@@ -1,0 +1,12 @@
+//go:build routervpn_tor_native_test
+
+package nativetor
+
+/*
+int routervpn_test_count(int which);
+void routervpn_test_release(void);
+*/
+import "C"
+
+func count(which int) int { return int(C.routervpn_test_count(C.int(which))) }
+func allowRelease()       { C.routervpn_test_release() }

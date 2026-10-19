@@ -1,0 +1,24 @@
+{
+  "adaptations": [
+    "Add explicit worker join while preserving the upstream nonblocking Close used inside protocol workers."
+  ],
+  "commit": "3b4ec04d359934256b3adea7133374e3c93a0622",
+  "modified_files": [
+    "session.go"
+  ],
+  "module": "github.com/xtaci/smux",
+  "module_sum": "h1:N72VbGoSYxgcm6mPOYX0QzEZNVD3UI/JlVvAtXF+WrY=",
+  "omitted_files": [],
+  "original_files": {
+    "alloc.go": "88f28ea5871c11d5ef17e2d4376ac9559d662e6b7b0d67ba621274d4830e9ff8",
+    "frame.go": "77ed98325686a2fc902218570c5c9edfe6a57bdbc8ef5fbf3a6307bbb4a1fcd5",
+    "mux.go": "7ee97437b6414da39cb74c57d0784c91b64780afddda5a1e89c6aeeb251470ad",
+    "pkg.go": "a451923502fbdce8c8ceaab5828830aa98e62bdc2d1702e1d7d2894684927a6a",
+    "session.go": "49fd866e1eb86b5a595b517e5834d1385aae4ce14782f99f0801668f238b1cf3",
+    "shaper.go": "d59c0b5566dcad01b7490b95eb4791ae9b653e9ff511507832cb2988de1eea07",
+    "stream.go": "d3f54098259b2fe3f47831bc93f7895a75647e81d41df6b5d62e5e0c578adccf"
+  },
+  "repository": "https://github.com/xtaci/smux",
+  "schema": 1,
+  "version": "v1.5.57"
+}

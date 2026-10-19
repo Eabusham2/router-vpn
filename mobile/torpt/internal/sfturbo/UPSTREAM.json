@@ -1,0 +1,16 @@
+{
+  "adaptations": [
+    "Close cancels the active dial, rejects and closes late success, and joins both transfer workers before redial or release.",
+    "Close retains a non-cooperative captured operation until it actually finishes."
+  ],
+  "commit": "4f0256ed4f948d1c90fef465466c6b1e252cb3c4",
+  "module": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2",
+  "module_sum": "h1:QUVDPSkMrvdKlBnDuAFvN2WgqwueU6MoV11c51CpcFg=",
+  "original_files": {
+    "common/turbotunnel/consts.go": "b169cee92f5d9e6a4219c5e4543e5d4b64c5ffda9314f4ee4582737e07782ffe",
+    "common/turbotunnel/redialpacketconn.go": "e82add8811f75590255fc37539db8ed48ec1ed1b56843df2c2155c1b361b9e96"
+  },
+  "repository": "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake",
+  "schema": 1,
+  "version": "v2.15.1"
+}

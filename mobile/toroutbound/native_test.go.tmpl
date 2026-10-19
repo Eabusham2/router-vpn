@@ -1,0 +1,172 @@
+//go:build routervpn_tor_native_test
+
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"path/filepath"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/nativetor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4"
+)
+
+type capturedNativeFixture struct {
+	expected string
+	entered  chan struct{}
+	calls    atomic.Int32
+	drained  atomic.Int32
+	release  <-chan struct{}
+}
+
+func (c *capturedNativeFixture) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkTCP || destination.String() != c.expected {
+		return nil, errors.New("native Tor bypassed its captured PT bridge")
+	}
+	if c.calls.Add(1) == 1 {
+		close(c.entered)
+	}
+	// This lower owner deliberately carries no public traffic. Native Tor
+	// has made a real SOCKS request to the real in-process obfs4 PT. Retain
+	// that actual pending PT dial until the VPN owner cancels the session.
+	<-ctx.Done()
+	if c.release != nil {
+		<-c.release
+	}
+	c.drained.Add(1)
+	return nil, ctx.Err()
+}
+
+func (*capturedNativeFixture) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("obfs4 boundary fixture has no UDP route")
+}
+
+func startNativeFixtureSession(t *testing.T, directory string, session int, release <-chan struct{}) (*Outbound, *capturedNativeFixture) {
+	t.Helper()
+	factory, err := (&obfs4.Transport{}).ServerFactory(t.TempDir(), &pt.Args{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := factory.Args().Get("cert")
+	target := fmt.Sprintf("203.0.113.%d:443", session+20)
+	plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "obfs4", Bridges: []string{
+		"obfs4 " + target + " " + fmt.Sprintf("%040x", session+1) + " cert=" + cert + " iat-mode=0",
+	}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured := &capturedNativeFixture{expected: target, entered: make(chan struct{}), release: release}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &Outbound{Adapter: outbound.NewAdapter(Type, "native-tor", []string{N.NetworkTCP}, nil),
+		ctx: ctx, cancel: cancel, plan: plan, directory: directory, sessionID: fmt.Sprintf("native-fixture-%d", session),
+		lower: captured, resident: processResident, ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	if err := h.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	if h.started {
+		t.Fatal("native Tor began before the VPN network and TUN lifecycle stage")
+	}
+	if err := h.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-captured.entered:
+	case <-h.closeDone:
+		t.Fatalf("native Tor stopped before entering the protected PT (session %d): %v", session, h.failure)
+	case <-time.After(12 * time.Second):
+		_ = h.Close()
+		t.Fatalf("native Tor never reached its actual protected PT (session %d)", session)
+	}
+	return h, captured
+}
+
+func TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain(t *testing.T) {
+	if nativetor.ABI() != nativetor.RequiredABI || nativetor.Version() != nativetor.RequiredVersion {
+		t.Fatal("native Tor fixture did not link the real pinned C ABI")
+	}
+	directory := filepath.Join(t.TempDir(), "private-tor")
+	var first nativeInstance
+	defer func() {
+		if first != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := first.Close(ctx); err != nil {
+				t.Error("real native Tor final shutdown did not join", err)
+			}
+		}
+	}()
+	const sessions = 12
+	for session := 0; session < sessions; session++ {
+		h, captured := startNativeFixtureSession(t, directory, session, nil)
+		proofContext, cancelProof := context.WithTimeout(context.Background(), 5*time.Millisecond)
+		_, proofError := h.TorProof(proofContext, h.sessionID)
+		cancelProof()
+		if !errors.Is(proofError, context.DeadlineExceeded) {
+			t.Fatal("native configuration without Tor exit traffic falsely proved ready", proofError)
+		}
+		if err := h.Close(); err != nil {
+			t.Fatalf("real native Tor/PT close did not prove quiescence (session %d): %v", session, err)
+		}
+		if captured.calls.Load() < 1 || captured.drained.Load() != captured.calls.Load() {
+			t.Fatal("resident lease was released before actual pending PT dials drained", captured.calls.Load(), captured.drained.Load())
+		}
+		processResident.mu.Lock()
+		instance, active, retired := processResident.instance, processResident.active, processResident.retired
+		processResident.mu.Unlock()
+		if first == nil {
+			first = instance
+		}
+		if instance != first || active != nil || retired {
+			t.Fatal("native resident changed or remained owned after verified PT drain")
+		}
+		if exited, _, err := instance.Status(); err != nil || exited {
+			t.Fatal("normal disconnect ended the sole resident Tor invocation", err)
+		}
+	}
+	// A lower operation which ignores cancellation cannot borrow the next
+	// session's resident. Timeout final-retires C Tor while retaining PT work
+	// until it really exits; releasing it later does not erase quarantine.
+	release := make(chan struct{})
+	h, captured := startNativeFixtureSession(t, directory, sessions, release)
+	wait, cancelWait := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := h.closeWithContext(wait)
+	cancelWait()
+	if !errors.Is(err, errRetired) {
+		close(release)
+		t.Fatal("late native PT dial falsely completed disconnect", err)
+	}
+	if _, err := processResident.acquire(context.Background(), directory); !errors.Is(err, errRetired) {
+		close(release)
+		t.Fatal("undrained native PT allowed a new resident lease", err)
+	}
+	select {
+	case <-h.closeDone:
+		close(release)
+		t.Fatal("native cleanup lost ownership of its late protected dial")
+	default:
+	}
+	close(release)
+	select {
+	case <-h.closeDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("late native PT dial never finished its retained cleanup")
+	}
+	if captured.drained.Load() != captured.calls.Load() {
+		t.Fatal("late native PT work escaped retained cleanup")
+	}
+	if _, err := processResident.acquire(context.Background(), directory); !errors.Is(err, errRetired) {
+		t.Fatal("late cleanup cleared native process quarantine", err)
+	}
+}

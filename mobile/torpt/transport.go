@@ -15,7 +15,7 @@ import (
 	"router-vpn/mobile/torpt/internal/webtunnel"
 )
 
-func newClientTransport(name string) (clientTransport, error) {
+func newClientTransport(name string, network NetworkOptions) (clientTransport, error) {
 	var transport base.Transport
 	switch name {
 	case "obfs4":
@@ -24,6 +24,8 @@ func newClientTransport(name string) (clientTransport, error) {
 		transport = &meeklite.Transport{}
 	case "webtunnel":
 		transport = webtunnel.Transport
+	case "snowflake":
+		return newSnowflakeTransport(network)
 	default:
 		return nil, errors.New("requested native Tor transport is not integrated")
 	}

@@ -1,0 +1,337 @@
+{
+  "go": "go1.26.3",
+  "modules": [
+    {
+      "go_mod_sum": "h1:xzAOLCNug/yB62zG1bQ8uziwrIqIuxhctzJT18Q77mc=",
+      "path": "filippo.io/edwards25519",
+      "source_commit": "b182a6575cfd9f4fbb1d1d4e487a6b00a3ec06f7",
+      "sum": "h1:crnVqOiS4jqYleHd9vaKZ+HKtHfllngJIiOpNpoJsjo=",
+      "version": "v1.2.0"
+    },
+    {
+      "go_mod_sum": "h1:rzTDkvFWvIrjDXZHkuS16NPggd91W3kUSvPlQ1pLaKY=",
+      "path": "github.com/andybalholm/brotli",
+      "source_commit": "785aba538b2118979d2c573eccb287c4da157faf",
+      "sum": "h1:HzTuoo2ErYQqf5qvcJInB8uvqSVxRttzkFexPWtnceM=",
+      "version": "v1.2.2"
+    },
+    {
+      "go_mod_sum": "h1:0NvQU092bT0ipiFN++/rXm69QG9tVxLAlQHIXMPAkHc=",
+      "path": "github.com/dchest/siphash",
+      "sum": "h1:QXwFc8cFOR2dSa/gE6o/HokBMWtLUaNDVd+22aKHeEA=",
+      "version": "v1.2.3"
+    },
+    {
+      "go_mod_sum": "h1:TIyPZe4MgqvfeYDBFedMoGGpEw/LqOeaOT+nhxU+yHo=",
+      "path": "github.com/google/uuid",
+      "source_commit": "0f11ee6918f41a04c201eceeadf612a377bc7fbc",
+      "sum": "h1:NIvaJDMOsjHA8n1jAhLSgzrAzy1Hgr+hNrb57e+94F0=",
+      "version": "v1.6.0"
+    },
+    {
+      "go_mod_sum": "h1:cwPg85FWrGar70rWktvGQj8/hthj3wpl0PGDogxkrSQ=",
+      "path": "github.com/klauspost/compress",
+      "source_commit": "c3b3439a48196b5082c63252bfb8633d0a2faad4",
+      "sum": "h1:hMRETovs/pu/dVWN7zIT1PGG8t509MwT6bO7XSi26R8=",
+      "version": "v1.19.2"
+    },
+    {
+      "go_mod_sum": "h1:19jmZ9mjzoF//ddRSUsv0zfBTJWh3QJh9FNxZTMrGxU=",
+      "path": "github.com/klauspost/cpuid/v2",
+      "source_commit": "8590c161fbc87954548d2aedb65e2aad4e5137d1",
+      "sum": "h1:S6Hrbc7+ywsr0r+RLapfGBHfyefhCTwEh3A0tV913Dw=",
+      "version": "v2.4.0"
+    },
+    {
+      "go_mod_sum": "h1:yjqqjgMTQkBUHSG97/rm4zipffCNbCiZcB3kTqr++sQ=",
+      "path": "github.com/klauspost/reedsolomon",
+      "source_commit": "1166fa573ff0b5c3a0fa5ac4d312c6e84a4dbb04",
+      "sum": "h1:swE9kzyWXD/wVG+l5Pe8bWnQ0giIY7D1GjCBKk3kG2U=",
+      "version": "v1.14.1"
+    },
+    {
+      "go_mod_sum": "h1:+EuEPhdHOsfk6Wk5TT2CzssZdqkmFhf8r+aVyDEToIs=",
+      "path": "github.com/miekg/dns",
+      "source_commit": "cb21f4d26733ca42749cd87a0fe44094ad833a21",
+      "sum": "h1:vhmr+TF2A3tuoGNkLDFK9zi36F2LS+hKTRW0Uf8kbzI=",
+      "version": "v1.1.72"
+    },
+    {
+      "go_mod_sum": "h1:3Qf8kWWT7OJRJbdiICTKqZju1ZixQ/KpMGzzAfe6+WQ=",
+      "path": "github.com/patrickmn/go-cache",
+      "sum": "h1:HRMgzkcYKYpi3C8ajMPV8OFXaaRUnok+kx1WdO15EQc=",
+      "version": "v2.1.0+incompatible"
+    },
+    {
+      "go_mod_sum": "h1:pzbdAZvyGtXbcHM1hBbsFaOTf40lZizU/dNlvVOak6E=",
+      "path": "github.com/pion/datachannel",
+      "source_commit": "7a71a8db774be92b7f3be850c387445f2fdf74de",
+      "sum": "h1:7EXQ8TH3vTouBUdRWYbcX2edSx9Yj6k5zl5P+qyxEPc=",
+      "version": "v1.6.2"
+    },
+    {
+      "go_mod_sum": "h1:gz1K4jg6c+fq86oQMH4pilpCEOEPwmEr2jY+VcF/mkU=",
+      "path": "github.com/pion/dtls/v3",
+      "source_commit": "9c642f885371954b6010f9605e963d54f654e917",
+      "sum": "h1:9xJtVsHwMYeSjPp5Hh1FTis4DchnQWtnOa5o+6ygqfc=",
+      "version": "v3.1.5"
+    },
+    {
+      "go_mod_sum": "h1:0Jm0wsNNSBPrAV2CVTwf4e51Ue1oG+JRgTQDofx2lvA=",
+      "path": "github.com/pion/ice/v4",
+      "source_commit": "c64926588f6c466c4bffb2c136173d0419755785",
+      "sum": "h1:d6SvwfYLx7vlddzOD1SW7BSqs6J6qxaJ9vzWacNxJjU=",
+      "version": "v4.4.1"
+    },
+    {
+      "go_mod_sum": "h1:7yoRBzaIDETPC6cIN8Zj9EyGqHv1ImOpcTFPha6MuOM=",
+      "path": "github.com/pion/interceptor",
+      "source_commit": "341ec2dc11b25b0fc705cc453336678e811992f8",
+      "sum": "h1:yw8t5pJ2f8t78NgU+8EmxhaqYLXS7uFCC/tAGOaSDBo=",
+      "version": "v0.1.47"
+    },
+    {
+      "go_mod_sum": "h1:DffhXTKYdNZU+KtJ5pyQDjvOAh/GsNSyv1lbkFbe3so=",
+      "path": "github.com/pion/logging",
+      "source_commit": "39ff9235799bde6d2c7b3f5e21579159e5bbe332",
+      "sum": "h1:tTew+7cmQ+Mc1pTBLKH2puKsOvhm32dROumOZ655zB8=",
+      "version": "v0.2.4"
+    },
+    {
+      "go_mod_sum": "h1:pcez23GdynwcfRU1977qKU0mDxSeucttSHbCSfFOd9A=",
+      "path": "github.com/pion/mdns/v2",
+      "source_commit": "339008c88b3e25493223ad5289fd2efffd2c6422",
+      "sum": "h1:3IJ9+Xio6tWYjhN6WwuY142P/1jA0D5ERaIqawg/fOY=",
+      "version": "v2.1.0"
+    },
+    {
+      "go_mod_sum": "h1:XcJrSMMbbMRhASFVOlj/5hQial/Y8oH/HVo7TBZq+j8=",
+      "path": "github.com/pion/randutil",
+      "sum": "h1:CFG1UdESneORglEsnimhUjf33Rwjubwj6xfiOXBa3mA=",
+      "version": "v0.1.0"
+    },
+    {
+      "go_mod_sum": "h1:7kBpuBJaWwax4hzc/pgexY8vkOpvh8atgYDbaKZq0iU=",
+      "path": "github.com/pion/rtcp",
+      "source_commit": "a9b71ae137f29b00eb94a89a9529f0d13c85d536",
+      "sum": "h1:PxiT6L79yPZKtXIsXdG1eakBl6dtBj4x+4oVEL0DlSw=",
+      "version": "v1.2.17"
+    },
+    {
+      "go_mod_sum": "h1:Au8fc6cEByy8RLTwKTQTEeQqDB/SJDxwL4mZuxYA5Pk=",
+      "path": "github.com/pion/rtp",
+      "source_commit": "e61bd16da5287b0ae211a8624aee62b03ff2306c",
+      "sum": "h1:ip0HhO/wYZqQ4bKS+R99KnZh/GRCmIT0jDXikub7vlE=",
+      "version": "v1.10.5"
+    },
+    {
+      "go_mod_sum": "h1:7KFmTwLcoYgJs/Z+99nJvsWL0qDpuyloSI0RbAqlrz0=",
+      "path": "github.com/pion/sctp",
+      "source_commit": "37fef17855bc720b31c09e8c8643aa67122aff7e",
+      "sum": "h1:O4dIFyURw1KTST7w+gtD4gLeYXkhPa0xXLHMMoe/OSA=",
+      "version": "v1.11.1"
+    },
+    {
+      "go_mod_sum": "h1:dE5WOSlzXrtiE/iuZqe9n+AcEbOjtAd3k5m5NtlV/qU=",
+      "path": "github.com/pion/sdp/v3",
+      "source_commit": "c1a888b2f5fcd2bb0a476bfa083d86978f31922f",
+      "sum": "h1:1VMKs3gIkTQV5M3hNKfTAPrDXSNrYtOlmOD8+mSZUGQ=",
+      "version": "v3.0.19"
+    },
+    {
+      "go_mod_sum": "h1:7qR3L69t8RX0EPVQwGNwCa1Gy9keKKNDpWwQzZbeXDY=",
+      "path": "github.com/pion/srtp/v3",
+      "source_commit": "68a52e9c7c29e380db62c562684d627a0a8e4d56",
+      "sum": "h1:FmQaqgNbN1vUtMhEsmj8trldc3lNZr1xmN7nl8CyX+Q=",
+      "version": "v3.0.13"
+    },
+    {
+      "go_mod_sum": "h1:zRUghXSQU32Lx5orJsz3uYMkIihweXb3mu5gIns02fs=",
+      "path": "github.com/pion/stun/v3",
+      "source_commit": "e1234ac068ba5e0bb4e110c8fe1a548e0724f15f",
+      "sum": "h1:WnhsD0eHCiwCfKNkVx0VJJwr2Y3eV4Ueih3KJ+dfZy8=",
+      "version": "v3.1.6"
+    },
+    {
+      "go_mod_sum": "h1:06hFI+jCFcok2X2MekVufNZ/uzNZXivGBPfviSVcjgM=",
+      "path": "github.com/pion/transport/v4",
+      "source_commit": "b60c5c3a5dca25942a050e130e750d8ff16069d4",
+      "sum": "h1:8S+nF2reM2cJuqC6g78OVy2BBgmbdns+acx3jA97BvQ=",
+      "version": "v4.1.0"
+    },
+    {
+      "go_mod_sum": "h1:CQACsRDJtjQ+6RSrGHrS2PCIerLwbW3uqXRqOvtjAFg=",
+      "path": "github.com/pion/turn/v5",
+      "source_commit": "443e41acf1bb4e5e6cabfb3a8876d419b31b617e",
+      "sum": "h1:6+b69ivQQXSlyfkp2AKripqD2k3W32qXK8QzCzpJWPI=",
+      "version": "v5.0.12"
+    },
+    {
+      "go_mod_sum": "h1:vmzi6s+rvhoIuT94DPqivB+0xJXs9rG4QRD+4MgBtlY=",
+      "path": "github.com/pion/webrtc/v4",
+      "source_commit": "a08347acf9d5353163d4db2ed597ab23ba358ce3",
+      "sum": "h1:smA/3g6Gy4RohM0VIZ5KKY/12TQbxv3XFgpUMyb2EUI=",
+      "version": "v4.2.18"
+    },
+    {
+      "go_mod_sum": "h1:bwawxfHBFNV+L2hUp1rHADufV3IMtnDRdf1r5NINEl0=",
+      "path": "github.com/pkg/errors",
+      "sum": "h1:FEBLx1zS214owpjy7qsBeixbURkuhQAwrK5UwLGTwt4=",
+      "version": "v0.9.1"
+    },
+    {
+      "go_mod_sum": "h1:CXnUdVwFRcXFJIRb/dTYqbT7ud48+Pi2pFm80bxDmcI=",
+      "path": "github.com/realclientip/realclientip-go",
+      "sum": "h1:+yPxeC0mEaJzq1BfCt2h4BxlyrvIIBzR6suDc3BEF1U=",
+      "version": "v1.0.0"
+    },
+    {
+      "go_mod_sum": "h1:jkSOEkLqn+S/jtpEHPOsVv/4V4EVnelwbMQl4vCWXAM=",
+      "path": "github.com/refraction-networking/utls",
+      "source_commit": "8fe0b08e9a0e7e2d08b268f451f2c79962e6acd0",
+      "sum": "h1:j4Q1gJj0xngdeH+Ox/qND11aEfhpgoEvV+S9iJ2IdQo=",
+      "version": "v1.8.2"
+    },
+    {
+      "go_mod_sum": "h1:j4INPkHWMrhJb38G+J6W4Tw0AbuN8Thu3PbdVYhVcTE=",
+      "path": "github.com/tjfoc/gmsm",
+      "sum": "h1:aMe1GlZb+0bLjn+cKTPEvvn9oUEBlJitaZiiBwsbgho=",
+      "version": "v1.4.1"
+    },
+    {
+      "go_mod_sum": "h1:cldYm15/XHcGt7ndItnEWHwFZo7dinU+2QoyjfErhsI=",
+      "path": "github.com/txthinking/runnergroup",
+      "source_commit": "5864ffeb65ae7b2923c9ad8ee3bc21115dd447c4",
+      "sum": "h1:ArVM1jICfm7g4E4dBet+KHUFMLuxmj1Nxdp/tr3ByCU=",
+      "version": "v0.0.0-20250224021307-5864ffeb65ae"
+    },
+    {
+      "go_mod_sum": "h1:ntmMHL/xPq1WLeKiw8p/eRATaae6PiVRNipHFJxI8PM=",
+      "path": "github.com/txthinking/socks5",
+      "source_commit": "339b044ab0eb8485292330ab589ab4c80d8e4390",
+      "sum": "h1:cFSmrCbLJPb87QrwDhUTnguVLezlIqDiJuY8xKcFZnw=",
+      "version": "v0.0.0-20260601051520-339b044ab0eb"
+    },
+    {
+      "go_mod_sum": "h1:eay5PRQr7fIVAMbTbchTnO9gG65Hg/uYGdc7mguHxoA=",
+      "path": "github.com/wlynxg/anet",
+      "source_commit": "839bc3a920f1b87dd3ce1386e425aa5ef2e69d24",
+      "sum": "h1:J3VJGi1gvo0JwZ/P1/Yc/8p63SoW98B5dHkYDmpgvvU=",
+      "version": "v0.0.5"
+    },
+    {
+      "go_mod_sum": "h1:9O3D8WR+cyyUjGiTILYfg17vn72otWuXK2AFfqIe6CM=",
+      "path": "github.com/xtaci/kcp-go/v5",
+      "source_commit": "78a2a3914a97fe8414b3f63054fad36c0a6e2e7c",
+      "sum": "h1:FLaQPalgpufJYQRk0OK+gErEhXGLUPjv6FSRPrFR8Lk=",
+      "version": "v5.6.72"
+    },
+    {
+      "go_mod_sum": "h1:IGQ9QYrBphmb/4aTnLEcJby0TNr3NV+OslIOMrX825Q=",
+      "path": "github.com/xtaci/smux",
+      "source_commit": "3b4ec04d359934256b3adea7133374e3c93a0622",
+      "sum": "h1:N72VbGoSYxgcm6mPOYX0QzEZNVD3UI/JlVvAtXF+WrY=",
+      "version": "v1.5.57"
+    },
+    {
+      "go_mod_sum": "h1:K/3SQWdJL6udzwInHk1gaYaECYxMp9dDayniPq6gCSo=",
+      "path": "gitlab.com/yawning/edwards25519-extra",
+      "source_commit": "2149dcafc266f66d2487f45b156f6397f9c4760b",
+      "sum": "h1:IvjshROr8z24+UCiOe/90cUWt3QDr8Rt+VkUjZsn+i0=",
+      "version": "v0.0.0-20231005122941-2149dcafc266"
+    },
+    {
+      "go_mod_sum": "h1:70bhd4JKW/+1HLfm+TMrgHJsUHG4coelMWwiVEJ2gAg=",
+      "path": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib",
+      "source_commit": "f4bb5dd5725833bd880347b8fbaf60522ed0a710",
+      "sum": "h1:KD9m+mRBwtEdqe94Sv72uiedMWeRdIr4sXbrRyzRiIo=",
+      "version": "v1.6.0"
+    },
+    {
+      "go_mod_sum": "h1:klAZIGqJ782bWabeluciUW4ZrBXwNZvGsJI1odFaqb0=",
+      "path": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird",
+      "source_commit": "362a60bb4e3fa434130ef81a9990d83d6d8eaea5",
+      "sum": "h1:iQzghnWKOjCh0lCwlfYckalo4Xmf91z2f9T89bXbXIM=",
+      "version": "v0.0.0-20261008205628-362a60bb4e3f"
+    },
+    {
+      "go_mod_sum": "h1:PK7EvweKeypdelDyh1m7N922aldSeCAG8n0lJ7RAXWQ=",
+      "path": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/ptutil",
+      "source_commit": "418f76dcf315ab95e92f0e20f40da12d2f532f94",
+      "sum": "h1:9lmXguW9aH5sdZR5h5jOrdInCt0tQ9NRa7+wFD4MQBk=",
+      "version": "v0.0.0-20250815012447-418f76dcf315"
+    },
+    {
+      "go_mod_sum": "h1:LIfwK5C1dPDFrrldJMIX9Sk1XSoc09IpKmoaYIRTQHs=",
+      "path": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2",
+      "source_commit": "4f0256ed4f948d1c90fef465466c6b1e252cb3c4",
+      "sum": "h1:QUVDPSkMrvdKlBnDuAFvN2WgqwueU6MoV11c51CpcFg=",
+      "version": "v2.15.1"
+    },
+    {
+      "go_mod_sum": "h1:GlxU1bY/uoCOkbMJpmsiynfU20eL36CGitONPa3Z2gs=",
+      "path": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel",
+      "source_commit": "11334a222c1beeb45759d436b7aef963a10600b2",
+      "sum": "h1:c7PutWnnXJytefsiENNo+iq2qAbE2RfUbggGtnnmuAA=",
+      "version": "v0.0.7"
+    },
+    {
+      "go_mod_sum": "h1:Fdz0i5U6CoizGwLda9DttjSk6qlZo25zYNtR+ycvuZA=",
+      "path": "golang.org/x/crypto",
+      "source_commit": "3f62bf119e84c6e35e8518a2958089ade622d1a3",
+      "sum": "h1:3ZVCjf8Ggz7zneR/EHRVx68Ctf+2pmIMP2UFhh9cC6M=",
+      "version": "v0.57.0"
+    },
+    {
+      "go_mod_sum": "h1:Ek9pY8RKWXwsWvd3rQiHYtMqkjSUV+s1Rj7j4H5Ur6o=",
+      "path": "golang.org/x/mod",
+      "source_commit": "d0a27b2d4a48460806692bf5c87fc157c3c65292",
+      "sum": "h1:qJmnOUb4YB+FsEuM3HcWucdZASCPGhsX6uljO6pog0c=",
+      "version": "v0.41.0"
+    },
+    {
+      "go_mod_sum": "h1:2DA/G1UfVbCpQPeWTmMPGY7Cs2PkBkwu743bVX5PIVg=",
+      "path": "golang.org/x/net",
+      "source_commit": "540d04cfe5028e2655754591a4d3e08c586809f2",
+      "sum": "h1:5zfYln+w5XCxwrnMMJPufRgNoXEaGxl0wo5GqPXyues=",
+      "version": "v0.59.0"
+    },
+    {
+      "go_mod_sum": "h1:sUUOizhqBxiL6pEWpqNLUiaJn1ShEbZ6BBqskPbjZm0=",
+      "path": "golang.org/x/sync",
+      "source_commit": "f75267d8412fc1dfd12b343644a7ea46e4d9c85d",
+      "sum": "h1:KameEIfc1IkluZyXWLn39Wd4tURc6GbCiISGiZm2bQk=",
+      "version": "v0.23.0"
+    },
+    {
+      "go_mod_sum": "h1:hNLxWAXmnKAxqDtdwIYC4bM9oQPEecfsnNMuSxOs3og=",
+      "path": "golang.org/x/sys",
+      "source_commit": "613e2570718ecde85c04e69ebd5585c3881c442c",
+      "sum": "h1:bbX/i/6MgT9BVLM9RT1thmxL04yeTAhbEz4SyadbXoo=",
+      "version": "v0.48.0"
+    },
+    {
+      "go_mod_sum": "h1:ojzP1Z+2QtioaF8DTtO8K5q7JWVVYwZKenzujK0Zd0E=",
+      "path": "golang.org/x/text",
+      "source_commit": "fafe4a06967e06550e69ee42787d9902845d2a3f",
+      "sum": "h1:JbOZXgfeCPU9gacVtYliJqOhD+zhrEqK4LfdpmlUZqI=",
+      "version": "v0.42.0"
+    },
+    {
+      "go_mod_sum": "h1:Y4YMaQmXwGQZoFaVFk4YpCt4FLQMYKZe9oeV/f4MSno=",
+      "path": "golang.org/x/time",
+      "source_commit": "812b343c8714c317b0dad633efa6d103e554c006",
+      "sum": "h1:bbrp8t3bGUeFOx08pvsMYRTCVSMk89u4tKbNOZbp88U=",
+      "version": "v0.15.0"
+    },
+    {
+      "go_mod_sum": "h1:SJNXV9DBKT0UbdttsQjbfJlAE/q+y36++zo3uL3N0Oo=",
+      "path": "golang.org/x/tools",
+      "source_commit": "18332fec72972efbb8ab9881984fec2d8cfc2b58",
+      "sum": "h1:3NI7VXzL9+1WZD52Dx2ttoPwD5DWrFGpl9mFZDlmisI=",
+      "version": "v0.49.0"
+    }
+  ],
+  "native_core": "1ac1a339cb1223e9c70eae14c44411c75033c02d",
+  "schema": 1
+}

@@ -1,0 +1,24 @@
+{
+  "adaptations": [
+    "Captured VPN networking and DNS instead of default host/proxy fallbacks",
+    "Joined session-owned NAT, WebRTC, broker, KCP and stream workers",
+    "Only the shared Router VPN bridge grammar rendezvous options are exposed"
+  ],
+  "commit": "4f0256ed4f948d1c90fef465466c6b1e252cb3c4",
+  "module": "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2",
+  "module_sum": "h1:QUVDPSkMrvdKlBnDuAFvN2WgqwueU6MoV11c51CpcFg=",
+  "original_files": {
+    "client/lib/interfaces.go": "1ca365f5ae845d725a7f40962ea86d42f5f07b496af420891df66e4b2cb718d1",
+    "client/lib/peers.go": "c5ca1cbe5d03db24614385bfed3840e7ba964aef938b7d9cfebb2216a7fb45d9",
+    "client/lib/rendezvous.go": "ccf16c166f08673d98d9fab4dab813d94b85aca564b9f099190e7a9a9b6a13bc",
+    "client/lib/rendezvous_http.go": "c9aac5ae7e2e40332047a4fa4e078a6dab1e27b16d7711583aa420ccbcba7411",
+    "client/lib/snowflake.go": "c4e53e095f4994fae2c54461d6fa5b67f4e39de3b7573e331653a08d5c3ada73",
+    "client/lib/turbotunnel.go": "66e6790a73deb0cf0b653d2b33a4d61c5f12beff7d82c6dc3c80209d8e4c430d",
+    "client/lib/util.go": "01b34c880c4bf70db8f36f892bcdfc612ed268620c550b604e8189bd099a62dd",
+    "client/lib/webrtc.go": "1a5b102c3e1e39d35ad9653a5688c002b790f6c34c9cab0a8d2292b9b9b639f3",
+    "common/nat/nat.go": "03c1b45d308311cfc40317242db496ee0d398372b957ed3f6c746310aef4094f"
+  },
+  "repository": "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake",
+  "schema": 1,
+  "version": "v2.15.1"
+}

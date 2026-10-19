@@ -48,6 +48,7 @@ import (
 	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/common/utlsutil"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/base"
+	"router-vpn/mobile/torpt/internal/httpowner"
 )
 
 const (
@@ -152,6 +153,8 @@ type meekConn struct {
 	args         *meekClientArgs
 	sessionID    string
 	roundTripper http.RoundTripper
+	httpOwner    *httpowner.Owner
+	closeErr     error // published by workerDoneChan
 
 	closeOnce       sync.Once
 	workerWrChan    chan []byte
@@ -227,7 +230,7 @@ func (c *meekConn) Write(b []byte) (n int, err error) {
 func (c *meekConn) Close() error {
 	c.stop()
 	<-c.workerDoneChan
-	return nil
+	return c.closeErr
 }
 
 // stop signals cancellation without joining. The worker calls this on its
@@ -235,6 +238,7 @@ func (c *meekConn) Close() error {
 func (c *meekConn) stop() {
 	c.closeOnce.Do(func() {
 		c.cancel()
+		c.httpOwner.BeginClose()
 		close(c.workerCloseChan)
 	})
 }
@@ -336,6 +340,7 @@ func (c *meekConn) ioWorker() {
 		if closer, ok := c.roundTripper.(interface{ CloseIdleConnections() }); ok {
 			closer.CloseIdleConnections()
 		}
+		c.closeErr = c.httpOwner.Close()
 	}()
 	interval := initPollInterval
 	var sndBuf, leftBuf []byte
@@ -418,19 +423,29 @@ func newMeekConn(network, addr string, dialFn base.DialFunc, ca *meekClientArgs)
 		return nil, err
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	owned, err := httpowner.New(ctx, func(_ context.Context, network, address string) (net.Conn, error) {
+		return dialFn(network, address)
+	})
+	if err != nil {
+		cancel()
+		return nil, err
+	}
 	var rt http.RoundTripper
 	switch ca.utls {
 	case nil:
-		rt = &http.Transport{Dial: dialFn}
+		rt = &http.Transport{DialContext: owned.DialContext}
 	default:
-		rt = newRoundTripper(dialFn, ca.utls)
+		rt = newRoundTripper(func(network, address string) (net.Conn, error) {
+			return owned.DialContext(ctx, network, address)
+		}, ca.utls)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
 	conn := &meekConn{
 		args:            ca,
 		sessionID:       id,
 		roundTripper:    rt,
+		httpOwner:       owned,
 		workerWrChan:    make(chan []byte, maxChanBacklog),
 		workerRdChan:    make(chan []byte, maxChanBacklog),
 		workerCloseChan: make(chan struct{}),

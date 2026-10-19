@@ -1,0 +1,12 @@
+//go:build !cgo || (!android && !ios && !routervpn_tor_native_test)
+
+package nativetor
+
+// Ordinary host parser/tests do not require or advertise a mobile C library.
+// Native integration tests opt in explicitly and must link the real ABI.
+func nativeABI() int32                         { return 0 }
+func nativeVersion() string                    { return "" }
+func nativeStart([]string) (uint64, error)     { return 0, ErrUnavailable }
+func nativeControl(uint64) (int, error)        { return -1, ErrUnavailable }
+func nativeStatus(uint64) (bool, int, error)   { return false, 0, ErrUnavailable }
+func nativeClose(uint64, uint32) (bool, error) { return false, ErrUnavailable }

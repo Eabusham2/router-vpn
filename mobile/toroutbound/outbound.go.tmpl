@@ -1,0 +1,402 @@
+// Native Tor and its bridge transports are compiled into the existing Libbox
+// runtime. This outbound never starts a second VPN or an external executable.
+package routervpntor
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"net"
+	"net/netip"
+	"path/filepath"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/nativetor"
+	"github.com/sagernet/sing-box/routervpn/torpt"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/filemanager"
+)
+
+const Type = "routervpn-tor"
+const closeTimeout = 15 * time.Second
+
+type Options struct {
+	option.DialerOptions
+	Bridges   []string `json:"bridges"`
+	SessionID string   `json:"session_id"`
+}
+
+func RegisterOutbound(registry *outbound.Registry) {
+	outbound.Register[Options](registry, Type, NewOutbound)
+}
+
+var _ adapter.Outbound = (*Outbound)(nil)
+var _ adapter.Lifecycle = (*Outbound)(nil)
+
+type Outbound struct {
+	outbound.Adapter
+	ctx            context.Context
+	cancel         context.CancelFunc
+	plan           mobiletor.Plan
+	directory      string
+	sessionID      string
+	lower          N.Dialer
+	networkCapture *torNetworkCapture
+	ptNetwork      torpt.NetworkOptions
+	resident       *resident
+	mu             sync.Mutex
+	started        bool
+	closing        bool
+	closeTimedOut  bool
+	ready          chan struct{}
+	readyOnce      sync.Once
+	workerDone     chan struct{}
+	closeDone      chan struct{}
+	closeOnce      sync.Once
+	parentStop     func() bool
+	lease          *lease
+	bridges        *torpt.Bridges
+	application    *mobiletor.Network
+	proof          mobiletor.Proof
+	failure        error
+	closeErr       error
+}
+
+func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil {
+		return nil, errors.New("native Tor requires its active VPN context")
+	}
+	if options.SessionID == "" || len(options.SessionID) > 512 || strings.ContainsAny(options.SessionID, "\x00\r\n") {
+		return nil, errors.New("native Tor requires its frozen VPN session identity")
+	}
+	if options.Detour == tag && tag != "" {
+		return nil, errors.New("native Tor cannot detour through itself")
+	}
+	plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), options.Bridges...)})
+	if err != nil {
+		return nil, errors.New("native Tor bridge profile is invalid")
+	}
+	if nativetor.ABI() != nativetor.RequiredABI || nativetor.Version() != nativetor.RequiredVersion {
+		return nil, nativetor.ErrUnavailable
+	}
+	if service.FromContext[filemanager.Manager](ctx) == nil || service.FromContext[adapter.NetworkManager](ctx) == nil || service.FromContext[adapter.DNSRouter](ctx) == nil || service.FromContext[adapter.DNSTransportManager](ctx) == nil {
+		return nil, errors.New("native Tor requires the captured VPN file and network owners")
+	}
+	directory := filemanager.BasePath(ctx, "routervpn-tor")
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return nil, errors.New("native Tor requires its private VPN working directory")
+	}
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options.DialerOptions, RemoteIsDomain: true, NewDialer: true})
+	if err != nil {
+		return nil, errors.New("native Tor protected transport could not be captured")
+	}
+	owned, cancel := context.WithCancel(ctx)
+	var networkCapture *torNetworkCapture
+	for _, transport := range plan.Transports() {
+		if transport == "snowflake" {
+			networkCapture, err = captureTorNetwork(owned, tag, options.DialerOptions, lower)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+			break
+		}
+	}
+	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(Type, tag, []string{N.NetworkTCP}, options.DialerOptions),
+		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, lower: lower, resident: processResident,
+		networkCapture: networkCapture,
+		ready:          make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	h.parentStop = context.AfterFunc(ctx, h.beginClose)
+	return h, nil
+}
+
+func (h *Outbound) Start(stage adapter.StartStage) error {
+	// The pinned Box starts outbounds before DNS, protected networking and
+	// TUN in StartStateStart. Real bootstrap/proof can begin only after those
+	// owners have reached Started. Traffic waits below, with caller cancellation.
+	if stage != adapter.StartStateStarted {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing || h.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if h.started {
+		return errors.New("native Tor session was already started")
+	}
+	if h.networkCapture != nil {
+		var err error
+		h.ptNetwork, err = h.networkCapture.prepare()
+		if err != nil {
+			return err
+		}
+	}
+	h.started = true
+	go h.run()
+	return nil
+}
+
+func (h *Outbound) protectedDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if h.networkCapture != nil {
+		if err := h.networkCapture.current(); err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, torBootstrapDNSKey{}, true)
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("native Tor protected destination is invalid")
+	}
+	connection, err := h.lower.DialContext(ctx, network, destination)
+	if h.networkCapture != nil {
+		if currentErr := h.networkCapture.current(); currentErr != nil {
+			// Return even a rejected late socket to the PT network owner. Its
+			// discard path retains close failures and counts the actual drain.
+			return connection, errors.Join(err, currentErr)
+		}
+	}
+	return connection, err
+}
+
+func (h *Outbound) protectedPackets(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if h.networkCapture != nil {
+		if err := h.networkCapture.current(); err != nil {
+			return nil, err
+		}
+		ctx = context.WithValue(ctx, torBootstrapDNSKey{}, true)
+	}
+	if network != N.NetworkUDP && network != "udp4" && network != "udp6" {
+		return nil, errors.New("native Tor packet owner supports only UDP")
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() {
+		return nil, errors.New("native Tor packet destination is invalid")
+	}
+	connection, err := h.lower.ListenPacket(ctx, destination)
+	if h.networkCapture != nil {
+		if currentErr := h.networkCapture.current(); currentErr != nil {
+			return connection, errors.Join(err, currentErr)
+		}
+	}
+	return connection, err
+}
+
+func (h *Outbound) fail(err error) {
+	h.mu.Lock()
+	if h.failure == nil {
+		h.failure = err
+	}
+	h.mu.Unlock()
+	h.readyOnce.Do(func() { close(h.ready) })
+	h.beginClose()
+}
+
+func (h *Outbound) run() {
+	defer close(h.workerDone)
+	boot, cancelBoot := context.WithTimeout(h.ctx, 3*time.Minute)
+	defer cancelBoot()
+	owner, err := h.resident.acquire(boot, h.directory)
+	if err != nil {
+		h.fail(err)
+		return
+	}
+	h.mu.Lock()
+	h.lease = owner
+	timedOut := h.closeTimedOut
+	h.mu.Unlock()
+	if timedOut {
+		owner.quarantine()
+		h.fail(errRetired)
+		return
+	}
+	bridges, err := torpt.StartWithNetwork(h.ctx, h.plan, h.protectedDial, h.protectedPackets, h.ptNetwork)
+	if err != nil {
+		h.fail(err)
+		return
+	}
+	h.mu.Lock()
+	h.bridges = bridges
+	h.mu.Unlock()
+	if err = h.controlCall(boot, func(ctx context.Context) error { return owner.control.Configure(ctx, h.plan, bridges.Listeners()) }); err == nil {
+		err = h.controlCall(boot, owner.control.EnableNetwork)
+	}
+	if err != nil {
+		h.fail(errors.New("native Tor session configuration failed"))
+		return
+	}
+	state, err := h.waitBootstrap(boot, owner.control)
+	if err != nil {
+		h.fail(errors.New("native Tor did not establish a bridge circuit"))
+		return
+	}
+	var secret [64]byte
+	if _, err = rand.Read(secret[:]); err != nil {
+		h.fail(errors.New("native Tor session isolation could not be generated"))
+		return
+	}
+	local := &loopbackDialer{address: state.SOCKSAddress}
+	client := socks.NewClient(local, M.ParseSocksaddr(state.SOCKSAddress), socks.Version5, hex.EncodeToString(secret[:32]), hex.EncodeToString(secret[32:]))
+	application, err := mobiletor.NewNetwork(h.ctx, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if network != N.NetworkTCP && network != "tcp4" && network != "tcp6" {
+			return nil, errors.New("native Tor exit carries only TCP")
+		}
+		destination := M.ParseSocksaddr(address)
+		if !destination.IsValid() || destination.Port == 0 {
+			return nil, errors.New("native Tor application destination is invalid")
+		}
+		return client.DialContext(ctx, N.NetworkTCP, destination)
+	}, nil)
+	if err != nil {
+		h.fail(err)
+		return
+	}
+	h.mu.Lock()
+	h.application = application
+	h.mu.Unlock()
+	proof, err := mobiletor.Prove(boot, h.sessionID, application.DialContext)
+	if err != nil {
+		h.fail(err)
+		return
+	}
+	h.mu.Lock()
+	if h.closing || h.ctx.Err() != nil {
+		h.mu.Unlock()
+		return
+	}
+	h.proof = proof
+	h.mu.Unlock()
+	h.readyOnce.Do(func() { close(h.ready) })
+	// Status is a native handle query, not a control command. Normal session
+	// cancellation never interrupts an in-flight control reply after readiness.
+	watch := time.NewTicker(250 * time.Millisecond)
+	defer watch.Stop()
+	for {
+		select {
+		case <-h.ctx.Done():
+			return
+		case <-bridges.Stopping():
+			h.fail(errors.New("native Tor bridge transport stopped"))
+			return
+		case <-watch.C:
+			if exited, _, err := owner.instance.Status(); err != nil || exited {
+				h.fail(errors.New("native Tor invocation stopped"))
+				return
+			}
+		}
+	}
+}
+
+// Finish each short, local control operation even if the VPN is canceled in
+// the middle. Abandoning a partial reply would retire the sole owning socket.
+// Session cancellation still freezes PT/application traffic immediately, and
+// cleanup waits for this bounded operation before resetting the control state.
+func (h *Outbound) controlCall(owner context.Context, action func(context.Context) error) error {
+	if err := owner.Err(); err != nil {
+		return err
+	}
+	operation, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := action(operation); err != nil {
+		return err
+	}
+	return owner.Err()
+}
+
+func (h *Outbound) waitBootstrap(ctx context.Context, control *mobiletor.Control) (mobiletor.Bootstrap, error) {
+	for {
+		var state mobiletor.Bootstrap
+		err := h.controlCall(ctx, func(operation context.Context) error {
+			var err error
+			state, err = control.Bootstrap(operation)
+			return err
+		})
+		if err != nil {
+			return mobiletor.Bootstrap{}, err
+		}
+		if state.Progress == 100 && state.CircuitEstablished && state.SOCKSAddress != "" {
+			return state, nil
+		}
+		timer := time.NewTimer(200 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return mobiletor.Bootstrap{}, ctx.Err()
+		case <-timer.C:
+		}
+	}
+}
+
+func (h *Outbound) TorProof(ctx context.Context, sessionID string) (mobiletor.Proof, error) {
+	if ctx == nil || sessionID != h.sessionID {
+		return mobiletor.Proof{}, errors.New("native Tor proof belongs to another VPN session")
+	}
+	select {
+	case <-ctx.Done():
+		return mobiletor.Proof{}, ctx.Err()
+	case <-h.ctx.Done():
+		return mobiletor.Proof{}, net.ErrClosed
+	case <-h.ready:
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closing || h.ctx.Err() != nil {
+		return mobiletor.Proof{}, net.ErrClosed
+	}
+	if h.failure != nil {
+		return mobiletor.Proof{}, h.failure
+	}
+	if !h.proof.IsTor || h.proof.SessionID != sessionID || h.application == nil {
+		return mobiletor.Proof{}, errors.New("native Tor final outbound proof is not ready")
+	}
+	return h.proof, nil
+}
+
+func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx != nil && ctx.Value(torBootstrapDNSKey{}) != nil {
+		return nil, errors.New("native Tor cannot carry its own bridge bootstrap DNS")
+	}
+	if N.NetworkName(network) != N.NetworkTCP {
+		return nil, errors.New("native Tor exit carries only TCP")
+	}
+	if _, err := h.TorProof(ctx, h.sessionID); err != nil {
+		return nil, err
+	}
+	h.mu.Lock()
+	application := h.application
+	h.mu.Unlock()
+	return application.DialContext(ctx, N.NetworkTCP, destination.String())
+}
+
+func (h *Outbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("native Tor exit does not carry UDP")
+}
+
+// The sole unprotected dial is private Tor IPC. Both the frozen endpoint and
+// supplied destination must be the same literal loopback TCP listener.
+type loopbackDialer struct{ address string }
+
+func (l *loopbackDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	address, err := netip.ParseAddrPort(l.address)
+	if err != nil || !address.Addr().IsLoopback() || address.Port() < 1024 || network != N.NetworkTCP || destination.String() != l.address {
+		return nil, errors.New("native Tor IPC destination escaped its owning listener")
+	}
+	return (&net.Dialer{Timeout: 15 * time.Second}).DialContext(ctx, "tcp", l.address)
+}
+
+func (*loopbackDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("native Tor IPC has no UDP listener")
+}

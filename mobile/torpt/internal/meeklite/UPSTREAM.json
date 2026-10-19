@@ -17,6 +17,7 @@
     "Owned request context, cancelable queues, worker join, and HTTP idle-connection retirement.",
     "Bridge URL/front/error details removed from transport logs.",
     "Preserve every front in the shared profile grammar's comma-separated front list.",
-    "Use the public uTLS spec adapter to keep randomized ML-KEM support and actual key shares consistent."
+    "Use the public uTLS spec adapter to keep randomized ML-KEM support and actual key shares consistent.",
+    "Freeze captured HTTP operation admission and join actual dial/read/write/close work before the meek session is released."
   ]
 }

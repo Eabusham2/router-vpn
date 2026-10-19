@@ -1,0 +1,39 @@
+{
+  "adaptations": [
+    "Add explicit worker join, and use an owned cancelable updater instead of enqueuing session pointers on a process-global scheduler."
+  ],
+  "commit": "78a2a3914a97fe8414b3f63054fad36c0a6e2e7c",
+  "modified_files": [
+    "sess.go"
+  ],
+  "module": "github.com/xtaci/kcp-go/v5",
+  "module_sum": "h1:FLaQPalgpufJYQRk0OK+gErEhXGLUPjv6FSRPrFR8Lk=",
+  "omitted_files": [
+    "timedsched.go"
+  ],
+  "original_files": {
+    "autotune.go": "60bb51f12ec09dcd0504e047da189f6a6dbbb8cbda3d30ec3a48afcb7a130374",
+    "bufferpool.go": "d91d83e958acae4f65194a9c3c9a650ae3fa5dcd18510d1596b16784e4c6958b",
+    "crypt.go": "f2796258ac3cb8e49686951f98cdf4088905f519fda18cf0bdf41c671b774e54",
+    "entropy.go": "cda35f575d7b680078d2a1ed6e9e07b41609531015af4a53215efedaadb50a68",
+    "fec.go": "022e25aa39b9954f90f71bb711cc5c01d06674933d065326e57688ffdc9ccecf",
+    "kcp.go": "a9c835e64b32cc1e08ad7931a12566ad535e768beeb7ca5c3c52e57da52041f1",
+    "kcp_trace_off.go": "45a232b9939518f6e15973a6b605ffbbbcde1a099c5e252b476bf9321b765420",
+    "kcp_trace_on.go": "4c15c4ccddc5d9faa2b575f732061ee21a6d17e7f8b64d8d73217ea203f7e75c",
+    "pkg.go": "00e187414ef10c7f460464b92480b74c0d48c28b0cce52eb1641e61886245b6c",
+    "platform_generic.go": "32e5513174d4c92fa1fabf7e09bd3a88b3b47f22c8d67e7843e5ea1988b8a44c",
+    "platform_linux.go": "c223d24e56f73a88fb8039b97568fd3aa440a0eeaddeeae5598138e3225476b0",
+    "readloop.go": "f4094676df28ec645302b3537d20484b7c0334e784f156df1edff405b22410df",
+    "readloop_generic.go": "ad867697f73e24f1911ea9503aaa62a9becd8fb41ba2bfedbd4a9bbf5a44e247",
+    "readloop_linux.go": "2c4b88cfd37770c9618b4ebf2cec844c1bae95eaafbe7e6fb6749ac2596199e5",
+    "ringbuffer.go": "54e6e0e57be2f04e6df32c7950a537def7ba6f5edfc78a15d50fd522f5954f40",
+    "sess.go": "a269472efd92478ffc3e82207d1debcb74df2ca3b587db07b7bd5f0e5b3a7b06",
+    "snmp.go": "8082f1d6e85e0438250c1aaeeb2654882102e9304b1a66739513e0acca56a06b",
+    "tx.go": "947b7cb4377eb10c6f862ac137688cbdbb620779daf9c8d2901b23d5ddb8b72c",
+    "tx_generic.go": "affe70f5bebbb76c5d302951db3f6df301cbe562874d7ae8d0327660bd714975",
+    "tx_linux.go": "9d1f8a6fde00ac653fc393c7588317b6490ec68592975de4038f02cd8d19a1ca"
+  },
+  "repository": "https://github.com/xtaci/kcp-go",
+  "schema": 1,
+  "version": "v5.6.72"
+}

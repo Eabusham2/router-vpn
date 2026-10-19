@@ -1,0 +1,244 @@
+// Package nativetor owns the only native Tor invocation in this process. It is
+// linked into the existing Libbox Go runtime, never a second gomobile library.
+package nativetor
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"time"
+)
+
+const RequiredABI int32 = 1
+const RequiredVersion = "tor 0.4.9.14"
+
+var ErrUnavailable = errors.New("native Tor C library is unavailable on this target")
+var ErrReleased = errors.New("native Tor invocation has been released")
+
+var process struct {
+	sync.Mutex
+	// Retain the owner even after failed control acquisition or a caller's close
+	// deadline. No other caller can obtain or replace this process singleton.
+	instance *Instance
+}
+
+// Instance is opaque ownership of one resident Tor C invocation. VPN session
+// changes must quiesce/reconfigure its control socket; Close is final shutdown
+// and cannot be followed by another native Start in this process.
+type Instance struct {
+	mu        sync.Mutex
+	handle    uint64
+	claimed   bool
+	closing   bool
+	released  bool
+	closeErr  error
+	closeDone chan struct{}
+	control   *owningConnection
+}
+
+func ABI() int32      { return nativeABI() }
+func Version() string { return nativeVersion() }
+
+// Start only accepts previously validated, generated Tor arguments. It checks
+// byte bounds and NULs again before C allocation. If an unexpected native error
+// includes a live handle, the returned Instance is nonnil and retains it until
+// checked final shutdown; callers must retain that owner even alongside error.
+func Start(arguments []string) (*Instance, error) {
+	if len(arguments) == 0 || len(arguments) > 128 || arguments[0] != "tor" {
+		return nil, errors.New("invalid native Tor argument count or executable")
+	}
+	total := 0
+	for _, argument := range arguments {
+		if len(argument) == 0 || len(argument) > 8192 || strings.IndexByte(argument, 0) >= 0 {
+			return nil, errors.New("invalid native Tor argument bytes")
+		}
+		total += len(argument)
+		if total > 65536 {
+			return nil, errors.New("native Tor arguments exceed the allocation bound")
+		}
+	}
+	process.Lock()
+	defer process.Unlock()
+	if process.instance != nil {
+		return nil, errors.New("native Tor process invocation is already owned or retired")
+	}
+	if ABI() == 0 && Version() == "" {
+		return nil, ErrUnavailable
+	}
+	if ABI() != RequiredABI || Version() != RequiredVersion {
+		return nil, errors.New("native Tor ABI or source version does not match the pinned host")
+	}
+	handle, err := nativeStart(arguments)
+	if handle == 0 {
+		if err == nil {
+			err = errors.New("native Tor start returned no owned handle")
+		}
+		return nil, err
+	}
+	instance := &Instance{handle: handle, closeDone: make(chan struct{})}
+	process.instance = instance
+	if err != nil {
+		instance.beginClose()
+		return instance, err
+	}
+	return instance, nil
+}
+
+// Control claims the preauthenticated owning socketpair exactly once. FileConn
+// duplicates the claimed descriptor; the original file always closes. A failed
+// claim/conversion retires this invocation and keeps its final shutdown owned.
+func (i *Instance) Control() (net.Conn, error) {
+	if i == nil {
+		return nil, errors.New("native Tor instance is absent")
+	}
+	i.mu.Lock()
+	if i.claimed || i.closing || i.released {
+		i.mu.Unlock()
+		return nil, errors.New("native Tor control is already claimed or retiring")
+	}
+	i.claimed = true
+	handle := i.handle
+	i.mu.Unlock()
+	fd, err := nativeControl(handle)
+	if err != nil {
+		i.beginClose()
+		return nil, err
+	}
+	file := os.NewFile(uintptr(fd), "routervpn-tor-owning-control")
+	if file == nil {
+		i.beginClose()
+		return nil, errors.New("native Tor control descriptor could not be owned")
+	}
+	connection, conversionErr := net.FileConn(file)
+	closeErr := file.Close()
+	if conversionErr != nil || closeErr != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		i.beginClose()
+		return nil, errors.New("native Tor control descriptor conversion failed")
+	}
+	i.mu.Lock()
+	if i.closing || i.released {
+		i.mu.Unlock()
+		_ = connection.Close()
+		return nil, errors.New("native Tor retired during control acquisition")
+	}
+	owned := &owningConnection{Conn: connection, owner: i}
+	i.control = owned
+	i.mu.Unlock()
+	return owned, nil
+}
+
+// Status reads the exact native handle. Failed/unknown ownership remains an
+// error, never a successful exit or a reusable native process.
+func (i *Instance) Status() (exited bool, code int, err error) {
+	if i == nil {
+		return false, 0, errors.New("native Tor instance is absent")
+	}
+	i.mu.Lock()
+	if i.released {
+		i.mu.Unlock()
+		return true, 0, ErrReleased
+	}
+	handle := i.handle
+	i.mu.Unlock()
+	exited, code, err = nativeStatus(handle)
+	if err != nil {
+		i.mu.Lock()
+		released := i.released
+		i.mu.Unlock()
+		if released {
+			return true, 0, ErrReleased
+		}
+	}
+	return
+}
+
+// Close requests final process shutdown immediately and waits only for ctx.
+// Deadline/cancellation does not release the handle, cancel a native thread, or
+// allow restart. The retained owner continues bounded native joins. A later
+// Close can observe completion; a failed native join stays quarantined.
+func (i *Instance) Close(ctx context.Context) error {
+	if i == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("native Tor close requires a context")
+	}
+	i.beginClose()
+	select {
+	case <-i.closeDone:
+		i.mu.Lock()
+		err := i.closeErr
+		i.mu.Unlock()
+		return err
+	default:
+	}
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-i.closeDone:
+		i.mu.Lock()
+		err := i.closeErr
+		i.mu.Unlock()
+		return err
+	}
+}
+
+func (i *Instance) beginClose() {
+	i.mu.Lock()
+	if i.closing {
+		i.mu.Unlock()
+		return
+	}
+	i.closing = true
+	connection := i.control
+	i.mu.Unlock()
+	go func() {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		for {
+			// The C API's timeout is bounded independently of every caller. It
+			// shuts down only its owning socket; it never signals this process.
+			complete, err := nativeClose(i.handle, 100)
+			if complete || err != nil {
+				i.mu.Lock()
+				i.released = complete && err == nil
+				i.closeErr = err
+				i.control = nil
+				i.mu.Unlock()
+				close(i.closeDone)
+				return
+			}
+			// A native clock/join failure may return immediately. Bound retry
+			// frequency without dropping the still-owned native invocation.
+			time.Sleep(20 * time.Millisecond)
+		}
+	}()
+}
+
+type owningConnection struct {
+	net.Conn
+	owner *Instance
+	once  sync.Once
+	err   error
+}
+
+func (c *owningConnection) Close() error {
+	c.once.Do(func() {
+		c.err = c.Conn.Close()
+		// Loss of the only controller cannot leave a detached resident Tor.
+		c.owner.beginClose()
+	})
+	return c.err
+}
+
+func nativeError(operation string, code int32) error {
+	return fmt.Errorf("native Tor %s failed (%d)", operation, code)
+}

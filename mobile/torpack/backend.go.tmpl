@@ -1,0 +1,78 @@
+//go:build cgo && (android || ios || routervpn_tor_native_test)
+
+package nativetor
+
+/*
+#cgo android,arm LDFLAGS: -L${SRCDIR}/lib/android/arm -lroutervpn_tor
+#cgo android,arm64 LDFLAGS: -L${SRCDIR}/lib/android/arm64 -lroutervpn_tor
+#cgo android,386 LDFLAGS: -L${SRCDIR}/lib/android/386 -lroutervpn_tor
+#cgo android,amd64 LDFLAGS: -L${SRCDIR}/lib/android/amd64 -lroutervpn_tor
+#cgo ios LDFLAGS: -F${SRCDIR}/lib/apple -framework RouterVPNTor
+#cgo routervpn_tor_native_test LDFLAGS: -lroutervpn_tor
+#include <stdlib.h>
+#include "routervpn_tor_host.h"
+*/
+import "C"
+
+import (
+	"errors"
+	"unsafe"
+)
+
+func nativeABI() int32      { return int32(C.routervpn_tor_abi()) }
+func nativeVersion() string { return C.GoString(C.routervpn_tor_version()) }
+
+func nativeStart(arguments []string) (uint64, error) {
+	storage := C.calloc(C.size_t(len(arguments)), C.size_t(unsafe.Sizeof(uintptr(0))))
+	if storage == nil {
+		return 0, errors.New("native Tor argument storage allocation failed")
+	}
+	defer C.free(storage)
+	pointers := unsafe.Slice((**C.char)(storage), len(arguments))
+	for index, argument := range arguments {
+		pointers[index] = C.CString(argument)
+		if pointers[index] == nil {
+			return 0, errors.New("native Tor argument allocation failed")
+		}
+		defer C.free(unsafe.Pointer(pointers[index]))
+	}
+	var handle C.uint64_t
+	code := C.routervpn_tor_start((**C.char)(storage), C.size_t(len(arguments)), &handle)
+	if code != 0 {
+		return uint64(handle), nativeError("start", int32(code))
+	}
+	return uint64(handle), nil
+}
+
+func nativeControl(handle uint64) (int, error) {
+	fd := C.routervpn_tor_control(C.uint64_t(handle))
+	if fd < 0 {
+		return -1, nativeError("control claim", int32(fd))
+	}
+	return int(fd), nil
+}
+
+func nativeStatus(handle uint64) (bool, int, error) {
+	var exitCode C.int32_t
+	code := C.routervpn_tor_status(C.uint64_t(handle), &exitCode)
+	switch code {
+	case 0:
+		return false, 0, nil
+	case 1:
+		return true, int(exitCode), nil
+	default:
+		return false, 0, nativeError("status", int32(code))
+	}
+}
+
+func nativeClose(handle uint64, waitMillis uint32) (bool, error) {
+	code := C.routervpn_tor_close(C.uint64_t(handle), C.uint32_t(waitMillis))
+	switch code {
+	case 0:
+		return true, nil
+	case 1:
+		return false, nil
+	default:
+		return false, nativeError("close", int32(code))
+	}
+}

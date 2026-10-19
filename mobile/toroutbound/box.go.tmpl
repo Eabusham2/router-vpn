@@ -1,0 +1,40 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// RouterVPNTorProof captures the actual Tor adapter in this Box. Labels alone,
+// another native instance, or a caller-supplied expected IP cannot prove it.
+func (s *Box) RouterVPNTorProof(outboundTag, sessionID string) (string, error) {
+	if s == nil || s.outbound == nil || outboundTag == "" || sessionID == "" {
+		return "", errors.New("native Tor proof owner is unavailable")
+	}
+	owner, found := s.outbound.Outbound(outboundTag)
+	if !found || owner == nil || owner.Type() != "routervpn-tor" {
+		return "", errors.New("native Tor final outbound is unavailable")
+	}
+	prover, ok := owner.(interface {
+		TorProof(context.Context, string) (mobiletor.Proof, error)
+	})
+	if !ok {
+		return "", errors.New("native Tor final outbound has no traffic proof")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
+	defer cancel()
+	proof, err := prover.TorProof(ctx, sessionID)
+	if err != nil {
+		return "", err
+	}
+	current, found := s.outbound.Outbound(outboundTag)
+	if !found || current != owner || s.ctx.Err() != nil {
+		return "", errors.New("native Tor proof belongs to a retired outbound")
+	}
+	data, err := json.Marshal(proof)
+	return string(data), err
+}

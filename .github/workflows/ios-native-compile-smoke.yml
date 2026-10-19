@@ -31,7 +31,7 @@ jobs:
           python3 deploy/test_ios_max_multihop.py
           python3 deploy/test_ios_naive_multihop.py
       - name: Install XcodeGen
-        run: brew install xcodegen
+        run: brew install xcodegen autoconf automake libtool pkg-config
       - name: Prepare pinned native engines
         working-directory: ios/RouterVPN
         run: |

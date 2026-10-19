@@ -31,8 +31,15 @@ android {
     sourceSets {
         main {
             jniLibs.srcDir file('libs/rosenpass-native/jni')
+            jniLibs.srcDir file('libs/tor-native/jni')
             assets.srcDir generatedLicenseAssets
             assets.srcDir generatedProvenanceAssets
+        }
+    }
+    packaging {
+        jniLibs {
+            // Preserve the native package's verified bytes through APK assembly.
+            keepDebugSymbols += ['**/libroutervpn_tor.so']
         }
     }
 }
@@ -46,8 +53,10 @@ def libboxOpenVPNStamp = file('libs/libbox.openvpn.sha256')
 def libboxLicense = file('libs/libbox-LICENSE.txt')
 def libxrayLicense = file('libs/libxray-LICENSE.txt')
 def nativeAwgLicense = file('libs/native-amneziawg-LICENSE.txt')
+def nativeTorPackage = file('libs/tor-native')
+def nativeTorNotices = file('libs/tor-notices')
 
-tasks.register('stageProjectLicense', Copy) {
+tasks.register('stageProjectLicense', Sync) {
     doFirst {
         if (!projectLicense.isFile()) {
             throw new GradleException('Root MIT LICENSE is missing')
@@ -56,6 +65,7 @@ tasks.register('stageProjectLicense', Copy) {
     dependsOn 'prepareSingBoxLibbox'
     from projectLicense
     from(nativeAwgLicense) { into 'third-party' }
+    from(nativeTorNotices) { into 'third-party/routervpn-tor' }
     into generatedLicenseAssets
 }
 
@@ -91,6 +101,10 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     inputs.files rootProject.file('build-sing-box-libbox.sh'), rootProject.file('routervpn_xray_bridge.go'), rootProject.file('../mobile/routervpn_openvpn.go'), rootProject.file('../mobile/routervpn_openvpn_native_test.go.tmpl'), rootProject.file('../deploy/test_mobile_openvpn_pinned.sh')
     inputs.file rootProject.file('../deploy/prepare-mobile-amnezia.py')
     inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
+    inputs.files rootProject.file('../deploy/build-mobile-tor-package.py'), rootProject.file('../deploy/prepare-mobile-torpack.py'), rootProject.file('../deploy/prepare-mobile-tor.py'), rootProject.file('../deploy/stage-mobile-tor-notices.py'), rootProject.file('../deploy/verify-mobile-tor-link.py')
+    inputs.files rootProject.file('../deploy/test_mobile_tor_loader.py'), rootProject.file('../deploy/test_mobile_tor_package_policy.py')
+    inputs.file rootProject.file('../deploy/test_mobile_tor_packaged_link.py')
+    inputs.files rootProject.file('../deploy/build-mobile-tor.py'), rootProject.file('../deploy/test-mobile-tor-outbound.py'), rootProject.file('../deploy/test_mobile_tor_package_runtime.py'), rootProject.fileTree('../internal/mobiletor')
     inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
     inputs.files rootProject.file('../deploy/prepare-mobile-mtu.py'), rootProject.file('../deploy/prepare-retained-tun.py'), rootProject.fileTree('../internal/mobilemtu'), rootProject.fileTree('../internal/mtuprobe'), rootProject.fileTree('../internal/hopmeasure')
     inputs.files rootProject.file('../deploy/prepare-apple-xray.py'), rootProject.file('../deploy/xray_native_dialer_policy.py'), rootProject.fileTree('../internal/applexray'), rootProject.fileTree('../mobile/applexray')
@@ -99,6 +113,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     inputs.files rootProject.file('../deploy/test_android_multihop_pinned.py'), rootProject.file('test_android_multihop_graph.py')
     inputs.files fileTree('src/main/java/com/eabusham/routervpn') { include '*.java' }
     outputs.files libboxAar, libboxStamp, libboxLicense, libxrayLicense, libboxOpenVPNStamp, nativeAwgLicense
+    outputs.dirs nativeTorPackage, nativeTorNotices
 }
 
 tasks.register('prepareRosenpassNative', Exec) {
@@ -152,6 +167,17 @@ tasks.register('verifyDebugProjectLicense') {
 
 tasks.matching { it.name == 'assembleDebug' }.configureEach {
     finalizedBy tasks.named('verifyDebugProjectLicense')
+}
+
+tasks.register('verifyDebugNativeTor', Exec) {
+    dependsOn 'packageDebug'
+    workingDir rootProject.projectDir
+    commandLine 'python3', '../deploy/verify-mobile-tor-link.py', '--native-package',
+        nativeTorPackage.absolutePath, '--android-apk', file("$buildDir/outputs/apk/debug/app-debug.apk").absolutePath
+}
+
+tasks.matching { it.name == 'assembleDebug' }.configureEach {
+    finalizedBy tasks.named('verifyDebugNativeTor')
 }
 
 dependencies {

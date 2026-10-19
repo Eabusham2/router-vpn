@@ -46,6 +46,12 @@ type clientTransport interface {
 // destination on the default host network. The dial/listen callbacks must be
 // captured from the current VPN owner or the final multihop predecessor.
 func Start(ctx context.Context, plan mobiletor.Plan, dial mobiletor.DialContext, listen mobiletor.ListenPacket) (*Bridges, error) {
+	return StartWithNetwork(ctx, plan, dial, listen, NetworkOptions{})
+}
+
+// StartWithNetwork additionally captures Snowflake's DNS and interface owner.
+// These are selected by the existing native VPN graph, never by a PT fallback.
+func StartWithNetwork(ctx context.Context, plan mobiletor.Plan, dial mobiletor.DialContext, listen mobiletor.ListenPacket, options NetworkOptions) (*Bridges, error) {
 	if ctx == nil || ctx.Err() != nil {
 		return nil, errors.New("native Tor bridge session has no active context")
 	}
@@ -59,7 +65,10 @@ func Start(ctx context.Context, plan mobiletor.Plan, dial mobiletor.DialContext,
 	}
 	transports := make(map[string]clientTransport)
 	for _, name := range verified.Transports() {
-		transport, err := newClientTransport(name)
+		if name == "snowflake" && listen == nil {
+			return nil, errors.New("Snowflake requires the captured VPN packet owner")
+		}
+		transport, err := newClientTransport(name, options)
 		if err != nil {
 			return nil, err
 		}
@@ -207,23 +216,31 @@ func (b *Bridges) serve(name string, local *pt.SocksConn) {
 	// their captured sockets. Stop the timer before admitting application data.
 	handshake := time.AfterFunc(30*time.Second, cancel)
 	remote, err := b.transports[name].Dial(ctx, bridge, lower)
+	closeRemote := func() {
+		if remote == nil {
+			return
+		}
+		if closeErr := remote.Close(); closeErr != nil && !errors.Is(closeErr, net.ErrClosed) && !errors.Is(closeErr, io.ErrClosedPipe) {
+			b.fail(errors.New("native Tor transport worker did not close cleanly"))
+		}
+	}
 	timely := handshake.Stop()
 	if err != nil || remote == nil || !timely || ctx.Err() != nil {
 		cancel()
 		if remote != nil {
-			remote.Close()
+			closeRemote()
 		}
 		local.Reject()
 		return
 	}
 	remoteStopped := make(chan struct{})
-	stopRemote := context.AfterFunc(ctx, func() { remote.Close(); close(remoteStopped) })
+	stopRemote := context.AfterFunc(ctx, func() { closeRemote(); close(remoteStopped) })
 	defer func() {
 		cancel()
 		if !stopRemote() {
 			<-remoteStopped
 		}
-		remote.Close()
+		closeRemote()
 	}()
 	if err := local.Grant(nil); err != nil {
 		return
@@ -240,7 +257,7 @@ func (b *Bridges) serve(name string, local *pt.SocksConn) {
 	local.Close()
 	// Closing the protected sockets interrupts the opposite direction. Both
 	// pumps finish before this worker can leave the session's close barrier.
-	remote.Close()
+	closeRemote()
 	<-finished
 }
 

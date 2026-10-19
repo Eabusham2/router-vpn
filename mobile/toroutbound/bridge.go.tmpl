@@ -1,0 +1,32 @@
+package libbox
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/routervpn/tornotices"
+)
+
+// RouterTorProof must receive the provider's captured native CommandServer,
+// final outbound tag and frozen connection session ID. The result is JSON with
+// session_id, ip, is_tor and checked_at from a real HTTPS Tor exit check.
+func RouterTorProof(server *CommandServer, outboundTag, sessionID string) (string, error) {
+	if server == nil || server.StartedService == nil {
+		return "", errors.New("native Tor VPN owner is unavailable")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return "", errors.New("native Tor VPN instance is unavailable")
+	}
+	proof, err := instance.Box().RouterVPNTorProof(outboundTag, sessionID)
+	if err != nil {
+		return "", err
+	}
+	if instance != server.StartedService.Instance() {
+		return "", errors.New("native Tor proof belongs to a retired VPN instance")
+	}
+	return proof, nil
+}
+
+// Keeping this exported getter in Libbox also retains the original PT license
+// text and source manifests in the one final Android/Apple Go runtime.
+func RouterTorSourceNotices() string { return tornotices.JSON() }

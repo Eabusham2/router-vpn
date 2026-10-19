@@ -1,0 +1,8 @@
+package libbox
+
+import "github.com/sagernet/sing-box/routervpn/nativetor"
+
+// These describe linked library provenance only. A protected Tor session still
+// requires its owned PT/controller/circuit proofs before capability is usable.
+func RouterTorNativeABI() int32      { return nativetor.ABI() }
+func RouterTorNativeVersion() string { return nativetor.Version() }

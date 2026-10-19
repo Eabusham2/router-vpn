@@ -1,0 +1,150 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// These fixtures exercise ownership only. Actual C Tor/PT behavior is covered
+// by native_test.go with the explicit routervpn_tor_native_test build tag.
+type residentFixture struct {
+	control net.Conn
+	peer    net.Conn
+	exited  atomic.Bool
+	once    sync.Once
+	closed  chan struct{}
+}
+
+func newResidentFixture(t *testing.T) *residentFixture {
+	t.Helper()
+	control, peer := net.Pipe()
+	fixture := &residentFixture{control: control, peer: peer, closed: make(chan struct{})}
+	t.Cleanup(func() { fixture.Close(context.Background()) })
+	return fixture
+}
+
+func (f *residentFixture) Control() (net.Conn, error) { return f.control, nil }
+func (f *residentFixture) Status() (bool, int, error) { return f.exited.Load(), 0, nil }
+func (f *residentFixture) Close(context.Context) error {
+	f.once.Do(func() {
+		f.exited.Store(true)
+		_ = f.control.Close()
+		_ = f.peer.Close()
+		close(f.closed)
+	})
+	return nil
+}
+
+func TestResidentLeaseDoesNotReplaceActiveOrQuarantinedInvocation(t *testing.T) {
+	fixture := newResidentFixture(t)
+	var starts int
+	r := &resident{start: func([]string) (nativeInstance, error) { starts++; return fixture, nil }}
+	directory := filepath.Join(t.TempDir(), "private-tor")
+	first, err := r.acquire(context.Background(), directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.acquire(context.Background(), directory); err == nil {
+		t.Fatal("another session acquired the active native invocation")
+	}
+	// The caller's checked cleanup is represented explicitly here; this
+	// ownership fixture does not claim it performed Tor wire quiescence.
+	if err = first.release(nil); err != nil {
+		t.Fatal(err)
+	}
+	second, err := r.acquire(context.Background(), directory)
+	if err != nil || second.instance != first.instance || starts != 1 {
+		t.Fatal("native resident was replaced between session leases", err, starts)
+	}
+	second.quarantine()
+	if _, err = r.acquire(context.Background(), directory); !errors.Is(err, errRetired) {
+		t.Fatal("quarantined native owner was reusable", err)
+	}
+	if err = second.release(nil); !errors.Is(err, errRetired) {
+		t.Fatal("late cleanup erased an earlier quarantine", err)
+	}
+	select {
+	case <-fixture.closed:
+	case <-time.After(time.Second):
+		t.Fatal("quarantined native invocation never received final shutdown")
+	}
+	if starts != 1 {
+		t.Fatal("quarantine started another C Tor invocation")
+	}
+}
+
+func TestNativeStartErrorRetainsItsReturnedOwner(t *testing.T) {
+	fixture := newResidentFixture(t)
+	var starts int
+	r := &resident{start: func([]string) (nativeInstance, error) {
+		starts++
+		return fixture, errors.New("owned native startup failure")
+	}}
+	directory := filepath.Join(t.TempDir(), "private-tor")
+	if _, err := r.acquire(context.Background(), directory); err == nil {
+		t.Fatal("failed native startup returned a session lease")
+	}
+	if _, err := r.acquire(context.Background(), directory); !errors.Is(err, errRetired) || starts != 1 {
+		t.Fatal("failed startup lost its live owner and retried Tor", err, starts)
+	}
+	select {
+	case <-fixture.closed:
+	case <-time.After(time.Second):
+		t.Fatal("startup failure did not final-shut its returned native owner")
+	}
+}
+
+func TestResidentCannotMovePrivateStateBetweenSessions(t *testing.T) {
+	fixture := newResidentFixture(t)
+	r := &resident{start: func([]string) (nativeInstance, error) { return fixture, nil }}
+	first, err := r.acquire(context.Background(), filepath.Join(t.TempDir(), "tor-a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := first.release(nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.acquire(context.Background(), filepath.Join(t.TempDir(), "tor-b")); err == nil {
+		t.Fatal("resident native Tor changed its private state owner")
+	}
+}
+
+func TestCloseTimeoutBeforeNativeLeaseAcquisitionStillQuarantines(t *testing.T) {
+	fixture := newResidentFixture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	r := &resident{start: func([]string) (nativeInstance, error) {
+		close(entered)
+		<-release
+		return fixture, nil
+	}}
+	ctx, cancel := context.WithCancel(context.Background())
+	h := &Outbound{ctx: ctx, cancel: cancel, resident: r, directory: filepath.Join(t.TempDir(), "tor"),
+		ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	if err := h.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	wait, cancelWait := context.WithTimeout(context.Background(), 10*time.Millisecond)
+	err := h.closeWithContext(wait)
+	cancelWait()
+	if !errors.Is(err, errRetired) {
+		t.Fatal("unfinished native acquisition falsely completed close", err)
+	}
+	close(release)
+	select {
+	case <-h.closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("late native owner did not remain attached to cleanup")
+	}
+	if _, err := r.acquire(context.Background(), h.directory); !errors.Is(err, errRetired) {
+		t.Fatal("late native acquisition escaped close timeout quarantine", err)
+	}
+}

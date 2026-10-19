@@ -1,0 +1,93 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (h *Outbound) beginClose() {
+	h.closeOnce.Do(func() {
+		h.mu.Lock()
+		h.closing = true
+		if !h.started {
+			h.started = true
+			close(h.workerDone)
+		}
+		h.mu.Unlock()
+		h.cancel()
+		h.readyOnce.Do(func() { close(h.ready) })
+		go h.cleanup()
+	})
+}
+
+func (h *Outbound) cleanup() {
+	// Cancellation already freezes each network owner. Keep the lease and
+	// every worker reachable until actual closes and pending dials have joined.
+	<-h.workerDone
+	h.mu.Lock()
+	owner, bridges, application := h.lease, h.bridges, h.application
+	h.mu.Unlock()
+	var cleanupError error
+	if application != nil {
+		cleanupError = errors.Join(cleanupError, application.Close(context.Background()))
+	}
+	if owner != nil {
+		cleanupError = errors.Join(cleanupError, owner.control.Quiesce(context.Background()))
+	}
+	if bridges != nil {
+		// Tor's inventories exclude connections marked for close. Real PT
+		// workers and their protected sockets must independently finish.
+		cleanupError = errors.Join(cleanupError, bridges.Close(context.Background()))
+	}
+	if owner != nil {
+		cleanupError = errors.Join(cleanupError, owner.control.Quiesce(context.Background()))
+		cleanupError = owner.release(cleanupError)
+	}
+	h.mu.Lock()
+	h.closeErr = cleanupError
+	h.proof = mobiletor.Proof{}
+	h.mu.Unlock()
+	close(h.closeDone)
+}
+
+func (h *Outbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), closeTimeout)
+	defer cancel()
+	return h.closeWithContext(ctx)
+}
+
+func (h *Outbound) closeWithContext(ctx context.Context) error {
+	h.beginClose()
+	if h.parentStop != nil {
+		h.parentStop()
+	}
+	select {
+	case <-h.closeDone:
+		h.mu.Lock()
+		err := h.closeErr
+		h.mu.Unlock()
+		return err
+	case <-ctx.Done():
+		select {
+		case <-h.closeDone:
+			h.mu.Lock()
+			err := h.closeErr
+			h.mu.Unlock()
+			return err
+		default:
+		}
+		h.mu.Lock()
+		h.closeTimedOut = true
+		owner := h.lease
+		h.mu.Unlock()
+		if owner != nil {
+			owner.quarantine()
+		}
+		// Cleanup continues owning pending work. No timeout can hand it to a
+		// new VPN session or authorize a second C Tor invocation.
+		return errors.Join(net.ErrClosed, errRetired)
+	}
+}

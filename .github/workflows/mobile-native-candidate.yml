@@ -154,7 +154,7 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
-      - run: brew install xcodegen
+      - run: brew install xcodegen autoconf automake libtool pkg-config
       - uses: actions/cache/restore@v4
         id: engine-cache
         with:
@@ -231,6 +231,8 @@ jobs:
           GITHUB_SHA: ${{ needs.snapshot.outputs.source_sha }}
         run: |
           set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
           gradle --no-daemon :app:assembleDebug --stacktrace 2>&1 | tee "$RUNNER_TEMP/android-build.log"
       - uses: actions/upload-artifact@v4
         if: always()

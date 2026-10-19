@@ -1,0 +1,149 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/nativetor"
+)
+
+// The C Tor library permits one invocation for the lifetime of this process.
+// Session leases keep its control socket resident and release only after a
+// checked configuration reset and independent PT/application socket drain.
+type nativeInstance interface {
+	Control() (net.Conn, error)
+	Status() (bool, int, error)
+	Close(context.Context) error
+}
+
+type nativeStart func([]string) (nativeInstance, error)
+
+var processResident = &resident{start: func(arguments []string) (nativeInstance, error) {
+	instance, err := nativetor.Start(arguments)
+	if instance == nil {
+		return nil, err
+	}
+	return instance, err
+}}
+
+type resident struct {
+	mu        sync.Mutex
+	start     nativeStart
+	instance  nativeInstance
+	control   *mobiletor.Control
+	directory string
+	active    *lease
+	retired   bool
+	closeOnce sync.Once
+}
+
+type lease struct {
+	resident *resident
+	instance nativeInstance
+	control  *mobiletor.Control
+}
+
+var errRetired = errors.New("native Tor ownership could not be safely reused; restart the VPN process")
+
+func (r *resident) acquire(ctx context.Context, directory string) (*lease, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if ctx == nil || ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	if r.retired {
+		return nil, errRetired
+	}
+	if r.active != nil {
+		return nil, errors.New("native Tor already belongs to an active VPN session")
+	}
+	if r.directory != "" && r.directory != directory {
+		return nil, errors.New("native Tor cannot change its private process-owned directory")
+	}
+	if err := mobiletor.PrepareState(directory); err != nil {
+		return nil, errors.New("native Tor private state could not be owned")
+	}
+	if r.instance == nil {
+		arguments, err := mobiletor.ResidentArguments(directory)
+		if err != nil {
+			return nil, err
+		}
+		instance, err := r.start(arguments)
+		// An error does not discharge a nonnil native owner. It is retained
+		// and finally joined instead of attempting another Tor invocation.
+		if instance != nil {
+			r.instance, r.directory = instance, directory
+		}
+		if err != nil || instance == nil {
+			if instance != nil {
+				r.retireLocked()
+			}
+			return nil, errors.New("native Tor invocation could not start")
+		}
+		connection, err := instance.Control()
+		if err != nil || connection == nil {
+			if connection != nil {
+				_ = connection.Close()
+			}
+			r.retireLocked()
+			return nil, errors.New("native Tor owning control could not be acquired")
+		}
+		r.control, err = mobiletor.NewControl(connection)
+		if err != nil {
+			_ = connection.Close()
+			r.retireLocked()
+			return nil, errors.New("native Tor control stream could not be owned")
+		}
+	}
+	if exited, _, err := r.instance.Status(); err != nil || exited {
+		r.retireLocked()
+		return nil, errRetired
+	}
+	owner := &lease{resident: r, instance: r.instance, control: r.control}
+	r.active = owner
+	return owner, nil
+}
+
+func (r *resident) retireLocked() {
+	r.retired = true
+	if r.instance != nil {
+		instance := r.instance
+		r.closeOnce.Do(func() {
+			// The native loader retains its handle even if a close fails. This
+			// resident also stays quarantined and can never claim a new one.
+			go func() { _ = instance.Close(context.Background()) }()
+		})
+	}
+}
+
+func (l *lease) quarantine() {
+	r := l.resident
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active == l {
+		r.retireLocked()
+	}
+}
+
+func (l *lease) release(cleanupError error) error {
+	r := l.resident
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.active != l {
+		return errRetired
+	}
+	if cleanupError != nil {
+		r.retireLocked()
+	}
+	if exited, _, err := l.instance.Status(); err != nil || exited {
+		r.retireLocked()
+	}
+	r.active = nil
+	if r.retired {
+		return errors.Join(cleanupError, errRetired)
+	}
+	return nil
+}

@@ -1,0 +1,237 @@
+//go:build routervpn_tor_native_test
+
+package nativetor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+	"os/exec"
+	"runtime"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+)
+
+func TestActualCgoLoaderScenarios(t *testing.T) {
+	for _, scenario := range []string{"arguments", "bad-abi", "bad-version", "empty-handle", "normal",
+		"claim-failed", "conversion-failed", "start-error-handle", "timeout", "close-error", "exit-code", "unknown-status", "controller-close"} {
+		t.Run(scenario, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+			defer cancel()
+			command := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestActualCgoLoaderChild$", "-test.v")
+			command.Env = append(os.Environ(), "ROUTERVPN_TOR_LOADER_SCENARIO="+scenario)
+			if output, err := command.CombinedOutput(); err != nil {
+				t.Fatalf("actual Cgo owner scenario failed: %v\n%s", err, output)
+			}
+		})
+	}
+}
+
+func descriptorCount(t *testing.T) int {
+	t.Helper()
+	directory := "/proc/self/fd"
+	if runtime.GOOS == "darwin" {
+		directory = "/dev/fd"
+	}
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+func finalClose(t *testing.T, instance *Instance) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	if err := instance.Close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if count(3) != 1 || count(4) != 0 {
+		t.Fatal("native owner was not joined exactly once")
+	}
+	if exited, _, err := instance.Status(); !exited || !errors.Is(err, ErrReleased) {
+		t.Fatal("released native handle fabricated an exit code or remained usable")
+	}
+	if other, err := Start([]string{"tor"}); other != nil || err == nil {
+		t.Fatal("native invocation restarted in same process")
+	}
+}
+
+func TestActualCgoLoaderChild(t *testing.T) {
+	scenario := os.Getenv("ROUTERVPN_TOR_LOADER_SCENARIO")
+	if scenario == "" {
+		return
+	}
+	// Initialize the Go netpoller before comparing kernel descriptor ownership.
+	left, right, pipeErr := os.Pipe()
+	if pipeErr != nil {
+		t.Fatal(pipeErr)
+	}
+	if err := left.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	_ = left.Close()
+	_ = right.Close()
+	settled := descriptorCount(t)
+	if scenario == "arguments" {
+		for _, arguments := range [][]string{nil, {"bad"}, {"tor", ""}, {"tor", "x\x00ignored"},
+			{"tor", strings.Repeat("x", 8193)}, append([]string{"tor"}, make([]string, 128)...),
+			{"tor", strings.Repeat("x", 8192), strings.Repeat("x", 8192), strings.Repeat("x", 8192),
+				strings.Repeat("x", 8192), strings.Repeat("x", 8192), strings.Repeat("x", 8192),
+				strings.Repeat("x", 8192), strings.Repeat("x", 8192)}} {
+			if instance, err := Start(arguments); instance != nil || err == nil {
+				t.Fatal("invalid argv crossed native allocation boundary")
+			}
+		}
+		if count(0) != 0 {
+			t.Fatal("invalid argv reached native C start")
+		}
+		return
+	}
+	instance, err := Start([]string{"tor", "--DisableNetwork", "1"})
+	if scenario == "bad-abi" || scenario == "bad-version" {
+		if instance != nil || err == nil || count(0) != 0 {
+			t.Fatal("wrong native library was invoked")
+		}
+		return
+	}
+	if scenario == "empty-handle" {
+		if instance != nil || err == nil {
+			t.Fatal("missing native handle accepted")
+		}
+		return
+	}
+	if instance == nil {
+		t.Fatalf("native ownership missing: %v", err)
+	}
+	if scenario == "start-error-handle" {
+		if err == nil {
+			t.Fatal("native error was lost")
+		}
+		finalClose(t, instance)
+		if descriptorCount(t) != settled {
+			t.Fatal("failed native start leaked descriptors")
+		}
+		return
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	if scenario == "exit-code" {
+		if exited, code, err := instance.Status(); !exited || code != 17 || err != nil {
+			t.Fatal("native failure code was rewritten")
+		}
+		finalClose(t, instance)
+		return
+	}
+	if scenario == "unknown-status" {
+		if exited, _, err := instance.Status(); exited || err == nil {
+			t.Fatal("unknown native handle became proven running/exited")
+		}
+		finalClose(t, instance)
+		return
+	}
+	if scenario == "close-error" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		defer cancel()
+		for iteration := 0; iteration < 2; iteration++ {
+			if err := instance.Close(ctx); err == nil {
+				t.Fatal("failed native join released ownership")
+			}
+		}
+		if count(2) != 1 || count(4) != 1 {
+			t.Fatal("failed close did not retain sticky native quarantine")
+		}
+		if other, err := Start([]string{"tor"}); other != nil || err == nil {
+			t.Fatal("quarantined process restarted")
+		}
+		return
+	}
+	if scenario == "timeout" {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond)
+		err := instance.Close(ctx)
+		cancel()
+		if !errors.Is(err, context.DeadlineExceeded) || count(4) != 1 {
+			t.Fatal("close timeout released native ownership")
+		}
+		if other, err := Start([]string{"tor"}); other != nil || err == nil {
+			t.Fatal("timed-out invocation was replaced")
+		}
+		allowRelease()
+		finalClose(t, instance)
+		return
+	}
+	if scenario == "claim-failed" || scenario == "conversion-failed" {
+		if connection, err := instance.Control(); connection != nil || err == nil {
+			t.Fatal("invalid owning control descriptor accepted")
+		}
+		finalClose(t, instance)
+		if descriptorCount(t) != settled {
+			t.Fatal("failed native control leaked descriptors")
+		}
+		return
+	}
+	if scenario == "controller-close" {
+		connection, err := instance.Control()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := connection.Close(); err != nil {
+			t.Fatal(err)
+		}
+		finalClose(t, instance)
+		return
+	}
+	var group sync.WaitGroup
+	connections := make(chan net.Conn, 32)
+	for iteration := 0; iteration < 32; iteration++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			if connection, err := instance.Control(); err == nil {
+				connections <- connection
+			}
+		}()
+	}
+	group.Wait()
+	close(connections)
+	var connection net.Conn
+	for current := range connections {
+		if connection != nil {
+			t.Fatal("native owning descriptor claimed twice")
+		}
+		connection = current
+	}
+	if connection == nil || count(1) != 1 || count(2) != 0 {
+		t.Fatal("duplicate control request touched or retired active native owner")
+	}
+	if _, err := connection.Write([]byte("owned")); err != nil {
+		t.Fatal("active owning socket was lost", err)
+	}
+	if exited, _, err := instance.Status(); exited || err != nil {
+		t.Fatal("active native status lost")
+	}
+	for iteration := 0; iteration < 16; iteration++ {
+		group.Add(1)
+		go func() {
+			defer group.Done()
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := instance.Close(ctx); err != nil {
+				t.Error(err)
+			}
+		}()
+	}
+	group.Wait()
+	finalClose(t, instance)
+	if _, err := connection.Write([]byte("retired")); err == nil {
+		t.Fatal("retired owning socket still usable")
+	}
+	if descriptorCount(t) != settled {
+		t.Fatal("FileConn conversion or native close leaked a descriptor")
+	}
+}

@@ -1,0 +1,61 @@
+{
+  "schema": 1,
+  "abi": 1,
+  "native_version": "tor 0.4.9.14",
+  "android_ndk": "28.0.13004108",
+  "android_api": 24,
+  "ios_minimum": "17.0",
+  "sources": {
+    "tor": {
+      "repository": "https://github.com/bitmold/tor",
+      "commit": "4a522a3ca491c6c04d4a44cb006b92101c42efc1",
+      "archive_sha256": "b01c7c86053241489ced7466124ed8f912d284cf58f33f32b31b0065e70c184b",
+      "licenses": {
+        "LICENSE": "5dc29ea302cc75db6db4a7c88d7b5d4638b4e0f5f1d2e6d21ce71f707470b766"
+      }
+    },
+    "openssl": {
+      "repository": "https://github.com/openssl/openssl",
+      "commit": "45e844fa2a14ec92d146bd8f5778ac130b6625fb",
+      "archive_sha256": "f54250b21795bb01240f3f9b42c384868d04460e339e39275aaaf93487f2d903",
+      "licenses": {
+        "LICENSE.txt": "7d5450cb2d142651b8afa315b5f238efc805dad827d91ba367d8516bc9d49e7a"
+      }
+    },
+    "libevent": {
+      "repository": "https://github.com/libevent/libevent",
+      "commit": "79ddfb460847999b807cba76d04e73891f29c6ee",
+      "archive_sha256": "b2f050a2e5b0631ca851de514c19739896b1ef0f7f0b79a1bc5a81f63db1335b",
+      "licenses": {
+        "LICENSE": "ff02effc9b331edcdac387d198691bfa3e575e7d244ad10cb826aa51ef085670"
+      }
+    },
+    "zlib": {
+      "repository": "https://github.com/madler/zlib",
+      "commit": "da607da739fa6047df13e66a2af6b8bec7c2a498",
+      "archive_sha256": "b9258cf6254e7f7c37f1cd61dba943a1c5ea3cff5718c789834dac359094f5f7",
+      "licenses": {
+        "LICENSE": "e32ff4e00d9d94930537635291da39e7e612703334bf6fde8c7f1686fe8a45a2"
+      }
+    }
+  },
+  "source_date_epoch": 1791478284,
+  "embedded_process_sha256": {
+    "src/lib/process/daemon.c": {
+      "original": "c44d136a6af4ef8d1941785104a0619e5bfc21487e9e3ff810a796bd55679fa8",
+      "patched": "e6e6356dffb59fbc0ddf9600a05da1545bd11de25da4463b75f7ed2079de51ca"
+    },
+    "src/lib/process/process_unix.c": {
+      "original": "a53ce0e8287f0f59ccc0fb28f6a9010806f184fb22d08652980e99545cd76b47",
+      "patched": "8f1f9c0bca8d352ad1cbc8f8eaeadb08d447bba6cd26552231266dbe90297daf"
+    },
+    "src/lib/process/process.c": {
+      "original": "080e3228266355d7eca4d09d6845e7fb86cb50940bb4cbaedec2dd07814adb13",
+      "patched": "5c910dd1fa3d3219738a23dd02c8d6c37477b946aed8941e8f75500919ce7d71"
+    },
+    "src/app/config/config.c": {
+      "original": "068a53051555128208e6042255d0c317647a83a5ad3eda315f3f3b489cc0869e",
+      "patched": "e8934edfcfd6a8e3522c3c2deb3f945f8ba26dd24004d8d9af2e015bff195e02"
+    }
+  }
+}

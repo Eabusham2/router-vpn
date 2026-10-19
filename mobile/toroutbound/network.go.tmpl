@@ -1,0 +1,347 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"slices"
+	"strings"
+
+	"github.com/pion/transport/v4"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/torpt"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+// A query carries this private marker through native DNS dialers as a second
+// guard against a bootstrap path re-entering Tor while awaiting Tor readiness.
+type torBootstrapDNSKey struct{}
+
+type torCapturedDNS struct {
+	owner          adapter.DNSTransport
+	detour, server string
+	dependencies   []string
+}
+
+type torCapturedOutbound struct {
+	owner        adapter.Outbound
+	dependencies []string
+}
+
+type torNetworkCapture struct {
+	ctx                        context.Context
+	tag, predecessor, resolver string
+	router                     adapter.DNSRouter
+	dns                        adapter.DNSTransportManager
+	outbound                   adapter.OutboundManager
+	network                    adapter.NetworkManager
+	query                      adapter.DNSQueryOptions
+	dnsOwners                  map[string]torCapturedDNS
+	outboundOwners             map[string]torCapturedOutbound
+	prepared                   bool
+}
+
+// The selected core dialer is authoritative for native resolver options. The
+// sole detour case without a resolveDialer uses the same Box's explicitly
+// selected route.default_domain_resolver, never dns.final or the system DNS.
+func captureTorNetwork(ctx context.Context, tag string, options option.DialerOptions, lower N.Dialer) (*torNetworkCapture, error) {
+	if ctx == nil || ctx.Err() != nil || lower == nil {
+		return nil, errors.New("Snowflake requires an active native network owner")
+	}
+	n := &torNetworkCapture{ctx: ctx, tag: tag, predecessor: options.Detour,
+		router:   service.FromContext[adapter.DNSRouter](ctx),
+		dns:      service.FromContext[adapter.DNSTransportManager](ctx),
+		outbound: service.FromContext[adapter.OutboundManager](ctx),
+		network:  service.FromContext[adapter.NetworkManager](ctx)}
+	if n.router == nil || n.dns == nil || n.outbound == nil || n.network == nil {
+		return nil, errors.New("Snowflake requires captured native DNS and network managers")
+	}
+	defaults := n.network.DefaultOptions()
+	if options.DomainResolver != nil && options.DomainResolver.Server != "" {
+		n.resolver = options.DomainResolver.Server
+	} else {
+		n.resolver = defaults.DomainResolver
+	}
+	if n.resolver == "" {
+		return nil, errors.New("Snowflake requires an explicit predecessor bootstrap domain_resolver")
+	}
+	selected, loaded := n.dns.Transport(n.resolver)
+	if !loaded || selected == nil {
+		return nil, errors.New("Snowflake selected bootstrap resolver is unavailable")
+	}
+	if resolver, ok := lower.(interface {
+		QueryOptions() adapter.DNSQueryOptions
+	}); ok {
+		n.query = resolver.QueryOptions()
+		if n.query.Transport != selected {
+			return nil, errors.New("Snowflake DNS differs from its captured native dialer")
+		}
+	} else {
+		// An explicitly selected outbound resolver always creates a native
+		// resolveDialer. Only a predecessor without one can inherit the
+		// frozen route default for Pion's separate DNS requests.
+		if options.Detour == "" || options.DomainResolver != nil && options.DomainResolver.Server != "" || defaults.DomainResolver == "" {
+			return nil, errors.New("Snowflake native dialer has no captured resolver options")
+		}
+		n.query = defaults.DomainResolveOptions
+		n.query.Transport = selected
+		// Match the pinned dialer: the legacy per-outbound strategy overrides
+		// the route default when no per-outbound resolver was specified.
+		if options.DomainStrategy != option.DomainStrategy(C.DomainStrategyAsIS) {
+			n.query.Strategy = C.DomainStrategy(options.DomainStrategy)
+		}
+	}
+	n.query = copyTorDNSOptions(n.query)
+	return n, nil
+}
+
+func copyTorDNSOptions(options adapter.DNSQueryOptions) adapter.DNSQueryOptions {
+	if options.RewriteTTL != nil {
+		ttl := *options.RewriteTTL
+		options.RewriteTTL = &ttl
+	}
+	return options
+}
+
+// Prepare is called once at Started, after this Box has populated its native
+// outbounds, DNS transports, protected network and interface finder. It opens
+// no socket and makes no lookup. An invalid graph never acquires a Tor lease.
+func (n *torNetworkCapture) prepare() (torpt.NetworkOptions, error) {
+	if n == nil || n.prepared || n.ctx.Err() != nil {
+		return torpt.NetworkOptions{}, errors.New("Snowflake network capture is unavailable or already prepared")
+	}
+	n.dnsOwners = make(map[string]torCapturedDNS)
+	n.outboundOwners = make(map[string]torCapturedOutbound)
+	visiting := make(map[string]bool)
+	var visitDNS func(string, int) error
+	var visitOutbound func(string, int) error
+	bounded := func(key string, depth int) error {
+		if depth > 32 || len(n.dnsOwners)+len(n.outboundOwners) >= 128 || visiting[key] {
+			return errors.New("Snowflake bootstrap dependencies are circular or exceed the owned graph")
+		}
+		return nil
+	}
+	visitOutbound = func(tag string, depth int) error {
+		if tag == "" {
+			return nil
+		}
+		key := "outbound:" + tag
+		if err := bounded(key, depth); err != nil {
+			return err
+		}
+		if _, captured := n.outboundOwners[tag]; captured {
+			return nil
+		}
+		owner, loaded := n.outbound.Outbound(tag)
+		if !loaded || owner == nil || tag == n.tag || owner.Type() == Type {
+			return errors.New("Snowflake bootstrap resolver must use an available predecessor without Tor")
+		}
+		visiting[key] = true
+		dependencies := append([]string(nil), owner.Dependencies()...)
+		for _, dependency := range dependencies {
+			if dependency == "" {
+				return errors.New("Snowflake predecessor has an unresolved dependency")
+			}
+			if err := visitOutbound(dependency, depth+1); err != nil {
+				return err
+			}
+		}
+		delete(visiting, key)
+		n.outboundOwners[tag] = torCapturedOutbound{owner: owner, dependencies: dependencies}
+		return nil
+	}
+	visitDNS = func(tag string, depth int) error {
+		key := "dns:" + tag
+		if tag == "" {
+			return errors.New("Snowflake bootstrap DNS dependency is missing")
+		}
+		if err := bounded(key, depth); err != nil {
+			return err
+		}
+		if _, captured := n.dnsOwners[tag]; captured {
+			return nil
+		}
+		owner, loaded := n.dns.Transport(tag)
+		if !loaded || owner == nil {
+			return errors.New("Snowflake bootstrap DNS dependency is unavailable")
+		}
+		switch owner.Type() {
+		case C.DNSTypeUDP, C.DNSTypeTCP, C.DNSTypeTLS, C.DNSTypeHTTPS, C.DNSTypeQUIC, C.DNSTypeHTTP3:
+		default:
+			return errors.New("Snowflake bootstrap DNS must be a captured remote transport")
+		}
+		metadata, ok := owner.(interface{ RouterVPNTorBootstrap() (string, string, bool) })
+		if !ok {
+			return errors.New("Snowflake DNS transport has no pinned bootstrap route capture")
+		}
+		detour, server, captured := metadata.RouterVPNTorBootstrap()
+		if !captured || server == "" || detour != n.predecessor {
+			return errors.New("Snowflake DNS must use its exact captured predecessor bootstrap route")
+		}
+		dependencies := append([]string(nil), owner.Dependencies()...)
+		if _, err := netip.ParseAddr(server); err != nil && len(dependencies) == 0 && detour == "" {
+			return errors.New("Snowflake DNS hostname requires a captured nonrecursive bootstrap resolver")
+		}
+		visiting[key] = true
+		if err := visitOutbound(detour, depth+1); err != nil {
+			return err
+		}
+		for _, dependency := range dependencies {
+			if err := visitDNS(dependency, depth+1); err != nil {
+				return err
+			}
+		}
+		delete(visiting, key)
+		n.dnsOwners[tag] = torCapturedDNS{owner: owner, detour: detour, server: server, dependencies: dependencies}
+		return nil
+	}
+	if err := visitDNS(n.resolver, 0); err != nil {
+		return torpt.NetworkOptions{}, err
+	}
+	if n.dnsOwners[n.resolver].owner != n.query.Transport {
+		return torpt.NetworkOptions{}, errors.New("Snowflake selected resolver was replaced before bootstrap")
+	}
+	interfaces, err := captureTorInterfaces(n.network)
+	if err != nil {
+		return torpt.NetworkOptions{}, err
+	}
+	n.prepared = true
+	if err := n.current(); err != nil {
+		return torpt.NetworkOptions{}, err
+	}
+	return torpt.NetworkOptions{Resolve: n.resolve, Interfaces: interfaces}, nil
+}
+
+func (n *torNetworkCapture) current() error {
+	if n == nil || !n.prepared || n.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if service.FromContext[adapter.DNSRouter](n.ctx) != n.router ||
+		service.FromContext[adapter.DNSTransportManager](n.ctx) != n.dns ||
+		service.FromContext[adapter.OutboundManager](n.ctx) != n.outbound ||
+		service.FromContext[adapter.NetworkManager](n.ctx) != n.network {
+		return errors.New("Snowflake native network owner was replaced")
+	}
+	for tag, captured := range n.dnsOwners {
+		owner, loaded := n.dns.Transport(tag)
+		if !loaded || owner != captured.owner || !slices.Equal(owner.Dependencies(), captured.dependencies) {
+			return errors.New("Snowflake bootstrap DNS owner was replaced")
+		}
+	}
+	for tag, captured := range n.outboundOwners {
+		owner, loaded := n.outbound.Outbound(tag)
+		if !loaded || owner != captured.owner || !slices.Equal(owner.Dependencies(), captured.dependencies) {
+			return errors.New("Snowflake bootstrap predecessor was replaced")
+		}
+	}
+	return nil
+}
+
+func (n *torNetworkCapture) resolve(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	if ctx == nil {
+		return nil, errors.New("Snowflake DNS query has no owner")
+	}
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	if err := n.current(); err != nil {
+		return nil, err
+	}
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, " \t\r\n\x00/:?#@") {
+		return nil, errors.New("Snowflake DNS name is invalid")
+	}
+	query := copyTorDNSOptions(n.query)
+	switch network {
+	case "ip":
+	case "ip4":
+		if query.Strategy == C.DomainStrategyIPv6Only || query.LookupStrategy == C.DomainStrategyIPv6Only {
+			return nil, errors.New("Snowflake IPv4 query conflicts with the captured resolver strategy")
+		}
+		query.LookupStrategy = C.DomainStrategyIPv4Only
+	case "ip6":
+		if query.Strategy == C.DomainStrategyIPv4Only || query.LookupStrategy == C.DomainStrategyIPv4Only {
+			return nil, errors.New("Snowflake IPv6 query conflicts with the captured resolver strategy")
+		}
+		query.LookupStrategy = C.DomainStrategyIPv6Only
+	default:
+		return nil, errors.New("Snowflake DNS address family is unsupported")
+	}
+	owned, cancel := context.WithCancel(context.WithValue(ctx, torBootstrapDNSKey{}, true))
+	cancelDone := make(chan struct{})
+	stop := context.AfterFunc(n.ctx, func() { cancel(); close(cancelDone) })
+	defer func() {
+		if !stop() {
+			<-cancelDone
+		}
+		cancel()
+	}()
+	addresses, err := n.router.Lookup(owned, host, query)
+	// Pion retains this synchronous callback until it actually returns. A
+	// late native DNS result must not escape after caller/session cancellation
+	// or an in-place DNS/outbound replacement in the captured Box.
+	if ctx.Err() != nil {
+		return nil, ctx.Err()
+	}
+	if err := n.current(); err != nil {
+		return nil, err
+	}
+	if err != nil {
+		return nil, errors.New("Snowflake captured native DNS lookup failed")
+	}
+	result := make([]netip.Addr, 0, len(addresses))
+	for _, address := range addresses {
+		address = address.Unmap()
+		if !address.IsValid() || address.IsUnspecified() || address.IsMulticast() || address.Zone() != "" {
+			continue
+		}
+		if network == "ip4" && !address.Is4() || network == "ip6" && !address.Is6() {
+			continue
+		}
+		if !slices.Contains(result, address) {
+			result = append(result, address)
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("Snowflake captured DNS returned no matching address")
+	}
+	return result, nil
+}
+
+func captureTorInterfaces(manager adapter.NetworkManager) ([]*transport.Interface, error) {
+	if manager == nil || manager.InterfaceFinder() == nil {
+		return nil, errors.New("Snowflake requires the native interface finder snapshot")
+	}
+	interfaces := manager.InterfaceFinder().Interfaces()
+	if interfaces == nil || len(interfaces) > 128 {
+		return nil, errors.New("Snowflake native interface snapshot is unavailable or too large")
+	}
+	var ownInterfaces []string
+	if monitor := manager.InterfaceMonitor(); monitor != nil {
+		ownInterfaces = append([]string(nil), monitor.MyInterfaces()...)
+	}
+	result := make([]*transport.Interface, 0, len(interfaces))
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagUp == 0 || slices.Contains(ownInterfaces, iface.Name) {
+			continue
+		}
+		if iface.Index <= 0 || iface.Name == "" || len(iface.Addresses) > 128 {
+			return nil, errors.New("Snowflake native interface identity is invalid")
+		}
+		copy := transport.NewInterface(net.Interface{Index: iface.Index, MTU: iface.MTU, Name: iface.Name,
+			HardwareAddr: append(net.HardwareAddr(nil), iface.HardwareAddr...), Flags: iface.Flags})
+		for _, prefix := range iface.Addresses {
+			if !prefix.IsValid() {
+				return nil, errors.New("Snowflake native interface prefix is invalid")
+			}
+			// Preserve the interface host address, not prefix.Masked(): the
+			// address Pion requests must be an actual captured local binding.
+			copy.AddAddress(&net.IPNet{IP: append(net.IP(nil), prefix.Addr().AsSlice()...), Mask: net.CIDRMask(prefix.Bits(), prefix.Addr().BitLen())})
+		}
+		result = append(result, copy)
+	}
+	return result, nil
+}

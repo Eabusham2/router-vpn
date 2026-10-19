@@ -1,0 +1,8 @@
+package tornotices
+
+import _ "embed"
+
+//go:embed source-notices.json
+var sourceNotices string
+
+func JSON() string { return sourceNotices }

@@ -14,6 +14,12 @@ VENDOR="$DEPS/sing-box-apple"
 XRAY_VENDOR="$DEPS/xray-core-apple"
 XRAY_LICENSE_OUT="$DEPS/xray-core-LICENSE.txt"
 AMNEZIA_LICENSE_OUT="$DEPS/native-amneziawg-LICENSE.txt"
+TOR_PACKAGE="$DEPS/tor-native"
+TOR_NOTICES="$DEPS/tor-notices"
+TOR_SOURCE_CACHE="$DEPS/tor-sources"
+TOR_SOURCE_SHA=$(python3 "$ROOT/../../deploy/prepare-mobile-tor.py" --digest)
+python3 "$ROOT/../../deploy/build-mobile-tor-package.py" --platform ios --output "$TOR_PACKAGE" --source-cache "$TOR_SOURCE_CACHE"
+python3 "$ROOT/../../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES"
 FRAMEWORK="$DEPS/Libbox.xcframework"
 STAMP="$DEPS/Libbox.xcframework.pin"
 LICENSE_OUT="$DEPS/libbox-LICENSE.txt"
@@ -22,6 +28,7 @@ BRIDGE_STAMP="$DEPS/Libbox.routervpn-openvpn.sha256"
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$BRIDGE_SOURCE")
 MULTIHOP_SHA=$(python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$MULTIHOP_SHA")
+BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$TOR_SOURCE_SHA")
 XRAY_BRIDGE_SHA=$(python3 "$ROOT/../../deploy/prepare-apple-xray.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$XRAY_BRIDGE_SHA")
 EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulator"
@@ -29,6 +36,8 @@ EXPECTED_STAMP="$VERSION+$COMMIT+$GO_TOOLCHAIN+$GOMOBILE_VERSION+ios,iossimulato
 verify_framework() {
   test -d "$FRAMEWORK"
   test -s "$AMNEZIA_LICENSE_OUT"
+  python3 "$ROOT/../../deploy/verify-mobile-tor-link.py" --native-package "$TOR_PACKAGE" --apple-libbox "$FRAMEWORK"
+  python3 "$ROOT/../../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES" --verify
   test -f "$FRAMEWORK/Info.plist"
   /usr/libexec/PlistBuddy -c 'Print :AvailableLibraries' "$FRAMEWORK/Info.plist" >/dev/null
   python3 - "$FRAMEWORK/Info.plist" <<'PY'
@@ -60,6 +69,8 @@ import sys
 headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
+    for symbol in ('LibboxRouterTorNativeABI', 'LibboxRouterTorNativeVersion', 'LibboxRouterTorSourceNotices'):
+        assert symbol in header.read_text(), str(header)
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
@@ -114,6 +125,8 @@ GOBIN="$GO_BIN_DIR" go install "github.com/sagernet/gomobile/cmd/gobind@v$GOMOBI
 export PATH="$GO_BIN_DIR:$PATH"
 command -v gomobile >/dev/null
 command -v gobind >/dev/null
+python3 "$ROOT/../../deploy/test_mobile_tor_loader.py" --go "$(command -v go)"
+python3 "$ROOT/../../deploy/test_mobile_tor_package_policy.py" --source-cache "$TOR_SOURCE_CACHE"
 
 rm -rf "$VENDOR" "$FRAMEWORK" "$STAMP" "$LICENSE_OUT"
 for attempt in 1 2 3; do
@@ -138,6 +151,7 @@ grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 install -m 0644 "$BRIDGE_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
 python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
 python3 "$ROOT/../../deploy/test_retained_strategy_preparation.py" "$VENDOR"
+python3 "$ROOT/../../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
 for attempt in 1 2 3; do
   rm -rf "$XRAY_VENDOR"
   if git clone --filter=blob:none --no-checkout https://github.com/XTLS/Xray-core.git "$XRAY_VENDOR" && \
@@ -169,6 +183,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1
   go test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./service/routervpnperformance ./experimental/libbox/routervpn/mobileperf -count=1 -timeout=120s
   python3 "$ROOT/../../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
+  python3 "$ROOT/../../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
   GOFLAGS="-ldflags=-checklinkname=0" go run ./cmd/internal/build_libbox -target apple -platform ios,iossimulator
 )
 SOURCE="$VENDOR/Libbox.xcframework"

@@ -1,0 +1,670 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"reflect"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type torTestDNS struct {
+	adapter.DNSRouter
+	calls  atomic.Int32
+	lookup func(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error)
+}
+
+func (r *torTestDNS) Lookup(ctx context.Context, domain string, options adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	r.calls.Add(1)
+	if ctx.Value(torBootstrapDNSKey{}) == nil {
+		return nil, errors.New("missing bootstrap cycle guard")
+	}
+	if r.lookup != nil {
+		return r.lookup(ctx, domain, options)
+	}
+	return []netip.Addr{netip.MustParseAddr("192.0.2.77"), netip.MustParseAddr("2001:db8::77")}, nil
+}
+
+type torTestDNSManager struct {
+	adapter.DNSTransportManager
+	mu    sync.Mutex
+	items map[string]adapter.DNSTransport
+}
+
+func (m *torTestDNSManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	item, ok := m.items[tag]
+	return item, ok
+}
+func (*torTestDNSManager) Default() adapter.DNSTransport {
+	panic("Snowflake consulted implicit/default DNS")
+}
+func (*torTestDNSManager) Transports() []adapter.DNSTransport {
+	panic("Snowflake guessed a DNS resolver")
+}
+func (m *torTestDNSManager) set(tag string, value adapter.DNSTransport) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[tag] = value
+}
+
+type torTestOutboundManager struct {
+	adapter.OutboundManager
+	mu    sync.Mutex
+	items map[string]adapter.Outbound
+}
+
+func (m *torTestOutboundManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	item, ok := m.items[tag]
+	return item, ok
+}
+func (m *torTestOutboundManager) set(tag string, value adapter.Outbound) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[tag] = value
+}
+
+type torTestOutbound struct {
+	outbound.Adapter
+	N.Dialer
+}
+type torTestTransport struct {
+	dns.TransportAdapter
+	adapter.Lifecycle
+}
+
+func (*torTestTransport) Reset() {}
+func (*torTestTransport) Exchange(context.Context, *mDNS.Msg) (*mDNS.Msg, error) {
+	return nil, errors.New("fixture did not permit native DNS IO")
+}
+func (*torTestTransport) ExchangeAsync(_ context.Context, _ *mDNS.Msg, callback func(*mDNS.Msg, error)) {
+	callback(nil, errors.New("fixture did not permit native DNS IO"))
+}
+
+type torTestFinder struct {
+	control.InterfaceFinder
+	items []control.Interface
+}
+
+func (f *torTestFinder) Interfaces() []control.Interface { return f.items }
+
+type torTestMonitor struct {
+	tun.DefaultInterfaceMonitor
+	own []string
+}
+
+func (m *torTestMonitor) MyInterfaces() []string { return m.own }
+
+type torTestNetwork struct {
+	adapter.NetworkManager
+	finder   *torTestFinder
+	defaults adapter.NetworkOptions
+	monitor  tun.DefaultInterfaceMonitor
+}
+
+func (m *torTestNetwork) DefaultOptions() adapter.NetworkOptions { return m.defaults }
+func (m *torTestNetwork) InterfaceFinder() control.InterfaceFinder {
+	if m.finder == nil {
+		return nil
+	}
+	return m.finder
+}
+func (m *torTestNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return m.monitor }
+
+type torNeverDial struct{}
+
+func (torNeverDial) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	return nil, errors.New("unowned test dial")
+}
+func (torNeverDial) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unowned test packets")
+}
+
+func torRemote(tag, detour, server, resolver string) adapter.DNSTransport {
+	options := option.RemoteDNSServerOptions{DNSServerAddressOptions: option.DNSServerAddressOptions{Server: server}}
+	options.Detour = detour
+	if resolver != "" {
+		options.DomainResolver = &option.DomainResolveOptions{Server: resolver}
+	}
+	return &torTestTransport{TransportAdapter: dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, tag, options)}
+}
+func torOut(tag, kind string, dependencies ...string) adapter.Outbound {
+	return &torTestOutbound{Adapter: outbound.NewAdapter(kind, tag, []string{N.NetworkTCP, N.NetworkUDP}, dependencies)}
+}
+
+type torCaptureFixture struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	router  *torTestDNS
+	dns     *torTestDNSManager
+	out     *torTestOutboundManager
+	network *torTestNetwork
+	options option.DialerOptions
+	query   adapter.DNSQueryOptions
+	lower   N.Dialer
+}
+
+func newTorCaptureFixture(t *testing.T, predecessor string) *torCaptureFixture {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = service.ContextWithDefaultRegistry(ctx)
+	f := &torCaptureFixture{ctx: ctx, cancel: cancel, router: &torTestDNS{}, dns: &torTestDNSManager{items: map[string]adapter.DNSTransport{}}, out: &torTestOutboundManager{items: map[string]adapter.Outbound{}},
+		network: &torTestNetwork{finder: &torTestFinder{items: []control.Interface{{Index: 7, MTU: 1500, Name: "captured0", Flags: net.FlagUp, HardwareAddr: net.HardwareAddr{2, 3, 4, 5, 6, 7}, Addresses: []netip.Prefix{netip.MustParsePrefix("192.0.2.31/24"), netip.MustParsePrefix("2001:db8:1::31/64")}}}}}}
+	service.MustRegister[adapter.DNSRouter](ctx, f.router)
+	service.MustRegister[adapter.DNSTransportManager](ctx, f.dns)
+	service.MustRegister[adapter.OutboundManager](ctx, f.out)
+	service.MustRegister[adapter.NetworkManager](ctx, f.network)
+	f.dns.items["bootstrap"] = torRemote("bootstrap", predecessor, "192.0.2.53", "")
+	if predecessor != "" {
+		f.out.items[predecessor] = torOut(predecessor, "shadowsocks")
+	}
+	f.options.Detour = predecessor
+	ttl := uint32(41)
+	subnet := badoption.Prefixable(netip.MustParsePrefix("198.51.100.0/24"))
+	f.options.DomainResolver = &option.DomainResolveOptions{Server: "bootstrap", Strategy: option.DomainStrategy(C.DomainStrategyPreferIPv6), DisableCache: true, DisableOptimisticCache: true, RewriteTTL: &ttl, Timeout: badoption.Duration(2 * time.Second), ClientSubnet: &subnet}
+	query, err := adapter.DNSQueryOptionsFrom(ctx, f.options.DomainResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.query = query
+	f.lower = dialer.NewResolveDialer(ctx, torNeverDial{}, false, "bootstrap", query, 0)
+	return f
+}
+func (f *torCaptureFixture) capture(t *testing.T) *torNetworkCapture {
+	t.Helper()
+	capture, err := captureTorNetwork(f.ctx, "tor-final", f.options, f.lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capture
+}
+
+func TestSnowflakeNativeResolverSelectionAndFrozenQueryOptions(t *testing.T) {
+	f := newTorCaptureFixture(t, "entry")
+	// This runs the pinned selection code, including its actual resolveDialer.
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: f.ctx, Options: f.options, RemoteIsDomain: true, NewDialer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.lower = lower
+	capture := f.capture(t)
+	*f.options.DomainResolver.RewriteTTL = 999
+	f.options.DomainResolver.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
+	f.options.DomainResolver.Server = "replaced-tag"
+	options, err := capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if options.Resolve == nil || len(options.Interfaces) != 1 {
+		t.Fatal("network options did not carry captured DNS/interfaces")
+	}
+	f.router.lookup = func(_ context.Context, domain string, query adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		if domain != "broker.example" || query.Transport != f.query.Transport || query.Strategy != C.DomainStrategyPreferIPv6 || query.LookupStrategy != C.DomainStrategyIPv4Only || !query.DisableCache || !query.DisableOptimisticCache || query.RewriteTTL == nil || *query.RewriteTTL != 41 || query.Timeout != 2*time.Second || query.ClientSubnet != netip.MustParsePrefix("198.51.100.0/24") {
+			t.Errorf("native query options changed: %#v", query)
+		}
+		*query.RewriteTTL = 1234
+		return []netip.Addr{netip.MustParseAddr("::ffff:192.0.2.77"), netip.MustParseAddr("192.0.2.77"), netip.MustParseAddr("2001:db8::77"), netip.IPv4Unspecified()}, nil
+	}
+	for i := 0; i < 2; i++ {
+		values, err := options.Resolve(f.ctx, "ip4", "broker.example")
+		if err != nil || !reflect.DeepEqual(values, []netip.Addr{netip.MustParseAddr("192.0.2.77")}) {
+			t.Fatalf("filtered lookup=%v/%v", values, err)
+		}
+	}
+	if *capture.query.RewriteTTL != 41 {
+		t.Fatal("native lookup mutated frozen TTL")
+	}
+	if _, err = capture.prepare(); err == nil {
+		t.Fatal("one capture was prepared twice")
+	}
+}
+
+func TestSnowflakeNativeCapturedRouteDefaultAndFamilyPolicy(t *testing.T) {
+	f := newTorCaptureFixture(t, "entry")
+	f.options.DomainResolver = nil
+	f.network.defaults = adapter.NetworkOptions{DomainResolver: "bootstrap", DomainResolveOptions: f.query}
+	f.options.DomainStrategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
+	f.lower = torNeverDial{}
+	capture := f.capture(t)
+	options, err := capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = options.Resolve(f.ctx, "ip6", "broker.example"); err == nil || f.router.calls.Load() != 0 {
+		t.Fatal("IPv6 bypassed captured IPv4-only policy")
+	}
+	if _, err = options.Resolve(f.ctx, "ip4", "broker.example"); err != nil {
+		t.Fatal(err)
+	}
+	f2 := newTorCaptureFixture(t, "entry")
+	f2.options.DomainResolver = nil
+	f2.lower = torNeverDial{}
+	if _, err = captureTorNetwork(f2.ctx, "tor-final", f2.options, f2.lower); err == nil {
+		t.Fatal("missing explicit/default resolver was guessed")
+	}
+	f3 := newTorCaptureFixture(t, "entry")
+	f3.query.Strategy = C.DomainStrategyIPv6Only
+	f3.lower = dialer.NewResolveDialer(f3.ctx, torNeverDial{}, false, "bootstrap", f3.query, 0)
+	capture = f3.capture(t)
+	options, err = capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = options.Resolve(f3.ctx, "ip4", "broker.example"); err == nil || f3.router.calls.Load() != 0 {
+		t.Fatal("IPv4 bypassed captured IPv6-only policy")
+	}
+}
+
+func TestSnowflakeNativeDNSHostnameBootstrapKeepsSamePredecessor(t *testing.T) {
+	for _, predecessor := range []string{"", "entry"} {
+		t.Run("predecessor="+predecessor, func(t *testing.T) {
+			f := newTorCaptureFixture(t, predecessor)
+			f.dns.items["bootstrap"] = torRemote("bootstrap", predecessor, "dns.example", "literal-bootstrap")
+			f.dns.items["literal-bootstrap"] = torRemote("literal-bootstrap", predecessor, "192.0.2.53", "")
+			f.query.Transport = f.dns.items["bootstrap"]
+			f.lower = dialer.NewResolveDialer(f.ctx, torNeverDial{}, false, "bootstrap", f.query, 0)
+			capture := f.capture(t)
+			options, err := capture.prepare()
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(capture.dnsOwners) != 2 {
+				t.Fatal("DNS hostname bootstrap was not captured")
+			}
+			if _, err = options.Resolve(f.ctx, "ip4", "broker.example"); err != nil {
+				t.Fatal(err)
+			}
+			f.dns.set("literal-bootstrap", torRemote("literal-bootstrap", predecessor, "192.0.2.54", ""))
+			previous := f.router.calls.Load()
+			if _, err = options.Resolve(f.ctx, "ip4", "broker.example"); err == nil || f.router.calls.Load() != previous {
+				t.Fatal("replaced transitive bootstrap resolver was used")
+			}
+		})
+	}
+}
+
+func TestSnowflakeNativeRejectsUnknownOrRecursiveBootstrapBeforeStart(t *testing.T) {
+	cases := map[string]func(*torCaptureFixture){
+		"missing-dns":                      func(f *torCaptureFixture) { f.dns.items["bootstrap"] = nil },
+		"physical-dns-escapes-predecessor": func(f *torCaptureFixture) { f.dns.items["bootstrap"] = torRemote("bootstrap", "", "192.0.2.53", "") },
+		"different-predecessor": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = torRemote("bootstrap", "other", "192.0.2.53", "")
+		},
+		"tor-predecessor": func(f *torCaptureFixture) { f.out.items["entry"] = torOut("entry", Type) },
+		"indirect-tor": func(f *torCaptureFixture) {
+			f.out.items["entry"] = torOut("entry", "shadowsocks", "tor-final")
+			f.out.items["tor-final"] = torOut("tor-final", Type)
+		},
+		"selector-can-enter-tor": func(f *torCaptureFixture) {
+			f.out.items["entry"] = torOut("entry", C.TypeSelector, "safe", "tor-final")
+			f.out.items["safe"] = torOut("safe", "shadowsocks")
+			f.out.items["tor-final"] = torOut("tor-final", Type)
+		},
+		"missing-outbound-dependency": func(f *torCaptureFixture) { f.out.items["entry"] = torOut("entry", "shadowsocks", "missing") },
+		"empty-outbound-dependency":   func(f *torCaptureFixture) { f.out.items["entry"] = torOut("entry", "shadowsocks", "") },
+		"outbound-cycle": func(f *torCaptureFixture) {
+			f.out.items["entry"] = torOut("entry", "shadowsocks", "middle")
+			f.out.items["middle"] = torOut("middle", "shadowsocks", "entry")
+		},
+		"dns-cycle": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = torRemote("bootstrap", "entry", "dns.example", "bootstrap")
+		},
+		"transitive-dns-cycle": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = torRemote("bootstrap", "entry", "dns.example", "other")
+			f.dns.items["other"] = torRemote("other", "entry", "dns2.example", "bootstrap")
+		},
+		"unknown-dns-dependency": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = torRemote("bootstrap", "entry", "dns.example", "unknown")
+		},
+		"unowned-raw-dns": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = &torTestTransport{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeUDP, "bootstrap", nil)}
+		},
+		"local-system-dns": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = &torTestTransport{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeLocal, "bootstrap", nil)}
+		},
+		"fake-ip-dns": func(f *torCaptureFixture) {
+			f.dns.items["bootstrap"] = &torTestTransport{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeFakeIP, "bootstrap", nil)}
+		},
+		"missing-interface-snapshot": func(f *torCaptureFixture) { f.network.finder.items = nil },
+		"missing-interface-finder":   func(f *torCaptureFixture) { f.network.finder = nil },
+	}
+	for name, mutate := range cases {
+		t.Run(name, func(t *testing.T) {
+			f := newTorCaptureFixture(t, "entry")
+			mutate(f)
+			selected, _ := f.dns.Transport("bootstrap")
+			if selected == nil {
+				if _, err := captureTorNetwork(f.ctx, "tor-final", f.options, f.lower); err == nil {
+					t.Fatal("missing resolver accepted")
+				}
+				return
+			}
+			f.query.Transport = selected
+			f.lower = dialer.NewResolveDialer(f.ctx, torNeverDial{}, false, "bootstrap", f.query, 0)
+			capture := f.capture(t)
+			h := &Outbound{ctx: f.ctx, networkCapture: capture}
+			if err := h.Start(adapter.StartStateStarted); err == nil {
+				t.Fatal("invalid capture started a native Tor session")
+			}
+			if h.started || h.lease != nil || h.bridges != nil || f.router.calls.Load() != 0 {
+				t.Fatal("rejected capture staged Tor or sent DNS")
+			}
+		})
+	}
+}
+
+func TestSnowflakeNativeDNSOwnsCancellationAndReplacement(t *testing.T) {
+	for _, scenario := range []string{"caller", "session", "dns-owner", "predecessor-owner"} {
+		t.Run(scenario, func(t *testing.T) {
+			f := newTorCaptureFixture(t, "entry")
+			capture := f.capture(t)
+			options, err := capture.prepare()
+			if err != nil {
+				t.Fatal(err)
+			}
+			entered, release := make(chan struct{}), make(chan struct{})
+			dnsCanceled := make(chan struct{})
+			f.router.lookup = func(ctx context.Context, _ string, _ adapter.DNSQueryOptions) ([]netip.Addr, error) {
+				close(entered)
+				if scenario == "caller" || scenario == "session" {
+					<-ctx.Done()
+					close(dnsCanceled)
+				}
+				<-release
+				return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil
+			}
+			ctx, cancel := context.WithCancel(f.ctx)
+			defer cancel()
+			finished := make(chan error, 1)
+			go func() {
+				values, err := options.Resolve(ctx, "ip4", "broker.example")
+				if len(values) != 0 {
+					finished <- errors.New("late DNS result was adopted")
+				} else {
+					finished <- err
+				}
+			}()
+			<-entered
+			switch scenario {
+			case "caller":
+				cancel()
+			case "session":
+				f.cancel()
+			case "dns-owner":
+				f.dns.set("bootstrap", torRemote("bootstrap", "entry", "192.0.2.54", ""))
+			case "predecessor-owner":
+				f.out.set("entry", torOut("entry", "shadowsocks"))
+			}
+			if scenario == "caller" || scenario == "session" {
+				select {
+				case <-dnsCanceled:
+				case <-time.After(time.Second):
+					t.Fatal("native query did not receive owner cancellation")
+				}
+			}
+			select {
+			case <-finished:
+				t.Fatal("undrained native query was abandoned")
+			default:
+			}
+			close(release)
+			if err := <-finished; err == nil || strings.Contains(err.Error(), "adopted") {
+				t.Fatalf("late query outcome: %v", err)
+			}
+		})
+	}
+	f := newTorCaptureFixture(t, "entry")
+	capture := f.capture(t)
+	options, err := capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.dns.set("bootstrap", torRemote("bootstrap", "entry", "192.0.2.54", ""))
+	if _, err = options.Resolve(f.ctx, "ip", "broker.example"); err == nil || f.router.calls.Load() != 0 {
+		t.Fatal("replaced resolver was queried")
+	}
+	ctx := context.WithValue(context.Background(), torBootstrapDNSKey{}, true)
+	if _, err = (&Outbound{}).DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.53:853")); err == nil {
+		t.Fatal("bootstrap DNS reentered Tor readiness")
+	}
+}
+
+func TestSnowflakeNativeInterfacesPreserveRealHostPrefixesAndOwnership(t *testing.T) {
+	f := newTorCaptureFixture(t, "entry")
+	f.network.finder.items = append(f.network.finder.items, control.Interface{Index: 8, Name: "owned-tun", Flags: net.FlagUp, Addresses: []netip.Prefix{netip.MustParsePrefix("10.77.0.1/24")}}, control.Interface{Index: 9, Name: "down", Flags: 0})
+	f.network.monitor = &torTestMonitor{own: []string{"owned-tun"}}
+	interfaces, err := captureTorInterfaces(f.network)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(interfaces) != 1 || interfaces[0].Index != 7 || interfaces[0].Name != "captured0" {
+		t.Fatal("snapshot invented or retained a VPN interface")
+	}
+	addresses, err := interfaces[0].Addrs()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if addresses[0].String() != "192.0.2.31/24" || addresses[1].String() != "2001:db8:1::31/64" {
+		t.Fatalf("interface addresses became network prefixes: %v", addresses)
+	}
+	f.network.finder.items[0].HardwareAddr[0] = 99
+	f.network.finder.items[0].Addresses[0] = netip.MustParsePrefix("198.51.100.1/24")
+	if interfaces[0].HardwareAddr[0] != 2 || addresses[0].String() != "192.0.2.31/24" {
+		t.Fatal("captured interface aliases mutable manager storage")
+	}
+	addresses[0].(*net.IPNet).IP[0] = 44
+	if f.network.finder.items[0].Addresses[0].String() != "198.51.100.1/24" {
+		t.Fatal("Pion changed native manager interface ownership")
+	}
+	for _, invalid := range []control.Interface{{Index: 0, Name: "missing", Flags: net.FlagUp}, {Index: 7, Name: "bad-prefix", Flags: net.FlagUp, Addresses: []netip.Prefix{{}}}} {
+		f.network.finder.items = []control.Interface{invalid}
+		if _, err = captureTorInterfaces(f.network); err == nil {
+			t.Fatal("invalid native interface was invented")
+		}
+	}
+}
+
+type torLateConnection struct {
+	net.Conn
+	closes atomic.Int32
+}
+
+func (c *torLateConnection) Close() error { c.closes.Add(1); return c.Conn.Close() }
+
+type torLatePacket struct {
+	net.PacketConn
+	closes atomic.Int32
+}
+
+func (c *torLatePacket) Close() error { c.closes.Add(1); return c.PacketConn.Close() }
+
+type torLateLower struct {
+	entered chan struct{}
+	release chan struct{}
+	tcp     net.Conn
+	udp     net.PacketConn
+}
+
+func (d *torLateLower) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	close(d.entered)
+	<-d.release
+	return d.tcp, nil
+}
+func (d *torLateLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	close(d.entered)
+	<-d.release
+	return d.udp, nil
+}
+
+func TestSnowflakeNativeLateProtectedSocketCannotOutliveReplacedOwner(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			f := newTorCaptureFixture(t, "entry")
+			capture := f.capture(t)
+			if _, err := capture.prepare(); err != nil {
+				t.Fatal(err)
+			}
+			lower := &torLateLower{entered: make(chan struct{}), release: make(chan struct{})}
+			var closeCount *atomic.Int32
+			if network == "tcp" {
+				client, peer := net.Pipe()
+				t.Cleanup(func() { _ = peer.Close() })
+				tracked := &torLateConnection{Conn: client}
+				lower.tcp = tracked
+				closeCount = &tracked.closes
+			} else {
+				packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				tracked := &torLatePacket{PacketConn: packet}
+				lower.udp = tracked
+				closeCount = &tracked.closes
+			}
+			h := &Outbound{lower: lower, networkCapture: capture}
+			owned, err := mobiletor.NewNetwork(f.ctx, h.protectedDial, h.protectedPackets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				if network == "tcp" {
+					conn, err := owned.DialContext(f.ctx, "tcp", "192.0.2.7:443")
+					if conn != nil {
+						_ = conn.Close()
+						done <- errors.New("late TCP socket adopted")
+					} else {
+						done <- err
+					}
+				} else {
+					conn, err := owned.ListenPacket(f.ctx, "udp", "0.0.0.0:0")
+					if conn != nil {
+						_ = conn.Close()
+						done <- errors.New("late UDP socket adopted")
+					} else {
+						done <- err
+					}
+				}
+			}()
+			<-lower.entered
+			f.out.set("entry", torOut("entry", "shadowsocks"))
+			close(lower.release)
+			if err := <-done; err == nil || strings.Contains(err.Error(), "adopted") {
+				t.Fatalf("late protected socket outcome: %v", err)
+			}
+			if err := owned.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			if closeCount.Load() != 1 {
+				t.Fatalf("late socket was not returned to its exact PT owner for discard: %d", closeCount.Load())
+			}
+		})
+	}
+}
+
+type torOwnedDNSDialer struct {
+	target string
+	calls  atomic.Int32
+}
+
+func (d *torOwnedDNSDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkUDP || destination.String() != d.target {
+		return nil, errors.New("native DNS escaped the owned UDP fixture")
+	}
+	d.calls.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, "udp4", d.target)
+}
+func (*torOwnedDNSDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("owned DNS fixture does not expose another socket")
+}
+
+func TestSnowflakeNativeActualDNSRouterUsesOnlyCapturedTransport(t *testing.T) {
+	packet, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var queries atomic.Int32
+	var subnetSeen atomic.Bool
+	server := &mDNS.Server{PacketConn: packet, Handler: mDNS.HandlerFunc(func(w mDNS.ResponseWriter, request *mDNS.Msg) {
+		queries.Add(1)
+		if opt := request.IsEdns0(); opt != nil {
+			for _, field := range opt.Option {
+				if ecs, ok := field.(*mDNS.EDNS0_SUBNET); ok && ecs.Address.String() == "198.51.100.0" && ecs.SourceNetmask == 24 {
+					subnetSeen.Store(true)
+				}
+			}
+		}
+		response := new(mDNS.Msg)
+		response.SetReply(request)
+		for _, question := range request.Question {
+			switch question.Qtype {
+			case mDNS.TypeA:
+				response.Answer = append(response.Answer, &mDNS.A{Hdr: mDNS.RR_Header{Name: question.Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 300}, A: net.ParseIP("192.0.2.77")})
+			case mDNS.TypeAAAA:
+				response.Answer = append(response.Answer, &mDNS.AAAA{Hdr: mDNS.RR_Header{Name: question.Name, Rrtype: mDNS.TypeAAAA, Class: mDNS.ClassINET, Ttl: 300}, AAAA: net.ParseIP("2001:db8::77")})
+			}
+		}
+		_ = w.WriteMsg(response)
+	})}
+	serverDone := make(chan error, 1)
+	go func() { serverDone <- server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown(); _ = packet.Close(); <-serverDone })
+	f := newTorCaptureFixture(t, "entry")
+	protected := &torOwnedDNSDialer{target: packet.LocalAddr().String()}
+	opts := option.RemoteDNSServerOptions{DNSServerAddressOptions: option.DNSServerAddressOptions{Server: "127.0.0.1"}}
+	opts.Detour = "entry"
+	transport := DNST.NewUDPRaw(log.NewNOPFactory().NewLogger("captured-dns"), dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeUDP, "bootstrap", opts), protected, M.ParseSocksaddr(protected.target))
+	t.Cleanup(func() { _ = transport.Close() })
+	f.dns.set("bootstrap", transport)
+	f.query.Transport = transport
+	f.lower = dialer.NewResolveDialer(f.ctx, torNeverDial{}, false, "bootstrap", f.query, 0)
+	router, err := dns.NewRouter(f.ctx, log.NewNOPFactory(), option.DNSOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = router.Close() })
+	f.router.lookup = router.Lookup
+	capture := f.capture(t)
+	options, err := capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{"ip4", "ip6", "ip"} {
+		values, err := options.Resolve(f.ctx, network, "broker.example")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if network == "ip4" && !reflect.DeepEqual(values, []netip.Addr{netip.MustParseAddr("192.0.2.77")}) || network == "ip6" && !reflect.DeepEqual(values, []netip.Addr{netip.MustParseAddr("2001:db8::77")}) || network == "ip" && (len(values) != 2 || !values[0].Is6()) {
+			t.Fatalf("actual native DNS lost family/preference: %s=%v", network, values)
+		}
+	}
+	if queries.Load() != 4 || protected.calls.Load() == 0 || !subnetSeen.Load() {
+		t.Fatalf("actual captured transport proof missing: queries=%d dials=%d subnet=%v", queries.Load(), protected.calls.Load(), subnetSeen.Load())
+	}
+}

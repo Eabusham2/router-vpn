@@ -247,7 +247,7 @@ func TestPTCloseRetainsAnIgnoringPendingDial(t *testing.T) {
 	}
 }
 
-func TestBridgeStartRequiresAnImplementedTransportAndCapturedOwner(t *testing.T) {
+func TestBridgeStartRequiresCapturedNetworkAndDNS(t *testing.T) {
 	plan := obfs4Plan(t, strings.Repeat("A", 70))
 	if b, err := Start(context.Background(), plan, nil, nil); err == nil {
 		b.Close(context.Background())
@@ -261,7 +261,7 @@ func TestBridgeStartRequiresAnImplementedTransportAndCapturedOwner(t *testing.T)
 	}
 	if b, err := Start(context.Background(), plan, func(context.Context, string, string) (net.Conn, error) { return nil, net.ErrClosed }, nil); err == nil {
 		b.Close(context.Background())
-		t.Fatal("transport capability was claimed before integration")
+		t.Fatal("Snowflake accepted missing captured DNS, interfaces, or packet ownership")
 	}
 }
 

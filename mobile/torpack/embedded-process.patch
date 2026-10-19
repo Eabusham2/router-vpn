@@ -1,0 +1,61 @@
+--- a/src/lib/process/daemon.c
++++ b/src/lib/process/daemon.c
+@@ -11,7 +11,7 @@
+ #include "orconfig.h"
+ #include "lib/process/daemon.h"
+ 
+-#ifndef _WIN32
++#if !defined(_WIN32) && !defined(ROUTERVPN_TOR_EMBEDDED)
+ 
+ #include "lib/fdio/fdio.h"
+ #include "lib/fs/files.h"
+--- a/src/lib/process/process_unix.c
++++ b/src/lib/process/process_unix.c
+@@ -129,6 +129,11 @@
+ process_status_t
+ process_unix_exec(process_t *process)
+ {
++#ifdef ROUTERVPN_TOR_EMBEDDED
++  (void)process;
++  log_warn(LD_PROCESS, "Embedded Tor requires owned in-process transports.");
++  return PROCESS_STATUS_ERROR;
++#else
+   process_unix_t *unix_process;
+   pid_t pid;
+   int stdin_pipe[2];
+@@ -322,6 +327,7 @@
+   process_unix_start_reading(&unix_process->stderr_handle);
+ 
+   return PROCESS_STATUS_RUNNING;
++#endif /* ROUTERVPN_TOR_EMBEDDED */
+ }
+ 
+ /** Terminate the given process. Returns true on success, otherwise false. */
+--- a/src/lib/process/process.c
++++ b/src/lib/process/process.c
+@@ -30,7 +30,11 @@
+  * Boolean.  If true, then Tor may call execve or CreateProcess via
+  * tor_spawn_background.
+  **/
++#ifdef ROUTERVPN_TOR_EMBEDDED
++static int may_spawn_background_process = 0;
++#else
+ static int may_spawn_background_process = 1;
++#endif
+ 
+ /** Structure to represent a child process. */
+ struct process_t {
+--- a/src/app/config/config.c
++++ b/src/app/config/config.c
+@@ -3298,6 +3298,11 @@
+   int world_writable_control_socket=0;
+ 
+   tor_assert(msg);
++
++#ifdef ROUTERVPN_TOR_EMBEDDED
++  if (options->RunAsDaemon)
++    REJECT("Embedded Tor cannot run as a daemon.");
++#endif
+   *msg = NULL;
+ 
+   if (parse_ports(options, 1, msg, &n_ports,
