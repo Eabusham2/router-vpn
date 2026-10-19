@@ -51,6 +51,8 @@ class TorNativeGate(unittest.TestCase):
                          'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',
                          'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java',
                          'android/test_android_tor_profile.py','android/test_android_tor_session.py',
+                         'android/test_android_tor_form.py','android/test_android_start_layer_relay_lifecycle.py',
+                         'deploy/native_tor_graph_host.py','deploy/test_native_tor_graph_host.py',
                          'mobile/routervpn_tor_android_graph_test.go.tmpl'):
             changed=ROOT/relative;self.assertIn(changed,paths)
             with mock.patch.object(Path,'read_bytes',lambda path:read(path)+(b'\nchanged fixture\n' if path==changed else b'')):
@@ -92,11 +94,14 @@ class TorNativeGate(unittest.TestCase):
         gradle=(ROOT/'android/app/build.gradle').read_text()
         self.assertIn("rootProject.file('../deploy/test_android_tor_pinned.py')",gradle)
         self.assertIn("rootProject.file('test_android_tor_profile.py')",gradle)
+        for path in ('native_tor_graph_host.py','test_native_tor_graph_host.py'):
+            self.assertIn("rootProject.file('../deploy/"+path+"')",gradle)
         runtime=(ROOT/'android/test_android_runtime_contract.py').read_text()
-        for script in ('test_android_tor_profile.py','test_android_tor_session.py','deploy/test_android_tor_pinned_contract.py'):
+        for script in ('test_android_tor_profile.py','test_android_tor_session.py','deploy/test_android_tor_pinned_contract.py','deploy/test_native_tor_graph_host.py'):
             self.assertIn('"'+script+'"',runtime)
         source=(ROOT/'deploy/test_android_tor_pinned.py').read_text()
         self.assertIn('with_naive_outbound,routervpn_tor_native_test',source)
+        self.assertIn('env=HOST.environment(go,library,clang)',source)
         self.assertIn("'^TestRouterTorAndroidGeneratedGraphs$'",source)
         native=GATE.TEMPLATE.read_text()
         for marker in ('len(entries) != 348','CheckConfig(string(data))','CheckConfig(string(bad))',

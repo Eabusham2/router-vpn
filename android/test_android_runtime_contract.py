@@ -319,5 +319,7 @@ subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_
                cwd=ROOT.parent, check=True)
 subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_tor_pinned_contract.py")],
                cwd=ROOT.parent, check=True)
+subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_native_tor_graph_host.py")],
+               cwd=ROOT.parent, check=True)
 
 print("Android runtime truth contract: PASS")

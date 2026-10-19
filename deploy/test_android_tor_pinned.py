@@ -6,7 +6,6 @@ import hashlib
 import importlib.util
 import itertools
 import json
-import os
 import shutil
 import subprocess
 import sys
@@ -17,6 +16,7 @@ def module(name,path):
     spec=importlib.util.spec_from_file_location(name,path);loaded=importlib.util.module_from_spec(spec);spec.loader.exec_module(loaded);return loaded
 M=module('android_tor_graph_dependencies',ROOT/'deploy/test_android_multihop_pinned.py')
 T=module('android_tor_owned_source',ROOT/'deploy/prepare-mobile-tor.py')
+HOST=module('android_tor_graph_host',ROOT/'deploy/native_tor_graph_host.py')
 JAVA=ROOT/'android/app/src/main/java/com/eabusham/routervpn'
 TEMPLATE=ROOT/'mobile/routervpn_tor_android_graph_test.go.tmpl'
 MODES=('wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','naive-h2','naive-h3','reality-vision','reality-pq-vision','reality-xhttp','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
@@ -27,7 +27,7 @@ LAYERS=('off','aes-256-gcm','aes-256-gcm+xor-whitening')
 def inputs():
     extra=[Path(__file__).resolve(),TEMPLATE,ROOT/'deploy/test_android_tor_pinned_contract.py',ROOT/'android/test_android_tor_profile.py',ROOT/'android/test_android_tor_form.py',ROOT/'android/test_android_tor_session.py',ROOT/'android/test_android_start_layer_relay_lifecycle.py',ROOT/'android/test_android_runtime_teardown.py',ROOT/'android/test_android_runtime_contract.py',ROOT/'android/test_android_standard_exit_contract.py',ROOT/'android/test_android_multihop_home_state.py',ROOT/'android/test_android_layered_service_compile.py']
     extra += [JAVA/(name+'.java') for name in ('AndroidTorProfile','AndroidTorSession','AndroidStandardExitStore','AndroidStandardExitRuntime','AndroidStandardExitController','AndroidDirectStandardExitController','AndroidHomeStateStore','AndroidSessionRevalidator','LayeredVpnService','AndroidStartLayerRelay','StandardExitActivity')]
-    return sorted(set(M.inputs()+extra))
+    return sorted(set(M.inputs()+HOST.inputs()+extra))
 
 
 def digest():
@@ -64,13 +64,14 @@ def verify_prepared(vendor):
         raise ValueError('Prepared Tor bootstrap DNS owner changed')
 
 
-def run(vendor,package,go):
+def run(vendor,package,go,clang=None):
     vendor=vendor.resolve();package=package.resolve()
     if subprocess.check_output(['git','rev-parse','HEAD'],cwd=vendor,text=True).strip()!=M.PIN:raise ValueError('Android Tor gate needs the exact pinned core')
     T.TORPACK.PACKAGE.verify(package,'host-test')
     verify_prepared(vendor)
     library=package/'lib/libroutervpn_tor.so'
     if not library.is_file():raise ValueError('This Android runtime gate requires the verified Linux host Tor DSO')
+    env=HOST.environment(go,library,clang)
     before=digest();native=hashlib.sha256(library.read_bytes()).hexdigest()
     target=vendor/'experimental/libbox/routervpn_tor_android_graph_test.go'
     data=TEMPLATE.read_bytes()
@@ -79,10 +80,9 @@ def run(vendor,package,go):
     try:
         with tempfile.TemporaryDirectory(prefix='routervpn-android-tor-native-') as directory:
             work=Path(directory);graphs=work/'graphs';graphs.mkdir()
-            env=os.environ.copy();env['ANDROID_JSON_JAR']=str(M.android_json_dependency(work,env));env['ROUTERVPN_ANDROID_TOR_GRAPHS']=str(graphs)
+            env['ANDROID_JSON_JAR']=str(M.android_json_dependency(work,env));env['ROUTERVPN_ANDROID_TOR_GRAPHS']=str(graphs)
             subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_profile.py')],cwd=ROOT,env=env,check=True,timeout=600)
             matrix(graphs)
-            env['CGO_ENABLED']='1';env['CGO_LDFLAGS']='-L'+str(library.parent)+' -Wl,-rpath,'+str(library.parent)+' -lroutervpn_tor'
             subprocess.run([go,'test','-mod=readonly','-ldflags=-checklinkname=0','-tags','with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test','./experimental/libbox','-run','^TestRouterTorAndroidGeneratedGraphs$','-count=1','-timeout=120s','-v'],cwd=vendor,env=env,check=True,timeout=600)
         if before!=digest() or native!=hashlib.sha256(library.read_bytes()).hexdigest():raise ValueError('Android or native Tor source changed during validation')
         T.TORPACK.PACKAGE.verify(package,'host-test')
@@ -93,7 +93,7 @@ def run(vendor,package,go):
 
 
 if __name__=='__main__':
-    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--native-package',type=Path);parser.add_argument('--go',default=shutil.which('go'));parser.add_argument('--digest',action='store_true');args=parser.parse_args()
+    parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--native-package',type=Path);parser.add_argument('--go',default=shutil.which('go'));parser.add_argument('--clang',help='Clang21+ with matching sibling clang++ and ld.lld');parser.add_argument('--digest',action='store_true');args=parser.parse_args()
     if args.digest:print(digest())
-    elif args.vendor and args.native_package and args.go:run(args.vendor,args.native_package,args.go)
+    elif args.vendor and args.native_package and args.go:run(args.vendor,args.native_package,args.go,args.clang)
     else:parser.error('prepared vendor, verified host package and Go are required')
