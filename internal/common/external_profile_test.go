@@ -68,9 +68,74 @@ func TestExternalNodeRejectsRouterVPNAdminSecrets(t *testing.T) {
 }
 
 func TestInjectedRouterDefaultsAreStrippedFromExternal(t *testing.T) {
-	p:=RouterProfile{ID:"ext",NodeKind:"external",RouterAPI:"http://10.77.0.1:8787",AdGuardIPv4:"10.77.0.1",SocksHost:"10.77.0.1",SocksPort:1080,DAITAHost:"10.77.0.1",DAITAPort:45999,BaseTunnel:"wg",DNSMode:"home",DNSProtocol:"udp",DNSHost:"10.77.0.1",DNSPort:53,PathProbeURL:"http://10.77.0.1:8787/health",External:&ExternalNodeConfig{Protocol:"socks5",ExpectedPublicIP:"203.0.113.31",SOCKS5:&ExternalSOCKS5Config{Host:"proxy.example.com",Port:1080}}}
+	p:=legacyInjectedExternalHomeProfile()
 	if err:=NormalizeRouterProfile(&p);err!=nil{t.Fatal(err)}
 	if p.RouterAPI!=""||p.AdGuardIPv4!=""||p.SocksHost!=""||p.BaseTunnel!=""||p.DNSMode!=""||p.PathProbeURL!=""{t.Fatalf("Router VPN defaults leaked into external profile: %+v",p)}
+}
+
+func legacyInjectedExternalHomeProfile() RouterProfile {
+	return RouterProfile{ID:"ext",NodeKind:"external",RouterAPI:"http://10.77.0.1:8787",AdGuardIPv4:"10.77.0.1",SocksHost:"10.77.0.1",SocksPort:1080,DAITAHost:"10.77.0.1",DAITAPort:45999,BaseTunnel:"wg",DNSMode:"home",DNSProtocol:"udp",DNSHost:"10.77.0.1",DNSPort:53,PathProbeURL:"http://10.77.0.1:8787/health",External:&ExternalNodeConfig{Protocol:"socks5",ExpectedPublicIP:"203.0.113.31",SOCKS5:&ExternalSOCKS5Config{Host:"proxy.example.com",Port:1080}}}
+}
+
+func TestExternalHomeDNSMigrationDoesNotEraseExplicitSelection(t *testing.T) {
+	for _, schema := range []int{0, 1, 3, RouterProfileSchemaVersion} {
+		p := RouterProfile{SchemaVersion: schema, ID: "explicit-home", NodeKind: "external", DNSMode: "home", DNSProtocol: "tcp", DNSHost: "10.77.0.1", DNSPort: 5353,
+			External: &ExternalNodeConfig{Protocol: "socks5", ExpectedPublicIP: "203.0.113.31", SOCKS5: &ExternalSOCKS5Config{Host: "203.0.113.30", Port: 1080}}}
+		b, err := json.Marshal(p)
+		if err != nil { t.Fatal(err) }
+		var saved RouterProfile
+		if err := json.Unmarshal(b, &saved); err != nil { t.Fatal(err) }
+		if saved.DNSMode != "home" || saved.DNSProtocol != "tcp" || saved.DNSHost != "10.77.0.1" || saved.DNSPort != 5353 {
+			t.Fatalf("schema %d lost an explicit Home DNS choice: %s", schema, b)
+		}
+		if saved.RouterAPI != "" || saved.AdGuardIPv4 != "" || saved.NodeProofID != "" { t.Fatal("external Home choice invented a Router VPN owner") }
+	}
+}
+
+func TestExternalHomeDNSMigrationRequiresCompleteUnversionedSignature(t *testing.T) {
+	mutations := map[string]func(*RouterProfile){
+		"versioned old": func(p *RouterProfile) { p.SchemaVersion = 3 },
+		"versioned current": func(p *RouterProfile) { p.SchemaVersion = RouterProfileSchemaVersion },
+		"no router API": func(p *RouterProfile) { p.RouterAPI = "" },
+		"different AdGuard": func(p *RouterProfile) { p.AdGuardIPv4 = "10.78.0.1" },
+		"AdGuard IPv6": func(p *RouterProfile) { p.AdGuardIPv6 = "fd77:77::1" },
+		"no SOCKS host": func(p *RouterProfile) { p.SocksHost = "" },
+		"SOCKS port": func(p *RouterProfile) { p.SocksPort = 1081 },
+		"SOCKS username": func(p *RouterProfile) { p.SocksUsername = "saved-user" },
+		"SOCKS password": func(p *RouterProfile) { p.SocksPassword = "saved-password" },
+		"DAITA host": func(p *RouterProfile) { p.DAITAHost = "10.78.0.1" },
+		"DAITA port": func(p *RouterProfile) { p.DAITAPort = 45998 },
+		"DAITA rate": func(p *RouterProfile) { p.DAITARateKbps = 64 },
+		"base": func(p *RouterProfile) { p.BaseTunnel = "awg" },
+		"fallback": func(p *RouterProfile) { p.BaseFallback = true },
+		"custom layers": func(p *RouterProfile) { p.CustomLayers = []string{"reality"} },
+		"start layer": func(p *RouterProfile) { p.StartLayer = "off" },
+		"probe URL": func(p *RouterProfile) { p.PathProbeURL = "" },
+		"DNS mode": func(p *RouterProfile) { p.DNSMode = "custom" },
+		"DNS protocol": func(p *RouterProfile) { p.DNSProtocol = "tcp" },
+		"DNS host": func(p *RouterProfile) { p.DNSHost = "10.78.0.1" },
+		"DNS port": func(p *RouterProfile) { p.DNSPort = 5353 },
+		"DNS TLS identity": func(p *RouterProfile) { p.DNSServerName = "dns.example" },
+		"DNS path": func(p *RouterProfile) { p.DNSPath = "/selected-dns" },
+		"fastest host": func(p *RouterProfile) { p.FastestDNSHost = "9.9.9.9" },
+		"fastest name": func(p *RouterProfile) { p.FastestDNSName = "saved resolver" },
+		"fastest sample": func(p *RouterProfile) { p.FastestDNSLatencyMs = 12 },
+		"DNS samples": func(p *RouterProfile) { p.DNSResults = []DNSBenchmarkResult{{Address: "9.9.9.9", Working: true}} },
+		"plain Tor": func(p *RouterProfile) { p.External = &ExternalNodeConfig{Protocol: "tor"} },
+	}
+	for name, mutate := range mutations {
+		t.Run(name, func(t *testing.T) {
+			p := legacyInjectedExternalHomeProfile()
+			mutate(&p)
+			mode, protocol, host, port, serverName, path := p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath
+			if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
+			if p.DNSMode != mode || p.DNSProtocol != protocol || p.DNSHost != host || p.DNSPort != port || p.DNSServerName != serverName || p.DNSPath != path {
+				t.Fatalf("partial legacy signature erased a saved DNS choice: %+v", p)
+			}
+			if err := NormalizeRouterProfile(&p); err != nil { t.Fatal(err) }
+			if p.DNSMode != mode || p.DNSHost != host { t.Fatal("repeat normalization erased the choice") }
+		})
+	}
 }
 
 func TestExternalCredentialPairsFailClosed(t *testing.T) {

@@ -181,25 +181,45 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 	return ""
 }
 
-func stripInjectedRouterDefaultsFromExternal(p *RouterProfile) error {
+// An old, unversioned external import copied this complete Router VPN defaults
+// bundle. It did not represent a saved external DNS choice. Match every field
+// before normalization changes the schema or strips Router VPN-only fields;
+// a partial bundle, versioned profile, or Tor policy is not this migration.
+func hasLegacyInjectedExternalHomeDNS(p *RouterProfile) bool {
+	if p.SchemaVersion != 0 || p.External == nil { return false }
+	protocol := strings.ToLower(strings.TrimSpace(p.External.Protocol))
+	if protocol == "tor" || protocol == "tor-bridge" || protocol == "tor_bridge" { return false }
+	return p.RouterAPI == "http://10.77.0.1:8787" && p.NodeProofID == "" && p.APIToken == "" &&
+		p.AdGuardIPv4 == "10.77.0.1" && p.AdGuardIPv6 == "" &&
+		p.SocksHost == "10.77.0.1" && p.SocksPort == 1080 && p.SocksUsername == "" && p.SocksPassword == "" &&
+		p.DAITAHost == "10.77.0.1" && p.DAITAPort == 45999 && p.DAITARateKbps == 0 &&
+		p.BaseTunnel == "wg" && !p.BaseFallback && len(p.CustomLayers) == 0 && p.StartLayer == "" &&
+		p.PathProbeURL == "http://10.77.0.1:8787/health" &&
+		p.DNSMode == "home" && p.DNSProtocol == "udp" && p.DNSHost == "10.77.0.1" && p.DNSPort == 53 &&
+		p.DNSServerName == "" && p.DNSPath == "" && p.FastestDNSHost == "" && p.FastestDNSName == "" &&
+		p.FastestDNSLatencyMs == 0 && len(p.DNSResults) == 0
+}
+
+func stripInjectedRouterDefaultsFromExternal(p *RouterProfile, legacyHomeDNS bool) error {
 	if strings.TrimSpace(p.NodeProofID) != "" || strings.TrimSpace(p.APIToken) != "" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
 	if v := strings.TrimSpace(p.RouterAPI); v != "" && v != "http://10.77.0.1:8787" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
 	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil; p.StartLayer = ""
 	if p.PathProbeURL == "http://10.77.0.1:8787/health" { p.PathProbeURL = "" }
-	if p.DNSMode == "home" { p.DNSMode = ""; if p.DNSHost == "10.77.0.1" { p.DNSHost = "" } }
+	if legacyHomeDNS { p.DNSMode = ""; p.DNSHost = "" }
 	if p.DNSMode == "" { p.DNSProtocol = ""; p.DNSPort = 0; p.DNSServerName = ""; p.DNSPath = "" }
 	return nil
 }
 
 func NormalizeRouterProfile(p *RouterProfile) error {
 	if p.SchemaVersion > RouterProfileSchemaVersion { return fmt.Errorf("router profile schema %d is newer than supported schema %d", p.SchemaVersion, RouterProfileSchemaVersion) }
+	legacyHomeDNS := hasLegacyInjectedExternalHomeDNS(p)
 	p.SchemaVersion = RouterProfileSchemaVersion; p.NodeKind = strings.ToLower(strings.TrimSpace(p.NodeKind)); if p.NodeKind == "" { p.NodeKind = "router-vpn" }
 	switch p.NodeKind {
 	case "router-vpn": if p.External != nil { return fmt.Errorf("router-vpn node cannot contain external protocol configuration") }
 	case "external":
 		if err := normalizeExternalNode(p.External); err != nil { return err }
 		if p.Endpoint = strings.TrimSpace(p.Endpoint); p.Endpoint == "" { p.Endpoint = externalNodeEndpoint(p.External) }; if p.Endpoint == "" { return fmt.Errorf("external node has no usable endpoint") }
-		if err := stripInjectedRouterDefaultsFromExternal(p); err != nil { return err }
+		if err := stripInjectedRouterDefaultsFromExternal(p, legacyHomeDNS); err != nil { return err }
 	default: return fmt.Errorf("invalid node kind %q", p.NodeKind)
 	}
 	startLayer, err := NormalizeStartLayerMode(p.StartLayer); if err != nil { return err }; p.StartLayer = startLayer
