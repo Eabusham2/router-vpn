@@ -55,7 +55,11 @@ final class NativeSingBoxController {
     static final class SessionInfo {
         final String sessionId;
         final String modeId;
-        SessionInfo(String sessionId, String modeId) { this.sessionId = sessionId; this.modeId = modeId; }
+        final AndroidMAXProfilePreparation maxPreparation;
+        SessionInfo(String sessionId, String modeId) { this(sessionId, modeId, null); }
+        SessionInfo(String sessionId, String modeId, AndroidMAXProfilePreparation maxPreparation) {
+            this.sessionId = sessionId; this.modeId = modeId; this.maxPreparation = maxPreparation;
+        }
     }
 
     private static final class DnsSelection {
@@ -81,6 +85,12 @@ final class NativeSingBoxController {
             if (profile == null) continue;
             String candidate;
             try {
+                if (AndroidNativeMAXProfile.isMode(id) && AndroidNativeMAXProfile.capture(root, profile, id).requiresResolution()) {
+                    validateMAXReadiness(root);
+                    String name = mode.optString("name", id).trim();
+                    result.add(new ModeInfo(id, name.isEmpty() ? id : name));
+                    continue;
+                }
                 candidate = compileStandaloneProfile(root, profile, id);
                 if (!isDirectFullDeviceConfig(candidate)) continue;
                 if (AndroidStartLayer.nativeXray(id)) {
@@ -127,9 +137,14 @@ final class NativeSingBoxController {
         JSONObject profile = profiles == null ? null : profiles.optJSONObject(modeId);
         if (profile == null) throw new IllegalStateException("The selected mode has no generated profile.");
         String capturedBundle = root.toString();
+        AndroidMAXProfilePreparation.Source maxSource = AndroidNativeMAXProfile.isMode(modeId)
+                ? new AndroidMAXProfilePreparation.Source(privateBundle, root, modeId) : null;
+        AndroidMAXProfilePreparation maxPreparation = maxSource == null ? null : AndroidMAXProfilePreparation.begin(context, maxSource);
+        boolean maxStaged = false;
+        try {
         String rawConfigText = AndroidStartLayer.nativeXray(modeId)
                 ? AndroidXrayLibboxPolicy.resolve(root, profile, modeId)
-                : compileStandaloneProfile(root, profile, modeId);
+                : maxPreparation != null ? maxPreparation.compile(maxSource) : compileStandaloneProfile(root, profile, modeId);
         if (nativeSinglePacketMode(modeId) || AndroidNativeMAXProfile.isMode(modeId) || nativeNaiveFamily(modeId)) {
             // Only the compiled graph is staged. A second WireGuard VPN or
             // unused raw-backend file must never be started implicitly.
@@ -158,6 +173,7 @@ final class NativeSingBoxController {
                     || !capturedBundle.equals(loadBundle(privateBundle).toString()))) {
                 throw new IllegalStateException("Selected node changed or preparation was cancelled; no native session was staged.");
             }
+            if (maxPreparation != null) maxPreparation.verify();
             File rootDir = new File(context.getFilesDir(), "layered-sessions");
             if (!rootDir.isDirectory() && !rootDir.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
             cleanupOldSessions(rootDir);
@@ -180,6 +196,7 @@ final class NativeSingBoxController {
                 if (names == null) throw new IllegalStateException("Selected mode profile is empty.");
                 for (int i = 0; i < names.length(); i++) {
                     String name = names.getString(i);
+                    if (AndroidMAXProfilePreparation.SESSION_FILE.equals(name)) throw new IllegalStateException("Imported profile uses reserved MAX ownership metadata.");
                     if (AndroidStartLayer.nativeXray(modeId) && "xray.json".equals(name)) continue;
                     if (!safeFileName(name)) throw new IllegalStateException("Unsafe profile filename: " + name);
                     byte[] decoded;
@@ -203,10 +220,15 @@ final class NativeSingBoxController {
                 writeFile(new File(session,"routervpn-mtu.json"),mtuBytes);
                 File configFile = new File(session, "sing-box.json");
                 if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Session is missing sing-box.json.");
-                return new SessionInfo(sessionId, modeId);
+                if (maxPreparation != null) maxPreparation.stage(session, sessionId, modeId, new String(config, StandardCharsets.UTF_8));
+                maxStaged = true;
+                return new SessionInfo(sessionId, modeId, maxPreparation);
             } catch (Throwable error) { deleteTree(session); throw error; }
         } finally {
             if (relayPlan != null) relayPlan.clear();
+        }
+        } finally {
+            if (maxPreparation != null && !maxStaged) maxPreparation.close();
         }
     }
 
@@ -372,9 +394,8 @@ final class NativeSingBoxController {
         return result;
     }
 
-    static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {
+    private static JSONObject selectedDnsConfig(JSONObject bundle, String detour) throws Exception {
         DnsSelection selected = dnsSelection(bundle);
-        String detour = chooseDnsDetour(config);
         String protocol = selected.protocol;
         if ("rescue".equals(protocol)) {
             protocol = "https";
@@ -399,7 +420,26 @@ final class NativeSingBoxController {
             server.put("domain_resolver", "routervpn-bootstrap-dns");
         }
         servers.put(server);
-        config.put("dns", new JSONObject().put("servers", servers).put("final", "selected-dns"));
+        return new JSONObject().put("servers", servers).put("final", "selected-dns");
+    }
+
+    /** Readiness validates captured input/policy without resolving a hostname or
+     * manufacturing a runnable graph. Selected launch still applies and checks
+     * the full DNS/device/performance graph before staging. */
+    static void validateMAXReadiness(JSONObject bundle) throws Exception {
+        JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
+        selectedDnsConfig(bundle, "proxy");
+        AndroidNativeProfilePolicy.selectedMtu(bundle, 1280);
+        if (AndroidNativeProfilePolicy.booleanPolicy(profile, "jumbo_tun", false)) throw new IllegalStateException("Complete MAX does not support Jumbo TUN.");
+        if (!java.util.Arrays.asList("", "on", "auto", "off").contains(AndroidNativeProfilePolicy.stringPolicy(profile, "ipv6_mode", "on"))) throw new IllegalStateException("Unknown IPv6 policy.");
+        if (AndroidNativeProfilePolicy.booleanPolicy(profile, "daita_enabled", false)) {
+            AndroidNativeProfilePolicy.exactInteger(profile, "daita_port", 45999, 45999, 45999);
+            AndroidNativeProfilePolicy.exactInteger(profile, "daita_rate_kbps", 192, 32, 192);
+        }
+    }
+
+    static void applySelectedDns(JSONObject bundle, JSONObject config) throws Exception {
+        config.put("dns", selectedDnsConfig(bundle, chooseDnsDetour(config)));
         JSONObject route = config.optJSONObject("route"); if (route == null) { route = new JSONObject(); config.put("route", route); }
         JSONArray rules = route.optJSONArray("rules"); if (rules == null) rules = new JSONArray();
         boolean hasDnsRule = false;
@@ -457,17 +497,30 @@ final class NativeSingBoxController {
     }
 
     void start(SessionInfo session) {
+        try { if (session.maxPreparation != null) session.maxPreparation.beforeSubmit(session.sessionId, session.modeId); }
+        catch (Exception stale) {
+            if (session.maxPreparation != null) session.maxPreparation.close();
+            throw new IllegalStateException("Complete MAX preparation is stale or cancelled; no VPN was started.");
+        }
         Intent intent = new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID, session.sessionId).putExtra(LayeredVpnService.EXTRA_MODE_ID, session.modeId);
-        AndroidServiceStopConfirmation.start(STATE_KEY, () -> {
-            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent); else context.startService(intent);
-        });
+        if (session.maxPreparation != null) intent.putExtra(AndroidMAXProfilePreparation.EXTRA_OWNER, session.maxPreparation.identity);
+        try {
+            AndroidServiceStopConfirmation.start(STATE_KEY, () -> {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) context.startForegroundService(intent); else context.startService(intent);
+            });
+        } catch (RuntimeException launch) {
+            if (session.maxPreparation != null) session.maxPreparation.close();
+            throw launch;
+        }
     }
     void stop() {
+        AndroidMAXProfilePreparation.cancelActive();
         AndroidServiceStopConfirmation.request(STATE_KEY, command -> context.startService(
                 new Intent(context, LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP)
                         .putExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, command)));
     }
     String getState() {
+        if (AndroidMAXProfilePreparation.busy()) return "PREPARING";
         return AndroidServiceStopConfirmation.state(STATE_KEY,
                 () -> context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getString(STATE_KEY, "DOWN"));
     }

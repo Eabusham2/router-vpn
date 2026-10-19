@@ -109,6 +109,21 @@ verify_aar() {
   for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
   done
+  for symbol in routerCheckMAXProfile routerCreateMAXProfileRequest routerCompileMAXProfile; do
+    grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing owned MAX API $symbol" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterMAXEndpointResolver >"$tmp/router-max-resolver.javap"
+  for signature in 'java.lang.String ownerID();' 'boolean current();' 'java.lang.String lookup(java.lang.String) throws java.lang.Exception;' 'void cancel();'; do
+    grep -Fq "$signature" "$tmp/router-max-resolver.javap" || {
+      echo 'combined libbox AAR MAX resolver has the wrong captured-owner API' >&2; return 1
+    }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterMAXProfileRequest >"$tmp/router-max-request.javap"
+  for signature in 'java.lang.String sourceSHA256();' 'java.lang.String run() throws java.lang.Exception;' 'boolean healthy();' 'void cancel();' 'void close();'; do
+    grep -Fq "$signature" "$tmp/router-max-request.javap" || {
+      echo 'combined libbox AAR MAX request has the wrong cancellation/drain API' >&2; return 1
+    }
+  done
   javap -classpath "$classes" io.nekohasekai.libbox.RouterTorProofRequest >"$tmp/router-tor-proof.javap"
   for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
     grep -Fq "$signature" "$tmp/router-tor-proof.javap" || {

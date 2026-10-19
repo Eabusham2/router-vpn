@@ -325,23 +325,7 @@ GO = GO.replace('case "xray-policy":', '''case "tor-profile":
  case "xray-policy":''', 1)
 
 TOR_BOUNDARIES = r'''
-final class AndroidPrivateFileStore {
- static String failName;
- static byte[] read(java.io.File file,int maximum)throws Exception{
-  if(file==null||!java.nio.file.Files.isRegularFile(file.toPath(),java.nio.file.LinkOption.NOFOLLOW_LINKS)||java.nio.file.Files.size(file.toPath())<=0||java.nio.file.Files.size(file.toPath())>maximum)throw new java.io.IOException("Invalid bounded private fixture");
-  return java.nio.file.Files.readAllBytes(file.toPath());
- }
- static void write(java.io.File file,byte[] data,int maximum)throws Exception{
-  if(file.getName().equals(failName))throw new java.io.IOException("Injected private staging failure");
-  if(data==null||data.length==0||data.length>maximum)throw new java.io.IOException("Invalid bounded private fixture");
-  java.nio.file.Files.createDirectories(file.toPath().getParent());java.nio.file.Files.write(file.toPath(),data);
- }
-}
 final class AndroidVpnMutationGuard {static boolean isBusy(android.content.Context c){return false;}}
-final class AndroidHomeStateStore {
- static final class Snapshot{boolean connected;String phase="idle";}
- static Snapshot snapshot(android.content.Context c){return new Snapshot();}
-}
 final class AndroidRuntimeRegistry {
  static final class Engine{String getState(){return "STOPPED";}boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}}
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();

@@ -279,7 +279,7 @@ def run():
                 methods = node_source[node_source.index('    static String stableNodeIdentity('):node_source.index('    static String deriveId(')]
                 methods += node_source[node_source.index('    private static String wireGuardPeerPublicKey('):node_source.index('    private static JSONObject load(')]
                 methods += next(line for line in node_source.splitlines() if 'private static String hex(byte[] data)' in line)
-                constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line)
+                constants = '\n'.join(line for line in node_source.splitlines() if 'private static final String NODE_PROOF_DOMAIN =' in line or 'static final int MAX_PROFILE_SCHEMA =' in line or 'static final int MAX_BUNDLE =' in line)
                 start = text.index('final class AndroidNodeStore {')
                 end = text.index('final class AndroidKillSwitchPolicy {')
                 text = text[:start] + 'final class AndroidNodeStore {\n' + constants + '\n' + methods + '\n}\n' + text[end:]

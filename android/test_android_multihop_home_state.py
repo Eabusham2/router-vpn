@@ -183,6 +183,8 @@ def main():
         jar = dependency.android_json_dependency(root, dict(os.environ))
         sources = dict(graph.STUBS)
         sources.update(SOURCES)
+        context = 'android/content/Context.java'
+        sources[context] = sources[context].replace('public final class Context {', 'public final class Context {public static final String CONNECTIVITY_SERVICE="connectivity";public Object getSystemService(String name){return null;}', 1)
         for name, source in sources.items():
             target = root/name
             target.parent.mkdir(parents=True, exist_ok=True)

@@ -23,7 +23,7 @@ spec.loader.exec_module(T)
 
 UI = {
 "android/content/Context.java": r'''package android.content;
-public class Context {
+public class Context {public static final String CONNECTIVITY_SERVICE="connectivity";public Object getSystemService(String name){return null;}
  public static java.io.File nextFiles; private final java.io.File files;
  public Context(){this(nextFiles);}public Context(java.io.File f){files=f;}
  public Context getApplicationContext(){return this;}public java.io.File getFilesDir(){return files;}
@@ -152,8 +152,8 @@ public final class AlertDialog implements DialogInterface {
 APP = r'''
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidHomeStateStore {
- static final class Snapshot{boolean connected;String phase="idle",logicalMode="",activeExternalName="",activeExternalProtocol="";}
- static Snapshot snapshot(android.content.Context c){return new Snapshot();}static String actualExitForCurrentSession(android.content.Context c){return "";}
+ static final class Snapshot{boolean connected;String sessionId="form-session",phase="idle",logicalMode="",activeExternalName="",activeExternalProtocol="";}
+ static boolean emergencyDisconnectPending(android.content.Context c){return false;}static Snapshot snapshot(android.content.Context c){return new Snapshot();}static String actualExitForCurrentSession(android.content.Context c){return "";}
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String value);void finished(boolean success,String value);}
@@ -300,6 +300,7 @@ def main():
         subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")], cwd=ROOT, check=True, timeout=90)
         stubs = dict(T.P.M.STUBS)
         stubs.update(UI)
+        stubs.pop("com/eabusham/routervpn/AndroidHomeStateStore.java", None)
         src = work / "src"
         for path, text in stubs.items():
             if path.endswith("/Boundaries.java"):

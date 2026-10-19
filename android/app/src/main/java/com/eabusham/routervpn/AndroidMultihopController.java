@@ -184,14 +184,22 @@ final class AndroidMultihopController {
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
         if (entryIdentity.isEmpty() || exitIdentity.isEmpty()) throw new IllegalArgumentException("Both multihop nodes need paired identities.");
         boolean maxEntry = AndroidNativeMAXProfile.isMode(entryMode), maxExit = AndroidNativeMAXProfile.isMode(exitMode);
+        AndroidMAXProfilePreparation.Source maxEntrySource = maxEntry || maxExit ? new AndroidMAXProfilePreparation.Source(entryBundle, entry, entryMode) : null;
+        AndroidMAXProfilePreparation.Source maxExitSource = maxEntry || maxExit ? new AndroidMAXProfilePreparation.Source(exitBundle, exit, exitMode) : null;
+        AndroidMAXProfilePreparation maxPreparation = maxEntrySource == null ? null
+                : AndroidMAXProfilePreparation.begin(context, maxEntrySource, maxExitSource);
+        boolean maxStaged = false;
+        try {
         boolean compositeEntry = AndroidNativeCompositeProfile.isMode(entryMode), compositeExit = AndroidNativeCompositeProfile.isMode(exitMode);
         String entryLayerMode = AndroidStartLayer.selectedMode(entry), exitLayerMode = AndroidStartLayer.selectedMode(exit);
         // MAX's complete compiler already owns its optional outermost AES leg.
         // Ordinary hops retain their independently captured layer assets.
         String entryStartLayer = maxEntry || compositeEntry ? "" : AndroidMultihopStartLayer.capture(entry);
         String exitStartLayer = maxExit || compositeExit ? "" : AndroidMultihopStartLayer.capture(exit);
-        String entryMAX = maxEntry ? AndroidNativeMAXProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
-        String exitMAX = maxExit ? AndroidNativeMAXProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
+        String entryMAX = maxEntry ? maxPreparation != null ? maxPreparation.compile(maxEntrySource)
+                : AndroidNativeMAXProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
+        String exitMAX = maxExit ? maxPreparation != null ? maxPreparation.compile(maxExitSource)
+                : AndroidNativeMAXProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
         String entryComposite = compositeEntry ? AndroidNativeCompositeProfile.compile(entry, requiredProfile(entry, entryMode), entryMode) : "";
         String exitComposite = compositeExit ? AndroidNativeCompositeProfile.compile(exit, requiredProfile(exit, exitMode), exitMode) : "";
         requireOwnedPolicies(entry, true); requireOwnedPolicies(exit, true);
@@ -322,6 +330,7 @@ final class AndroidMultihopController {
                 || !exitSnapshot.equals(loadBundle(exitBundle).toString())) {
             throw new IllegalStateException("Multihop preparation was cancelled or a captured node changed; no session was staged.");
         }
+        if (maxPreparation != null) maxPreparation.verify();
         File root = new File(context.getFilesDir(), "layered-sessions");
         if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
         File[] dirs = root.listFiles(File::isDirectory);
@@ -336,7 +345,7 @@ final class AndroidMultihopController {
             if (names == null) throw new IllegalStateException("Exit profile is empty.");
             for (int i = 0; i < names.length(); i++) {
                 String name = names.getString(i);
-                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name)||AndroidMultihopStartLayer.SESSION_FILE.equals(name)||AndroidMultihopStartLayer.EXIT_SESSION_FILE.equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
+                if("routervpn-multihop.json".equals(name)||"routervpn-mtu.json".equals(name)||AndroidMultihopStartLayer.SESSION_FILE.equals(name)||AndroidMultihopStartLayer.EXIT_SESSION_FILE.equals(name)||AndroidMAXProfilePreparation.SESSION_FILE.equals(name))throw new IllegalArgumentException("Imported profile uses a reserved multihop metadata file.");
                 if (!safeFileName(name)) throw new IllegalStateException("Unsafe exit profile filename: " + name);
                 byte[] data;
                 if ("sing-box.json".equals(name)) data = patched;
@@ -374,10 +383,15 @@ final class AndroidMultihopController {
                 writeFile(new File(session,"routervpn-mtu.json"),mtuBytes);
             File configFile = new File(session, "sing-box.json");
             if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Multihop session is missing sing-box.json.");
-            return new Prepared(new NativeSingBoxController.SessionInfo(sessionId, "multihop-" + exitMode), exitBundle, exitMode);
+            if (maxPreparation != null) maxPreparation.stage(session, sessionId, "multihop-" + exitMode, new String(patched, StandardCharsets.UTF_8));
+            maxStaged = true;
+            return new Prepared(new NativeSingBoxController.SessionInfo(sessionId, "multihop-" + exitMode, maxPreparation), exitBundle, exitMode);
         } catch (Throwable error) {
             deleteTree(session);
             throw error;
+        }
+        } finally {
+            if (maxPreparation != null && !maxStaged) maxPreparation.close();
         }
     }
 

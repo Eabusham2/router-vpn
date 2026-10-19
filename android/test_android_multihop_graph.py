@@ -230,6 +230,14 @@ public final class Libbox {
  public static void checkConfig(String c)throws Exception {if(rejectConfig)throw new IllegalArgumentException("Injected native schema failure");new JSONObject(c);}
 }''',
 }
+# Resolver/FFI handles only; exact preparation and compiler sources are copied.
+import importlib.util
+max_spec = importlib.util.spec_from_file_location('max_preparation_boundary', ROOT/'android/max_preparation_test_boundary.py')
+MAX_BOUNDARY = importlib.util.module_from_spec(max_spec)
+max_spec.loader.exec_module(MAX_BOUNDARY)
+MAX_BOUNDARY.install(STUBS)
+GO_HELPER = GO_HELPER.replace('case "xray-policy":', 'case "max-resolve":value,err=maxFixtureResolve(r.Config,r.Policy)\n case "xray-policy":', 1) + MAX_BOUNDARY.GO_TYPES
+
 HARNESS=r'''package com.eabusham.routervpn;
 import android.content.Context;import org.json.*;import java.io.*;import java.nio.file.*;import java.nio.charset.StandardCharsets;import java.security.MessageDigest;import java.util.*;
 public final class MultihopGraphHarness {

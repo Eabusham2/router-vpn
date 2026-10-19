@@ -66,6 +66,7 @@ def android_json_dependency(work: Path, env: dict[str, str]) -> Path:
 
 
 JAVA_NAMES = ('AndroidMultihopController', 'NativeSingBoxController',
+              'AndroidNativeMAXProfile', 'AndroidMAXDNSOwner', 'AndroidMAXProfilePreparation',
               'AndroidProfileSelection', 'AndroidNumericAddress',
               'AndroidNativeProfilePolicy', 'AndroidWireGuardLibboxPolicy',
               'AndroidStartLayer', 'AndroidXrayLibboxPolicy', 'NativeXrayController','AndroidMultihopStartLayer')
@@ -77,6 +78,7 @@ def inputs() -> list[Path]:
             ROOT / 'mobile/routervpn_multihop_native_test.go.tmpl',
             ROOT / 'android/test_android_composite_multihop.py', ROOT / 'android/test_android_max_multihop.py',
             ROOT / 'android/test_android_pq_selection.py', ROOT / 'deploy/testfixtures/composite/main.go',
+            ROOT / 'android/max_preparation_test_boundary.py', ROOT / 'android/test_android_max_dns_owner.py',
             java / 'AndroidNativeCompositeProfile.java',
             *[java / (name + '.java') for name in JAVA_NAMES]]
 

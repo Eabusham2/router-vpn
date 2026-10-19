@@ -20,6 +20,30 @@ final class AndroidNativeMAXProfile {
 
     static boolean isMode(String mode) { return mode != null && MODES.contains(mode); }
 
+    /** Exact input strings belong to the native capture hash, not Java's JSON
+     * re-encoding of an equivalent profile. No DNS or engine starts here. */
+    static final class Capture {
+        final String mode, files, metadata, endpoint, source;
+        Capture(String mode, String files, String metadata, String endpoint, String source) {
+            this.mode = mode; this.files = files; this.metadata = metadata;
+            this.endpoint = endpoint; this.source = source;
+        }
+        boolean requiresResolution() {
+            try { AndroidNumericAddress.parse(endpoint); return false; }
+            catch (Exception hostname) { return true; }
+        }
+        void recheck() throws Exception {
+            if (!source.equals(Libbox.routerCheckMAXProfile(mode, files, metadata))) {
+                throw invalid("Complete MAX source changed during preparation.");
+            }
+        }
+    }
+
+    static Capture capture(JSONObject bundle, JSONObject assets, String mode) throws Exception {
+        try { return captureChecked(bundle, assets, mode); }
+        catch (Exception rejected) { throw invalid("Complete MAX profile or captured policy failed validation."); }
+    }
+
     static String compile(JSONObject bundle, JSONObject assets, String mode) throws Exception {
         try {
             return compileCaptured(bundle, assets, mode);
@@ -31,6 +55,16 @@ final class AndroidNativeMAXProfile {
     }
 
     private static String compileCaptured(JSONObject bundle, JSONObject assets, String mode) throws Exception {
+        Capture captured = captureChecked(bundle, assets, mode);
+        String compiled = Libbox.routerCompileMAXProfile(mode, captured.files, captured.metadata);
+        if (compiled == null || compiled.isEmpty() || compiled.getBytes(StandardCharsets.UTF_8).length > MAX_GRAPH) {
+            throw invalid("Complete MAX compiler returned no bounded graph.");
+        }
+        validateGraph(bundle, assets, new JSONObject(compiled), mode);
+        return compiled;
+    }
+
+    private static Capture captureChecked(JSONObject bundle, JSONObject assets, String mode) throws Exception {
         validateAssets(assets, mode);
         JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
         String node = AndroidNodeStore.stableNodeIdentity(bundle);
@@ -48,12 +82,10 @@ final class AndroidNativeMAXProfile {
                 || metadata.toString().getBytes(StandardCharsets.UTF_8).length > 16384) {
             throw invalid("Complete MAX input exceeds its bound.");
         }
-        String compiled = Libbox.routerCompileMAXProfile(mode, input, metadata.toString());
-        if (compiled == null || compiled.isEmpty() || compiled.getBytes(StandardCharsets.UTF_8).length > MAX_GRAPH) {
-            throw invalid("Complete MAX compiler returned no bounded graph.");
-        }
-        validateGraph(bundle, assets, new JSONObject(compiled), mode);
-        return compiled;
+        String metadataJSON = metadata.toString();
+        String source = Libbox.routerCheckMAXProfile(mode, input, metadataJSON);
+        if (source == null || !source.matches("[0-9a-f]{64}")) throw invalid("Complete MAX has no validated source identity.");
+        return new Capture(mode, input, metadataJSON, text(profile, "endpoint"), source);
     }
 
     static void validateAssets(JSONObject assets, String mode) throws Exception {

@@ -96,6 +96,8 @@ final class AndroidTorProfile {
         JSONObject entry = null, predecessorProfile = null;
         byte[] entryBytes = null;
         AndroidStartLayer.RelayPlan relay = null;
+        AndroidMAXProfilePreparation maxPreparation = null;
+        boolean maxStaged = false;
         String predecessor = "";
         try {
             if (entryFile != null) {
@@ -111,7 +113,11 @@ final class AndroidTorProfile {
                 }
                 JSONObject assets = entry.getJSONObject("profiles").getJSONObject(entryMode);
                 JSONObject graph;
-                if (AndroidNativeCompositeProfile.isMode(entryMode)) {
+                if (AndroidNativeMAXProfile.isMode(entryMode)) {
+                    AndroidMAXProfilePreparation.Source source = new AndroidMAXProfilePreparation.Source(entryFile, entry, entryMode);
+                    maxPreparation = AndroidMAXProfilePreparation.begin(context, source);
+                    graph = new JSONObject(maxPreparation == null ? AndroidNativeMAXProfile.compile(entry, assets, entryMode) : maxPreparation.compile(source));
+                } else if (AndroidNativeCompositeProfile.isMode(entryMode)) {
                     graph = new JSONObject(AndroidNativeCompositeProfile.compile(entry, assets, entryMode));
                 } else {
                     String compiled = AndroidStartLayer.nativeXray(entryMode)
@@ -150,6 +156,7 @@ final class AndroidTorProfile {
                     || entryFile != null && !Arrays.equals(entryBytes, AndroidPrivateFileStore.read(entryFile, AndroidNodeStore.MAX_BUNDLE))) {
                 throw new IllegalStateException("Tor preparation was cancelled or a captured node changed.");
             }
+            if (maxPreparation != null) maxPreparation.verify();
             File root = new File(context.getFilesDir(), "layered-sessions").getCanonicalFile();
             if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create private Tor session storage.");
             File[] sessions = root.listFiles(File::isDirectory);
@@ -162,13 +169,17 @@ final class AndroidTorProfile {
                 AndroidPrivateFileStore.write(new File(folder, "sing-box.json"), config.getBytes(StandardCharsets.UTF_8), MAX_CONFIG);
                 AndroidPrivateFileStore.write(new File(folder, SESSION_FILE), metadataText.getBytes(StandardCharsets.UTF_8), MAX_METADATA);
                 if (relay != null) AndroidPrivateFileStore.write(new File(folder, AndroidStartLayerRelay.SESSION_FILE), relay.metadata().toString().getBytes(StandardCharsets.UTF_8), 16384);
-                return new NativeSingBoxController.SessionInfo(sessionId, (entryFile == null ? "standard-direct-" : "standard-") + exit.protocol);
+                String mode = (entryFile == null ? "standard-direct-" : "standard-") + exit.protocol;
+                if (maxPreparation != null) maxPreparation.stage(folder, sessionId, mode, config);
+                maxStaged = true;
+                return new NativeSingBoxController.SessionInfo(sessionId, mode, maxPreparation);
             } catch (Throwable failure) {
                 removeSession(folder);
                 throw failure;
             }
         } finally {
             if (relay != null) relay.clear();
+            if (maxPreparation != null && !maxStaged) maxPreparation.close();
         }
     }
 
