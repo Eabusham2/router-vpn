@@ -1,294 +1,213 @@
 # Current implementation status
 
-## Current mobile MTU integration (October 1, 2026)
+Updated October 19, 2026. This file describes committed source and remaining
+delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
+Source tests, native configuration tests and older releases do not establish
+completion of the current commit's packages, physical devices or deployment.
 
-Android (`71be1466`) and iOS (`2dc2630f`) now include the process-owned
-Libbox Auto-MTU controller, Retest UI, cancellation, actual MTU readback,
-VPN-bound probes, and measurement holds across temporary comparison
-sessions. Native integration passed on Linux and macOS. See
-`internal/mobilemtu/README.md` for behavior and test boundaries.
+## Current continuation
 
-This supersedes older mobile MTU limitations in historical checkpoints.
-Actual packaged-app builds and device acceptance are separate gates;
-source/contract passes do not establish complete release readiness.
-Apple WG/AWG Auto-MTU uses the Libbox endpoint owner without changing the
-selected transport; nonadaptive fixed/manual/default MTU retains the raw
-WireGuardKit path. Multihop also adopts its startup measurement hold before
-launch. Other listed helper-engine gaps and signed/device/off-LAN/ASUS
-validation remain open. No router was deployed.
+The source has advanced beyond the old WireGuard-only mobile multihop and
+mobile-Tor exclusions. Those historical restrictions no longer describe the
+application source and must not trigger reimplementation of committed work.
 
-This file describes the **current source implementation**. It does not turn a source feature into a release claim by itself: physical-device, off-LAN, leak-negative, signing and production-deploy gates remain separate and must be passed before release.
+The active implementation work is:
+
+- Finish Android and Apple adoption of complete MAX profiles whose physical
+  outer endpoint is a hostname. The committed shared compiler validates the
+  complete capture, uses an explicitly owned cancellable resolver and preserves
+  credentials, TLS identity, mode and source hashes. The app/provider handoff
+  must retain that ownership through startup, cancellation and replacement.
+- Apply saved DNS, IPv6, LAN and MTU policy consistently to ordinary external
+  nodes in the graph compiler and native hosts. Explicit Home DNS now survives
+  import and reload. It requires a captured, proven Router VPN entry; a direct
+  external connection cannot silently replace it with Rescue. Absent legacy
+  policy retains its documented persisted migration.
+- Complete the new exact-SHA APK, Xcode/IPA, desktop packages, server images,
+  generated compose and publication gates after source changes.
+
+The Apple MAX source gate, LAN-policy fixture, canonical macOS native-test
+paths and Android pinned-NDK setup order have been corrected on main. These
+fixes preserve production validation and native failure propagation. The final
+release pipeline is not declared complete by those individual corrections.
 
 ## Product split
 
-Router VPN has two separate products/surfaces:
+- **Router VPN app:** the native daily VPN client with map and shared node
+  catalog, Connect/Disconnect, modes, saved connection profiles, DNS, multihop,
+  Speed Lab, MTU, kill switch, LAN policy, forwarding and settings.
+- **Setup Center:** private deployment, administration, recovery, downloads,
+  pairing, simple third-party Methods, Full Guide and AI Help.
 
-- **Setup Center** — private deployment/setup/admin/recovery/downloads/pairing/simple third-party Methods/Full Guide/AI Help.
-- **Router VPN app** — native daily-use VPN client for nodes, map, logical modes, AUTO/SMART AUTO/CUSTOM, DNS, kill switch, multihop where supported, MTU/Jumbo, forwarding, settings and diagnostics.
+Generic packages contain no private node credentials. Install once and link
+nodes separately. Node selection never silently connects. Fastest requires
+usable measurements; missing coordinates are never replaced by IP-derived
+fiction. Profile changes require an idle, validated transaction with rollback.
 
-Generic application packages contain no home secrets. Install the app once, then import/link one or more private router/node bundles independently. Native node managers support current/recent, last-used, measured-latency and name ordering; automatic lowest-latency selection is withheld until at least two usable nodes have real measurements.
+## Native application source
 
-## Server/runtime
+| Platform | Application and runtime |
+| --- | --- |
+| Windows x64/ARM64 | Native WPF application, normal installer and Portable ZIP, native tunnel engines, firewall ownership, custom exits and local/server multihop. |
+| macOS Intel/Apple Silicon | Native AppKit/MapKit application, tunnel engines, PF policy and desktop multihop. The installed application is not a browser wrapper. |
+| Linux x64/ARM64 | Native GTK application, tunnel engines, nftables policy and desktop multihop. |
+| Android | Native VpnService with WG/AWG and the combined pinned Libbox/Xray runtime. Layered modes, Tor, complete MAX and multihop use one owned system VPN interface. |
+| iOS/iPadOS | SwiftUI app and one PacketTunnel. Raw WG/AWG uses the pinned WireGuardKit owner where appropriate; layered, adaptive-MTU, Tor, complete MAX and multihop use the owned Libbox runtime. |
 
-Implemented with validation/fail-closed checks:
+Strict Apple sessions require actual NetworkExtension route-lockdown settings
+and LAN exclusion matching the selected graph. Both nodes participate in
+multihop LAN policy. Native session ownership rejects stale Connect, proof,
+measurement, cancellation and profile handoffs.
 
-- WireGuard with userspace `wireguard-go` fallback
-- AmneziaWG Fast / Strong
-- Rosenpass PQ variants
-- VLESS + REALITY + Vision
-- hybrid-PQ REALITY
-- Shadowsocks 2022
-- Hysteria2 / QUIC / Salamander
-- Shadowsocks + V2Ray TLS
-- Naive H2/H3
-- XHTTP / FinalMask
-- Dual transport
-- MAX TLS / MAX QUIC
-- ALL health-tested fallback
-- AUTO / SMART AUTO / CUSTOM
-- IPv4/IPv6
-- Home AdGuard/public/custom/encrypted DNS policies and home-node DNS benchmark
-- DAITA-like bounded cover traffic
-- private SOCKS5
-- OverTLS compatibility
-- ShadowsocksR legacy compatibility
-- peer-owned explicit forwarding plus authenticated Setup Center/server-admin Protected DMZ
-- persistent ASUS Merlin forwarding helper
-- authenticated Setup Center admin surface, Connected Clients and persistent policy controls
-- dynamic download jobs with progress/cancel/fallback handling
-- server-side multi-provider AI Help with bounded/redacted repository/runtime context
+Compilation and executable boundary tests remain distinct from physical
+permission, routing, leak, reconnect, sleep and network-transition tests.
 
-## Build/deploy policy
+## Modes, helpers and profiles
 
-GitHub Actions is the normal compile/test environment.
+The source implements WG, AWG Fast/Strong, Rosenpass-protected WG/AWG,
+Shadowsocks 2022, Hysteria2, REALITY/Vision, PQ REALITY, XHTTP, Naive H2/H3,
+SIP003/TLS helpers, split transport, complete MAX TLS/QUIC and validated
+Start Layer compositions. Raw Xray mode `max` is distinct from a complete MAX
+chain containing its mandatory PQ base and middle/outer layers.
 
-The **production Portainer server stack is exact-SHA image-only**. Production should never silently rebuild an unpinned server image from a moving branch.
+AUTO, SMART AUTO, logical fallback, CUSTOM and ALL use captured profiles under
+the saved encryption, obfuscation, base and fallback policy. ALL requires
+complete MAX branches. Labels or incomplete credentials do not grant readiness.
+Apple trials run inside one provider session with checked native close, fresh
+node/DNS proofs, final MTU activation and restoration semantics; see
+[IOS-OWNED-STRATEGIES.md](IOS-OWNED-STRATEGIES.md).
 
-Client package downloads use:
+Saved connection profiles retain node references, mode, DNS, policy and
+multihop choices without duplicating private keys into another credential store.
+
+## Multihop and comparison
+
+Mobile graphs now include WG/AWG, proxy, native Xray, PQ, complete MAX and
+helper/composite families, including captured entry and exit Start Layers.
+They are no longer restricted to WG entry with WG/Shadowsocks/Hysteria2 exits.
+Every accepted graph preserves node credentials, separate entry/exit proofs,
+routing ownership, selected DNS and individual MTU bounds.
+
+**Local** executes the nested exit on the device. **Server** executes an
+isolated exit session on a paired entry server and therefore gives the entry
+the exit-tunnel trust role. **Compare both** retains the eligible lower score:
 
 ```text
-matching same-SHA GitHub artifact
-→ Windows x64/ARM64 installed/Portable only: bounded requested-package router-local fallback when needed
-→ validate/package the generic secret-free Windows application
-→ stream
-→ cleanup
+(last-node routed response time + external-server routed response time) / 2
 ```
 
-macOS and Linux never use the AI Board as a substitute native build environment; they require matching same-SHA artifacts or source built in the correct native environment. Android and iOS/iPadOS never use router-local builds. Private node data is linked/imported separately after installation and is never baked into the generic installer or Portable package. One installed application can link multiple Router VPN nodes without reinstalling.
-
-The router-local fallback is bounded to the requested generic **Windows/Portable** package and uses the approved same-image prebuilt components. PortableApps/PAF is retired; normal Router VPN Portable ZIP x64/ARM64 remains supported.
-
-## Native platform status
-
-### Windows
-
-Router VPN ships a native WPF daily-use application for x64 and ARM64. The native runtime has elevated full-device TUN paths for supported layered modes, applies Router VPN DNS policy inside the TUN runtime, and has a Windows firewall kill-switch helper. Raw/native WireGuard and native multihop paths are part of the Windows implementation; WSL is not counted as the Windows VPN implementation.
-
-Windows has validated external-profile import and direct/entry→exit connect flows for supported custom exits. WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the standard external runtime. OpenVPN 2.7 profile import and a native Windows helper/adapter remain source-implemented because Windows OpenVPN is still a project target, but `openVPNRuntimeCapability()` intentionally reports OpenVPN unavailable on Windows until strict lifecycle cleanup passes native leak tests. Every currently supported external exit withholds Connected until its expected public exit is proven.
-
-The Nodes/Map product surface exposes current/recent, last-used, lowest measured latency and name ordering plus 50-sample latency testing. Automatic lowest-latency selection requires at least two measured usable nodes; unmeasured nodes are not guessed fastest.
-
-**Still a release gate:** physical Windows validation must prove full-device routing, DNS behavior, strict leak blocking, reconnect/network-change behavior, custom-exit traffic and all supported Windows packaging/install variants. Windows OpenVPN additionally remains unavailable until the native strict lifecycle/leak gate is passed; source helper presence alone does not make it supported.
-
-### macOS
-
-Router VPN ships a native AppKit/MapKit application. Native macOS routing, PF kill-switch handling and real native multihop are implemented. Saved WireGuard/SOCKS5/Shadowsocks/Hysteria2 custom exits use the strict native desktop entry→exit model and expected-public-IP proof. A native OpenVPN 2.7 source path is also implemented for direct exits and the supported TCP-over-entry hop case; unsupported OpenVPN/DNS/hop combinations fail closed instead of bypassing the selected path.
-
-The Nodes & Map surface supports current/recent, last-used, lowest measured latency and name ordering, and automatic fastest selection only after at least two real measurements exist.
-
-The current installer installs and opens the real AppKit `RouterVPN.app`; it does not create a browser-app wrapper. The loopback controller remains private implementation/recovery plumbing. Physical macOS visual/network/custom-exit validation plus signing/notarization remain release work.
-
-### Linux
-
-Router VPN ships a native GTK application. Linux has broad native runtime coverage, nftables kill-switch handling and real multihop. Its external runtime supports validated Router VPN/external node import, direct and supported entry→exit paths, current/recent/last-used/latency/name ordering, and measured-fastest selection. Coordinate-less nodes remain usable in the list and are never given invented map positions.
-
-Linux also has a native OpenVPN 2.7 custom-exit path. It applies Router VPN-owned DNS/LAN/IPv6 policy, supports direct OpenVPN and the safe TCP OpenVPN-over-entry case, applies fail-closed platform policy before the full-device TUN, and proves the expected public exit before Connected. Distro/runtime/desktop integration and live leak-negative/custom-exit validation remain release gates.
-
-### Android
-
-Android is a native `VpnService` application, not a controller-only shell. It has real WireGuard and AmneziaWG paths, the pinned combined libbox/Xray runtime for supported layered modes, AUTO/SMART/CUSTOM orchestration, strict-policy handling, exact selected-node proof and a real one-TUN WireGuard-entry multihop path to a distinct WireGuard, Shadowsocks or Hysteria2 Router VPN exit. The frozen exit DNS policy, separate per-hop fixed MTU bounds, LAN-Off and IPv6-Off policies are compiled before session staging. Configured MTU bounds are not reported as fresh path measurements.
-
-Android has an app-private typed external/custom-exit store and native Custom Exits product screen for WireGuard, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN TLS-client profiles. OpenVPN uses the pinned native mobile Libbox endpoint for direct exits and the supported WireGuard-entry graph. Supported external graphs remain one full-device VPN path and success is withheld until a forced proof observes the saved expected public exit IP. The inline-profile, authentication and certificate-verification boundaries are documented in `MOBILE-OPENVPN.md`.
-
-The unified Android node catalog and product UI support current/recent, last-used, measured-latency and name ordering. Automatic fastest selection is withheld until at least two usable nodes have real latency measurements. Nodes without real coordinates remain list-only and are not geolocated from an IP.
-
-**Current boundary:** incompatible mixed-engine/AWG-entry multihop combinations and unsupported OpenVPN directives remain unavailable rather than simulated. Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests remain release gates.
-
-### iOS / iPadOS
-
-The SwiftUI application uses the pinned AWG-capable WireGuardKit PacketTunnel for raw WireGuard and AmneziaWG Fast/Strong, with exact selected-node path proof. When strict policy is requested, the host configures NetworkExtension route lockdown (`includeAllNetworks` + `enforceRoutes`), aligns local-network exclusion with the imported LAN policy and enables on-demand reconnect; the PacketTunnel refuses strict mode unless those controls are actually active.
-
-The pinned Libbox Apple bridge is now wired into the PacketTunnel source for the supported Router VPN layered profiles. It starts the exact imported Libbox assets and still requires the selected private node proof before startup is accepted. This source implementation does not remove the physical Apple-device validation gate.
-
-iOS also has per-node private bundle storage and validated external-node selection. External WireGuard, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN TLS-client profiles use the Libbox PacketTunnel path and require an exact expected-public-IP proof before Connected. OpenVPN is a native userspace endpoint, not an external app or host executable. Its supported import subset is documented in `MOBILE-OPENVPN.md`.
-
-The Linked Nodes UI supports current/recent, last-used, measured-latency and name ordering. Automatic lowest-latency selection requires at least two real measured nodes. Missing coordinates remain missing rather than being guessed.
-
-**Current boundary:** arbitrary multihop families, full desktop-equivalent per-hop telemetry, and Router VPN modes whose real imported Apple dataplane is not available remain unavailable/fail-closed. The implemented two-node graph is WireGuard entry to WireGuard/Shadowsocks/Hysteria2 Router VPN exit; both private node proofs must succeed through their independently owned paths. MAX/ALL labels do not grant readiness by themselves. Physical iPhone/iPad permission, lockdown, reconnect, DNS/IPv4/IPv6, Libbox/external-exit traffic, leak-negative and signing validation remain release gates.
-
-## Multihop / kill switch
-
-- Linux, Windows and macOS have real entry→exit multihop implementations with entry != exit, exit-node proof, DNS-through-exit requirements and rollback/fail-closed handling.
-- Android has a deliberately narrower real multihop subset.
-- iOS owns WireGuard-entry to WireGuard/Shadowsocks/Hysteria2 Router VPN-exit graphs inside one PacketTunnel, with distinct entry/exit identities, exit-routed DNS and no direct-exit fallback. This is a bounded real implementation, not full desktop-equivalent multihop parity.
-- Strict kill-switch source paths exist for Linux/macOS/Windows/Android and strict Apple route-lockdown is wired on iOS.
-- Linux strict nftables policy does not preserve blanket pre-existing public established flows; only explicitly allowed endpoint/tunnel/LAN/link-maintenance paths survive.
-- Physical negative-leak validation during connect/fallback/reconnect/crash/sleep/network-change/DNS/IPv4/IPv6/LAN-policy transitions is still mandatory before final release.
-
-## MTU / Jumbo
-
-Router VPN supports catalog/default MTU, manual MTU, safe PMTU-based auto selection, effective-MTU proof metadata, per-path auto-MTU memory and explicit Jumbo (`9000`) policy where requested.
-
-The current source also implements a bounded **throughput-aware MTU optimizer** after the selected private Router VPN path is proven. It tests safe candidate MTUs with bidirectional packet success, RTT and private-tunnel transfer-rate measurements, persists the winner by path context, and restores the original MTU if optimization fails. Windows has a native PowerShell implementation and Unix-like platforms use the shared optimizer contract. This remains subject to physical performance/path-change validation; it is not evidence that Jumbo or any specific MTU works Internet-wide.
-
-## Speed Lab
-
-Router VPN has a dedicated native **Speed Lab** separate from lightweight live telemetry. By default it tests the exact current path; where the platform owns the required dataplane it can also build a temporary test configuration without overwriting the saved connection profile, run the test, and restore the prior runtime afterward.
-
-The result contract includes real download/upload Mbps, idle latency distribution (including min/median/average/P90/max and jitter), download-loaded latency, upload-loaded latency, bufferbloat deltas, transfer rounds/duration, and Auto/custom minimum/maximum test-time controls. The tester uses bounded multi-stream transfers rather than deriving Mbps from RTT.
-
-For real multihop implementations, entry and exit measurements are independently attributed to the exact launched graph. Desktop/Android hop measurements use dedicated proof lanes and revalidate the graph/session so an entry value cannot be copied from or confused with the exit. iOS supports temporary testing of its implemented WireGuard-entry graphs, with saved graph restoration and connection-date/identity checks; it does not claim full desktop-equivalent per-hop measurement parity. In-flight results are rejected if the session/graph/config changes before adoption.
-
-See `docs/SPEED-LAB.md` for the detailed measurement and temporary-transaction contract.
-
-## Tor censorship circumvention
-
-Router VPN's Tor support is a censorship-evasion path, not homemade packet encryption. The supported transport family is **obfs4, meek/meek_lite, Snowflake, WebTunnel, and validated Auto/Custom bridge sets**. Profile input cannot inject `ClientTransportPlugin` commands or arbitrary torrc execution; the trusted runtime owns pluggable-transport registration and Tor bootstrap.
-
-- **Windows x64** uses the pinned native Tor Expert Bundle/Lyrebird lifecycle.
-- **macOS and Linux** use Router VPN-owned pinned Lyrebird/Tor runtime paths.
-- **Windows ARM64** stays unavailable until Tor Project provides a pinned native Expert Bundle for that architecture.
-- **Android and iOS/iPadOS** stay unavailable for Tor bridges until Router VPN ships a real native Tor + pluggable-transport `VpnService`/PacketTunnel dataplane; they are never approximated as plain SOCKS5.
-
-A single literal obfs4 bridge can use the stricter endpoint-owned pre-tunnel policy. Dynamic/CDN/WebRTC transports such as Snowflake, meek and WebTunnel do **not** pretend the existing endpoint-only strict kill switch can safely pre-whitelist their changing bootstrap egress; those combinations fail closed unless the requested policy is compatible. After bootstrap, the proved Tor circuit remains the encrypted final path and Tor is not advertised as a fake upstream-hop graph.
-
-The project deliberately supersedes earlier XOR/homebrew-cipher ideas with Tor's vetted circuit cryptography and real pluggable transports.
-
-## Setup Center Methods
-
-Setup Center Methods is for simple, interoperable external/native-compatible configurations. Complex Router VPN stacks remain in the Router VPN app. Current method metadata explicitly distinguishes public direct tunnels/proxies from private/tunnel-only SOCKS5 and records whether an import/QR contract is actually supported.
-
-External-app compatibility remains a live gate: remotely usable Methods must be tested off-LAN with real import → connect → DNS → HTTP → correct-exit proof. SOCKS5 `1080` remains private and must not be exposed to WAN merely to make a third-party client work.
-
-## Custom standard-protocol exits
-
-Custom standard exits are separate from Router VPN's `CUSTOM` transport-layer selector and separate from Setup Center Methods. They can be direct external exits or, where the platform/runtime supports it, be reached through a selected Router VPN/external entry while preserving one fail-closed full-device path.
-
-Current product capability:
-
-- **WireGuard exit** — Windows/macOS/Linux/Android/iOS
-- **SOCKS5 exit** — Windows/macOS/Linux/Android/iOS
-- **Shadowsocks exit** — Windows/macOS/Linux/Android/iOS
-- **Hysteria2 exit** — Windows/macOS/Linux/Android/iOS
-- **OpenVPN exit** — Linux/macOS where the required OpenVPN 2.7 runtime and requested direct/hop policy are supported; Windows import/helper/adapter source exists but remains unavailable until native strict lifecycle/leak validation passes; Android/iOS use the pinned native Libbox TLS-client endpoint for the bounded inline-profile subset. Android additionally owns the supported WireGuard-entry → OpenVPN-exit graph. Mobile OpenVPN support does not imply arbitrary profile compatibility.
-
-Desktop external-profile secrets stay in private 0600 controller storage; Android uses app-private storage; iOS keeps full node bundles in its per-node private bundle store. Public list/status/profile APIs expose redacted summaries only. Every supported external exit requires an expected public exit IP and must pass that exact path proof before Connected.
-
-## Forwarding / LAN policy
-
-Explicit daily-client inbound forwarding is authenticated and peer-owned. Peer clear deletes only that peer's tagged rules and cannot flush Setup Center/admin or another peer's forwarding state. Broad Protected DMZ is an authenticated Setup Center/server-admin action; its allowed ranges exclude reserved infrastructure and enabled explicit admin forwards.
-
-When LAN access is OFF, Router VPN drops both tunnel-peer traffic addressed to the AI Board's home-LAN address space and forwarded traffic from tunnel peers into the home LAN, while private tunnel control destinations remain available for the minimum recovery/control plane.
-
-## AI Help
-
-AI Help is server-side and provider-neutral. Current adapters cover OpenAI, Google Gemini, Anthropic/Claude, DeepSeek, xAI/Grok, Moonshot/Kimi and a restricted private/local OpenAI-compatible endpoint suitable for an AI Board service. Keys stay server-side; repository/runtime/page context is bounded and redacted. Provider web capability is optional and must not become an arbitrary SSRF path.
-
-## Security boundaries
-
-- DAITA-like is not exact Mullvad DAITA/Maybenot.
-- Proxy-only modes do not magically provide arbitrary inbound forwarding.
-- Setup Center/control services `8786-8793` stay private.
-- `1080`, `14444`, `45999`, `9443`, SSH and admin services stay off WAN.
-- A mode becomes Ready only because its real generated configuration/runtime validates.
-- `Connected` requires exact selected-node/private-exit proof, not generic Internet reachability.
-- Unsupported platform features stay unavailable with a real reason; UI/CSS must never force them Ready.
-
-Use `docs/CURRENT-GUIDE.md` for setup/operation detail and `docs/NATIVE-APPS.md` for native application boundaries.
-
-### Android single-node WireGuard policy continuation — September 28, 2026
-
-Single-node standard WireGuard can also run as a native endpoint in the existing
-Libbox VpnService. AUTO/logical selection uses that owner when the saved DNS
-transport/port, LAN-Off, IPv6-Off or strict policy cannot be enforced by the
-address-only backend. Ordinary compatible raw WG/AWG selection is preserved.
-The native compiler verifies the paired peer identity, preserves keys and
-keepalive, applies fixed MTU separately to the OS TUN and native endpoint, and
-stages only the compiled graph. It does not start an additional VPN. Both DNS
-and hostname bootstrap use the encrypted endpoint; Home DNS is not replaced
-with a public resolver, and unmeasured Fastest has no fabricated winner.
-
-The raw policy path no longer adopts saved effective MTU without a matching
-current-path proof, silently falls back from a missing/duplicate selected
-profile, or accepts invalid fixed MTU. Invalid graphs fail before session
-staging. The executable Java-to-Go integration tests exercise the shipping
-controllers and policy code, with Android OS handles doubled. Real-device
-routing/leak/transition proof remains required. Mobile Tor, remaining helper
-chains, AWG-entry multihop and real mobile Auto-MTU/Retest/padding/Jumbo remain
-open requirements, not completed features merely because refusal is safe.
-
-### Apple profile/lockdown correction — September 28, 2026
-
-Apple runtime and DNS selection now reject missing or duplicate selected node
-identities rather than borrowing the first node's settings. A legacy bundle
-without an explicit selection is accepted only when it has exactly one node.
-The PacketTunnel early lockdown check recognizes `multihop-libbox` and leaves
-its LAN intersection to the existing two-node validator; entry-LAN-Off combined
-with exit-LAN-On no longer fails an exit-only comparison first. Both node
-lockdown requirements still must pass before an engine starts.
-
-SIP003 exact-field preservation compares canonical JSON instead of bridging
-Foundation NSNumber/native Swift dictionaries, which falsely rejected equal
-profiles under Swift 6.4 on Linux. Its key, TLS, UDP-leg and extra-field rejection
-checks remain mandatory. These corrections are implementation/test evidence,
-not a claim that the remaining mobile runtime requirements are complete.
-
-### Apple native WireGuard DNS parity — September 28, 2026
-
-Standard WireGuard now uses the existing Libbox PacketTunnel when its saved DNS
-transport/port, LAN-Off or IPv6-Off policy requires that engine. The original WG
-asset remains the source of peer-key verification; the extension compiles the
-one-TUN graph before starting. Plain compatible raw WireGuard and AmneziaWG
-selection remain unchanged. This does not substitute WG for an AWG request.
-
-Single-node and WireGuard-entry graphs preserve custom UDP/TCP ports, DoT, DoH
-and DoH3. Resolver hostnames use a saved literal bootstrap through the same
-non-direct exit, with exact TLS identity and no system resolver fallback.
-Both-node LAN policy is still compiled natively, fixed MTU still changes its
-owned interface, and IPv6-Off retains capture plus TUN-scoped rejection. These
-configuration and lifecycle tests are distinct from physical-device proof.
-
-### Native AmneziaWG entry and policy integration — September 28, 2026
-
-Android and iOS/iPadOS can compose awg2-fast or awg2-strong as the entry in
-one owned Libbox VPN, with WG, Shadowsocks or Hysteria2 exits. The entry choice
-is retained by connection profiles and Speed Lab. Local/Server/Compare keep
-the exact entry. Advanced DNS, LAN and IPv6 policy can also use the native
-single-node AWG endpoint instead of silently substituting standard WireGuard.
-
-The adapter uses the checksum-pinned upstream AmneziaWG implementation and
-retains all eleven generated parameters. Both mobile builds run its actual
-TCP, UDP, IPv4/IPv6, raw ICMP, wrong-key/header and teardown tests. Paired node
-identity is separately proved through the encrypted path. Fixed MTU updates
-both the owned AWG stack and OS TUN. These are automated implementation checks,
-not physical-device validation. Native Tor, remaining helper chains and mobile
-Auto-MTU/Retest/padding/Jumbo remain open until implemented and tested.
-
-### Mobile bounded padding and compatible Jumbo integration
-
-Android and iOS/iPadOS use the same owned native performance compiler and cover
-service. DAITA-like here means bounded encrypted-path cover traffic, not the
-Mullvad/Maybenot implementation. Each requested home-node worker proves its
-private node identity and UDP sink before activation, uses at most 20 datagrams
-per second and 192 kbps of payload per direction, and fails if replies stop or
-the path changes. Workers and timers are cancelled and joined with the owning
-VPN. Imported configuration cannot activate cover traffic that is disabled in
-the captured user preferences. Local/Server/Compare multihop activates workers
-only after final path selection; each hop retains its own private destination.
-
-Jumbo sets a compatible proxy OS TUN to 9000 bytes without changing the physical
-Internet link, DNS, route ownership or a WG/AWG packet endpoint. Raw packet
-Jumbo and conflicting fixed-MTU requests are rejected. iOS Settings and saved
-connection profiles preserve both choices. Source, graph and lifecycle tests
-are not a substitute for device acceptance. Auto-MTU/Retest, native mobile Tor
-and remaining helper-chain parity are separate unfinished requirements.
+Both candidates use the same randomly selected external endpoint. A timeout,
+failed identity/probe, stale path or invalid measurement disqualifies the
+candidate. The selected candidate must pass both probes again before adoption.
+These are routed response times, not mislabeled ICMP pings.
+
+Private registry pairing, separate protocol peer ownership where required,
+authentication, expiry, acknowledged deletion and relay cleanup remain
+mandatory. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md).
+
+## DNS, MTU and measurement
+
+Router VPN node paths support Home AdGuard, measured Fastest, Custom UDP/TCP,
+DoT, DoH, DoH3 and Rescue through captured policy. Resolver names, bootstrap
+routes and destination retain the selected tunnel owner. Ordinary external-node
+policy integration is tracked above; controls on Router VPN nodes do not
+complete that separate host path.
+
+Android and Apple implement Auto-MTU, Retest and Cancel using the owned native
+interface, actual readback, authenticated through-tunnel probes, rollback,
+path-specific history and measurement holds. History is not presented as a
+fresh current-path result. Adaptive WG/AWG uses the Libbox endpoint owner
+without discarding AWG parameters; fixed/manual/default may retain the raw
+backend. See [../internal/mobilemtu/README.md](../internal/mobilemtu/README.md).
+
+The private optimizer requires an authenticated probe peer. An external node
+cannot claim that optimizer merely by accepting Auto or applying a default
+MTU; it needs a supported probe and actual native interface owner.
+
+Bounded padding, compatible Jumbo TUN policy and nested MTU checks are present
+in mobile source. A configured 9000-byte TUN does not prove that a public path
+carries 9000-byte packets.
+
+Speed Lab and per-hop measurements use owned transfer lanes, actual bytes,
+latency samples and stale-result rejection. Live RTT, 50-sample node statistics,
+current-path Mbps, per-hop Mbps and optimizer throughput remain distinct.
+Temporary trials preserve saved policy and restore the captured prior runtime.
+See [SPEED-LAB.md](SPEED-LAB.md).
+
+## Native Tor and external protocols
+
+Android and Apple now contain native Tor and pluggable-transport source for
+plain Tor, obfs4, meek_lite, Snowflake, WebTunnel and validated bridge sets.
+The C package and PT/session implementation join the existing VPN runtime;
+Tor is not simulated by an ordinary SOCKS profile. Selected DNS, Tor proof and
+the captured predecessor are checked before Connected. Imported values cannot
+inject torrc commands or executable plugin paths.
+
+Real Java/Swift graph fixtures cover 348 Tor variants per mobile platform.
+The pinned native registry accepts those graphs and rejects corresponding
+missing-Tor-engine mutations. These constructor/configuration checks do not
+start a public Tor circuit or replace APK/IPA and device networking tests.
+
+Windows x64, macOS and Linux use pinned owned Tor/helper processes. Windows
+ARM64 uses verified Windows 11 x64 userspace compatibility for Tor/Lyrebird;
+the app, VPN engine and driver stay ARM64. Capability checks describe this
+accurately and reject hosts without the required execution support.
+See [WINDOWS-TOR-ARM64.md](WINDOWS-TOR-ARM64.md).
+
+External imports include validated WG/AWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks,
+Hysteria2 and OpenVPN paths exposed by native hosts. Ordinary external exits
+prove the saved expected public IP. Tor uses its separate owned public-exit
+proof. Plain proxies are not labeled authenticated encrypted VPNs.
+
+Windows OpenVPN capability checks its installed native runtime/helper; it is
+not unconditionally disabled. Mobile OpenVPN uses the pinned userspace TLS
+client and documented inline-profile subset. Exact transport, authentication,
+certificate and hop requirements still apply; see [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md).
+
+## Server and private production
+
+Server source includes the protocol/helper families, private node proof and
+authenticated MTU services, paired relay sessions, forwarding, Setup Center
+administration and server-side multi-provider AI Help. Actual provider
+credentials and availability require live validation.
+
+Production Portainer compose is exact-SHA and image-only. Nine custom images
+and their compose references must match the release source. A moving branch
+or unrelated green workflow cannot certify it. The stack obtains no
+Docker-socket mount.
+
+Setup Center/admin ports **8786-8793**, private SOCKS5 and DAITA-like port
+**45999** remain private. ASUS exposure owns only exact tagged Router VPN
+DNAT/FORWARD rules. Foreign same-port rules win. Failure withdraws Router VPN
+exposure while preserving household Internet, DNS, DHCP, IPv6 and unrelated
+hooks.
+
+## Build, downloads and acceptance
+
+GitHub Actions is the normal native build environment. Downloads require the
+exact requested revision, source provenance and checksums:
+
+```text
+matching exact-SHA GitHub Release asset or Actions artifact
+→ Windows x64/ARM64 installed/Portable only: bounded requested-package fallback
+→ verified generic secret-free package
+→ download with owned progress, cancellation and retained retry
+```
+
+macOS and Linux never use the AI Board as a substitute native build environment.
+Android and iOS/iPadOS never use router-local builds. The router-local fallback is bounded to the requested generic **Windows/Portable** package
+and uses approved same-image components. PortableApps/PAF is retired; normal
+Router VPN Portable ZIP x64/ARM64 remains supported.
+
+READY output and its workspace remain available for 30 minutes. Repeat or
+interrupted download does not extend the deadline. Cancel/Delete, expiry and
+shutdown clean owned files; failure remains visible and retried.
+
+The final source generation needs its authoritative native matrix, ARM64
+server/preflight checks, exact compose and publication. Whole-project acceptance
+then also requires physical devices, visual/DPI testing, leak/network
+transitions, off-LAN interoperability, private server and AI-provider checks,
+Apple signing/distribution, deliberate deployment and live ASUS validation.
+Use [LIVE-RELEASE-EVIDENCE.md](LIVE-RELEASE-EVIDENCE.md) and
+`deploy/live-release-evidence.py` to bind real evidence to the exact SHA.
+This source-status document marks none of those live gates complete.
