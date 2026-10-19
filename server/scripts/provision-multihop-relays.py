@@ -278,6 +278,41 @@ def native_pq(assets, mode, node, server):
         raise bad
     return value
 
+def native_composite(assets, mode, node, server, api):
+    """Pair both authenticated lanes; no imported helper is ever executed."""
+    bad = ValueError('Native composite pairing lost its complete captured node graph')
+    if mode not in ('ss-v2ray', 'split', 'max') or not isinstance(assets, dict) or not 1 <= len(assets) <= 8:
+        raise bad
+    if not isinstance(api, str) or not all(isinstance(value, str) for value in assets.values()):
+        raise bad
+    payload = json.dumps(assets, ensure_ascii=False, allow_nan=False).encode('utf-8')
+    if len(payload) > 4 << 20:
+        raise ValueError('Native composite pairing exceeds its source bound')
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-composite-relay-profile', mode, node, server, api],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (OSError, subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        raise ValueError('Native composite pairing failed offline validation') from None
+    if not result.stdout or len(result.stdout) > (4 << 20) + 1:
+        raise bad
+    value = decode(result.stdout)
+    if not isinstance(value, dict) or set(value) != {'type', 'mode', 'node_id', 'start_layer', 'tcp', 'udp'}:
+        raise bad
+    if value['type'] != 'routervpn-composite-plan' or value['mode'] != mode or value['node_id'] != node or value['start_layer'] != '':
+        raise bad
+    tcp, udp = value['tcp'], value['udp']
+    if not isinstance(tcp, dict) or not isinstance(udp, dict) or tcp.get('detour') is not None or udp.get('detour') is not None:
+        raise bad
+    if tcp.get('tag') != 'routervpn-composite-tcp' or udp.get('tag') != 'routervpn-composite-udp' or udp.get('type') != 'hysteria2' or udp.get('server') != server:
+        raise bad
+    if mode == 'ss-v2ray':
+        if tcp.get('type') != 'shadowsocks' or tcp.get('server') != server or tcp.get('plugin') != 'v2ray-plugin' or tcp.get('network') != 'tcp':
+            raise bad
+    elif tcp.get('type') != 'routervpn-xray' or tcp.get('mode') != mode:
+        raise bad
+    return value
+
 def paired_start_layer(bundle, profile, endpoint):
     raw_mode = profile.get('start_layer', 'off')
     if not isinstance(raw_mode, str):
@@ -375,8 +410,12 @@ def pair(bundle, alias, selected=None):
         if assets is None: continue
         transport = native_xray(assets, mode, endpoint)
         exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
+    for mode in ('ss-v2ray', 'split', 'max'):
+        if mode not in modes: continue
+        transport = native_composite(modes[mode], mode, node, endpoint, profile.get('router_api'))
+        exits.append(dict(id=alias, mode=mode, node_id=node, dns_server=dns, transport=transport))
     if not exits:
-        raise ValueError('bundle has no supported standalone server exit transport')
+        raise ValueError('bundle has no supported native server exit graph')
     layer = paired_start_layer(bundle, profile, endpoint)
     if layer is not None:
         # Pair exactly the saved choice. A later client requesting another

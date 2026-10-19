@@ -42,6 +42,15 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "compile-composite-relay-profile" {
+		if len(os.Args) != 6 {
+			log.Fatal("compile-composite-relay-profile requires the captured mode, node, endpoint and private API")
+		}
+		if err := compileCompositeRelayProfile(os.Stdin, os.Stdout, os.Args[2], os.Args[3], os.Args[4], os.Args[5]); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-relay-start-layer" {
 		if len(os.Args) != 4 {
 			log.Fatal("compile-relay-start-layer requires the captured endpoint and private API")

@@ -66,7 +66,11 @@ func run() error {
 	}
 	cert := base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
 	secret := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(id[:1], 32)))
-	aes := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": secret}}}
+	aes := map[string]any{
+		"inbounds":  []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true, "mtu": 1280, "address": []string{"172.29.94.1/30", "fd29:94::1/126"}}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": host, "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": secret}},
+		"route":     map[string]any{"final": "proxy"},
+	}
 	profiles := map[string]map[string]string{"shadowsocks": {"sing-box.json": encoded(aes)}}
 	for _, mode := range []string{"ss-v2ray", "split", "max"} {
 		helperPort, helperName := 1090, "xray.json"
