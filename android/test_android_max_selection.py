@@ -22,6 +22,7 @@ import("bytes";"encoding/binary";"encoding/json";"fmt";"io";"os";"router-vpn/int
 type request struct{Operation,Config,Policy string}
 func handle(r request)(string,error){
  switch r.Operation {
+ case "max-check":var input struct{Mode,Files string};if err:=json.Unmarshal([]byte(r.Config),&input);err!=nil{return "",err};captured,err:=mobilemultihop.CaptureMAXProfile(input.Mode,input.Files,r.Policy);if err!=nil{return "",err};return captured.SourceSHA256(),nil
  case "max-profile":var input struct{Mode,Files string};if err:=json.Unmarshal([]byte(r.Config),&input);err!=nil{return "",err};return mobilemultihop.CompileMAXProfile(input.Mode,input.Files,r.Policy)
  case "lan":return mobilemultihop.ApplyLANPolicy(r.Config,r.Policy)
  case "performance":return mobileperf.Apply(r.Config,r.Policy)

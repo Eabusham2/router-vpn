@@ -54,6 +54,9 @@ func main(){
  case "exit":value,err=mobilemultihop.WireGuardExitConfig(r.Config,r.Policy)
  case "awg-parse":value,err=mobilemultihop.CompileAmneziaProfile(r.Config,r.Policy)
  case "awg-exit":value,err=mobilemultihop.AmneziaExitConfig(r.Config,r.Policy)
+ case "max-check":
+  var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{var captured *mobilemultihop.MAXProfileCapture;captured,err=mobilemultihop.CaptureMAXProfile(input.Mode,input.Files,r.Policy);if err==nil{value=captured.SourceSHA256()}}
  case "max-profile":
   var input struct{Mode string;Files string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobilemultihop.CompileMAXProfile(input.Mode,input.Files,r.Policy)}
@@ -165,6 +168,7 @@ public final class Libbox {
  public static String routerMAXMultihopBase(String config,String mode,String node,String layer)throws Exception{return call("max-base",new JSONObject().put("Config",config).put("Mode",mode).put("Node",node).put("Layer",layer).toString(),"");}
  public static String routerComposeMAXMultihop(String config,String metadata,String entry,String exit)throws Exception{return call("max-multihop",new JSONObject().put("Config",config).put("Entry",entry).put("Exit",exit).toString(),metadata);}
 
+ public static String routerCheckMAXProfile(String mode,String files,String policy)throws Exception{return call("max-check",new JSONObject().put("Mode",mode).put("Files",files).toString(),policy);}
  public static String routerCompileMAXProfile(String mode,String files,String policy)throws Exception{return call("max-profile",new JSONObject().put("Mode",mode).put("Files",files).toString(),policy);}
  public static String routerCompileCompositeProfile(String mode,String files,String policy,String start)throws Exception{return call("composite-profile",new JSONObject().put("Mode",mode).put("Files",files).put("Start",start).toString(),policy);}
  public static String routerCompositeMultihopBase(String config,String mode,String node,String layer)throws Exception{return call("composite-base",new JSONObject().put("Config",config).put("Mode",mode).put("Node",node).put("Layer",layer).toString(),"");}
