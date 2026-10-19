@@ -16,7 +16,7 @@ import (
 )
 
 func TestActualCgoLoaderScenarios(t *testing.T) {
-	for _, scenario := range []string{"arguments", "bad-abi", "bad-version", "empty-handle", "normal",
+	for _, scenario := range []string{"descriptor-count", "arguments", "bad-abi", "bad-version", "empty-handle", "normal",
 		"claim-failed", "conversion-failed", "start-error-handle", "timeout", "close-error", "exit-code", "unknown-status", "controller-close"} {
 		t.Run(scenario, func(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
@@ -36,9 +36,20 @@ func descriptorCount(t *testing.T) int {
 	if runtime.GOOS == "darwin" {
 		directory = "/dev/fd"
 	}
-	entries, err := os.ReadDir(directory)
+	// Only names are needed. ReadDir performs fstatat on /dev/fd entries;
+	// Darwin cannot stat kqueue descriptors even though they are open. Name-only
+	// enumeration counts those descriptors without hiding an EBADF or a leak.
+	dir, err := os.Open(directory)
 	if err != nil {
 		t.Fatal(err)
+	}
+	entries, readErr := dir.Readdirnames(-1)
+	closeErr := dir.Close()
+	if readErr != nil {
+		t.Fatal(readErr)
+	}
+	if closeErr != nil {
+		t.Fatal(closeErr)
 	}
 	return len(entries)
 }
@@ -77,6 +88,43 @@ func TestActualCgoLoaderChild(t *testing.T) {
 	_ = left.Close()
 	_ = right.Close()
 	settled := descriptorCount(t)
+	if scenario == "descriptor-count" {
+		owned := make([]*os.File, 8)
+		t.Cleanup(func() {
+			for _, file := range owned {
+				if file != nil {
+					if err := file.Close(); err != nil {
+						t.Error(err)
+					}
+				}
+			}
+		})
+		for i := range owned {
+			file, err := os.Open(os.DevNull)
+			if err != nil {
+				t.Fatal(err)
+			}
+			owned[i] = file
+			if got := descriptorCount(t); got != settled+i+1 {
+				t.Fatalf("descriptor counter lost an open owner: got %d, want %d", got, settled+i+1)
+			}
+		}
+		for i := 0; i < 16; i++ {
+			if got := descriptorCount(t); got != settled+len(owned) {
+				t.Fatal("descriptor enumeration leaked or omitted an owned descriptor", got)
+			}
+		}
+		for i, file := range owned {
+			if err := file.Close(); err != nil {
+				t.Fatal(err)
+			}
+			owned[i] = nil
+		}
+		if descriptorCount(t) != settled {
+			t.Fatal("descriptor enumeration retained a closed owner")
+		}
+		return
+	}
 	if scenario == "arguments" {
 		for _, arguments := range [][]string{nil, {"bad"}, {"tor", ""}, {"tor", "x\x00ignored"},
 			{"tor", strings.Repeat("x", 8193)}, append([]string{"tor"}, make([]string, 128)...),

@@ -52,17 +52,19 @@ def main(go):
         positive = run(command, root, env)
         if positive.returncode:
             raise RuntimeError('Shipping native Tor loader failed:\n' + positive.stdout)
-        print('PASS actual Cgo Tor ownership: 13 scenarios, concurrent control/close, fd accounting, -race')
+        print('PASS actual Cgo Tor ownership: 14 scenarios, concurrent control/close, fd accounting, -race')
         original = (root / 'native.go').read_text()
         backend = (root / 'backend.go').read_text()
+        sources = {'native.go': original, 'backend.go': backend, 'loader_test.go': (root / 'loader_test.go').read_text()}
         mutations = {
+            'fabricated descriptor count': ('loader_test.go', 'return len(entries)', 'return len(entries) * 0'),
             'duplicate native control claim': ('native.go', 'if i.claimed || i.closing || i.released {', 'if i.closing || i.released {'),
             'leaked FileConn original descriptor': ('native.go', 'closeErr := file.Close()', 'closeErr := error(nil)'),
             'NUL-truncated C argument': ('native.go', 'strings.IndexByte(argument, 0) >= 0', 'strings.IndexByte(argument, 0) >= len(argument)'),
             'premature release on native timeout': ('backend.go', 'case 1:\n\t\treturn false, nil', 'case 1:\n\t\treturn true, nil'),
         }
         for name, (file, before, after) in mutations.items():
-            value = original if file == 'native.go' else backend
+            value = sources[file]
             if value.count(before) != 1:
                 raise RuntimeError('Native loader negative-control anchor changed: ' + name)
             (root / file).write_text(value.replace(before, after, 1))
