@@ -1,0 +1,11 @@
+package libbox
+
+import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+
+// RouterCompileExternalPolicy applies the exact captured ordinary external
+// DNS, IPv6, LAN and MTU policy without opening a socket or changing a profile.
+// The bounded envelope binds the original strings, compiled graph and metadata.
+// Hosts must still prove the selected native DNS and exit before reporting UP.
+func RouterCompileExternalPolicy(config, capture string) (string, error) {
+	return mobilemultihop.CompileExternalPolicy(config, capture)
+}
