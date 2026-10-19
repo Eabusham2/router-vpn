@@ -15,14 +15,15 @@ extension RouterVPNModel {
     var selectedExternalProtocol: String { selectedNodeProfile?.external?.protocolName.lowercased() ?? "" }
 
     var selectedExternalSupportedOnIOS: Bool {
-        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selectedExternalProtocol)
+        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"].contains(selectedExternalProtocol)
     }
 
     func nodeRuntimeSummary(_ profile: RouterProfile) -> String {
         if profile.normalizedNodeKind == "external" {
             let protocolName = profile.external?.protocolName.lowercased() ?? "unknown"
             if protocolName == "openvpn" { return "External OpenVPN — native pinned client with exact public-exit proof" }
-            if protocolName == "tor-bridge" { return "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom — unavailable on iOS until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof" }
+            if protocolName == "tor" { return "Tor • current circuit exit verified before connection completes" }
+            if protocolName == "tor-bridge" { return "Tor bridges • obfs4 / meek / Snowflake / WebTunnel • current circuit exit verification" }
             if ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) { return "External \(protocolName) — native Libbox PacketTunnel + exact public-exit proof" }
             return "External \(protocolName) — unsupported"
         }
@@ -85,19 +86,27 @@ extension RouterVPNModel {
             connected = false
             if selectedExternalProtocol == "openvpn" {
                 message = "OpenVPN native capability is unavailable in this build."
-            } else if selectedExternalProtocol == "tor-bridge" {
-                message = "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on iOS until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane. A fixed expected-exit IP cannot substitute for Tor's dynamic circuit-exit proof."
             } else {
                 message = "This external protocol is unavailable on iOS."
             }
             return
         }
-        guard let expected = profile.external?.expectedPublicIP, !expected.isEmpty else {
+        let tor = selectedExternalProtocol == "tor" || selectedExternalProtocol == "tor-bridge"
+        let expected = profile.external?.expectedPublicIP ?? ""
+        guard tor ? expected.isEmpty : !expected.isEmpty else {
             connected = false; message = "External node is missing its expected public exit IP."; return
         }
         let encodedBundle: Data
+        let capturedEntry: Data?
+        let capturedEntryProfile: RouterProfile?
         do {
             encodedBundle = try externalRuntimeBundleData(source: bundle, profile: profile)
+            capturedEntry = try externalTorEntryData(source: bundle)
+            capturedEntryProfile = try capturedEntry.map { data in
+                let entry = try JSONDecoder().decode(ClientBundle.self, from: data)
+                guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: entry) else { throw CancellationError() }
+                return selected
+            }
         } catch {
             connected = false; message = "Could not prepare the selected external runtime bundle: \(error.localizedDescription)"; return
         }
@@ -113,7 +122,7 @@ extension RouterVPNModel {
                 throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN tunnel configurations make external connection ownership ambiguous.")
             }
             let manager = managers.first ?? NETunnelProviderManager()
-            try requireExternalPreparation(generation, source: bundle, manager: manager)
+            try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
             proto.serverAddress = profile.endpoint
@@ -124,10 +133,14 @@ extension RouterVPNModel {
                 "logicalMode": "external-node",
                 "bundle": encodedBundle
             ]
-            let strict = externalStrict(profile)
+            if let capturedEntry {
+                proto.providerConfiguration?["tor_entry_bundle"] = capturedEntry
+                proto.providerConfiguration?["tor_entry_mode"] = profile.multihopEntryMode ?? "wg"
+            }
+            let strict = externalStrict(profile) || capturedEntryProfile.map(externalStrict) == true
             proto.includeAllNetworks = strict
             proto.enforceRoutes = strict
-            proto.excludeLocalNetworks = strict && (profile.homeLANAccess ?? true)
+            proto.excludeLocalNetworks = strict && (profile.homeLANAccess ?? true) && (capturedEntryProfile?.homeLANAccess ?? true)
             proto.excludeAPNs = false
             proto.excludeCellularServices = false
             manager.protocolConfiguration = proto
@@ -136,29 +149,33 @@ extension RouterVPNModel {
             if strict { manager.onDemandRules = [NEOnDemandRuleConnect()]; manager.isOnDemandEnabled = true }
             else { manager.onDemandRules = []; manager.isOnDemandEnabled = false }
             try await manager.saveToPreferences()
-            try requireExternalPreparation(generation, source: bundle, manager: manager)
+            try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
             try await manager.loadFromPreferences()
-            try requireExternalPreparation(generation, source: bundle, manager: manager)
+            try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
             guard let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   saved.providerConfiguration?["bundle"] as? Data == encodedBundle,
                   saved.providerConfiguration?["engine"] as? String == "external-libbox",
+                  saved.providerConfiguration?["tor_entry_bundle"] as? Data == capturedEntry,
+                  saved.providerConfiguration?["tor_entry_mode"] as? String == (capturedEntry == nil ? nil : (profile.multihopEntryMode ?? "wg")),
+                  saved.includeAllNetworks == strict, saved.enforceRoutes == strict,
+                  saved.excludeLocalNetworks == proto.excludeLocalNetworks,
                   manager.isEnabled, manager.isOnDemandEnabled == strict else {
                 throw IOSRuntimeSelectionError.unsupportedMode("External runtime preferences did not preserve the captured owner.")
             }
-            message = "Starting external \(protocolName) PacketTunnel • proving exit \(expected)…"
+            message = tor ? "Connecting to Tor • building the circuit and verifying its current exit…" : "Starting external \(protocolName) PacketTunnel • proving exit \(expected)…"
             try manager.connection.startVPNTunnel()
-            let ok = await waitExternalConnection(manager, attempts: 48, generation: generation)
+            let ok = await waitExternalConnection(manager, attempts: tor ? 720 : 48, generation: generation)
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard ok else {
                 await refreshTunnelStatus()
                 guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
-                message = "External \(protocolName) has not completed exact public-exit proof. Check its protected status or Disconnect."
+                message = tor ? "Tor has not finished verifying its current circuit exit. You can disconnect while it is connecting." : "External \(protocolName) has not completed exact public-exit proof. Check its protected status or Disconnect."
                 return
             }
             await refreshTunnelStatus()
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
             if connected {
-                message = "Connected • external \(protocolName) • exact public-exit proof passed: \(expected)" + (strict ? " • strict route lockdown" : "")
+                message = (tor ? "Connected • Tor • current circuit exit verified" : "Connected • external \(protocolName) • exact public-exit proof passed: \(expected)") + (strict ? " • strict route lockdown" : "")
             }
         } catch {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
@@ -169,7 +186,7 @@ extension RouterVPNModel {
         }
     }
 
-    private func requireExternalPreparation(_ generation: UUID, source: ClientBundle, manager: NETunnelProviderManager) throws {
+    private func requireExternalPreparation(_ generation: UUID, source: ClientBundle, entry: Data?, manager: NETunnelProviderManager) throws {
         try Task.checkCancellation()
         guard iosConnectGeneration == generation, !iosUserDisconnectInProgress,
               let current = bundle, current.selectedRouterID == source.selectedRouterID,
@@ -177,9 +194,23 @@ extension RouterVPNModel {
               manager.protocolConfiguration == nil || (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" else {
             throw CancellationError()
         }
+        guard try externalTorEntryData(source: source) == entry else { throw CancellationError() }
         guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
             throw IOSRuntimeSelectionError.unsupportedMode("The external VPN owner changed during startup; disconnect before replacing it.")
         }
+    }
+
+    private func externalTorEntryData(source: ClientBundle) throws -> Data? {
+        guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: source) else { throw CancellationError() }
+        guard selected.multihopEnabled == true else { return nil }
+        guard selected.normalizedNodeKind == "external", ["tor", "tor-bridge"].contains(selected.external?.protocolName ?? "") else {
+            throw IOSRuntimeSelectionError.unsupportedMode("This external node has no saved native entry composition.")
+        }
+        let entry = try iosMultihopEntryBundle(for: source)
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(entry)
+        guard data.count <= 32 * 1024 * 1024 else { throw IOSRuntimeSelectionError.unsupportedMode("The captured Tor entry bundle exceeds its 32 MiB limit.") }
+        return data
     }
 
     private func externalRuntimeBundleData(source: ClientBundle, profile: RouterProfile) throws -> Data {

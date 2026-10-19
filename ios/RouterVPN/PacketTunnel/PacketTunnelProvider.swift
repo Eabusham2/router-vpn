@@ -341,7 +341,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 // The two-node validator below checks the intersection of both
                 // LAN policies. Comparing only the exit here rejects a valid
                 // entry-LAN-Off / exit-LAN-On graph before that check can run.
-                guard (provider["engine"] as? String) == "multihop-libbox" || tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
+                guard (provider["engine"] as? String) == "multihop-libbox" ||
+                    ((provider["engine"] as? String) == "external-libbox" && provider["tor_entry_bundle"] != nil) ||
+                    tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
@@ -355,7 +357,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
             case "multihop-libbox": try startMultihop(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
             case "libbox": try startLibbox(provider: provider, root: root, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
-            case "external-libbox": try startExternalLibbox(selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
+            case "external-libbox": try startExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
             default: throw tunnelError(6, "Unsupported Router VPN iOS engine \(engine).")
             }
         } catch { completionHandler(error) }
@@ -780,6 +782,33 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 return result
             }
             rawFiles = try RouterVPNMultihopGraph.singlePQPolicy(rawFiles, profile: selectedProfile)
+        } else if IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID) {
+            let layer = try IOSStartLayer.selectedMode(profile: selectedProfile)
+            guard let captured = try IOSNativeCompositeMultihop.capture(root: root, mode: rawProfileID,
+                profile: selectedProfile, nodeID: expectedNodeID, layer: layer, compiler: { mode, assets, policy, start in
+                    var failure: NSError?
+                    let compiled: String? = LibboxRouterCompileCompositeProfile(mode, assets, policy, start, &failure)
+                    if let failure { throw failure }
+                    guard let compiled else { throw self.tunnelError(58, "Composite entry did not compile.") }
+                    return compiled
+                }, baseCompiler: { source, mode, node, start in
+                    var failure: NSError?
+                    let compiled: String? = LibboxRouterCompositeMultihopBase(source, mode, node, start, &failure)
+                    if let failure { throw failure }
+                    guard let compiled else { throw self.tunnelError(58, "Composite entry lost its captured owner.") }
+                    return compiled
+                }) else { throw tunnelError(58, "The selected composite entry was not captured.") }
+            // Apply the saved DNS policy to the validated owner, then retain the
+            // complete source's TCP/UDP lanes and its already composed Start Layer.
+            let policyFiles = try RouterVPNMultihopGraph.compositeDNSPolicy(captured.baseFiles, profile: selectedProfile)
+            guard let policyData = policyFiles["sing-box.json"],
+                  let policyGraph = try JSONSerialization.jsonObject(with: policyData) as? [String: Any],
+                  let dns = policyGraph["dns"] as? [String: Any],
+                  var complete = try JSONSerialization.jsonObject(with: Data(captured.source.utf8)) as? [String: Any] else {
+                throw tunnelError(58, "Composite entry lost its captured resolver or complete graph.")
+            }
+            complete["dns"] = dns
+            rawFiles = ["sing-box.json": try JSONSerialization.data(withJSONObject: complete, options: [.sortedKeys])]
         } else if IOSNativePQProfile.modeIDs.contains(rawProfileID) {
             guard let profiles = root["profiles"] as? [String: Any],
                   let encoded = profiles[rawProfileID] as? [String: String] else { throw tunnelError(58, "Native PQ captured assets are missing.") }
@@ -807,6 +836,25 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             rawFiles = try RouterVPNMultihopGraph.singleWireGuardPolicy(rawFiles, profile: selectedProfile)
         } else {
             rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)
+            if ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"].contains(rawProfileID) {
+                guard let profiles = root["profiles"] as? [String: Any], let assets = profiles[rawProfileID] as? [String: String],
+                      let source = rawFiles["sing-box.json"],
+                      var graph = try JSONSerialization.jsonObject(with: source) as? [String: Any],
+                      var outputs = graph["outbounds"] as? [[String: Any]] else { throw tunnelError(58, "Native proxy lost its captured assets.") }
+                let input = try JSONSerialization.data(withJSONObject: assets, options: [.sortedKeys])
+                var failure: NSError?
+                let result: String? = LibboxRouterCompileProxyEntry(String(decoding: input, as: UTF8.self), rawProfileID, &failure)
+                if let failure { throw failure }
+                guard let result, !result.isEmpty, result.utf8.count <= Self.maxProfileBytes,
+                      var outbound = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
+                      outbound["tag"] as? String == "routervpn-hop-entry" else { throw tunnelError(58, "Native proxy validation did not preserve its owner.") }
+                let positions = outputs.indices.filter { outputs[$0]["tag"] as? String == "proxy" }
+                guard positions.count == 1 else { throw tunnelError(58, "Native proxy final owner is ambiguous.") }
+                // Only its own validated certificate is inlined. DNS, routes,
+                // interface and all selected transport fields remain captured.
+                outbound["tag"] = "proxy"; outputs[positions[0]] = outbound; graph["outbounds"] = outputs
+                rawFiles["sing-box.json"] = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+            }
         }
         if let original = rawFiles["xray.json"] {
             guard let wrapper = rawFiles["sing-box.json"], let wrapperText = String(data: wrapper, encoding: .utf8), let xrayText = String(data: original, encoding: .utf8) else { throw tunnelError(58, "Native Xray requires its exact UTF-8 imported graph.") }
@@ -816,20 +864,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let compiled, !compiled.isEmpty, compiled.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native Xray graph validation failed.") }
             rawFiles["sing-box.json"] = Data(compiled.utf8)
         }
-        if rawProfileID == "ss-v2ray" {
-            guard let helper = rawFiles["sslocal.json"], let wrapper = rawFiles["sing-box.json"],
-                  let helperText = String(data: helper, encoding: .utf8), let wrapperText = String(data: wrapper, encoding: .utf8) else {
-                throw tunnelError(58, "Native SIP003 requires its exact generated UTF-8 graph.")
-            }
-            var failure: NSError?
-            let compiled: String? = LibboxRouterCompileSIP003Profile(wrapperText, helperText, &failure)
-            if let failure { throw failure }
-            guard let compiled, !compiled.isEmpty, compiled.utf8.count <= 4 * 1024 * 1024 else {
-                throw tunnelError(58, "The native SIP003 compiler did not return a bounded profile.")
-            }
-            rawFiles["sing-box.json"] = Data(compiled.utf8)
-        }
-        // The complete-chain compiler already owns MAX's selected outer layer.
+        // Complete-chain compilers already own their selected outer layer.
         var compositionRoot = root
         if let source = rawFiles["start-layer-source.json"] {
             guard rawFiles["xray.json"] != nil, !source.isEmpty, source.count <= Self.maxProfileBytes,
@@ -840,13 +875,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             shadowsocks["sing-box.json"] = source.base64EncodedString()
             profiles["shadowsocks"] = shadowsocks; compositionRoot["profiles"] = profiles
         }
-        let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles
+        let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)
+        let composedFiles = try completeChain ? rawFiles
             : IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         if rawFiles["xray.json"] != nil {
             files = try IOSXrayDevicePolicy.apply(files: files, profile: selectedProfile)
         }
-        if IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawProfileID) {
+        let proxyEntry = ["shadowsocks", "hysteria2", "naive-h2", "naive-h3"].contains(rawProfileID)
+        if completeChain || proxyEntry || ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"].contains(rawProfileID) {
             guard let data = files["sing-box.json"], let text = String(data: data, encoding: .utf8) else { throw tunnelError(58, "Native WG lost its compiled graph.") }
             let policies = try JSONSerialization.data(withJSONObject: ["entry": selectedProfile, "exit": selectedProfile])
             var failure: NSError?
@@ -854,6 +891,28 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             if let failure { throw failure }
             guard let protected, !protected.isEmpty, protected.utf8.count <= Self.maxProfileBytes else { throw tunnelError(58, "Native WG LAN policy was not compiled.") }
             files["sing-box.json"] = Data(protected.utf8)
+        }
+        if proxyEntry || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID) {
+            if let value = selectedProfile["ipv6_mode"], !(value is String) { throw tunnelError(58, "Proxy IPv6 policy must be a saved selection.") }
+            let ipv6 = (selectedProfile["ipv6_mode"] as? String ?? "on").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            guard ["", "on", "auto", "off"].contains(ipv6) else { throw tunnelError(58, "Proxy IPv6 policy is invalid.") }
+            if ipv6 == "off" {
+                guard let data = files["sing-box.json"], var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      var inputs = graph["inbounds"] as? [[String: Any]], inputs.count == 1,
+                      inputs[0]["type"] as? String == "tun", let tag = inputs[0]["tag"] as? String,
+                      var addresses = inputs[0]["address"] as? [String], !addresses.isEmpty,
+                      var route = graph["route"] as? [String: Any], route["final"] as? String == "proxy",
+                      let rules = route["rules"] as? [[String: Any]], var dns = graph["dns"] as? [String: Any] else { throw tunnelError(58, "Proxy IPv6 policy lost its owned interface.") }
+                // Capture IPv6 before rejecting it; removing its system route
+                // would allow the underlying connection to carry that traffic.
+                if !addresses.contains(where: { $0.contains(":") }) { addresses.append("fd00:5256:504e:1::1/126") }
+                inputs[0]["address"] = addresses
+                if inputs[0]["route_address"] == nil { inputs[0]["route_address"] = ["0.0.0.0/0", "::/0"] }
+                route["rules"] = [["inbound": [tag], "ip_version": 6, "action": "reject"]] + rules
+                dns["strategy"] = "ipv4_only"
+                graph["route"] = route; graph["dns"] = dns; graph["inbounds"] = inputs
+                files["sing-box.json"] = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+            }
         }
         guard expectedNodeID.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { throw tunnelError(14, "Layered iOS modes require the imported node's exact node proof id.") }
         var performanceProfile = selectedProfile
@@ -874,14 +933,43 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var result = files; result["sing-box.json"] = Data(compiled.utf8); return result
     }
 
-    private func startExternalLibbox(selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+    private func startExternalLibbox(provider: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
         try IOSStartLayer.validateExternal(profile: selectedProfile)
-        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile)
+        var entryFiles: [String: Data] = [:]
+        var entryProfile: [String: Any]?
+        var effectiveStrict = strict
+        if let entryData = provider["tor_entry_bundle"] {
+            guard let data = entryData as? Data, !data.isEmpty, data.count <= Self.maxBundleBytes,
+                  selectedProfile["multihop_enabled"] as? Bool == true,
+                  let entryRoot = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let mode = provider["tor_entry_mode"] as? String,
+                  mode == (selectedProfile["multihop_entry_mode"] as? String ?? "wg"),
+                  RouterVPNExternalExitBuilder.torEntryModes.contains(mode) else { throw tunnelError(58, "Tor lost its captured entry bundle or transport.") }
+            let entry = try selectedRouterProfile(entryRoot)
+            guard entry["id"] as? String == selectedProfile["multihop_entry_id"] as? String,
+                  entry["node_kind"] as? String == "router-vpn" else { throw tunnelError(58, "Tor entry bundle selected another node.") }
+            let compiled = try compileLibbox(provider: ["rawProfileID": mode], root: entryRoot, selectedProfile: entry)
+            entryFiles = compiled.files; entryProfile = entry
+            effectiveStrict = strict || strictKillSwitchRequested(entry)
+            guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol,
+                  !effectiveStrict || (tunnelProtocol.includeAllNetworks && tunnelProtocol.enforceRoutes &&
+                  tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))) else { throw tunnelError(58, "Tor entry and exit route lockdown was not preserved.") }
+        } else if provider["tor_entry_mode"] != nil || selectedProfile["multihop_enabled"] as? Bool == true {
+            throw tunnelError(58, "Saved Tor multihop cannot start without its captured entry.")
+        }
+        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         try engine.prepareMTUHold(initialMTUHold)
-        do { try engine.start(files: RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile), strict: strict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
+        let files = runtime.torSessionID == nil ? try RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile) : runtime.files
+        do { try engine.start(files: files, strict: effectiveStrict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
         let externalPathGuard = self.armNetworkProofGuard()
-        proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
+        let prove: (@escaping (Error?) -> Void) -> Void
+        if let sessionID = runtime.torSessionID {
+            prove = { engine.proveTor(sessionID: sessionID, predecessorProfile: runtime.torPredecessorProfile, completion: $0) }
+        } else {
+            prove = { self.proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort, completion: $0) }
+        }
+        prove { [weak self] proofError in
             guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 18, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during external-exit proof."])); return }
             guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(43, "A newer iOS external runtime replaced this proof attempt.")); return }
             if let proofError {

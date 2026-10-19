@@ -444,6 +444,16 @@ final class CompletionState: @unchecked Sendable {
             check("late Tor success cannot reactivate retired session",done.values()==(1,cancelled ? 1 : 0) && provider.count()==0)
         }
         check("Tor uses a stable private directory across new engine roots",Set(torState.stateRoots()).count==1 && torState.stateRoots().count>=2 && !torState.stateRoots()[0].contains("routervpn-libbox-"))
+        for fails in [false,true] {
+            torState.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:true)
+            let server=state.currentServer()!;server.configureStrategy(dns:fails)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            check("Tor requires its selected native DNS before Connected",done.wait() && done.values()==(1,fails ? 1:0))
+            check("Tor DNS proof belongs to the same captured runtime",server.strategyCalls()==["start","dns"])
+            owner.stop()
+        }
         do {
             torState.configure()
             let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)

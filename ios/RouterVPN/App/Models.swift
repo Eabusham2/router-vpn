@@ -113,6 +113,16 @@ struct ExternalHysteria2Config: Codable, Hashable {
     }
 }
 
+struct ExternalTorBridgeConfig: Codable, Hashable {
+    var transport: String?
+    var bridges: [String]
+    var socksPort: Int?
+    enum CodingKeys: String, CodingKey {
+        case transport, bridges
+        case socksPort = "socks_port"
+    }
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -123,6 +133,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var httpConnect: ExternalHTTPConnectConfig?
     var httpsConnect: ExternalHTTPConnectConfig?
     var hysteria2: ExternalHysteria2Config?
+    var torBridge: ExternalTorBridgeConfig?
 
     enum CodingKeys: String, CodingKey {
         case wireGuard = "wireguard"
@@ -130,6 +141,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case httpConnect = "http_connect"
         case httpsConnect = "https_connect"
         case shadowsocks, socks5, hysteria2
+        case torBridge = "tor_bridge"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

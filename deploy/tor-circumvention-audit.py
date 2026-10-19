@@ -372,9 +372,24 @@ forbid(
 )
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
-    "Tor bridges — obfs4 / meek / Snowflake / WebTunnel / Custom",
-    "real native Tor + pluggable-transport PacketTunnel dataplane",
+    '"tor", "tor-bridge"',
+    "capturedEntry = try externalTorEntryData(source: bundle)",
+    'proto.providerConfiguration?["tor_entry_bundle"] = capturedEntry',
+    'saved.providerConfiguration?["tor_entry_bundle"] as? Data == capturedEntry',
+    "current circuit exit verified",
 )
+need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
+     "LibboxRouterCompileTorProfile", "torPredecessorProfile: proofProfile",
+     'tor["session_id"] as? String == sessionID', 'tor["detour"] as? String == predecessorTag')
+need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
+     'provider["tor_entry_bundle"]', "RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)",
+     "engine.proveTor(sessionID: sessionID, predecessorProfile: runtime.torPredecessorProfile", "self.currentPathProofGuard() === externalPathGuard")
+need("ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
+     "LibboxRouterTorSetStateDirectory", "LibboxRouterTorCreateProofWithPredecessor", "TorProofDelivery",
+     "LibboxRouterStrategyDNSProof(server", "request.healthy()", "request.cancel()",
+     "Self.torRetirement.retain(server: owned", "torDelivery?.cancel()")
+need("deploy/test_ios_tor_profile.py", "mobiletor.CompileProfile", "LibboxRouterCompileProxyEntry", "graphs==348", "profile_policy_combinations")
+need("deploy/test_ios_libbox_delivery.py", "Tor requires its selected native DNS before Connected", "Tor stop cancels captured request immediately")
 forbid(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     "Tor obfs4 bridge — unavailable",

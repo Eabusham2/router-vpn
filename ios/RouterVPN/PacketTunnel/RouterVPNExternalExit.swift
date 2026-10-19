@@ -6,19 +6,68 @@ struct RouterVPNExternalExitRuntime {
     let protocolName: String
     let expectedPublicIP: String
     let files: [String: Data]
+    var torSessionID: String? = nil
+    var torPredecessorProfile: String? = nil
 }
 
 enum RouterVPNExternalExitBuilder {
-    static func build(profile: [String: Any]) throws -> RouterVPNExternalExitRuntime {
+    static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
+    static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()
         guard kind == "external", let external = profile["external"] as? [String: Any] else {
             throw error("Selected profile is not an external custom node.")
         }
         let protocolName = string(external["protocol"]).lowercased()
-        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) else {
-            if protocolName == "tor-bridge" {
-                throw error("Tor bridges are unavailable on iOS until Router VPN ships a native Tor + pluggable-transport PacketTunnel dataplane with dynamic Tor-exit proof.")
+        if protocolName == "tor" || protocolName == "tor-bridge" {
+            let throughEntry = profile["multihop_enabled"] as? Bool ?? false
+            guard throughEntry == (predecessorProfile != nil), throughEntry == !predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
+            var predecessor = ""
+            var predecessorTag: String?
+            var proofProfile: String?
+            if let predecessorProfile {
+                guard string(profile["multihop_exit_id"]) == string(profile["id"]),
+                      string(profile["multihop_exit_mode"]) == protocolName,
+                      ["", "local"].contains(string(profile["multihop_execution"])),
+                      string(profile["multihop_entry_id"]) == string(predecessorProfile["id"]),
+                      predecessorProfile["node_kind"] as? String == "router-vpn",
+                      string(predecessorProfile["node_proof_id"]).range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
+                      let source = predecessorFiles["sing-box.json"], let text = String(data: source, encoding: .utf8),
+                      let config = try JSONSerialization.jsonObject(with: source) as? [String: Any],
+                      let final = (config["route"] as? [String: Any])?["final"] as? String, !final.isEmpty else {
+                    throw error("Tor requires the selected entry's complete graph and private node identity.")
+                }
+                // A single system TUN cannot obey two conflicting fixed sizes.
+                // Preserve the entry's already validated MTU unless Tor explicitly
+                // selects a compatible value; never reuse saved measurement history.
+                let entryPolicy = string(predecessorProfile["mtu_policy"])
+                let exitPolicy = string(profile["mtu_policy"])
+                if ["manual", "fixed"].contains(entryPolicy), ["manual", "fixed"].contains(exitPolicy),
+                   int(predecessorProfile["manual_mtu"]) != int(profile["manual_mtu"]) { throw error("Tor and its entry select different fixed sizes for the same VPN interface.") }
+                predecessor = text; predecessorTag = final
+                proofProfile = String(decoding: try JSONSerialization.data(withJSONObject: predecessorProfile, options: [.sortedKeys]), as: UTF8.self)
             }
+            let sessionID = UUID().uuidString.lowercased()
+            let source = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
+            var failure: NSError?
+            let encoded = LibboxRouterCompileTorProfile(String(decoding: source, as: UTF8.self), sessionID, predecessor, &failure)
+            if let failure { throw failure }
+            guard let data = encoded.data(using: .utf8), !data.isEmpty, data.count <= 4 * 1024 * 1024,
+                  let config = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let inbounds = config["inbounds"] as? [[String: Any]], inbounds.count == 1, inbounds[0]["type"] as? String == "tun",
+                  let outbounds = config["outbounds"] as? [[String: Any]],
+                  outbounds.filter({ $0["type"] as? String == "routervpn-tor" }).count == 1,
+                  let tor = outbounds.first(where: { $0["type"] as? String == "routervpn-tor" }),
+                  tor["tag"] as? String == "routervpn-tor-exit",
+                  tor["session_id"] as? String == sessionID,
+                  tor["detour"] as? String == predecessorTag,
+                  (config["route"] as? [String: Any])?["final"] as? String == "routervpn-tor-exit" else {
+                throw error("Tor compiler lost the selected session or final route.")
+            }
+            var files = predecessorFiles; files["sing-box.json"] = data
+            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile)
+        }
+        guard predecessorProfile == nil, predecessorFiles.isEmpty else { throw error("A non-Tor external node cannot discard an entry graph.") }
+        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")
         }
         let expected = try publicLiteralIP(string(external["expected_public_ip"]), label: "expected public exit IP")

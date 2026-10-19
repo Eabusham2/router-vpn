@@ -26,23 +26,29 @@ import Foundation
 }
 @MainActor final class RouterVPNLibboxEngine {
  static let proofProxyPort=1099
+ let owner:PacketTunnelProvider
  var stops=0
  var started=false
  var held=""
- init(tunnel:PacketTunnelProvider){}
+ init(tunnel:PacketTunnelProvider){owner=tunnel}
  func prepareMTUHold(_ value:String)throws{held=value}
  func start(files:[String:Data],strict:Bool)throws{started=true}
  func stop(){stops += 1;started=false}
+ func proveTor(sessionID:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.proofCallback=completion}
 }
 enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{}}
 enum RouterVPNExternalExitBuilder {
- struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)]}
- static func build(profile:[String:Any])throws->Runtime{Runtime()}
+ static let torEntryModes:Set<String>=["wg"]
+ struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?}
+ static func build(profile:[String:Any],predecessorFiles:[String:Data],predecessorProfile:[String:Any]?)throws->Runtime{Runtime(torSessionID:profile["tor"] as? Bool == true ? "captured-tor-session":nil)}
 }
 enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[String:Any])throws->[String:Data]{files}}
+final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRoutes=true;var excludeLocalNetworks=true}
 @MainActor final class NetworkProofGuard {}
 @MainActor final class Monitor {var cancelled=false;func cancel(){cancelled=true}}
 @MainActor final class PacketTunnelProvider {
+ static let maxBundleBytes=32*1024*1024
+ var protocolConfiguration:Any?=NETunnelProviderProtocol()
  var wireGuardAdapter:WireGuardAdapter?
  var libboxEngine:RouterVPNLibboxEngine?
  var pathProofGuard:NetworkProofGuard?
@@ -50,6 +56,7 @@ enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[Strin
  var pathProofOwnerLock=NSLock()
  var initialMTUHold="test-comparison-lease"
  var proofCallback:((Error?)->Void)?
+ var torSession:String?
  var arms=0
  var forwarded=0
  var duringForwarding:(()->Void)?
@@ -58,8 +65,12 @@ enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[Strin
  func currentPathProofGuard()->NetworkProofGuard?{pathProofGuard}
  func enableForwarding(profileData:Data,proofID:String){forwarded += 1;duringForwarding?()}
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
- func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
- func beginExternal(_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(selectedProfile:[:],strict:true,completionHandler:done)}
+ func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
+ func beginExternal(tor:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["tor":tor],strict:true,completionHandler:done)}
+ func strictKillSwitchRequested(_ profile:[String:Any])->Bool{profile["strict"] as? Bool == true}
+ func selectedRouterProfile(_ root:[String:Any])throws->[String:Any]{root}
+ struct Compilation {let files:[String:Data]=["sing-box.json":Data("{}".utf8)]}
+ func compileLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any])throws->Compilation{Compilation()}
  func beginRaw(_ completionHandler:@escaping(Error?)->Void){
   let tunnelConfiguration="fixture"
   let proofURL=URL(string:"http://10.77.0.1:8787/health")!
@@ -73,15 +84,16 @@ TEST=r'''
   var checks=0
   func check(_ name:String,_ test:Bool){if !test{fatalError(name)};checks += 1}
   let failure=NSError(domain:"Fixture",code:1)
-  for kind in ["raw","external"] {
+  for kind in ["raw","external","tor"] {
    for event in ["stable","network","proof-error","replacement","stop","forwarding-change"] {
-    if kind=="external" && event=="forwarding-change"{continue}
+    if kind != "raw" && event=="forwarding-change"{continue}
     let p=PacketTunnelProvider();var replies:[Error?]=[]
     if kind=="raw"{p.beginRaw{replies.append($0)};p.wireGuardAdapter!.startCallback!(nil)}
-    else {try p.beginExternal{replies.append($0)}}
+    else {try p.beginExternal(tor:kind=="tor"){replies.append($0)}}
     let adapter=p.wireGuardAdapter,engine=p.libboxEngine,guardState=p.pathProofGuard,monitor=p.pathMonitor
     check("guard already armed before proof",p.arms==1 && guardState != nil && p.proofCallback != nil && replies.isEmpty)
-    if kind=="external"{check("MTU comparison owner held before proof",engine!.held==p.initialMTUHold && engine!.started)}
+    if kind != "raw"{check("MTU comparison owner held before proof",engine!.held==p.initialMTUHold && engine!.started)}
+    if kind=="tor"{check("Tor uses the captured dynamic proof request",p.torSession=="captured-tor-session")}
     if event=="network" || event=="stop"{p.pathProofGuard=nil}
     if event=="stop"{p.wireGuardAdapter=nil;p.libboxEngine=nil}
     if event=="replacement"{

@@ -265,6 +265,10 @@ final class RouterVPNLibboxEngine {
                 guard let checked, checked >= began.addingTimeInterval(-2), checked <= Date().addingTimeInterval(5), current(owner) else { throw retired() }
                 lock.lock(); let usable = !cancelled; lock.unlock()
                 guard usable else { throw retired() }
+                var dnsFailure: NSError?
+                let dnsProved = LibboxRouterStrategyDNSProof(server, &dnsFailure)
+                if let dnsFailure { throw dnsFailure }
+                guard dnsProved, current(owner) else { throw retired() }
                 guard request.healthy() else { throw retired() }
                 let timer = DispatchSource.makeTimerSource(queue: DispatchQueue.global(qos: .utility))
                 timer.schedule(deadline: .now() + 1, repeating: 1)

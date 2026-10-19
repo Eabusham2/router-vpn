@@ -10,6 +10,9 @@ private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
     case shadowsocks
     case hysteria2
     case openvpn
+    case tor
+    case torBridge = "tor-bridge"
+    var isTor: Bool { self == .tor || self == .torBridge }
     var id: String { rawValue }
     var title: String {
         switch self {
@@ -20,6 +23,8 @@ private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
         case .shadowsocks: return "Shadowsocks"
         case .hysteria2: return "Hysteria2"
         case .openvpn: return "OpenVPN"
+        case .tor: return "Tor"
+        case .torBridge: return "Tor with bridges"
         }
     }
 }
@@ -44,12 +49,15 @@ extension RouterVPNModel {
         wgAllowedIPs: [String],
         wgDNS: [String],
         wgMTU: Int?,
-        openVPNConfig: String = ""
+        openVPNConfig: String = "",
+        torTransport: String = "custom",
+        torBridges: [String] = []
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
         }
-        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"])
+        let tor = protocolName == "tor" || protocolName == "tor-bridge"
+        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])
         guard supported.contains(protocolName) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 2, userInfo: [NSLocalizedDescriptionKey: "This external protocol has no proven iOS PacketTunnel dataplane."])
         }
@@ -69,10 +77,10 @@ extension RouterVPNModel {
             }
             compiledOpenVPN = object
         } else { compiledOpenVPN = nil }
-        let server = try iosExternalLiteralIP(compiledOpenVPN?["server"] as? String ?? rawServer, label: "External server")
+        let server = tor ? "tor" : try iosExternalLiteralIP(compiledOpenVPN?["server"] as? String ?? rawServer, label: "External server")
         let port = compiledOpenVPN?["server_port"] as? Int ?? port
-        let expected = try iosExternalPublicIP(rawExpected, label: "Expected public exit IP")
-        guard (1...65535).contains(port) else {
+        let expected = tor ? "" : try iosExternalPublicIP(rawExpected, label: "Expected public exit IP")
+        guard tor || (1...65535).contains(port) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 3, userInfo: [NSLocalizedDescriptionKey: "External server port must be 1..65535."])
         }
         let name = rawName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? "Custom \(protocolName)" : rawName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -82,6 +90,10 @@ extension RouterVPNModel {
 
         var external: [String: Any] = ["protocol": protocolName, "expected_public_ip": expected]
         switch protocolName {
+        case "tor":
+            guard torBridges.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 34, userInfo: [NSLocalizedDescriptionKey: "Choose Tor with bridges to retain the bridge lines."]) }
+        case "tor-bridge":
+            external["tor_bridge"] = ["transport": torTransport, "bridges": torBridges]
         case "openvpn":
             // Persist the private source profile, not a second set of generated
             // credentials. PacketTunnel recompiles the frozen profile before use.
@@ -155,7 +167,7 @@ extension RouterVPNModel {
         }
 
         let profileID = "ios-ext-" + UUID().uuidString.lowercased()
-        let endpoint = iosExternalEndpoint(server: server, port: port)
+        let endpoint = tor ? "tor" : iosExternalEndpoint(server: server, port: port)
         let profile: [String: Any] = [
             "schema_version": 4,
             "id": profileID,
@@ -177,6 +189,13 @@ extension RouterVPNModel {
             "kill_switch_policy": "off",
             "dns_mode": "rescue",
         ]
+        if tor {
+            let captured = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
+            var failure: NSError?
+            let compiled = LibboxRouterCompileTorProfile(String(decoding: captured, as: UTF8.self), UUID().uuidString.lowercased(), "", &failure)
+            if let failure { throw failure }
+            guard !compiled.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 35, userInfo: [NSLocalizedDescriptionKey: "Tor profile validation did not complete."]) }
+        }
         let bundleJSON: [String: Any] = [
             "bundleVersion": 4,
             "profileSchemaVersion": 4,
@@ -257,6 +276,8 @@ struct IOSExternalNodeBuilderView: View {
     @State private var wgDNS = ""
     @State private var wgMTU = ""
     @State private var openVPNConfig = ""
+    @State private var torTransport = "custom"
+    @State private var torBridges = ""
     @State private var errorText = ""
 
     var body: some View {
@@ -266,16 +287,37 @@ struct IOSExternalNodeBuilderView: View {
                     Picker("External node type", selection: $selected) {
                         ForEach(IOSExternalNodeProtocol.allCases) { item in Text(item.title).tag(item) }
                     }
-                    Text("iOS exposes only external protocols with a real pinned PacketTunnel dataplane. OpenVPN uses the pinned native client. Tor still requires a separate native transport path.")
+                    Text("Choose a saved VPN or proxy endpoint, ordinary Tor, or Tor with your bridge settings.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Identity") {
                     TextField("Display name", text: $name)
-                    if selected != .openvpn {
+                    if selected != .openvpn && !selected.isTor {
                         TextField("Server literal IP", text: $server).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
-                    TextField("Expected public exit IP", text: $expectedPublicIP).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    if !selected.isTor {
+                        TextField("Expected public exit IP", text: $expectedPublicIP).textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                }
+                if selected.isTor {
+                    Section("Tor connection") {
+                        Text("The app builds a circuit and verifies its current Tor exit before showing Connected. The initial DNS choice is Rescue DoH; you can choose a TCP, DoT or DoH resolver in Settings.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if selected == .torBridge {
+                            Picker("Bridge transport", selection: $torTransport) {
+                                Text("Mixed / Custom").tag("custom")
+                                Text("obfs4").tag("obfs4")
+                                Text("meek").tag("meek_lite")
+                                Text("Snowflake").tag("snowflake")
+                                Text("WebTunnel").tag("webtunnel")
+                            }
+                            TextEditor(text: $torBridges).frame(minHeight: 150)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            Text("Paste complete bridge lines, one per line. Bridge credentials stay with this private saved node.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                 }
                 if selected == .socks5 || selected == .httpConnect || selected == .httpsConnect {
                     Section(selected == .socks5 ? "SOCKS5" : (selected == .httpsConnect ? "HTTPS CONNECT" : "HTTP CONNECT")) {
@@ -315,8 +357,8 @@ struct IOSExternalNodeBuilderView: View {
                         TextField("MTU (optional)", text: $wgMTU).keyboardType(.numberPad)
                     }
                 }
-                Section("Safety") {
-                    Text("Servers and expected exits require literal IPs so profile creation cannot leak DNS before the tunnel. Security-critical fields stay in the existing app-private linked-node bundle store and are never copied into connection-profile snapshots.")
+                Section("Saved node") {
+                    Text(selected.isTor ? "Tor exit addresses are verified live and may change between circuits." : "Enter literal IP addresses for the server and expected exit. Credentials stay in the private saved node.")
                         .font(.caption).foregroundStyle(.secondary)
                     if !errorText.isEmpty { Text(errorText).font(.caption).foregroundStyle(.orange) }
                 }
@@ -338,14 +380,15 @@ struct IOSExternalNodeBuilderView: View {
     private func save() {
         guard !model.profileMutationBlocked else { errorText = "Disconnect or let the active VPN transition finish before adding an external node."; return }
         do {
-            guard let numericPort = (selected == .openvpn ? 1194 : Int(port)) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 30, userInfo: [NSLocalizedDescriptionKey: "Enter a valid port."]) }
+            guard let numericPort = (selected.isTor ? 0 : selected == .openvpn ? 1194 : Int(port)) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 30, userInfo: [NSLocalizedDescriptionKey: "Enter a valid port."]) }
             let mtu = wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : Int(wgMTU)
             if selected == .wireguard && mtu == nil && !wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw NSError(domain: "RouterVPN.ExternalNode", code: 31, userInfo: [NSLocalizedDescriptionKey: "Enter a valid WireGuard MTU."]) }
             try model.createIOSExternalNode(
                 protocolName: selected.rawValue, name: name, server: server, port: numericPort, expectedPublicIP: expectedPublicIP,
                 username: username, password: password, method: method, secret: secret, tlsServerName: tlsName,
                 wgPrivateKey: wgPrivate, wgPeerPublicKey: wgPeer, wgPresharedKey: wgPSK,
-                wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig
+                wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig,
+                torTransport: torTransport, torBridges: selected == .torBridge ? torBridges.split(whereSeparator: \.isNewline).map { String($0) } : []
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

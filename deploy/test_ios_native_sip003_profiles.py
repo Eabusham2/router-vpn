@@ -85,7 +85,10 @@ def main():
         subprocess.run([str(binary)],check=True,timeout=30)
     provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
     section=provider[provider.index('private func compileLibbox('):provider.index('private func performanceFiles(')]
-    assert section.index('LibboxRouterCompileSIP003Profile') < section.index('IOSStartLayer.apply') < section.index('return LibboxCompilation(files: files')
+    assert section.index('IOSNativeCompositeMultihop.capture(') < section.index('LibboxRouterCompileCompositeProfile(') < section.index('captured.source.utf8') < section.index('return LibboxCompilation(files: files')
+    assert 'IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)' in section
+    assert 'let composedFiles = try completeChain ? rawFiles' in section, 'the composite compiler already owns both encrypted lanes and Start Layer'
+    assert 'rawFiles = captured.baseFiles' not in section, 'temporary owner-only graphs cannot become a runnable SIP003 selection'
     start=provider[provider.index('private func startLibbox('):provider.index('private struct LibboxCompilation')]
     assert start.index('let compiled = try compileLibbox(') < start.index('let files = compiled.files') < start.index('engine.start(files: files')
     print('Shipping host composition and pre-start native validation are both wired.')

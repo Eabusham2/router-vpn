@@ -73,6 +73,10 @@ assert headers, 'Libbox generated headers missing'
 for header in headers:
     for symbol in ('LibboxRouterTorNativeABI', 'LibboxRouterTorNativeVersion', 'LibboxRouterTorSourceNotices'):
         assert symbol in header.read_text(), str(header)
+    for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterTorSetStateDirectory',
+                   'LibboxRouterTorCreateProof', 'LibboxRouterTorCreateProofWithPredecessor',
+                   'LibboxRouterTorProofRequest'):
+        assert symbol in header.read_text(), str(header)
     assert 'LibboxRouterOpenVPNEndpoint' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihop' in header.read_text(), str(header)
     assert 'LibboxNewRouterMultihopWithEntryStartLayer' in header.read_text(), str(header)
