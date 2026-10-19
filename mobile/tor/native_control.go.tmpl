@@ -1,0 +1,52 @@
+// Test-only Cgo harness. Shipping mobile builds embed the C host in the existing
+// Libbox runtime; this fixture does not create a second mobile Go library.
+package torfixture
+
+/*
+#include <stdlib.h>
+#include "routervpn_tor_host.h"
+*/
+import "C"
+
+import (
+    "fmt"
+    "net"
+    "os"
+    "unsafe"
+
+    "router-vpn/internal/mobiletor"
+)
+
+func startNative(directory string) (*mobiletor.Control, uint64, error) {
+    if err := mobiletor.PrepareState(directory); err != nil { return nil, 0, err }
+    arguments, err := mobiletor.ResidentArguments(directory)
+    if err != nil { return nil, 0, err }
+    storage := C.calloc(C.size_t(len(arguments)), C.size_t(unsafe.Sizeof(uintptr(0))))
+    if storage == nil { return nil, 0, fmt.Errorf("native argv allocation failed") }
+    defer C.free(storage)
+    pointers := unsafe.Slice((**C.char)(storage),len(arguments))
+    for i,argument := range arguments {
+        pointers[i] = C.CString(argument)
+        if pointers[i] == nil { return nil, 0, fmt.Errorf("native argument allocation failed") }
+        defer C.free(unsafe.Pointer(pointers[i]))
+    }
+    var handle C.uint64_t
+    if code := C.routervpn_tor_start((**C.char)(storage),C.size_t(len(arguments)),&handle); code != 0 {
+        return nil,0,fmt.Errorf("native startup failed: %d",code)
+    }
+    descriptor := C.routervpn_tor_control(handle)
+    if descriptor < 0 { return nil,uint64(handle),fmt.Errorf("native owning descriptor absent") }
+    file := os.NewFile(uintptr(descriptor),"routervpn-tor-owning-control")
+    connection, err := net.FileConn(file)
+    _ = file.Close()
+    if err != nil { return nil,uint64(handle),err }
+    control,err := mobiletor.NewControl(connection)
+    return control,uint64(handle),err
+}
+
+func closeNative(handle uint64) error {
+    if code := C.routervpn_tor_close(C.uint64_t(handle),5000); code != 0 {
+        return fmt.Errorf("native thread did not join: %d",code)
+    }
+    return nil
+}

@@ -13,12 +13,13 @@ import (
 	"time"
 )
 
-// Control exclusively owns a preauthenticated socket returned by Tor's public
-// embedding API. It never opens or authenticates a public control port.
+// Control exclusively owns the native Tor preauthenticated socketpair. It never
+// opens or authenticates a public control port.
 type Control struct {
-	conn   net.Conn
-	reader *bufio.Reader
-	mu     sync.Mutex
+	conn      net.Conn
+	reader    *bufio.Reader
+	mu        sync.Mutex
+	operation sync.Mutex
 }
 
 func NewControl(conn net.Conn) (*Control, error) {
@@ -65,26 +66,36 @@ func (c *Control) command(ctx context.Context, command string) (reply []string, 
 	}
 	var values []string
 	used, events := 0, 0
-	for {
+	readLine := func() (string, error) {
 		line, err := c.reader.ReadSlice('\n')
+		if err != nil {
+			return "", err
+		}
+		used += len(line)
+		if used > 65536 || len(line) < 2 || line[len(line)-2] != '\r' {
+			return "", errors.New("invalid or oversized Tor control reply")
+		}
+		return string(line[:len(line)-2]), nil
+	}
+	for {
+		line, err := readLine()
 		if err != nil {
 			return nil, err
 		}
-		used += len(line)
-		if used > 65536 || len(line) < 5 || line[len(line)-2] != '\r' {
-			return nil, errors.New("invalid or oversized Tor control reply")
+		if len(line) < 4 {
+			return nil, errors.New("invalid Tor control status")
 		}
-		code, err := strconv.Atoi(string(line[:3]))
+		code, err := strconv.Atoi(line[:3])
 		if err != nil {
 			return nil, errors.New("invalid Tor control status")
 		}
 		separator := line[3]
-		if separator != ' ' && separator != '-' {
+		if separator != ' ' && separator != '-' && separator != '+' {
 			return nil, errors.New("unexpected Tor control data reply")
 		}
 		if code == 650 {
 			events++
-			if events > 32 {
+			if events > 32 || separator == '+' {
 				return nil, errors.New("excessive Tor control events")
 			}
 			continue
@@ -92,7 +103,30 @@ func (c *Control) command(ctx context.Context, command string) (reply []string, 
 		if code != 250 {
 			return nil, fmt.Errorf("native Tor control command failed (%d)", code)
 		}
-		value := string(line[4 : len(line)-2])
+		value := line[4:]
+		if separator == '+' {
+			if !strings.HasSuffix(value, "=") {
+				return nil, errors.New("invalid Tor control data header")
+			}
+			var body []string
+			for {
+				data, err := readLine()
+				if err != nil {
+					return nil, err
+				}
+				if data == "." {
+					break
+				}
+				if strings.HasPrefix(data, ".") {
+					if !strings.HasPrefix(data, "..") {
+						return nil, errors.New("invalid Tor control dot escaping")
+					}
+					data = data[1:]
+				}
+				body = append(body, data)
+			}
+			value += strings.Join(body, "\n")
+		}
 		if value != "OK" {
 			values = append(values, value)
 		}
@@ -103,12 +137,23 @@ func (c *Control) command(ctx context.Context, command string) (reply []string, 
 }
 
 func (c *Control) EnableNetwork(ctx context.Context) error {
-	_, err := c.command(ctx, "SETCONF DisableNetwork=0")
-	return err
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	return c.change(ctx, "SETCONF DisableNetwork=0")
 }
 
 func (c *Control) Halt(ctx context.Context) error {
-	_, err := c.command(ctx, "SIGNAL HALT")
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	return c.change(ctx, "SIGNAL HALT")
+}
+
+func (c *Control) change(ctx context.Context, command string) error {
+	values, err := c.command(ctx, command)
+	if err == nil && len(values) != 0 {
+		_ = c.conn.Close()
+		return errors.New("unexpected native Tor configuration reply")
+	}
 	return err
 }
 
@@ -119,6 +164,8 @@ type Bootstrap struct {
 }
 
 func (c *Control) Bootstrap(ctx context.Context) (status Bootstrap, failure error) {
+	c.operation.Lock()
+	defer c.operation.Unlock()
 	defer func() {
 		if failure != nil {
 			_ = c.conn.Close()

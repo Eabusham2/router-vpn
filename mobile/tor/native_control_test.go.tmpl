@@ -1,0 +1,38 @@
+package torfixture
+
+import (
+    "context"
+    "path/filepath"
+    "testing"
+    "time"
+
+    "router-vpn/internal/common"
+    "router-vpn/internal/mobiletor"
+)
+
+func TestRealCResidentControllerClearsEachSession(t *testing.T) {
+    control,handle,err := startNative(filepath.Join(t.TempDir(),"tor"))
+    if handle != 0 { t.Cleanup(func(){ if err:=closeNative(handle);err!=nil { t.Error(err) } }) }
+    if err != nil { t.Fatal(err) }
+    t.Cleanup(func(){ _ = control.Close() })
+    ctx,cancel := context.WithTimeout(context.Background(),15*time.Second)
+    defer cancel()
+    if err := control.Quiesce(ctx);err!=nil { t.Fatal(err) }
+    configurations := []common.ExternalTorBridgeConfig{
+        {Bridges: []string{"obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"}},
+        {Bridges: []string{"meek_lite 192.0.2.2:2 url=https://bridge.example/ front=front.example"}},
+    }
+    for cycle:=0;cycle<32;cycle++ {
+        configuration := configurations[cycle%len(configurations)]
+        plan,err := mobiletor.NewPlan(configuration)
+        if err != nil { t.Fatal(err) }
+        listeners := map[string]string{plan.Transports()[0]:"127.0.0.1:18443"}
+        if err := control.Configure(ctx,plan,listeners);err!=nil { t.Fatal(err) }
+        status,err := control.Bootstrap(ctx)
+        if err != nil { t.Fatal(err) }
+        if status.CircuitEstablished || status.SOCKSAddress != "" {
+            t.Fatal("offline native fixture unexpectedly established a circuit or listener")
+        }
+        if err := control.Quiesce(ctx);err!=nil { t.Fatal(err) }
+    }
+}

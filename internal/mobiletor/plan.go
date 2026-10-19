@@ -67,11 +67,48 @@ func (p Plan) Transports() []string {
 // socket is injected by the C API. Only the owner enables networking after its
 // PT listeners and protected network dialers are ready.
 func (p Plan) Arguments(directory string, listeners map[string]string) ([]string, error) {
+	args, err := torArguments(directory, "1", "auto IsolateSOCKSAuth")
+	if err != nil {
+		return nil, err
+	}
+	verified, plugins, err := p.bindings(listeners)
+	if err != nil {
+		return nil, err
+	}
+	for _, plugin := range plugins {
+		args = append(args, "--ClientTransportPlugin", plugin)
+	}
+	for _, bridge := range verified.Bridges {
+		args = append(args, "--Bridge", bridge.Line)
+	}
+	return args, nil
+}
+
+// ResidentArguments is the mobile host's process-lifetime configuration. It
+// contains no session bridge credentials, PT bindings or SOCKS listener. Session
+// configuration travels only over the owned control socket, so a later reset
+// cannot recover an earlier session's command-line bridge configuration.
+func ResidentArguments(directory string) ([]string, error) {
+	return torArguments(directory, "0", "0")
+}
+
+func torArguments(directory, useBridges, socks string) ([]string, error) {
 	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory || directory == "/" || len(directory) > 4096 || strings.ContainsAny(directory, "\x00\r\n") {
 		return nil, errors.New("Tor requires an absolute private data directory")
 	}
+	torrc := filepath.Join(directory, "routervpn-empty-torrc")
+	return []string{"tor", "--quiet", "--defaults-torrc", torrc, "-f", torrc,
+		"--DataDirectory", directory, "--ClientOnly", "1", "--AvoidDiskWrites", "1",
+		"--__DisableSignalHandlers", "1",
+		"--SafeLogging", "1", "--Log", "err stderr", "--UseBridges", useBridges,
+		"--ClientUseIPv6", "1", "--SocksPort", socks,
+		"--ControlPort", "0", "--DNSPort", "0", "--TransPort", "0",
+		"--NATDPort", "0", "--HTTPTunnelPort", "0", "--DisableNetwork", "1"}, nil
+}
+
+func (p Plan) bindings(listeners map[string]string) (Plan, []string, error) {
 	if len(p.Bridges) == 0 || len(p.Bridges) > 8 {
-		return nil, errors.New("Tor bridge plan is empty or oversized")
+		return Plan{}, nil, errors.New("Tor bridge plan is empty or oversized")
 	}
 	// Revalidate exported plan values, so mutating a Plan cannot inject torrc
 	// directives after initial profile validation.
@@ -81,35 +118,25 @@ func (p Plan) Arguments(directory string, listeners map[string]string) ([]string
 	}
 	verified, err := NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: lines})
 	if err != nil {
-		return nil, err
+		return Plan{}, nil, err
 	}
 	transports := verified.Transports()
 	if len(listeners) != len(transports) {
-		return nil, errors.New("Tor requires exactly its owned pluggable transport listeners")
+		return Plan{}, nil, errors.New("Tor requires exactly its owned pluggable transport listeners")
 	}
-	torrc := filepath.Join(directory, "routervpn-empty-torrc")
-	args := []string{"tor", "--quiet", "--defaults-torrc", torrc, "-f", torrc,
-		"--DataDirectory", directory, "--ClientOnly", "1", "--AvoidDiskWrites", "1",
-		"--__DisableSignalHandlers", "1",
-		"--SafeLogging", "1", "--Log", "err stderr", "--UseBridges", "1",
-		"--ClientUseIPv6", "1", "--SocksPort", "auto IsolateSOCKSAuth",
-		"--ControlPort", "0", "--DNSPort", "0", "--TransPort", "0",
-		"--NATDPort", "0", "--HTTPTunnelPort", "0", "--DisableNetwork", "1"}
+	plugins := make([]string, 0, len(transports))
 	used := map[string]bool{}
 	for _, transport := range transports {
 		listener := listeners[transport]
 		host, port, splitErr := net.SplitHostPort(listener)
 		n, numberErr := strconv.Atoi(port)
 		if splitErr != nil || numberErr != nil || host != "127.0.0.1" || n < 1024 || n > 65535 || used[listener] {
-			return nil, errors.New("Tor pluggable transport listener must be a distinct owned IPv4 loopback port")
+			return Plan{}, nil, errors.New("Tor pluggable transport listener must be a distinct owned IPv4 loopback port")
 		}
 		used[listener] = true
-		args = append(args, "--ClientTransportPlugin", fmt.Sprintf("%s socks5 %s", transport, listener))
+		plugins = append(plugins, fmt.Sprintf("%s socks5 %s", transport, listener))
 	}
-	for _, bridge := range verified.Bridges {
-		args = append(args, "--Bridge", bridge.Line)
-	}
-	return args, nil
+	return verified, plugins, nil
 }
 
 // PrepareState creates only the host-owned private data directory and an empty

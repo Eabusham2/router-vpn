@@ -1,0 +1,149 @@
+--- a/src/lib/evloop/workqueue.c
++++ b/src/lib/evloop/workqueue.c
+@@ -96,6 +96,9 @@
+   int exit;
+   /** Mutex for controlling worker threads' startup and exit. */
+   tor_mutex_t control_lock;
++  tor_cond_t lifecycle_condition;
++  int workers_started;
++  int workers_exited;
+ };
+ 
+ /** Used to put a workqueue_priority_t value into a bitfield. */
+@@ -278,34 +281,20 @@
+ static void
+ worker_thread_main(void *thread_)
+ {
+-  static int n_worker_threads_running = 0;
+-  static unsigned long control_lock_owner = 0;
+   workerthread_t *thread = thread_;
+   threadpool_t *pool = thread->in_pool;
+   workqueue_entry_t *work;
+   workqueue_reply_t result;
+ 
+   tor_mutex_acquire(&pool->control_lock);
+-  log_debug(LD_GENERAL, "Worker thread %u/%u has started [TID: %lu].",
+-            n_worker_threads_running + 1, pool->n_threads_max,
+-            tor_get_thread_id());
+-
+-  if (++n_worker_threads_running == pool->n_threads_max)
+-    tor_cond_signal_one(&pool->condition);
+-
++  ++pool->workers_started;
++  tor_cond_signal_all(&pool->lifecycle_condition);
+   tor_mutex_release(&pool->control_lock);
+ 
+-  /* Wait until all worker threads have started.
+-   * pool->lock must be prelocked here. */
++  /* Startup keeps the work mutex locked until every created worker has
++   * registered. Lifecycle accounting belongs to this pool, never a previous
++   * embedded Tor invocation or a mutex owned by some other worker. */
+   tor_mutex_acquire(&pool->lock);
+-
+-  if (control_lock_owner == 0) {
+-    /* pool->control_lock stays locked. This is required for the main thread
+-     * to wait for the worker threads to exit on shutdown, so the memory
+-     * clean up won't begin before all threads have exited. */
+-    tor_mutex_acquire(&pool->control_lock);
+-    control_lock_owner = tor_get_thread_id();
+-  }
+ 
+   log_debug(LD_GENERAL, "Worker thread has entered the work loop [TID: %lu].",
+             tor_get_thread_id());
+@@ -370,28 +359,12 @@
+   }
+ 
+ exit:
+-  /* At this point pool->lock must be held */
+-
+-  log_debug(LD_GENERAL, "Worker thread %u/%u has exited [TID: %lu].",
+-            pool->n_threads_max - n_worker_threads_running + 1,
+-            pool->n_threads_max, tor_get_thread_id());
+-
+-  if (tor_get_thread_id() == control_lock_owner) {
+-    /* Wait for the other worker threads to exit so we
+-     * can safely unlock pool->control_lock. */
+-    while (n_worker_threads_running > 1) {
+-      tor_mutex_release(&pool->lock);
+-      tor_sleep_msec(10);
+-      tor_mutex_acquire(&pool->lock);
+-    }
+-
+-    tor_mutex_release(&pool->lock);
+-    /* Let the main thread know, the last worker thread has exited. */
+-    tor_mutex_release(&pool->control_lock);
+-  } else {
+-    --n_worker_threads_running;
+-    tor_mutex_release(&pool->lock);
+-  }
++  tor_mutex_release(&pool->lock);
++  tor_mutex_acquire(&pool->control_lock);
++  ++pool->workers_exited;
++  tor_cond_signal_all(&pool->lifecycle_condition);
++  /* No pool, worker or reply-queue access is permitted after this release. */
++  tor_mutex_release(&pool->control_lock);
+ }
+ 
+ /** Put a reply on the reply queue.  The reply must not currently be on
+@@ -620,7 +593,11 @@
+ 
+   /* Wait for the last launched thread to confirm us, it has started.
+    * Wait max 30 seconds */
+-  status = tor_cond_wait(&pool->condition, &pool->control_lock, &tv);
++  while (pool->workers_started < pool->n_threads) {
++    status = tor_cond_wait(&pool->lifecycle_condition, &pool->control_lock, &tv);
++    if (status != 0)
++      break;
++  }
+ 
+ check_status:
+   switch (status) {
+@@ -648,8 +625,7 @@
+ 
+   /* Let worker threads enter the work loop. */
+   tor_mutex_release(&pool->lock);
+-  /* Let one of the worker threads take the ownership of pool->control_lock.
+-   * This is required for compliance with POSIX. */
++  /* Each thread releases only locks that it acquired itself. */
+   tor_mutex_release(&pool->control_lock);
+ 
+   return status;
+@@ -673,15 +649,15 @@
+ 
+   tor_mutex_release(&pool->lock);
+ 
+-  /* Wait until all worker threads have exited.
+-   * pool->control_lock must be prelocked here. */
++  /* Include workers that were created but had not registered when startup
++   * failed. A dedicated condition avoids using one POSIX condition with two
++   * concurrently active mutexes. */
+   tor_mutex_acquire(&pool->control_lock);
+-  /* Unlock required, else main thread hangs on mutex uninit. */
++  while (pool->workers_exited < pool->n_threads) {
++    if (tor_cond_wait(&pool->lifecycle_condition, &pool->control_lock, NULL) < 0)
++      tor_assert_unreached();
++  }
+   tor_mutex_release(&pool->control_lock);
+-
+-  /* If this message appears in the log before all threads have confirmed
+-   * their exit, then pool->control_lock wasn't prelocked for some reason. */
+-  log_debug(LD_GENERAL, "All worker threads have exited.");
+ }
+ 
+ /**
+@@ -703,6 +679,7 @@
+   tor_mutex_init_nonrecursive(&pool->lock);
+   tor_cond_init(&pool->condition);
+   tor_mutex_init_nonrecursive(&pool->control_lock);
++  tor_cond_init(&pool->lifecycle_condition);
+   pool->exit = 0;
+ 
+   unsigned i;
+@@ -740,6 +717,7 @@
+   log_debug(LD_GENERAL, "Beginning to clean up...");
+ 
+   tor_cond_uninit(&pool->condition);
++  tor_cond_uninit(&pool->lifecycle_condition);
+   tor_mutex_uninit(&pool->lock);
+   tor_mutex_uninit(&pool->control_lock);
+ 
