@@ -8,7 +8,9 @@ import (
 	"time"
 )
 
-const configurationKeys = "DisableNetwork SocksPort UseBridges Bridge ClientTransportPlugin"
+const proxyKeys = "HTTPProxy HTTPProxyAuthenticator HTTPSProxy HTTPSProxyAuthenticator Socks4Proxy Socks5Proxy Socks5ProxyUsername Socks5ProxyPassword TCPProxy"
+const configurationKeys = "DisableNetwork SocksPort UseBridges Bridge ClientTransportPlugin " + proxyKeys
+const clearConfiguration = "SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin " + proxyKeys
 
 var idleInventories = []string{
 	"orconn-status", "circuit-status", "stream-status", "address-mappings/cache",
@@ -17,8 +19,9 @@ var idleInventories = []string{
 	"net/listeners/dns", "net/listeners/control", "net/listeners/metrics",
 }
 
-// Quiesce disables Tor networking, removes session bridge/PT configuration and
-// SOCKS listeners, clears transient DNS answers, and verifies the daemon's
+// Quiesce disables Tor networking, removes session bridge/PT configuration,
+// upstream proxy credentials and SOCKS listeners, clears transient DNS answers,
+// and verifies the daemon's
 // configuration plus current connection, circuit, stream and listener lists.
 // The VPN owner must then close and join its PT listeners and protected sockets
 // before releasing the session lease. Tor's control lists omit connections
@@ -39,16 +42,16 @@ func (c *Control) Quiesce(ctx context.Context) (failure error) {
 func (c *Control) quiesce(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	if err := c.change(ctx, "SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin"); err != nil {
+	if err := c.change(ctx, clearConfiguration); err != nil {
 		return err
 	}
 	if err := c.change(ctx, "SIGNAL CLEARDNSCACHE"); err != nil {
 		return err
 	}
-	if err := c.configuration(ctx, map[string][]string{
+	if err := c.configuration(ctx, withEmptyProxies(map[string][]string{
 		"DisableNetwork": {"1"}, "SocksPort": {"0"}, "UseBridges": {"0"},
 		"Bridge": {""}, "ClientTransportPlugin": {""},
-	}); err != nil {
+	})); err != nil {
 		return err
 	}
 	ticker := time.NewTicker(50 * time.Millisecond)
@@ -111,10 +114,54 @@ func (c *Control) Configure(ctx context.Context, plan Plan, listeners map[string
 	if err := c.change(ctx, command); err != nil {
 		return err
 	}
-	return c.configuration(ctx, map[string][]string{
+	return c.configuration(ctx, withEmptyProxies(map[string][]string{
 		"DisableNetwork": {"1"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"1"},
 		"Bridge": bridges, "ClientTransportPlugin": plugins,
+	}))
+}
+
+// ConfigurePlain selects ordinary Tor guard relays without inserting bridges.
+// Its sole upstream is the live session's authenticated process-local proxy.
+// The pinned client-only Tor requires directory traffic to use OR connections;
+// Socks5Proxy covers those connections as well as guard circuit connections.
+func (c *Control) ConfigurePlain(ctx context.Context, proxy *TCPProxy) (failure error) {
+	address, username, password, err := proxy.binding()
+	if err != nil {
+		return err
+	}
+	c.operation.Lock()
+	defer c.operation.Unlock()
+	defer func() {
+		if failure != nil {
+			_ = c.conn.Close()
+		}
+	}()
+	if err := c.quiesce(ctx); err != nil {
+		return err
+	}
+	if _, _, _, err := proxy.binding(); err != nil {
+		return err
+	}
+	command := `SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=0 Socks5Proxy=` + torQuote(address) +
+		" Socks5ProxyUsername=" + torQuote(username) + " Socks5ProxyPassword=" + torQuote(password)
+	if err := c.change(ctx, command); err != nil {
+		return err
+	}
+	expected := withEmptyProxies(map[string][]string{
+		"DisableNetwork": {"1"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"0"},
+		"Bridge": {""}, "ClientTransportPlugin": {""},
 	})
+	expected["Socks5Proxy"] = []string{address}
+	expected["Socks5ProxyUsername"] = []string{username}
+	expected["Socks5ProxyPassword"] = []string{password}
+	return c.configuration(ctx, expected)
+}
+
+func withEmptyProxies(configuration map[string][]string) map[string][]string {
+	for _, key := range strings.Fields(proxyKeys) {
+		configuration[key] = []string{""}
+	}
+	return configuration
 }
 
 func torQuote(value string) string {

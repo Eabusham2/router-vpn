@@ -45,7 +45,8 @@ func sessionFixture(t *testing.T, exchanges []exchange) *Control {
 	return control
 }
 
-const idleConfigReply = "250-DisableNetwork=1\r\n250-SocksPort=0\r\n250-UseBridges=0\r\n250-Bridge\r\n250 ClientTransportPlugin\r\n"
+const emptyProxyReply = "250-HTTPProxy\r\n250-HTTPProxyAuthenticator\r\n250-HTTPSProxy\r\n250-HTTPSProxyAuthenticator\r\n250-Socks4Proxy\r\n250-Socks5Proxy\r\n250-Socks5ProxyUsername\r\n250-Socks5ProxyPassword\r\n250 TCPProxy\r\n"
+const idleConfigReply = "250-DisableNetwork=1\r\n250-SocksPort=0\r\n250-UseBridges=0\r\n250-Bridge\r\n250-ClientTransportPlugin\r\n" + emptyProxyReply
 
 func inventoryReply(busy string) string {
 	var reply strings.Builder
@@ -61,7 +62,7 @@ func inventoryReply(busy string) string {
 
 func idleExchanges(reply string) []exchange {
 	return []exchange{
-		{"SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin", "250 OK\r\n"},
+		{clearConfiguration, "250 OK\r\n"},
 		{"SIGNAL CLEARDNSCACHE", "250 OK\r\n"},
 		{"GETCONF " + configurationKeys, idleConfigReply},
 		{"GETINFO " + strings.Join(idleInventories, " "), reply},
@@ -76,7 +77,7 @@ func TestResidentConfigureReadbackAndReleaseClearPreviousSession(t *testing.T) {
 	sequence := idleExchanges(inventoryReply(""))
 	sequence = append(sequence,
 		exchange{`SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=1 ClientTransportPlugin="obfs4 socks5 127.0.0.1:18443" Bridge="` + obfs4Bridge + `"`, "250 OK\r\n"},
-		exchange{"GETCONF " + configurationKeys, "250-DisableNetwork=1\r\n250-SocksPort=auto IsolateSOCKSAuth\r\n250-UseBridges=1\r\n250-Bridge=" + obfs4Bridge + "\r\n250 ClientTransportPlugin=obfs4 socks5 127.0.0.1:18443\r\n"},
+		exchange{"GETCONF " + configurationKeys, "250-DisableNetwork=1\r\n250-SocksPort=auto IsolateSOCKSAuth\r\n250-UseBridges=1\r\n250-Bridge=" + obfs4Bridge + "\r\n250-ClientTransportPlugin=obfs4 socks5 127.0.0.1:18443\r\n" + emptyProxyReply},
 		exchange{"SETCONF DisableNetwork=0", "250 OK\r\n"},
 	)
 	sequence = append(sequence, idleExchanges(inventoryReply(""))...)
@@ -108,7 +109,7 @@ func TestQuiesceRejectsStaleCredentialsAndAmbiguousReadback(t *testing.T) {
 		strings.Replace(idleConfigReply, "250-Bridge\r\n", "250-Bridge="+obfs4Bridge+"\r\n", 1),
 		strings.Replace(idleConfigReply, "DisableNetwork=1", "DisableNetwork=0", 1),
 		strings.Replace(idleConfigReply, "250-SocksPort=0\r\n", "250-SocksPort=0\r\n250-SocksPort=9050\r\n", 1),
-		strings.Replace(idleConfigReply, "250 ClientTransportPlugin\r\n", "250 OK\r\n", 1),
+		strings.Replace(idleConfigReply, "250-ClientTransportPlugin\r\n", "", 1),
 	} {
 		sequence := idleExchanges("")[:3]
 		sequence[2].reply = reply
@@ -119,6 +120,58 @@ func TestQuiesceRejectsStaleCredentialsAndAmbiguousReadback(t *testing.T) {
 		if err := control.EnableNetwork(context.Background()); !errors.Is(err, io.ErrClosedPipe) {
 			t.Fatalf("failed resident control was not retired: %v", err)
 		}
+	}
+	for _, key := range strings.Fields(proxyKeys) {
+		sequence := idleExchanges("")[:3]
+		sequence[2].reply = strings.Replace(idleConfigReply, key+"\r\n", key+"=stale-private-value\r\n", 1)
+		control := sessionFixture(t, sequence)
+		if err := control.Quiesce(context.Background()); err == nil || strings.Contains(err.Error(), "stale-private-value") {
+			t.Fatal("stale upstream proxy value was accepted or exposed", key)
+		}
+		if err := control.EnableNetwork(context.Background()); !errors.Is(err, io.ErrClosedPipe) {
+			t.Fatal("stale proxy state retained a reusable control owner", key)
+		}
+	}
+}
+
+func TestPlainConfigurationUsesOnlyItsLivePrivateProxyAndClearsCredentials(t *testing.T) {
+	proxy, err := StartTCPProxy(context.Background(), func(context.Context, string, string) (net.Conn, error) {
+		t.Error("configuring disabled Tor opened an Internet socket")
+		return nil, net.ErrClosed
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer proxy.Close(context.Background())
+	address, user, password, err := proxy.binding()
+	if err != nil {
+		t.Fatal(err)
+	}
+	reply := strings.Replace(idleConfigReply, "SocksPort=0", "SocksPort=auto IsolateSOCKSAuth", 1)
+	for key, value := range map[string]string{"Socks5Proxy": address, "Socks5ProxyUsername": user, "Socks5ProxyPassword": password} {
+		reply = strings.Replace(reply, key+"\r\n", key+"="+value+"\r\n", 1)
+	}
+	sequence := idleExchanges(inventoryReply(""))
+	sequence = append(sequence,
+		exchange{`SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=0 Socks5Proxy="` + address + `" Socks5ProxyUsername="` + user + `" Socks5ProxyPassword="` + password + `"`, "250 OK\r\n"},
+		exchange{"GETCONF " + configurationKeys, reply},
+	)
+	sequence = append(sequence, idleExchanges(inventoryReply(""))...)
+	control := sessionFixture(t, sequence)
+	if err := control.ConfigurePlain(context.Background(), proxy); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.Quiesce(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := control.ConfigurePlain(context.Background(), proxy); err == nil {
+		t.Fatal("closed ordinary Tor proxy could be configured")
+	}
+	if err := control.ConfigurePlain(context.Background(), nil); err == nil {
+		t.Fatal("missing ordinary Tor proxy could be configured")
 	}
 }
 
