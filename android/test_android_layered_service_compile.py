@@ -16,7 +16,7 @@ def stub(package, name, body, kind='class', imports=''):
     STUBS[package.replace('.', '/')+'/'+name+'.java'] = 'package '+package+';\n'+imports+'\npublic '+kind+' '+name+' '+body
 
 stub('android.content','Context','''{ public static final String CONNECTIVITY_SERVICE="c",NOTIFICATION_SERVICE="n"; public static final int MODE_PRIVATE=0;
- public Object getSystemService(String name){return null;} public java.io.File getFilesDir(){return null;} public java.io.File getCacheDir(){return null;}
+ public Object getSystemService(String name){return null;} public java.io.File getFilesDir(){return null;} public java.io.File getCacheDir(){return null;} public java.io.File getNoBackupFilesDir(){return null;}
  public SharedPreferences getSharedPreferences(String a,int b){return null;} public android.content.pm.PackageManager getPackageManager(){return null;} }''')
 stub('android.content','SharedPreferences','''{ Editor edit(); interface Editor {Editor putString(String a,String b);void apply();} }''','interface')
 stub('android.content','Intent','{ public String getAction(){return "";} public long getLongExtra(String a,long b){return b;} public String getStringExtra(String a){return "";} }')
@@ -32,12 +32,12 @@ stub('android','R','{public static final class drawable{public static final int 
 stub('android.os','Build','{public static class VERSION {public static int SDK_INT=36;} public static class VERSION_CODES { public static final int O=26,Q=29,TIRAMISU=33;} }')
 stub('android.os','Handler','{public Handler(Looper l){} public boolean post(Runnable r){return true;} public boolean postDelayed(Runnable r,long delay){return true;} public void removeCallbacks(Runnable r){} }')
 stub('android.os','Looper','{public static Looper getMainLooper(){return null;} }')
-stub('android.os','ParcelFileDescriptor','implements java.io.Closeable {public java.io.FileDescriptor getFileDescriptor(){return null;} public int getFd(){return 1;} public void close() throws java.io.IOException {} }')
+stub('android.os','ParcelFileDescriptor','implements java.io.Closeable {public static ParcelFileDescriptor fromFd(int fd)throws java.io.IOException{return new ParcelFileDescriptor();}public java.io.FileDescriptor getFileDescriptor(){return null;} public int getFd(){return 1;} public void close() throws java.io.IOException {} }')
 stub('android.os','Process','{public static final int INVALID_UID=-1;}')
 stub('android.system','OsConstants','{public static final int IFF_UP=1,IFF_RUNNING=2,IFF_LOOPBACK=4,IFF_POINTOPOINT=8,IFF_MULTICAST=16;}')
 stub('android.util','Base64','{public static final int NO_WRAP=1;public static String encodeToString(byte[] b,int f){return "";} }')
 stub('android.util','Log','{public static int d(String a,String b){return 0;} public static int w(String a,String b){return 0;} public static int w(String a,String b,Throwable t){return 0;} public static int e(String a,String b,Throwable t){return 0;} }')
-stub('android.net','Network','{}')
+stub('android.net','Network','{public void bindSocket(java.io.FileDescriptor fd)throws java.io.IOException{}public void bindSocket(java.net.Socket s)throws java.io.IOException{}public void bindSocket(java.net.DatagramSocket s)throws java.io.IOException{} }')
 stub('android.net','IpPrefix','{ public IpPrefix(java.net.InetAddress a,int p){} }')
 stub('android.net','NetworkCapabilities','{public static final int TRANSPORT_VPN=1,TRANSPORT_WIFI=2,TRANSPORT_CELLULAR=3,TRANSPORT_ETHERNET=4,NET_CAPABILITY_NOT_METERED=5,NET_CAPABILITY_NOT_RESTRICTED=6; public boolean hasTransport(int n){return false;} public boolean hasCapability(int n){return true;} }')
 stub('android.net','LinkProperties','{public String getInterfaceName(){return "";} public java.util.List<String> getLinkAddresses(){return java.util.List.of();} public java.util.List<java.net.InetAddress> getDnsServers(){return java.util.List.of();} }')
@@ -47,12 +47,12 @@ stub('android.net','ConnectivityManager','''{public Network[] getAllNetworks(){r
  public void registerDefaultNetworkCallback(NetworkCallback c){} public void unregisterNetworkCallback(NetworkCallback c){}
  public static class NetworkCallback {public void onAvailable(Network n){}public void onLost(Network n){}public void onCapabilitiesChanged(Network n,NetworkCapabilities c){}public void onLinkPropertiesChanged(Network n,LinkProperties p){}} }''')
 stub('android.net','VpnService','''extends android.app.Service {public static android.content.Intent prepare(android.content.Context c){return null;}
- public boolean protect(int fd){return true;} public boolean isAlwaysOn(){return true;}public boolean isLockdownEnabled(){return true;}public void onRevoke(){}
+ public boolean protect(int fd){return true;}public boolean protect(java.net.Socket s){return true;}public boolean protect(java.net.DatagramSocket s){return true;} public boolean isAlwaysOn(){return true;}public boolean isLockdownEnabled(){return true;}public void onRevoke(){}
  public class Builder {public Builder setSession(String s){return this;}public Builder setMtu(int n){return this;}public Builder setMetered(boolean b){return this;}
  public Builder addAddress(String s,int p){return this;}public Builder addDnsServer(String s){return this;}public Builder addRoute(IpPrefix p){return this;}public Builder addRoute(String a,int p){return this;}public Builder excludeRoute(IpPrefix p){return this;}
  public Builder addAllowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}public Builder addDisallowedApplication(String s)throws android.content.pm.PackageManager.NameNotFoundException{return this;}
  public android.os.ParcelFileDescriptor establish(){return null;} } }''')
-stub('org.json','JSONObject','{public JSONObject(String s)throws Exception {} public String optString(String a,String b){return b;} public boolean optBoolean(String a,boolean b){return b;} }')
+stub('org.json','JSONObject','{public JSONObject(String s)throws Exception {} public String getString(String a)throws Exception{return "";} public String optString(String a,String b){return b;} public boolean optBoolean(String a,boolean b){return b;} }')
 PKG='io.nekohasekai.libbox'
 for name in ('LocalDNSTransport','WIFIState','Notification','NeighborUpdateListener','ShellSession','PlatformUser','BridgeSession','BridgeOptions','OverrideOptions','SystemProxyStatus'):stub(PKG,name,'{}')
 stub(PKG,'StringIterator','{int len();boolean hasNext();String next();}','interface')
@@ -70,6 +70,7 @@ stub(PKG,'RouterMultihop','{public void networkChanged(){}public boolean healthy
 stub(PKG,'RouterHopMeasurement','{public void networkChanged(){}public void start(String id,long size)throws Exception{}public void cancel(String id){}public String statusJSON(){return "";}public void close()throws Exception{} }')
 stub(PKG,'Libbox','''{public static final int InterfaceTypeOther=0,InterfaceTypeWIFI=1,InterfaceTypeCellular=2,InterfaceTypeEthernet=3;
  public static void setup(SetupOptions o)throws Exception{}public static void checkConfig(String c)throws Exception{}
+ public static void routerTorSetStateDirectory(String path)throws Exception{}public static void routerStrategyCloseService(CommandServer server)throws Exception{}
  public static long routerStartPerformance(CommandServer s)throws Exception{return 0;}public static String routerPerformanceFailure(CommandServer s){return "";}public static void routerInvalidatePerformance(CommandServer s){}
  public static RouterMultihop newRouterMultihop(String c,String m)throws Exception{return null;}public static RouterHopMeasurement newRouterHopMeasurement(CommandServer c,String m)throws Exception{return null;} }''')
 stub(PKG,'CommandServer','{public CommandServer(PlatformInterface p,CommandServerHandler h)throws Exception{}public void start()throws Exception{}public void startOrReloadService(String c,OverrideOptions o)throws Exception{}public void closeService()throws Exception{}public void close(){}public void resetNetwork(){} }')
@@ -88,10 +89,12 @@ stub(PKG,'PlatformInterface','''{
 }''','interface')
 APP='com.eabusham.routervpn'
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
+stub(APP,'AndroidTorProfile','{public static final String SESSION_FILE="routervpn-tor.json";public static final int MAX_METADATA=262144;public static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return null;}public static String strictText(byte[] data)throws Exception{return "";} }')
+stub(APP,'AndroidTorSession','{public interface Owner{boolean current(AndroidTorSession session,io.nekohasekai.libbox.CommandServer server);String network();}public AndroidTorSession(org.json.JSONObject m,io.nekohasekai.libbox.CommandServer s,Owner o)throws Exception{}public void prove()throws Exception{}public void cancel(){}public boolean healthy(){return false;}public String result(String s,String e)throws Exception{return "";} }')
 stub(APP,'AndroidServiceStopConfirmation','{public static final String EXTRA_COMMAND="stop";public static void acknowledge(String k,long c){} }')
 stub(APP,'AndroidKillSwitchPolicy','{public static final String SESSION_MARKER="kill-switch";public static String requirementMessage(){return "";} }')
 stub(APP,'AndroidMTUSession','{interface Failure{void abort(AndroidMTUSession owner);}public AndroidMTUSession(android.content.Context c,Failure f){} public void activate(io.nekohasekai.libbox.CommandServer c,String config,String metadata){}public String request(String a,String b,String c)throws Exception{return "";}public boolean running(){return false;}public void drainForMeasurement()throws Exception{}public void networkChanged(){}public void close()throws Exception{}public void beforeOpen()throws Exception{}public void established(int mtu)throws Exception{}public void registered(String name){}public boolean unchangedPhysicalPath(){return false;}public void checkNetwork(){} }')
-stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public static AndroidStartLayerRelay startIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void close(){} }')
+stub(APP,'AndroidStartLayerRelay','implements java.io.Closeable{public interface SocketProtector{void protectRelaySocket(java.net.Socket s)throws Exception;void protectRelaySocket(java.net.DatagramSocket s)throws Exception;}public static AndroidStartLayerRelay prepareIfConfigured(android.content.Context c,java.io.File f,java.util.function.Consumer<String> failure)throws Exception{return null;}public void start(){}public void close(){} }')
 
 def main():
     if not shutil.which('javac'):

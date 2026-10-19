@@ -17,10 +17,11 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 
-/** Starts one libbox graph and accepts success only after public exit IP proof through its loopback proxy. */
+/** Owns one custom-exit graph, its exact proof and cancellation through real teardown. */
 final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);}
     private static final long START_TIMEOUT_MS=20000L;
+    private static final long TOR_START_TIMEOUT_MS=200000L;
     private static final long STOP_TIMEOUT_MS=8000L;
     private final Context context;
     private final NativeSingBoxController singBox;
@@ -33,6 +34,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private boolean disconnectRequested;
     private boolean revalidationTeardown;
     private boolean teardownInProgress;
+    private String torNativeSession="",torHomeSession="",torExternalID="";
 
     AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
         this.context=context.getApplicationContext();
@@ -41,36 +43,47 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         this.directBuilder=new AndroidDirectStandardExitController(this.context);
     }
 
-    synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,Callback cb){ submit(entryBundle,exit,false,cb); }
-    synchronized void connectDirect(AndroidStandardExitStore.Entry exit,Callback cb){ submit(null,exit,true,cb); }
+    synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,Callback cb){ submit(entryBundle,exit,false,"wg",cb); }
+    synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode,Callback cb){ submit(entryBundle,exit,false,entryMode,cb); }
+    synchronized void connectDirect(AndroidStandardExitStore.Entry exit,Callback cb){ submit(null,exit,true,"external",cb); }
 
-    private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,Callback cb){
+    private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){
         if(closed.get()){cb.finished(false,"Android custom-exit runtime is closed.");return;}
         if(teardownInProgress||(active!=null&&!active.isDone())){cb.finished(false,"Another Android custom-exit attempt or teardown is running.");return;}
         String blocked=startBlockedReason();if(!blocked.isEmpty()){cb.finished(false,blocked);return;}
+        final AndroidStandardExitStore.Entry captured;
+        try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured); }
+        catch(Exception invalid){cb.finished(false,"The saved custom-exit profile is invalid; review its settings before connecting.");return;}
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
-        active=executor.submit(()->run(entryBundle,exit,direct,cb));
+        torNativeSession="";torHomeSession="";torExternalID="";
+        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,cb));
     }
 
-    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,Callback cb){
+    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){
         boolean started=false,sessionStarted=false;
+        boolean tor=AndroidTorProfile.isTor(exit.protocol);
+        AndroidHomeStateStore.Snapshot capturedHome=null;
         synchronized(this){workerThread=Thread.currentThread();}
         try{
             synchronized(this){if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled.");}
             String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
             if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
-            AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");sessionStarted=true;
-            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing WireGuard entry → "+exit.protocol+" custom exit…");
-            NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit);
+            if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
+            else AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");
+            sessionStarted=true;
+            capturedHome=AndroidHomeStateStore.snapshot(context);
+            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
+            NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode);
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
             cb.progress("Starting one Android VpnService custom-exit graph…");
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before engine launch.");
                 // A partially published start still owns cleanup when launch throws.
+                if(tor){torNativeSession=session.sessionId;torHomeSession=capturedHome.sessionId;torExternalID=exit.id;}
                 started=true;singBox.start(session);
             }
-            long deadline=System.currentTimeMillis()+START_TIMEOUT_MS;
+            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:START_TIMEOUT_MS);
             while(System.currentTimeMillis()<deadline){
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
                 String state=singBox.getState();
@@ -79,20 +92,24 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 Thread.sleep(250L);
             }
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
-            cb.progress("Tunnel is UP; proving the exact public custom exit before Connected…");
-            String observed=proveExpectedPublicIp(exit.expectedPublicIp);
+            cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Tunnel is UP; proving the exact public custom exit before Connected…");
+            String observed=tor?capturedTorExit(capturedHome):proveExpectedPublicIp(exit.expectedPublicIp);
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
-                AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
+                if(tor){
+                    capturedTorExit(capturedHome);
+                    if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
+                }else AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
             }
-            cb.finished(true,direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
+            cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
+                    :direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
             Thread.currentThread().interrupt();
             boolean suppressHome;
             synchronized(this){suppressHome=revalidationTeardown;teardownInProgress=!stopped;}
             boolean emergency=AndroidHomeStateStore.emergencyDisconnectPending(context);
-            if(sessionStarted&&!suppressHome){
+            if(sessionStarted&&!suppressHome&&sameHomeOwner(tor,capturedHome)){
                 if(emergency){
                     AndroidHomeStateStore.warning(context,stopped
                             ?"Emergency Disconnect requested; Android custom-exit graph stopped; awaiting remaining runtime teardown."
@@ -108,9 +125,9 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             boolean stopped=!started||stopEmbeddedAndProve();
             boolean suppressHome;
             synchronized(this){suppressHome=revalidationTeardown;teardownInProgress=!stopped;}
-            String message=nonEmpty(error.getMessage(),"Android custom exit failed closed.");
+            String message=tor?"The captured Tor circuit, entry or DNS proof failed. Check the saved bridge and DNS settings, then reconnect.":nonEmpty(error.getMessage(),"Android custom exit failed closed.");
             if(!stopped)message+=" Embedded engine teardown was not proved; runtime ownership retained.";
-            if(sessionStarted&&!suppressHome){
+            if(sessionStarted&&!suppressHome&&sameHomeOwner(tor,capturedHome)){
                 boolean emergency=AndroidHomeStateStore.emergencyDisconnectPending(context);
                 if(emergency) AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; "+message);
                 else if(stopped) AndroidHomeStateStore.failed(context,message);
@@ -120,6 +137,24 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         }finally{
             synchronized(this){workerThread=null;}
         }
+    }
+
+    private boolean sameHomeOwner(boolean tor,AndroidHomeStateStore.Snapshot captured){
+        return !tor||captured!=null&&captured.sessionId.equals(AndroidHomeStateStore.snapshot(context).sessionId);
+    }
+
+    synchronized String capturedTorExit(AndroidHomeStateStore.Snapshot owner)throws Exception{
+        AndroidHomeStateStore.Snapshot current=AndroidHomeStateStore.snapshot(context);
+        if(disconnectRequested||closed.get()||owner==null||!AndroidTorProfile.isTor(owner.activeExternalProtocol)
+                ||torNativeSession.isEmpty()||!torHomeSession.equals(owner.sessionId)||!torHomeSession.equals(current.sessionId)
+                ||!torExternalID.equals(owner.activeExternalId)||!torExternalID.equals(current.activeExternalId)
+                ||!"UP".equals(singBox.getState()))throw new IllegalStateException("The captured Tor runtime is unavailable; reconnect to prove its path.");
+        return LayeredVpnService.torExitIP(torNativeSession,torExternalID);
+    }
+
+    private static String entryID(File file){
+        if(file==null||!file.getName().matches("[0-9a-f]{32}\\.json"))throw new IllegalArgumentException("Select a saved Router VPN entry node.");
+        return file.getName().substring(0,32);
     }
 
     private String startBlockedReason(){

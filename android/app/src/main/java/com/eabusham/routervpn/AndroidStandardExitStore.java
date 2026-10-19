@@ -38,6 +38,9 @@ final class AndroidStandardExitStore {
         String username="", password="", method="", secret="", tlsServerName="";
         String wgPrivateKey="", wgPeerPublicKey="", wgPreSharedKey="";
         String openVPNConfig="";
+        String torTransport="";
+        JSONObject torPolicy = new JSONObject();
+        final List<String> torBridges = new ArrayList<>();
         final List<String> wgAddresses = new ArrayList<>(), wgAllowedIps = new ArrayList<>();
 
         JSONObject summary() throws Exception {
@@ -59,7 +62,8 @@ final class AndroidStandardExitStore {
         r.add(new Capability("http",true,"")); r.add(new Capability("https",true,""));
         r.add(new Capability("shadowsocks",true,"")); r.add(new Capability("hysteria2",true,""));
         r.add(new Capability("openvpn",true,"Native pinned OpenVPN client with exact public-exit proof."));
-        r.add(new Capability("tor-bridge",false,"Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android until Router VPN ships a real native Tor + pluggable-transport VpnService dataplane with dynamic Tor-exit proof; they must not be approximated as SOCKS5."));
+        r.add(new Capability("tor",true,"Native Tor circuit with dynamic Tor-exit proof."));
+        r.add(new Capability("tor-bridge",true,"Native obfs4 / meek / Snowflake / WebTunnel / Custom bridge circuits with captured protected networking."));
         return r;
     }
 
@@ -85,6 +89,7 @@ final class AndroidStandardExitStore {
     }
 
     private void requireMutable(String action){
+        if(AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect Router VPN before "+action+"; live external-exit identity and proof must remain immutable for the session.");
         AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
         AndroidRuntimeRegistry engines=AndroidRuntimeRegistry.get(context);
         boolean activeOrTransitioning=home.connected||"connecting".equals(home.phase)
@@ -116,11 +121,11 @@ final class AndroidStandardExitStore {
         e.id=e.id==null?"":e.id.trim(); if(e.id.isEmpty())e.id="exit-"+randomHex(6); if(!safeId(e.id))throw new IllegalArgumentException("Invalid custom exit id.");
         e.name=e.name==null?"":e.name.trim();if(e.name.isEmpty())e.name="Custom Exit";if(e.name.length()>120)throw new IllegalArgumentException("Custom exit name is too long.");
         e.protocol=normalizeProtocol(e.protocol);
+        if(AndroidTorProfile.isTor(e.protocol)){AndroidTorProfile.validate(e);return;}
         if("openvpn".equals(e.protocol)){
             JSONObject compiled=AndroidOpenVPN.endpoint(e, "");
             e.server=compiled.getString("server");e.serverPort=compiled.getInt("server_port");
         }
-        if("tor-bridge".equals(e.protocol))throw new IllegalArgumentException("Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android until Router VPN ships a real native Tor + pluggable-transport VpnService dataplane with dynamic Tor-exit proof; they must not be approximated as SOCKS5.");
         if(!Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(e.protocol))throw new IllegalArgumentException("Unsupported custom exit protocol: "+e.protocol);
         e.server=literalIp(e.server,"Custom exit server").getHostAddress(); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
         InetAddress expected=literalIp(e.expectedPublicIp,"Expected public exit IP"); if(isPrivate(expected))throw new IllegalArgumentException("Expected public exit IP must be public.");e.expectedPublicIp=expected.getHostAddress();
@@ -133,7 +138,7 @@ final class AndroidStandardExitStore {
         if("wireguard".equals(e.protocol)){validateKey(e.wgPrivateKey,"WireGuard private key",false);validateKey(e.wgPeerPublicKey,"WireGuard peer public key",false);validateKey(e.wgPreSharedKey,"WireGuard preshared key",true);validateCidrs(e.wgAddresses,"WireGuard interface addresses");validateCidrs(e.wgAllowedIps,"WireGuard AllowedIPs");if(e.wgMtu!=0&&(e.wgMtu<1280||e.wgMtu>9000))throw new IllegalArgumentException("WireGuard MTU must be 1280..9000.");}
     }
 
-    private static String normalizeProtocol(String p){p=p==null?"":p.trim().toLowerCase(Locale.ROOT);if("wg".equals(p))return"wireguard";if("socks".equals(p))return"socks5";if("http-connect".equals(p))return"http";if("https-connect".equals(p))return"https";if("ss".equals(p))return"shadowsocks";if("hy2".equals(p))return"hysteria2";if("ovpn".equals(p))return"openvpn";if("tor".equals(p)||"tor_bridge".equals(p))return"tor-bridge";return p;}
+    private static String normalizeProtocol(String p){p=p==null?"":p.trim().toLowerCase(Locale.ROOT);if("wg".equals(p))return"wireguard";if("socks".equals(p))return"socks5";if("http-connect".equals(p))return"http";if("https-connect".equals(p))return"https";if("ss".equals(p))return"shadowsocks";if("hy2".equals(p))return"hysteria2";if("ovpn".equals(p))return"openvpn";if("tor_bridge".equals(p))return"tor-bridge";return p;}
     private static boolean safeId(String v){return v!=null&&v.matches("[A-Za-z0-9._-]{1,96}")&&!v.equals(".")&&!v.equals("..")&&!v.contains("..");}
     private static String trimBound(String v,String label){v=v==null?"":v.trim();if(v.length()>4096)throw new IllegalArgumentException(label+" is too long.");return v;}
     private static InetAddress literalIp(String value,String label)throws Exception{value=value==null?"":value.trim();boolean v4=value.matches("[0-9.]+"),v6=value.contains(":")&&value.matches("[0-9A-Fa-f:.%]+$");if(!v4&&!v6)throw new IllegalArgumentException(label+" must be a literal IP to avoid pre-tunnel DNS.");return InetAddress.getByName(value);}
@@ -142,6 +147,8 @@ final class AndroidStandardExitStore {
     private static void validateCidrs(List<String> values,String label)throws Exception{if(values==null||values.isEmpty())throw new IllegalArgumentException(label+" are required.");if(values.size()>32)throw new IllegalArgumentException(label+" has too many entries.");for(String v:values){String[]p=v.trim().split("/",-1);if(p.length!=2)throw new IllegalArgumentException("Invalid "+label+": "+v);InetAddress ip=literalIp(p[0],label);int prefix=Integer.parseInt(p[1]);int max=ip.getAddress().length==4?32:128;if(prefix<0||prefix>max)throw new IllegalArgumentException("Invalid "+label+" prefix: "+v);}}
     private static String randomHex(int n){byte[]b=new byte[n];RANDOM.nextBytes(b);StringBuilder s=new StringBuilder();for(byte x:b)s.append(String.format(Locale.ROOT,"%02x",x&255));return s.toString();}
     private static byte[] readLimited(File f,int max)throws Exception{return AndroidPrivateFileStore.read(f,max);}
-    private static JSONObject toJson(Entry e)throws Exception{JSONObject o=new JSONObject().put("id",e.id).put("name",e.name).put("protocol",e.protocol).put("server",e.server).put("server_port",e.serverPort).put("expected_public_ip",e.expectedPublicIp).put("username",e.username).put("password",e.password).put("method",e.method).put("secret",e.secret).put("tls_server_name",e.tlsServerName).put("wg_addresses",new JSONArray(e.wgAddresses)).put("wg_private_key",e.wgPrivateKey).put("wg_peer_public_key",e.wgPeerPublicKey).put("wg_pre_shared_key",e.wgPreSharedKey).put("wg_allowed_ips",new JSONArray(e.wgAllowedIps)).put("wg_mtu",e.wgMtu).put("openvpn_config",e.openVPNConfig);return o;}
-    private static Entry fromJson(JSONObject o)throws Exception{Entry e=new Entry();e.id=o.optString("id","");e.name=o.optString("name","");e.protocol=o.optString("protocol","");e.server=o.optString("server","");e.serverPort=o.optInt("server_port",0);e.expectedPublicIp=o.optString("expected_public_ip","");e.username=o.optString("username","");e.password=o.optString("password","");e.method=o.optString("method","");e.secret=o.optString("secret","");e.tlsServerName=o.optString("tls_server_name","");e.wgPrivateKey=o.optString("wg_private_key","");e.wgPeerPublicKey=o.optString("wg_peer_public_key","");e.wgPreSharedKey=o.optString("wg_pre_shared_key","");e.wgMtu=o.optInt("wg_mtu",0);e.openVPNConfig=o.optString("openvpn_config","");JSONArray a=o.optJSONArray("wg_addresses"),b=o.optJSONArray("wg_allowed_ips");if(a!=null)for(int i=0;i<a.length();i++)e.wgAddresses.add(a.getString(i));if(b!=null)for(int i=0;i<b.length();i++)e.wgAllowedIps.add(b.getString(i));return e;}
+    static Entry copy(Entry entry)throws Exception{return fromJson(toJson(entry));}
+    static String snapshot(Entry entry)throws Exception{return toJson(entry).toString();}
+    private static JSONObject toJson(Entry e)throws Exception{JSONObject o=new JSONObject().put("id",e.id).put("name",e.name).put("protocol",e.protocol).put("server",e.server).put("server_port",e.serverPort).put("expected_public_ip",e.expectedPublicIp).put("username",e.username).put("password",e.password).put("method",e.method).put("secret",e.secret).put("tls_server_name",e.tlsServerName).put("wg_addresses",new JSONArray(e.wgAddresses)).put("wg_private_key",e.wgPrivateKey).put("wg_peer_public_key",e.wgPeerPublicKey).put("wg_pre_shared_key",e.wgPreSharedKey).put("wg_allowed_ips",new JSONArray(e.wgAllowedIps)).put("wg_mtu",e.wgMtu).put("openvpn_config",e.openVPNConfig);if(AndroidTorProfile.isTor(e.protocol)||e.torPolicy!=null&&e.torPolicy.length()!=0)o.put("tor_policy",e.torPolicy);if("tor-bridge".equals(e.protocol)||e.torTransport!=null&&!e.torTransport.isEmpty()||!e.torBridges.isEmpty())o.put("tor_bridge",new JSONObject().put("transport",e.torTransport).put("bridges",new JSONArray(e.torBridges)));return o;}
+    private static Entry fromJson(JSONObject o)throws Exception{Entry e=new Entry();e.id=o.optString("id","");e.name=o.optString("name","");e.protocol=o.optString("protocol","");e.server=o.optString("server","");e.serverPort=o.optInt("server_port",0);e.expectedPublicIp=o.optString("expected_public_ip","");e.username=o.optString("username","");e.password=o.optString("password","");e.method=o.optString("method","");e.secret=o.optString("secret","");e.tlsServerName=o.optString("tls_server_name","");e.wgPrivateKey=o.optString("wg_private_key","");e.wgPeerPublicKey=o.optString("wg_peer_public_key","");e.wgPreSharedKey=o.optString("wg_pre_shared_key","");e.wgMtu=o.optInt("wg_mtu",0);e.openVPNConfig=o.optString("openvpn_config","");if(o.has("tor_policy"))e.torPolicy=new JSONObject(o.getJSONObject("tor_policy").toString());if(o.has("tor_bridge")){JSONObject bridge=o.getJSONObject("tor_bridge");e.torTransport=bridge.getString("transport");JSONArray lines=bridge.getJSONArray("bridges");for(int i=0;i<lines.length();i++)e.torBridges.add(lines.getString(i));}JSONArray a=o.optJSONArray("wg_addresses"),b=o.optJSONArray("wg_allowed_ips");if(a!=null)for(int i=0;i<a.length();i++)e.wgAddresses.add(a.getString(i));if(b!=null)for(int i=0;i<b.length();i++)e.wgAllowedIps.add(b.getString(i));return e;}
 }

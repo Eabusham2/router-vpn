@@ -38,6 +38,8 @@ OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"
 # only the Go core. Changing a host graph invalidates the cached AAR proof.
 ANDROID_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_multihop_pinned.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_GRAPH_SHA")
+ANDROID_TOR_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_tor_pinned.py" --digest)
+OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 verify_aar() {
@@ -89,8 +91,15 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices; do
-    grep -Fq "$symbol" "$api_list" || { echo "combined libbox AAR is missing native Tor source API $symbol" >&2; return 1; }
+  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
+    grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterTorProofRequest >"$tmp/router-tor-proof.javap"
+  for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
+    grep -Fq "$signature" "$tmp/router-tor-proof.javap" || {
+      echo 'combined libbox AAR RouterTorProofRequest has the wrong captured-owner API' >&2
+      return 1
+    }
   done
   for symbol in     newRouterMTU     routerMTUPhysicalPath     routerReadMTUInterface     routerApplyPerformancePolicy     routerStartPerformance     routerPerformanceFailure     routerInvalidatePerformance     routerPerformanceStatus     routerCompileProxyEntry     routerMultihopMTUProfile     routerCompileAmneziaProfile     routerAmneziaExitConfig     routerCompileWireGuardProfile     routerWireGuardExitConfig     routerApplyMultihopMTUPolicy     routerApplyMultihopLANPolicy     newRouterHopMeasurement     routerCompileSIP003Profile     routerComposeSIP003StartLayer     routerCheckXrayProfile     routerCompileXrayProfile     routerResolveXrayProfile     routerComposeXrayStartLayer     routerResolveXrayStartLayerProfile     routerApplyNativeXrayDevicePolicy     newRouterMultihop     newRouterMultihopWithEntryStartLayer     newRouterMultihopWithStartLayers     routerCompileMultihopStartLayers     routerCompileMultihopEntryStartLayer     routerOpenVPNEndpoint     routerXrayInvoke     routerXrayRegisterDialerController     routerXraySetDNS     routerXrayResetDNS     routerXrayBridgeRevision; do
     grep -Fq "$symbol" "$api_list" || {
@@ -263,6 +272,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     python3 "$ROOT/../deploy/test_mobile_tor_package_runtime.py" --package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
     TOR_GATE_PARENT=$(mktemp -d "$ROOT/.vendor/tor-outbound-proof.XXXXXX")
     python3 "$ROOT/../deploy/test-mobile-tor-outbound.py" --go "$(command -v go)" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --output "$TOR_GATE_PARENT/evidence"
+    python3 "$ROOT/../deploy/test_android_tor_pinned.py" "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
   fi
   # Install only the verified C dependency into the existing Go module after
   # host graph gates, before the sole gomobile build of the combined runtime.

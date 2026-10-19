@@ -14,7 +14,7 @@ import tempfile
 ROOT = Path(sys.argv[1]).resolve() if len(sys.argv) > 1 else Path(__file__).resolve().parents[1]
 JAVA = ROOT / 'android/app/src/main/java/com/eabusham/routervpn'
 TARGETS = sys.argv[2:]
-assert all(x in ('multihop', 'external') for x in TARGETS), 'unknown runtime test target'
+assert all(x in ('multihop', 'external', 'tor') for x in TARGETS), 'unknown runtime test target'
 javac, java = shutil.which('javac'), shutil.which('java')
 assert javac and java, 'JDK is required for Android runtime lifecycle tests'
 
@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class NativeSingBoxController {
     // PRODUCTION_TRANSPORT_PREDICATES
     static final class ModeInfo {}
-    static final class SessionInfo {}
+    static final class SessionInfo {final String sessionId="native-session";}
     volatile String state = "DOWN", mode = "";
     volatile String startState = "UP";
     volatile boolean failStart, failStop;
@@ -47,6 +47,8 @@ final class NativeSingBoxController {
     }
 }
 final class LayeredVpnService {
+    static final AtomicInteger torReads=new AtomicInteger();static volatile boolean torHealthy=true;
+    static String torExitIP(String session,String exit){torReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor owner");return "8.8.4.4";}
     static final AtomicInteger mtuStarts = new AtomicInteger();
     static volatile java.util.concurrent.CountDownLatch mtuEntered, mtuRelease;
     static void startAutomaticMTU() {
@@ -83,16 +85,22 @@ final class AndroidMultihopController {
 }
 final class AndroidStandardExitStore {
     static final class Entry {
-        final String id="external", name="external", protocol="socks5", expectedPublicIp="1.1.1.1";
+        String id="external", name="external", protocol="socks5", expectedPublicIp="1.1.1.1";
     }
+    static Entry copy(Entry entry){Entry e=new Entry();e.id=entry.id;e.name=entry.name;e.protocol=entry.protocol;e.expectedPublicIp=entry.expectedPublicIp;return e;}
+    static void validate(Entry entry){}
 }
+final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
 final class AndroidStandardExitController {
+    static volatile String lastEntryMode="",lastProtocol="";
     AndroidStandardExitController(Context c) {}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e) { return new NativeSingBoxController.SessionInfo(); }
+    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode) {lastEntryMode=mode;lastProtocol=e.protocol;return prepare(f,e); }
 }
 final class AndroidDirectStandardExitController {
+    static volatile String lastProtocol="";
     AndroidDirectStandardExitController(Context c) {}
-    NativeSingBoxController.SessionInfo prepare(AndroidStandardExitStore.Entry e) { return new NativeSingBoxController.SessionInfo(); }
+    NativeSingBoxController.SessionInfo prepare(AndroidStandardExitStore.Entry e) {lastProtocol=e.protocol;return new NativeSingBoxController.SessionInfo(); }
 }
 final class AndroidPathProbe {
     static boolean prove(File bundle, int timeout) { return true; }
@@ -100,7 +108,7 @@ final class AndroidPathProbe {
 final class AndroidHomeStateStore {
     static final class Snapshot {
         boolean connected;
-        String logicalMode="", phase="off", activeEntryId="", activeExitId="", activeEntryMode="wg", runtimeMode="";
+        String logicalMode="", phase="off", activeEntryId="", activeExitId="", activeEntryMode="wg", runtimeMode="",sessionId="home-session",activeExternalId="external",activeExternalProtocol="socks5";
     }
     static volatile Snapshot current = new Snapshot();
     static volatile java.util.concurrent.CountDownLatch connectedEntered, connectedRelease;
@@ -123,6 +131,8 @@ final class AndroidHomeStateStore {
     static void beginExternal(Context c, String id, String name, String protocol, String ip, String base) {
         Snapshot s=new Snapshot();s.logicalMode="external";s.phase="connecting";current=s;
     }
+    static String beginTorExternal(Context c,String id,String name,String protocol,String entry,String mode){beginExternal(c,id,name,protocol,"",mode);current.activeExternalProtocol=protocol;current.activeExternalId=id;current.activeEntryId=entry;current.activeEntryMode=mode;return "home-session";}
+    static boolean connectedTorExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId))return false;beforeConnectedWrite();current.connected=true;current.phase="connected";return true;}
     static void connectedExternal(Context c, String id, String name, String protocol, String ip, String base, String observed) {
         beginExternal(c,id,name,protocol,ip,base); beforeConnectedWrite(); current.connected=true; current.phase="connected";
     }
@@ -164,6 +174,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class RuntimeTeardownHarness {
     static final List<String> failures=new ArrayList<>();
+    static final java.util.concurrent.atomic.AtomicInteger publicProofs=new java.util.concurrent.atomic.AtomicInteger();
     static final class Callback implements AndroidMultihopRuntime.Callback, AndroidStandardExitRuntime.Callback {
         final int blockAt; int progressCalls; volatile boolean ok;
         final CountDownLatch entered=new CountDownLatch(1), release=new CountDownLatch(1), done=new CountDownLatch(1);
@@ -184,7 +195,9 @@ public final class RuntimeTeardownHarness {
     static final class Owner implements AutoCloseable {
         final Context context=new Context(); final NativeSingBoxController engine=new NativeSingBoxController();
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
+        final String kind;
         Owner(String kind) {
+            this.kind=kind;LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
@@ -192,7 +205,7 @@ public final class RuntimeTeardownHarness {
         Object runtime() { return multihop!=null?multihop:external; }
         void connect(Callback cb) {
             if(multihop!=null)multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks",cb);
-            else external.connectDirect(new AndroidStandardExitStore.Entry(),cb);
+            else {AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();if(kind.equals("tor")){e.protocol="tor";e.expectedPublicIp="";}external.connectDirect(e,cb);}
         }
         boolean busy() { return multihop!=null?multihop.isActiveOrTransitioning():external.isActiveOrTransitioning(); }
         void disconnect() { if(multihop!=null)multihop.disconnect();else external.disconnect(); }
@@ -213,6 +226,7 @@ public final class RuntimeTeardownHarness {
         check(!owner.busy(),"worker did not release ownership after completion");
     }
     static void tests(String kind) {
+        if("tor".equals(kind))torTests();
         if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
             test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {
@@ -259,6 +273,7 @@ public final class RuntimeTeardownHarness {
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
                 check(LayeredVpnService.mtuStarts.get()==(owner.multihop!=null?1:0),"MTU must start once, only after selected-router proof");
+                if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
                 owner.disconnect();awaitIdle(owner);
             }
         });
@@ -367,6 +382,28 @@ public final class RuntimeTeardownHarness {
             }
         });
     }
+    static AndroidStandardExitStore.Entry torEntry(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="tor-bridge";e.expectedPublicIp="";return e;}
+    static void torTests(){
+        for(String mode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"})test("Tor exact entry "+mode,()->{
+            try(Owner owner=new Owner("tor")){Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),torEntry(),mode,cb);cb.awaitDone();
+                check(cb.ok&&mode.equals(AndroidStandardExitController.lastEntryMode)&&mode.equals(AndroidHomeStateStore.current.activeEntryMode),"Tor entry was replaced with default WG");check(publicProofs.get()==0,"Tor borrowed fixed-IP proof");owner.disconnect();awaitIdle(owner);}
+        });
+        test("Tor late underlying UP cannot adopt after cancel",()->{
+            try(Owner owner=new Owner("tor")){owner.engine.startState="STARTING";Callback cb=new Callback(0);owner.connect(cb);long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(owner.engine.starts.get()==0&&System.nanoTime()<deadline)Thread.sleep(2);
+                check(owner.engine.starts.get()==1&&!AndroidHomeStateStore.current.connected,"Tor connected before native proof");owner.disconnect();cb.awaitDone();check(!cb.ok&&LayeredVpnService.torReads.get()==0,"cancelled native startup reached Connected");awaitIdle(owner);}
+        });
+        test("Tor missing native owner fails closed",()->{
+            try(Owner owner=new Owner("tor")){LayeredVpnService.torHealthy=false;Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(!cb.ok&&!AndroidHomeStateStore.current.connected&&owner.engine.stops.get()>0,"unproven native Tor owner admitted");check(publicProofs.get()==0,"missing native proof substituted public IP");awaitIdle(owner);}
+        });
+        test("Tor stale Home completion cannot overwrite replacement",()->{
+            try(Owner owner=new Owner("tor")){Callback cb=new Callback(3);try{owner.connect(cb);cb.awaitEntered();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="new-session";replacement.phase="new-owner";AndroidHomeStateStore.current=replacement;}finally{cb.release.countDown();cb.awaitDone();}
+                check(!cb.ok&&AndroidHomeStateStore.current.sessionId.equals("new-session")&&AndroidHomeStateStore.current.phase.equals("new-owner"),"late Tor failure overwrote a new Home owner");}
+        });
+        test("Tor request freezes saved exit before queued work",()->{
+            try(Owner owner=new Owner("tor")){java.lang.reflect.Field f=owner.runtime().getClass().getDeclaredField("executor");f.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)f.get(owner.runtime());CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);executor.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});check(entered.await(3,TimeUnit.SECONDS),"queue did not block");
+                AndroidStandardExitStore.Entry original=torEntry();Callback cb=new Callback(0);owner.external.connectDirect(original,cb);original.protocol="socks5";original.expectedPublicIp="1.1.1.1";release.countDown();cb.awaitDone();check(cb.ok&&AndroidDirectStandardExitController.lastProtocol.equals("tor-bridge")&&publicProofs.get()==0,"queued request re-read mutable exit credentials");owner.disconnect();awaitIdle(owner);}
+        });
+    }
     public static void main(String[] args) {
         // A deterministic fake of the public-exit provider. No real sockets,
         // DNS requests, VPN engines, or external services are used by this test.
@@ -374,11 +411,11 @@ public final class RuntimeTeardownHarness {
             protected URLConnection openConnection(URL u){return openConnection(u,Proxy.NO_PROXY);}
             protected URLConnection openConnection(URL u,Proxy p){return new HttpURLConnection(u){
                 public void connect(){}public void disconnect(){}public boolean usingProxy(){return true;}
-                public int getResponseCode(){return 200;}
+                public int getResponseCode(){publicProofs.incrementAndGet();return 200;}
                 public InputStream getInputStream(){return new ByteArrayInputStream("1.1.1.1".getBytes(StandardCharsets.US_ASCII));}
             };}
         }:null);
-        if(args.length==0){tests("multihop");tests("external");}
+        if(args.length==0){tests("multihop");tests("external");tests("tor");}
         else for(String kind:args)tests(kind);
         if(!failures.isEmpty()){for(String s:failures)System.err.println(s);System.exit(1);}
     }

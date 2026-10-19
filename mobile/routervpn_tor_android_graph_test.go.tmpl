@@ -1,0 +1,67 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+// Graphs come from the actual Android profile, store and native entry compiler.
+// CheckConfig constructs/closes native owners; this test never starts a VPN.
+func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_ANDROID_TOR_GRAPHS")
+	if root == "" {
+		t.Skip("run deploy/test_android_tor_pinned.py for the exact Android matrix")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 348 {
+		t.Fatalf("exact Android Tor matrix unavailable: %v (%d files)", err, len(entries))
+	}
+	if err = RouterTorSetStateDirectory(filepath.Join(t.TempDir(), "tor-state")); err != nil {
+		t.Fatal(err)
+	}
+	for _, entry := range entries {
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !entry.Type().IsRegular() || filepath.Ext(entry.Name()) != ".json" {
+				t.Fatal("unowned Android graph entry")
+			}
+			data, err := os.ReadFile(filepath.Join(root, entry.Name()))
+			if err != nil || len(data) == 0 || len(data) > 4<<20 {
+				t.Fatal("empty or oversized Android graph")
+			}
+			if err := CheckConfig(string(data)); err != nil {
+				t.Fatalf("real Android graph rejected: %v", err)
+			}
+			var graph map[string]any
+			if err := json.Unmarshal(data, &graph); err != nil {
+				t.Fatal(err)
+			}
+			outbounds, ok := graph["outbounds"].([]any)
+			if !ok {
+				t.Fatal("Android graph has no native outbounds")
+			}
+			found := 0
+			for _, raw := range outbounds {
+				outbound, ok := raw.(map[string]any)
+				if !ok {
+					t.Fatal("invalid outbound")
+				}
+				if outbound["type"] == "routervpn-tor" {
+					outbound["type"] = "routervpn-missing-tor-engine"
+					found++
+				}
+			}
+			if found != 1 {
+				t.Fatal("Android graph has no unique native Tor owner")
+			}
+			bad, err := json.Marshal(graph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckConfig(string(bad)); err == nil {
+				t.Fatal("missing Tor engine was accepted")
+			}
+		})
+	}
+}

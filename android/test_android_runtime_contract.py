@@ -297,6 +297,10 @@ for executable_contract in (
     "test_android_multihop_start_layer.py",
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",
+    "test_android_tor_profile.py",
+    "test_android_tor_form.py",
+    "test_android_tor_session.py",
+    "test_android_start_layer_relay_lifecycle.py",
     "test_android_custom_preset_commit.py",
     "test_android_mode_orchestrator.py",
     "test_android_runtime_teardown.py",
@@ -312,6 +316,8 @@ for executable_contract in (
     )
 
 subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_pinned_contract.py")],
+               cwd=ROOT.parent, check=True)
+subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_tor_pinned_contract.py")],
                cwd=ROOT.parent, check=True)
 
 print("Android runtime truth contract: PASS")

@@ -357,15 +357,35 @@ need(
     "does not substitute homemade XOR/custom cryptography",
 )
 
-# Mobile clients remain explicit about the full PT family instead of exposing a
-# cosmetic desktop-equivalent path. Android and iOS only become connect-capable
-# after they own real native Tor/PT tunnel lifecycles and dynamic-exit proof.
+# Mobile clients own the full PT family, native lifecycle and dynamic exit
+# proof. The original entry profile and selected DNS remain captured throughout
+# preparation, VPN permission handoff, startup and cancellation.
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
-    "Tor bridges (obfs4 / meek / Snowflake / WebTunnel / Custom) are unavailable on Android",
-    "real native Tor + pluggable-transport VpnService dataplane",
-    "must not be approximated as SOCKS5",
+    "AndroidTorProfile.isTor(e.protocol)", "AndroidTorProfile.validate(e)",
+    'o.put("tor_policy",e.torPolicy)', 'o.put("tor_bridge",new JSONObject()',
 )
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidTorProfile.java",
+     "Libbox.routerCompileTorProfile", "Libbox.routerCompileProxyEntry",
+     "capturedExit.equals(AndroidStandardExitStore.snapshot(selected))",
+     '"Tor requires one owned runtime and one VPN interface."')
+need("android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java",
+     "Libbox.routerTorCreateProofWithPredecessor", "captured.run()",
+     "Libbox.routerStrategyDNSProof(server)", "captured.healthy()",
+     "captured.cancel()", "network.equals(owner.network())")
+need("android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
+     "Libbox.routerTorSetStateDirectory", "getNoBackupFilesDir()",
+     "torPhysicalNetwork = torPhysical", "capturedTor.prove()",
+     "Libbox.routerStrategyCloseService(commandServer)",
+     "Native Tor teardown remains unconfirmed; runtime ownership is retained.")
+need("android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java",
+     "showTorForm", "chooseTorEntryMode", "pendingEntryDigest", "pendingExitDigest",
+     "A captured node changed while Android permission was open. Select the path again.")
+need("android/test_android_runtime_contract.py", '"test_android_tor_profile.py"',
+     '"test_android_tor_form.py"', '"test_android_tor_session.py"',
+     '"test_android_start_layer_relay_lifecycle.py"')
+need("deploy/test_android_tor_pinned.py", "with_naive_outbound", "TestRouterTorAndroidGeneratedGraphs",
+     "all 348 captured graphs and 348 missing-engine controls")
 forbid(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     "Tor obfs4 bridge is unavailable on Android",

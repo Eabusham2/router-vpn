@@ -14,14 +14,14 @@ for marker in ['AndroidKillSwitchPolicy.SESSION_MARKER','put("strict_route", tru
     assert marker in direct, marker
 for marker in ['connectDirect(AndroidStandardExitStore.Entry exit','directBuilder.prepare(exit)','new Proxy(Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",1099))','proveExpectedPublicIp(exit.expectedPublicIp)','boolean stopped=!started||stopEmbeddedAndProve();','Public exit proof passed']:
     assert marker in runtime, marker
-for marker in ['Connect direct external exit','Router VPN WireGuard entry → external exit','HTTP CONNECT','HTTPS CONNECT + TLS','requestDirect(','runtime.connectDirect(exit,cb)','Always-on VPN plus ‘Block connections without VPN’','TLS server name / SNI for certificate verification']:
+for marker in ['Connect direct external exit','Connect via Router VPN entry → external exit','HTTP CONNECT','HTTPS CONNECT + TLS','requestDirect(','runtime.connectDirect(exit,cb)','Always-on VPN plus ‘Block connections without VPN’','Other hopped external exits currently use WireGuard','TLS server name / SNI for certificate verification']:
     assert marker in activity, marker
 # A stop request is not teardown proof. Both cancellation and failure must keep
 # ownership until the embedded engine reports a terminal state.
 assert runtime.count("boolean stopped=!started||stopEmbeddedAndProve();") == 2
 for marker in (
     "teardownInProgress=!stopped;",
-    "if(sessionStarted&&!suppressHome)",
+    "if(sessionStarted&&!suppressHome&&sameHomeOwner(tor,capturedHome))",
     "else if(stopped)",
     "runtime ownership retained",
     "if(!stopped)throw new IllegalStateException",
@@ -41,4 +41,20 @@ terminal = runtime.split("private static boolean terminal", 1)[1].split("private
 assert 'if(state==null)return false;' in terminal
 assert 'return "DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized);' in terminal
 assert 'callback.finished(true' not in runtime
+# Tor uses the same private store and custom-exit owner, with its complete
+# selected predecessor and native proof handle. It has no fabricated fixed IP.
+for marker in ('"tor",true', '"tor-bridge",true', 'AndroidTorProfile.validate(e)',
+               'tor_policy', 'tor_bridge'):
+    assert marker in store, f'Tor store capability or policy missing: {marker}'
+assert 'AndroidTorProfile.prepare(context, entryBundle, exit, entryMode)' in controller
+assert 'AndroidTorProfile.prepare(context, null, exit, "external")' in direct
+for marker in ('AndroidStandardExitStore.copy(exit)', 'capturedTorExit(capturedHome)',
+               'LayeredVpnService.torExitIP(torNativeSession,torExternalID)',
+               'AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed)'):
+    assert marker in runtime, f'Tor exact-owner adoption missing: {marker}'
+for marker in ('showTorForm(', '"Tor with bridges"', '"Snowflake"', '"WebTunnel"',
+               'pendingEntryDigest', 'pendingExitDigest', 'bridges.setSaveEnabled(false)',
+               'dialog.setOnDismissListener(ignored->bridges.setText(""))',
+               'Tor carries TCP; UDP and DoH3 DNS are rejected'):
+    assert marker in activity, f'Tor form or captured permission input missing: {marker}'
 print('Android custom standard-exit source contract OK')

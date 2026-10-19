@@ -56,7 +56,7 @@ import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 
 /** Embedded sing-box full-device Android tunnel. Mixed local-engine profiles are rejected before this service starts. */
-public final class LayeredVpnService extends VpnService implements PlatformInterface, CommandServerHandler {
+public final class LayeredVpnService extends VpnService implements PlatformInterface, CommandServerHandler, AndroidStartLayerRelay.SocketProtector {
     static final String ACTION_START = "com.eabusham.routervpn.LAYERED_START";
     static final String ACTION_STOP = "com.eabusham.routervpn.LAYERED_STOP";
     static final String EXTRA_SESSION_ID = "session_id";
@@ -122,6 +122,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }};
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
+    private volatile AndroidTorSession torSession;
+    private volatile boolean torOwner;
+    private volatile Network torPhysicalNetwork;
+    private final java.util.concurrent.atomic.AtomicLong lifecycle = new java.util.concurrent.atomic.AtomicLong();
     private static volatile java.lang.ref.WeakReference<LayeredVpnService> currentService=new java.lang.ref.WeakReference<>(null);
     private final android.os.Handler executionHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private volatile String executionNetwork="";
@@ -144,7 +148,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             return response;
         }
     }
-    private void cancelMultihopComparison(){AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    static String torProofJSON(String sessionID, String externalID) throws Exception {
+        LayeredVpnService service = currentService.get();
+        AndroidTorSession captured = service == null ? null : service.torSession;
+        if (captured == null || !"UP".equals(service.state) || service.explicitStop) throw new IllegalStateException("The captured Tor VPN proof is unavailable.");
+        return captured.result(sessionID, externalID);
+    }
+    static String torExitIP(String sessionID, String externalID) throws Exception {
+        return new JSONObject(torProofJSON(sessionID, externalID)).getString("ip");
+    }
+    private void cancelMultihopComparison(){AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -156,9 +169,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         java.util.Collections.sort(values);return values.toString();
     }
     private final Runnable executionWatch=new Runnable(){public void run(){
-        io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan==null&&hopMeasurement==null)return;
-        if(!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())){
-            cancelMultihopComparison();executor.execute(()->shutdown("FAILED","Multihop network or server lease changed; reconnect to compare again."));return;
+        io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;if(plan==null&&hopMeasurement==null&&tor==null)return;
+        if(!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())){
+            cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor)return;shutdown("FAILED",tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
         }
         executionHandler.postDelayed(this,500);
     }};
@@ -184,8 +197,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         String action = intent == null ? "" : intent.getAction();
         if (ACTION_STOP.equals(action)) {
-            cancelMultihopComparison();
+            lifecycle.incrementAndGet();
             explicitStop = true;
+            cancelMultihopComparison();
             final long command = intent.getLongExtra(AndroidServiceStopConfirmation.EXTRA_COMMAND, 0L);
             executor.execute(() -> {
                 shutdown("DOWN", "");
@@ -199,17 +213,19 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         startForeground(NOTIFICATION_ID, buildNotification("Starting layered VPN…"));
         final String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
         final String modeId = intent.getStringExtra(EXTRA_MODE_ID);
+        final long generation = lifecycle.incrementAndGet();
         explicitStop = false;
-        executor.execute(() -> startLayered(sessionId, modeId));
+        executor.execute(() -> startLayered(sessionId, modeId, generation));
         return Service.START_NOT_STICKY;
     }
 
-    private void startLayered(String sessionId, String modeId) {
+    private void startLayered(String sessionId, String modeId, long generation) {
         synchronized (lock) {
+            if (generation != lifecycle.get() || explicitStop) return;
             if ("STARTING".equals(state) || "UP".equals(state)) return;
+            if (torOwner) throw new IllegalStateException("The previous native Tor owner has not finished teardown.");
             publish("STARTING", modeId, "");
         }
-        AndroidStartLayerRelay pendingRelay = null;
         try {
             if (VpnService.prepare(this) != null) throw new RevokedException("Android VPN permission is missing or was revoked.");
             if (!safeToken(sessionId) || !safeToken(modeId)) throw new IllegalArgumentException("Invalid layered session metadata.");
@@ -228,6 +244,15 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             File configFile = new File(session, "sing-box.json").getCanonicalFile();
             if (!configFile.getParentFile().equals(session) || !configFile.isFile()) throw new IllegalStateException("Layered session has no sing-box.json.");
             String config = new String(readLimited(configFile, MAX_CONFIG), java.nio.charset.StandardCharsets.UTF_8);
+            File torFile = new File(session, AndroidTorProfile.SESSION_FILE).getCanonicalFile();
+            JSONObject torMetadata = null;
+            if (torFile.exists()) {
+                if (!torFile.isFile() || !torFile.getParentFile().equals(session)) throw new IllegalStateException("Tor metadata has no private session owner.");
+                torMetadata = AndroidTorProfile.session(config, AndroidTorProfile.strictText(readLimited(torFile, AndroidTorProfile.MAX_METADATA)), sessionId, modeId);
+            } else if ("standard-tor".equals(modeId) || "standard-tor-bridge".equals(modeId)
+                    || "standard-direct-tor".equals(modeId) || "standard-direct-tor-bridge".equals(modeId)) {
+                throw new IllegalStateException("The requested Tor VPN has no captured proof metadata.");
+            }
 
             File base = new File(getFilesDir(), "libbox-base");
             File temp = new File(getCacheDir(), "libbox-temp");
@@ -240,6 +265,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             setup.setLogMaxLines(2000);
             setup.setDebug(false);
             Libbox.setup(setup);
+            if (torMetadata != null) {
+                File noBackup = getNoBackupFilesDir().getCanonicalFile();
+                if (!noBackup.isDirectory() && !noBackup.mkdirs()) throw new IllegalStateException("Cannot create private Tor state storage.");
+                Libbox.routerTorSetStateDirectory(new File(noBackup, "routervpn-tor").getAbsolutePath());
+            }
             // The immutable factory owns no peer or network. Each compiled PQ
             // endpoint creates its own protocol under this service's VPN owner.
             RouterPQNative.install();
@@ -253,6 +283,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
             }
             if(executionFile.isFile()){
+                if (torMetadata != null) throw new IllegalStateException("Tor cannot adopt a second multihop execution owner.");
                 if(!modeId.startsWith("multihop-")||!executionFile.getParentFile().equals(session))throw new IllegalStateException("Unowned multihop metadata.");
                 String metadata=new String(readLimited(executionFile,16384),java.nio.charset.StandardCharsets.UTF_8);
                 hopMetadata=metadata;
@@ -286,14 +317,15 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 capturedMTU=new String(readLimited(mtuFile,256*1024),java.nio.charset.StandardCharsets.UTF_8);
             }
             Libbox.checkConfig(config);
+            String torNetwork = torMetadata == null ? "" : executionNetworkIdentity();
+            if (torMetadata != null && (torNetwork.isEmpty() || "[]".equals(torNetwork))) throw new IllegalStateException("Tor requires the captured underlying network before startup.");
+            Network torPhysical = torMetadata == null ? null : connectivity.getActiveNetwork();
+            if (torMetadata != null && (torPhysical == null || connectivity.getNetworkCapabilities(torPhysical) == null
+                    || connectivity.getNetworkCapabilities(torPhysical).hasTransport(NetworkCapabilities.TRANSPORT_VPN))) throw new IllegalStateException("Tor requires an owned physical network before the VPN starts.");
 
-            pendingRelay = AndroidStartLayerRelay.startIfConfigured(this, session, message -> executor.execute(() -> {
-                if (!explicitStop) shutdown("FAILED", message);
-            }));
             synchronized (lock) {
+                if (generation != lifecycle.get() || explicitStop) throw new IllegalStateException("VPN launch was cancelled before native startup.");
                 closeCoreLocked();
-                startLayerRelay = pendingRelay;
-                pendingRelay = null;
                 activeSession = session;
                 activeMode = modeId;
                 activeConfig = config;
@@ -302,6 +334,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     if(mtuSession==owner)shutdown("FAILED","MTU transaction could not retain the verified VPN interface.");
                 }));
                 executionController=preparedExecution;executionProved=false;
+                torPhysicalNetwork = torPhysical;
+                if(torMetadata!=null)executionNetwork=torNetwork;
+                torOwner = torMetadata != null;
+                startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session, message -> executor.execute(() -> {
+                    if (!explicitStop && activeSession == session) shutdown("FAILED", message);
+                }));
+                if(startLayerRelay!=null)startLayerRelay.start();
                 commandServer = new CommandServer(this, this);
                 commandServer.start();
                 commandServer.startOrReloadService(config, new OverrideOptions());
@@ -311,6 +350,24 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
             io.nekohasekai.libbox.RouterMultihop ownedExecution=executionController;
             CommandServer ownedServer=commandServer;
+            if (torMetadata != null) {
+                final CommandServer capturedServer = ownedServer;
+                final AndroidTorSession capturedTor = new AndroidTorSession(torMetadata, capturedServer, new AndroidTorSession.Owner() {
+                    @Override public boolean current(AndroidTorSession candidate, CommandServer nativeServer) {
+                        return torSession == candidate && commandServer == nativeServer && generation == lifecycle.get() && !explicitStop
+                                && activeSession != null && sessionId.equals(activeSession.getName());
+                    }
+                    @Override public String network() { return executionNetworkIdentity(); }
+                });
+                synchronized (lock) {
+                    torSession = capturedTor;
+                    if (generation != lifecycle.get() || explicitStop || !torNetwork.equals(executionNetworkIdentity())) { capturedTor.cancel(); throw new IllegalStateException("Tor VPN launch was cancelled or its captured network changed."); }
+                }
+                executionNetwork = torNetwork;
+                executionHandler.post(executionWatch);
+                updateForeground("Proving Tor circuit and selected DNS…");
+                capturedTor.prove();
+            }
             if(hopMetadata!=null){
                 executionNetwork=executionNetworkIdentity();
                 if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
@@ -321,7 +378,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
             long performanceServices = Libbox.routerStartPerformance(ownedServer);
             synchronized(lock){
-                if(explicitStop||commandServer!=ownedServer||executionController!=ownedExecution)throw new IllegalStateException("VPN ownership changed during multihop comparison.");
+                if(explicitStop||generation!=lifecycle.get()||commandServer!=ownedServer||executionController!=ownedExecution
+                        ||torSession!=null&&!torSession.healthy())throw new IllegalStateException("VPN ownership changed during path proof.");
                 performanceActive = performanceServices > 0;
                 executionProved=true;publish("UP",modeId,"");
             }
@@ -333,12 +391,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         } catch (Throwable error) {
             Log.e(TAG, "Layered VPN start failed", error);
             shutdown("FAILED", safeMessage(error));
-        } finally {
-            if (pendingRelay != null) pendingRelay.close();
         }
     }
 
     @Override public void onRevoke() {
+        lifecycle.incrementAndGet();
         cancelMultihopComparison();
         explicitStop = false;
         executor.execute(() -> shutdown("REVOKED", "Android revoked VPN permission."));
@@ -346,17 +403,24 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     @Override public void onDestroy() {
+        lifecycle.incrementAndGet();
         cancelMultihopComparison();
-        if(currentService.get()==this)currentService.clear();
         String terminal = state;
         String mode = activeMode;
         File session;
         synchronized (lock) {
             session = activeSession;
+            try { closeCoreLocked(); }
+            catch (RuntimeException pending) {
+                publish("STOPPING", mode, "VPN teardown remains unconfirmed; runtime ownership is retained.");
+                executor.shutdown();
+                super.onDestroy();
+                return;
+            }
             activeSession = null;
-            closeCoreLocked();
             activeConfig = "";
         }
+        if(currentService.get()==this)currentService.clear();
         if (!explicitStop && ("UP".equals(terminal) || "STARTING".equals(terminal))) {
             publish("FAILED", mode, "Layered VPN service stopped unexpectedly.");
         }
@@ -385,6 +449,32 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void closeCoreLocked() {
+        AndroidTorSession capturedTor = torSession;
+        if(capturedTor!=null)capturedTor.cancel();
+        if(startLayerRelay!=null){
+            try{startLayerRelay.close();}
+            catch(RuntimeException pending){
+                publish("STOPPING",activeMode,"Start Layer teardown remains unconfirmed; runtime ownership is retained.");
+                throw new IllegalStateException("Start Layer teardown has not completed.");
+            }
+        }
+        if (torOwner) {
+            try {
+                // Checked native close keeps the Box owned on timeout. A stop
+                // acknowledgment and a new graph must wait for its real drain.
+                if (commandServer != null) {
+                    Libbox.routerStrategyCloseService(commandServer);
+                    commandServer.close();
+                }
+            } catch (Throwable pending) {
+                publish("STOPPING", activeMode, "Native Tor teardown remains unconfirmed; runtime ownership is retained.");
+                throw new IllegalStateException("Native Tor teardown has not completed.");
+            }
+            commandServer = null;
+            torSession = null;
+            torOwner = false;
+            torPhysicalNetwork = null;
+        }
         AndroidMTUSession oldMTU=mtuSession;
         if(oldMTU!=null){
             oldMTU.networkChanged();
@@ -405,10 +495,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             try { commandServer.close(); } catch (Throwable ignored) { }
             commandServer = null;
         }
-        if (startLayerRelay != null) {
-            try { startLayerRelay.close(); } catch (Throwable ignored) { }
-            startLayerRelay = null;
-        }
+        startLayerRelay = null;
         synchronized(tunAccess){
             if (tunDescriptor != null) {try { tunDescriptor.close(); } catch (Throwable ignored) { } tunDescriptor=null;}
         }
@@ -428,6 +515,27 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     @Override public boolean usePlatformAutoDetectInterfaceControl() { return true; }
     @Override public void autoDetectInterfaceControl(int fd) throws Exception {
         if (!protect(fd)) throw new IllegalStateException("Android refused to protect an outbound socket from the VPN loop.");
+        if(torOwner){
+            Network captured=torPhysicalNetwork;requireTorNetwork(captured);
+            // fromFd duplicates the borrowed descriptor. Closing this wrapper
+            // cannot close the sole native socket; binding applies to both FDs.
+            try(ParcelFileDescriptor borrowed=ParcelFileDescriptor.fromFd(fd)){captured.bindSocket(borrowed.getFileDescriptor());}
+            requireTorNetwork(captured);
+        }
+    }
+
+    @Override public void protectRelaySocket(java.net.Socket socket)throws Exception{
+        if(!protect(socket))throw new IllegalStateException("Android refused the protected entry socket.");
+        if(torOwner){Network captured=torPhysicalNetwork;requireTorNetwork(captured);captured.bindSocket(socket);requireTorNetwork(captured);}
+    }
+    @Override public void protectRelaySocket(java.net.DatagramSocket socket)throws Exception{
+        if(!protect(socket))throw new IllegalStateException("Android refused the protected entry socket.");
+        if(torOwner){Network captured=torPhysicalNetwork;requireTorNetwork(captured);captured.bindSocket(socket);requireTorNetwork(captured);}
+    }
+    private void requireTorNetwork(Network captured){
+        NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);
+        if(explicitStop||!torOwner||captured!=torPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                ||!executionNetwork.equals(executionNetworkIdentity()))throw new IllegalStateException("The captured Tor physical network changed; reconnect before opening traffic.");
     }
 
     @Override public int openTun(TunOptions options) throws Exception {
@@ -557,6 +665,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
 
     private void pushDefaultInterface() {
+        AndroidTorSession tor=torSession;
+        if(tor!=null&&!executionNetwork.equals(executionNetworkIdentity())){
+            tor.cancel();executor.execute(()->{if(torSession==tor)shutdown("FAILED","The captured Tor network changed; reconnect to prove the path.");});return;
+        }
         AndroidMTUSession mtu=mtuSession;
         if(mtu!=null){
             // Own VPN replacement is not a physical-interface transition.
@@ -663,7 +775,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
-                if(executionController!=null||hopMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
+                if(torOwner||executionController!=null||hopMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {

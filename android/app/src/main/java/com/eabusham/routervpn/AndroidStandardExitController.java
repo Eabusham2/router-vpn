@@ -27,6 +27,15 @@ final class AndroidStandardExitController {
     AndroidStandardExitController(Context context){this.context=context.getApplicationContext();}
 
     NativeSingBoxController.SessionInfo prepare(File entryBundle,AndroidStandardExitStore.Entry exit)throws Exception{
+        return prepare(entryBundle, exit, "wg");
+    }
+
+    NativeSingBoxController.SessionInfo prepare(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode)throws Exception{
+        if (AndroidTorProfile.isTor(exit.protocol)) {
+            if (entryBundle == null) throw new IllegalArgumentException("Choose the captured Router VPN entry.");
+            return AndroidTorProfile.prepare(context, entryBundle, exit, entryMode);
+        }
+        if (!"wg".equals(entryMode)) throw new IllegalArgumentException("This external exit currently requires its WireGuard entry.");
         if(entryBundle==null)throw new IllegalArgumentException("Choose a Router VPN WireGuard entry node.");
         AndroidStandardExitStore.validate(exit);
         JSONObject entry=loadBundle(entryBundle);AndroidNodeStore.validateBundle(entry);WgConfig wg=parseWireGuard(entry);

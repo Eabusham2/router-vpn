@@ -63,9 +63,8 @@ require(
 
 # Native Start Layer is a release boundary, not a settings-only feature.
 # Android owns AES+XOR through a VpnService-protected relay and must not release
-# engine ownership until teardown is proved. Apple deliberately supports only
-# the authenticated AES layer until PacketTunnel owns an equivalent protected
-# whitening relay; AES+XOR must remain explicitly fail-closed there.
+# engine ownership until teardown is proved. Apple owns authenticated AES+XOR
+# through its registered native endpoint in the existing PacketTunnel graph.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStartLayer.java",
     'AES_XOR = "aes-256-gcm+xor-whitening"',
@@ -90,7 +89,8 @@ forbid(
 require(
     "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
     "private AndroidStartLayerRelay startLayerRelay",
-    "AndroidStartLayerRelay.startIfConfigured(this, session",
+    "startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session",
+    "if(startLayerRelay!=null)startLayerRelay.start();",
     "startLayerRelay.close()",
     "startLayerRelay = null",
 )

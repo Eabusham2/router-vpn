@@ -299,7 +299,7 @@ final class NativeSingBoxController {
         return nativeWireGuardFamily(mode) || nativePQFamily(mode);
     }
 
-    private static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
+    static String compileStandaloneProfile(JSONObject bundle, JSONObject profile, String modeId) throws Exception {
         if (AndroidNativeMAXProfile.isMode(modeId)) return AndroidNativeMAXProfile.compile(bundle, profile, modeId);
         if (nativePQFamily(modeId)) {
             // The captured generated assets are data for the pinned compiler.

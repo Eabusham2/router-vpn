@@ -8,14 +8,20 @@ import android.os.Bundle;
 import android.text.InputType;
 import android.view.View;
 import android.widget.Button;
+import android.widget.ArrayAdapter;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
+import android.widget.Spinner;
 import android.widget.TextView;
 import android.widget.Toast;
 
 import java.util.ArrayList;
 import java.util.List;
+import org.json.JSONArray;
+import org.json.JSONObject;
+import java.nio.charset.StandardCharsets;
 
 /** Native custom standard-exit management and connection screen. */
 public final class StandardExitActivity extends Activity {
@@ -31,6 +37,7 @@ public final class StandardExitActivity extends Activity {
     private AndroidNodeStore.Node pendingEntry;
     private AndroidStandardExitStore.Entry pendingExit;
     private boolean pendingDirect;
+    private String pendingEntryMode="wg",pendingEntryDigest="",pendingExitDigest="";
     private boolean busy;
     private boolean requestedExitHandled;
 
@@ -54,12 +61,18 @@ public final class StandardExitActivity extends Activity {
         if(pendingExit!=null)out.putString(STATE_PENDING_EXIT,pendingExit.id);
         out.putBoolean(STATE_PENDING_DIRECT,pendingDirect);
         out.putBoolean(STATE_REQUESTED_HANDLED,requestedExitHandled);
+        out.putString("pending_entry_mode",pendingEntryMode);
+        out.putString("pending_entry_digest",pendingEntryDigest);
+        out.putString("pending_exit_digest",pendingExitDigest);
     }
 
     private void restorePending(Bundle state){
         if(state==null)return;
         pendingDirect=state.getBoolean(STATE_PENDING_DIRECT,false);
         requestedExitHandled=state.getBoolean(STATE_REQUESTED_HANDLED,false);
+        pendingEntryMode=state.getString("pending_entry_mode","wg");
+        pendingEntryDigest=state.getString("pending_entry_digest","");
+        pendingExitDigest=state.getString("pending_exit_digest","");
         String entryId=state.getString(STATE_PENDING_ENTRY,""),exitId=state.getString(STATE_PENDING_EXIT,"");
         try{if(!entryId.isEmpty())for(AndroidNodeStore.Node n:nodeStore.list())if(entryId.equals(n.id)){pendingEntry=n;break;}}catch(Exception ignored){}
         try{if(!exitId.isEmpty())pendingExit=exitStore.get(exitId);}catch(Exception ignored){}
@@ -78,13 +91,17 @@ public final class StandardExitActivity extends Activity {
         int pad = dp(18);
         LinearLayout root = new LinearLayout(this); root.setOrientation(LinearLayout.VERTICAL); root.setPadding(pad,pad,pad,pad);
         root.addView(text("Custom Standard Exits",28,true));
-        root.addView(text("Save a private non-Router-VPN exit, then either connect to it directly or chain Router VPN WireGuard entry → external exit. Connected is withheld until the exact expected public exit IP is observed.",14,false), margins(0,dp(4),0,dp(12)));
+        root.addView(text("Save a private external exit and connect directly or through a Router VPN entry. Tor can use any supported encrypted entry mode and proves its captured circuit and DNS before Connected. Other custom exits prove their expected public IP.",14,false), margins(0,dp(4),0,dp(12)));
         statusView=text("Disconnected",16,true); root.addView(statusView,margins(0,0,0,dp(10)));
         addButton=button("Add custom exit"); addButton.setOnClickListener(v->chooseProtocol()); root.addView(addButton);
         Button manage=button("Manage saved exits"); manage.setOnClickListener(v->showSavedExits(false,false)); root.addView(manage,margins(0,dp(8),0,0));
         directButton=button("Connect direct external exit"); directButton.setOnClickListener(v->showSavedExits(true,true)); root.addView(directButton,margins(0,dp(8),0,0));
-        hoppedButton=button("Connect via Router VPN WireGuard entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
-        Button disconnect=button("Disconnect custom exit"); disconnect.setOnClickListener(v->{runtime.disconnect();busy=false;pendingDirect=false;pendingEntry=null;pendingExit=null;statusView.setText("Disconnected");refresh();}); root.addView(disconnect,margins(0,dp(8),0,0));
+        hoppedButton=button("Connect via Router VPN entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
+        Button disconnect=button("Disconnect custom exit"); disconnect.setOnClickListener(v->{
+            clearPending();statusView.setText("Disconnecting; waiting for the captured runtime to stop…");disconnect.setEnabled(false);
+            new Thread(()->{String failure="";try{runtime.disconnect();}catch(Exception error){failure="Teardown is not confirmed. Runtime ownership is retained; retry Disconnect.";}String result=failure;
+                runOnUiThread(()->{if(isFinishing())return;disconnect.setEnabled(true);busy=false;refresh();if(!result.isEmpty())statusView.setText(result);});},"routervpn-exit-disconnect").start();
+        }); root.addView(disconnect,margins(0,dp(8),0,0));
         Button vpnSettings=button("Open Android VPN settings / lockdown"); vpnSettings.setOnClickListener(v->startActivity(new Intent(android.provider.Settings.ACTION_VPN_SETTINGS))); root.addView(vpnSettings,margins(0,dp(8),0,0));
         listView=text("",14,false); root.addView(listView,margins(0,dp(16),0,0));
         root.addView(text(capabilityText(),13,false),margins(0,dp(16),0,dp(18)));
@@ -100,25 +117,25 @@ public final class StandardExitActivity extends Activity {
             if(addButton!=null)addButton.setEnabled(!mutationBlocked);if(directButton!=null)directButton.setEnabled(!mutationBlocked);if(hoppedButton!=null)hoppedButton.setEnabled(!mutationBlocked);
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
             StringBuilder out=new StringBuilder("Saved standard exits: ").append(exits.size()).append('/').append(AndroidStandardExitStore.MAX_EXITS);
-            for(AndroidStandardExitStore.Entry e:exits) out.append("\n• ").append(e.name).append(" — ").append(e.protocol).append(" — ").append(e.server).append(':').append(e.serverPort).append(" → expected ").append(e.expectedPublicIp);
+            for(AndroidStandardExitStore.Entry e:exits) out.append("\n• ").append(e.name).append(" — ").append(exitSummary(e));
             listView.setText(out.toString());
             if("external".equals(home.logicalMode)&&home.connected){String actual=AndroidHomeStateStore.actualExitForCurrentSession(this);statusView.setText("Connected • "+home.activeExternalName+" • "+home.activeExternalProtocol+" • exit "+(actual.isEmpty()?"unproven":actual));}
             else if(busy)statusView.setText("Custom-exit connection is in progress…");
-            else {String state=singBox.getState();if("UP".equals(state)&&singBox.getMode().startsWith("standard-"))statusView.setText("Custom-exit VPN engine UP — unified session proof is being reconciled.");else statusView.setText("Disconnected");}
+            else {String state=singBox.getState();if("UP".equals(state)&&singBox.getMode().startsWith("standard-"))statusView.setText("Custom-exit VPN engine UP — unified session proof is being reconciled.");else if(mutationBlocked)statusView.setText("VPN transition or teardown is pending; runtime ownership is retained.");else statusView.setText("Disconnected");}
         } catch(Exception e){listView.setText("Custom exit store unavailable: "+safe(e));}
     }
 
     private String capabilityText() {
         StringBuilder s=new StringBuilder("Supported now:");
         for(AndroidStandardExitStore.Capability c:AndroidStandardExitStore.capabilities()) s.append("\n").append(c.supported?"✓ ":"— ").append(c.protocol).append(c.supported?"":" — "+c.reason);
-        s.append("\n\nHTTP is HTTP CONNECT. HTTPS is HTTP CONNECT protected by certificate-verified TLS/SNI. Direct custom exits require Android Always-on VPN plus ‘Block connections without VPN’; Router VPN refuses to start a direct external graph without that strict system lockdown. Hopped exits use the linked Router VPN WireGuard entry policy. Secrets stay in Android app-private storage and are never shown in this list. Custom exit servers and DNS endpoints require literal IPs so setup cannot leak pre-tunnel DNS.");
+        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Direct custom exits and every Tor path require Android Always-on VPN plus ‘Block connections without VPN’. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Tor after a Router VPN entry retains that exact mode and also proves the entry's private authenticated identity. Other hopped external exits currently use WireGuard. Secrets remain in app-private storage. Custom exit servers and DNS endpoints require literal IPs; Tor transport hostnames are resolved only through captured protected networking.");
         return s.toString();
     }
 
     private void chooseProtocol() {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding or editing custom exits.");return;}
-        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN"};
-        String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"};
+        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN","Tor","Tor with bridges"};
+        String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"};
         new AlertDialog.Builder(this).setTitle("Add custom exit protocol").setItems(protocols,(d,w)->{
             showAddForm(ids[w]);
         }).setNegativeButton("Cancel",null).show();
@@ -127,6 +144,7 @@ public final class StandardExitActivity extends Activity {
     private void showAddForm(String protocol) {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding a custom exit.");return;}
         if("openvpn".equals(protocol)){showOpenVPNForm();return;}
+        if(AndroidTorProfile.isTor(protocol)){showTorForm(protocol,null);return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
         EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
         port.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(name);form.addView(server);form.addView(port);form.addView(expected);
@@ -148,6 +166,56 @@ public final class StandardExitActivity extends Activity {
             }catch(Exception e){toast("Save failed: "+safe(e));}
         }).setNegativeButton("Cancel",null).show();
     }
+
+    private void showTorForm(String protocol, AndroidStandardExitStore.Entry saved) {
+        if(activeOrTransitioning()){toast("Disconnect before changing a Tor node.");return;}
+        final JSONObject policy;
+        try{policy=AndroidTorProfile.editorPolicy(saved);}catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
+        EditText name=field("Display name",false);if(saved!=null)name.setText(saved.name);form.addView(name);
+        Spinner transport=choice(new String[]{"obfs4","meek","Snowflake","WebTunnel","Custom bridge block"});
+        EditText bridges=field("Paste bridge lines, one per line",false);bridges.setSingleLine(false);bridges.setMinLines(5);bridges.setMaxLines(12);
+        bridges.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        bridges.setSaveEnabled(false);if(android.os.Build.VERSION.SDK_INT>=26)bridges.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        if("tor-bridge".equals(protocol)){
+            form.addView(text("Bridge transport",14,true));form.addView(transport);form.addView(bridges);
+            if(saved!=null){for(int i=0;i<AndroidTorProfile.TRANSPORTS.length;i++)if(AndroidTorProfile.TRANSPORTS[i].equals(saved.torTransport))transport.setSelection(i);bridges.setText(android.text.TextUtils.join("\n",saved.torBridges));}
+            form.addView(text("Paste the complete supplied bridge block. Custom accepts supported bridge lines; it cannot run transport programs or scripts.",13,false));
+        }
+        Spinner dns=choice(new String[]{"Rescue DoH (Cloudflare)","Custom TCP DNS","Custom DoT","Custom DoH"});
+        String protocolDNS=policy.optString("dns_protocol",policy.optString("dns_mode","rescue"));
+        dns.setSelection("tcp".equals(protocolDNS)?1:("dot".equals(protocolDNS)||"tls".equals(protocolDNS))?2:("doh".equals(protocolDNS)||"https".equals(protocolDNS))?3:0);
+        form.addView(text("DNS through the Tor circuit",14,true));form.addView(dns);
+        EditText dnsHost=field("Custom DNS literal IP",false),dnsPort=field("Custom DNS port (blank uses protocol default)",false),dnsName=field("DoT / DoH certificate server name",false),dnsPath=field("DoH path (default /dns-query)",false);
+        dnsHost.setText(policy.optString("dns_host",""));int savedPort=policy.optInt("dns_port",0);if(savedPort!=0)dnsPort.setText(Integer.toString(savedPort));dnsPort.setInputType(InputType.TYPE_CLASS_NUMBER);
+        dnsName.setText(policy.optString("dns_server_name",""));dnsPath.setText(policy.optString("dns_path",""));
+        form.addView(dnsHost);form.addView(dnsPort);form.addView(dnsName);form.addView(dnsPath);
+        dns.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){dnsHost.setEnabled(position>0);dnsPort.setEnabled(position>0);dnsName.setEnabled(position>1);dnsPath.setEnabled(position==3);}});
+        Spinner ipv6=choice(new String[]{"IPv6 off","IPv6 automatic","IPv6 on"});String ipPolicy=policy.optString("ipv6_mode","off");ipv6.setSelection("auto".equals(ipPolicy)?1:"on".equals(ipPolicy)?2:0);
+        form.addView(text("IPv6",14,true));form.addView(ipv6);
+        CheckBox blockLAN=new CheckBox(this);blockLAN.setText("Block private LAN ranges");blockLAN.setChecked(!policy.optBoolean("home_lan_access",false));form.addView(blockLAN);
+        EditText lan=field("Private LAN CIDRs to block, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
+        EditText mtu=field("Manual interface MTU, 1280–9000 (blank uses automatic)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if("manual".equals(policy.optString("mtu_policy"))||"fixed".equals(policy.optString("mtu_policy")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
+        form.addView(text("Tor uses TCP. UDP, DoH3 and private Home DNS are unsupported and are never silently replaced. Bootstrap and bridge traffic use the captured protected network. Every Tor path requires Android Always-on VPN and Block connections without VPN.",13,false));
+        TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle(saved==null?"Add "+protocol:"Edit "+saved.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
+            try{
+                AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();if(saved!=null)entry.id=saved.id;entry.name=name.getText().toString();entry.protocol=protocol;
+                if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
+                int selectedDNS=dns.getSelectedItemPosition();JSONObject p=new JSONObject().put("dns_mode",selectedDNS==0?"rescue":"custom");
+                if(selectedDNS!=0){p.put("dns_protocol",new String[]{"","tcp","dot","doh"}[selectedDNS]).put("dns_host",dnsHost.getText().toString().trim());String portText=dnsPort.getText().toString().trim();p.put("dns_port",portText.isEmpty()?0:Integer.parseInt(portText));if(selectedDNS>1)p.put("dns_server_name",dnsName.getText().toString().trim());if(selectedDNS==3)p.put("dns_path",dnsPath.getText().toString().trim());}
+                p.put("ipv6_mode",new String[]{"off","auto","on"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
+                String mtuText=mtu.getText().toString().trim();p.put("mtu_policy",mtuText.isEmpty()?"auto":"manual");if(!mtuText.isEmpty())p.put("manual_mtu",Integer.parseInt(mtuText));entry.torPolicy=p;
+                exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
+            }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges and MTU. The saved profile was not changed.");}
+        }));
+        dialog.setOnDismissListener(ignored->bridges.setText(""));dialog.show();
+    }
+
+    private Spinner choice(String[] values){Spinner spinner=new Spinner(this);ArrayAdapter<String> adapter=new ArrayAdapter<>(this,android.R.layout.simple_spinner_item,values);adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);spinner.setAdapter(adapter);return spinner;}
+    private static String exitSummary(AndroidStandardExitStore.Entry entry){return AndroidTorProfile.isTor(entry.protocol)?AndroidTorProfile.summary(entry):entry.protocol+" — "+entry.server+":"+entry.serverPort+" → expected "+entry.expectedPublicIp;}
 
     private void showOpenVPNForm() {
         if(activeOrTransitioning()){toast("Disconnect before adding an OpenVPN exit.");return;}
@@ -190,50 +258,78 @@ public final class StandardExitActivity extends Activity {
     private void showSavedExits(boolean connect, boolean direct) {
         try {
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
-            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2 or OpenVPN first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
-            String[] labels=new String[exits.size()];for(int i=0;i<exits.size();i++){AndroidStandardExitStore.Entry e=exits.get(i);labels[i]=e.name+" — "+e.protocol+"\n"+e.server+":"+e.serverPort+" → "+e.expectedPublicIp;}
+            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add Tor, Tor bridges, WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2 or OpenVPN first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
+            String[] labels=new String[exits.size()];for(int i=0;i<exits.size();i++){AndroidStandardExitStore.Entry e=exits.get(i);labels[i]=e.name+"\n"+exitSummary(e);}
             String title=!connect?"Manage custom exits":direct?"Choose direct external exit":"Choose external exit after Router VPN entry";
             new AlertDialog.Builder(this).setTitle(title).setItems(labels,(d,w)->{if(connect){if(direct)requestDirect(exits.get(w));else chooseEntry(exits.get(w));}else showExitActions(exits.get(w));}).setPositiveButton(connect?"Cancel":"Add new",(d,w)->{if(!connect)chooseProtocol();}).setNegativeButton("Close",null).show();
         } catch(Exception e){toast(safe(e));}
     }
 
     private void showExitActions(AndroidStandardExitStore.Entry e) {
-        String[] actions={"Connect direct","Connect through Router VPN entry","Delete"};
-        new AlertDialog.Builder(this).setTitle(e.name+" — "+e.protocol).setMessage("Server: "+e.server+":"+e.serverPort+"\nExpected public IP: "+e.expectedPublicIp+"\nCredentials are stored privately and are not displayed.")
-                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+        boolean tor=AndroidTorProfile.isTor(e.protocol);
+        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
+        new AlertDialog.Builder(this).setCustomTitle(choiceHeader(e.name+" — "+e.protocol,exitSummary(e)+"\nCredentials and bridge blocks remain private."))
+                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        pendingEntry=null;pendingExit=exit;pendingDirect=true;
+        try{capturePending(null,exit,true,"external");}catch(Exception invalid){toast("The selected external node changed or could not be captured.");return;}
         Intent permission=VpnService.prepare(this);
         if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
 
     private void chooseEntry(AndroidStandardExitStore.Entry exit) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        try{List<AndroidNodeStore.Node> nodes=nodeStore.list();if(nodes.isEmpty()){dialog("Router VPN entry required","Link at least one Router VPN node first; the entry must contain standard WireGuard.");return;}String[]labels=new String[nodes.size()];for(int i=0;i<nodes.size();i++)labels[i]=nodes.get(i).name+(nodes.get(i).endpoint.isEmpty()?"":" — "+nodes.get(i).endpoint);new AlertDialog.Builder(this).setTitle("Choose Router VPN WireGuard entry").setMessage("Path: this device → Router VPN WireGuard entry → "+exit.name+" → Internet").setItems(labels,(d,w)->requestConnect(nodes.get(w),exit)).setNegativeButton("Cancel",null).show();}catch(Exception e){toast(safe(e));}
+        try{List<AndroidNodeStore.Node> nodes=nodeStore.list();if(nodes.isEmpty()){dialog("Router VPN entry required","Link a Router VPN node first. Tor can use its exact supported encrypted mode; other external exits require WireGuard.");return;}String[]labels=new String[nodes.size()];for(int i=0;i<nodes.size();i++)labels[i]=nodes.get(i).name+(nodes.get(i).endpoint.isEmpty()?"":" — "+nodes.get(i).endpoint);new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Choose Router VPN entry","Path: this device → Router VPN entry → "+exit.name+" → Internet")).setItems(labels,(d,w)->{if(AndroidTorProfile.isTor(exit.protocol))chooseTorEntryMode(nodes.get(w),exit);else requestConnect(nodes.get(w),exit,"wg");}).setNegativeButton("Cancel",null).show();}catch(Exception e){toast(safe(e));}
     }
 
-    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit) {
-        if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        pendingEntry=entry;pendingExit=exit;pendingDirect=false;Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
+    private void chooseTorEntryMode(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit){
+        if(activeOrTransitioning()){toast("Disconnect before selecting the Tor entry.");return;}
+        try{
+            JSONObject bundle=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE)));AndroidNodeStore.validateBundle(bundle);
+            JSONObject profiles=bundle.getJSONObject("profiles");JSONArray modes=bundle.getJSONArray("modes");List<String> ids=new ArrayList<>(),labels=new ArrayList<>();
+            for(int i=0;i<modes.length();i++){JSONObject mode=modes.getJSONObject(i);String id=mode.optString("id");if(NativeSingBoxController.nativeMultihopEntry(id)&&profiles.optJSONObject(id)!=null&&!ids.contains(id)){ids.add(id);labels.add(mode.optString("name",id)+" ["+id+"]");}}
+            if(ids.isEmpty())throw new IllegalStateException("This saved entry has no supported native encrypted mode.");
+            new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before Tor. Both entry identity and the Tor circuit must pass proof."))
+                    .setItems(labels.toArray(new String[0]),(d,w)->requestConnect(entry,exit,ids.get(w))).setNegativeButton("Cancel",null).show();
+        }catch(Exception error){toast("The saved entry cannot provide a captured native Tor path.");}
     }
+
+    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode) {
+        if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
+        try{capturePending(entry,exit,false,entryMode);}catch(Exception invalid){toast("The selected nodes changed or could not be captured.");return;}
+        Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
+    }
+
+    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)throws Exception{
+        pendingEntry=entry;pendingExit=AndroidStandardExitStore.copy(exit);pendingDirect=direct;pendingEntryMode=entryMode;
+        pendingExitDigest=AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(pendingExit).getBytes(StandardCharsets.UTF_8));
+        pendingEntryDigest=entry==null?"":AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
+    }
+
+    private void clearPending(){pendingEntry=null;pendingExit=null;pendingDirect=false;pendingEntryMode="wg";pendingEntryDigest="";pendingExitDigest="";}
 
     private void startPending() {
-        AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit;boolean direct=pendingDirect;
-        pendingEntry=null;pendingExit=null;pendingDirect=false;if(exit==null)return;if(!direct&&entry==null)return;
+        AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit;boolean direct=pendingDirect;String entryMode=pendingEntryMode,entryDigest=pendingEntryDigest,exitDigest=pendingExitDigest;
+        clearPending();if(exit==null)return;if(!direct&&entry==null)return;
         if(activeOrTransitioning()){toast("VPN state changed while permission was open; disconnect before starting the custom exit.");refresh();return;}
+        try{
+            if(!exitDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exitStore.get(exit.id)).getBytes(StandardCharsets.UTF_8)))
+                    ||!exitDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exit).getBytes(StandardCharsets.UTF_8)))
+                    ||!direct&&!entryDigest.equals(AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE))))throw new IllegalStateException("Captured source changed.");
+        }catch(Exception changed){toast("A captured node changed while Android permission was open. Select the path again.");refresh();return;}
         busy=true;statusView.setText(direct?"Preparing direct external exit…":"Preparing Router VPN entry → external exit…");
         AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void progress(String m){runOnUiThread(()->{if(!isFinishing())statusView.setText(m);});}public void finished(boolean ok,String m){runOnUiThread(()->{busy=false;if(!isFinishing()){statusView.setText(m);if(!ok)toast(m);refresh();}});}};
-        if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,cb);
+        if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,entryMode,cb);
     }
 
     private boolean activeOrTransitioning(){return busy||AndroidVpnMutationGuard.isBusy(this);}
 
-    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request!=PREPARE_STANDARD_EXIT)return;if(result==RESULT_OK)startPending();else{pendingEntry=null;pendingExit=null;pendingDirect=false;busy=false;statusView.setText("VPN permission denied; custom exit stayed disconnected.");}}
+    @Override protected void onActivityResult(int request,int result,Intent data){super.onActivityResult(request,result,data);if(request!=PREPARE_STANDARD_EXIT)return;if(result==RESULT_OK)startPending();else{clearPending();busy=false;statusView.setText("VPN permission denied; custom exit stayed disconnected.");}}
 
     private EditText field(String hint,boolean secret){EditText e=new EditText(this);e.setHint(hint);e.setSingleLine(true);if(secret)e.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_VARIATION_PASSWORD);return e;}
+    private View choiceHeader(String title,String message){LinearLayout header=new LinearLayout(this);header.setOrientation(LinearLayout.VERTICAL);int pad=dp(16);header.setPadding(pad,pad,pad,dp(8));header.addView(text(title,18,true));header.addView(text(message,14,false));return header;}
     private static int parseInt(EditText e,String label){String v=e.getText().toString().trim();if(v.isEmpty())throw new IllegalArgumentException(label+" is required.");return Integer.parseInt(v);}
     private static List<String> csv(String text){List<String>r=new ArrayList<>();for(String p:text.split(",")){p=p.trim();if(!p.isEmpty())r.add(p);}return r;}
     private void dialog(String title,String message){new AlertDialog.Builder(this).setTitle(title).setMessage(message).setPositiveButton("OK",null).show();}

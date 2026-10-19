@@ -21,11 +21,16 @@ import java.net.SocketException;
 import java.net.SocketTimeoutException;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
 
 /**
@@ -38,6 +43,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  */
 final class AndroidStartLayerRelay implements AutoCloseable {
     interface FatalHandler { void failed(String message); }
+    interface SocketProtector {
+        void protectRelaySocket(Socket socket) throws Exception;
+        void protectRelaySocket(DatagramSocket socket) throws Exception;
+    }
 
     static final String SESSION_FILE = "start-layer-relay.json";
     static final int LISTEN_PORT = 18389;
@@ -45,11 +54,12 @@ final class AndroidStartLayerRelay implements AutoCloseable {
     private static final int MAX_METADATA = 16 * 1024;
     private static final int BUFFER = 32 * 1024;
     private static final int UDP_IDLE_MS = 120_000;
+    private static final long CLOSE_TIMEOUT_MS = 1500;
 
     private static final class Metadata {
-        final String targetHost;
+        final InetAddress targetAddress;
         final byte[] key;
-        Metadata(String targetHost, byte[] key) { this.targetHost = targetHost; this.key = key; }
+        Metadata(InetAddress targetAddress, byte[] key) { this.targetAddress = targetAddress; this.key = key; }
     }
 
     private static final class UdpSession {
@@ -60,8 +70,11 @@ final class AndroidStartLayerRelay implements AutoCloseable {
 
     private final VpnService service;
     private final FatalHandler fatalHandler;
-    private final String targetHost;
+    private final InetAddress targetAddress;
     private final byte[] key;
+    private final Object admission = new Object();
+    private final Set<Socket> tcpSockets = new HashSet<>();
+    private final Set<DatagramSocket> udpSockets = new HashSet<>();
     private final ExecutorService workers = Executors.newCachedThreadPool();
     private final Map<SocketAddress,UdpSession> udpSessions = new ConcurrentHashMap<>();
     private final AtomicBoolean closed = new AtomicBoolean(false);
@@ -69,38 +82,40 @@ final class AndroidStartLayerRelay implements AutoCloseable {
     private ServerSocket tcpListener;
     private DatagramSocket udpListener;
 
-    static AndroidStartLayerRelay startIfConfigured(VpnService service, File sessionDir, FatalHandler fatalHandler) throws Exception {
+    static AndroidStartLayerRelay prepareIfConfigured(VpnService service, File sessionDir, FatalHandler fatalHandler) throws Exception {
         File metadataFile = new File(sessionDir, SESSION_FILE).getCanonicalFile();
         if (!metadataFile.getParentFile().equals(sessionDir.getCanonicalFile())) throw new IllegalStateException("Android Start Layer relay metadata escaped its private session directory.");
         if (!metadataFile.exists()) return null;
         Metadata metadata = readMetadata(metadataFile);
-        AndroidStartLayerRelay relay = new AndroidStartLayerRelay(service, fatalHandler, metadata);
-        try { relay.start(); return relay; }
-        catch (Throwable error) { relay.close(); throw error; }
+        return new AndroidStartLayerRelay(service, fatalHandler, metadata);
     }
 
     private AndroidStartLayerRelay(VpnService service, FatalHandler fatalHandler, Metadata metadata) {
         this.service = service;
         this.fatalHandler = fatalHandler;
-        this.targetHost = metadata.targetHost;
+        this.targetAddress = metadata.targetAddress;
         this.key = Arrays.copyOf(metadata.key, metadata.key.length);
     }
 
-    private void start() throws Exception {
-        InetAddress loopback = InetAddress.getByName("127.0.0.1");
-        tcpListener = new ServerSocket();
-        tcpListener.setReuseAddress(false);
-        tcpListener.bind(new InetSocketAddress(loopback, LISTEN_PORT), 32);
-        udpListener = new DatagramSocket(new InetSocketAddress(loopback, LISTEN_PORT));
-        workers.execute(this::tcpLoop);
-        workers.execute(this::udpLoop);
+    void start() throws Exception {
+        synchronized(admission){
+            if(closed.get()||tcpListener!=null)throw new IllegalStateException("Start Layer owner cannot restart.");
+            InetAddress loopback = AndroidNumericAddress.parse("127.0.0.1");
+            tcpListener = new ServerSocket();
+            // The previous listener and workers are fully joined before a new
+            // owner starts; allow its closed TCP flows to finish TIME_WAIT.
+            tcpListener.setReuseAddress(true);
+            tcpListener.bind(new InetSocketAddress(loopback, LISTEN_PORT), 32);
+            udpListener = new DatagramSocket(new InetSocketAddress(loopback, LISTEN_PORT));
+            if(!executeOwned(this::tcpLoop)||!executeOwned(this::udpLoop))throw new IllegalStateException("Start Layer owner stopped during startup.");
+        }
     }
 
     private void tcpLoop() {
         try {
             while (!closed.get()) {
                 Socket local = tcpListener.accept();
-                workers.execute(() -> handleTCP(local));
+                if(!retainTCP(local)||!executeOwned(() -> handleTCP(local)))closeTCP(local);
             }
         } catch (Throwable error) {
             if (!closed.get()) fail("Android Start Layer TCP relay stopped unexpectedly: " + safe(error));
@@ -110,13 +125,16 @@ final class AndroidStartLayerRelay implements AutoCloseable {
     private void handleTCP(Socket local) {
         Socket upstream = new Socket();
         try {
+            if(!retainTCP(upstream))return;
             local.setTcpNoDelay(true);
             upstream.setTcpNoDelay(true);
-            if (!service.protect(upstream)) throw new IllegalStateException("Android refused to protect the Start Layer TCP upstream socket from the VPN loop.");
-            upstream.connect(new InetSocketAddress(targetHost, SERVER_PORT), 10_000);
+            if (service instanceof SocketProtector) ((SocketProtector) service).protectRelaySocket(upstream);
+            else if (!service.protect(upstream)) throw new IllegalStateException("Android refused to protect the Start Layer TCP upstream socket from the VPN loop.");
+            if(closed.get())return;
+            upstream.connect(new InetSocketAddress(targetAddress, SERVER_PORT), 10_000);
             final CountDownLatch done = new CountDownLatch(2);
-            workers.execute(() -> { try { pump(local, upstream); } finally { done.countDown(); } });
-            workers.execute(() -> { try { pump(upstream, local); } finally { done.countDown(); } });
+            if(!executeOwned(() -> { try { pump(local, upstream); } finally { done.countDown(); } })
+                    ||!executeOwned(() -> { try { pump(upstream, local); } finally { done.countDown(); } }))return;
             done.await();
         } catch (InterruptedException interrupted) {
             Thread.currentThread().interrupt();
@@ -124,8 +142,8 @@ final class AndroidStartLayerRelay implements AutoCloseable {
             // Per-flow connection failures are surfaced by the owning libbox
             // path proof. They do not make the listener itself untrustworthy.
         } finally {
-            try { local.close(); } catch (Throwable ignored) { }
-            try { upstream.close(); } catch (Throwable ignored) { }
+            closeTCP(local);
+            closeTCP(upstream);
         }
     }
 
@@ -168,15 +186,23 @@ final class AndroidStartLayerRelay implements AutoCloseable {
 
     private UdpSession createUdpSession(InetSocketAddress peer) throws Exception {
         DatagramSocket upstream = new DatagramSocket();
-        if (!service.protect(upstream)) { upstream.close(); throw new IllegalStateException("Android refused to protect the Start Layer UDP upstream socket from the VPN loop."); }
-        upstream.connect(new InetSocketAddress(targetHost, SERVER_PORT));
-        upstream.setSoTimeout(UDP_IDLE_MS);
-        UdpSession session = new UdpSession(upstream, peer);
-        UdpSession existing = udpSessions.putIfAbsent(peer, session);
-        if (existing != null && !existing.upstream.isClosed()) { upstream.close(); return existing; }
-        if (existing != null) udpSessions.put(peer, session);
-        workers.execute(() -> readUdpReplies(peer, session));
-        return session;
+        try {
+            if(!retainUDP(upstream))throw new IllegalStateException("Start Layer owner stopped before UDP admission.");
+            if (service instanceof SocketProtector) ((SocketProtector) service).protectRelaySocket(upstream);
+            else if (!service.protect(upstream)) throw new IllegalStateException("Android refused to protect the Start Layer UDP upstream socket from the VPN loop.");
+            if(closed.get())throw new IllegalStateException("Start Layer owner stopped during UDP protection.");
+            upstream.connect(new InetSocketAddress(targetAddress, SERVER_PORT));
+            upstream.setSoTimeout(UDP_IDLE_MS);
+            UdpSession session = new UdpSession(upstream, peer);
+            synchronized(admission){
+                if(closed.get())throw new IllegalStateException("Start Layer owner stopped before UDP publication.");
+                UdpSession existing = udpSessions.putIfAbsent(peer, session);
+                if(existing!=null&&!existing.upstream.isClosed()){closeUDP(upstream);return existing;}
+                if(existing!=null)udpSessions.put(peer,session);
+                if(!executeOwned(()->readUdpReplies(peer,session)))throw new IllegalStateException("Start Layer UDP worker was not admitted.");
+            }
+            return session;
+        } catch (Exception failed) { closeUDP(upstream); throw failed; }
     }
 
     private void readUdpReplies(InetSocketAddress keyPeer, UdpSession session) {
@@ -198,7 +224,7 @@ final class AndroidStartLayerRelay implements AutoCloseable {
             if (!closed.get()) fail("Android Start Layer UDP session failed: " + safe(error));
         } finally {
             udpSessions.remove(keyPeer, session);
-            session.upstream.close();
+            closeUDP(session.upstream);
         }
     }
 
@@ -210,14 +236,63 @@ final class AndroidStartLayerRelay implements AutoCloseable {
         if (fatalHandler != null && fatalDelivered.compareAndSet(false, true)) fatalHandler.failed(message);
     }
 
-    @Override public void close() {
-        if (!closed.compareAndSet(false, true)) return;
+    private boolean executeOwned(Runnable worker){
+        synchronized(admission){
+            if(closed.get())return false;
+            try{workers.execute(worker);return true;}catch(RejectedExecutionException stopped){return false;}
+        }
+    }
+
+    private boolean retainTCP(Socket socket){
+        synchronized(admission){if(!closed.get()){tcpSockets.add(socket);return true;}}
+        closeTCP(socket);return false;
+    }
+
+    private boolean retainUDP(DatagramSocket socket){
+        synchronized(admission){if(!closed.get()){udpSockets.add(socket);return true;}}
+        closeUDP(socket);return false;
+    }
+
+    private void closeTCP(Socket socket){
+        try{socket.close();synchronized(admission){tcpSockets.remove(socket);}}
+        catch(Exception failed){synchronized(admission){tcpSockets.add(socket);}}
+    }
+
+    private void closeUDP(DatagramSocket socket){
+        try{socket.close();synchronized(admission){udpSockets.remove(socket);}}
+        catch(RuntimeException failed){synchronized(admission){udpSockets.add(socket);}}
+    }
+
+    @Override public synchronized void close() {
+        ArrayList<Socket> tcp;
+        ArrayList<DatagramSocket> udp;
+        synchronized(admission){
+            closed.set(true);
+            workers.shutdown();
+            tcp=new ArrayList<>(tcpSockets);udp=new ArrayList<>(udpSockets);
+        }
         try { if (tcpListener != null) tcpListener.close(); } catch (Throwable ignored) { }
         try { if (udpListener != null) udpListener.close(); } catch (Throwable ignored) { }
-        for (UdpSession session : udpSessions.values()) try { session.upstream.close(); } catch (Throwable ignored) { }
-        udpSessions.clear();
+        for(Socket socket:tcp)closeTCP(socket);
+        for(DatagramSocket socket:udp)closeUDP(socket);
         workers.shutdownNow();
-        Arrays.fill(key, (byte) 0);
+        boolean interrupted=false;
+        long deadline=System.nanoTime()+TimeUnit.MILLISECONDS.toNanos(CLOSE_TIMEOUT_MS);
+        try{
+            while(!workers.isTerminated()){
+                long remaining=deadline-System.nanoTime();
+                if(remaining<=0)break;
+                try{workers.awaitTermination(remaining,TimeUnit.NANOSECONDS);}catch(InterruptedException cancelled){interrupted=true;}
+            }
+            synchronized(admission){
+                if(!workers.isTerminated()||!tcpSockets.isEmpty()||!udpSockets.isEmpty()
+                        ||tcpListener!=null&&!tcpListener.isClosed()||udpListener!=null&&!udpListener.isClosed()){
+                    throw new IllegalStateException("Start Layer teardown has not completed; its owner remains retained.");
+                }
+                udpSessions.clear();
+                Arrays.fill(key,(byte)0);
+            }
+        }finally{if(interrupted)Thread.currentThread().interrupt();}
     }
 
     private static Metadata readMetadata(File file) throws Exception {
@@ -227,12 +302,13 @@ final class AndroidStartLayerRelay implements AutoCloseable {
         if (root.optInt("version", 0) != 1 || root.optInt("listen_port", 0) != LISTEN_PORT || root.optInt("target_port", 0) != SERVER_PORT) throw new IllegalStateException("Android Start Layer relay metadata version/ports are invalid.");
         String host = root.optString("target_host", "").trim();
         if (host.isEmpty() || host.length() > 253 || host.contains("\n") || host.contains("\r") || host.contains("\u0000") || host.contains("/") || host.contains("@")) throw new IllegalStateException("Android Start Layer relay target host is unsafe.");
-        if ("127.0.0.1".equals(host) || "::1".equals(host) || "localhost".equalsIgnoreCase(host)) throw new IllegalStateException("Android Start Layer relay target cannot be loopback.");
+        InetAddress address=AndroidNumericAddress.parse(host);
+        if(address.isLoopbackAddress()||address.isAnyLocalAddress()||address.isMulticastAddress())throw new IllegalStateException("Android Start Layer relay requires a captured non-loopback literal endpoint.");
         byte[] key;
         try { key = Base64.decode(root.optString("key_b64", ""), Base64.DEFAULT); }
         catch (IllegalArgumentException invalid) { throw new IllegalStateException("Android Start Layer relay key is not valid base64.", invalid); }
         if (key.length != 32) throw new IllegalStateException("Android Start Layer relay key must be exactly 32 bytes.");
-        return new Metadata(host, key);
+        return new Metadata(address, key);
     }
 
     private static byte[] readLimited(File file, int max) throws Exception {

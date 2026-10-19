@@ -65,6 +65,7 @@ public interface Tunnel {enum State {DOWN,UP}}''',
 public interface Tunnel {enum State {DOWN,UP}}''',
     'com/eabusham/routervpn/HomeBoundaries.java': r'''package com.eabusham.routervpn;
 import android.content.Context;
+final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
 final class AndroidRuntimeRegistry {
  static final AndroidRuntimeRegistry INSTANCE=new AndroidRuntimeRegistry();
  static AndroidRuntimeRegistry get(Context context){return INSTANCE;}
@@ -130,6 +131,25 @@ public final class MultihopHomeHarness {
   check(before.equals(context.store.values),"rejected entry changed the current session/node/exit identity");
   check(context.fileAccesses==0,"rejected entry staged a native session");
  }
+ static void tor(String mode){
+  Context context=externalOwner();String entry=mode.equals("direct")?"":ENTRY;
+  String session=AndroidHomeStateStore.beginTorExternal(context,"tor-node","Private Tor","tor-bridge",entry,mode.equals("direct")?"external":mode);
+  AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+  check(!captured.connected&&captured.pathProof.equals("pending")&&captured.expectedExternalIp.isEmpty(),"Tor began with reused fixed exit proof");
+  check(captured.activeNodeId.isEmpty()&&captured.activeExitId.isEmpty()&&captured.activeEntryId.equals(entry),"Tor retained a previous graph identity");
+  check(captured.activeEntryMode.equals(entry.isEmpty()?"":mode)&&captured.actualBase.equals(entry.isEmpty()?"external":base(mode)),"Tor silently changed its captured entry/base");
+  check(AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"valid Tor proof was not adopted");
+  AndroidHomeStateStore.Snapshot current=AndroidHomeStateStore.snapshot(context);
+  check(current.connected&&current.sessionId.equals(session)&&current.activeExternalProtocol.equals("tor-bridge")&&current.activeEntryId.equals(entry),"Tor proof changed the session owner");
+  check(AndroidHomeStateStore.actualExitForCurrentSession(context).equals("8.8.4.4"),"Tor dynamic exit lost its current session");
+  check(!AndroidHomeStateStore.connectedTorExternal(context,captured,"9.9.9.9"),"one proof adopted twice");
+ }
+ static void torStale(String key,Object value){
+  Context context=new Context();AndroidHomeStateStore.beginTorExternal(context,"tor-node","Tor","tor",ENTRY,"naive-h3");AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+  context.store.values.put(key,value);Map<String,Object> before=new HashMap<>(context.store.values);int writes=context.store.writes;
+  check(!AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"Tor accepted stale "+key);
+  check(before.equals(context.store.values)&&writes==context.store.writes,"stale Tor completion overwrote Home state: "+key);
+ }
  public static void main(String[] args)throws Exception {
   JSONArray catalog=new JSONArray(Files.readString(Path.of(args[0])));List<String> supported=new ArrayList<>(),unsupported=new ArrayList<>();
   for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");
@@ -139,6 +159,9 @@ public final class MultihopHomeHarness {
    check(supported.contains(required),"shipping captured catalog lost required entry "+required);
   }
   for(String entry:supported)for(String exit:supported)try{pair(entry,exit);}catch(Throwable error){failures.add(entry+" -> "+exit+": "+error);}
+  tor("direct");for(String entry:supported)tor(entry);
+  for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","socks5"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})torStale(change[0],change[1]);
+  torStale("path_generation",99L);
   unsupported.addAll(Arrays.asList(null,"","WG"," wg","wg ","unknown","naive","naive-h2;exec","max-tls-other"));
   for(String mode:unsupported)for(boolean adopt:new boolean[]{false,true})try{rejected(mode,adopt);}catch(Throwable error){failures.add("reject "+mode+"/"+adopt+": "+error);}
   Context legacy=new Context();String session=AndroidHomeStateStore.beginMultihop(legacy,ENTRY,EXIT,"shadowsocks");

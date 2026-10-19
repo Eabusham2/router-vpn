@@ -36,7 +36,9 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		"key_b64",
 		"offset + i",
 		"payload[i] ^ key[i % key.length]",
-		"Arrays.fill(key, (byte) 0)",
+		"Arrays.fill(key,(byte)0)",
+		"workers.awaitTermination(remaining,TimeUnit.NANOSECONDS)",
+		"Start Layer teardown has not completed; its owner remains retained.",
 		"start-layer-relay.json",
 	} {
 		if required == "extends" {
@@ -93,7 +95,8 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 	service := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java")
 	for _, required := range []string{
 		"private AndroidStartLayerRelay startLayerRelay",
-		"AndroidStartLayerRelay.startIfConfigured(this, session",
+		"startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session",
+		"if(startLayerRelay!=null)startLayerRelay.start();",
 		"shutdown(\"FAILED\", message)",
 		"startLayerRelay.close()",
 		"startLayerRelay = null",
@@ -101,6 +104,12 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 		if !strings.Contains(service, required) {
 			t.Fatalf("Android VpnService does not own Start Layer relay lifecycle: missing %q", required)
 		}
+	}
+	prepare := strings.Index(service, "startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session")
+	activate := strings.Index(service, "if(startLayerRelay!=null)startLayerRelay.start();")
+	engine := strings.Index(service, "commandServer = new CommandServer(this, this);")
+	if prepare < 0 || activate <= prepare || engine <= activate {
+		t.Fatal("Android must retain the prepared relay before starting its workers and then the native VPN engine")
 	}
 
 	for _, raw := range []struct {

@@ -35,8 +35,15 @@ final class AndroidSessionRevalidator {
             try{Thread.sleep(650L);}catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new IllegalStateException("Android network-change revalidation was interrupted; refusing to keep stale Connected proof.",interrupted);}
             AndroidHomeStateStore.Snapshot current=requireSameRevalidation(token);
             if("external".equals(current.logicalMode)){
-                if(current.expectedExternalIp==null||current.expectedExternalIp.isEmpty())throw new IllegalStateException("External session has no expected public-exit proof target.");
-                String observed=AndroidStandardExitRuntime.proveExpectedPublicIp(current.expectedExternalIp);
+                String observed;
+                if(AndroidTorProfile.isTor(current.activeExternalProtocol)){
+                    // A different network invalidates the captured native Tor
+                    // owner. Never substitute a fixed-IP check or a new graph.
+                    observed=engines.standardExit.capturedTorExit(current);
+                }else{
+                    if(current.expectedExternalIp==null||current.expectedExternalIp.isEmpty())throw new IllegalStateException("External session has no expected public-exit proof target.");
+                    observed=AndroidStandardExitRuntime.proveExpectedPublicIp(current.expectedExternalIp);
+                }
                 current=requireSameRevalidation(token);
                 if(!AndroidHomeStateStore.completePathRevalidation(context,token))throw new IllegalStateException("External path proof completed for a stale Android session/generation.");
                 AndroidHomeStateStore.saveActualExit(context,token.sessionId,observed);

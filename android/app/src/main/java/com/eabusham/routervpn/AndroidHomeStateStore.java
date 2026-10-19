@@ -69,6 +69,28 @@ final class AndroidHomeStateStore {
         return session;
     }
 
+    static String beginTorExternal(Context context, String externalId, String name, String protocol, String entryId, String entryMode) {
+        if (!AndroidTorProfile.isTor(protocol) || (!entryId.isEmpty() && !NativeSingBoxController.nativeMultihopEntry(entryMode))) throw new IllegalArgumentException("Invalid captured Tor path.");
+        String session = UUID.randomUUID().toString();
+        SharedPreferences.Editor e = clearRouterGraph(baseSession(context, session, "external", protocol, entryId.isEmpty() ? "external" : multihopBase(entryMode)));
+        e.putString("active_external_id", clean(externalId)).putString("active_external_name", clean(name)).putString("active_external_protocol", protocol).putString("expected_external_ip", "")
+                .putString("active_entry_id", entryId).putString("active_entry_mode", entryId.isEmpty() ? "" : entryMode).apply();
+        return session;
+    }
+
+    static boolean connectedTorExternal(Context context, Snapshot captured, String observedIp) {
+        Snapshot now = snapshot(context);
+        if (captured == null || !AndroidTorProfile.isTor(captured.activeExternalProtocol)
+                || !captured.sessionId.equals(now.sessionId) || captured.pathGeneration != now.pathGeneration
+                || !"external".equals(now.logicalMode) || !captured.activeExternalProtocol.equals(now.activeExternalProtocol) || !captured.runtimeMode.equals(now.runtimeMode)
+                || !captured.activeExternalId.equals(now.activeExternalId) || !captured.activeEntryId.equals(now.activeEntryId)
+                || !captured.activeEntryMode.equals(now.activeEntryMode) || !"connecting".equals(now.phase)
+                || !"pending".equals(now.pathProof) || emergencyDisconnectPending(context)) return false;
+        prefs(context).edit().putString("phase", "connected").putString("path_proof", "passed").putString("warning", "")
+                .putBoolean("connected", true).putString("actual_exit_session", captured.sessionId).putString("actual_exit_ip", clean(observedIp)).apply();
+        return true;
+    }
+
     static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback) { connected(context, logicalMode, runtimeMode, base, fallback, ""); }
     static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback, String activeNodeId) {
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
