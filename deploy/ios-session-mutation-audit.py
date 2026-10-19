@@ -22,9 +22,10 @@ require(
     "ios/RouterVPN/App/IOSUnifiedProductView.swift",
     "connectionStateTitle",
     "connectionButtonTitle",
-    ".disabled(model.tunnelTransitioning)",
+    ".disabled(model.iosUserDisconnectInProgress)",
     ".disabled(model.profileMutationBlocked)",
-    "guard !model.tunnelTransitioning else { return }",
+    "if model.tunnelTransitioning || model.connected { model.disconnect(); return }",
+    "Cancel & disconnect",
     "guard !parent.model.profileMutationBlocked",
     "setUnifiedQuickKillSwitch",
     "unifiedSetDNSMode",
@@ -65,9 +66,28 @@ require(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     "guard !profileMutationBlocked",
     "tunnelTransitioning = true",
-    "defer { tunnelTransitioning = false }",
+    "let generation = UUID(); iosConnectGeneration = generation",
+    "try requireExternalPreparation(generation, source: bundle, manager: manager)",
+    "await refreshTunnelStatus()",
+    "return IOSDNSRuntimePolicy.selectedProfile(in: bundle)",
     "before linking node data",
 )
+
+# Cancellation is an allowed transition; profile mutation is not. The prior
+# blanket disabled-state marker prevented the user from stopping a trial and
+# its unconditional defer unlocked unknown status after a failed readback.
+model = (ROOT / "ios/RouterVPN/App/RouterVPNModel.swift").read_text()
+disconnect = model.split("    func disconnect() {", 1)[1].split("    private func completeUserDisconnect()", 1)[0]
+assert "guard !userDisconnectInProgress" in disconnect
+assert "iosConnectGeneration = UUID()" in disconnect
+assert "guard !tunnelTransitioning" not in disconnect
+external = (ROOT / "ios/RouterVPN/App/RouterVPNModelExternal.swift").read_text()
+assert "defer { tunnelTransitioning = false }" not in external
+require("ios/RouterVPN/test_runtime_selection_contract.py", "deploy/test_ios_owned_strategy_app.py")
+require("deploy/test_ios_owned_strategy_app.py",
+        "cancel during external save cannot start later",
+        "unknown external status keeps settings locked",
+        "unknown multihop status keeps settings locked")
 require(
     "ios/RouterVPN/App/RouterVPNModelNodeManagement.swift",
     "before removing a linked node",
