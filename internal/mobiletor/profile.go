@@ -14,7 +14,6 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
-	"router-vpn/internal/startwhitening"
 )
 
 const ProfileOutboundTag = "routervpn-tor-exit"
@@ -191,7 +190,7 @@ func torPredecessor(source string) (map[string]any, map[string]any, string, erro
 			seen[tag] = true
 			if tag == final {
 				switch outbound["type"] {
-				case startwhitening.Type:
+				case "routervpn-aes-xor":
 					if key != "outbounds" || !torAuthenticatedWhitening(outbound) {
 						return nil, nil, "", failure
 					}
@@ -257,12 +256,7 @@ func torAuthenticatedWhitening(outbound map[string]any) bool {
 	material, err := base64.StdEncoding.Strict().DecodeString(password)
 	validKey := err == nil && len(material) == 32 && base64.StdEncoding.EncodeToString(material) == password
 	clear(material)
-	if !validKey || outbound["method"] != startwhitening.Method {
-		return false
-	}
-	key, err := startwhitening.Key(profileString(outbound, "method"), password)
-	clear(key[:])
-	if err != nil {
+	if !validKey || outbound["method"] != "2022-blake3-aes-256-gcm" {
 		return false
 	}
 	host := profileString(outbound, "server")
