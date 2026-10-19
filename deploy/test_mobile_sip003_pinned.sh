@@ -1,8 +1,23 @@
 #!/usr/bin/env bash
 set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
-VENDOR=${1:?prepared exact sing-box source required}
+VENDOR=${1:?exact sing-box source required}
 [[ $(git -C "$VENDOR" rev-parse HEAD) == 1ac1a339cb1223e9c70eae14c44411c75033c02d ]]
+export GOTOOLCHAIN=go1.26.3
+# Standalone CI passes its exact Xray checkout. Shipping builds already own
+# this same checkout in their single module graph; retain that replacement.
+XRAY=${2:-$(cd "$VENDOR" && go list -mod=readonly -m -f '{{.Dir}}' github.com/xtls/xray-core)}
+[[ $(git -C "$XRAY" rev-parse HEAD) == 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 ]]
+# Composite encrypted-lane tests import the owned native Xray adapter. Install
+# both source families before tidy scans every test import, including custom tags.
+python3 "$ROOT/deploy/prepare-mobile-multihop.py" "$VENDOR"
+python3 "$ROOT/deploy/prepare-apple-xray.py" "$VENDOR" "$XRAY"
+(
+  cd "$VENDOR"
+  go mod edit -require=github.com/xtls/xray-core@v1.260327.1-0.20260711155151-50231eaff98c
+  go mod edit -replace="github.com/xtls/xray-core=$XRAY"
+  go mod tidy
+)
 # The same mobile buffers/socket protection used in shipping Libbox remain on.
 python3 "$ROOT/deploy/prepare-mobile-buffers.py" "$VENDOR"
 FIXTURE_DIR=$(mktemp -d)
