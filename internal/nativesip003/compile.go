@@ -212,6 +212,39 @@ func validateOptions(raw string) error {
 	return nil
 }
 
+// ValidateTCPOutbound checks the compiled, process-free SIP003 TCP leg without
+// needing a helper listener. Composite owners use this when revalidating their
+// frozen TCP/UDP plan; detours must be removed only after their owner is checked.
+func ValidateTCPOutbound(value map[string]any) error {
+	for field, raw := range value {
+		if !utf8.ValidString(field) {
+			return invalid
+		}
+		if value, ok := raw.(string); ok && !utf8.ValidString(value) {
+			return invalid
+		}
+	}
+	encoded, err := json.Marshal(value)
+	if err != nil {
+		return invalid
+	}
+	out, err := Object(encoded)
+	if err != nil || len(out) != 9 || !keys(out, "type", "tag", "server", "server_port", "method", "password", "plugin", "plugin_opts", "network") {
+		return invalid
+	}
+	if out["type"] != "shadowsocks" || out["network"] != "tcp" || out["method"] != "2022-blake3-aes-256-gcm" || out["plugin"] != "v2ray-plugin" || !tagPattern.MatchString(text(out["tag"])) || !hostname(text(out["server"])) {
+		return invalid
+	}
+	if _, err = port(out["server_port"]); err != nil {
+		return invalid
+	}
+	key, err := base64.StdEncoding.Strict().DecodeString(text(out["password"]))
+	if err != nil || len(key) != 32 || base64.StdEncoding.EncodeToString(key) != text(out["password"]) {
+		return invalid
+	}
+	return validateOptions(text(out["plugin_opts"]))
+}
+
 // Compile also accepts its own exact output, making DNS patching/reconnect
 // idempotent. An existing native outbound must still match the imported helper
 // credentials, server, transport options, and route identity byte-for-byte.

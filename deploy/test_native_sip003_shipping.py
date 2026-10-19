@@ -10,11 +10,12 @@ class Shipping(unittest.TestCase):
     def test_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare:
+            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
                 PREPARE.prepare(root)
                 mtu_prepare.assert_called_once_with(root.resolve())
                 pq_prepare.assert_called_once_with(root.resolve())
                 strategy_prepare.assert_called_once_with(root.resolve())
+                composite_prepare.assert_called_once_with(root.resolve())
             native=root/'experimental/libbox/routervpn/nativesip003'
             for source in (ROOT/'internal/nativesip003').glob('*.go'):
                 self.assertEqual(source.read_bytes(),(native/source.name).read_bytes())

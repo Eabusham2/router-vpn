@@ -6,7 +6,7 @@ import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'nativesip003', 'hopmeasure', 'mobileperf')
+PACKAGES = ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'nativesip003', 'nativecomposite', 'hopmeasure', 'mobileperf')
 _whitening_spec = importlib.util.spec_from_file_location('routervpn_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
 WHITENING = importlib.util.module_from_spec(_whitening_spec)
 _whitening_spec.loader.exec_module(WHITENING)
@@ -22,6 +22,9 @@ _perf_spec.loader.exec_module(PERFORMANCE)
 _strategy_spec = importlib.util.spec_from_file_location('routervpn_strategy', ROOT/'deploy/prepare-mobile-strategy.py')
 STRATEGY = importlib.util.module_from_spec(_strategy_spec)
 _strategy_spec.loader.exec_module(STRATEGY)
+_composite_spec = importlib.util.spec_from_file_location('routervpn_composite', ROOT/'deploy/prepare-mobile-composite.py')
+COMPOSITE = importlib.util.module_from_spec(_composite_spec)
+_composite_spec.loader.exec_module(COMPOSITE)
 _wg_spec = importlib.util.spec_from_file_location('routervpn_wg_bind', ROOT/'deploy/mobile_wireguard_bind_policy.py')
 WIREGUARD_BIND = importlib.util.module_from_spec(_wg_spec)
 _wg_spec.loader.exec_module(WIREGUARD_BIND)
@@ -32,7 +35,7 @@ def inputs():
     paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + [Path(__file__).resolve()]
+    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -73,6 +76,7 @@ def prepare(vendor):
     PERFORMANCE.prepare(vendor)
     MTU.prepare(vendor)
     STRATEGY.prepare(vendor)
+    COMPOSITE.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
     print('Shared multihop source digest:',digest())
 if __name__=='__main__':

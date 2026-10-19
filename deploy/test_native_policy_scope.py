@@ -22,7 +22,7 @@ class NativePolicyScope(unittest.TestCase):
             parent=output/'preparation_test.go'
             if stale=='old':parent.write_bytes((ROOT/'internal/applexray/preparation_test.go').read_bytes())
             if stale=='foreign':parent.write_text('do not erase unknown test')
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','PQ','STRATEGY'):
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','PQ','STRATEGY','COMPOSITE'):
                 if hasattr(module,hook):mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
             if hasattr(module,'CORE'):
                 mocks.enter_context(mock.patch.object(module.subprocess,'check_output',return_value=module.CORE+'\n'))

@@ -1,0 +1,466 @@
+//go:build with_quic
+
+package routervpncomposite_test
+
+import (
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxservice "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/dns/transport/local"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/direct"
+	"github.com/sagernet/sing-box/protocol/hysteria2"
+	"github.com/sagernet/sing-box/protocol/routervpncomposite"
+	"github.com/sagernet/sing-box/protocol/routervpnxray"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/transport/v2raywebsocket"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing-vmess"
+	"github.com/sagernet/sing/common/control"
+	SJSON "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/common/logger"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/x/list"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/ws"
+)
+
+// The only physical dialer in this fixture maps immutable documentation/test
+// addresses to listeners owned by this test. In particular, the client mapper
+// knows only the entry node. A direct client-to-exit leak is an immediate error.
+type physical struct {
+	outbound.Adapter
+	targets      map[string]string
+	tcp, packets atomic.Int64
+	mu           sync.Mutex
+	seen         map[string]int
+}
+
+func (p *physical) DialContext(ctx context.Context, network string, to M.Socksaddr) (net.Conn, error) {
+	target, ok := p.targets[to.String()]
+	if !ok || network != "tcp" && network != "udp" {
+		return nil, errors.New("test physical socket bypassed its captured node")
+	}
+	if network == "tcp" {
+		p.tcp.Add(1)
+	} else {
+		p.packets.Add(1)
+	}
+	p.mu.Lock()
+	p.seen[to.String()]++
+	p.mu.Unlock()
+	conn, err := (&net.Dialer{}).DialContext(ctx, network, target)
+	if err != nil {
+		return nil, err
+	}
+	return &mappedConnected{Conn: conn, remote: to}, nil
+}
+
+type mappedConnected struct {
+	net.Conn
+	remote M.Socksaddr
+}
+
+func (c *mappedConnected) RemoteAddr() net.Addr { return c.remote }
+func (p *physical) ListenPacket(ctx context.Context, to M.Socksaddr) (net.PacketConn, error) {
+	if _, ok := p.targets[to.String()]; !ok {
+		return nil, errors.New("test UDP bypassed its captured node")
+	}
+	conn, err := (&net.ListenConfig{}).ListenPacket(ctx, "udp", "127.0.0.1:0")
+	if err != nil {
+		return nil, err
+	}
+	p.packets.Add(1)
+	return &mappedPacket{PacketConn: conn, owner: p}, nil
+}
+
+type mappedPacket struct {
+	net.PacketConn
+	owner *physical
+}
+
+func (p *mappedPacket) WriteTo(packet []byte, to net.Addr) (int, error) {
+	target, ok := p.owner.targets[to.String()]
+	if !ok {
+		return 0, errors.New("test datagram bypassed its captured node")
+	}
+	address, err := net.ResolveUDPAddr("udp", target)
+	if err != nil {
+		return 0, err
+	}
+	p.owner.mu.Lock()
+	p.owner.seen[to.String()]++
+	p.owner.mu.Unlock()
+	return p.PacketConn.WriteTo(packet, address)
+}
+func (p *mappedPacket) ReadFrom(packet []byte) (int, net.Addr, error) {
+	n, from, err := p.PacketConn.ReadFrom(packet)
+	if err != nil {
+		return n, from, err
+	}
+	for original, target := range p.owner.targets {
+		if target == from.String() {
+			return n, M.ParseSocksaddr(original), nil
+		}
+	}
+	return 0, nil, errors.New("unowned test datagram source")
+}
+
+func encode(t *testing.T, value any) []byte {
+	t.Helper()
+	raw, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
+
+// This fixture owns only loopback listeners and supplies no asynchronous OS
+// interface notifications. Actual TCP/TLS, SS2022 and QUIC protocols still run.
+type fixturePlatform struct{ adapter.PlatformInterface }
+
+func (*fixturePlatform) Initialize(adapter.NetworkManager) error  { return nil }
+func (*fixturePlatform) UsePlatformDefaultInterfaceMonitor() bool { return true }
+func (*fixturePlatform) CreateDefaultInterfaceMonitor(logger.Logger) tun.DefaultInterfaceMonitor {
+	return &fixtureMonitor{}
+}
+func (*fixturePlatform) UsePlatformNetworkInterfaces() bool          { return false }
+func (*fixturePlatform) UsePlatformAutoDetectInterfaceControl() bool { return false }
+func (*fixturePlatform) UsePlatformInterface() bool                  { return false }
+func (*fixturePlatform) UnderNetworkExtension() bool                 { return false }
+func (*fixturePlatform) NetworkExtensionIncludeAllNetworks() bool    { return false }
+func (*fixturePlatform) UsePlatformConnectionOwnerFinder() bool      { return false }
+func (*fixturePlatform) UsePlatformWIFIMonitor() bool                { return false }
+func (*fixturePlatform) UsePlatformNotification() bool               { return false }
+func (*fixturePlatform) UsePlatformNeighborResolver() bool           { return false }
+func (*fixturePlatform) UsePlatformShell() bool                      { return false }
+func (*fixturePlatform) UsePlatformBridge() bool                     { return false }
+func (*fixturePlatform) ClearDNSCache()                              {}
+
+type fixtureMonitor struct{ tun.DefaultInterfaceMonitor }
+
+func (*fixtureMonitor) Start() error                         { return nil }
+func (*fixtureMonitor) Close() error                         { return nil }
+func (*fixtureMonitor) DefaultInterface() *control.Interface { return nil }
+func (*fixtureMonitor) RegisterCallback(tun.DefaultInterfaceUpdateCallback) *list.Element[tun.DefaultInterfaceUpdateCallback] {
+	return nil
+}
+func (*fixtureMonitor) UnregisterCallback(*list.Element[tun.DefaultInterfaceUpdateCallback]) {}
+func (*fixtureMonitor) RegisterMyInterface(string)                                           {}
+func (*fixtureMonitor) MyInterfaces() []string                                               { return nil }
+func (*fixtureMonitor) OverrideAndroidVPN() bool                                             { return false }
+func (*fixtureMonitor) AndroidVPNEnabled() bool                                              { return false }
+
+func registryContext(p *physical) context.Context {
+	ins, outs := inbound.NewRegistry(), outbound.NewRegistry()
+	shadowsocks.RegisterInbound(ins)
+	hysteria2.RegisterInbound(ins)
+	shadowsocks.RegisterOutbound(outs)
+	hysteria2.RegisterOutbound(outs)
+	direct.RegisterOutbound(outs)
+	routervpncomposite.RegisterOutbound(outs)
+	routervpnxray.RegisterOutbound(outs)
+	outbound.Register[struct{}](outs, "owned-test-physical", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ struct{}) (adapter.Outbound, error) {
+		p.Adapter = outbound.NewAdapter("owned-test-physical", tag, []string{"tcp", "udp"}, nil)
+		return p, nil
+	})
+	resolvers := dns.NewTransportRegistry()
+	local.RegisterTransport(resolvers)
+	ctx := service.ContextWith[adapter.PlatformInterface](context.Background(), &fixturePlatform{})
+	return box.Context(ctx, ins, outs, endpoint.NewRegistry(), resolvers, boxservice.NewRegistry(), certificate.NewRegistry())
+}
+func runtime(t *testing.T, config map[string]any, p *physical) *box.Box {
+	t.Helper()
+	ctx := registryContext(p)
+	var options option.Options
+	if err := SJSON.UnmarshalContext(ctx, encode(t, config), &options); err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Options: options, Context: ctx})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := instance.Close(); err != nil {
+			t.Error("owned native fixture did not close", err)
+		}
+	})
+	if err = instance.Start(); err != nil {
+		t.Fatal(err)
+	}
+	return instance
+}
+func ephemeralUDP(t *testing.T) int {
+	t.Helper()
+	s, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	return s.LocalAddr().(*net.UDPAddr).Port
+}
+func address(port int) string { return net.JoinHostPort("127.0.0.1", strconv.Itoa(port)) }
+func echoes(t *testing.T) (string, string) {
+	t.Helper()
+	tcp, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	udp, err := net.ListenPacket("udp", "127.0.0.1:0")
+	if err != nil {
+		tcp.Close()
+		t.Fatal(err)
+	}
+	var mu sync.Mutex
+	stopped := false
+	connections := map[net.Conn]bool{}
+	t.Cleanup(func() {
+		_ = tcp.Close()
+		_ = udp.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		stopped = true
+		for conn := range connections {
+			_ = conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := tcp.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				conn.Close()
+				return
+			}
+			connections[conn] = true
+			mu.Unlock()
+			go func() {
+				defer conn.Close()
+				_, _ = io.Copy(conn, conn)
+				mu.Lock()
+				delete(connections, conn)
+				mu.Unlock()
+			}()
+		}
+	}()
+	go func() {
+		buffer := make([]byte, 65535)
+		for {
+			n, to, err := udp.ReadFrom(buffer)
+			if err != nil {
+				return
+			}
+			_, _ = udp.WriteTo(buffer[:n], to)
+		}
+	}()
+	return tcp.Addr().String(), udp.LocalAddr().String()
+}
+
+type node struct {
+	id, host, secret, hySecret, mask, cert, certRaw string
+	mode                                            string
+	xray                                            map[string]any
+	tcpPort, udpPort                                int
+	physical                                        *physical
+}
+type pluginMux struct{ server adapter.TCPInjectableInbound }
+
+func (h pluginMux) NewConnectionEx(ctx context.Context, conn net.Conn, source, destination M.Socksaddr, onClose N.CloseHandlerFunc) {
+	h.server.NewConnection(ctx, conn, adapter.InboundContext{Source: source, Destination: destination}, onClose)
+}
+func (h pluginMux) NewPacketConnectionEx(_ context.Context, conn N.PacketConn, _, _ M.Socksaddr, _ N.CloseHandlerFunc) {
+	_ = conn.Close()
+}
+func startNode(t *testing.T, host, id string, targets map[string]string, mode string) *node {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	spec := &x509.Certificate{SerialNumber: big.NewInt(time.Now().UnixNano()), Subject: pkix.Name{CommonName: "node.test"}, DNSNames: []string{"node.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature | x509.KeyUsageCertSign, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, IsCA: true, BasicConstraintsValid: true}
+	der, err := x509.CreateCertificate(rand.Reader, spec, spec, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificatePEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	secret := make([]byte, 32)
+	if _, err = rand.Read(secret); err != nil {
+		t.Fatal(err)
+	}
+	n := &node{id: id, host: host, mode: mode, secret: base64.StdEncoding.EncodeToString(secret), hySecret: "hy-" + id, mask: "mask-" + id, cert: certificatePEM, certRaw: base64.StdEncoding.EncodeToString(der), udpPort: ephemeralUDP(t), physical: &physical{targets: targets, seen: map[string]int{}}}
+	server := runtime(t, map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{
+		map[string]any{"type": "shadowsocks", "tag": "tcp-server", "listen": "127.0.0.1", "listen_port": 0, "network": "tcp", "method": "2022-blake3-aes-256-gcm", "password": n.secret},
+		map[string]any{"type": "hysteria2", "tag": "udp-server", "listen": "127.0.0.1", "listen_port": n.udpPort, "users": []any{map[string]any{"name": "fixture", "password": n.hySecret}}, "obfs": map[string]any{"type": "salamander", "password": n.mask}, "tls": map[string]any{"enabled": true, "certificate": []string{n.cert}, "key": []string{keyPEM}}},
+	}, "outbounds": []any{map[string]any{"type": "owned-test-physical", "tag": "physical"}}, "route": map[string]any{"final": "physical"}}, n.physical)
+	if mode != "ss-v2ray" {
+		n.tcpPort, n.xray = startCompositeXray(t, n)
+		return n
+	}
+	ss, ok := server.Inbound().Get("tcp-server")
+	if !ok {
+		t.Fatal("native SS server missing")
+	}
+	var upgraded atomic.Int64
+	front := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/shadowsocks" || r.Host != "node.test" {
+			http.Error(w, "wrong owned TLS/WebSocket destination", http.StatusForbidden)
+			return
+		}
+		conn, _, _, err := ws.UpgradeHTTP(r, w)
+		if err != nil {
+			return
+		}
+		upgraded.Add(1)
+		stream := v2raywebsocket.NewConn(conn, M.ParseSocksaddr(r.RemoteAddr), ws.StateServerSide)
+		_ = vmess.HandleMuxConnection(context.Background(), stream, M.ParseSocksaddr(r.RemoteAddr), pluginMux{ss.(adapter.TCPInjectableInbound)})
+		_ = stream.Close()
+	}))
+	tlsCert, err := tls.X509KeyPair([]byte(certificatePEM), []byte(keyPEM))
+	if err != nil {
+		t.Fatal(err)
+	}
+	front.TLS = &tls.Config{MinVersion: tls.VersionTLS12, Certificates: []tls.Certificate{tlsCert}}
+	front.StartTLS()
+	t.Cleanup(front.Close)
+	n.tcpPort = front.Listener.Addr().(*net.TCPAddr).Port
+	t.Cleanup(func() {
+		if !t.Failed() && upgraded.Load() == 0 {
+			t.Error("native encrypted TCP never reached its owned TLS/WebSocket server")
+		}
+	})
+	return n
+}
+func (n *node) plan(t *testing.T) map[string]any {
+	t.Helper()
+	helperPort, helperName := 1092, "sslocal.json"
+	helper := map[string]any{"server": n.host, "server_port": n.tcpPort, "password": n.secret, "method": "2022-blake3-aes-256-gcm", "local_address": "127.0.0.1", "local_port": 1092, "mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=node.test;path=/shadowsocks;certRaw=" + n.certRaw}
+	if n.mode != "ss-v2ray" {
+		helperPort, helperName, helper = 1090, "xray.json", n.xray
+	}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "outbounds": []any{
+		map[string]any{"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": helperPort, "version": "5"},
+		map[string]any{"type": "hysteria2", "tag": "udp-stack", "server": n.host, "server_port": n.udpPort, "password": n.hySecret, "obfs": map[string]any{"type": "salamander", "password": n.mask}, "tls": map[string]any{"enabled": true, "server_name": "node.test", "certificate_path": "cert.pem"}},
+	}, "route": map[string]any{"rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}, "final": "tcp-stack"}, "dns": map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "selected", "server": "10.77.0.1", "detour": "tcp-stack"}}, "final": "selected"}}
+	profile := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(encode(t, graph)), helperName: base64.StdEncoding.EncodeToString(encode(t, helper)), "cert.pem": base64.StdEncoding.EncodeToString([]byte(n.cert))}
+	metadata := map[string]any{"node_id": n.id, "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787", "start_layer": ""}
+	compiled, err := nativecomposite.Compile(n.mode, string(encode(t, profile)), string(encode(t, metadata)), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := nativecomposite.Plan(compiled, n.mode, n.id, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+func TestNativeCompositeEncryptedEntryAndExitBothLanes(t *testing.T) {
+	for _, entryMode := range []string{"ss-v2ray", "split", "max"} {
+		for _, exitMode := range []string{"ss-v2ray", "split", "max"} {
+			t.Run(entryMode+"/"+exitMode, func(t *testing.T) { runNativeCompositeTraffic(t, entryMode, exitMode) })
+		}
+	}
+}
+func runNativeCompositeTraffic(t *testing.T, entryMode, exitMode string) {
+	tcpEcho, udpEcho := echoes(t)
+	appTCP, appUDP := "198.51.100.10:9001", "198.51.100.10:9002"
+	exit := startNode(t, "192.0.2.2", strings.Repeat("b", 64), map[string]string{appTCP: tcpEcho, appUDP: udpEcho}, exitMode)
+	exitTCP, exitUDP := net.JoinHostPort(exit.host, strconv.Itoa(exit.tcpPort)), net.JoinHostPort(exit.host, strconv.Itoa(exit.udpPort))
+	entry := startNode(t, "192.0.2.1", strings.Repeat("a", 64), map[string]string{exitTCP: address(exit.tcpPort), exitUDP: address(exit.udpPort), appTCP: tcpEcho, appUDP: udpEcho}, entryMode)
+	entryTCP, entryUDP := net.JoinHostPort(entry.host, strconv.Itoa(entry.tcpPort)), net.JoinHostPort(entry.host, strconv.Itoa(entry.udpPort))
+	entryRoot, entryLegs, err := nativecomposite.Relabel(entry.plan(t), entry.mode, entry.id, "", "entry", "entry-composite-", "physical")
+	if err != nil {
+		t.Fatal(err)
+	}
+	exitRoot, exitLegs, err := nativecomposite.Relabel(exit.plan(t), exit.mode, exit.id, "", "proxy", "exit-composite-", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	outputs := append(append([]any{entryRoot, exitRoot, map[string]any{"type": "owned-test-physical", "tag": "physical"}}, entryLegs...), exitLegs...)
+	physical := &physical{targets: map[string]string{entryTCP: address(entry.tcpPort), entryUDP: address(entry.udpPort)}, seen: map[string]int{}}
+	client := runtime(t, map[string]any{"log": map[string]any{"disabled": true}, "outbounds": outputs, "route": map[string]any{"final": "proxy"}}, physical)
+	for _, tag := range []string{"entry", "proxy"} {
+		t.Run(tag, func(t *testing.T) {
+			via := dialer.NewDetour(client.Outbound(), tag, false)
+			ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+			defer cancel()
+			for _, network := range []string{"tcp", "udp"} {
+				to := appTCP
+				if network == "udp" {
+					to = appUDP
+				}
+				conn, err := via.DialContext(ctx, network, M.ParseSocksaddr(to))
+				if err != nil {
+					t.Fatal("encrypted native dial", network, err)
+				}
+				defer conn.Close()
+				for _, size := range []int{64, 1200, 2000} {
+					payload := bytes.Repeat([]byte{byte(size)}, size)
+					if err = conn.SetDeadline(time.Now().Add(5 * time.Second)); err != nil {
+						t.Fatal(err)
+					}
+					if _, err = conn.Write(payload); err != nil {
+						t.Fatal("encrypted native write", network, err)
+					}
+					got := make([]byte, size)
+					if _, err = io.ReadFull(conn, got); err != nil || !bytes.Equal(payload, got) {
+						t.Fatal("encrypted native payload or UDP reassembly", network, size, err)
+					}
+				}
+			}
+		})
+	}
+	if physical.tcp.Load() == 0 || physical.packets.Load() == 0 {
+		t.Fatal("entry did not use both encrypted physical lanes")
+	}
+	entry.physical.mu.Lock()
+	throughTCP, throughUDP := entry.physical.seen[exitTCP], entry.physical.seen[exitUDP]
+	entry.physical.mu.Unlock()
+	if throughTCP == 0 || throughUDP == 0 {
+		t.Fatal("exit TCP and QUIC were not both carried by the encrypted entry")
+	}
+	if exit.physical.tcp.Load() == 0 || exit.physical.packets.Load() == 0 {
+		t.Fatal("exit did not carry TCP and UDP to their owned destinations")
+	}
+}

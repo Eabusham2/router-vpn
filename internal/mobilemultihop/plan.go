@@ -27,6 +27,7 @@ import (
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilepq"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 	"router-vpn/internal/routechoice"
 )
 
@@ -185,7 +186,7 @@ func New(config, metadata string) (*Controller, error) {
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid frozen multihop metadata")
 	}
-	if meta.EntryStartLayer != "" && !MAXMode(meta.EntryMode) || meta.ExitStartLayer != "" && !MAXMode(meta.ExitMode) {
+	if meta.EntryStartLayer != "" && !MAXMode(meta.EntryMode) && !CompositeMode(meta.EntryMode) || meta.ExitStartLayer != "" && !MAXMode(meta.ExitMode) && !CompositeMode(meta.ExitMode) {
 		return nil, errors.New("captured entry or exit layer requires its authenticated native source")
 	}
 	if !exactID.MatchString(meta.EntryID) || !exactID.MatchString(meta.ExitID) || meta.EntryID == meta.ExitID || !proofID.MatchString(meta.EntryNodeID) || !proofID.MatchString(meta.ExitNodeID) || meta.EntryNodeID == meta.ExitNodeID {
@@ -197,10 +198,10 @@ func New(config, metadata string) (*Controller, error) {
 	if meta.EntryMode == "" {
 		meta.EntryMode = "wg"
 	}
-	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !IsPQMode(meta.EntryMode) && !MAXMode(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) {
+	if !awgpolicy.WireGuardFamily(meta.EntryMode) && !IsPQMode(meta.EntryMode) && !MAXMode(meta.EntryMode) && !ProxyEntryMode(meta.EntryMode) && !CompositeMode(meta.EntryMode) {
 		return nil, errors.New("unimplemented entry transport")
 	}
-	if !multihoprelay.PacketMode(meta.ExitMode) && !MAXMode(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !multihoprelay.NaiveMode(meta.ExitMode) && !XrayEntryMode(meta.ExitMode) {
+	if !multihoprelay.PacketMode(meta.ExitMode) && !MAXMode(meta.ExitMode) && meta.ExitMode != "shadowsocks" && meta.ExitMode != "hysteria2" && !multihoprelay.NaiveMode(meta.ExitMode) && !XrayEntryMode(meta.ExitMode) && !CompositeMode(meta.ExitMode) {
 		return nil, errors.New("unimplemented exit transport")
 	}
 	if meta.Execution != "local" && meta.Execution != "server" && meta.Execution != "auto" {
@@ -234,6 +235,9 @@ func New(config, metadata string) (*Controller, error) {
 	if err := validateMAXGraphOwners(root, meta); err != nil {
 		return nil, err
 	}
+	if err := validateCompositeGraphOwners(root, meta); err != nil {
+		return nil, err
+	}
 	var local map[string]any
 	var exitList string
 	entryCount, exitCount := 0, 0
@@ -260,6 +264,9 @@ func New(config, metadata string) (*Controller, error) {
 				}
 				if MAXMode(meta.EntryMode) {
 					expectedList, expectedEntry = "endpoints", PQType
+				}
+				if CompositeMode(meta.EntryMode) {
+					expectedList, expectedEntry = "outbounds", nativecomposite.Type
 				}
 				if IsPQMode(meta.EntryMode) {
 					expectedList, expectedEntry = "endpoints", PQType
@@ -295,7 +302,7 @@ func New(config, metadata string) (*Controller, error) {
 			}
 		}
 	}
-	if entryCount != 1 || exitCount != 1 || local == nil || !MAXMode(meta.ExitMode) && local["detour"] != meta.EntryTag {
+	if entryCount != 1 || exitCount != 1 || local == nil || !MAXMode(meta.ExitMode) && !CompositeMode(meta.ExitMode) && local["detour"] != meta.EntryTag {
 		return nil, errors.New("exact nested local graph required")
 	}
 	expectedType := proxyEntryType(meta.ExitMode)
@@ -306,6 +313,12 @@ func New(config, metadata string) (*Controller, error) {
 	}
 	if MAXMode(meta.ExitMode) {
 		expectedType = PQType
+	}
+	if CompositeMode(meta.ExitMode) {
+		expectedType = nativecomposite.Type
+		if exitList != "outbounds" {
+			return nil, errors.New("composite exit requires its native outbound manager")
+		}
 	}
 	if IsPQMode(meta.ExitMode) {
 		expectedType = PQType
@@ -369,7 +382,7 @@ func New(config, metadata string) (*Controller, error) {
 		return nil, e
 	}
 	c.proposal = multihoprelay.Request{SessionID: nonce, EntryNodeID: meta.EntryNodeID, ExitID: meta.ExitID, ExitMode: meta.ExitMode, Port: 26240 + int(seed[0]%32), Username: user, Password: password}
-	if MAXMode(meta.ExitMode) {
+	if MAXMode(meta.ExitMode) || CompositeMode(meta.ExitMode) {
 		c.proposal.ExitStartLayer = meta.ExitStartLayer
 	}
 	c.expected = multihoprelay.Lease{Request: c.proposal, NodeID: meta.EntryNodeID, ExitNodeID: meta.ExitNodeID, Host: entry.Hostname(), Port: c.proposal.Port, Username: user, Password: password}

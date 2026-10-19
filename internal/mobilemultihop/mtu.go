@@ -111,10 +111,17 @@ func ApplyMTUPolicy(config, profiles string) (string, error) {
 			continue
 		}
 		mode := proxyModeForOutbound(value)
-		if entry != nil || !ProxyEntryMode(mode) {
+		composite, _ := value["mode"].(string)
+		isComposite := CompositeMode(composite) && value["type"] == "routervpn-composite"
+		if entry != nil || !ProxyEntryMode(mode) && !isComposite {
 			return "", errors.New("MTU entry is ambiguous or in the wrong manager")
 		}
-		if err := validateProxyEntry(value, mode); err != nil {
+		if isComposite {
+			err = validateCompositeMTUEntry(root, value)
+		} else {
+			err = validateProxyEntry(value, mode)
+		}
+		if err != nil {
 			return "", err
 		}
 		entry, proxyEntry = value, true

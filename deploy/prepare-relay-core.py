@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
-PACKAGES = ('awgpolicy', 'mobilemultihop', 'mobilepq', 'applexray', 'multihoprelay', 'routechoice')
+PACKAGES = ('awgpolicy', 'mobilemultihop', 'mobilepq', 'applexray', 'multihoprelay', 'routechoice', 'nativesip003', 'nativecomposite')
 spec = importlib.util.spec_from_file_location('relay_amnezia', ROOT/'deploy/prepare-mobile-amnezia.py')
 AMNEZIA = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(AMNEZIA)
@@ -27,10 +27,13 @@ whitening_spec.loader.exec_module(WHITENING)
 pq_spec = importlib.util.spec_from_file_location('relay_native_pq', ROOT/'deploy/prepare-server-pq.py')
 PQ = importlib.util.module_from_spec(pq_spec)
 pq_spec.loader.exec_module(PQ)
+composite_spec = importlib.util.spec_from_file_location('relay_composite', ROOT/'deploy/prepare-mobile-composite.py')
+COMPOSITE = importlib.util.module_from_spec(composite_spec)
+composite_spec.loader.exec_module(COMPOSITE)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 def inputs():
-    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs()
+    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
 
@@ -77,6 +80,7 @@ def prepare_native(vendor, xray):
     WHITENING.prepare(vendor)
     XRAY.prepare(vendor, xray)
     PQ.prepare(vendor)
+    COMPOSITE.prepare(vendor)
     subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
     subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
     license = xray/'LICENSE'

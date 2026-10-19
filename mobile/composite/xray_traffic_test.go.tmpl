@@ -1,0 +1,221 @@
+//go:build with_quic
+
+package routervpncomposite_test
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/mlkem"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/pem"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sort"
+	"strconv"
+	"sync"
+	"testing"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func compositeCamouflage(t *testing.T) string {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	certificate := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "www.example.com"}, DNSNames: []string{"www.example.com"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, certificate, certificate, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	private, err := x509.MarshalPKCS8PrivateKey(key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pair, err := tls.X509KeyPair(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: private}))
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusNoContent) }))
+	server.EnableHTTP2 = true
+	server.TLS = &tls.Config{Certificates: []tls.Certificate{pair}, MinVersion: tls.VersionTLS13, MaxVersion: tls.VersionTLS13, CurvePreferences: []tls.CurveID{tls.X25519}}
+	server.StartTLS()
+	t.Cleanup(server.Close)
+	return server.Listener.Addr().String()
+}
+
+// Only exact test destinations reach this bridge. It records the native
+// Xray server's real TCP egress while preserving the shared node mapper. UDP
+// is deliberately unsupported here: the composite must use Hysteria2 for it.
+func compositeTCPBridge(t *testing.T, owner *physical, destination string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var mu sync.Mutex
+	stopped := false
+	connections := map[net.Conn]bool{}
+	t.Cleanup(func() {
+		cancel()
+		listener.Close()
+		mu.Lock()
+		defer mu.Unlock()
+		stopped = true
+		for conn := range connections {
+			conn.Close()
+		}
+	})
+	go func() {
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			mu.Lock()
+			if stopped {
+				mu.Unlock()
+				conn.Close()
+				return
+			}
+			connections[conn] = true
+			mu.Unlock()
+			go func() {
+				defer func() { conn.Close(); mu.Lock(); delete(connections, conn); mu.Unlock() }()
+				upstream, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(destination))
+				if err != nil {
+					return
+				}
+				defer upstream.Close()
+				stop := context.AfterFunc(ctx, func() { upstream.Close() })
+				defer stop()
+				done := make(chan struct{})
+				go func() { _, _ = io.Copy(upstream, conn); upstream.Close(); close(done) }()
+				_, _ = io.Copy(conn, upstream)
+				conn.Close()
+				<-done
+			}()
+		}
+	}()
+	return listener.Addr().String()
+}
+
+func startCompositeXray(t *testing.T, node *node) (int, map[string]any) {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("exact pinned Xray server binary required for encrypted split/MAX proof")
+	}
+	if node.mode != "split" && node.mode != "max" {
+		t.Fatal("unsupported Xray composite fixture mode")
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port, listenAddress := listener.Addr().(*net.TCPAddr).Port, listener.Addr().String()
+	listener.Close()
+	reality, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	user := map[string]any{"id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision", "encryption": "none"}
+	decryption := "none"
+	if node.mode == "max" {
+		seed := make([]byte, 64)
+		if _, err := rand.Read(seed); err != nil {
+			t.Fatal(err)
+		}
+		pq, err := mlkem.NewDecapsulationKey768(seed)
+		if err != nil {
+			t.Fatal(err)
+		}
+		user["encryption"] = "mlkem768x25519plus.native.0rtt." + base64.RawURLEncoding.EncodeToString(pq.EncapsulationKey().Bytes())
+		decryption = "mlkem768x25519plus.native.600s." + base64.RawURLEncoding.EncodeToString(seed)
+	}
+	clientStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{"serverName": "www.example.com", "fingerprint": "chrome", "password": base64.RawURLEncoding.EncodeToString(reality.PublicKey().Bytes()), "shortId": "0123456789abcdef"}}
+	client := map[string]any{"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": 1090, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}}}, "outbounds": []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"vnext": []any{map[string]any{"address": node.host, "port": port, "users": []any{user}}}}, "streamSettings": clientStream}}}
+	serverStream := map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{"target": compositeCamouflage(t), "serverNames": []string{"www.example.com"}, "privateKey": base64.RawURLEncoding.EncodeToString(reality.Bytes()), "shortIds": []string{"0123456789abcdef"}}}
+	outputs := []any{map[string]any{"tag": "block", "protocol": "blackhole"}}
+	rules := []any{}
+	keys := make([]string, 0, len(node.physical.targets))
+	for key := range node.physical.targets {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	for index, destination := range keys {
+		bridge := compositeTCPBridge(t, node.physical, destination)
+		host, destPort, err := net.SplitHostPort(destination)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_, bridgePort, err := net.SplitHostPort(bridge)
+		if err != nil {
+			t.Fatal(err)
+		}
+		tag := "owned-" + strconv.Itoa(index)
+		outputs = append(outputs, map[string]any{"tag": tag, "protocol": "freedom", "settings": map[string]any{"redirect": bridge, "finalRules": []any{map[string]any{"action": "allow", "network": "tcp", "ip": []string{"127.0.0.1/32"}, "port": bridgePort}, map[string]any{"action": "block", "blockDelay": "0-0"}}}})
+		rules = append(rules, map[string]any{"type": "field", "network": "tcp", "ip": []string{host + "/32"}, "port": destPort, "outboundTag": tag})
+	}
+	server := map[string]any{"log": map[string]any{"loglevel": "debug"}, "inbounds": []any{map[string]any{"tag": "captured-node", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{map[string]any{"id": user["id"], "flow": user["flow"]}}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": outputs, "routing": map[string]any{"domainStrategy": "AsIs", "rules": rules}}
+	path := filepath.Join(t.TempDir(), "owned-server.json")
+	if err := os.WriteFile(path, encode(t, server), 0600); err != nil {
+		t.Fatal(err)
+	}
+	log, err := os.Create(filepath.Join(t.TempDir(), "owned-server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "run", "-c", path)
+	command.Stdout, command.Stderr = log, log
+	if err := command.Start(); err != nil {
+		log.Close()
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	var processErr error
+	go func() { processErr = command.Wait(); close(done) }()
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("owned Xray fixture process did not exit")
+		}
+		log.Close()
+		if t.Failed() {
+			body, _ := os.ReadFile(log.Name())
+			t.Logf("owned exact Xray server diagnostics: %s", body)
+		}
+	})
+	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
+		select {
+		case <-done:
+			t.Fatal("owned Xray fixture exited", processErr)
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", listenAddress, 100*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return port, client
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("owned Xray fixture did not become ready")
+	return 0, nil
+}

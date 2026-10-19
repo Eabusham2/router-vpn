@@ -2,7 +2,7 @@ FROM golang:1.24.13-alpine AS build
 WORKDIR /src
 COPY . .
 RUN CGO_ENABLED=0 go build -trimpath -ldflags='-s -w' -o /router-vpn-agent ./cmd/router-agent
-RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay|PQRelay|NaiveRelay)Configurations' ./internal/multihoprelay
+RUN ROUTER_VPN_RELAY_FIXTURES_DIR=/relay-fixtures CGO_ENABLED=0 go test -count=1 -run 'TestExportPinnedCore(Relay|XrayRelay|PQRelay|NaiveRelay|CompositeRelay)Configurations' ./internal/multihoprelay
 
 FROM alpine:3.22 AS awg-tools-build
 ARG AWGTOOLS_COMMIT=5e882890fbca2316f8ca40e992789d24f67f0118

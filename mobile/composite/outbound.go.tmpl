@@ -1,0 +1,333 @@
+// Compiled only into the checksum-pinned native core. A composite is a fixed
+// TCP/UDP dispatcher over two authenticated transports, never a selector.
+package routervpncomposite
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"slices"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/log"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type Options struct {
+	Mode   string `json:"mode"`
+	NodeID string `json:"node_id"`
+	TCP    string `json:"tcp"`
+	UDP    string `json:"udp"`
+}
+
+func RegisterOutbound(registry *outbound.Registry) {
+	outbound.Register[Options](registry, nativecomposite.Type, NewOutbound)
+}
+
+var _ adapter.Outbound = (*Outbound)(nil)
+var _ adapter.Lifecycle = (*Outbound)(nil)
+
+type Outbound struct {
+	outbound.Adapter
+	ctx         context.Context
+	cancel      context.CancelFunc
+	manager     adapter.OutboundManager
+	options     Options
+	mu          sync.Mutex
+	tcp, udp    adapter.Outbound
+	closed      bool
+	once        sync.Once
+	closeErr    error
+	connections applexray.Connections
+}
+
+func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	if ctx == nil {
+		return nil, errors.New("composite requires its native context")
+	}
+	if err := nativecomposite.ValidateOwner(options.Mode, options.NodeID, tag, options.TCP, options.UDP); err != nil {
+		return nil, err
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return nil, errors.New("composite requires its native outbound manager")
+	}
+	owned, cancel := context.WithCancel(ctx)
+	return &Outbound{Adapter: outbound.NewAdapter(nativecomposite.Type, tag, []string{N.NetworkTCP, N.NetworkUDP}, []string{options.TCP, options.UDP}), ctx: owned, cancel: cancel, manager: manager, options: options}, nil
+}
+
+func (h *Outbound) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || h.ctx.Err() != nil {
+		return net.ErrClosed
+	}
+	if h.tcp != nil || h.udp != nil {
+		return errors.New("composite already has its transport owners")
+	}
+	tcp, okTCP := h.manager.Outbound(h.options.TCP)
+	udp, okUDP := h.manager.Outbound(h.options.UDP)
+	expectedTCP := applexray.Type
+	if h.options.Mode == "ss-v2ray" {
+		expectedTCP = "shadowsocks"
+	}
+	if !okTCP || !okUDP || tcp == nil || udp == nil || tcp.Type() != expectedTCP || udp.Type() != "hysteria2" || !slices.Contains(tcp.Network(), N.NetworkTCP) || !slices.Contains(udp.Network(), N.NetworkUDP) {
+		return errors.New("composite requires both exact TCP and Hysteria2 UDP owners")
+	}
+	h.tcp, h.udp = tcp, udp
+	return nil
+}
+
+func (h *Outbound) lane(network string) (adapter.Outbound, error) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.closed || h.ctx.Err() != nil || h.tcp == nil || h.udp == nil {
+		return nil, net.ErrClosed
+	}
+	switch N.NetworkName(network) {
+	case N.NetworkTCP:
+		return h.tcp, nil
+	case N.NetworkUDP:
+		return h.udp, nil
+	default:
+		return nil, errors.New("composite supports only TCP or UDP")
+	}
+}
+
+func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if N.NetworkName(network) == N.NetworkUDP {
+		packet, err := h.ListenPacket(ctx, destination)
+		if err != nil {
+			return nil, err
+		}
+		return &connectedPacket{PacketConn: packet, remote: destination}, nil
+	}
+	child, err := h.lane(network)
+	if err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		return nil, errors.New("composite dial has no context")
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	scope := newDialScope(h.ctx, ctx)
+	request, err := h.connections.Begin(scope)
+	if err != nil {
+		scope.release()
+		return nil, err
+	}
+	release := func() { request.Release(); scope.release() }
+	stop := context.AfterFunc(h.ctx, request.Cancel)
+	conn, err := child.DialContext(request.Context, N.NetworkTCP, destination)
+	if err != nil {
+		stop()
+		release()
+		return nil, err
+	}
+	if conn == nil {
+		stop()
+		release()
+		return nil, errors.New("composite TCP child returned no connection")
+	}
+	// SIP003 WebSocket streams do not implement net.Conn deadlines. The same
+	// bounded adapter used by native Xray gives every composite TCP lane real
+	// deadlines while retaining the caller and captured tunnel cancellation.
+	transport := &ownedStream{Conn: conn, release: release, stop: stop}
+	if h.options.Mode == "ss-v2ray" {
+		// The pinned SS2022 DialEarlyConn writes its request salt lazily.
+		// Finish that authenticated header before concurrent response reads;
+		// otherwise the first duplex read/write races over the request salt.
+		abort := context.AfterFunc(request.Context, func() { _ = transport.Close() })
+		_, err = transport.Write(nil)
+		abort()
+		if err != nil {
+			_ = transport.Close()
+			return nil, err
+		}
+	}
+	stream := applexray.NewStreamConn(request.Context, transport, destination)
+	if err = request.Publish(stream); err != nil {
+		return nil, err
+	}
+	if err = scope.commit(); err != nil {
+		_ = stream.Close()
+		return nil, err
+	}
+	return stream, nil
+}
+
+func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	child, err := h.lane(N.NetworkUDP)
+	if err != nil {
+		return nil, err
+	}
+	if ctx == nil {
+		return nil, errors.New("composite packet dial has no context")
+	}
+	if err = ctx.Err(); err != nil {
+		return nil, err
+	}
+	scope := newDialScope(h.ctx, ctx)
+	request, err := h.connections.Begin(scope)
+	if err != nil {
+		scope.release()
+		return nil, err
+	}
+	release := func() { request.Release(); scope.release() }
+	stop := context.AfterFunc(h.ctx, request.Cancel)
+	conn, err := child.ListenPacket(request.Context, destination)
+	if err != nil {
+		stop()
+		release()
+		return nil, err
+	}
+	if conn == nil {
+		stop()
+		release()
+		return nil, errors.New("composite UDP child returned no connection")
+	}
+	transport := &ownedPacket{PacketConn: conn, release: release, stop: stop}
+	packet := applexray.NewPacketConn(request.Context, transport)
+	if err = request.Publish(packet); err != nil {
+		return nil, err
+	}
+	if err = scope.commit(); err != nil {
+		_ = packet.Close()
+		return nil, err
+	}
+	return packet, nil
+}
+
+// DialContext cancellation applies while opening a socket. After publication,
+// the native engine and the socket's own Close/deadlines own its lifetime. In
+// particular, Hysteria2 cancels its offer context after successful QUIC setup;
+// retaining that transient context would destroy an established nested lane.
+type dialScope struct {
+	context.Context
+	caller    context.Context
+	cancel    context.CancelFunc
+	mu        sync.Mutex
+	published bool
+	stop      func() bool
+}
+
+func newDialScope(owner, caller context.Context) *dialScope {
+	ctx, cancel := context.WithCancel(owner)
+	s := &dialScope{Context: ctx, caller: caller, cancel: cancel}
+	s.stop = context.AfterFunc(caller, func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		if !s.published {
+			s.cancel()
+		}
+	})
+	return s
+}
+func (s *dialScope) Value(key any) any { return s.caller.Value(key) }
+func (s *dialScope) Deadline() (time.Time, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	owner, ok := s.Context.Deadline()
+	if s.published {
+		return owner, ok
+	}
+	when, has := s.caller.Deadline()
+	if has && (!ok || when.Before(owner)) {
+		return when, true
+	}
+	return owner, ok
+}
+func (s *dialScope) commit() error {
+	s.mu.Lock()
+	err := s.Context.Err()
+	if err == nil {
+		err = s.caller.Err()
+	}
+	if err == nil {
+		s.published = true
+	}
+	s.mu.Unlock()
+	if err != nil {
+		s.release()
+		return err
+	}
+	s.stop()
+	return nil
+}
+func (s *dialScope) release() { s.stop(); s.cancel() }
+
+func (h *Outbound) Close() error {
+	h.once.Do(func() {
+		h.mu.Lock()
+		h.closed = true
+		h.mu.Unlock()
+		h.cancel()
+		h.closeErr = h.connections.Close()
+		// The native manager owns both children, including their protocol pools.
+		// Closing this wrapper owns only its pending and published connections.
+	})
+	return h.closeErr
+}
+
+type ownedStream struct {
+	net.Conn
+	once    sync.Once
+	err     error
+	release func()
+	stop    func() bool
+}
+
+func (c *ownedStream) Close() error {
+	c.once.Do(func() { c.err = c.Conn.Close(); c.stop(); c.release() })
+	return c.err
+}
+
+type ownedPacket struct {
+	net.PacketConn
+	once    sync.Once
+	err     error
+	release func()
+	stop    func() bool
+}
+
+func (c *ownedPacket) ReadPacket() ([]byte, net.Addr, error) {
+	packet := make([]byte, 65535)
+	n, from, err := c.PacketConn.ReadFrom(packet)
+	return packet[:n], from, err
+}
+func (c *ownedPacket) WritePacket(packet []byte, to net.Addr) error {
+	n, err := c.PacketConn.WriteTo(packet, to)
+	if err == nil && n != len(packet) {
+		return io.ErrShortWrite
+	}
+	return err
+}
+func (c *ownedPacket) Close() error {
+	c.once.Do(func() { c.err = c.PacketConn.Close(); c.stop(); c.release() })
+	return c.err
+}
+
+type connectedPacket struct {
+	net.PacketConn
+	remote M.Socksaddr
+}
+
+func (c *connectedPacket) Read(packet []byte) (int, error) {
+	n, _, err := c.ReadFrom(packet)
+	return n, err
+}
+func (c *connectedPacket) Write(packet []byte) (int, error) { return c.WriteTo(packet, c.remote) }
+func (c *connectedPacket) RemoteAddr() net.Addr             { return c.remote }

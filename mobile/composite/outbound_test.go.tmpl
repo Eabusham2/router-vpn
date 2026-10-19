@@ -1,0 +1,327 @@
+package routervpncomposite
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/common/dialer"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type testManager struct {
+	adapter.OutboundManager
+	values map[string]adapter.Outbound
+}
+
+func (m *testManager) Outbound(tag string) (adapter.Outbound, bool) {
+	value, ok := m.values[tag]
+	return value, ok
+}
+
+type testChild struct {
+	outbound.Adapter
+	dials, packets, closed atomic.Int64
+	stream                 func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	packet                 func(context.Context, M.Socksaddr) (net.PacketConn, error)
+}
+
+func (c *testChild) DialContext(ctx context.Context, network string, to M.Socksaddr) (net.Conn, error) {
+	c.dials.Add(1)
+	return c.stream(ctx, network, to)
+}
+func (c *testChild) ListenPacket(ctx context.Context, to M.Socksaddr) (net.PacketConn, error) {
+	c.packets.Add(1)
+	return c.packet(ctx, to)
+}
+func (c *testChild) Close() error { c.closed.Add(1); return nil }
+
+type echoPacket struct {
+	in       chan []byte
+	done     chan struct{}
+	once     sync.Once
+	closeErr error
+}
+
+func newEchoPacket() *echoPacket {
+	return &echoPacket{in: make(chan []byte, 4), done: make(chan struct{})}
+}
+func (p *echoPacket) ReadFrom(buffer []byte) (int, net.Addr, error) {
+	select {
+	case <-p.done:
+		return 0, nil, net.ErrClosed
+	case value := <-p.in:
+		return copy(buffer, value), M.ParseSocksaddr("192.0.2.10:53"), nil
+	}
+}
+func (p *echoPacket) WriteTo(buffer []byte, _ net.Addr) (int, error) {
+	select {
+	case <-p.done:
+		return 0, net.ErrClosed
+	case p.in <- append([]byte(nil), buffer...):
+		return len(buffer), nil
+	}
+}
+func (p *echoPacket) LocalAddr() net.Addr              { return &net.UDPAddr{} }
+func (p *echoPacket) SetDeadline(time.Time) error      { return os.ErrInvalid }
+func (p *echoPacket) SetReadDeadline(time.Time) error  { return os.ErrInvalid }
+func (p *echoPacket) SetWriteDeadline(time.Time) error { return os.ErrInvalid }
+func (p *echoPacket) Close() error                     { p.once.Do(func() { close(p.done) }); return p.closeErr }
+
+type contextKey struct{}
+
+func setup(t *testing.T, mode string) (*Outbound, *testManager, *testChild, *testChild) {
+	t.Helper()
+	tcpType := "routervpn-xray"
+	if mode == "ss-v2ray" {
+		tcpType = "shadowsocks"
+	}
+	tcp := &testChild{Adapter: outbound.NewAdapter(tcpType, "owned-tcp", []string{N.NetworkTCP}, nil)}
+	udp := &testChild{Adapter: outbound.NewAdapter("hysteria2", "owned-udp", []string{N.NetworkUDP}, nil)}
+	tcp.stream = func(ctx context.Context, network string, to M.Socksaddr) (net.Conn, error) {
+		if ctx.Value(contextKey{}) != "captured" || network != N.NetworkTCP || to.String() != "192.0.2.10:53" {
+			t.Error("TCP lost network, target or caller context")
+		}
+		a, b := net.Pipe()
+		go func() { defer b.Close(); _, _ = io.Copy(b, b) }()
+		return a, nil
+	}
+	udp.stream = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		t.Error("UDP used stream dispatch on the wrong owner")
+		return nil, net.ErrClosed
+	}
+	udp.packet = func(ctx context.Context, to M.Socksaddr) (net.PacketConn, error) {
+		if ctx.Value(contextKey{}) != "captured" || to.String() != "192.0.2.10:53" {
+			t.Error("UDP lost target or context")
+		}
+		return newEchoPacket(), nil
+	}
+	tcp.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+		t.Error("UDP went through TCP lane")
+		return nil, net.ErrClosed
+	}
+	manager := &testManager{values: map[string]adapter.Outbound{"owned-tcp": tcp, "owned-udp": udp}}
+	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), manager)
+	value, err := NewOutbound(ctx, nil, nil, "composite", Options{Mode: mode, NodeID: strings.Repeat("a", 64), TCP: "owned-tcp", UDP: "owned-udp"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := value.(*Outbound)
+	manager.values["composite"] = owner
+	t.Cleanup(func() { _ = owner.Close() })
+	if err = owner.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	return owner, manager, tcp, udp
+}
+
+func TestNativeCompositePreservesGenericDetourTCPAndUDP(t *testing.T) {
+	for _, mode := range []string{"ss-v2ray", "split", "max"} {
+		t.Run(mode, func(t *testing.T) {
+			owner, manager, tcp, udp := setup(t, mode)
+			if len(owner.Dependencies()) != 2 {
+				t.Fatal("native lifecycle lost a lane dependency")
+			}
+			detour := dialer.NewDetour(manager, "composite", false)
+			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), contextKey{}, "captured"), 2*time.Second)
+			defer cancel()
+			to := M.ParseSocksaddr("192.0.2.10:53")
+			for _, network := range []string{"tcp", "udp"} {
+				conn, err := detour.DialContext(ctx, network, to)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err = conn.SetDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				message := bytes.Repeat([]byte(network), 500)
+				if _, err = conn.Write(message); err != nil {
+					t.Fatal(err)
+				}
+				got := make([]byte, len(message))
+				if _, err = io.ReadFull(conn, got); err != nil || !bytes.Equal(message, got) {
+					t.Fatal("generic detour lost payload", err)
+				}
+				if err = conn.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			packet, err := detour.ListenPacket(ctx, to)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err = packet.SetReadDeadline(time.Now().Add(10 * time.Millisecond)); err != nil {
+				t.Fatal(err)
+			}
+			_, _, err = packet.ReadFrom(make([]byte, 1))
+			if !errors.Is(err, os.ErrDeadlineExceeded) {
+				t.Fatal("packet read has no deadline", err)
+			}
+			if err = packet.SetDeadline(time.Now().Add(time.Second)); err != nil {
+				t.Fatal(err)
+			}
+			if _, err = packet.WriteTo([]byte("packet-proof"), to); err != nil {
+				t.Fatal(err)
+			}
+			got := make([]byte, 64)
+			n, _, err := packet.ReadFrom(got)
+			if err != nil || string(got[:n]) != "packet-proof" {
+				t.Fatal("explicit packet detour lost payload", err)
+			}
+			_ = packet.Close()
+			if tcp.dials.Load() != 1 || tcp.packets.Load() != 0 || udp.dials.Load() != 0 || udp.packets.Load() != 2 {
+				t.Fatal("network dispatch substituted a lane")
+			}
+			if err = owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			if tcp.closed.Load() != 0 || udp.closed.Load() != 0 {
+				t.Fatal("wrapper closed manager-owned children")
+			}
+			if _, err = detour.DialContext(ctx, "tcp", to); !errors.Is(err, net.ErrClosed) {
+				t.Fatal("closed wrapper adopted a new connection", err)
+			}
+		})
+	}
+}
+
+func TestNativeCompositeCloseCancelsPendingAndLateDials(t *testing.T) {
+	for _, late := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancel", true: "late"}[late], func(t *testing.T) {
+			owner, _, tcp, _ := setup(t, "ss-v2ray")
+			started := make(chan struct{})
+			done := make(chan error, 1)
+			latePeer := make(chan net.Conn, 1)
+			tcp.stream = func(ctx context.Context, _ string, _ M.Socksaddr) (net.Conn, error) {
+				if _, ok := ctx.Deadline(); !ok {
+					t.Error("dial lost deadline")
+				}
+				close(started)
+				<-ctx.Done()
+				if !late {
+					return nil, ctx.Err()
+				}
+				a, b := net.Pipe()
+				latePeer <- b
+				return a, nil
+			}
+			ctx, cancel := context.WithTimeout(context.WithValue(context.Background(), contextKey{}, "captured"), time.Second)
+			defer cancel()
+			go func() { _, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.10:53")); done <- err }()
+			<-started
+			if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case err := <-done:
+				if err == nil {
+					t.Fatal("late connection escaped closed owner")
+				}
+			case <-time.After(time.Second):
+				t.Fatal("pending dial survived close")
+			}
+			if late {
+				peer := <-latePeer
+				defer peer.Close()
+				_ = peer.SetReadDeadline(time.Now().Add(time.Second))
+				if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+					t.Fatal("late native connection was not closed", err)
+				}
+			}
+		})
+	}
+}
+
+func TestNativeCompositeCancellationAndCloseErrorAreRetained(t *testing.T) {
+	owner, _, _, udp := setup(t, "max")
+	failure := errors.New("owned packet close failed")
+	udp.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+		p := newEchoPacket()
+		p.closeErr = failure
+		return p, nil
+	}
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), contextKey{}, "captured"))
+	defer cancel()
+	packet, err := owner.ListenPacket(ctx, M.ParseSocksaddr("192.0.2.10:53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() { _, _, err := packet.ReadFrom(make([]byte, 1)); read <- err }()
+	if err = owner.Close(); !errors.Is(err, failure) {
+		t.Fatal("teardown failure was swallowed", err)
+	}
+	if err = owner.Close(); !errors.Is(err, failure) {
+		t.Fatal("second close erased teardown failure", err)
+	}
+	select {
+	case err = <-read:
+		if err == nil {
+			t.Fatal("closed packet produced a successful proof")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("published packet survived close")
+	}
+	other, _, _, _ := setup(t, "split")
+	packet, err = other.ListenPacket(ctx, M.ParseSocksaddr("192.0.2.10:53"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Like net.Dialer, an established packet socket survives cancellation of
+	// its completed dial context; Hysteria2 relies on this after authentication.
+	cancel()
+	if err = packet.SetDeadline(time.Now().Add(time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = packet.WriteTo([]byte("retained"), M.ParseSocksaddr("192.0.2.10:53")); err != nil {
+		t.Fatal("completed dial context killed its owned socket", err)
+	}
+	buffer := make([]byte, 8)
+	if n, _, err := packet.ReadFrom(buffer); err != nil || string(buffer[:n]) != "retained" {
+		t.Fatal("completed offer lost its packet connection", err)
+	}
+	if err = other.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = packet.ReadFrom(buffer); err == nil {
+		t.Fatal("engine close did not cancel its retained packet socket")
+	}
+}
+
+func TestNativeCompositeRejectsMissingOrSubstitutedLanes(t *testing.T) {
+	for _, bad := range []string{"missing", "direct", "selector", "network"} {
+		t.Run(bad, func(t *testing.T) {
+			owner, manager, _, udp := setup(t, "ss-v2ray")
+			_ = owner.Close()
+			switch bad {
+			case "missing":
+				delete(manager.values, "owned-udp")
+			case "network":
+				udp.Adapter = outbound.NewAdapter("hysteria2", "owned-udp", []string{N.NetworkTCP}, nil)
+			default:
+				udp.Adapter = outbound.NewAdapter(bad, "owned-udp", []string{N.NetworkUDP}, nil)
+			}
+			ctx := service.ContextWith[adapter.OutboundManager](context.Background(), manager)
+			value, err := NewOutbound(ctx, nil, nil, "next", Options{Mode: "ss-v2ray", NodeID: strings.Repeat("a", 64), TCP: "owned-tcp", UDP: "owned-udp"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer value.(*Outbound).Close()
+			if err = value.(*Outbound).Start(adapter.StartStateStart); err == nil {
+				t.Fatal("missing or weaker transport became a whole graph")
+			}
+		})
+	}
+}

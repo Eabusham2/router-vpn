@@ -34,6 +34,18 @@ func RouterComposeMAXMultihop(config, metadata, entrySource, exitSource string) 
 	return mobilemultihop.ComposeMAXMultihop(config, metadata, entrySource, exitSource)
 }
 
+// Composite sources retain the real TCP and Hysteria2 UDP transports together.
+// Both compiler and composer reject unpublished or mismatched lane ownership.
+func RouterCompileCompositeProfile(mode, profile, metadata, start string) (string, error) {
+	return mobilemultihop.CompileCompositeProfile(mode, profile, metadata, start)
+}
+func RouterCompositeMultihopBase(config, mode, nodeID, startLayer string) (string, error) {
+	return mobilemultihop.CompositeMultihopBase(config, mode, nodeID, startLayer)
+}
+func RouterComposeCompositeMultihop(config, metadata, entrySource, exitSource string) (string, error) {
+	return mobilemultihop.ComposeCompositeMultihop(config, metadata, entrySource, exitSource)
+}
+
 // RouterCompileWireGuardProfile verifies the paired key and keeps native options.
 func RouterCompileWireGuardProfile(config, nodeID string) (string, error) {
 	return mobilemultihop.CompileWireGuardProfile(config, nodeID)

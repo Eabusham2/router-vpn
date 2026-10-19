@@ -19,3 +19,4 @@ export ROUTER_VPN_SING_TEST_BINARY="$FIXTURE_DIR/sing-fixture"
 export ROUTER_VPN_V2RAY_TEST_BINARY="$FIXTURE_DIR/v2ray-plugin-fixture"
 (cd "$VENDOR" && go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor -count=1 -timeout=120s -v ./protocol/routervpnsip003test)
 (cd "$VENDOR" && go test -race -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor,with_low_memory -count=1 -timeout=120s ./protocol/routervpnsip003test)
+bash "$ROOT/deploy/test_mobile_composite_pinned.sh" "$VENDOR"

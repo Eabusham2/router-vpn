@@ -20,6 +20,7 @@ import (
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilepq"
+	"router-vpn/internal/nativecomposite"
 )
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -124,8 +125,14 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 			return nil, err
 		}
 		if e.StartLayer != nil {
-			if _, _, err := WrapStartLayer(validated, e.Mode, e.StartLayer, ExitStartLayerTag, ""); err != nil {
-				return nil, err
+			if nativecomposite.Mode(e.Mode) {
+				if _, err := compositePlan(e); err != nil {
+					return nil, err
+				}
+			} else {
+				if _, _, err := WrapStartLayer(validated, e.Mode, e.StartLayer, ExitStartLayerTag, ""); err != nil {
+					return nil, err
+				}
 			}
 		}
 		seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] = true
@@ -437,6 +444,12 @@ func validateTransport(e Exit) (map[string]any, error) {
 	if !literalServer(e.DNS) {
 		return nil, errors.New("relay exit requires a literal exit-routed DNS server")
 	}
+	if nativecomposite.Mode(e.Mode) {
+		if err := nativecomposite.ValidatePlan(e.Transport, e.Mode, e.NodeID, ""); err != nil {
+			return nil, err
+		}
+		return copyMap(e.Transport)
+	}
 	// Validate before JSON copying: encoding/json normalizes invalid UTF-8,
 	// which would silently change an authentication credential.
 	if NaiveMode(e.Mode) {
@@ -568,13 +581,23 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		"dns":      map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": exit.DNS, "detour": "exit"}}, "final": "exit-dns"},
 		"route":    map[string]any{"default_domain_resolver": "exit-dns", "rules": []any{map[string]any{"source_ip_cidr": []string{netip.PrefixFrom(peer, bits).String()}, "invert": true, "action": "reject"}}, "final": "exit"},
 	}
-	if PacketMode(exit.Mode) {
+	if nativecomposite.Mode(exit.Mode) {
+		plan, err := compositePlan(exit)
+		if err != nil {
+			return nil, err
+		}
+		owner, children, err := nativecomposite.Relabel(plan, exit.Mode, exit.NodeID, LayerMode(exit.StartLayer), "exit", CompositePrefix, "")
+		if err != nil {
+			return nil, err
+		}
+		config["outbounds"] = append([]any{owner}, children...)
+	} else if PacketMode(exit.Mode) {
 		config["endpoints"] = []any{transport}
 		config["outbounds"] = []any{}
 	} else {
 		config["outbounds"] = []any{transport}
 	}
-	if exit.StartLayer != nil {
+	if exit.StartLayer != nil && !nativecomposite.Mode(exit.Mode) {
 		inner, outer, err := WrapStartLayer(transport, exit.Mode, exit.StartLayer, ExitStartLayerTag, "")
 		if err != nil {
 			return nil, err
