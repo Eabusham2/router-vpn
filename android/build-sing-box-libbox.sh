@@ -25,8 +25,21 @@ AMNEZIA_LICENSE_OUT="$LIBDIR/native-amneziawg-LICENSE.txt"
 TOR_PACKAGE="$LIBDIR/tor-native"
 TOR_NOTICES="$LIBDIR/tor-notices"
 TOR_SOURCE_CACHE="$ROOT/.vendor/tor-sources"
+# Select the shared pinned NDK before either the Tor C package or Libbox is
+# built. Hosted runners may export a different default ANDROID_NDK_HOME.
+SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
+if [[ -z "$SDK_ROOT" || ! -x "$SDKMANAGER" ]]; then
+  echo 'Android sdkmanager was not found under ANDROID_HOME/ANDROID_SDK_ROOT' >&2
+  exit 1
+fi
+
+yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
+"$SDKMANAGER" "ndk;$NDK_VERSION" >/dev/null
+export ANDROID_NDK_HOME="$SDK_ROOT/ndk/$NDK_VERSION"
+export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 TOR_SOURCE_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-tor.py" --digest)
-python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform android --output "$TOR_PACKAGE" --source-cache "$TOR_SOURCE_CACHE"
+python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform android --output "$TOR_PACKAGE" --source-cache "$TOR_SOURCE_CACHE" --ndk "$ANDROID_NDK_HOME"
 python3 "$ROOT/../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES"
 OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
 OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
@@ -134,17 +147,6 @@ command -v java >/dev/null || { echo 'Java 17 is required to validate the combin
 command -v javap >/dev/null || { echo 'javap is required to validate the combined AAR API' >&2; exit 1; }
 command -v jar >/dev/null || { echo 'JDK jar tool is required to inspect the combined AAR classes' >&2; exit 1; }
 
-SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
-SDKMANAGER="$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager"
-if [[ -z "$SDK_ROOT" || ! -x "$SDKMANAGER" ]]; then
-  echo 'Android sdkmanager was not found under ANDROID_HOME/ANDROID_SDK_ROOT' >&2
-  exit 1
-fi
-
-yes | "$SDKMANAGER" --licenses >/dev/null 2>&1 || true
-"$SDKMANAGER" "ndk;$NDK_VERSION" >/dev/null
-export ANDROID_NDK_HOME="$SDK_ROOT/ndk/$NDK_VERSION"
-export ANDROID_NDK_ROOT="$ANDROID_NDK_HOME"
 # The combined binary must satisfy libXray's pinned Go 1.26.3 module while
 # preserving sing-box at its immutable source commit. Do not use ambient Go.
 export GOTOOLCHAIN="$GO_TOOLCHAIN+auto"

@@ -5,6 +5,9 @@ import hashlib
 import importlib.util
 import itertools
 import json
+import os
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest import mock
@@ -16,6 +19,63 @@ spec.loader.exec_module(GATE)
 
 
 class TorNativeGate(unittest.TestCase):
+    def build_prefix(self, sdk_variable='ANDROID_HOME', lose_selection=False, fail_install=False):
+        shell=(ROOT/'android/build-sing-box-libbox.sh').read_text()
+        prefix=shell.split('python3 "$ROOT/../deploy/stage-mobile-tor-notices.py"',1)[0]
+        if lose_selection:
+            original='export ANDROID_NDK_HOME="$SDK_ROOT/ndk/$NDK_VERSION"'
+            self.assertIn(original,prefix)
+            prefix=prefix.replace(original,'# reproduce the pre-selection Tor build')
+        helper=r'''import json,os,sys
+from pathlib import Path
+args=sys.argv[1:];name=Path(sys.argv[0]).name
+root=Path(os.environ['ROUTERVPN_TEST_SDK']);pin='28.0.13004108';ndk=root/'ndk'/pin
+with open(os.environ['ROUTERVPN_TEST_CALLS'],'a') as out:
+    out.write(json.dumps(dict(name=name,args=args,ndk_home=os.environ.get('ANDROID_NDK_HOME'),ndk_root=os.environ.get('ANDROID_NDK_ROOT')))+'\n')
+if name=='sdkmanager':
+    if args==['--licenses']:sys.exit(0)
+    assert args==['ndk;'+pin],args
+    if os.environ.get('ROUTERVPN_TEST_FAIL_INSTALL')=='1':sys.exit(23)
+    ndk.mkdir(parents=True,exist_ok=True);(ndk/'source.properties').write_text('Pkg.Revision = '+pin+'\n')
+elif '--digest' in args:print('0'*64)
+else:
+    assert Path(args[0]).name=='build-mobile-tor-package.py',args
+    assert args[args.index('--platform')+1]=='android'
+    assert args[args.index('--ndk')+1]==str(ndk)
+    assert os.environ['ANDROID_NDK_HOME']==str(ndk) and os.environ['ANDROID_NDK_ROOT']==str(ndk)
+    assert (ndk/'source.properties').read_text()=='Pkg.Revision = '+pin+'\n'
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-pinned-ndk-') as temporary:
+            root=Path(temporary);sdk=root/'sdk with spaces';binary=root/'tools';binary.mkdir()
+            manager=sdk/'cmdline-tools/latest/bin/sdkmanager';manager.parent.mkdir(parents=True)
+            for path in (manager,binary/'python3'):
+                path.write_text('#!'+sys.executable+'\n'+helper);path.chmod(0o755)
+            script=root/'android-prefix.sh';script.write_text(prefix)
+            log=root/'calls.jsonl'
+            env=dict(os.environ,PATH=str(binary)+os.pathsep+os.environ['PATH'],
+                     ANDROID_HOME='',ANDROID_SDK_ROOT='',ANDROID_NDK_HOME=str(root/'foreign-ndk'),ANDROID_NDK_ROOT=str(root/'other-ndk'),
+                     ROUTERVPN_TEST_SDK=str(sdk),ROUTERVPN_TEST_CALLS=str(log),ROUTERVPN_TEST_FAIL_INSTALL='1' if fail_install else '0')
+            env[sdk_variable]=str(sdk)
+            result=subprocess.run(['bash',str(script)],env=env,text=True,capture_output=True,timeout=15)
+            calls=[json.loads(line) for line in log.read_text().splitlines()]
+            return result,calls
+
+    def test_real_builder_selects_one_pinned_ndk_before_tor(self):
+        for variable in ('ANDROID_HOME','ANDROID_SDK_ROOT'):
+            with self.subTest(variable=variable):
+                result,calls=self.build_prefix(variable)
+                self.assertEqual(result.returncode,0,result.stderr)
+                install=next(i for i,call in enumerate(calls) if call['args']==['ndk;28.0.13004108'])
+                tor=next(i for i,call in enumerate(calls) if call['name']=='python3' and Path(call['args'][0]).name=='build-mobile-tor-package.py')
+                self.assertLess(install,tor)
+
+    def test_missing_selection_or_failed_install_cannot_start_native_tor(self):
+        result,calls=self.build_prefix(lose_selection=True)
+        self.assertNotEqual(result.returncode,0,'ambient NDK regression was accepted')
+        result,calls=self.build_prefix(fail_install=True)
+        self.assertEqual(result.returncode,23,result.stderr)
+        self.assertFalse(any(call['name']=='python3' and Path(call['args'][0]).name=='build-mobile-tor-package.py' for call in calls))
+
     def populate(self,root):
         for kind,mode,layer in itertools.product(GATE.KINDS,GATE.MODES,GATE.LAYERS):
             (root/f'{kind}-{mode}-{layer}.json').write_text('{}')
