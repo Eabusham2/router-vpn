@@ -36,6 +36,7 @@ type socketOwner struct {
 	socket  io.Closer
 	once    sync.Once
 	failure error
+	release func()
 }
 
 type ownedConn struct {
@@ -80,8 +81,8 @@ func (n *Network) begin() error {
 	return nil
 }
 
-func (n *Network) adopt(socket io.Closer) (*socketOwner, error) {
-	owner := &socketOwner{network: n, socket: socket}
+func (n *Network) adopt(socket io.Closer, release func()) (*socketOwner, error) {
+	owner := &socketOwner{network: n, socket: socket, release: release}
 	n.mu.Lock()
 	closing := n.closing || n.ctx.Err() != nil
 	if !closing {
@@ -95,12 +96,6 @@ func (n *Network) adopt(socket io.Closer) (*socketOwner, error) {
 	return owner, nil
 }
 
-func (n *Network) operationContext(ctx context.Context) (context.Context, func()) {
-	combined, cancel := context.WithCancel(ctx)
-	stop := context.AfterFunc(n.ctx, cancel)
-	return combined, func() { stop(); cancel() }
-}
-
 func (n *Network) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
 	if ctx == nil {
 		return nil, errors.New("native Tor dial context is missing")
@@ -111,10 +106,16 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (net
 	if err := n.begin(); err != nil {
 		return nil, err
 	}
-	combined, cancel := n.operationContext(ctx)
-	defer cancel()
+	combined := n.operationContext(ctx)
+	transferred := false
+	defer func() {
+		if !transferred {
+			combined.release()
+		}
+	}()
 	connection, err := n.dial(combined, network, address)
 	if err != nil {
+		combined.release()
 		n.discard(connection)
 		return nil, err
 	}
@@ -122,17 +123,19 @@ func (n *Network) DialContext(ctx context.Context, network, address string) (net
 		n.discard(nil)
 		return nil, errors.New("captured Tor dialer returned no socket")
 	}
-	if err := combined.Err(); err != nil {
+	if err := combined.publish(); err != nil {
+		combined.release()
 		n.discard(connection)
 		if n.ctx.Err() != nil {
 			return nil, net.ErrClosed
 		}
 		return nil, err
 	}
-	owner, err := n.adopt(connection)
+	owner, err := n.adopt(connection, combined.release)
 	if err != nil {
 		return nil, err
 	}
+	transferred = true
 	return &ownedConn{Conn: connection, owner: owner}, nil
 }
 
@@ -146,10 +149,16 @@ func (n *Network) ListenPacket(ctx context.Context, network, address string) (ne
 	if err := n.begin(); err != nil {
 		return nil, err
 	}
-	combined, cancel := n.operationContext(ctx)
-	defer cancel()
+	combined := n.operationContext(ctx)
+	transferred := false
+	defer func() {
+		if !transferred {
+			combined.release()
+		}
+	}()
 	connection, err := n.listen(combined, network, address)
 	if err != nil {
+		combined.release()
 		n.discard(connection)
 		return nil, err
 	}
@@ -157,22 +166,27 @@ func (n *Network) ListenPacket(ctx context.Context, network, address string) (ne
 		n.discard(nil)
 		return nil, errors.New("captured Tor packet listener returned no socket")
 	}
-	if err := combined.Err(); err != nil {
+	if err := combined.publish(); err != nil {
+		combined.release()
 		n.discard(connection)
 		if n.ctx.Err() != nil {
 			return nil, net.ErrClosed
 		}
 		return nil, err
 	}
-	owner, err := n.adopt(connection)
+	owner, err := n.adopt(connection, combined.release)
 	if err != nil {
 		return nil, err
 	}
+	transferred = true
 	return &ownedPacket{PacketConn: connection, owner: owner}, nil
 }
 
 func (owner *socketOwner) Close() error {
 	owner.once.Do(func() {
+		if owner.release != nil {
+			owner.release()
+		}
 		owner.failure = owner.socket.Close()
 		n := owner.network
 		n.mu.Lock()
