@@ -52,10 +52,15 @@ need(
 )
 need(
     "internal/common/profile_schema.go",
-    'case "tor", "tor_bridge", "tor-bridge"',
+    'case "tor":',
+    'case "tor_bridge", "tor-bridge":',
     'ext.Protocol = "tor-bridge"',
     "Tor bridge has a dynamic circuit exit",
     "normalizeExternalTorBridge",
+)
+need(
+    "internal/common/tor_plain_test.go",
+    "TestPlainTor",
 )
 need(
     "internal/common/tor_bridge_test.go",
