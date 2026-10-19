@@ -181,6 +181,119 @@ enum IOSNativeMAXProfile {
 /// Captures complete MAX encryption before reusing the existing two-node graph
 /// builder. Temporary PQ-only values are construction inputs, never runnable
 /// selections; all captured layers must be restored before native validation.
+enum IOSNativeCompositeMultihop {
+    static let modeIDs: Set<String> = ["ss-v2ray", "split", "max"]
+    static let maximumBytes = 4 * 1024 * 1024
+    struct Capture {
+        let mode: String
+        let nodeID: String
+        let startLayer: String
+        let source: String
+        let baseFiles: [String: Data]
+        func outbound() throws -> [String: Any] {
+            let graph = try IOSNativeCompositeMultihop.object(baseFiles["sing-box.json"])
+            guard let outputs = graph["outbounds"] as? [[String: Any]], outputs.count == 1 else {
+                throw IOSNativeCompositeMultihop.issue()
+            }
+            return outputs[0]
+        }
+    }
+
+    static func capture(root: [String: Any], mode: String, profile: [String: Any], nodeID: String,
+                        layer: String, compiler: (String, String, String, String) throws -> String,
+                        baseCompiler: (String, String, String, String) throws -> String) throws -> Capture? {
+        guard modeIDs.contains(mode) else { return nil }
+        do {
+            guard profile["node_kind"] as? String == "router-vpn", profile["node_proof_id"] as? String == nodeID,
+                  nodeID.count == 64, nodeID.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }),
+                  ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(layer),
+                  let profiles = root["profiles"] as? [String: [String: String]], let assets = profiles[mode],
+                  let api = profile["router_api"] as? String else { throw issue() }
+            let input = try text(assets)
+            let start: String
+            if layer == "off" { start = "" }
+            else {
+                guard let aes = profiles["shadowsocks"] else { throw issue() }
+                start = try text(aes)
+            }
+            let policy = try text(["node_id": nodeID, "node_kind": "router-vpn", "router_api": api, "start_layer": layer])
+            guard policy.utf8.count <= 16384 else { throw issue() }
+            let source = try compiler(mode, input, policy, start)
+            var expected = try object(Data(source.utf8))
+            guard let outputs = expected["outbounds"] as? [[String: Any]], outputs.count == (layer == "off" ? 3 : 4),
+                  let owner = outputs.first, Set(owner.keys) == Set(["type", "tag", "mode", "node_id", "tcp", "udp"]),
+                  owner["type"] as? String == "routervpn-composite", owner["tag"] as? String == "proxy",
+                  owner["mode"] as? String == mode, owner["node_id"] as? String == nodeID,
+                  owner["tcp"] as? String == "routervpn-composite-tcp", owner["udp"] as? String == "routervpn-composite-udp" else { throw issue() }
+            let base = try baseCompiler(source, mode, nodeID, layer)
+            expected["outbounds"] = [owner]
+            guard try text(expected) == text(object(Data(base.utf8))) else { throw issue() }
+            return Capture(mode: mode, nodeID: nodeID, startLayer: layer, source: source,
+                           baseFiles: ["sing-box.json": Data(base.utf8)])
+        } catch { throw issue() }
+    }
+
+    static func compose(files: [String: Data], metadata: String, entry: Capture?, exit: Capture?,
+                        compiler: (String, String, String, String) throws -> String) throws -> [String: Data] {
+        guard entry != nil || exit != nil, metadata.utf8.count <= 16384,
+              let captured = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: String],
+              let entryTag = captured["entry_tag"], entryTag == "routervpn-hop-entry",
+              let input = files["sing-box.json"], let config = String(data: input, encoding: .utf8) else { throw issue() }
+        var expected = try object(input)
+        guard var outputs = expected["outbounds"] as? [[String: Any]] else { throw issue() }
+        let endpointTags = (expected["endpoints"] as? [[String: Any]] ?? []).compactMap { $0["tag"] as? String }
+        for (side, capture) in [("entry", entry), ("exit", exit)] {
+            guard let mode = captured[side + "_mode"], modeIDs.contains(mode) == (capture != nil) else { throw issue() }
+            guard let capture else { continue }
+            guard capture.mode == mode, captured[side + "_node_id"] == capture.nodeID,
+                  (captured[side + "_start_layer"] ?? "") == (capture.startLayer == "off" ? "" : capture.startLayer),
+                  let originals = try object(Data(capture.source.utf8))["outbounds"] as? [[String: Any]],
+                  let root = originals.first else { throw issue() }
+            let tag = side == "entry" ? entryTag : "proxy", prefix = "routervpn-" + side + "-composite-"
+            let positions = outputs.indices.filter { outputs[$0]["tag"] as? String == tag }
+            guard positions.count == 1, !endpointTags.contains(tag),
+                  !outputs.contains(where: { ($0["tag"] as? String ?? "").hasPrefix(prefix) }),
+                  !endpointTags.contains(where: { $0.hasPrefix(prefix) }) else { throw issue() }
+            var placeholder = root; placeholder["tag"] = tag
+            if side == "exit" { placeholder["detour"] = entryTag }
+            guard try text(placeholder) == text(outputs[positions[0]]) else { throw issue() }
+            var restored = root; restored["tag"] = tag
+            restored["tcp"] = prefix + "tcp"; restored["udp"] = prefix + "udp"
+            outputs[positions[0]] = restored
+            for var child in originals.dropFirst() {
+                guard let old = child["tag"] as? String,
+                      ["routervpn-composite-tcp", "routervpn-composite-udp", "routervpn-composite-start"].contains(old) else { throw issue() }
+                let suffix = String(old.dropFirst("routervpn-composite-".count))
+                child["tag"] = prefix + suffix
+                if suffix != "start" && capture.startLayer != "off" { child["detour"] = prefix + "start" }
+                else if side == "exit" { child["detour"] = entryTag }
+                else { child.removeValue(forKey: "detour") }
+                outputs.append(child)
+            }
+        }
+        expected["outbounds"] = outputs
+        let compiled = try compiler(config, metadata, entry?.source ?? "", exit?.source ?? "")
+        guard try text(expected) == text(object(Data(compiled.utf8))) else { throw issue() }
+        var result = files; result["sing-box.json"] = Data(compiled.utf8)
+        return result
+    }
+
+    private static func object(_ data: Data?) throws -> [String: Any] {
+        guard let data, !data.isEmpty, data.count <= maximumBytes,
+              let value = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw issue() }
+        return value
+    }
+    private static func text(_ value: Any) throws -> String {
+        let data = try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys])
+        guard !data.isEmpty, data.count <= maximumBytes else { throw issue() }
+        return String(decoding: data, as: UTF8.self)
+    }
+    private static func issue() -> NSError {
+        NSError(domain: "RouterVPN.CompositeMultihop", code: 1, userInfo: [NSLocalizedDescriptionKey:
+            "The composite profile lost its captured node, encryption, or TCP/UDP transport."])
+    }
+}
+
 enum IOSNativeMAXMultihop {
     struct Capture {
         let mode: String

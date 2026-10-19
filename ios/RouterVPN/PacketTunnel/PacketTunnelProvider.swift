@@ -458,14 +458,34 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         entryProfile["node_proof_id"] = entryProofID
         exitProfile["node_proof_id"] = exitProofID
         let entryMode = selectedProfile["multihop_entry_mode"] as? String ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
+        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3","ss-v2ray","split","max"].contains(entryMode) else { throw tunnelError(58,"Unknown captured entry transport.") }
         let entryLayerMode = try IOSMultihopStartLayer.selected(entryProfile)
         let exitLayerMode = try IOSMultihopStartLayer.selected(exitProfile)
         let entryMAX = try multihopMAX(root: entryRoot, mode: entryMode, profile: entryProfile, nodeID: entryProofID, layer: entryLayerMode)
         let exitMAX = try multihopMAX(root: root, mode: exitMode, profile: exitProfile, nodeID: exitProofID, layer: exitLayerMode)
+        let compositeCompiler: (String, String, String, String) throws -> String = { mode, assets, policy, layer in
+            var failure: NSError?
+            let compiled: String? = LibboxRouterCompileCompositeProfile(mode, assets, policy, layer, &failure)
+            if let failure { throw failure }
+            guard let compiled else { throw self.tunnelError(58, "Composite profile did not compile.") }
+            return compiled
+        }
+        let compositeBase: (String, String, String, String) throws -> String = { config, mode, node, layer in
+            var failure: NSError?
+            let compiled: String? = LibboxRouterCompositeMultihopBase(config, mode, node, layer, &failure)
+            if let failure { throw failure }
+            guard let compiled else { throw self.tunnelError(58, "Composite construction lost its captured owner.") }
+            return compiled
+        }
+        let entryComposite = try IOSNativeCompositeMultihop.capture(root: entryRoot, mode: entryMode, profile: entryProfile,
+            nodeID: entryProofID, layer: entryLayerMode, compiler: compositeCompiler, baseCompiler: compositeBase)
+        let exitComposite = try IOSNativeCompositeMultihop.capture(root: root, mode: exitMode, profile: exitProfile,
+            nodeID: exitProofID, layer: exitLayerMode, compiler: compositeCompiler, baseCompiler: compositeBase)
         let endpoint: [String: Any]
         if let entryMAX {
             endpoint = try entryMAX.endpoint()
+        } else if let entryComposite {
+            endpoint = try entryComposite.outbound()
         } else if entryMode == "wg" {
             endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: entryProofID, name: "Router VPN entry").endpoint
         } else if ["awg2-fast", "awg2-strong"].contains(entryMode) {
@@ -500,6 +520,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let rawFiles: [String: Data]
         if let exitMAX {
             rawFiles = try RouterVPNMultihopGraph.pqDNSPolicy(exitMAX.baseFiles, profile: exitProfile)
+        } else if let exitComposite {
+            rawFiles = try RouterVPNMultihopGraph.compositeDNSPolicy(exitComposite.baseFiles, profile: exitProfile)
         } else if exitMode == "wg" {
             let exit = try multihopWireGuardEndpoint(root: root, expectedProofID: exitProofID, name: "Router VPN exit")
             rawFiles = try RouterVPNMultihopGraph.wireGuardFiles(endpoint: exit.endpoint, profile: exitProfile, dnsServers: exit.dns)
@@ -538,10 +560,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         // Only ordinary hops pass a separate AES source to the runtime factory.
         var entryConstruction = entryProfile, exitConstruction = exitProfile
         entryConstruction["start_layer"] = "off"; exitConstruction["start_layer"] = "off"
-        let entryLayer = try entryMAX == nil ? IOSMultihopStartLayer.capture(profile: entryProfile,
+        let entryLayer = try entryMAX == nil && entryComposite == nil ? IOSMultihopStartLayer.capture(profile: entryProfile,
             profiles: entryRoot["profiles"] as? [String: [String: String]] ?? [:]) :
             IOSMultihopStartLayer.Capture(mode: entryLayerMode, source: nil, graphProfile: entryConstruction)
-        let exitLayer = try exitMAX == nil ? IOSMultihopStartLayer.capture(profile: exitProfile,
+        let exitLayer = try exitMAX == nil && exitComposite == nil ? IOSMultihopStartLayer.capture(profile: exitProfile,
             profiles: root["profiles"] as? [String: [String: String]] ?? [:]) :
             IOSMultihopStartLayer.Capture(mode: exitLayerMode, source: nil, graphProfile: exitConstruction)
         var constructionExitProfile = exitLayer.graphProfile
@@ -581,8 +603,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
         }
         let policy = try JSONSerialization.data(withJSONObject: ["entry": entryProfile, "exit": exitProfile])
+        if entryComposite != nil || exitComposite != nil {
+            files = try IOSNativeCompositeMultihop.compose(files: files, metadata: hopMetadata, entry: entryComposite, exit: exitComposite) { config, metadata, entry, exit in
+                var failure: NSError?
+                let result: String? = LibboxRouterComposeCompositeMultihop(config, metadata, entry, exit, &failure)
+                if let failure { throw failure }
+                guard let result else { throw self.tunnelError(58, "Composite multihop did not restore both transport lanes.") }
+                return result
+            }
+        }
         let mtuFiles: [String: Data]
-        if entryMAX != nil || exitMAX != nil {
+        if entryMAX != nil || exitMAX != nil || entryComposite != nil || exitComposite != nil {
             guard let source = files["sing-box.json"], let config = String(data: source, encoding: .utf8) else { throw tunnelError(58, "Missing complete MAX graph.") }
             var failure: NSError?
             let sized: String? = LibboxRouterApplyMultihopMTUPolicy(config, String(decoding: policy, as: UTF8.self), &failure)
@@ -622,7 +653,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         do {
             let execution = selectedProfile["multihop_execution"] as? String ?? "local"
             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
-            if entryLayer.source != nil || exitLayer.source != nil || entryMAX != nil || exitMAX != nil {
+            if entryLayer.source != nil || exitLayer.source != nil || entryMAX != nil || exitMAX != nil || entryComposite != nil || exitComposite != nil {
                 try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata,
                                  entryStartLayerSource: entryLayer.source, exitStartLayerSource: exitLayer.source)
             } else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }

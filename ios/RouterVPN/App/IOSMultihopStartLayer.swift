@@ -123,7 +123,7 @@ enum IOSMultihopStartLayer {
             guard let text = value as? String else { throw issue("Invalid requested entry layer.") }
             required = text
         } else { required = "" }
-        if ["max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(captured["entry_mode"] as? String ?? "") {
+        if ["max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "ss-v2ray", "split", "max"].contains(captured["entry_mode"] as? String ?? "") {
             // MAX's exact chain compiler already embedded the selected layer.
             // The native multihop factory must still validate that full chain;
             // a second source could wrap a different node or double-encrypt it.

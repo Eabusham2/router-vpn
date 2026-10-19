@@ -27,18 +27,18 @@ graph.multihopEntryID = "home-entry"
 graph.multihopExitID = "home-exit"
 graph.multihopExitMode = "shadowsocks"
 // Every offered exit mode survives the real private Codable profile model.
-for mode in ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"] {
+for mode in ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"] {
     var candidate = graph
     candidate.multihopExitMode = mode
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
     try check("saved graph preserves exact exit family \(mode)", copy == candidate && copy.multihopExitMode == mode)
 }
-for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"] {
+for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"] {
     var candidate = graph; candidate.multihopEntryMode = mode
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(candidate))
     try check("saved entry mode keeps exact engine variant",copy.multihopEntryMode == mode && copy == candidate)
 }
-for mode in ["split", "max", "tor", "wg-pq-unknown", "awg2-pq-unknown", "unregistered", "reality-vision\n"] {
+for mode in ["ss-v2ray-unknown", "split-unknown", "max-unknown", "tor", "wg-pq-unknown", "awg2-pq-unknown", "unregistered", "reality-vision\n"] {
     var invalid = try JSONSerialization.jsonObject(with:JSONEncoder().encode(graph)) as! [String:Any]
     invalid["multihopExitMode"] = mode
     do { _ = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONSerialization.data(withJSONObject:invalid));fatalError("unknown exit silently accepted") } catch { checks += 1 }

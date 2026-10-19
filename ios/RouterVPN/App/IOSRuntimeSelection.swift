@@ -73,7 +73,7 @@ enum IOSRuntimeSelector {
     static let multihopModeIDs: Set<String> = [
         "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
         "reality-vision", "reality-pq-vision", "reality-xhttp",
-        "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"
+        "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"
     ]
     static let maxAssetBytes = 4 * 1024 * 1024
     static let maxProfileBytes = 12 * 1024 * 1024

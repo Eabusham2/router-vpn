@@ -442,7 +442,10 @@ for entryMode in ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-visi
     let importedEntry = proxyInput(entryMode)
     var expectedEntry = importedEntry; expectedEntry["tag"] = P.entryTag
     try check("all native exit fixtures generated", Set(xrayExits.keys) == Set(P.nativeXrayModes))
-    for exitMode in P.supportedExitModes {
+    // Composite modes require two captured sources and restoration before
+    // native validation. Their 513 real Swift/Go graphs and 297 production
+    // provider assemblies run in the mandatory composite host/native gate.
+    for exitMode in P.supportedExitModes where !P.nativeCompositeModes.contains(exitMode) {
         let pqExit = ["wg-pq", "awg2-pq"].contains(exitMode)
         let packetExit = pqExit || ["wg", "awg2-fast", "awg2-strong"].contains(exitMode)
         var capturedExit = wgExitProfile; capturedExit["multihop_exit_mode"] = exitMode

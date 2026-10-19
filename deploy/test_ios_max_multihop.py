@@ -17,6 +17,11 @@ P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
 anchor = ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)'
 assert P.GO.count(anchor) == 1
 P.GO = P.GO.replace(anchor, ''' case "max-compile":value,err=mobilemultihop.CompileMAXProfile(r.Mode,r.Files,r.Policy)
+ case "composite-compile":value,err=mobilemultihop.CompileCompositeProfile(r.Mode,r.Files,r.Policy,r.Source)
+ case "composite-base":value,err=mobilemultihop.CompositeMultihopBase(r.Config,r.Mode,r.Node,r.Policy)
+ case "composite-compose":
+  var src struct{Entry,Exit string};err=json.Unmarshal([]byte(r.Source),&src)
+  if err==nil{value,err=mobilemultihop.ComposeCompositeMultihop(r.Config,r.Policy,src.Entry,src.Exit)}
  case "max-base":value,err=mobilemultihop.MAXMultihopBase(r.Config,r.Mode,r.Node,r.Policy)
  case "max-compose":
   var src struct{Entry,Exit string};err=json.Unmarshal([]byte(r.Source),&src)
@@ -51,6 +56,9 @@ func apiResult(_ error:inout NSError?,_ action:()throws->String)->String?{do{ret
 func LibboxRouterCompileMAXProfile(_ mode:String,_ files:String,_ policy:String,_ error:inout NSError?)->String?{apiResult(&error){try maxCompile(mode,files,policy)}}
 func LibboxRouterMAXMultihopBase(_ config:String,_ mode:String,_ node:String,_ layer:String,_ error:inout NSError?)->String?{apiResult(&error){try maxBase(config,mode,node,layer)}}
 func LibboxRouterComposeMAXMultihop(_ config:String,_ meta:String,_ a:String,_ b:String,_ error:inout NSError?)->String?{apiResult(&error){try maxCompose(config,meta,a,b)}}
+func LibboxRouterCompileCompositeProfile(_ mode:String,_ files:String,_ policy:String,_ start:String,_ error:inout NSError?)->String?{apiResult(&error){try bridge(["Op":"composite-compile","Mode":mode,"Files":files,"Policy":policy,"Source":start])}}
+func LibboxRouterCompositeMultihopBase(_ config:String,_ mode:String,_ node:String,_ layer:String,_ error:inout NSError?)->String?{apiResult(&error){try bridge(["Op":"composite-base","Config":config,"Mode":mode,"Node":node,"Policy":layer])}}
+func LibboxRouterComposeCompositeMultihop(_ config:String,_ meta:String,_ a:String,_ b:String,_ error:inout NSError?)->String?{apiResult(&error){try bridge(["Op":"composite-compose","Config":config,"Policy":meta,"Source":text(["Entry":a,"Exit":b])])}}
 func LibboxRouterCompilePQProfile(_ mode:String,_ files:String,_ node:String,_ error:inout NSError?)->String?{apiResult(&error){try compile(mode,files,node)}}
 func LibboxRouterCompileProxyEntry(_ files:String,_ mode:String,_ error:inout NSError?)->String?{error=NSError(domain:"UnexercisedOrdinaryCompiler",code:1);return nil}
 func LibboxRouterCompileXrayExit(_ files:String,_ mode:String,_ error:inout NSError?)->String?{error=NSError(domain:"UnexercisedOrdinaryCompiler",code:1);return nil}

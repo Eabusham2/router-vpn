@@ -15,7 +15,8 @@ enum RouterVPNMultihopGraph {
     static let entryPrivateTag = "routervpn-hop-entry-private"
     static let nativeXrayModes = ["reality-vision", "reality-pq-vision", "reality-xhttp"]
     static let nativeNaiveModes = ["naive-h2", "naive-h3"]
-    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2"] + nativeXrayModes + nativeNaiveModes
+    static let nativeCompositeModes = ["ss-v2ray", "split", "max"]
+    static let supportedExitModes = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2"] + nativeXrayModes + nativeNaiveModes + nativeCompositeModes
     private static let maxBytes = 4 * 1024 * 1024
 
     static func build(entryEndpoint: [String: Any], entryProfile: [String: Any],
@@ -45,6 +46,12 @@ enum RouterVPNMultihopGraph {
             }
         }
         let capturedEntryMode = exitProfile["multihop_entry_mode"] as? String ?? "wg"
+        if nativeCompositeModes.contains(capturedEntryMode) || entryEndpoint["type"] as? String == "routervpn-composite" {
+            guard nativeCompositeModes.contains(capturedEntryMode), entryEndpoint["type"] as? String == "routervpn-composite",
+                  entryEndpoint["mode"] as? String == capturedEntryMode, entryEndpoint["node_id"] as? String == entryProof else {
+                throw issue("Composite entry differs from its captured mode or node identity.")
+            }
+        }
         if nativeNaiveModes.contains(capturedEntryMode) || entryEndpoint["type"] as? String == "naive" {
             guard nativeNaiveModes.contains(capturedEntryMode), entryEndpoint["type"] as? String == "naive",
                   try boolean(entryEndpoint["quic"]) == (capturedEntryMode == "naive-h3") else {
@@ -120,6 +127,13 @@ enum RouterVPNMultihopGraph {
                     throw issue("Two WireGuard hops cannot use the same server key under different node labels.")
                 }
             }
+        } else if nativeCompositeModes.contains(exitMode) {
+            guard originalEndpoints.isEmpty, outbounds.count == 1, let native = outbounds.first,
+                  native["tag"] as? String == "proxy", native["mode"] as? String == exitMode,
+                  native["node_id"] as? String == exitProof else {
+                throw issue("Composite exit lost its captured construction owner.")
+            }
+            proxy = try proxyEntry(native, tag: "proxy")
         } else if nativeXrayModes.contains(exitMode) {
             let proxies = outbounds.filter { $0["tag"] as? String == "proxy" }
             guard originalEndpoints.isEmpty, proxies.count == 1, let native = proxies.first,
@@ -369,6 +383,32 @@ enum RouterVPNMultihopGraph {
         return ["sing-box.json": encoded]
     }
 
+    /// A composite construction has one TCP/UDP dispatcher in the outbound
+    /// manager. Preserve that captured node while applying its saved resolver;
+    /// both encrypted lanes are restored before this graph becomes runnable.
+    static func compositeDNSPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
+        guard files.count == 1, let data = files["sing-box.json"], data.count <= maxBytes,
+              var graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+              graph["endpoints"] == nil || (graph["endpoints"] as? [Any])?.isEmpty == true,
+              let outbounds = graph["outbounds"] as? [[String: Any]], outbounds.count == 1,
+              let owner = outbounds.first, Set(owner.keys) == Set(["type", "tag", "mode", "node_id", "tcp", "udp"]),
+              owner["type"] as? String == "routervpn-composite", owner["tag"] as? String == "proxy",
+              let mode = owner["mode"] as? String, nativeCompositeModes.contains(mode),
+              let node = owner["node_id"] as? String, fullMatch(node, "[0-9a-f]{64}"),
+              profile["node_kind"] as? String == "router-vpn", profile["node_proof_id"] as? String == node,
+              owner["tcp"] as? String == "routervpn-composite-tcp", owner["udp"] as? String == "routervpn-composite-udp",
+              let dns = graph["dns"] as? [String: Any],
+              let servers = dns["servers"] as? [[String: Any]], servers.count == 1,
+              let importedDNS = servers[0]["server"] as? String, serverIP(importedDNS),
+              servers[0]["detour"] as? String == "proxy" else {
+            throw issue("Composite DNS lost its captured TCP/UDP owner or node resolver.")
+        }
+        graph["dns"] = try selectedDNS(profile, importedDNS: importedDNS, requireImportedMatch: false)
+        let encoded = try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])
+        guard encoded.count <= maxBytes else { throw issue("Composite DNS graph exceeds its bound.") }
+        return ["sing-box.json": encoded]
+    }
+
     /// Apply a saved IPv6 preference to the existing single-node WG graph.
     static func singleWireGuardPolicy(_ files: [String: Data], profile: [String: Any]) throws -> [String: Data] {
         struct Policy: Decodable { let ipv6_mode: String?; let daita_enabled: Bool?; let jumbo_tun: Bool? }
@@ -531,6 +571,19 @@ enum RouterVPNMultihopGraph {
     /// intact and refuses any attempt to replace its physical dial ownership.
     private static func proxyEntry(_ value: [String: Any], tag: String) throws -> [String: Any] {
         let mode = value["type"] as? String ?? ""
+        if mode == "routervpn-composite" {
+            guard Set(value.keys) == Set(["type", "tag", "mode", "node_id", "tcp", "udp"]),
+                  let rawMode = value["mode"] as? String, nativeCompositeModes.contains(rawMode),
+                  let node = value["node_id"] as? String, fullMatch(node, "[0-9a-f]{64}"),
+                  value["tcp"] as? String == "routervpn-composite-tcp",
+                  value["udp"] as? String == "routervpn-composite-udp" else {
+                throw issue("Composite construction must preserve both captured transport references.")
+            }
+            // This unresolved owner is restored by the captured-source composer
+            // before MTU policy and the mandatory native runtime validation.
+            var result = value; result["tag"] = tag
+            return result
+        }
         if mode == "routervpn-xray" {
             guard Set(value.keys) == Set(["type", "tag", "mode", "config_json"]),
                   let rawMode = value["mode"] as? String,
