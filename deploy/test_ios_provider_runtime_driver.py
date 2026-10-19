@@ -15,6 +15,66 @@ SOURCE = ROOT / 'ios/RouterVPN/PacketTunnel'
 FIXTURE = r'''
 import Foundation
 
+enum IOSNativeMAXProfile {
+    static let modeIDs: Set<String> = ["max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+}
+enum IOSMAXSourceSelection {
+    static func profile(_ root: [String: Any]) throws -> [String: Any] {
+        guard let profiles = root["routerProfiles"] as? [[String: Any]], profiles.count == 1,
+              profiles[0]["id"] as? String == root["selectedRouterID"] as? String else { throw Main.failure }
+        return profiles[0]
+    }
+}
+final class MAXGate: @unchecked Sendable {
+    let entered = DispatchSemaphore(value: 0)
+    let cancelled = DispatchSemaphore(value: 0)
+    let release = DispatchSemaphore(value: 0)
+}
+final class MAXBoundary: @unchecked Sendable {
+    static let shared = MAXBoundary()
+    private let lock = NSLock()
+    private var owners: [RouterVPNMAXPreparation] = []
+    private var next: MAXGate?
+    func holdNext() -> MAXGate {
+        lock.lock(); defer { lock.unlock() }
+        let gate = MAXGate(); next = gate; return gate
+    }
+    func takeGate() -> MAXGate? { lock.lock(); defer { lock.unlock() }; let gate = next; next = nil; return gate }
+    func add(_ owner: RouterVPNMAXPreparation) { lock.lock(); owners.append(owner); lock.unlock() }
+    var all: [RouterVPNMAXPreparation] { lock.lock(); defer { lock.unlock() }; return owners }
+}
+final class RouterVPNMAXPreparation: @unchecked Sendable {
+    let id = UUID().uuidString
+    private let captured: Data
+    private let gate: MAXGate?
+    private let lock = NSLock()
+    private var cancelled = false
+    private var closed = false
+    init(provider: [String: Any]) throws {
+        guard Set(provider.keys) == ["engine", "bundle", "rawProfileID", "max_source_sha256"],
+              provider["engine"] as? String == "libbox", let raw = provider["rawProfileID"] as? String,
+              IOSNativeMAXProfile.modeIDs.contains(raw), let data = provider["bundle"] as? Data,
+              provider["max_source_sha256"] as? [String: String] == ["bundle/" + raw: Main.digest],
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["max_launch_owner"] == nil else { throw Main.failure }
+        captured = data; gate = MAXBoundary.shared.takeGate(); MAXBoundary.shared.add(self)
+    }
+    func run() throws -> [String: Any] {
+        gate?.entered.signal()
+        if let gate { precondition(gate.release.wait(timeout: .now() + 8) == .success, "fixture MAX worker was never released") }
+        guard healthy() else { throw Main.failure }
+        var root = try JSONSerialization.jsonObject(with: captured) as! [String: Any]
+        var profile = try IOSMAXSourceSelection.profile(root)
+        profile["endpoint"] = "203.0.113.40"
+        root["routerProfiles"] = [profile]; root["max_launch_owner"] = id
+        return ["bundle": try JSONSerialization.data(withJSONObject: root)]
+    }
+    func healthy() -> Bool { lock.lock(); defer { lock.unlock() }; return !cancelled && !closed }
+    func cancel() { lock.lock(); cancelled = true; lock.unlock(); gate?.cancelled.signal() }
+    func close() { cancel(); lock.lock(); closed = true; lock.unlock() }
+    var isClosed: Bool { lock.lock(); defer { lock.unlock() }; return closed }
+    static func issue() -> NSError { Main.failure }
+}
+
 final class Forwarding {
     var active = false
     func invalidate() { active = false }
@@ -63,6 +123,11 @@ final class PacketTunnelProvider: @unchecked Sendable {
               selectedProfile["node_proof_id"] as? String == Main.node else { throw Main.failure }
         events.append("compile:" + raw)
         if failCompile.contains(raw) { throw Main.failure }
+        if IOSNativeMAXProfile.modeIDs.contains(raw) {
+            guard root["max_launch_owner"] as? String == MAXBoundary.shared.all.last?.id,
+                  selectedProfile["endpoint"] as? String == "203.0.113.40",
+                  selectedProfile["tls_name"] as? String == "vpn.example.invalid" else { throw Main.failure }
+        }
         return LibboxCompilation(files: ["sing-box.json": Data(raw.utf8)], nodeID: Main.node,
             proofURL: URL(string: "http://10.66.0.1:18118/node-proof")!,
             profile: try JSONSerialization.data(withJSONObject: selectedProfile))
@@ -70,6 +135,9 @@ final class PacketTunnelProvider: @unchecked Sendable {
     func proveSelectedNode(url: URL, expectedNodeID: String, proxyPort: Int,
                            completion: @escaping (Error?) -> Void) {
         precondition(expectedNodeID == Main.node && proxyPort == RouterVPNLibboxEngine.proofProxyPort)
+        if IOSNativeMAXProfile.modeIDs.contains(libboxEngine?.raw ?? "") {
+            precondition(MAXBoundary.shared.all.last?.isClosed == true, "MAX preparation was not drained before node proof")
+        }
         events.append("node:" + (libboxEngine?.raw ?? "missing")); proofs.append(completion)
     }
     func enableForwarding(profileData: Data, proofID: String) {
@@ -79,15 +147,17 @@ final class PacketTunnelProvider: @unchecked Sendable {
     }
     func configure(_ kind: String, _ raws: [String], catalog: [String]? = nil, preferred: String? = nil) throws {
         let captured = catalog ?? raws
-        let profile: [String: Any] = ["id": "home", "node_kind": "router-vpn", "node_proof_id": Main.node]
+        let profile: [String: Any] = ["id": "home", "node_kind": "router-vpn", "node_proof_id": Main.node,
+                                      "endpoint": "vpn.example.invalid", "tls_name": "vpn.example.invalid"]
         var files: [String: [String: String]] = [:]
         for raw in captured { files[raw] = ["sing-box.json": Data("{}".utf8).base64EncodedString()] }
-        let root: [String: Any] = ["selectedRouterID": "home", "immutable": "captured", "profiles": files]
+        let root: [String: Any] = ["selectedRouterID": "home", "immutable": "captured", "profiles": files, "routerProfiles": [profile]]
         let policy = try RouterVPNStrategyPolicy(catalog: ["version": 1, "candidates": captured.map(Main.reference)],
                                                  root: root, profile: profile)
         let plan = try policy.plan(Main.request(kind, raws, preferred: preferred), initial: true)
         driver = StrategyRuntimeDriver(provider: self, bundle: try JSONSerialization.data(withJSONObject: root),
-            profile: try JSONSerialization.data(withJSONObject: profile), strict: true, initialHold: initialLease)
+            profile: try JSONSerialization.data(withJSONObject: profile), strict: true, initialHold: initialLease,
+            maxSources: Dictionary(uniqueKeysWithValues: captured.filter(IOSNativeMAXProfile.modeIDs.contains).map { ("bundle/" + $0, Main.digest) }))
         owner = try RouterVPNProviderStrategy(policy: policy, plan: plan, bundleDigest: Main.digest, nodeID: Main.node, driver: driver)
     }
     func start() { owner.start(); flush() }
@@ -99,8 +169,19 @@ final class PacketTunnelProvider: @unchecked Sendable {
         owner.invalidate(epoch: owner.currentEpoch)
     }
     func stop() {
-        owner.stop(); clearPathProofGuard(); cancelActiveProof()
-        let old = libboxEngine; libboxEngine = nil; old?.stop(); flush()
+        let done = DispatchSemaphore(value: 0)
+        stopWithoutWaiting { done.signal() }
+        precondition(done.wait(timeout: .now() + 8) == .success); flush()
+    }
+    func stopWithoutWaiting(_ completion: @escaping () -> Void) {
+        owner.stop()
+        driver.drain { [self] in
+            clearPathProofGuard(); cancelActiveProof()
+            let old = libboxEngine; libboxEngine = nil; old?.stop(); completion()
+        }
+    }
+    func drain(_ completion: @escaping () -> Void) {
+        driver.drain(completion)
     }
 
     // SHIPPING_DRIVER
@@ -255,6 +336,46 @@ final class RouterVPNLibboxEngine {
         invalid.finish(0)
         check("remaining captured candidate still requires native DNS", invalid.events.contains("dns:shadowsocks") && status(invalid)["phase"] as? String == "connected")
 
+        let maximum = PacketTunnelProvider()
+        let beforeMAX = MAXBoundary.shared.all.count
+        try maximum.configure("auto", ["max-tls-wg", "max-quic-wg"]); maximum.start()
+        maximum.finish(0, error: failure)
+        check("MAX fallback captures a fresh preparation owner", MAXBoundary.shared.all.count == beforeMAX + 2)
+        check("each MAX launch drains preparation before native proof", MAXBoundary.shared.all.suffix(2).allSatisfy(\.isClosed))
+        maximum.finish(1)
+        check("MAX keeps the single native reader and exact final mode", maximum.maximumEngines == 1 && status(maximum)["proven_raw"] as? String == "max-quic-wg")
+        maximum.stop()
+
+        let held = PacketTunnelProvider()
+        try held.configure("auto", ["max-tls-wg"])
+        let gate = MAXBoundary.shared.holdNext(); held.owner.start()
+        check("MAX preparation can be held inside the real driver queue", gate.entered.wait(timeout: .now() + 4) == .success)
+        let heldRequest = status(held)["request_id"]!
+        check("Cancel acknowledges before the MAX worker returns", held.owner.handle(data(["operation": "strategy-cancel", "request_id": heldRequest,
+              "provider_session": held.owner.providerSession])) != nil && gate.cancelled.wait(timeout: .now() + 2) == .success)
+        let drained = DispatchSemaphore(value: 0); held.drain { drained.signal() }
+        check("Cancel does not pretend that a held MAX worker has drained", drained.wait(timeout: .now()) == .timedOut)
+        gate.release.signal()
+        check("MAX cancellation drains the exact old worker", drained.wait(timeout: .now() + 4) == .success)
+        held.flush()
+        check("cancelled MAX output cannot create a native engine", held.engines.isEmpty && status(held)["phase"] as? String == "cancelled")
+        check("a later request uses fresh captured MAX preparation", run(held, "auto", ["max-tls-wg"]) != nil && held.engines.count == 1)
+        held.finish(0)
+        check("the replacement still needs both native proofs", status(held)["phase"] as? String == "connected" && held.events.contains("dns:max-tls-wg"))
+        held.stop()
+
+        let heldStop = PacketTunnelProvider()
+        try heldStop.configure("manual", ["max-tls-wg"])
+        let stopGate = MAXBoundary.shared.holdNext(); heldStop.owner.start()
+        check("Stop scenario captures a pending MAX worker", stopGate.entered.wait(timeout: .now() + 4) == .success)
+        let stoppedMAX = DispatchSemaphore(value: 0); heldStop.stopWithoutWaiting { stoppedMAX.signal() }
+        check("Stop cancels before waiting for its serial driver", stopGate.cancelled.wait(timeout: .now() + 2) == .success)
+        check("OS stop completion waits for MAX cleanup", stoppedMAX.wait(timeout: .now()) == .timedOut)
+        stopGate.release.signal()
+        check("OS stop completes only after the pending worker drains", stoppedMAX.wait(timeout: .now() + 4) == .success)
+        heldStop.flush()
+        check("stopped MAX output never reaches native startup", heldStop.engines.isEmpty && status(heldStop)["phase"] as? String == "stopped")
+
         for provider in [auto, dns, smart, cancelled, cancelledEarly, invalid] { provider.stop() }
         print("Shipping iOS native strategy driver: PASS (\(checks) executable generation, DNS, MTU, restoration and quarantine checks)")
     }
@@ -270,15 +391,28 @@ def main():
     original = '        private let queue = DispatchQueue('
     assert driver.count(original) == 1
     driver = driver.replace(original, '        let queue = DispatchQueue(', 1)
+    protect = driver.index('        func protect(epoch: String)')
+    signal = driver.index('            cancelMAXPreparation()', protect)
+    no_immediate_cancel = driver[:signal] + driver[signal:].replace('            cancelMAXPreparation()', '            // mutation: cancellation deferred until queue admission', 1)
+    close_before_proof = '                retireMAXPreparation(preparation); preparation = nil'
+    assert driver.count(close_before_proof) == 1
+    no_adoption_drain = driver.replace(close_before_proof, '                // mutation: retain preparation until after proof callback')
     with tempfile.TemporaryDirectory(prefix='router-ios-native-strategy-') as temporary:
         directory = Path(temporary)
-        harness = directory / 'main.swift'
-        harness.write_text(FIXTURE.replace('    // SHIPPING_DRIVER', driver))
-        binary = directory / 'strategy-driver-tests'
-        subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library',
-            str(SOURCE / 'RouterVPNStrategyPolicy.swift'), str(SOURCE / 'RouterVPNProviderStrategy.swift'),
-            str(harness), '-o', str(binary)], check=True, timeout=90)
-        subprocess.run([str(binary)], check=True, timeout=20)
+        for name, source, accepted in [('shipping',driver,True), ('deferred-cancel',no_immediate_cancel,False), ('undrained-adoption',no_adoption_drain,False)]:
+            harness = directory / (name + '.swift')
+            harness.write_text(FIXTURE.replace('    // SHIPPING_DRIVER', source))
+            binary = directory / name
+            subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library',
+                str(SOURCE / 'RouterVPNStrategyPolicy.swift'), str(SOURCE / 'RouterVPNProviderStrategy.swift'),
+                str(harness), '-o', str(binary)], check=True, timeout=90)
+            result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=20)
+            if accepted:
+                assert result.returncode == 0, result.stderr[-6000:]
+                print(result.stdout.strip())
+            else:
+                assert result.returncode != 0, name + ' driver regression was accepted'
+        print('Two compiled MAX cancellation/adoption regressions rejected')
 
 
 if __name__ == '__main__':

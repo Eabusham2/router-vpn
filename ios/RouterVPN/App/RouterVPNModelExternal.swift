@@ -1,4 +1,5 @@
 import Foundation
+import Libbox
 @preconcurrency import NetworkExtension
 
 extension RouterVPNModel {
@@ -137,6 +138,14 @@ extension RouterVPNModel {
                 proto.providerConfiguration?["tor_entry_bundle"] = capturedEntry
                 proto.providerConfiguration?["tor_entry_mode"] = profile.multihopEntryMode ?? "wg"
             }
+            let maxSources = try IOSMAXSourceSelection.sourceHashes(provider: proto.providerConfiguration ?? [:]) { mode, assets, metadata in
+                var failure: NSError?
+                let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
+                if let failure { throw failure }
+                guard let digest else { throw IOSMAXSourceSelection.issue() }
+                return digest
+            }
+            if !maxSources.isEmpty { proto.providerConfiguration?["max_source_sha256"] = maxSources }
             let strict = externalStrict(profile) || capturedEntryProfile.map(externalStrict) == true
             proto.includeAllNetworks = strict
             proto.enforceRoutes = strict
@@ -157,6 +166,7 @@ extension RouterVPNModel {
                   saved.providerConfiguration?["engine"] as? String == "external-libbox",
                   saved.providerConfiguration?["tor_entry_bundle"] as? Data == capturedEntry,
                   saved.providerConfiguration?["tor_entry_mode"] as? String == (capturedEntry == nil ? nil : (profile.multihopEntryMode ?? "wg")),
+                  saved.providerConfiguration?["max_source_sha256"] as? [String: String] == (maxSources.isEmpty ? nil : maxSources),
                   saved.includeAllNetworks == strict, saved.enforceRoutes == strict,
                   saved.excludeLocalNetworks == proto.excludeLocalNetworks,
                   manager.isEnabled, manager.isOnDemandEnabled == strict else {

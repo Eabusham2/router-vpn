@@ -6,6 +6,8 @@ doubles. Policy, app async ownership, IPC parsing, selection and provider state
 transitions are production Swift; no physical-device behavior is claimed.
 """
 from pathlib import Path
+import importlib.util
+import os
 import shutil
 import subprocess
 import tempfile
@@ -13,6 +15,8 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 PROVIDER = ROOT / 'ios/RouterVPN/PacketTunnel'
+spec = importlib.util.spec_from_file_location('max_app_readiness', ROOT / 'deploy/test_ios_max_hostname.py')
+MAX = importlib.util.module_from_spec(spec); spec.loader.exec_module(MAX)
 SHIM = r'''
 import Foundation
 
@@ -78,7 +82,7 @@ enum NEVPNStatus { case invalid, disconnected, connecting, connected, reassertin
     var corruptStatus = false
     override func startVPNTunnel(options: [String: NSObject]?) throws {
         if let c = (manager?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-           c["engine"] as? String == "external-libbox" {
+           ["external-libbox", "multihop-libbox"].contains(c["engine"] as? String ?? "") {
             starts += 1; status = .connected; connectedDate = Date(); RuntimeTrace.shared.vpn(true)
             return
         }
@@ -142,7 +146,11 @@ enum IOSRuntimeSelector {
         return ["native", "wg", "awg"].compactMap { mode.variants[$0] }.filter { seen.insert($0).inserted }.compactMap { try? selectRaw(bundle: bundle, rawProfileID: $0) }
     }
     static func runnableModes(in bundle: ClientBundle) -> [LogicalMode] { bundle.logicalModes }
-    static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection { throw IOSStrategyWire.failure("separate multihop fixture") }
+    static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection {
+        guard let raw = rawProfileID, IOSNativeMAXProfile.modeIDs.contains(raw) else { throw IOSStrategyWire.failure("separate multihop fixture") }
+        let selected = try selectRaw(bundle: bundle, rawProfileID: raw)
+        return IOSRuntimeSelection(engine: .multihop, logicalModeID: selected.logicalModeID, rawProfileID: raw, files: selected.files)
+    }
 }
 enum IOSRuntimeSelectionError: LocalizedError {
     case unsupportedMode(String), invalidSingBoxConfig
@@ -166,8 +174,13 @@ func LibboxRouterResolveXrayStartLayerProfile(_ mode: String, _ wrapper: String,
     precondition(!RuntimeTrace.shared.isLive, "ambient Start Layer resolver used after VPN startup")
     return try! String(decoding: JSONEncoder().encode(["sing-box.json": Data(wrapper.utf8), "xray.json": Data(original.utf8), "start-layer-source.json": Data(aes.utf8)]), as: UTF8.self)
 }
+func LibboxRouterCheckMAXProfile(_ mode: String, _ files: String, _ metadata: String, _ error: inout NSError?) -> String? {
+    do { return try bridge(["Op": "max-check", "Mode": mode, "Files": files, "Policy": metadata]) }
+    catch let failure as NSError { error = failure; return nil }
+}
 @MainActor final class RouterVPNModel {
     var bundle: ClientBundle?
+    var entryBundle: ClientBundle?
     var connected = false, tunnelTransitioning = false, auto = true, baseFallback = false, homeLANAccess = false
     var activeEngine = "none", activeRawProfile = "", selectedLogicalMode = "base-raw", selectedMode = "wg", message = "", routerName = "Home"
     var activeSessionIdentity: IOSSessionIdentity?
@@ -184,7 +197,9 @@ func LibboxRouterResolveXrayStartLayerProfile(_ mode: String, _ wrapper: String,
     var strictKillSwitchEnabled: Bool { selectedRouterProfile?.killSwitch == true }
     func saveRouter() -> Bool { bundle != nil }
     func importBundle(_ data: Data) throws { bundle = try JSONDecoder().decode(ClientBundle.self, from: data) }
-    func iosMultihopEntryBundle(for bundle: ClientBundle) throws -> ClientBundle { throw IOSStrategyWire.failure("separate multihop fixture") }
+    func iosMultihopEntryBundle(for bundle: ClientBundle) throws -> ClientBundle {
+        guard let entryBundle else { throw IOSStrategyWire.failure("separate multihop fixture") }; return entryBundle
+    }
     func drainDisconnect() async { while userDisconnectInProgress { await Task.yield() } }
     // SHIPPING_MODEL_METHODS
 }
@@ -217,8 +232,33 @@ func externalFixture() throws -> ClientBundle {
     value.routerProfiles[0].external = try JSONDecoder().decode(ExternalNodeConfig.self, from: JSONSerialization.data(withJSONObject: fields))
     return value
 }
+func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
+    var value = try fixture()
+    let values = try object(Data(contentsOf: URL(fileURLWithPath: CommandLine.arguments[role == nil ? 2 : 3])))
+    let fixtures = role.map { values[$0] as! [String: Any] } ?? values
+    let fixture = fixtures[mode] as! [String: Any], policy = fixture["policy"] as! [String: String]
+    var files = fixture["files"] as! [String: String]
+    let name = mode.hasPrefix("max-tls-") ? "outer-xray.json" : "middle-sing-box.json"
+    var root = try object(Data(base64Encoded: files[name]!)!), out = root["outbounds"] as! [[String: Any]]
+    if mode.hasPrefix("max-tls-") {
+        var settings = out[0]["settings"] as! [String: Any], remote = settings["vnext"] as! [[String: Any]]
+        remote[0]["address"] = "Captured-MAX.example"; settings["vnext"] = remote; out[0]["settings"] = settings
+    } else { let index = out.firstIndex { $0["tag"] as? String == "outer" }!; out[index]["server"] = "Captured-MAX.example" }
+    root["outbounds"] = out; files[name] = try json(root).base64EncodedString()
+    value.profiles = [mode: files]; value.nodeProofID = policy["node_id"]!; value.endpoint = "Captured-MAX.example"
+    value.routerProfiles[0].nodeProofID = value.nodeProofID; value.routerProfiles[0].endpoint = value.endpoint
+    value.routerProfiles[0].routerAPI = policy["router_api"]!; value.routerProfiles[0].startLayer = "aes-256-gcm"
+    let family = mode.hasPrefix("max-tls-") ? "max-tls" : "max-quic"
+    value.logicalModes = [LogicalMode(id: family, name: family, description: "", baseSelector: true, fallback: true,
+                                      variants: [mode.hasSuffix("-awg") ? "awg" : "wg": mode])]
+    let descriptor: [String: Any] = ["id": mode, "name": mode, "protection": "fixture", "ping_min_ms": 1, "ping_max_ms": 2,
+        "traffic_min_pct": 1, "traffic_max_pct": 2, "speed_loss_min_pct": 1, "speed_loss_max_pct": 2]
+    value.modes = [try JSONDecoder().decode(VPNMode.self, from: json(descriptor))]
+    return value
+}
 @main struct Tests {
     @MainActor static func main() async throws {
+        defer { TestCompiler.shared.close() }
         var checks = 0
         func check(_ label: String, _ value: @autoclosure () -> Bool) { precondition(value(), label); checks += 1 }
         func fresh() throws -> RouterVPNModel {
@@ -307,6 +347,53 @@ func externalFixture() throws -> ClientBundle {
         duplicate.routerProfiles.append(duplicate.routerProfiles[0]); model.bundle = duplicate
         await model.connectSelectedExternal()
         check("duplicate external selection cannot choose another owner", NETunnelProviderManager.stored.isEmpty)
+        for raw in IOSNativeMAXProfile.modeIDs.sorted() {
+            model = try fresh(); let captured = try maxAppFixture(raw); model.bundle = captured
+            await model.connect(rawProfileID: raw)
+            check("MAX candidate reaches same owned provider", model.connected && model.activeRawProfile == raw)
+            let manager = NETunnelProviderManager.stored[0], session = manager.connection as! NETunnelProviderSession
+            let configuration = (manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+            let hashes = try IOSMAXSourceSelection.sourceHashes(provider: configuration) { try bridge(["Op": "max-check", "Mode": $0, "Files": $1, "Policy": $2]) }
+            check("MAX app carries real no-DNS source hash", configuration["max_source_sha256"] as? [String: String] == hashes && hashes["bundle/" + raw]?.count == 64)
+            let saved = try JSONDecoder().decode(ClientBundle.self, from: configuration["bundle"] as! Data)
+            check("MAX saved source keeps hostname and credentials", saved.routerProfiles == captured.routerProfiles && saved.profiles == captured.profiles && model.bundle?.profiles == captured.profiles)
+            check("MAX preparation creates no second VPN", session.starts == 1 && session.stops == 0)
+            model.disconnect(); await model.drainDisconnect()
+            model = try fresh(); model.bundle = captured
+            NETunnelProviderManager.saveHook = {
+                let proto = NETunnelProviderManager.stored[0].protocolConfiguration as! NETunnelProviderProtocol
+                proto.providerConfiguration?["max_source_sha256"] = ["bundle/" + raw: String(repeating: "f", count: 64)]
+            }
+            await model.connect(rawProfileID: raw)
+            check("MAX changed source hash at readback prevents start", (NETunnelProviderManager.stored[0].connection as! NETunnelProviderSession).starts == 0 && !model.connected)
+        }
+        for change in ["", "entry-token", "entry-asset", "saved-LAN"] {
+            model = try fresh()
+            var entry = try maxAppFixture("max-tls-wg", role: "entry"), exit = try maxAppFixture("max-quic-awg", role: "exit")
+            entry.selectedRouterID = "entry"; entry.routerProfiles[0].id = "entry"
+            exit.selectedRouterID = "exit"; exit.routerProfiles[0].id = "exit"
+            exit.routerProfiles[0].multihopEnabled = true; exit.routerProfiles[0].multihopEntryID = "entry"
+            exit.routerProfiles[0].multihopExitID = "exit"; exit.routerProfiles[0].multihopEntryMode = "max-tls-wg"
+            exit.routerProfiles[0].multihopExitMode = "max-quic-awg"
+            model.bundle = exit; model.entryBundle = entry; let changing = model
+            NETunnelProviderManager.saveHook = {
+                if change == "entry-token" { changing.entryBundle?.routerProfiles[0].apiToken = "changed private entry" }
+                if change == "entry-asset" { changing.entryBundle?.profiles["max-tls-wg"]?["wg.conf"] = Data("changed entry asset".utf8).base64EncodedString() }
+                if change == "saved-LAN" { (NETunnelProviderManager.stored[0].protocolConfiguration as! NETunnelProviderProtocol).excludeLocalNetworks = true }
+            }
+            await model.connect(rawProfileID: "max-quic-awg")
+            let manager = NETunnelProviderManager.stored[0], session = manager.connection as! NETunnelProviderSession
+            if change.isEmpty {
+                let config = (manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+                let hashes = config["max_source_sha256"] as! [String: String]
+                check("MAX multihop carries both complete source identities", Set(hashes.keys) == ["entryBundle/max-tls-wg", "bundle/max-quic-awg"] && session.starts == 1)
+                let saved = try JSONDecoder().decode(ClientBundle.self, from: config["entryBundle"] as! Data)
+                check("MAX multihop saved entry stays exact", saved.profiles == entry.profiles && saved.routerProfiles == entry.routerProfiles)
+                model.disconnect(); await model.drainDisconnect()
+            } else {
+                check("MAX multihop changed captured entry or LAN prevents start " + change, session.starts == 0 && !model.connected)
+            }
+        }
         print("iOS app + provider owned strategies: PASS (\(checks) executable checks)")
     }
 }
@@ -332,26 +419,34 @@ def main():
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
                  (APP / 'IOSOwnedStrategy.swift').read_text(), (APP / 'IOSStrategySupport.swift').read_text().replace('UserDefaults.standard', 'FixturePreferences.standard'),
+                 (APP / 'IOSNativePQProfile.swift').read_text(), (APP / 'IOSMultihopStartLayer.swift').read_text(),
                  (PROVIDER / 'RouterVPNStrategyPolicy.swift').read_text(), (PROVIDER / 'RouterVPNProviderStrategy.swift').read_text()]:
         source += '\n' + strip_imports(text)
-    source = 'import CoreFoundation\n' + source + TEST
-    with tempfile.TemporaryDirectory(prefix='routervpn-owned-app-') as tmp:
+    source = 'import CoreFoundation\n' + source + MAX.P.SWIFT[:MAX.P.SWIFT.index('func profile(')] + TEST
+    with tempfile.TemporaryDirectory(prefix='routervpn-owned-app-') as tmp, tempfile.TemporaryDirectory(prefix='.ios-owned-max-go-', dir=ROOT) as go_tmp:
+        go_tmp = Path(go_tmp)
+        (go_tmp / 'main.go').write_text(MAX.GO)
+        compiler = Path(tmp) / 'compiler'; fixture = Path(tmp) / 'max-fixtures.json'; multihop = Path(tmp) / 'max-multihop.json'
+        subprocess.run(['go', 'build', '-o', str(compiler), str(go_tmp / 'main.go')], cwd=ROOT, check=True, timeout=120)
+        subprocess.run(['go', 'test', '-count=1', '-run', '^TestExportMAX(Multihop)?MobileProfiles$', './internal/mobilemultihop'],
+                       cwd=ROOT, env=dict(os.environ, ROUTERVPN_MAX_PROFILE_FIXTURES=str(fixture), ROUTERVPN_MAX_MULTIHOP_FIXTURES=str(multihop)), check=True, timeout=90)
         file = Path(tmp) / 'AppTests.swift'; binary = Path(tmp) / 'app-tests'
         file.write_text(source)
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
-        subprocess.run([str(binary)], check=True, timeout=40)
+        subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], check=True, timeout=40)
         for label, before, after, expected in [
             ('premature connection', 'connected = status.isProven', 'connected = true', 'node proof alone cannot connect'),
             ('runtime epoch collapse', 'runtimeEpoch: status.runtimeEpoch)', 'runtimeEpoch: status.providerSession)', 'same mode fresh runtime invalidates measurement'),
             ('cancel generation lost', 'iosConnectGeneration = UUID(); iosStrategyTaskActive = false;', 'iosStrategyTaskActive = false;', 'cancel revokes pending generation'),
             ('mutable source accepted', 'try iosStrategySource(current) == iosStrategySource(source)', '!current.selectedRouterID.isEmpty', 'changed source before preference readback prevents start'),
+            ('mutable MAX entry accepted', 'guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == capturedEntry else', 'guard !capturedEntry.isEmpty else', 'MAX multihop changed captured entry or LAN prevents start entry-token'),
         ]:
             assert source.count(before) == 1, label
             file.write_text(source.replace(before, after))
             subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(file), '-o', str(binary)], check=True, timeout=150)
-            result = subprocess.run([str(binary)], capture_output=True, text=True, timeout=40)
+            result = subprocess.run([str(binary), str(compiler), str(fixture), str(multihop)], capture_output=True, text=True, timeout=40)
             assert result.returncode != 0 and expected in result.stderr, label + ': ' + result.stderr[-3000:]
-        print('Negative controls: premature connection, reused epoch, lost cancel owner and mutable source are rejected')
+        print('Negative controls: premature connection, reused epoch, lost cancel owner, mutable source and replaced MAX entry are rejected')
 
 if __name__ == '__main__':
     main()

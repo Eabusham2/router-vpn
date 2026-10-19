@@ -49,6 +49,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private let strategyOwnerLock = NSLock()
     private var providerStrategy: RouterVPNProviderStrategy?
     private var strategyDriver: StrategyRuntimeDriver?
+    private let maxStartOwnerLock = NSLock()
+    private var maxStartOwner: RouterVPNMAXStart?
+    private var maxStartGeneration = UUID()
+    private var maxStartDraining = false
 
     override init() {
         super.init()
@@ -128,6 +132,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private func beginProviderStrategy(provider: [String: Any], bundleData: Data, root: [String: Any],
                                        selectedProfile: [String: Any], strict: Bool,
+                                       maxSources: [String: String],
                                        completionHandler: @escaping (Error?) -> Void) throws {
         guard let catalog = provider["strategy_catalog"] as? [String: Any],
               let request = provider["strategy"] as? [String: Any] else {
@@ -145,7 +150,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         profile["node_proof_id"] = nodeID
         let digest = SHA256.hash(data: bundleData).map { String(format: "%02x", $0) }.joined()
         let driver = StrategyRuntimeDriver(provider: self, bundle: bundleData,
-            profile: try JSONSerialization.data(withJSONObject: profile), strict: strict, initialHold: initialMTUHold)
+            profile: try JSONSerialization.data(withJSONObject: profile), strict: strict, initialHold: initialMTUHold,
+            maxSources: maxSources)
         let strategy = try RouterVPNProviderStrategy(policy: policy, plan: plan, bundleDigest: digest, nodeID: nodeID, driver: driver)
         strategyOwnerLock.lock()
         guard providerStrategy == nil else { strategyOwnerLock.unlock(); throw tunnelError(70, "This provider already owns a strategy session.") }
@@ -178,6 +184,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         private let bundle: Data
         private let profile: Data
         private let strict: Bool
+        private let maxSources: [String: String]
+        private let maxPreparationLock = NSLock()
+        private var maxPreparation: RouterVPNMAXPreparation?
         private let queue = DispatchQueue(label: "routervpn.provider.strategy", qos: .userInitiated)
         private var measurementLease: String
         private var compiled: LibboxCompilation?
@@ -185,9 +194,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         private var deadline: DispatchWorkItem?
         private var quarantined = false
 
-        init(provider: PacketTunnelProvider, bundle: Data, profile: Data, strict: Bool, initialHold: String) {
+        init(provider: PacketTunnelProvider, bundle: Data, profile: Data, strict: Bool, initialHold: String,
+             maxSources: [String: String]) {
             self.provider = provider; self.bundle = bundle; self.profile = profile
-            self.strict = strict; measurementLease = initialHold
+            self.strict = strict; self.maxSources = maxSources; measurementLease = initialHold
         }
 
         private func current(_ attempt: RouterVPNStrategyAttempt) -> PacketTunnelProvider? {
@@ -204,7 +214,35 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         func replace(_ attempt: RouterVPNStrategyAttempt, proving: @escaping @Sendable () -> Void,
                      completion: @escaping @Sendable (Result<RouterVPNStrategyProof, Error>) -> Void) {
+            cancelMAXPreparation()
             queue.async { [self] in begin(attempt, proving: proving, completion: completion) }
+        }
+
+        private func cancelMAXPreparation() {
+            maxPreparationLock.lock(); let captured = maxPreparation; maxPreparationLock.unlock()
+            captured?.cancel()
+        }
+
+        private func retireMAXPreparation(_ captured: RouterVPNMAXPreparation?) {
+            captured?.close()
+            maxPreparationLock.lock()
+            if maxPreparation === captured { maxPreparation = nil }
+            maxPreparationLock.unlock()
+        }
+
+        private final class DrainDelivery: @unchecked Sendable {
+            let completion: () -> Void
+            init(_ completion: @escaping () -> Void) { self.completion = completion }
+        }
+
+        func drain(_ completion: @escaping () -> Void) {
+            cancelMAXPreparation()
+            let delivery = DrainDelivery(completion)
+            queue.async { [self] in
+                maxPreparationLock.lock(); let captured = maxPreparation; maxPreparationLock.unlock()
+                retireMAXPreparation(captured)
+                delivery.completion()
+            }
         }
 
         private func begin(_ attempt: RouterVPNStrategyAttempt, proving: @escaping @Sendable () -> Void,
@@ -228,11 +266,31 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             let timeout = DispatchWorkItem { expiry.expire() }
             deadline = timeout
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 45, execute: timeout)
+            var preparation: RouterVPNMAXPreparation?
+            defer { retireMAXPreparation(preparation) }
             do {
-                guard let root = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
-                      let profile = try JSONSerialization.jsonObject(with: profile) as? [String: Any] else {
+                var capturedBundle = bundle
+                if IOSNativeMAXProfile.modeIDs.contains(attempt.candidate.raw) {
+                    var source: [String: Any] = ["engine": "libbox", "bundle": bundle, "rawProfileID": attempt.candidate.raw]
+                    let key = "bundle/" + attempt.candidate.raw
+                    guard let digest = maxSources[key] else { throw RouterVPNMAXPreparation.issue() }
+                    source["max_source_sha256"] = [key: digest]
+                    let pending = try RouterVPNMAXPreparation(provider: source)
+                    preparation = pending
+                    maxPreparationLock.lock(); maxPreparation = pending; maxPreparationLock.unlock()
+                    guard current(attempt) != nil else { pending.cancel(); return }
+                    let launch = try pending.run()
+                    guard current(attempt) != nil, pending.healthy(), let data = launch["bundle"] as? Data else {
+                        throw RouterVPNMAXPreparation.issue()
+                    }
+                    capturedBundle = data
+                }
+                guard let root = try JSONSerialization.jsonObject(with: capturedBundle) as? [String: Any],
+                      let originalProfile = try JSONSerialization.jsonObject(with: profile) as? [String: Any] else {
                     throw RouterVPNStrategyPolicy.error("The immutable strategy capture is invalid.")
                 }
+                var profile = preparation == nil ? originalProfile : try IOSMAXSourceSelection.profile(root)
+                profile["node_proof_id"] = originalProfile["node_proof_id"]
                 let compiled = try provider.compileLibbox(provider: ["rawProfileID": attempt.candidate.raw], root: root, selectedProfile: profile)
                 guard current(attempt) != nil else { return }
                 self.compiled = compiled
@@ -242,6 +300,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 try engine.start(files: compiled.files, strict: strict)
                 guard current(attempt) != nil, provider.libboxEngine === engine else { engine.stop(); return }
                 capturedGuard = provider.armNetworkProofGuard()
+                guard preparation?.healthy() != false, current(attempt) != nil else {
+                    engine.stop(); throw RouterVPNMAXPreparation.issue()
+                }
+                retireMAXPreparation(preparation); preparation = nil
                 proving()
                 provider.proveSelectedNode(url: compiled.proofURL, expectedNodeID: compiled.nodeID,
                                           proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] error in
@@ -289,6 +351,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
 
         func protect(epoch: String) {
+            // This signal must precede queue admission: that queue may be
+            // inside the very DNS callback/native request being canceled.
+            cancelMAXPreparation()
             queue.async { [self] in
                 guard let provider, let strategy = provider.currentProviderStrategy(), strategy.isCurrent(epoch) else { return }
                 deadline?.cancel(); deadline = nil
@@ -328,6 +393,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
         forwardingChannel?.invalidate()
         do {
+            maxStartOwnerLock.lock()
+            guard maxStartOwner == nil, !maxStartDraining else { maxStartOwnerLock.unlock(); throw RouterVPNMAXPreparation.issue() }
+            let generation = UUID(); maxStartGeneration = generation
+            maxStartOwnerLock.unlock()
             initialMTUHold = options?["routervpn_mtu_hold"] as? String ?? ""
             guard initialMTUHold.isEmpty || initialMTUHold.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { throw tunnelError(60, "Invalid MTU comparison lease") }
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol, let provider = tunnelProtocol.providerConfiguration else { throw tunnelError(1, "Router VPN PacketTunnel configuration is missing.") }
@@ -347,20 +416,80 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
+            // This complete validation is socket-free. The app's exact source
+            // stamps are checked again for every later strategy attempt.
+            let maxCapture = try RouterVPNMAXPreparation(provider: provider)
             if provider["strategy"] != nil || provider["strategy_catalog"] != nil {
+                defer { maxCapture.close() }
                 guard engine == "libbox" else { throw tunnelError(70, "Owned strategies require the single native Libbox dataplane.") }
+                guard currentMAXGeneration(generation) else { throw RouterVPNMAXPreparation.issue() }
                 try beginProviderStrategy(provider: provider, bundleData: bundleData, root: root,
-                                          selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
+                                          selectedProfile: selectedProfile, strict: strict, maxSources: maxCapture.sourceHashes,
+                                          completionHandler: completionHandler)
                 return
             }
-            switch engine {
-            case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
-            case "multihop-libbox": try startMultihop(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
-            case "libbox": try startLibbox(provider: provider, root: root, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
-            case "external-libbox": try startExternalLibbox(provider: provider, selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
-            default: throw tunnelError(6, "Unsupported Router VPN iOS engine \(engine).")
+            if maxCapture.requiresResolution {
+                try beginMAXStart(maxCapture, generation: generation, strict: strict, completion: completionHandler)
+                return
             }
+            maxCapture.close()
+            guard currentMAXGeneration(generation) else { throw RouterVPNMAXPreparation.issue() }
+            try startCapturedProvider(provider, root: root, profile: selectedProfile, strict: strict, completion: completionHandler)
         } catch { completionHandler(error) }
+    }
+
+    private func currentMAXGeneration(_ generation: UUID) -> Bool {
+        maxStartOwnerLock.lock(); defer { maxStartOwnerLock.unlock() }
+        return !maxStartDraining && maxStartGeneration == generation
+    }
+
+    private func beginMAXStart(_ preparation: RouterVPNMAXPreparation, generation: UUID, strict: Bool,
+                               completion: @escaping (Error?) -> Void) throws {
+        let owner = RouterVPNMAXStart(preparation: preparation) { [weak self] captured, error in
+            guard let self else { completion(RouterVPNMAXPreparation.issue()); return }
+            self.maxStartOwnerLock.lock()
+            let current = self.maxStartOwner === captured && self.maxStartGeneration == generation && !self.maxStartDraining
+            // A queued Stop keeps the owner until its actual cleanup returns.
+            if current, error == nil { self.maxStartOwner = nil }
+            if current, error != nil { self.maxStartDraining = true }
+            self.maxStartOwnerLock.unlock()
+            if current, error != nil {
+                self.clearPathProofGuard(); self.cancelActiveProof()
+                if let engine = self.libboxEngine { self.libboxEngine = nil; engine.stop() }
+                self.maxStartOwnerLock.lock()
+                if self.maxStartOwner === captured, self.maxStartGeneration == generation {
+                    self.maxStartOwner = nil; self.maxStartDraining = false
+                }
+                self.maxStartOwnerLock.unlock()
+            }
+            completion(current ? error : RouterVPNMAXPreparation.issue())
+        }
+        maxStartOwnerLock.lock()
+        guard maxStartOwner == nil, !maxStartDraining, maxStartGeneration == generation else {
+            maxStartOwnerLock.unlock(); preparation.close(); throw RouterVPNMAXPreparation.issue()
+        }
+        maxStartOwner = owner
+        maxStartOwnerLock.unlock()
+        owner.start { [weak self, weak owner] launch, captured, complete in
+            guard let self, let owner, owner.current, self.currentMAXGeneration(generation), captured.healthy(),
+                  let data = launch["bundle"] as? Data else { throw RouterVPNMAXPreparation.issue() }
+            let root = try IOSMAXSourceSelection.object(data), profile = try IOSMAXSourceSelection.profile(root)
+            try self.startCapturedProvider(launch, root: root, profile: profile, strict: strict, completion: complete)
+            // Existing start paths have installed their native path guard now.
+            // DNS ownership is released only after this handover is checked.
+            guard owner.current, self.currentMAXGeneration(generation), captured.healthy() else { throw RouterVPNMAXPreparation.issue() }
+        }
+    }
+
+    private func startCapturedProvider(_ provider: [String: Any], root: [String: Any], profile: [String: Any], strict: Bool,
+                                       completion: @escaping (Error?) -> Void) throws {
+        switch (provider["engine"] as? String ?? "wireguard").lowercased() {
+        case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: profile, completionHandler: completion)
+        case "multihop-libbox": try startMultihop(provider: provider, root: root, selectedProfile: profile, completionHandler: completion)
+        case "libbox": try startLibbox(provider: provider, root: root, selectedProfile: profile, strict: strict, completionHandler: completion)
+        case "external-libbox": try startExternalLibbox(provider: provider, selectedProfile: profile, strict: strict, completionHandler: completion)
+        default: throw tunnelError(6, "Unsupported Router VPN iOS engine.")
+        }
     }
 
     private func startWireGuard(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], completionHandler: @escaping (Error?) -> Void) throws {
@@ -1047,20 +1176,62 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        maxStartOwnerLock.lock()
+        maxStartGeneration = UUID(); maxStartDraining = true
+        let pending = maxStartOwner
+        maxStartOwnerLock.unlock()
+        if let pending {
+            pending.cancelAndDrain { [weak self] in
+                guard let self else { completionHandler(); return }
+                self.finishOwnedStop(completion: completionHandler)
+            }
+            return
+        }
+        finishOwnedStop(completion: completionHandler)
+    }
+
+    private func finishOwnedStop(completion: @escaping () -> Void) {
         if let strategy = currentProviderStrategy() {
             let epoch = strategy.currentEpoch
             strategy.stop()
             retireLibboxSettings(epoch: epoch)
+            if let driver = strategyDriver {
+                driver.drain { [weak self] in
+                    guard let self else { completion(); return }
+                    self.finishNativeStop(completion: completion)
+                }
+                return
+            }
         }
+        finishNativeStop(completion: completion)
+    }
+
+    private func finishNativeStop(completion: @escaping () -> Void) {
         clearPathProofGuard()
         cancelActiveProof()
         if let engine = libboxEngine { libboxEngine = nil; engine.stop() }
-        guard let adapter = wireGuardAdapter else { completionHandler(); return }
+        strategyOwnerLock.lock(); providerStrategy = nil; strategyDriver = nil; strategyOwnerLock.unlock()
+        let finished = { [self] in
+            maxStartOwnerLock.lock(); maxStartOwner = nil; maxStartDraining = false; maxStartOwnerLock.unlock()
+            completion()
+        }
+        guard let adapter = wireGuardAdapter else { finished(); return }
         wireGuardAdapter = nil
-        adapter.stop { _ in completionHandler() }
+        adapter.stop { _ in finished() }
     }
 
-    override func sleep(completionHandler: @escaping () -> Void) { forwardingChannel?.invalidate(); libboxEngine?.pause(); completionHandler() }
+    override func sleep(completionHandler: @escaping () -> Void) {
+        forwardingChannel?.invalidate()
+        maxStartOwnerLock.lock(); let pending = maxStartOwner
+        if pending != nil { maxStartGeneration = UUID(); maxStartDraining = true }
+        maxStartOwnerLock.unlock()
+        if let pending {
+            pending.cancelAndDrain { [weak self] in
+                guard let self else { completionHandler(); return }
+                self.finishOwnedStop(completion: completionHandler)
+            }
+        } else { libboxEngine?.pause(); completionHandler() }
+    }
     override func wake() {
         libboxEngine?.wake()
         // Sleep is a path-proof lifetime boundary even when iOS resumes onto a

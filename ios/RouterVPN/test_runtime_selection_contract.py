@@ -125,6 +125,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_session_identity.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_strategy_session.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_strategy.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_max_hostname.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_runtime_driver.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_owned_strategy_app.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)

@@ -57,6 +57,19 @@ import Libbox
     private func prepareIOSStrategyCandidate(_ selection: IOSRuntimeSelection, source: ClientBundle) async throws -> [String: Data] {
         var files = selection.files
         guard selection.engine != .multihop else { throw IOSStrategyWire.failure("A single-node strategy cannot replace the captured multihop owner.") }
+        if IOSNativeMAXProfile.modeIDs.contains(selection.rawProfileID) {
+            var captured = source
+            captured.profiles[selection.rawProfileID] = files.mapValues { $0.base64EncodedString() }
+            let configuration: [String: Any] = ["engine": "libbox", "rawProfileID": selection.rawProfileID,
+                                               "bundle": try JSONEncoder().encode(captured)]
+            _ = try IOSMAXSourceSelection.sourceHashes(provider: configuration) { mode, assets, metadata in
+                var failure: NSError?
+                let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
+                if let failure { throw failure }
+                guard let digest else { throw IOSMAXSourceSelection.issue() }; return digest
+            }
+            return files
+        }
         guard let originalData = files["xray.json"] else { return files }
         guard let wrapperData = files["sing-box.json"], let wrapper = String(data: wrapperData, encoding: .utf8),
               let original = String(data: originalData, encoding: .utf8) else {
@@ -195,6 +208,14 @@ import Libbox
                 captured["strategy"] = try plan.object()
                 captured["mode"] = refs[0].raw; captured["rawProfileID"] = refs[0].raw
                 captured["logicalMode"] = refs[0].logical; captured["modeCandidates"] = refs.map(\.raw)
+                let maxSources = try IOSMAXSourceSelection.sourceHashes(provider: captured) { mode, assets, metadata in
+                    var failure: NSError?
+                    let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
+                    if let failure { throw failure }
+                    guard let digest else { throw IOSMAXSourceSelection.issue() }
+                    return digest
+                }
+                if !maxSources.isEmpty { captured["max_source_sha256"] = maxSources }
                 proto.providerConfiguration = captured
                 let strict = iosStrategyStrictLockdown
                 proto.includeAllNetworks = strict; proto.enforceRoutes = strict
@@ -209,6 +230,7 @@ import Libbox
                 try requireIOSStrategyPreparation(generation, source: source, manager: manager, disconnected: true)
                 guard let saved = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
                       saved["bundle"] as? Data == data,
+                      saved["max_source_sha256"] as? [String: String] == (maxSources.isEmpty ? nil : maxSources),
                       (saved["strategy"] as? [String: Any])?["request_id"] as? String == plan.requestID,
                       manager.isEnabled, manager.isOnDemandEnabled == strict else {
                     throw IOSStrategyWire.failure("Saved VPN preferences did not preserve the captured strategy owner.")

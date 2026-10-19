@@ -94,6 +94,18 @@ enum IOSNativeMAXProfile {
     static let modeIDs: Set<String> = ["max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
     static let maxGraphBytes = 4 * 1024 * 1024
 
+    /// These exact strings cross the native validation/request boundary. A
+    /// launch may replace an outer address, but never rewrites this capture.
+    struct Input: Sendable {
+        let mode: String
+        let filesJSON: String
+        let metadataJSON: String
+        let endpoint: String
+        let nodeID: String
+        let startLayer: String
+        let assets: [String: Data]
+    }
+
     static func decode(mode: String, encoded: [String: String]) throws -> [String: Data] {
         guard modeIDs.contains(mode) else { throw issue("Unknown complete MAX mode.") }
         let awg = mode.hasSuffix("-awg"), tls = mode.hasPrefix("max-tls-")
@@ -127,8 +139,7 @@ enum IOSNativeMAXProfile {
         return result
     }
 
-    static func compile(mode: String, encoded: [String: String], nodeID: String, profile: [String: Any], startLayer: String,
-                        compiler: (String, String, String) throws -> String) throws -> [String: Data] {
+    static func input(mode: String, encoded: [String: String], nodeID: String, profile: [String: Any], startLayer: String) throws -> Input {
         let assets = try decode(mode: mode, encoded: encoded)
         guard nodeID.utf8.count == 64, nodeID.allSatisfy({ "0123456789abcdef".contains($0) }),
               profile["node_kind"] as? String == "router-vpn", profile["node_proof_id"] as? String == nodeID,
@@ -139,7 +150,16 @@ enum IOSNativeMAXProfile {
         let metadata = try JSONSerialization.data(withJSONObject: ["node_id": nodeID, "node_kind": "router-vpn", "router_api": api, "endpoint": endpoint, "start_layer": startLayer], options: [.sortedKeys])
         let input = try JSONSerialization.data(withJSONObject: encoded, options: [.sortedKeys])
         guard input.count <= 16 * 1024 * 1024 else { throw issue("Complete MAX input exceeds its bound.") }
-        let result = try compiler(mode, String(decoding: input, as: UTF8.self), String(decoding: metadata, as: UTF8.self))
+        return Input(mode: mode, filesJSON: String(decoding: input, as: UTF8.self),
+                     metadataJSON: String(decoding: metadata, as: UTF8.self), endpoint: endpoint,
+                     nodeID: nodeID, startLayer: startLayer, assets: assets)
+    }
+
+    static func compile(mode: String, encoded: [String: String], nodeID: String, profile: [String: Any], startLayer: String,
+                        compiler: (String, String, String) throws -> String) throws -> [String: Data] {
+        let captured = try input(mode: mode, encoded: encoded, nodeID: nodeID, profile: profile, startLayer: startLayer)
+        let assets = captured.assets
+        let result = try compiler(mode, captured.filesJSON, captured.metadataJSON)
         let extra = startLayer != "off"
         guard !result.isEmpty, result.utf8.count <= maxGraphBytes,
               let graph = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
@@ -174,6 +194,107 @@ enum IOSNativeMAXProfile {
 
     private static func issue(_ text: String) -> NSError {
         NSError(domain: "RouterVPN.NativeMAXProfile", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
+    }
+}
+
+/// The app and extension derive the same MAX inputs from the original private
+/// handoff. Readiness returns only a source digest; DNS and runtime construction
+/// belong to the extension's later owned request.
+enum IOSMAXSourceSelection {
+    struct Source: Sendable {
+        let slot: String
+        let bundle: Data
+        let selectedID: String
+        let input: IOSNativeMAXProfile.Input
+        var key: String { slot + "/" + input.mode }
+    }
+
+    static func sourceHashes(provider: [String: Any], checker: (String, String, String) throws -> String) throws -> [String: String] {
+        var hashes: [String: String] = [:]
+        for source in try sources(provider: provider) {
+            let value = try checker(source.input.mode, source.input.filesJSON, source.input.metadataJSON)
+            guard value.count == 64, value.allSatisfy({ "0123456789abcdef".contains($0) }) else { throw issue() }
+            hashes[source.key] = value
+        }
+        return hashes
+    }
+
+    static func sources(provider: [String: Any]) throws -> [Source] {
+        let engine = provider["engine"] as? String ?? "wireguard"
+        guard ["libbox", "multihop-libbox", "external-libbox"].contains(engine) else { return [] }
+        guard let data = provider["bundle"] as? Data else { throw issue() }
+        let root = try object(data)
+        var captures: [(String, Data, String)] = []
+        if engine == "libbox" {
+            if let value = provider["strategy_catalog"] {
+                guard let catalog = value as? [String: Any],
+                      let candidates = catalog["candidates"] as? [[String: String]],
+                      (1...32).contains(candidates.count) else { throw issue() }
+                var seen = Set<String>()
+                for candidate in candidates {
+                    guard Set(candidate.keys) == ["raw", "logical"],
+                          let mode = candidate["raw"], seen.insert(mode).inserted else { throw issue() }
+                    if IOSNativeMAXProfile.modeIDs.contains(mode) { captures.append(("bundle", data, mode)) }
+                }
+            } else {
+                let mode = provider["rawProfileID"] as? String ?? provider["mode"] as? String ?? ""
+                if IOSNativeMAXProfile.modeIDs.contains(mode) { captures.append(("bundle", data, mode)) }
+            }
+        } else if engine == "multihop-libbox" {
+            let selected = try profile(root)
+            guard selected["multihop_enabled"] as? Bool == true,
+                  let exitID = selected["id"] as? String, selected["multihop_exit_id"] as? String == exitID,
+                  let entryID = selected["multihop_entry_id"] as? String, entryID != exitID,
+                  let exitMode = selected["multihop_exit_mode"] as? String,
+                  provider["rawProfileID"] as? String == exitMode,
+                  let entryData = provider["entryBundle"] as? Data,
+                  try profile(object(entryData))["id"] as? String == entryID else { throw issue() }
+            let entryMode = selected["multihop_entry_mode"] as? String ?? "wg"
+            if IOSNativeMAXProfile.modeIDs.contains(entryMode) { captures.append(("entryBundle", entryData, entryMode)) }
+            if IOSNativeMAXProfile.modeIDs.contains(exitMode) { captures.append(("bundle", data, exitMode)) }
+        } else if let entryValue = provider["tor_entry_bundle"] {
+            let selected = try profile(root)
+            guard let entryData = entryValue as? Data,
+                  let external = selected["external"] as? [String: Any],
+                  ["tor", "tor-bridge"].contains(external["protocol"] as? String ?? ""),
+                  selected["multihop_enabled"] as? Bool == true,
+                  let entryID = selected["multihop_entry_id"] as? String,
+                  let mode = provider["tor_entry_mode"] as? String,
+                  mode == (selected["multihop_entry_mode"] as? String ?? "wg"),
+                  try profile(object(entryData))["id"] as? String == entryID else { throw issue() }
+            if IOSNativeMAXProfile.modeIDs.contains(mode) { captures.append(("tor_entry_bundle", entryData, mode)) }
+        }
+        return try captures.map { slot, bytes, mode in
+            let node = try object(bytes)
+            var selected = try profile(node)
+            guard let id = selected["id"] as? String,
+                  let profiles = node["profiles"] as? [String: Any],
+                  let assets = profiles[mode] as? [String: String] else { throw issue() }
+            let top = node["nodeProofId"] as? String ?? "", nested = selected["node_proof_id"] as? String ?? ""
+            guard top.isEmpty || nested.isEmpty || top == nested else { throw issue() }
+            let proof = top.isEmpty ? nested : top
+            selected["node_proof_id"] = proof
+            return Source(slot: slot, bundle: bytes, selectedID: id,
+                input: try IOSNativeMAXProfile.input(mode: mode, encoded: assets, nodeID: proof,
+                    profile: selected, startLayer: IOSMultihopStartLayer.selected(selected)))
+        }
+    }
+
+    static func object(_ data: Data) throws -> [String: Any] {
+        guard !data.isEmpty, data.count <= 32 * 1024 * 1024,
+              let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw issue() }
+        return root
+    }
+    static func profile(_ root: [String: Any]) throws -> [String: Any] {
+        guard let id = root["selectedRouterID"] as? String, !id.isEmpty,
+              let profiles = root["routerProfiles"] as? [[String: Any]] else { throw issue() }
+        let selected = profiles.filter { $0["id"] as? String == id }
+        guard selected.count == 1 else { throw issue() }
+        return selected[0]
+    }
+    static func issue() -> NSError {
+        NSError(domain: "RouterVPN.MAXSource", code: 1, userInfo: [NSLocalizedDescriptionKey:
+            "MAX preparation lost its complete captured source or selected node."])
     }
 }
 

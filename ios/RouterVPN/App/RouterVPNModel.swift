@@ -365,12 +365,21 @@ final class RouterVPNModel: ObservableObject {
         var entryAllowsLAN = true
         if selection.engine == .multihop {
             let entry = try iosMultihopEntryBundle(for: bundle)
-            configuration["entryBundle"] = try JSONEncoder().encode(entry)
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            configuration["entryBundle"] = try encoder.encode(entry)
             if let profile = entry.routerProfiles.first(where: { $0.id == entry.selectedRouterID }) {
                 entryAllowsLAN = profile.homeLANAccess ?? true
                 entryStrict = profile.killSwitch == true || ["always", "strict", "on", "enabled", "lockdown"].contains(profile.killSwitchPolicy ?? "off")
             }
         }
+        let maxSources = try IOSMAXSourceSelection.sourceHashes(provider: configuration) { mode, assets, metadata in
+            var failure: NSError?
+            let digest: String? = LibboxRouterCheckMAXProfile(mode, assets, metadata, &failure)
+            if let failure { throw failure }
+            guard let digest else { throw IOSMAXSourceSelection.issue() }
+            return digest
+        }
+        if !maxSources.isEmpty { configuration["max_source_sha256"] = maxSources }
         proto.providerConfiguration = configuration
 
         let strict = strictKillSwitchEnabled || entryStrict
@@ -378,7 +387,8 @@ final class RouterVPNModel: ObservableObject {
         proto.enforceRoutes = strict
         // Excluding local networks sends them OUTSIDE the tunnel. LAN-Off must
         // never enable that bypass; either hop can request the stricter policy.
-        proto.excludeLocalNetworks = strict && homeLANAccess && entryAllowsLAN
+        let capturedLANExclusion = strict && homeLANAccess && entryAllowsLAN
+        proto.excludeLocalNetworks = capturedLANExclusion
         proto.excludeAPNs = false
         proto.excludeCellularServices = false
 
@@ -397,6 +407,26 @@ final class RouterVPNModel: ObservableObject {
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         try await manager.loadFromPreferences()
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        if !maxSources.isEmpty {
+            if let capturedEntry = configuration["entryBundle"] as? Data {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == capturedEntry else { throw IOSMAXSourceSelection.issue() }
+            }
+            guard !Task.isCancelled,
+                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles,
+                  let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  saved.providerConfiguration?["bundle"] as? Data == configuration["bundle"] as? Data,
+                  saved.providerConfiguration?["entryBundle"] as? Data == configuration["entryBundle"] as? Data,
+                  saved.providerConfiguration?["max_source_sha256"] as? [String: String] == maxSources,
+                  saved.providerConfiguration?["rawProfileID"] as? String == selection.rawProfileID,
+                  saved.providerConfiguration?["engine"] as? String == selection.engine.rawValue,
+                  saved.includeAllNetworks == strict, saved.enforceRoutes == strict,
+                  saved.excludeLocalNetworks == capturedLANExclusion,
+                  manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+                throw IOSMAXSourceSelection.issue()
+            }
+        }
         let mtuHold = IOSMTUMeasurementGate.current
         let options: [String: NSObject]? = mtuHold.isEmpty ? nil : ["routervpn_mtu_hold": mtuHold as NSString]
         try manager.connection.startVPNTunnel(options: options)

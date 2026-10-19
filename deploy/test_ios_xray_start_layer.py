@@ -89,7 +89,7 @@ def main():
    text=dns.read_text();dns=tmp/dns.name;dns.write_text(text.replace('import Network\n',base.base.NETWORK_SHIM))
   fixture=base.TEST[:base.TEST.index('@main struct Tests')]
   (tmp/'Tests.swift').write_text('import Foundation\n'+base.FIXTURE+fixture+TEST)
-  subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=90)
+  subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=90)
   subprocess.run([str(tmp/'tests'),str(tmp/'compiler')],check=True,timeout=90)
  source=(APP/'RouterVPNModel.swift').read_text()
  for marker in ['LibboxRouterResolveXrayStartLayerProfile','let capturedAES = aesInput, capturedPolicy = startPolicy','launchBundle.profiles["shadowsocks"]?["sing-box.json"] = aes.base64EncodedString()','self.bundle?.profiles == bundle.profiles','where name != "start-layer-source.json"']:

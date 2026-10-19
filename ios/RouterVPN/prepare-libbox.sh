@@ -67,10 +67,22 @@ PY
   # Inspect generated headers, not a marker copied into our own Swift source.
   python3 - "$FRAMEWORK" <<'PYHEAD'
 from pathlib import Path
-import sys
+import re,sys
 headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
+    content=header.read_text()
+    for symbol in ('LibboxRouterCheckMAXProfile', 'LibboxRouterCreateMAXProfileRequest', 'LibboxRouterCompileMAXProfile'):
+        assert symbol in content, str(header)
+    resolver=re.search(r'@protocol LibboxRouterMAXEndpointResolver <NSObject>\n(.*?)@end',content,re.S)
+    request=re.search(r'@interface LibboxRouterMAXProfileRequest : NSObject .*?\n(.*?)@end',content,re.S)
+    assert resolver and request, 'Generated MAX ownership interfaces are missing: '+str(header)
+    for signature in ('- (void)cancel;', '- (BOOL)current;', '- (NSString* _Nonnull)ownerID;',
+                      '- (NSString* _Nonnull)lookup:(NSString* _Nullable)hostname error:(NSError* _Nullable* _Nullable)error;'):
+        assert signature in resolver.group(1), 'Generated MAX resolver signature changed: '+signature
+    for signature in ('- (void)cancel;', '- (void)close;', '- (BOOL)healthy;',
+                      '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;', '- (NSString* _Nonnull)sourceSHA256;'):
+        assert signature in request.group(1), 'Generated MAX request signature changed: '+signature
     for symbol in ('LibboxRouterTorNativeABI', 'LibboxRouterTorNativeVersion', 'LibboxRouterTorSourceNotices'):
         assert symbol in header.read_text(), str(header)
     for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterTorSetStateDirectory',

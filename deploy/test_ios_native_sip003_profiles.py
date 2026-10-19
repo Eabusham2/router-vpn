@@ -81,7 +81,7 @@ def main():
             contents=dns.read_text();dns=temp/'IOSDNSRuntimePolicy.swift';dns.write_text(contents.replace('import Network\n',base.NETWORK_SHIM))
         tests=temp/'Tests.swift';tests.write_text('import Foundation\n'+FIXTURE+TEST)
         binary=temp/'tests'
-        subprocess.run([swift,'-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(tests),'-o',str(binary)],check=True,timeout=90)
+        subprocess.run([swift,'-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSRuntimeSelection.swift'),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=30)
     provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
     section=provider[provider.index('private func compileLibbox('):provider.index('private func performanceFiles(')]
