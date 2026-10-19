@@ -21,7 +21,8 @@ need('mobile/routervpn_openvpn_native_test.go.tmpl', 'TestRouterOpenVPNNativeCon
 for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift', 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'):
     need(path, 'LibboxRouterOpenVPNEndpoint', 'openvpn-client', '"system"] as? Bool == false')
 need('ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift', 'startExternalLibbox', 'proveExternalExit', 'expectedPublicIP: runtime.expectedPublicIP')
-model=need('ios/RouterVPN/App/RouterVPNModelExternal.swift', '.loadAllFromPreferences().filter', 'managers.count <= 1', 'self.bundle?.profiles == bundle.profiles', 'exact public-exit proof')
+model=need('ios/RouterVPN/App/RouterVPNModelExternal.swift', '.loadAllFromPreferences().filter', 'managers.count <= 1', 'private func requireExternalPreparation(', 'current.selectedRouterID == source.selectedRouterID', 'current.routerProfiles == source.routerProfiles, current.profiles == source.profiles', 'guard try externalTorEntryData(source: source) == entry', 'saved.providerConfiguration?["bundle"] as? Data == encodedBundle', 'exact public-exit proof')
+assert model.count('try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)') == 3, 'external preparation must revalidate the captured source after each preferences await'
 need('android/app/src/main/java/com/eabusham/routervpn/AndroidOpenVPN.java', 'Libbox.routerOpenVPNEndpoint', 'Libbox.version()', '!detour.equals', 'result.optBoolean("system", true)')
 store=need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java', 'AndroidOpenVPN.endpoint(e, "")', '.put("openvpn_config",e.openVPNConfig)', 'AndroidPrivateFileStore.write')
 summary=store.split('JSONObject summary()',1)[1].split('private final Context',1)[0]

@@ -196,7 +196,7 @@ jobs:
 
   android:
     name: Android native app
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-java@v5
@@ -217,7 +217,7 @@ jobs:
       - name: Build APK
         run: |
           sudo apt-get update -qq
-          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch
+          sudo apt-get install -y --no-install-recommends build-essential autoconf automake libtool pkg-config perl patch libandroid-json-java
           gradle -p android --no-daemon :app:assembleDebug
       - name: Verify APK
         run: |

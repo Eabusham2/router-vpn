@@ -169,8 +169,8 @@ jobs:
           grep -Fq 'intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID,selected.id)' android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java
           grep -Fq 'KIND_EXTERNAL' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
           grep -Fq 'never infer them from an IP' android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java
-          grep -Fq 'Connect direct external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
-          grep -Fq 'Router VPN WireGuard entry → external exit' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          grep -Fq 'capturePending(entry,exit,false,entryMode)' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
+          grep -Fq 'if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,entryMode,cb);' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           grep -Fq 'VpnService.prepare(this)' android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
           python3 deploy/test_mobile_openvpn_contract.py
           grep -Fq 'StandardExitActivity' android/app/src/main/AndroidManifest.xml
