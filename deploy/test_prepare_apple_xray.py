@@ -66,6 +66,7 @@ class Prepare(unittest.TestCase):
             self.assertIn('request.Publish(packet)', native)
             self.assertLess(native.index('connectionErr := h.connections.Close()'), native.index('err := instance.Close()'))
             self.assertEqual((sing/'experimental/libbox/routervpn/applexray/connections.go').read_bytes(), (ROOT/'internal/applexray/connections.go').read_bytes())
+            self.assertEqual((sing/'protocol/routervpnxray/nested_session_test.go').read_bytes(), (ROOT/'mobile/applexray/nested_session_test.go.tmpl').read_bytes())
     def test_nested_transport_fixtures_are_test_tagged_and_exact(self):
         with tempfile.TemporaryDirectory() as tmp:
             sing,xray=self.fixture(tmp);self.run_prepare(sing,xray)

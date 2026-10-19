@@ -23,6 +23,7 @@ import (
 	xcommon "github.com/xtls/xray-core/common"
 	xbuf "github.com/xtls/xray-core/common/buf"
 	xnet "github.com/xtls/xray-core/common/net"
+	xsession "github.com/xtls/xray-core/common/session"
 	xcore "github.com/xtls/xray-core/core"
 	_ "github.com/xtls/xray-core/main/distro/all"
 	"github.com/xtls/xray-core/transport"
@@ -157,7 +158,7 @@ func (h *Outbound) DialContext(ctx context.Context, network string, destination 
 	if err != nil {
 		return nil, err
 	}
-	ctx = request.Context
+	ctx = nativeRequestContext(request.Context, h.binding)
 	stop := context.AfterFunc(h.ctx, request.Cancel)
 	conn, err := xcore.Dial(ctx, instance, dest)
 	if err != nil {
@@ -180,7 +181,7 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	if err != nil {
 		return nil, err
 	}
-	ctx = request.Context
+	ctx = nativeRequestContext(request.Context, h.binding)
 	stop := context.AfterFunc(h.ctx, request.Cancel)
 	dest := xnet.UDPDestination(xnet.ParseAddress(destination.AddrString()), xnet.Port(destination.Port))
 	link, err := xcore.RouterVPNDispatchPacket(ctx, instance, dest)
@@ -196,6 +197,19 @@ func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (n
 	}
 	return packet, nil
 }
+
+// A detoured Xray connection starts another protocol session. Its dispatcher
+// must not mutate the outer session's *Outbound or Content through inherited
+// context values: that would replace the exit payload destination with the
+// entry's physical next-hop address. Cancellation and non-Xray values remain
+// attached, while each dispatcher gets its own mutable session and binding.
+func nativeRequestContext(ctx context.Context, owner *binding) context.Context {
+	ctx = context.WithValue(ctx, bindingKey{}, owner)
+	ctx = xsession.ContextWithOutbounds(ctx, []*xsession.Outbound{{}})
+	ctx = xsession.ContextWithContent(ctx, &xsession.Content{})
+	return xsession.ContextWithInbound(ctx, nil)
+}
+
 func (h *Outbound) Close() error {
 	h.mu.Lock()
 	defer h.mu.Unlock()

@@ -1,0 +1,56 @@
+package routervpnxray
+
+import (
+	"context"
+	"errors"
+	"testing"
+	"time"
+
+	xnet "github.com/xtls/xray-core/common/net"
+	xsession "github.com/xtls/xray-core/common/session"
+)
+
+func TestNativeXrayNestedSessionOwnsDestinationContentAndBinding(t *testing.T) {
+	type nativeValue struct{}
+	deadline := time.Now().Add(time.Minute)
+	parent, cancel := context.WithDeadline(context.WithValue(context.Background(), nativeValue{}, "captured native policy"), deadline)
+	defer cancel()
+	application := xnet.TCPDestination(xnet.ParseAddress("198.51.100.10"), 9001)
+	outer := &xsession.Outbound{Target: application, OriginalTarget: application}
+	content := &xsession.Content{}
+	content.SetAttribute("forcedOutboundTag", "outer-exit")
+	outerBinding, entryBinding := &binding{}, &binding{}
+	parent = context.WithValue(parent, bindingKey{}, outerBinding)
+	parent = xsession.ContextWithOutbounds(parent, []*xsession.Outbound{outer})
+	parent = xsession.ContextWithContent(parent, content)
+	parent = xsession.ContextWithInbound(parent, &xsession.Inbound{})
+	child := nativeRequestContext(parent, entryBinding)
+	other := nativeRequestContext(parent, entryBinding)
+	entry := xsession.OutboundsFromContext(child)
+	if len(entry) != 1 || entry[0] == outer || entry[0] == xsession.OutboundsFromContext(other)[0] || entry[0].Target.IsValid() {
+		t.Fatal("nested dispatch reused an outer mutable destination")
+	}
+	entry[0].Target = xnet.TCPDestination(xnet.ParseAddress("192.0.2.2"), 24443)
+	entry[0].OriginalTarget = entry[0].Target
+	if outer.Target != application || outer.OriginalTarget != application {
+		t.Fatal("entry dispatch replaced exit payload destination")
+	}
+	inside := xsession.ContentFromContext(child)
+	if inside == nil || inside == content || inside == xsession.ContentFromContext(other) || xsession.GetForcedOutboundTagFromContext(child) != "" {
+		t.Fatal("unrelated Xray routing policy crossed session ownership")
+	}
+	inside.SetAttribute("forcedOutboundTag", "entry")
+	if xsession.GetForcedOutboundTagFromContext(parent) != "outer-exit" || xsession.InboundFromContext(child) != nil || xsession.InboundFromContext(parent) == nil {
+		t.Fatal("entry altered another session's policy or inbound")
+	}
+	if child.Value(bindingKey{}) != entryBinding || parent.Value(bindingKey{}) != outerBinding || child.Value(nativeValue{}) != "captured native policy" {
+		t.Fatal("native instance or device policy lost ownership")
+	}
+	if got, ok := child.Deadline(); !ok || !got.Equal(deadline) {
+		t.Fatal("nested dispatch dropped caller deadline")
+	}
+	cancel()
+	if !errors.Is(child.Err(), context.Canceled) || !errors.Is(other.Err(), context.Canceled) {
+		t.Fatal("nested dispatch lost caller cancellation")
+	}
+}
