@@ -8,6 +8,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/nativecomposite"
 )
 
@@ -253,10 +254,20 @@ func Apply(config, profiles string) (string, error) {
 			return "", errors.New("cover traffic requires a paired Router VPN node")
 		}
 		proved := func(tag string) bool {
-			if text(byTag[tag], "type") == nativecomposite.Type {
-				return encryptedComposite(root, byTag, tag, text(item.profile, "node_proof_id"), entryTag)
-			}
-			return encrypted(byTag, tag, map[string]bool{})
+			return encrypted(byTag, tag, map[string]bool{}, func(owner string) (string, bool) {
+				profile, via := pair.Exit, ""
+				if entryTag != "" {
+					if owner == entryTag {
+						profile = pair.Entry
+					} else {
+						via = entryTag
+					}
+				}
+				if owner != final && owner != udpTag && owner != entryTag {
+					return "", false
+				}
+				return via, encryptedComposite(root, byTag, owner, text(profile, "node_proof_id"), entryTag)
+			})
 		}
 		if !proved(item.packet) || !proved(item.proof) {
 			return "", errors.New("cover requires proved encrypted native legs")
@@ -351,7 +362,7 @@ func encryptedComposite(root map[string]any, tags map[string]map[string]any, tag
 	return err == nil
 }
 
-func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool) bool {
+func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool, composite func(string) (string, bool)) bool {
 	if seen[tag] || len(seen) > 12 {
 		return false
 	}
@@ -360,6 +371,14 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool)
 	if value == nil {
 		return false
 	}
+	detour := ""
+	if raw, exists := value["detour"]; exists {
+		var ok bool
+		detour, ok = raw.(string)
+		if !ok || !tokenPattern.MatchString(detour) || !encrypted(tags, detour, seen, composite) {
+			return false
+		}
+	}
 	switch text(value, "type") {
 	case "wireguard", "routervpn-amneziawg", "shadowsocks", "hysteria2", "routervpn-aes-xor", "routervpn-xray":
 		return true
@@ -367,9 +386,29 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool)
 		// Native construction validates the keys; performance must still reject
 		// an unknown base protocol instead of treating any PQ label as encrypted.
 		return value["mode"] == "wg-pq" || value["mode"] == "awg2-pq"
+	case "naive":
+		quic, ok := value["quic"].(bool)
+		if !ok {
+			return false
+		}
+		mode := "naive-h2"
+		if quic {
+			mode = "naive-h3"
+		}
+		if detour != "" {
+			// Validate the actual destination, credentials, TLS and UDP stream
+			// protocol only after the full lower path above has been proved.
+			return multihoprelay.ValidateNaiveRoutedTransport(value, mode) == nil
+		}
+		return multihoprelay.ValidateNaiveTransport(value, mode) == nil
+	case nativecomposite.Type:
+		if composite == nil {
+			return false
+		}
+		via, valid := composite(tag)
+		return valid && (via == "" || encrypted(tags, via, seen, composite))
 	case "socks":
-		detour := text(value, "detour")
-		return detour != "" && encrypted(tags, detour, seen)
+		return detour != ""
 	default:
 		return false
 	}

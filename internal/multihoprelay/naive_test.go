@@ -122,3 +122,60 @@ func TestNaiveRejectsUnownedOrDowngradedTransport(t *testing.T) {
 		}
 	}
 }
+
+func TestRoutedNaiveRetainsRemoteLoopbackWithoutRelaxingStandalone(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, address := range []string{"127.0.0.1", "::1", "10.77.0.1", "192.0.2.4"} {
+			t.Run(mode+"/"+address, func(t *testing.T) {
+				value := naiveFixture(mode)
+				value["server"], value["detour"] = address, "captured-aes"
+				before, _ := json.Marshal(value)
+				if err := ValidateNaiveRoutedTransport(value, mode); err != nil {
+					t.Fatal(err)
+				}
+				after, _ := json.Marshal(value)
+				if string(before) != string(after) {
+					t.Fatal("routed validation changed a destination or credential")
+				}
+				if ValidateNaiveTransport(value, mode) == nil {
+					t.Fatal("standalone accepted a routed transport")
+				}
+				delete(value, "detour")
+				if ValidateNaiveRoutedTransport(value, mode) == nil {
+					t.Fatal("routed validation allowed an absent lower owner")
+				}
+				if (address == "127.0.0.1" || address == "::1") && ValidateNaiveTransport(value, mode) == nil {
+					t.Fatal("standalone loopback policy was weakened")
+				}
+			})
+		}
+		for label, mutate := range map[string]func(map[string]any){
+			"empty-detour":    func(v map[string]any) { v["detour"] = "" },
+			"typed-detour":    func(v map[string]any) { v["detour"] = true },
+			"alias-detour":    func(v map[string]any) { v["detour"] = v["tag"] },
+			"spaced-detour":   func(v map[string]any) { v["detour"] = " captured-aes" },
+			"system-DNS":      func(v map[string]any) { v["server"] = "localhost" },
+			"unspecified":     func(v map[string]any) { v["server"] = "0.0.0.0" },
+			"multicast":       func(v map[string]any) { v["server"] = "ff02::1" },
+			"zoned-loopback":  func(v map[string]any) { v["server"] = "::1%en0" },
+			"mapped-loopback": func(v map[string]any) { v["server"] = "::ffff:127.0.0.1" },
+			"missing-TLS":     func(v map[string]any) { delete(v, "tls") },
+			"insecure-TLS":    func(v map[string]any) { v["tls"].(map[string]any)["insecure"] = true },
+			"file-trust":      func(v map[string]any) { v["tls"].(map[string]any)["certificate_path"] = "other.pem" },
+			"UDP-disabled":    func(v map[string]any) { v["udp_over_tcp"].(map[string]any)["enabled"] = false },
+			"UDP-version":     func(v map[string]any) { v["udp_over_tcp"].(map[string]any)["version"] = float64(1) },
+			"missing-secret":  func(v map[string]any) { v["password"] = "" },
+			"QUIC-coercion":   func(v map[string]any) { v["quic"] = "true" },
+			"unowned-option":  func(v map[string]any) { v["bind_interface"] = "lo" },
+		} {
+			t.Run(mode+"/"+label, func(t *testing.T) {
+				value := naiveFixture(mode)
+				value["server"], value["detour"] = "127.0.0.1", "captured-aes"
+				mutate(value)
+				if ValidateNaiveRoutedTransport(value, mode) == nil {
+					t.Fatal("routed policy discarded an invalid transport field")
+				}
+			})
+		}
+	}
+}

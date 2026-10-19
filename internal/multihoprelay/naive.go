@@ -18,13 +18,38 @@ func NaiveMode(mode string) bool { return mode == "naive-h2" || mode == "naive-h
 // outbound. The graph/relay owner adds its sole detour only after this check.
 // Inputs are decoded JSON values; no socket, resolver or certificate file opens.
 func ValidateNaiveTransport(value map[string]any, mode string) error {
+	return validateNaiveTransport(value, mode, false)
+}
+
+// ValidateNaiveRoutedTransport checks the same complete native transport after
+// its caller has proved that detour is an owned encrypted path. A loopback
+// destination then denotes the remote node's service, never a local proxy. The
+// detour must remain explicit; standalone validation still rejects loopback.
+func ValidateNaiveRoutedTransport(value map[string]any, mode string) error {
+	detour, ok := value["detour"].(string)
+	if !ok || !ident.MatchString(detour) || detour == value["tag"] {
+		return errors.New("routed Naive requires its distinct captured detour")
+	}
+	return validateNaiveTransport(value, mode, true)
+}
+
+func validateNaiveTransport(value map[string]any, mode string, routed bool) error {
 	bad := errors.New("Naive must retain its exact verified HTTP and UDP transport")
-	if !NaiveMode(mode) || value["type"] != "naive" || !literalServer(value["server"]) || !validPort(value["server_port"]) {
+	serverOK := literalServer(value["server"])
+	if host, ok := value["server"].(string); routed && ok && !serverOK {
+		ip, err := netip.ParseAddr(host)
+		serverOK = err == nil && ip.Zone() == "" && !ip.Is4In6() && ip.IsLoopback()
+	}
+	if !NaiveMode(mode) || value["type"] != "naive" || !serverOK || !validPort(value["server_port"]) {
 		return bad
 	}
 	for key := range value {
 		switch key {
 		case "type", "tag", "server", "server_port", "username", "password", "quic", "udp_over_tcp", "tls":
+		case "detour":
+			if !routed {
+				return errors.New("standalone Naive cannot acquire a detour")
+			}
 		default:
 			return errors.New("Naive contains an unowned dial, helper or transport option")
 		}

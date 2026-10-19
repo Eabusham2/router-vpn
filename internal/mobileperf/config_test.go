@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/nativecomposite"
 )
 
@@ -325,5 +326,199 @@ func TestPQCoverUsesEncryptedPeerWithoutChangingKeysOrDNS(t *testing.T) {
 				t.Fatal("unimplemented PQ mode marked encrypted")
 			}
 		})
+	}
+}
+
+func naiveCoverFixture(t *testing.T, mode, placement, layer, address string) (map[string]any, map[string]any, map[string]any, string) {
+	t.Helper()
+	root := perfFixture()
+	entry, exit := node(), node()
+	entry["node_proof_id"], entry["id"] = strings.Repeat("b", 64), "entry"
+	tag, via := "proxy", ""
+	if placement == "entry" {
+		tag = "entry-wg"
+		entry["daita_enabled"] = true
+	} else {
+		exit["daita_enabled"] = true
+		if placement == "single" {
+			entry = exit
+		} else {
+			via = "entry-wg"
+			root["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": via}}
+		}
+	}
+	value := map[string]any{
+		"type": "naive", "tag": tag, "server": "192.0.2.4", "server_port": float64(13443),
+		"username": placement + "-user", "password": placement + "-private-secret", "quic": mode == "naive-h3",
+		"udp_over_tcp": map[string]any{"enabled": true, "version": float64(2)},
+		"tls":          map[string]any{"enabled": true, "server_name": placement + ".example.test"},
+	}
+	if err := multihoprelay.ValidateNaiveTransport(value, mode); err != nil {
+		t.Fatal(err)
+	}
+	outputs := []any{value}
+	if layer != "" {
+		start := &multihoprelay.StartLayer{Mode: layer, API: "http://10.77.0.1:8787", Transport: map[string]any{
+			"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.4", "server_port": float64(8388),
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))),
+		}}
+		inner, outer, err := multihoprelay.WrapStartLayer(value, mode, start, "captured-aes", via)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if address != "" {
+			// Android's captured Start Layer can address the remote node's
+			// loopback service. Validation must keep this actual destination.
+			inner["server"] = address
+		}
+		outputs = []any{inner, outer}
+	} else if via != "" {
+		value["detour"] = via
+	}
+	if placement == "entry" {
+		final := root["outbounds"].([]any)[0].(map[string]any)
+		final["detour"] = tag
+		outputs = append(outputs, final)
+	}
+	root["outbounds"] = outputs
+	return root, entry, exit, tag
+}
+
+func TestNaiveCoverRetainsAuthenticatedNativeTCPAndUDP(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, placement := range []string{"single", "entry", "exit"} {
+			for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				addresses := []string{""}
+				if layer != "" {
+					addresses = append(addresses, "127.0.0.1", "::1")
+				}
+				for _, address := range addresses {
+					t.Run(mode+"/"+placement+"/"+layer+"/"+address, func(t *testing.T) {
+						root, entry, exit, tag := naiveCoverFixture(t, mode, placement, layer, address)
+						before := jsonText(root)
+						out, err := compilePerf(root, entry, exit)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if jsonText(root) != before {
+							t.Fatal("cover validation changed the caller's graph")
+						}
+						for _, field := range []string{"outbounds", "endpoints", "inbounds", "dns", "route"} {
+							if jsonText(out[field]) != jsonText(root[field]) {
+								t.Fatal("Naive cover changed captured", field)
+							}
+						}
+						services := out["services"].([]any)
+						if len(services) != 1 {
+							t.Fatal("Naive cover created another network owner")
+						}
+						service := services[0].(map[string]any)
+						owner := exit
+						if placement == "entry" {
+							owner = entry
+						}
+						if service["packet_tag"] != tag || service["proof_tag"] != tag || service["node_id"] != owner["node_proof_id"] {
+							t.Fatal("Naive cover bypassed the selected authenticated TCP/UDP owner")
+						}
+						again, err := compilePerf(out, entry, exit)
+						if err != nil || jsonText(again) != jsonText(out) {
+							t.Fatal("Naive cover was not idempotent", err)
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestNaiveCoverRejectsDowngradesAndDetourCycles(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, fault := range []string{"HTTP", "QUIC-type", "secret", "TLS", "trust-path", "invalid-cert", "UDP-disabled", "UDP-version", "UDP-extra", "hostname", "plain-loopback", "missing-detour", "empty-detour", "typed-detour", "self-cycle", "encrypted-cycle", "plain-underlay", "plain-after-encrypted", "unowned-options"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) {
+				root, entry, exit, _ := naiveCoverFixture(t, mode, "single", "aes-256-gcm", "127.0.0.1")
+				outputs := root["outbounds"].([]any)
+				value, lower := outputs[0].(map[string]any), outputs[1].(map[string]any)
+				switch fault {
+				case "HTTP":
+					value["type"] = "http"
+				case "QUIC-type":
+					value["quic"] = "true"
+				case "secret":
+					value["password"] = ""
+				case "TLS":
+					value["tls"].(map[string]any)["insecure"] = true
+				case "trust-path":
+					value["tls"].(map[string]any)["certificate_path"] = "other.pem"
+				case "invalid-cert":
+					value["tls"].(map[string]any)["certificate"] = []any{"not a certificate"}
+				case "UDP-disabled":
+					value["udp_over_tcp"].(map[string]any)["enabled"] = false
+				case "UDP-version":
+					value["udp_over_tcp"].(map[string]any)["version"] = float64(1)
+				case "UDP-extra":
+					value["udp_over_tcp"].(map[string]any)["detour"] = "direct"
+				case "hostname":
+					value["server"] = "localhost"
+				case "plain-loopback":
+					delete(value, "detour")
+				case "missing-detour":
+					value["detour"] = "absent"
+				case "empty-detour":
+					value["detour"] = ""
+				case "typed-detour":
+					value["detour"] = true
+				case "self-cycle":
+					value["detour"] = value["tag"]
+				case "encrypted-cycle":
+					lower["detour"] = value["tag"]
+				case "plain-underlay":
+					lower["type"] = "direct"
+				case "plain-after-encrypted":
+					lower["detour"] = "unowned"
+					root["outbounds"] = append(outputs, map[string]any{"type": "direct", "tag": "unowned"})
+				case "unowned-options":
+					value["bind_interface"] = "lo"
+				}
+				before := jsonText(root)
+				if _, err := compilePerf(root, entry, exit); err == nil {
+					t.Fatal("padding accepted unproved Naive transport")
+				}
+				if jsonText(root) != before {
+					t.Fatal("rejection repaired or replaced the caller's transport")
+				}
+			})
+		}
+	}
+}
+
+func TestNaiveCoverTraversesTheCompleteCapturedCompositeEntry(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, composite := range []string{"ss-v2ray", "split", "max"} {
+			t.Run(mode+"/"+composite, func(t *testing.T) {
+				root := compositeCoverFixture(t, composite, "", "entry-wg", "routervpn-entry-composite-", "")
+				naive, _, _, _ := naiveCoverFixture(t, mode, "exit", "", "")
+				outputs := root["outbounds"].([]any)
+				for i, raw := range outputs {
+					if raw.(map[string]any)["tag"] == "proxy" {
+						outputs[i] = naive["outbounds"].([]any)[0]
+					}
+				}
+				entry, exit := node(), node()
+				exit["node_proof_id"], exit["daita_enabled"] = strings.Repeat("b", 64), true
+				out, err := compilePerf(root, entry, exit)
+				if err != nil || jsonText(out["outbounds"]) != jsonText(root["outbounds"]) {
+					t.Fatal("Naive cover lost complete predecessor lanes", err)
+				}
+				for _, raw := range outputs {
+					value := raw.(map[string]any)
+					if value["tag"] == "routervpn-entry-composite-udp" {
+						value["type"] = "direct"
+					}
+				}
+				if _, err := compilePerf(root, entry, exit); err == nil {
+					t.Fatal("Naive TCP proof blessed a plaintext composite UDP lane")
+				}
+			})
+		}
 	}
 }
