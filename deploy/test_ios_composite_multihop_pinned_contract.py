@@ -20,9 +20,14 @@ G = importlib.util.module_from_spec(spec); spec.loader.exec_module(G)
 
 
 class AppleCompositeGate(unittest.TestCase):
-    def exercise(self, fault=''):
+    def exercise(self, fault='', linked_vendor=False):
         with tempfile.TemporaryDirectory(prefix='ios-composite-gate-contract-') as temp:
-            vendor = Path(temp)/'vendor'; (vendor/'experimental/libbox').mkdir(parents=True)
+            root = Path(temp)
+            if linked_vendor:
+                actual = root/'actual'; actual.mkdir()
+                alias = root/'alias'; alias.symlink_to(actual, target_is_directory=True)
+                root = alias
+            vendor = root/'vendor'; (vendor/'experimental/libbox').mkdir(parents=True)
             reader = vendor/'experimental/libbox/routervpn_multihop_native_test.go'
             reader.write_bytes((ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_bytes())
             if fault == 'reader': reader.write_text('different native reader')
@@ -42,7 +47,7 @@ class AppleCompositeGate(unittest.TestCase):
                     if fault == 'symlink':
                         victim = next(fixtures.iterdir()); victim.unlink(); victim.symlink_to(reader)
                 else:
-                    self.assertEqual(Path(cwd), vendor)
+                    self.assertEqual(Path(cwd), vendor.resolve(strict=True))
                     self.assertEqual(command[:3], ['go', 'test', '-mod=readonly'])
                     self.assertEqual(command[command.index('-run')+1], '^TestRouterMultihopAppleCompositeGeneratedGraphs$')
                     self.assertEqual(set(command[command.index('-tags')+1].split(',')), {'with_quic','with_wireguard','with_gvisor'})
@@ -63,6 +68,10 @@ class AppleCompositeGate(unittest.TestCase):
 
     def test_actual_runner_requires_host_then_native(self):
         self.assertEqual(len(self.exercise()), 2)
+
+    def test_linked_source_uses_the_exact_canonical_native_directory(self):
+        self.assertEqual(len(self.exercise(linked_vendor=True)), 2)
+        self.assertEqual(len(self.exercise('native', linked_vendor=True)), 2)
 
     def test_bad_pin_or_reader_never_runs_a_compiler(self):
         for fault in ('pin', 'reader'):
