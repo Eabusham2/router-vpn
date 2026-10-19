@@ -1,3 +1,5 @@
+//go:build go1.24
+
 // Command composite emits public two-node profile assets for the shipping
 // Java/Swift compiler harnesses. It never starts a runtime or opens a socket.
 package main
