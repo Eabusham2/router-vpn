@@ -18,7 +18,7 @@ spec.loader.exec_module(TORPACK)
 
 
 def inputs():
-    return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
+    return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *(ROOT/'internal/mobiletor').glob('*.go'),
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
@@ -71,6 +71,7 @@ def copies():
         relative = str(path.relative_to(ROOT/'mobile/torpt'))
         result['routervpn/torpt/'+relative] = rewrite(path.read_bytes()) if path.suffix == '.go' else path.read_bytes()
     mapped = {'box.go.tmpl': 'routervpn_tor.go',
+              'box_test.go.tmpl': 'routervpn_tor_test.go',
               'bridge.go.tmpl': 'experimental/libbox/routervpn_tor.go',
               'notices.go.tmpl': 'routervpn/tornotices/notices.go'}
     for path in sorted((ROOT/'mobile/toroutbound').glob('*.tmpl')):

@@ -1,0 +1,107 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func (h *Outbound) TorSessionID() string { return h.sessionID }
+
+// CancelTor freezes only this immutable outbound/session pair. It initiates
+// cancellation without waiting for native or protected socket cleanup; Close
+// retains the owner and performs that independent completion check.
+func (h *Outbound) CancelTor(sessionID string) {
+	if sessionID != "" && sessionID == h.sessionID {
+		h.beginClose()
+	}
+}
+
+func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string, predecessor *mobiletor.PredecessorProof) (proof mobiletor.Proof, failure error) {
+	if ctx == nil || sessionID == "" || sessionID != h.sessionID {
+		return proof, errors.New("native Tor proof belongs to another VPN session")
+	}
+	h.mu.Lock()
+	if h.closing || !h.started || h.ctx.Err() != nil {
+		h.mu.Unlock()
+		return proof, net.ErrClosed
+	}
+	if predecessor != nil && (h.predecessor == "" || h.upstream == nil) {
+		h.mu.Unlock()
+		return proof, errors.New("native Tor has no captured predecessor to prove")
+	}
+	h.proofWorkers.Add(1)
+	h.mu.Unlock()
+	defer h.proofWorkers.Done()
+	if err := h.upstream.current(); err != nil {
+		return proof, err
+	}
+	if predecessor != nil {
+		network, err := mobiletor.NewNetwork(h.ctx, h.protectedDial, nil)
+		if err != nil {
+			return proof, err
+		}
+		// The helper does synchronous HTTP, and this network retains even an
+		// ignored late lower dial. Its complete drain precedes proofWorkers.Done.
+		defer func() {
+			if err := network.Close(context.Background()); err != nil {
+				proof = mobiletor.Proof{}
+				failure = errors.New("native Tor predecessor proof did not drain cleanly")
+				h.mu.Lock()
+				h.proofCloseErr = errors.Join(h.proofCloseErr, failure)
+				h.mu.Unlock()
+				h.fail(failure)
+			}
+		}()
+		if err := predecessor.Prove(ctx, network.DialContext); err != nil {
+			return proof, err
+		}
+		if err := h.upstream.current(); err != nil {
+			return proof, err
+		}
+	}
+	return h.TorProof(ctx, sessionID)
+}
+
+// TorHealthy reports captured owner health only. It makes no DNS, socket or
+// control-protocol request, and cannot manufacture a fresh traffic proof.
+func (h *Outbound) TorHealthy(sessionID string) bool {
+	if sessionID == "" || sessionID != h.sessionID || h.ctx.Err() != nil {
+		return false
+	}
+	h.mu.Lock()
+	valid := !h.closing && h.failure == nil && h.proof.IsTor && h.proof.SessionID == sessionID && h.application != nil
+	owner, bridges, proxy := h.lease, h.bridges, h.proxy
+	h.mu.Unlock()
+	if !valid || owner == nil || owner.instance == nil || h.upstream.current() != nil || owner.resident.checkState() != nil {
+		return false
+	}
+	if h.networkCapture != nil && h.networkCapture.current() != nil {
+		return false
+	}
+	if bridges != nil {
+		select {
+		case <-bridges.Stopping():
+			return false
+		default:
+		}
+		if bridges.Err() != nil {
+			return false
+		}
+	} else if proxy != nil {
+		select {
+		case <-proxy.Stopping():
+			return false
+		default:
+		}
+		if proxy.Err() != nil {
+			return false
+		}
+	} else {
+		return false
+	}
+	exited, _, err := owner.instance.Status()
+	return err == nil && !exited && h.ctx.Err() == nil
+}

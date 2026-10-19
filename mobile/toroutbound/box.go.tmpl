@@ -4,37 +4,113 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"sync/atomic"
 	"time"
 
+	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
-// RouterVPNTorProof captures the actual Tor adapter in this Box. Labels alone,
-// another native instance, or a caller-supplied expected IP cannot prove it.
-func (s *Box) RouterVPNTorProof(outboundTag, sessionID string) (string, error) {
-	if s == nil || s.outbound == nil || outboundTag == "" || sessionID == "" {
-		return "", errors.New("native Tor proof owner is unavailable")
+type torProofOwner interface {
+	TorSessionID() string
+	TorProofWithPredecessor(context.Context, string, *mobiletor.PredecessorProof) (mobiletor.Proof, error)
+	CancelTor(string)
+	TorHealthy(string) bool
+}
+
+// RouterVPNTorProofRequest captures one Box, actual outbound and VPN session.
+// Cancel never consults a mutable host service or a replacement outbound.
+type RouterVPNTorProofRequest struct {
+	ctx         context.Context
+	owner       torProofOwner
+	current     func() bool
+	sessionID   string
+	predecessor *mobiletor.PredecessorProof
+	started     atomic.Bool
+	succeeded   atomic.Bool
+	canceled    atomic.Bool
+}
+
+func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON string) (*RouterVPNTorProofRequest, error) {
+	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.outbound == nil || outboundTag == "" || sessionID == "" {
+		return nil, errors.New("native Tor proof owner is unavailable")
 	}
 	owner, found := s.outbound.Outbound(outboundTag)
 	if !found || owner == nil || owner.Type() != "routervpn-tor" {
-		return "", errors.New("native Tor final outbound is unavailable")
+		return nil, errors.New("native Tor final outbound is unavailable")
 	}
-	prover, ok := owner.(interface {
-		TorProof(context.Context, string) (mobiletor.Proof, error)
+	return newRouterTorProofRequest(s.ctx, owner, sessionID, predecessorJSON, func() bool {
+		current, found := s.outbound.Outbound(outboundTag)
+		return found && current == owner && s.ctx.Err() == nil
 	})
-	if !ok {
-		return "", errors.New("native Tor final outbound has no traffic proof")
+}
+
+func newRouterTorProofRequest(ctx context.Context, outbound adapter.Outbound, sessionID, predecessorJSON string, current func() bool) (*RouterVPNTorProofRequest, error) {
+	owner, ok := outbound.(torProofOwner)
+	if ctx == nil || ctx.Err() != nil || !ok || sessionID == "" || owner.TorSessionID() != sessionID || current == nil || !current() {
+		return nil, errors.New("native Tor proof does not belong to this VPN session")
 	}
-	ctx, cancel := context.WithTimeout(s.ctx, 3*time.Minute)
+	var predecessor *mobiletor.PredecessorProof
+	if predecessorJSON != "" {
+		var err error
+		predecessor, err = mobiletor.NewPredecessorProof(predecessorJSON)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return &RouterVPNTorProofRequest{ctx: ctx, owner: owner, current: current, sessionID: sessionID, predecessor: predecessor}, nil
+}
+
+func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
+	if r == nil || !r.started.CompareAndSwap(false, true) {
+		return "", errors.New("native Tor proof request is unavailable or already used")
+	}
+	defer func() {
+		if failure != nil {
+			r.Cancel()
+		}
+	}()
+	if r.canceled.Load() || r.ctx.Err() != nil || !r.current() {
+		return "", errors.New("native Tor proof belongs to a retired VPN session")
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
 	defer cancel()
-	proof, err := prover.TorProof(ctx, sessionID)
+	proof, err := r.owner.TorProofWithPredecessor(ctx, r.sessionID, r.predecessor)
 	if err != nil {
 		return "", err
 	}
-	current, found := s.outbound.Outbound(outboundTag)
-	if !found || current != owner || s.ctx.Err() != nil {
+	if r.canceled.Load() || ctx.Err() != nil || !r.current() || proof.SessionID != r.sessionID || !proof.IsTor {
 		return "", errors.New("native Tor proof belongs to a retired outbound")
 	}
 	data, err := json.Marshal(proof)
-	return string(data), err
+	if err != nil {
+		return "", errors.New("native Tor traffic proof could not be encoded")
+	}
+	r.succeeded.Store(true)
+	if r.canceled.Load() {
+		r.succeeded.Store(false)
+		return "", errors.New("native Tor proof was canceled")
+	}
+	return string(data), nil
+}
+
+func (r *RouterVPNTorProofRequest) Cancel() {
+	if r != nil && r.canceled.CompareAndSwap(false, true) {
+		r.succeeded.Store(false)
+		r.owner.CancelTor(r.sessionID)
+	}
+}
+
+func (r *RouterVPNTorProofRequest) Healthy() bool {
+	return r != nil && r.succeeded.Load() && !r.canceled.Load() && r.ctx.Err() == nil && r.current() && r.owner.TorHealthy(r.sessionID)
+}
+
+// RouterVPNTorProof preserves the synchronous convenience API. Mobile hosts
+// retain the request itself so Stop and network changes can cancel immediately.
+func (s *Box) RouterVPNTorProof(outboundTag, sessionID string) (string, error) {
+	request, err := s.RouterVPNTorCreateProof(outboundTag, sessionID, "")
+	if err != nil {
+		return "", err
+	}
+	return request.Run()
 }

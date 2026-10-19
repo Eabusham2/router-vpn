@@ -1,0 +1,121 @@
+package routervpntor
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type privateState struct {
+	directory string
+	file      *os.File
+	identity  os.FileInfo
+}
+
+// SetStateDirectory binds a stable app-private directory for the lifetime of
+// the sole C Tor invocation. Hosts call this before constructing a Tor Box and
+// keep this directory separate from disposable Libbox runtime directories.
+// The directory handle remains process-owned, including after quarantine, so
+// a removed/replaced path cannot silently become a new resident's private state.
+func SetStateDirectory(directory string) error {
+	return processResident.setStateDirectory(directory)
+}
+
+func (r *resident) setStateDirectory(directory string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retired {
+		return errRetired
+	}
+	if r.state != nil {
+		if r.state.directory != directory {
+			return errors.New("native Tor private state is already bound to this process")
+		}
+		if err := r.state.check(); err != nil {
+			r.retireLocked()
+			return err
+		}
+		return nil
+	}
+	if r.instance != nil || r.directory != "" || r.active != nil {
+		return errors.New("native Tor private state must be bound before starting its process")
+	}
+	if _, err := mobiletor.ResidentArguments(directory); err != nil {
+		return err
+	}
+	// Validate the parent before creating anything. Hosts canonicalize their
+	// app container path (including Apple's /var alias) before this call.
+	parent := filepath.Dir(directory)
+	resolved, err := filepath.EvalSymlinks(parent)
+	if err != nil || resolved != parent {
+		return errors.New("native Tor private state parent must be canonical and unlinked")
+	}
+	if err := mobiletor.PrepareState(directory); err != nil {
+		return err
+	}
+	file, err := os.Open(directory)
+	if err != nil {
+		return errors.New("native Tor private state could not be retained")
+	}
+	info, err := file.Stat()
+	if err != nil {
+		_ = file.Close()
+		return errors.New("native Tor private state identity could not be captured")
+	}
+	state := &privateState{directory: directory, file: file, identity: info}
+	if err := state.check(); err != nil {
+		_ = file.Close()
+		return err
+	}
+	r.state = state
+	return nil
+}
+
+func (r *resident) stateDirectory() (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retired {
+		return "", errRetired
+	}
+	if r.state == nil {
+		return "", errors.New("native Tor requires its stable private state directory before VPN startup")
+	}
+	if err := r.state.check(); err != nil {
+		r.retireLocked()
+		return "", err
+	}
+	return r.state.directory, nil
+}
+
+func (r *resident) checkState() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.retired {
+		return errRetired
+	}
+	if r.state != nil {
+		if err := r.state.check(); err != nil {
+			r.retireLocked()
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *privateState) check() error {
+	resolved, err := filepath.EvalSymlinks(s.directory)
+	if err != nil || resolved != s.directory {
+		return errors.New("native Tor private state path changed or became linked")
+	}
+	info, err := os.Lstat(s.directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm()&0077 != 0 || !os.SameFile(s.identity, info) {
+		return errors.New("native Tor private state identity or permissions changed")
+	}
+	retained, err := s.file.Stat()
+	if err != nil || !os.SameFile(s.identity, retained) {
+		return errors.New("native Tor private state ownership was released")
+	}
+	return nil
+}

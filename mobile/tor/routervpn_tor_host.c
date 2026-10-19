@@ -6,6 +6,7 @@
 #include <fcntl.h>
 #include <limits.h>
 #include <pthread.h>
+#include <signal.h>
 #include <stdlib.h>
 #include <stdio.h>
 #include <string.h>
@@ -68,7 +69,16 @@ static void release(routervpn_tor *instance) {
 
 static void *run(void *value) {
     routervpn_tor *instance = value;
-    int result = tor_run_main(instance->configuration);
+    /* The embedded core must not install process-wide signal handlers over
+     * the app/Go runtime. Tor normally catches SIGPIPE itself, so preserve
+     * that protection on this dedicated thread and its subsequently created
+     * workers. A closed proxy/control peer must only fail the native write,
+     * never terminate the host application. The caller's mask is untouched. */
+    sigset_t signals;
+    int result = -1;
+    if (sigemptyset(&signals) == 0 && sigaddset(&signals, SIGPIPE) == 0 &&
+        pthread_sigmask(SIG_BLOCK, &signals, NULL) == 0)
+        result = tor_run_main(instance->configuration);
     pthread_mutex_lock(&lock);
     instance->result = result;
     instance->exited = 1;

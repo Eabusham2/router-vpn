@@ -1,0 +1,140 @@
+package routervpntor
+
+import (
+	"context"
+	"os"
+	"path/filepath"
+	"testing"
+)
+
+func canonicalTorTemp(t *testing.T) string {
+	t.Helper()
+	directory, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory
+}
+
+func boundStateFixture(t *testing.T) (*resident, string) {
+	t.Helper()
+	r := &resident{}
+	directory := filepath.Join(canonicalTorTemp(t), "private-tor")
+	if err := r.setStateDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
+	// The shipping owner keeps this descriptor for its whole process. Each
+	// fixture has its own resident and discharges it only at fixture teardown.
+	t.Cleanup(func() { _ = r.state.file.Close() })
+	return r, directory
+}
+
+func TestTorPrivateStateRemainsBoundAcrossDisposableRuntimeRoots(t *testing.T) {
+	r, directory := boundStateFixture(t)
+	fixture := newResidentFixture(t)
+	starts := 0
+	r.start = func([]string) (nativeInstance, error) { starts++; return fixture, nil }
+	for i := 0; i < 3; i++ {
+		runtimeRoot := filepath.Join(canonicalTorTemp(t), "libbox-runtime")
+		if err := os.Mkdir(runtimeRoot, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.setStateDirectory(directory); err != nil {
+			t.Fatal(err)
+		}
+		actual, err := r.stateDirectory()
+		if err != nil || actual != directory {
+			t.Fatal("stable state changed", err)
+		}
+		lease, err := r.acquire(context.Background(), actual)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := lease.release(nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.RemoveAll(runtimeRoot); err != nil {
+			t.Fatal(err)
+		}
+		if err := r.checkState(); err != nil {
+			t.Fatal("temporary runtime cleanup removed Tor state", err)
+		}
+	}
+	if starts != 1 {
+		t.Fatal("session restart invoked a second C Tor process", starts)
+	}
+	other := filepath.Join(canonicalTorTemp(t), "other")
+	if err := r.setStateDirectory(other); err == nil {
+		t.Fatal("resident state was rebound")
+	}
+	if _, err := os.Lstat(other); !os.IsNotExist(err) {
+		t.Fatal("rejected state path was created")
+	}
+}
+
+func TestTorPrivateStateRejectsLinksAndMissingSetup(t *testing.T) {
+	if _, err := (&resident{}).stateDirectory(); err == nil {
+		t.Fatal("missing explicit stable state was guessed")
+	}
+	for _, parentLink := range []bool{false, true} {
+		root := canonicalTorTemp(t)
+		real := filepath.Join(root, "real")
+		if err := os.Mkdir(real, 0700); err != nil {
+			t.Fatal(err)
+		}
+		linked := filepath.Join(root, "linked")
+		if err := os.Symlink(real, linked); err != nil {
+			t.Fatal(err)
+		}
+		target := linked
+		if parentLink {
+			target = filepath.Join(linked, "private-tor")
+		}
+		if err := (&resident{}).setStateDirectory(target); err == nil {
+			t.Fatal("linked private state accepted")
+		}
+		if parentLink {
+			if _, err := os.Lstat(filepath.Join(real, "private-tor")); !os.IsNotExist(err) {
+				t.Fatal("linked parent rejection happened after creation")
+			}
+		}
+	}
+}
+
+func TestTorPrivateStateReplacementOrPermissionChangeRetiresOwner(t *testing.T) {
+	for _, mutation := range []string{"replacement", "permission", "link", "released-handle"} {
+		t.Run(mutation, func(t *testing.T) {
+			r, directory := boundStateFixture(t)
+			switch mutation {
+			case "replacement":
+				if err := os.Rename(directory, directory+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(directory, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "permission":
+				if err := os.Chmod(directory, 0755); err != nil {
+					t.Fatal(err)
+				}
+			case "link":
+				if err := os.Rename(directory, directory+"-old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(directory+"-old", directory); err != nil {
+					t.Fatal(err)
+				}
+			case "released-handle":
+				if err := r.state.file.Close(); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := r.checkState(); err == nil || !r.retired {
+				t.Fatal("invalid state identity remained usable", err)
+			}
+			if _, err := r.stateDirectory(); err == nil {
+				t.Fatal("quarantined state became usable")
+			}
+		})
+	}
+}

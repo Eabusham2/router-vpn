@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/pion/transport/v4"
 	"github.com/sagernet/sing-box/adapter"
@@ -80,10 +81,24 @@ func captureTorNetwork(ctx context.Context, tag string, options option.DialerOpt
 		if n.query.Transport != selected {
 			return nil, errors.New("Snowflake DNS differs from its captured native dialer")
 		}
+	} else if options.Detour != "" && options.DomainResolver != nil && options.DomainResolver.Server != "" {
+		// A captured predecessor dialer need not resolve one remote hostname.
+		// Pion still needs the Tor outbound's explicitly selected DNS policy;
+		// deriving it here preserves the entry's separate route default. This
+		// matches the exact pinned native dialer's per-outbound option mapping.
+		resolver := options.DomainResolver
+		strategy := C.DomainStrategy(resolver.Strategy)
+		if strategy == C.DomainStrategyAsIS {
+			strategy = C.DomainStrategy(options.DomainStrategy)
+		}
+		n.query = adapter.DNSQueryOptions{
+			Transport: selected, Strategy: strategy, Timeout: time.Duration(resolver.Timeout),
+			DisableCache: resolver.DisableCache, DisableOptimisticCache: resolver.DisableOptimisticCache,
+			RewriteTTL: resolver.RewriteTTL, ClientSubnet: resolver.ClientSubnet.Build(netip.Prefix{}),
+		}
 	} else {
-		// An explicitly selected outbound resolver always creates a native
-		// resolveDialer. Only a predecessor without one can inherit the
-		// frozen route default for Pion's separate DNS requests.
+		// A predecessor without explicit per-outbound DNS may inherit only
+		// its frozen route default, never a system or guessed final resolver.
 		if options.Detour == "" || options.DomainResolver != nil && options.DomainResolver.Server != "" || defaults.DomainResolver == "" {
 			return nil, errors.New("Snowflake native dialer has no captured resolver options")
 		}

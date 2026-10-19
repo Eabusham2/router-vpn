@@ -27,10 +27,11 @@ func (h *Outbound) cleanup() {
 	// Cancellation already freezes each network owner. Keep the lease and
 	// every worker reachable until actual closes and pending dials have joined.
 	<-h.workerDone
+	h.proofWorkers.Wait()
 	h.mu.Lock()
-	owner, bridges, application := h.lease, h.bridges, h.application
+	owner, bridges, proxy, application := h.lease, h.bridges, h.proxy, h.application
+	cleanupError := h.proofCloseErr
 	h.mu.Unlock()
-	var cleanupError error
 	if application != nil {
 		cleanupError = errors.Join(cleanupError, application.Close(context.Background()))
 	}
@@ -41,6 +42,11 @@ func (h *Outbound) cleanup() {
 		// Tor's inventories exclude connections marked for close. Real PT
 		// workers and their protected sockets must independently finish.
 		cleanupError = errors.Join(cleanupError, bridges.Close(context.Background()))
+	}
+	if proxy != nil {
+		// Ordinary Tor's pending guard dial and both TCP relay pumps remain
+		// owned independently of the C control connection inventories.
+		cleanupError = errors.Join(cleanupError, proxy.Close(context.Background()))
 	}
 	if owner != nil {
 		cleanupError = errors.Join(cleanupError, owner.control.Quiesce(context.Background()))

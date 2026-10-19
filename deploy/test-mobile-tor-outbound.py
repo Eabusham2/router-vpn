@@ -57,11 +57,17 @@ def main():
     # links both the exact native CommandServer proof API and embedded notices.
     run([args.go, 'test', '-mod=readonly', '-ldflags=-checklinkname=0', '-run', '^$', './experimental/libbox'],
         vendor, environment, args.output, 'libbox-host-api')
+    run([args.go, 'test', '-mod=readonly', '-race', '-count=1', '-ldflags=-checklinkname=0',
+         '-run', '^TestRouterTorProof', '-timeout=60s', '.'],
+        vendor, environment, args.output, 'captured-proof-request')
     environment = environment.copy()
     environment['CGO_LDFLAGS'] = '-L'+str(library.parent)+' -Wl,-rpath,'+str(library.parent)+' -lroutervpn_tor'
-    run([args.go, 'test', '-mod=readonly', '-race', '-count=1', '-timeout=120s',
-         '-tags', 'routervpn_tor_native_test', '-v', './protocol/routervpntor'],
-        vendor, environment, args.output, 'real-native-pt-session-drain')
+    for late in ('pt', 'plain'):
+        environment['ROUTERVPN_TOR_TEST_LATE'] = late
+        run([args.go, 'test', '-mod=readonly', '-race', '-count=1', '-timeout=120s',
+             '-tags', 'routervpn_tor_native_test', '-run', '^TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain$',
+             '-v', './protocol/routervpntor'],
+            vendor, environment, args.output, 'real-native-'+late+'-session-drain')
     if sha(library) != native_hash or sources != {str(path.relative_to(ROOT)): sha(path) for path in PREP.inputs()}:
         raise ValueError('Native Tor source or C runtime changed during its gate')
     PREP.TORPACK.PACKAGE.verify(native_package, 'host-test')
@@ -71,7 +77,9 @@ def main():
                   native_library_sha256=native_hash, native_package=package,
                   prepared_source_sha256=PREP.digest(),
                   module_sha256={name: sha(vendor/name) for name in ('go.mod', 'go.sum')},
-                  verified=dict(native_resident_sessions=12, native_late_dial_quarantine=True,
+                  verified=dict(native_resident_invocations=2, native_resident_sessions=48, native_late_dial_quarantine=True,
+                                plain_native_tls_through_captured_tcp=True, plain_late_dial_quarantine=True,
+                                stable_private_state_across_runtime_roots=True, captured_cancelable_proof_requests=True,
                                 actual_pt_workers=True, local_pt_application_traffic=True, captured_snowflake_dns_and_io=True,
                                 bootstrap_source_guard=True,
                                 libbox_host_api_linked=True, public_tor_traffic=False,

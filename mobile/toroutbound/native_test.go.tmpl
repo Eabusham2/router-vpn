@@ -4,10 +4,14 @@ package routervpntor
 
 import (
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
 	"path/filepath"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -19,9 +23,118 @@ import (
 	"github.com/sagernet/sing-box/routervpn/nativetor"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service/filemanager"
 	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4"
 )
+
+type capturedPlainFixture struct {
+	entered     chan struct{}
+	hello       chan struct{}
+	calls       atomic.Int32
+	drained     atomic.Int32
+	workers     sync.WaitGroup
+	once        sync.Once
+	release     <-chan struct{}
+	t           *testing.T
+	runtimeRoot string
+}
+
+func (c *capturedPlainFixture) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != N.NetworkTCP || !destination.Addr.IsGlobalUnicast() || destination.Addr.IsPrivate() || destination.Port == 0 || destination.Fqdn != "" {
+		return nil, errors.New("ordinary Tor escaped its captured literal relay TCP owner")
+	}
+	if c.calls.Add(1) == 1 {
+		close(c.entered)
+	}
+	if c.release != nil {
+		<-ctx.Done()
+		<-c.release
+		c.drained.Add(1)
+		return nil, ctx.Err()
+	}
+	client, server := net.Pipe()
+	c.workers.Add(1)
+	go func() {
+		defer c.workers.Done()
+		defer c.drained.Add(1)
+		defer server.Close()
+		var header [5]byte
+		if _, err := io.ReadFull(server, header[:]); err != nil {
+			return
+		}
+		size := int(binary.BigEndian.Uint16(header[3:]))
+		body := make([]byte, size)
+		if header[0] != 22 || header[1] != 3 || size < 4 {
+			c.t.Error("ordinary C Tor did not send a TLS record through its protected proxy")
+			return
+		}
+		if _, err := io.ReadFull(server, body); err != nil {
+			return
+		}
+		if body[0] != 1 {
+			c.t.Error("ordinary C Tor protected stream did not begin with TLS ClientHello")
+			return
+		}
+		c.once.Do(func() { close(c.hello) })
+		<-ctx.Done()
+	}()
+	return client, nil
+}
+func (*capturedPlainFixture) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("ordinary Tor has no captured UDP path")
+}
+
+func startPlainNativeFixtureSession(t *testing.T, directory string, session int, release <-chan struct{}) (*Outbound, *capturedPlainFixture) {
+	t.Helper()
+	captured := &capturedPlainFixture{entered: make(chan struct{}), hello: make(chan struct{}), release: release, t: t}
+	f := newTorCaptureFixture(t, "entry")
+	f.out.items["entry"] = &torTestOutbound{Adapter: outbound.NewAdapter("fixture-captured-tcp", "entry", []string{N.NetworkTCP}, nil), Dialer: captured}
+	captured.runtimeRoot = filepath.Join(canonicalTorTemp(t), "disposable-libbox-runtime")
+	if err := os.Mkdir(captured.runtimeRoot, 0700); err != nil {
+		t.Fatal(err)
+	}
+	ctx := filemanager.WithDefault(f.ctx, captured.runtimeRoot, captured.runtimeRoot, os.Getuid(), os.Getgid())
+	actual, err := NewOutbound(ctx, nil, nil, "plain-tor", Options{DialerOptions: f.options, SessionID: fmt.Sprintf("plain-fixture-%d", session)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := actual.(*Outbound)
+	if h.directory != directory {
+		t.Fatal("native constructor used disposable Libbox state")
+	}
+	if err := h.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	ready := captured.hello
+	if release != nil {
+		ready = captured.entered
+	}
+	select {
+	case <-ready:
+	case <-h.closeDone:
+		t.Fatalf("ordinary native Tor stopped before captured TLS: %v", h.failure)
+	case <-time.After(15 * time.Second):
+		h.mu.Lock()
+		owner := h.lease
+		h.mu.Unlock()
+		progress := -1
+		if owner != nil {
+			wait, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			state, err := owner.control.Bootstrap(wait)
+			cancel()
+			if err == nil {
+				progress = state.Progress
+			}
+		}
+		closeErr := h.Close()
+		t.Fatalf("ordinary native Tor did not reach captured relay TCP: session=%d calls=%d drained=%d progress=%d close=%v", session, captured.calls.Load(), captured.drained.Load(), progress, closeErr)
+	}
+	if h.bridges != nil || h.proxy == nil || len(h.plan.Bridges) != 0 {
+		t.Fatal("empty bridge profile silently selected a PT")
+	}
+	return h, captured
+}
 
 type capturedNativeFixture struct {
 	expected string
@@ -96,7 +209,10 @@ func TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain(t *testing.T) {
 	if nativetor.ABI() != nativetor.RequiredABI || nativetor.Version() != nativetor.RequiredVersion {
 		t.Fatal("native Tor fixture did not link the real pinned C ABI")
 	}
-	directory := filepath.Join(t.TempDir(), "private-tor")
+	directory := filepath.Join(canonicalTorTemp(t), "private-tor")
+	if err := SetStateDirectory(directory); err != nil {
+		t.Fatal(err)
+	}
 	var first nativeInstance
 	defer func() {
 		if first != nil {
@@ -134,12 +250,51 @@ func TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain(t *testing.T) {
 		if exited, _, err := instance.Status(); err != nil || exited {
 			t.Fatal("normal disconnect ended the sole resident Tor invocation", err)
 		}
+		// Alternating PT and plain sessions proves that Tor clears both the
+		// transport/bridge selectors and global authenticated proxy credentials.
+		plain, relay := startPlainNativeFixtureSession(t, directory, session, nil)
+		proofContext, cancelProof = context.WithTimeout(context.Background(), 5*time.Millisecond)
+		_, proofError = plain.TorProof(proofContext, plain.sessionID)
+		cancelProof()
+		if !errors.Is(proofError, context.DeadlineExceeded) || plain.TorHealthy(plain.sessionID) {
+			t.Fatal("native TLS without an exit circuit falsely proved connected", proofError)
+		}
+		if err := plain.Close(); err != nil {
+			t.Fatalf("ordinary native Tor failed quiescence: %v", err)
+		}
+		relay.workers.Wait()
+		if relay.calls.Load() == 0 || relay.calls.Load() != relay.drained.Load() {
+			t.Fatal("ordinary captured relay work did not drain")
+		}
+		processResident.mu.Lock()
+		same := processResident.instance == first && processResident.active == nil && !processResident.retired
+		processResident.mu.Unlock()
+		if !same {
+			t.Fatal("ordinary native Tor replaced or retained its resident after close")
+		}
+		if err := os.RemoveAll(relay.runtimeRoot); err != nil {
+			t.Fatal(err)
+		}
+		if err := processResident.checkState(); err != nil {
+			t.Fatal("removing completed Libbox runtime changed resident Tor state", err)
+		}
+		t.Logf("verified PT + plain native session pair %d", session+1)
 	}
 	// A lower operation which ignores cancellation cannot borrow the next
 	// session's resident. Timeout final-retires C Tor while retaining PT work
 	// until it really exits; releasing it later does not erase quarantine.
 	release := make(chan struct{})
-	h, captured := startNativeFixtureSession(t, directory, sessions, release)
+	var h *Outbound
+	var calls, drained *atomic.Int32
+	if os.Getenv("ROUTERVPN_TOR_TEST_LATE") == "plain" {
+		var captured *capturedPlainFixture
+		h, captured = startPlainNativeFixtureSession(t, directory, sessions, release)
+		calls, drained = &captured.calls, &captured.drained
+	} else {
+		var captured *capturedNativeFixture
+		h, captured = startNativeFixtureSession(t, directory, sessions, release)
+		calls, drained = &captured.calls, &captured.drained
+	}
 	wait, cancelWait := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	err := h.closeWithContext(wait)
 	cancelWait()
@@ -163,7 +318,7 @@ func TestNativeTorOutboundReusesResidentOnlyAfterRealPTDrain(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("late native PT dial never finished its retained cleanup")
 	}
-	if captured.drained.Load() != captured.calls.Load() {
+	if drained.Load() != calls.Load() {
 		t.Fatal("late native PT work escaped retained cleanup")
 	}
 	if _, err := processResident.acquire(context.Background(), directory); !errors.Is(err, errRetired) {

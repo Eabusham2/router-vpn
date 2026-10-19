@@ -1,0 +1,164 @@
+package routervpntor
+
+import (
+	"bufio"
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type torProofLower struct {
+	dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
+}
+
+func (l torProofLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	return l.dial(ctx, network, destination)
+}
+func (torProofLower) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("proof has no packet route")
+}
+
+func torPredecessorFixture(t *testing.T, dial func(context.Context, string, M.Socksaddr) (net.Conn, error)) (*Outbound, *mobiletor.PredecessorProof) {
+	t.Helper()
+	f := newTorCaptureFixture(t, "entry")
+	ctx, cancel := context.WithCancel(f.ctx)
+	t.Cleanup(cancel)
+	captured, err := captureTorUpstream(ctx, "tor-final", "entry")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := &Outbound{Adapter: outbound.NewAdapter(Type, "tor-final", []string{N.NetworkTCP}, []string{"entry"}), ctx: ctx, cancel: cancel, sessionID: "captured-session", predecessor: "entry", upstream: captured, lower: torProofLower{dial: dial}, resident: &resident{}, started: true, ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+	// No native worker or exit proof is fabricated by this ownership fixture.
+	close(h.workerDone)
+	profile := `{"id":"entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"captured-entry-secret"}`
+	proof, err := mobiletor.NewPredecessorProof(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return h, proof
+}
+
+func TestTorPrivatePredecessorProofUsesCapturedLowerBeforeExitReadiness(t *testing.T) {
+	client, server := net.Pipe()
+	defer client.Close()
+	defer server.Close()
+	h, entry := torPredecessorFixture(t, func(_ context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+		if network != "tcp" || destination.String() != "10.77.0.1:8787" {
+			t.Error("private proof escaped captured lower")
+		}
+		return client, nil
+	})
+	peerDone := make(chan error, 1)
+	go func() {
+		request, err := http.ReadRequest(bufio.NewReader(server))
+		if err == nil && (request.URL.String() != "/health" || request.Header.Get("Authorization") != "Bearer captured-entry-secret") {
+			err = errors.New("private node proof request changed")
+		}
+		if err == nil {
+			body := `{"ok":true,"node_id":"` + strings.Repeat("a", 64) + `","proof":"router-vpn-private-agent-v1"}`
+			_, err = fmt.Fprintf(server, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\n\r\n%s", len(body), body)
+		}
+		peerDone <- err
+	}()
+	result := make(chan error, 1)
+	go func() {
+		proof, err := h.TorProofWithPredecessor(context.Background(), h.sessionID, entry)
+		if proof.IsTor {
+			err = errors.New("private entry fabricated Tor exit proof")
+		}
+		result <- err
+	}()
+	if err := <-peerDone; err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-result:
+		t.Fatal("private entry alone completed final Tor proof")
+	case <-time.After(15 * time.Millisecond):
+	}
+	h.CancelTor("other-session")
+	if h.ctx.Err() != nil {
+		t.Fatal("foreign session canceled captured proof")
+	}
+	h.CancelTor(h.sessionID)
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled final Tor wait succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("captured cancel did not unblock final Tor wait")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal("joined private proof failed clean drain", err)
+	}
+}
+
+type torProofSlowClose struct {
+	net.Conn
+	entered, release chan struct{}
+	once             sync.Once
+	writes           atomic.Int32
+}
+
+func (c *torProofSlowClose) Close() error {
+	c.once.Do(func() { close(c.entered) })
+	<-c.release
+	return errors.New("private-entry-secret close failure")
+}
+func (c *torProofSlowClose) Write(p []byte) (int, error) { c.writes.Add(1); return len(p), nil }
+
+func TestTorPrivateProofCloseRetainsLateDialAndStickyNativeCloseFailure(t *testing.T) {
+	dialEntered, dialRelease := make(chan struct{}), make(chan struct{})
+	late := &torProofSlowClose{entered: make(chan struct{}), release: make(chan struct{})}
+	h, entry := torPredecessorFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		close(dialEntered)
+		<-dialRelease
+		return late, nil
+	})
+	result := make(chan error, 1)
+	go func() { _, err := h.TorProofWithPredecessor(context.Background(), h.sessionID, entry); result <- err }()
+	<-dialEntered
+	h.CancelTor(h.sessionID)
+	select {
+	case <-h.closeDone:
+		t.Fatal("outbound released pending private proof dial")
+	case <-time.After(15 * time.Millisecond):
+	}
+	close(dialRelease)
+	<-late.entered
+	select {
+	case <-result:
+		t.Fatal("proof released blocked real lower Close")
+	case <-h.closeDone:
+		t.Fatal("outbound released blocked real lower Close")
+	case <-time.After(15 * time.Millisecond):
+	}
+	close(late.release)
+	if err := <-result; err == nil || strings.Contains(err.Error(), "private-entry-secret") {
+		t.Fatal("failed predecessor close accepted or exposed", err)
+	}
+	select {
+	case <-h.closeDone:
+	case <-time.After(time.Second):
+		t.Fatal("private proof did not discharge its retained worker")
+	}
+	if err := h.Close(); err == nil || strings.Contains(err.Error(), "private-entry-secret") {
+		t.Fatal("private proof Close failure did not remain sticky", err)
+	}
+	if late.writes.Load() != 0 {
+		t.Fatal("canceled late private proof dial wrote credentials")
+	}
+}

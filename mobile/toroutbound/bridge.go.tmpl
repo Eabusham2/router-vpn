@@ -3,9 +3,18 @@ package libbox
 import (
 	"errors"
 
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/protocol/routervpntor"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing-box/routervpn/tornotices"
 )
+
+// RouterTorSetStateDirectory must be called before constructing a Tor VPN Box.
+// The canonical private app directory is retained across session stops and is
+// separate from temporary Libbox runtime folders that hosts remove on stop.
+func RouterTorSetStateDirectory(directory string) error {
+	return routervpntor.SetStateDirectory(directory)
+}
 
 // RouterCompileTorProfile compiles captured node, DNS, interface and optional
 // predecessor configuration before either host stages files or opens a VPN.
@@ -13,25 +22,61 @@ func RouterCompileTorProfile(profileJSON, sessionID, predecessorJSON string) (st
 	return mobiletor.CompileProfile(profileJSON, sessionID, predecessorJSON)
 }
 
-// RouterTorProof must receive the provider's captured native CommandServer,
-// final outbound tag and frozen connection session ID. The result is JSON with
-// session_id, ip, is_tor and checked_at from a real HTTPS Tor exit check.
-func RouterTorProof(server *CommandServer, outboundTag, sessionID string) (string, error) {
+type RouterTorProofRequest struct {
+	request *box.RouterVPNTorProofRequest
+}
+
+func RouterTorCreateProof(server *CommandServer, outboundTag, sessionID string) (*RouterTorProofRequest, error) {
+	return RouterTorCreateProofWithPredecessor(server, outboundTag, sessionID, "")
+}
+
+// The factory captures the actual Box and outbound before Run can block. A
+// host may invoke Cancel from its immediate STOP/network callback while its
+// serialized native service worker later waits for the complete Close drain.
+func RouterTorCreateProofWithPredecessor(server *CommandServer, outboundTag, sessionID, profileJSON string) (*RouterTorProofRequest, error) {
 	if server == nil || server.StartedService == nil {
-		return "", errors.New("native Tor VPN owner is unavailable")
+		return nil, errors.New("native Tor VPN owner is unavailable")
 	}
 	instance := server.StartedService.Instance()
 	if instance == nil || instance.Box() == nil {
-		return "", errors.New("native Tor VPN instance is unavailable")
+		return nil, errors.New("native Tor VPN instance is unavailable")
 	}
-	proof, err := instance.Box().RouterVPNTorProof(outboundTag, sessionID)
+	request, err := instance.Box().RouterVPNTorCreateProof(outboundTag, sessionID, profileJSON)
+	if err != nil {
+		return nil, err
+	}
+	if instance != server.StartedService.Instance() {
+		request.Cancel()
+		return nil, errors.New("native Tor proof belongs to a retired VPN instance")
+	}
+	return &RouterTorProofRequest{request: request}, nil
+}
+
+func (r *RouterTorProofRequest) Run() (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("native Tor proof request is unavailable")
+	}
+	return r.request.Run()
+}
+
+func (r *RouterTorProofRequest) Cancel() {
+	if r != nil && r.request != nil {
+		r.request.Cancel()
+	}
+}
+
+func (r *RouterTorProofRequest) Healthy() bool {
+	return r != nil && r.request != nil && r.request.Healthy()
+}
+
+// The result contains session_id, ip, is_tor and checked_at from the actual
+// HTTPS Tor exit check. It never accepts a caller-supplied expected exit IP.
+func RouterTorProof(server *CommandServer, outboundTag, sessionID string) (string, error) {
+	request, err := RouterTorCreateProof(server, outboundTag, sessionID)
 	if err != nil {
 		return "", err
 	}
-	if instance != server.StartedService.Instance() {
-		return "", errors.New("native Tor proof belongs to a retired VPN instance")
-	}
-	return proof, nil
+	return request.Run()
 }
 
 // Keeping this exported getter in Libbox also retains the original PT license

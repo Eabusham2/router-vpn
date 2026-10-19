@@ -1,0 +1,74 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"slices"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/service"
+)
+
+// torUpstreamCapture binds ordinary/PT Tor and predecessor proof to the same
+// already-started native outbound graph. Captured N.Dialer values must never
+// silently acquire a replacement native predecessor under an existing label.
+type torUpstreamCapture struct {
+	ctx     context.Context
+	manager adapter.OutboundManager
+	owners  map[string]torCapturedOutbound
+}
+
+func captureTorUpstream(ctx context.Context, tag, predecessor string) (*torUpstreamCapture, error) {
+	if predecessor == "" {
+		return nil, nil
+	}
+	manager := service.FromContext[adapter.OutboundManager](ctx)
+	if manager == nil {
+		return nil, errors.New("native Tor predecessor manager is unavailable")
+	}
+	captured := &torUpstreamCapture{ctx: ctx, manager: manager, owners: make(map[string]torCapturedOutbound)}
+	visiting := make(map[string]bool)
+	var visit func(string, int) error
+	visit = func(name string, depth int) error {
+		if name == "" || name == tag || depth > 32 || len(captured.owners) >= 128 || visiting[name] {
+			return errors.New("native Tor predecessor graph is missing or circular")
+		}
+		if _, found := captured.owners[name]; found {
+			return nil
+		}
+		owner, found := manager.Outbound(name)
+		if !found || owner == nil || owner.Type() == Type {
+			return errors.New("native Tor predecessor cannot depend on Tor")
+		}
+		visiting[name] = true
+		dependencies := slices.Clone(owner.Dependencies())
+		for _, dependency := range dependencies {
+			if err := visit(dependency, depth+1); err != nil {
+				return err
+			}
+		}
+		delete(visiting, name)
+		captured.owners[name] = torCapturedOutbound{owner: owner, dependencies: dependencies}
+		return nil
+	}
+	if err := visit(predecessor, 0); err != nil {
+		return nil, err
+	}
+	return captured, nil
+}
+
+func (c *torUpstreamCapture) current() error {
+	if c == nil {
+		return nil
+	}
+	if c.ctx.Err() != nil || service.FromContext[adapter.OutboundManager](c.ctx) != c.manager {
+		return errors.New("native Tor predecessor manager was retired")
+	}
+	for tag, expected := range c.owners {
+		owner, found := c.manager.Outbound(tag)
+		if !found || owner != expected.owner || !slices.Equal(owner.Dependencies(), expected.dependencies) {
+			return errors.New("native Tor predecessor identity changed")
+		}
+	}
+	return nil
+}

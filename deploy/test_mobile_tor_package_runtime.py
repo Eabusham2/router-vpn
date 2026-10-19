@@ -7,6 +7,7 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -111,6 +112,8 @@ def main(native_package, go):
         for key in ('GOOS', 'GOARCH', 'GOARM', 'GOAMD64', 'GOFLAGS'):
             env.pop(key, None)
         compiler = shutil.which('cc')
+        command([sys.executable, ROOT / 'deploy/test_mobile_tor_thread_signals.py', '--cc', compiler], root, env)
+        print('PASS native Tor thread-local SIGPIPE protection under ASan/UBSan', flush=True)
         link = ['-L' + str(native_package / 'lib'), '-Wl,-rpath,' + str(native_package / 'lib'), '-lroutervpn_tor']
         common = [compiler, '-std=c11', '-Wall', '-Wextra', '-Werror', '-pthread', '-I' + str(ROOT / 'mobile/tor')]
         fixture = root / 'native-host'

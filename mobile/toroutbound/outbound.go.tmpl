@@ -9,7 +9,6 @@ import (
 	"errors"
 	"net"
 	"net/netip"
-	"path/filepath"
 	"strings"
 	"sync"
 	"time"
@@ -53,6 +52,8 @@ type Outbound struct {
 	plan           mobiletor.Plan
 	directory      string
 	sessionID      string
+	predecessor    string
+	upstream       *torUpstreamCapture
 	lower          N.Dialer
 	networkCapture *torNetworkCapture
 	ptNetwork      torpt.NetworkOptions
@@ -66,12 +67,15 @@ type Outbound struct {
 	workerDone     chan struct{}
 	closeDone      chan struct{}
 	closeOnce      sync.Once
+	proofWorkers   sync.WaitGroup
 	parentStop     func() bool
 	lease          *lease
 	bridges        *torpt.Bridges
+	proxy          *mobiletor.TCPProxy
 	application    *mobiletor.Network
 	proof          mobiletor.Proof
 	failure        error
+	proofCloseErr  error
 	closeErr       error
 }
 
@@ -85,9 +89,13 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 	if options.Detour == tag && tag != "" {
 		return nil, errors.New("native Tor cannot detour through itself")
 	}
-	plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), options.Bridges...)})
-	if err != nil {
-		return nil, errors.New("native Tor bridge profile is invalid")
+	var plan mobiletor.Plan
+	var err error
+	if len(options.Bridges) != 0 {
+		plan, err = mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), options.Bridges...)})
+		if err != nil {
+			return nil, errors.New("native Tor bridge profile is invalid")
+		}
 	}
 	if nativetor.ABI() != nativetor.RequiredABI || nativetor.Version() != nativetor.RequiredVersion {
 		return nil, nativetor.ErrUnavailable
@@ -95,11 +103,13 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 	if service.FromContext[filemanager.Manager](ctx) == nil || service.FromContext[adapter.NetworkManager](ctx) == nil || service.FromContext[adapter.DNSRouter](ctx) == nil || service.FromContext[adapter.DNSTransportManager](ctx) == nil {
 		return nil, errors.New("native Tor requires the captured VPN file and network owners")
 	}
-	directory := filemanager.BasePath(ctx, "routervpn-tor")
-	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
-		return nil, errors.New("native Tor requires its private VPN working directory")
+	directory, err := processResident.stateDirectory()
+	if err != nil {
+		return nil, err
 	}
-	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options.DialerOptions, RemoteIsDomain: true, NewDialer: true})
+	// Ordinary Tor selects literal relay endpoints and must not acquire an
+	// application DNS resolver that routes through its own final outbound.
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options.DialerOptions, RemoteIsDomain: len(plan.Bridges) != 0, NewDialer: true})
 	if err != nil {
 		return nil, errors.New("native Tor protected transport could not be captured")
 	}
@@ -116,7 +126,7 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 		}
 	}
 	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(Type, tag, []string{N.NetworkTCP}, options.DialerOptions),
-		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, lower: lower, resident: processResident,
+		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, predecessor: options.Detour, lower: lower, resident: processResident,
 		networkCapture: networkCapture,
 		ready:          make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
 	h.parentStop = context.AfterFunc(ctx, h.beginClose)
@@ -138,6 +148,11 @@ func (h *Outbound) Start(stage adapter.StartStage) error {
 	if h.started {
 		return errors.New("native Tor session was already started")
 	}
+	upstream, err := captureTorUpstream(h.ctx, h.Tag(), h.predecessor)
+	if err != nil {
+		return err
+	}
+	h.upstream = upstream
 	if h.networkCapture != nil {
 		var err error
 		h.ptNetwork, err = h.networkCapture.prepare()
@@ -151,6 +166,14 @@ func (h *Outbound) Start(stage adapter.StartStage) error {
 }
 
 func (h *Outbound) protectedDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if err := h.upstream.current(); err != nil {
+		return nil, err
+	}
+	if h.resident != nil {
+		if err := h.resident.checkState(); err != nil {
+			return nil, err
+		}
+	}
 	if h.networkCapture != nil {
 		if err := h.networkCapture.current(); err != nil {
 			return nil, err
@@ -162,6 +185,14 @@ func (h *Outbound) protectedDial(ctx context.Context, network, address string) (
 		return nil, errors.New("native Tor protected destination is invalid")
 	}
 	connection, err := h.lower.DialContext(ctx, network, destination)
+	if currentErr := h.upstream.current(); currentErr != nil {
+		return connection, errors.Join(err, currentErr)
+	}
+	if h.resident != nil {
+		if currentErr := h.resident.checkState(); currentErr != nil {
+			return connection, errors.Join(err, currentErr)
+		}
+	}
 	if h.networkCapture != nil {
 		if currentErr := h.networkCapture.current(); currentErr != nil {
 			// Return even a rejected late socket to the PT network owner. Its
@@ -173,6 +204,9 @@ func (h *Outbound) protectedDial(ctx context.Context, network, address string) (
 }
 
 func (h *Outbound) protectedPackets(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if err := h.upstream.current(); err != nil {
+		return nil, err
+	}
 	if h.networkCapture != nil {
 		if err := h.networkCapture.current(); err != nil {
 			return nil, err
@@ -187,6 +221,9 @@ func (h *Outbound) protectedPackets(ctx context.Context, network, address string
 		return nil, errors.New("native Tor packet destination is invalid")
 	}
 	connection, err := h.lower.ListenPacket(ctx, destination)
+	if currentErr := h.upstream.current(); currentErr != nil {
+		return connection, errors.Join(err, currentErr)
+	}
 	if h.networkCapture != nil {
 		if currentErr := h.networkCapture.current(); currentErr != nil {
 			return connection, errors.Join(err, currentErr)
@@ -223,15 +260,31 @@ func (h *Outbound) run() {
 		h.fail(errRetired)
 		return
 	}
-	bridges, err := torpt.StartWithNetwork(h.ctx, h.plan, h.protectedDial, h.protectedPackets, h.ptNetwork)
-	if err != nil {
-		h.fail(err)
-		return
+	var stopping <-chan struct{}
+	if len(h.plan.Bridges) == 0 {
+		proxy, startErr := mobiletor.StartTCPProxy(h.ctx, h.protectedDial)
+		if startErr != nil {
+			h.fail(startErr)
+			return
+		}
+		h.mu.Lock()
+		h.proxy = proxy
+		h.mu.Unlock()
+		stopping = proxy.Stopping()
+		err = h.controlCall(boot, func(ctx context.Context) error { return owner.control.ConfigurePlain(ctx, proxy) })
+	} else {
+		bridges, startErr := torpt.StartWithNetwork(h.ctx, h.plan, h.protectedDial, h.protectedPackets, h.ptNetwork)
+		if startErr != nil {
+			h.fail(startErr)
+			return
+		}
+		h.mu.Lock()
+		h.bridges = bridges
+		h.mu.Unlock()
+		stopping = bridges.Stopping()
+		err = h.controlCall(boot, func(ctx context.Context) error { return owner.control.Configure(ctx, h.plan, bridges.Listeners()) })
 	}
-	h.mu.Lock()
-	h.bridges = bridges
-	h.mu.Unlock()
-	if err = h.controlCall(boot, func(ctx context.Context) error { return owner.control.Configure(ctx, h.plan, bridges.Listeners()) }); err == nil {
+	if err == nil {
 		err = h.controlCall(boot, owner.control.EnableNetwork)
 	}
 	if err != nil {
@@ -240,7 +293,7 @@ func (h *Outbound) run() {
 	}
 	state, err := h.waitBootstrap(boot, owner.control)
 	if err != nil {
-		h.fail(errors.New("native Tor did not establish a bridge circuit"))
+		h.fail(errors.New("native Tor did not establish a circuit"))
 		return
 	}
 	var secret [64]byte
@@ -288,10 +341,14 @@ func (h *Outbound) run() {
 		select {
 		case <-h.ctx.Done():
 			return
-		case <-bridges.Stopping():
-			h.fail(errors.New("native Tor bridge transport stopped"))
+		case <-stopping:
+			h.fail(errors.New("native Tor upstream transport stopped"))
 			return
 		case <-watch.C:
+			if err := owner.resident.checkState(); err != nil {
+				h.fail(err)
+				return
+			}
 			if exited, _, err := owner.instance.Status(); err != nil || exited {
 				h.fail(errors.New("native Tor invocation stopped"))
 				return

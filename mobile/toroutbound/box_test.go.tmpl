@@ -1,0 +1,188 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This fixture proves request ownership/cancellation, never public Tor traffic.
+// The native/PT test separately exercises the actual pinned C invocation.
+type torBoxFixture struct {
+	outbound.Adapter
+	N.Dialer
+	ctx     context.Context
+	cancel  context.CancelFunc
+	session string
+	health  atomic.Bool
+	cancels atomic.Int32
+	calls   atomic.Int32
+	prove   func(context.Context, string, *mobiletor.PredecessorProof) (mobiletor.Proof, error)
+}
+
+func newTorBoxFixture(t *testing.T, session string) *torBoxFixture {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	f := &torBoxFixture{Adapter: outbound.NewAdapter("routervpn-tor", "tor-final", []string{N.NetworkTCP}, nil), ctx: ctx, cancel: cancel, session: session}
+	f.health.Store(true)
+	return f
+}
+func (f *torBoxFixture) TorSessionID() string { return f.session }
+func (f *torBoxFixture) CancelTor(session string) {
+	if session == f.session {
+		f.cancels.Add(1)
+		f.cancel()
+	}
+}
+func (f *torBoxFixture) TorHealthy(session string) bool {
+	return session == f.session && f.ctx.Err() == nil && f.health.Load()
+}
+func (f *torBoxFixture) TorProofWithPredecessor(ctx context.Context, session string, predecessor *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+	f.calls.Add(1)
+	if f.prove != nil {
+		return f.prove(ctx, session, predecessor)
+	}
+	return mobiletor.Proof{SessionID: session, IsTor: true, IP: "192.0.2.1", CheckedAt: time.Now().UTC()}, nil
+}
+
+func TestRouterTorProofCancelKeepsCapturedOwnerAfterReplacement(t *testing.T) {
+	old := newTorBoxFixture(t, "session-old")
+	replacement := newTorBoxFixture(t, "session-new")
+	var current atomic.Pointer[torBoxFixture]
+	current.Store(old)
+	entered := make(chan struct{})
+	old.prove = func(context.Context, string, *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+		close(entered)
+		<-old.ctx.Done()
+		return mobiletor.Proof{}, errors.New("captured owner stopped")
+	}
+	request, err := newRouterTorProofRequest(context.Background(), old, old.session, "", func() bool { return current.Load() == old })
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := make(chan error, 1)
+	go func() { _, err := request.Run(); result <- err }()
+	<-entered
+	current.Store(replacement)
+	request.Cancel()
+	request.Cancel()
+	select {
+	case err := <-result:
+		if err == nil {
+			t.Fatal("canceled old proof succeeded")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Cancel did not unblock captured proof")
+	}
+	if old.cancels.Load() != 1 || replacement.cancels.Load() != 0 || replacement.ctx.Err() != nil || request.Healthy() {
+		t.Fatal("old handle reached replacement session")
+	}
+}
+
+func TestRouterTorProofRunAndHealthRequireSameSuccessfulOwner(t *testing.T) {
+	f := newTorBoxFixture(t, "session")
+	var current atomic.Bool
+	current.Store(true)
+	r, err := newRouterTorProofRequest(context.Background(), f, f.session, "", current.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Healthy() {
+		t.Fatal("unproved owner appeared healthy")
+	}
+	raw, err := r.Run()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var proof mobiletor.Proof
+	if json.Unmarshal([]byte(raw), &proof) != nil || proof.SessionID != f.session || !proof.IsTor || !r.Healthy() {
+		t.Fatal("captured proof was not delivered")
+	}
+	if _, err := r.Run(); err == nil || f.calls.Load() != 1 {
+		t.Fatal("request was reused")
+	}
+	f.health.Store(false)
+	if r.Healthy() {
+		t.Fatal("failed native owner remained healthy")
+	}
+	f.health.Store(true)
+	current.Store(false)
+	if r.Healthy() {
+		t.Fatal("replaced native owner remained healthy")
+	}
+	r.Cancel()
+	if r.Healthy() {
+		t.Fatal("canceled successful owner remained healthy")
+	}
+}
+
+func TestRouterTorProofRejectsStaleFalseAndCanceledRequests(t *testing.T) {
+	for _, mode := range []string{"before-run", "false-proof", "wrong-session", "retired-during-proof"} {
+		t.Run(mode, func(t *testing.T) {
+			f := newTorBoxFixture(t, "captured")
+			var current atomic.Bool
+			current.Store(true)
+			f.prove = func(context.Context, string, *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+				proof := mobiletor.Proof{SessionID: f.session, IsTor: true}
+				if mode == "false-proof" {
+					proof.IsTor = false
+				}
+				if mode == "wrong-session" {
+					proof.SessionID = "other"
+				}
+				if mode == "retired-during-proof" {
+					current.Store(false)
+				}
+				return proof, nil
+			}
+			r, err := newRouterTorProofRequest(context.Background(), f, f.session, "", current.Load)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if mode == "before-run" {
+				r.Cancel()
+			}
+			if raw, err := r.Run(); err == nil || raw != "" || r.Healthy() || f.cancels.Load() != 1 {
+				t.Fatal("invalid proof escaped its session", raw, err)
+			}
+			if mode == "before-run" && f.calls.Load() != 0 {
+				t.Fatal("canceled request invoked native proof")
+			}
+		})
+	}
+	f := newTorBoxFixture(t, "captured")
+	if _, err := newRouterTorProofRequest(context.Background(), f, "other", "", func() bool { return true }); err == nil {
+		t.Fatal("foreign session captured")
+	}
+	if _, err := newRouterTorProofRequest(context.Background(), f, f.session, `{"api_token":"secret"}`, func() bool { return true }); err == nil || strings.Contains(err.Error(), "secret") {
+		t.Fatal("unvalidated predecessor captured or exposed", err)
+	}
+}
+
+func TestRouterTorProofCapturesPrivateEntrySeparatelyFromDeliveredJSON(t *testing.T) {
+	f := newTorBoxFixture(t, "captured")
+	profile := `{"id":"entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"private-proof-secret"}`
+	f.prove = func(_ context.Context, session string, entry *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+		if entry == nil {
+			t.Error("private entry proof was discarded")
+		}
+		return mobiletor.Proof{SessionID: session, IsTor: true}, nil
+	}
+	r, err := newRouterTorProofRequest(context.Background(), f, f.session, profile, func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := r.Run()
+	if err != nil || strings.Contains(raw, "private-proof-secret") || strings.Contains(raw, "router_api") {
+		t.Fatal("private entry credentials escaped proof handle", err)
+	}
+}

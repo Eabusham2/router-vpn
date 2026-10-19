@@ -281,6 +281,56 @@ func TestSnowflakeNativeCapturedRouteDefaultAndFamilyPolicy(t *testing.T) {
 	}
 }
 
+func TestSnowflakeNativeExplicitResolverOnLiteralPredecessorPreservesUnderlayDefault(t *testing.T) {
+	f := newTorCaptureFixture(t, "entry")
+	f.dns.items["underlay"] = torRemote("underlay", "", "198.51.100.53", "")
+	f.network.defaults = adapter.NetworkOptions{DomainResolver: "underlay", DomainResolveOptions: adapter.DNSQueryOptions{Transport: f.dns.items["underlay"], Strategy: C.DomainStrategyIPv4Only}}
+	before := f.network.defaults
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: f.ctx, Options: f.options, RemoteIsDomain: false, NewDialer: true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := lower.(interface {
+		QueryOptions() adapter.DNSQueryOptions
+	}); ok {
+		t.Fatal("fixture did not select the actual literal native detour dialer")
+	}
+	f.lower = lower
+	capture := f.capture(t)
+	*f.options.DomainResolver.RewriteTTL = 999
+	options, err := capture.prepare()
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.router.lookup = func(_ context.Context, _ string, query adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		if query.Transport != f.query.Transport || query.Strategy != C.DomainStrategyPreferIPv6 || !query.DisableCache || !query.DisableOptimisticCache || query.RewriteTTL == nil || *query.RewriteTTL != 41 || query.Timeout != 2*time.Second || query.ClientSubnet != netip.MustParsePrefix("198.51.100.0/24") {
+			t.Errorf("explicit predecessor DNS options changed: %#v", query)
+		}
+		return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil
+	}
+	if _, err := options.Resolve(f.ctx, "ip4", "broker.example"); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(before, f.network.defaults) || len(capture.dnsOwners) != 1 || capture.dnsOwners["bootstrap"].detour != "entry" {
+		t.Fatal("Tor bootstrap replaced the entry's independent hostname resolver")
+	}
+	f.dns.set("bootstrap", torRemote("bootstrap", "entry", "192.0.2.54", ""))
+	prior := f.router.calls.Load()
+	if _, err := options.Resolve(f.ctx, "ip4", "broker.example"); err == nil || f.router.calls.Load() != prior {
+		t.Fatal("late resolver replacement reached DNS IO")
+	}
+	// The pinned mapping falls back to the legacy strategy only when the
+	// explicit resolver has AsIS; it must not inherit the entry route default.
+	f2 := newTorCaptureFixture(t, "entry")
+	f2.options.DomainResolver.Strategy = option.DomainStrategy(C.DomainStrategyAsIS)
+	f2.options.DomainStrategy = option.DomainStrategy(C.DomainStrategyIPv6Only)
+	f2.lower = torNeverDial{}
+	capture = f2.capture(t)
+	if capture.query.Strategy != C.DomainStrategyIPv6Only {
+		t.Fatal("explicit resolver lost pinned legacy strategy semantics")
+	}
+}
+
 func TestSnowflakeNativeDNSHostnameBootstrapKeepsSamePredecessor(t *testing.T) {
 	for _, predecessor := range []string{"", "entry"} {
 		t.Run("predecessor="+predecessor, func(t *testing.T) {
