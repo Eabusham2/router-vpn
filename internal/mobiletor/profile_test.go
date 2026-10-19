@@ -1,6 +1,7 @@
 package mobiletor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"reflect"
 	"strings"
@@ -139,6 +140,44 @@ func TestTorPredecessorKeepsRegisteredWGAndPQOwners(t *testing.T) {
 		if !reflect.DeepEqual(root["endpoints"], base["endpoints"]) {
 			t.Fatal("registered native endpoint owner changed", kind)
 		}
+	}
+}
+
+func TestTorPredecessorPreservesAuthenticatedAESWhitening(t *testing.T) {
+	base, _ := profileObject(torHostBase(t), 4*1024*1024)
+	entry := base["outbounds"].([]any)[0].(map[string]any)
+	entry["type"], entry["method"] = "routervpn-aes-xor", "2022-blake3-aes-256-gcm"
+	entry["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	entry["server_port"] = json.Number("8389")
+	source := torHostEncode(t, base)
+	compiled := torHostCompile(t, torHostProfile(), source)
+	if !reflect.DeepEqual(torHostTagged(t, compiled["outbounds"], "proxy"), entry) {
+		t.Fatal("Tor replaced its authenticated AES+XOR method, key or peer")
+	}
+	if torHostTagged(t, compiled["outbounds"], ProfileOutboundTag)["detour"] != "proxy" {
+		t.Fatal("Tor bypassed the captured AES+XOR entry")
+	}
+	for name, mutate := range map[string]func(map[string]any){
+		"plaintext": func(out map[string]any) { out["method"] = "none" },
+		"xor-only":  func(out map[string]any) { out["method"] = "xor" },
+		"wrong-key": func(out map[string]any) { out["password"] = "not-a-complete-native-key" },
+		"short-key": func(out map[string]any) {
+			out["password"] = base64.StdEncoding.EncodeToString([]byte("sixteen-byte-key"))
+		},
+		"hidden-key":     func(out map[string]any) { out["password"] = out["password"].(string) + "\n" },
+		"socket-option":  func(out map[string]any) { out["bind_interface"] = "en0" },
+		"missing-server": func(out map[string]any) { delete(out, "server") },
+		"local-server":   func(out map[string]any) { out["server"] = "127.0.0.1" },
+		"invalid-port":   func(out map[string]any) { out["server_port"] = json.Number("65536") },
+		"self-detour":    func(out map[string]any) { out["detour"] = "proxy" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			changed, _ := profileObject(source, 4*1024*1024)
+			mutate(changed["outbounds"].([]any)[0].(map[string]any))
+			if _, err := CompileProfile(torHostEncode(t, torHostProfile()), "owned-session", torHostEncode(t, changed)); err == nil {
+				t.Fatal("Tor accepted an unowned or unauthenticated whitening entry")
+			}
+		})
 	}
 }
 

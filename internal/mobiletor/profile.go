@@ -1,6 +1,7 @@
 package mobiletor
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +14,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/startwhitening"
 )
 
 const ProfileOutboundTag = "routervpn-tor-exit"
@@ -189,6 +191,11 @@ func torPredecessor(source string) (map[string]any, map[string]any, string, erro
 			seen[tag] = true
 			if tag == final {
 				switch outbound["type"] {
+				case startwhitening.Type:
+					if key != "outbounds" || !torAuthenticatedWhitening(outbound) {
+						return nil, nil, "", failure
+					}
+					finalFound = true
 				case "wireguard", "routervpn-amneziawg", "routervpn-pq", "shadowsocks", "hysteria2", "routervpn-xray", "routervpn-composite", "naive", "openvpn-client":
 					finalFound = true
 				default:
@@ -234,6 +241,53 @@ func torPredecessor(source string) (map[string]any, map[string]any, string, erro
 		}
 	}
 	return root, tun, final, nil
+}
+
+// A captured AES+XOR entry remains authenticated Shadowsocks 2022. Reject
+// plaintext/XOR-only labels before native configuration or secret staging.
+func torAuthenticatedWhitening(outbound map[string]any) bool {
+	for key := range outbound {
+		switch key {
+		case "type", "tag", "server", "server_port", "method", "password", "detour":
+		default:
+			return false
+		}
+	}
+	password := profileString(outbound, "password")
+	material, err := base64.StdEncoding.Strict().DecodeString(password)
+	validKey := err == nil && len(material) == 32 && base64.StdEncoding.EncodeToString(material) == password
+	clear(material)
+	if !validKey || outbound["method"] != startwhitening.Method {
+		return false
+	}
+	key, err := startwhitening.Key(profileString(outbound, "method"), password)
+	clear(key[:])
+	if err != nil {
+		return false
+	}
+	host := profileString(outbound, "server")
+	if host == "" || len(host) > 253 || strings.ContainsAny(host, "/@\r\n\x00 %") || strings.EqualFold(host, "localhost") {
+		return false
+	}
+	if ip, err := netip.ParseAddr(host); err == nil {
+		ip = ip.Unmap()
+		if ip.IsLoopback() || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() {
+			return false
+		}
+	} else if !dnsHostname.MatchString(host) {
+		return false
+	}
+	port, err := profileInteger(outbound, "server_port", 0)
+	if err != nil || port < 1 || port > 65535 {
+		return false
+	}
+	if raw, exists := outbound["detour"]; exists {
+		tag, ok := raw.(string)
+		if !ok || !profileIdentifier.MatchString(tag) || tag == outbound["tag"] {
+			return false
+		}
+	}
+	return true
 }
 
 func torSelectedDNS(profile map[string]any) (map[string]any, error) {
