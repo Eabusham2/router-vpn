@@ -46,7 +46,10 @@ def main():
     start = model.index('    private func engineName(')
     end = model.index('\n    func refreshTunnelStatus()', start)
     method = model[start:end]
-    assert 'multihopEntryMode: profile.multihopEntryMode ?? "wg"' in model
+    assert 'IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)' in model
+    selector = (APP / 'IOSRuntimeSelection.swift').read_text()
+    assert 'let entryMode = profile.multihopEntryMode ?? "wg"' in selector
+    assert 'files: [:], multihopEntryMode: entryMode)' in selector
     assert 'case .multihop: return "Multihop • \\(selection.displayName)"' in model
     source = selection + '\nstruct LabelConsumer {\n' + method + '\nfunc label(_ s: IOSRuntimeSelection) -> String { engineName(s) }\n}\n' + TEST
     with tempfile.TemporaryDirectory(prefix='routervpn-labels-') as name:

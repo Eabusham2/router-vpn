@@ -68,6 +68,13 @@ enum IOSRuntimeSelectionError: LocalizedError {
 }
 
 enum IOSRuntimeSelector {
+    // One app-side catalog owns saved graph validation and Connect. Native
+    // graph construction still validates the exact transport and both peers.
+    static let multihopModeIDs: Set<String> = [
+        "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2",
+        "reality-vision", "reality-pq-vision", "reality-xhttp",
+        "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"
+    ]
     static let maxAssetBytes = 4 * 1024 * 1024
     static let maxProfileBytes = 12 * 1024 * 1024
     static let rawProfilePattern = try! NSRegularExpression(pattern: "^[A-Za-z0-9._-]{1,96}$")
@@ -122,6 +129,23 @@ enum IOSRuntimeSelector {
         do { try IOSDNSRuntimePolicy.validate(selection: selection, in: bundle) }
         catch { throw IOSRuntimeSelectionError.unsupportedMode(error.localizedDescription) }
         return selection
+    }
+
+    static func selectMultihop(bundle: ClientBundle, rawProfileID: String?) throws -> IOSRuntimeSelection {
+        guard rawProfileID == nil, let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
+              profile.normalizedNodeKind == "router-vpn", profile.multihopEnabled == true,
+              profile.multihopExitID == profile.id,
+              let entryID = profile.multihopEntryID, !entryID.isEmpty, entryID != profile.id,
+              let mode = profile.multihopExitMode, multihopModeIDs.contains(mode) else {
+            throw IOSRuntimeSelectionError.unsupportedMode("Choose a valid multihop graph or disable multihop before selecting an individual raw mode.")
+        }
+        let entryMode = profile.multihopEntryMode ?? "wg"
+        guard multihopModeIDs.contains(entryMode) else {
+            throw IOSRuntimeSelectionError.unsupportedMode("Choose an exact native multihop entry transport.")
+        }
+        _ = try selectRaw(bundle: bundle, rawProfileID: mode)
+        return IOSRuntimeSelection(engine: .multihop, logicalModeID: "multihop", rawProfileID: mode,
+                                   files: [:], multihopEntryMode: entryMode)
     }
 
     static func logicalModeID(for rawProfileID: String, in bundle: ClientBundle) -> String {

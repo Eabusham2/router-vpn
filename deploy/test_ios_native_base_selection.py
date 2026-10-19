@@ -199,6 +199,47 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
         let before = model.attempts.count
         let unverifiedStop = await model.exerciseRaw("awg2-fast")
         try check("unverified teardown prevents a new attempt", !unverifiedStop && model.attempts.count == before)
+        for raw in ["wg", "awg2-fast", "awg2-strong", "shadowsocks", "naive-h2", "naive-h3"] {
+            var graph = try fixture()
+            graph.routerProfiles[0].multihopEnabled = true
+            graph.routerProfiles[0].multihopEntryID = "entry"
+            graph.routerProfiles[0].multihopExitID = "home"
+            graph.routerProfiles[0].multihopExitMode = raw
+            if raw.hasPrefix("naive-") {
+                let native: [String: Any] = ["inbounds":[["type":"tun"]],
+                    "outbounds":[["type":"naive","tag":"proxy","server":"192.0.2.1","server_port":8443,
+                                  "username":"test-user","password":"test-password","quic":raw == "naive-h3",
+                                  "udp_over_tcp":["enabled":true,"version":2],
+                                  "tls":["enabled":true,"server_name":"exit.example.test"]]],
+                    "route":["final":"proxy"]]
+                graph.profiles[raw] = ["sing-box.json":try json(native).base64EncodedString()]
+            }
+            for entry in IOSRuntimeSelector.multihopModeIDs.sorted() {
+                graph.routerProfiles[0].multihopEntryMode = entry
+                let selection = try IOSRuntimeSelector.selectMultihop(bundle:graph,rawProfileID:nil)
+                try check("Connect captures exact graph \(entry) to \(raw)", selection.engine == .multihop && selection.logicalModeID == "multihop" && selection.rawProfileID == raw && selection.multihopEntryMode == entry)
+                try check("Connect defers owned graph construction to PacketTunnel", selection.files.isEmpty)
+            }
+            reject("raw attempt cannot replace saved graph") { _ = try IOSRuntimeSelector.selectMultihop(bundle:graph,rawProfileID:raw) }
+            var invalid = graph; invalid.profiles.removeValue(forKey:raw)
+            reject("missing exit assets stop Connect") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.selectedRouterID = "missing"
+            reject("missing selected exit is not guessed") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles.append(invalid.routerProfiles[0])
+            reject("duplicate selected exit is ambiguous") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopExitID = "another-exit"
+            reject("wrong captured exit cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopEntryID = "home"
+            reject("self-entry cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopEntryID = nil
+            reject("missing entry cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopEntryMode = "unowned-entry"
+            reject("unknown entry transport cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopExitMode = "unowned-exit"
+            reject("unknown exit transport cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+            invalid = graph; invalid.routerProfiles[0].multihopEnabled = false
+            reject("disabled graph cannot launch") { _ = try IOSRuntimeSelector.selectMultihop(bundle:invalid,rawProfileID:nil) }
+        }
         print("Native Apple WG/AWG selection + exact-raw strategy: PASS (\(checks) checks)")
     }
 }
@@ -222,6 +263,7 @@ def main():
     model = (APP / "RouterVPNModel.swift").read_text()
     assert 'func connect(rawProfileID: String?) async' in model
     assert 'selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]' in model
+    assert 'selections = [try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)]' in model
     assert 'IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: selectedLogicalMode)' in model
     assert 'configuration["rawProfileID"] = selection.rawProfileID' in model
     with tempfile.TemporaryDirectory(prefix="routervpn-native-selection-") as tmp:

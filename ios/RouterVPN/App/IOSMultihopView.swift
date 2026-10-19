@@ -9,13 +9,13 @@ extension RouterVPNModel {
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle),
               exit.normalizedNodeKind == "router-vpn", exit.multihopEnabled == true,
               exit.multihopExitID == exit.id, let entryID = exit.multihopEntryID, entryID != exit.id,
-              let mode = exit.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"].contains(mode),
+              let mode = exit.multihopExitMode, IOSRuntimeSelector.multihopModeIDs.contains(mode),
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
+        guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) else { throw iosMultihopError("Unknown saved entry transport.") }
         let entryAsset = IOSNativeMAXProfile.modeIDs.contains(entryMode) ? (entryMode.hasSuffix("-awg") ? "awg.conf" : "wg.conf") : ["wg", "wg-pq"].contains(entryMode) ? "wg.conf" : (["awg2-fast", "awg2-strong", "awg2-pq"].contains(entryMode) ? "awg.conf" : (["reality-vision", "reality-pq-vision", "reality-xhttp"].contains(entryMode) ? "xray.json" : "sing-box.json"))
         var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
         guard entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
@@ -49,7 +49,7 @@ extension RouterVPNModel {
     }
 
     func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local", entryMode: String = "wg") throws {
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3"].contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
+        guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
         guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
@@ -62,7 +62,7 @@ extension RouterVPNModel {
             message = "Multihop disabled. The next Connect uses the selected normal mode."
             return
         }
-        guard ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"].contains(exitMode), entryID != exitID,
+        guard IOSRuntimeSelector.multihopModeIDs.contains(exitMode), entryID != exitID,
               let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle) else {
             throw iosMultihopError("Choose two different linked Router VPN nodes and an exit transport.")
         }
