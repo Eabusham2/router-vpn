@@ -377,7 +377,8 @@ need("android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
      "Libbox.routerTorSetStateDirectory", "getNoBackupFilesDir()",
      "torPhysicalNetwork = torPhysical", "capturedTor.prove()",
      "Libbox.routerStrategyCloseService(commandServer)",
-     "Native Tor teardown remains unconfirmed; runtime ownership is retained.")
+     "if (torOwner || capturedMAX != null)",
+     "Native captured-path teardown remains unconfirmed; runtime ownership is retained.")
 need("android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java",
      "showTorForm", "chooseTorEntryMode", "pendingEntryDigest", "pendingExitDigest",
      "A captured node changed while Android permission was open. Select the path again.")

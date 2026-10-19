@@ -210,9 +210,11 @@ func androidMAXDispatchIsOwned(controller, compiler string) bool {
 		}
 	}
 	for _, marker := range []string{
+		"Capture captured = captureChecked(bundle, assets, mode);",
+		"Libbox.routerCheckMAXProfile(mode, input, metadataJSON)",
 		"validateAssets(assets, mode);",
 		".put(\"start_layer\", layer)",
-		"Libbox.routerCompileMAXProfile(mode, input, metadata.toString())",
+		"Libbox.routerCompileMAXProfile(mode, captured.files, captured.metadata)",
 		"validateGraph(bundle, assets, new JSONObject(compiled), mode);",
 		"Arrays.fill(raw, (byte) 0)",
 	} {
@@ -245,7 +247,7 @@ func TestAndroidMAXDispatchRetainsOwnedCompilationAndFailureBoundaries(t *testin
 			t.Fatal("unowned dispatch accepted", mutation[0])
 		}
 	}
-	for _, marker := range []string{"validateAssets(assets, mode);", ".put(\"start_layer\", layer)", "Libbox.routerCompileMAXProfile(mode, input, metadata.toString())", "validateGraph(bundle, assets, new JSONObject(compiled), mode);"} {
+	for _, marker := range []string{"Capture captured = captureChecked(bundle, assets, mode);", "Libbox.routerCheckMAXProfile(mode, input, metadataJSON)", "validateAssets(assets, mode);", ".put(\"start_layer\", layer)", "Libbox.routerCompileMAXProfile(mode, captured.files, captured.metadata)", "validateGraph(bundle, assets, new JSONObject(compiled), mode);"} {
 		if !strings.Contains(compiler, marker) {
 			t.Fatal("negative compiler anchor missing", marker)
 		}
