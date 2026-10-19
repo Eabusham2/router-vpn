@@ -77,7 +77,7 @@ private struct ConnectView: View {
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Divider()
-                        Text("AmneziaWG-only, Xray/helper-only, unsupported ALL/MAX composites and iOS multihop remain unavailable until their real Apple dataplanes exist. They are never CSS-forced Ready.")
+                        Text("Available modes depend on the selected node and its saved configuration. Connection starts only after the complete path and your DNS settings pass validation.")
                             .font(.caption).foregroundStyle(.secondary)
                         Button {
                             if model.connected { model.disconnect() } else { Task { await model.connect() } }
@@ -277,7 +277,7 @@ private struct NativeOnboardingView: View {
         case 3:
             OnboardingPage(title: "ASUS router forwarding", text: "Enable the required ASUS SSH/JFFS support, then use the current Setup Center forwarding helper. It preserves existing nat-start/firewall-start content and checks the firewall backend. Never WAN-expose SOCKS5 1080, Setup Center 8786, router API 8787, Portainer, AdGuard admin, SSH, or the OverTLS loopback backend.")
         case 4:
-            OnboardingPage(title: "Connect on iPhone or iPad", text: "AUTO evaluates the imported node and tries only modes this build can truly run through WireGuardKit or pinned Libbox 1.14.1 with the selected DNS policy. Each attempt remains Connecting until the PacketTunnel engine starts and the exact selected-node private proof passes through that engine. AWG-only, Xray/helper-only, unsupported ALL/MAX and multihop stay unavailable until their Apple dataplanes are real.")
+            OnboardingPage(title: "Connect on iPhone or iPad", text: "Choose a linked node and tap Connect. AUTO checks the modes available in that node’s saved configuration with your DNS and network settings. WireGuard, AmneziaWG, Xray, MAX and multihop use their validated saved paths. The app stays Connecting until the tunnel is running and the selected node identities are verified through it.")
         case 5:
             OnboardingPage(title: "Simple external methods vs Router VPN modes", text: "Setup Center is for simple, proven external/native-compatible Methods and exact setup instructions. The Router VPN app owns complex layered modes. A Setup Center QR/config being available does not imply every third-party app supports it, and a Router VPN mode being listed does not make it iOS Ready without a real imported runtime profile.")
         case 6:

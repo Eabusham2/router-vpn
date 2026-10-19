@@ -520,8 +520,8 @@ struct IOSConnectionProfilesView: View {
                     }
                     if !status.isEmpty { Text(status).font(.caption).foregroundStyle(.secondary) }
                 }
-                Section("Capability truth") {
-                    Text("Profiles preserve the supported WireGuard-entry → Shadowsocks/Hysteria2-exit graph as node references, not copied credentials. Both linked bundles must still exist when loaded. Additional unimplemented Start-Layer or mixed-engine graphs are not advertised as active capabilities.")
+                Section("Saved connections") {
+                    Text("Profiles restore your selected nodes, mode, DNS and path settings. Keep both nodes linked to load a saved multihop connection. Each saved path is checked before it is applied.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
             }
