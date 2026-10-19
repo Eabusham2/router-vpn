@@ -137,6 +137,7 @@ grep -Fq 'with_wireguard' "$VENDOR/cmd/internal/build_libbox/main.go"
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 install -m 0644 "$BRIDGE_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
 python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
+python3 "$ROOT/../../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 for attempt in 1 2 3; do
   rm -rf "$XRAY_VENDOR"
   if git clone --filter=blob:none --no-checkout https://github.com/XTLS/Xray-core.git "$XRAY_VENDOR" && \

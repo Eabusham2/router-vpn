@@ -194,6 +194,7 @@ install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/ro
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
 install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
 python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
+python3 "$ROOT/../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 
 (
   cd "$VENDOR"
