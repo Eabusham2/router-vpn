@@ -1,0 +1,20 @@
+{
+  "repository": "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird",
+  "commit": "362a60bb4e3fa434130ef81a9990d83d6d8eaea5",
+  "module_version": "v0.0.0-20261008205628-362a60bb4e3f",
+  "module_sum": "h1:iQzghnWKOjCh0lCwlfYckalo4Xmf91z2f9T89bXbXIM=",
+  "source_directory": "transports/webtunnel",
+  "original_sha256": {
+    "webtunnel.go": "c4c77fcfe5155ef0c1d5fee6717e992f24f9622f9782292560b90b2921fe57be",
+    "client.go": "b8c0b5bb2c3a864bc75c7acfaab1dc7068f60fdd6a7e5d2a4e74c0e6e4c5b320",
+    "utls.go": "89625d6c544d46f85444212e6cf521ddc84a6faaae842be152fc27551bb3f3a2",
+    "servername_generator.go": "ce779fe6cb24c2231d28b03dfad2b9144793be872d1fffd823989028b52db2a1"
+  },
+  "changes": [
+    "Use owned HTTP-upgrade adapter preserving buffered application data.",
+    "Close the raw connection on every failed handshake.",
+    "Preserve URL queries and IPv6 host:port formatting.",
+    "Remove bridge address, SNI and error details from logs.",
+    "Use the public uTLS spec adapter to keep randomized ML-KEM support and actual key shares consistent."
+  ]
+}

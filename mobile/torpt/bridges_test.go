@@ -254,7 +254,7 @@ func TestBridgeStartRequiresAnImplementedTransportAndCapturedOwner(t *testing.T)
 		t.Fatal("native PT substituted an unprotected host dialer")
 	}
 	plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Bridges: []string{
-		"webtunnel 192.0.2.8:443 0123456789ABCDEF0123456789ABCDEF01234567 url=https://bridge.example/secret",
+		"snowflake 192.0.2.8:443 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=0123456789ABCDEF0123456789ABCDEF01234567 url=https://broker.example/ front=front.example ice=stun:stun.example:3478",
 	}})
 	if err != nil {
 		t.Fatal(err)

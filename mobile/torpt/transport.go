@@ -4,12 +4,15 @@ import (
 	"context"
 	"errors"
 	"net"
+	"strings"
 
 	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/base"
 	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4"
 
 	"router-vpn/internal/mobiletor"
+	"router-vpn/mobile/torpt/internal/meeklite"
+	"router-vpn/mobile/torpt/internal/webtunnel"
 )
 
 func newClientTransport(name string) (clientTransport, error) {
@@ -17,6 +20,10 @@ func newClientTransport(name string) (clientTransport, error) {
 	switch name {
 	case "obfs4":
 		transport = &obfs4.Transport{}
+	case "meek_lite":
+		transport = &meeklite.Transport{}
+	case "webtunnel":
+		transport = webtunnel.Transport
 	default:
 		return nil, errors.New("requested native Tor transport is not integrated")
 	}
@@ -37,6 +44,15 @@ func (t *dialedTransport) Dial(ctx context.Context, bridge mobiletor.Bridge, low
 	if bridge.Transport == "obfs4" && len(args["iat-mode"]) == 0 {
 		// The shared profile schema permits the standard no-IAT default.
 		args.Add("iat-mode", "0")
+	}
+	if bridge.Transport == "meek_lite" {
+		if alias, ok := args.Get("utls-imitate"); ok {
+			if current, exists := args.Get("utls"); exists && !strings.EqualFold(current, alias) {
+				return nil, errors.New("native meek TLS fingerprint options conflict")
+			}
+			args["utls"] = []string{alias}
+			delete(args, "utls-imitate")
+		}
 	}
 	// obfs4 ParseArgs generates an ephemeral ntor key. It must be called for
 	// each connection; caching this result would reuse a handshake identity.

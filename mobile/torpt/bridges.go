@@ -94,6 +94,10 @@ func Start(ctx context.Context, plan mobiletor.Plan, dial mobiletor.DialContext,
 		go b.accept(name, listener)
 	}
 	b.parentStop = context.AfterFunc(ctx, b.beginClose)
+	if err := ctx.Err(); err != nil {
+		b.Close(context.Background())
+		return nil, err
+	}
 	return b, nil
 }
 
@@ -212,7 +216,15 @@ func (b *Bridges) serve(name string, local *pt.SocksConn) {
 		local.Reject()
 		return
 	}
-	defer func() { cancel(); remote.Close() }()
+	remoteStopped := make(chan struct{})
+	stopRemote := context.AfterFunc(ctx, func() { remote.Close(); close(remoteStopped) })
+	defer func() {
+		cancel()
+		if !stopRemote() {
+			<-remoteStopped
+		}
+		remote.Close()
+	}()
 	if err := local.Grant(nil); err != nil {
 		return
 	}
@@ -247,7 +259,11 @@ func (b *Bridges) beginClose() {
 	b.mu.Unlock()
 	b.cancel()
 	for _, listener := range b.listeners {
-		listener.Close()
+		if err := listener.Close(); err != nil && !errors.Is(err, net.ErrClosed) {
+			b.mu.Lock()
+			b.failure = errors.Join(b.failure, errors.New("native Tor bridge listener close failed"))
+			b.mu.Unlock()
+		}
 	}
 	for _, local := range locals {
 		local.Close()
@@ -318,6 +334,9 @@ func (c *localConn) Close() error {
 		c.err = c.Conn.Close()
 		c.bridges.mu.Lock()
 		delete(c.bridges.locals, c)
+		if c.err != nil && !errors.Is(c.err, net.ErrClosed) {
+			c.bridges.failure = errors.Join(c.bridges.failure, errors.New("native Tor local connection close failed"))
+		}
 		c.bridges.mu.Unlock()
 	})
 	return c.err

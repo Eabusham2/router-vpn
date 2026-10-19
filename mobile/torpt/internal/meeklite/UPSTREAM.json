@@ -1,0 +1,22 @@
+{
+  "repository": "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird",
+  "commit": "362a60bb4e3fa434130ef81a9990d83d6d8eaea5",
+  "module_version": "v0.0.0-20261008205628-362a60bb4e3f",
+  "module_sum": "h1:iQzghnWKOjCh0lCwlfYckalo4Xmf91z2f9T89bXbXIM=",
+  "source_directory": "transports/meeklite",
+  "original_sha256": {
+    "base.go": "9d9aa10bb024731b67d225a512ac7a7e55c5586407ab3e0b4b532f60ae85749b",
+    "certs.go": "fc6eee0d22a78b89f5e3e282063ba3d70ba6b4f42245ee4f088f2381c25a5e1e",
+    "frontlist.go": "a15162e76d06bf7f623612f748adf1b65bfe38573176229ee76c7b06ce397fb5",
+    "meek.go": "f2b75dc568331cf8e97eaecaf017facf69049069830a881ed734c60f665f2c91",
+    "transport.go": "6812a9e5cbdfe52679c0baa81447a07c0f9363e01382db079e36966f149c4fa4",
+    "meek_test.go": "e4dd22b81bf1915ea4a947415313780817756ed4da94c60012974d9ddfed9ac8"
+  },
+  "changes": [
+    "Package import comment adjusted for the embedded package.",
+    "Owned request context, cancelable queues, worker join, and HTTP idle-connection retirement.",
+    "Bridge URL/front/error details removed from transport logs.",
+    "Preserve every front in the shared profile grammar's comma-separated front list.",
+    "Use the public uTLS spec adapter to keep randomized ML-KEM support and actual key shares consistent."
+  ]
+}

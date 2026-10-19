@@ -1,0 +1,13 @@
+{
+  "repository": "https://gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/webtunnel",
+  "module_version": "v0.0.7",
+  "source_directory": "transport/httpupgrade",
+  "original_sha256": {
+    "httpupgrade.go": "e6fc8186f65de2f3e03c040143c20414578dfdb9f1c20392d9568e373cd8ab28"
+  },
+  "changes": [
+    "Preserve application bytes buffered while reading upgrade headers, in both client and server."
+  ],
+  "commit": "11334a222c1beeb45759d436b7aef963a10600b2",
+  "module_sum": "h1:c7PutWnnXJytefsiENNo+iq2qAbE2RfUbggGtnnmuAA="
+}
