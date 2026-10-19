@@ -27,7 +27,7 @@ import Foundation
 
 @MainActor final class RouterVPNModel {
     var bundle: ClientBundle?
-    var connected = false, auto = false
+    var connected = false, auto = false, tunnelTransitioning = false
     var selectedLogicalMode = "", selectedMode = "", activeRawProfile = ""
     var attempts: [String] = []
     var wrongDispatches = 0, stops = 0
@@ -189,10 +189,15 @@ func candidates(_ bundle: ClientBundle, _ logical: String = "base-raw") throws -
         let fast = await model.exerciseRaw("awg2-fast")
         try check("shipping strategy dispatches exact Fast", fast && model.attempts == ["awg2-fast"] && model.wrongDispatches == 0)
         let strong = await model.exerciseRaw("awg2-strong")
-        try check("shipping strategy stops before exact Strong", strong && model.stops == 1 && model.attempts == ["awg2-fast","awg2-strong"])
+        try check("raw startup never tears down an active owned strategy", !strong && model.stops == 0 && model.attempts == ["awg2-fast"])
+        model.connected = false
+        let freshStrong = await model.exerciseRaw("awg2-strong")
+        try check("idle raw startup preserves exact Strong", freshStrong && model.attempts == ["awg2-fast","awg2-strong"])
+        model.connected = false
         model.pretendWrongRuntime = true
         let wrong = await model.exerciseRaw("wg")
-        try check("shipping strategy rejects wrong runtime", !wrong && !model.connected && model.stops == 3)
+        try check("raw helper cannot count another runtime as its success", !wrong && model.stops == 0)
+        model.connected = false
         let missing = await model.exerciseRaw("awg2-pq")
         try check("missing runtime starts nothing", !missing && model.attempts.count == 3)
         model.connected = true; model.stopSucceeds = false
@@ -254,17 +259,20 @@ def main():
     end = strategy.index("    func runIOSSmartAuto()", begin)
     method = strategy[begin:end]
     provider=(ROOT / "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift").read_text()
-    scope=provider[provider.index("    private func startLibbox("):provider.index("    private func startExternalLibbox(")]
-    for marker in ("[\"wg\", \"awg2-fast\", \"awg2-strong\"].contains(rawProfileID)", "multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID", "RouterVPNMultihopGraph.wireGuardFiles(", "RouterVPNMultihopGraph.singleWireGuardPolicy(", "LibboxRouterApplyMultihopLANPolicy(", "expectedNodeID: provenNodeID"):
+    scope=provider[provider.index("    private func compileLibbox("):provider.index("    private func performanceFiles(")]
+    for marker in ("[\"wg\", \"awg2-fast\", \"awg2-strong\"].contains(rawProfileID)", "multihopWireGuardEndpoint(root: root, expectedProofID: expectedNodeID", "RouterVPNMultihopGraph.wireGuardFiles(", "RouterVPNMultihopGraph.singleWireGuardPolicy(", "LibboxRouterApplyMultihopLANPolicy("):
         assert marker in scope, "native WireGuard launch wiring missing: " + marker
-    assert scope.index("LibboxRouterApplyMultihopLANPolicy(") < scope.index("engine.start(")
+    assert scope.index("LibboxRouterApplyMultihopLANPolicy(") < scope.index("return LibboxCompilation(files: files, nodeID: expectedNodeID")
+    start=provider[provider.index("    private func startLibbox("):provider.index("    private struct LibboxCompilation")]
+    assert start.index("let compiled = try compileLibbox(") < start.index("let files = compiled.files, provenNodeID = compiled.nodeID") < start.index("engine.start(files: files") < start.index("expectedNodeID: provenNodeID")
     selection=provider[provider.index("    private func selectedRouterProfile("):provider.index("    private func wireGuardLikeProfile(")]
     assert "matches.count == 1" in selection and "profiles.count == 1" in selection
     model = (APP / "RouterVPNModel.swift").read_text()
     assert 'func connect(rawProfileID: String?) async' in model
-    assert 'selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]' in model
-    assert 'selections = [try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)]' in model
-    assert 'IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: selectedLogicalMode)' in model
+    owned = (APP / 'IOSOwnedStrategy.swift').read_text()
+    assert 'return [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]' in owned
+    assert 'let selection = try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)' in model
+    assert 'IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: kind == .all ? "all" : selectedLogicalMode)' in owned
     assert 'configuration["rawProfileID"] = selection.rawProfileID' in model
     with tempfile.TemporaryDirectory(prefix="routervpn-native-selection-") as tmp:
         tmp = Path(tmp)

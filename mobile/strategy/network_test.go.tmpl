@@ -1,0 +1,96 @@
+package route
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+)
+
+type strategyResetFixture struct {
+	adapter.Router
+	count atomic.Int32
+}
+
+func (f *strategyResetFixture) ResetNetwork() { f.count.Add(1) }
+
+type strategyEndpointsFixture struct{ adapter.EndpointManager }
+
+func (strategyEndpointsFixture) Endpoints() []adapter.Endpoint { return nil }
+
+type strategyInboundsFixture struct{ adapter.InboundManager }
+
+func (strategyInboundsFixture) Inbounds() []adapter.Inbound { return nil }
+
+type strategyOutboundsFixture struct{ adapter.OutboundManager }
+
+func (strategyOutboundsFixture) Outbounds() []adapter.Outbound { return nil }
+
+func strategyNetworkFixture() (*NetworkManager, *strategyResetFixture) {
+	reset := new(strategyResetFixture)
+	return &NetworkManager{
+		ctx: context.Background(), logger: logger.NOP(), router: reset,
+		endpoint: strategyEndpointsFixture{}, inbound: strategyInboundsFixture{}, outbound: strategyOutboundsFixture{},
+	}, reset
+}
+
+// Exercise the actual route manager and callback. Only OS monitors and the
+// downstream endpoint lists are absent; no network socket or sleep is needed.
+func TestRouterVPNStrategyInterfaceLifetime(t *testing.T) {
+	manager, reset := strategyNetworkFixture()
+	physical := &control.Interface{Name: "routervpn-fixture", Index: 7}
+	manager.updateInterface(context.Background(), physical)
+	if reset.count.Load() != 0 {
+		t.Fatal("a native interface callback reset paths before startup")
+	}
+	if err := manager.Start(adapter.StartStatePostStart); err != nil {
+		t.Fatal(err)
+	}
+	manager.updateInterface(context.Background(), physical)
+	if reset.count.Load() != 1 {
+		t.Fatal("a started native owner did not receive exactly one reset")
+	}
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+	manager.updateInterface(context.Background(), physical)
+	if reset.count.Load() != 1 {
+		t.Fatal("a retired native owner reset paths after close")
+	}
+}
+
+// The stock pinned bool fails this test under -race. Both goroutines execute
+// shipping methods; the common start barrier does not order their flag access.
+func TestRouterVPNStrategyInterfaceStartRace(t *testing.T) {
+	manager, _ := strategyNetworkFixture()
+	physical := &control.Interface{Name: "routervpn-fixture", Index: 7}
+	start := make(chan struct{})
+	var done sync.WaitGroup
+	done.Add(2)
+	go func() {
+		defer done.Done()
+		<-start
+		for i := 0; i < 1024; i++ {
+			if err := manager.Start(adapter.StartStatePostStart); err != nil {
+				t.Error(err)
+				return
+			}
+		}
+	}()
+	go func() {
+		defer done.Done()
+		<-start
+		for i := 0; i < 1024; i++ {
+			manager.updateInterface(context.Background(), physical)
+		}
+	}()
+	close(start)
+	done.Wait()
+	if err := manager.Close(); err != nil {
+		t.Fatal(err)
+	}
+}

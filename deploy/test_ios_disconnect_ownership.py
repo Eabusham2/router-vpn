@@ -67,6 +67,9 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
     var multihopProgressGeneration = UUID()
     var multihopProgressText = "Comparison in progress"
     private var userDisconnectInProgress = false
+    var iosConnectGeneration = UUID()
+    var iosStrategyTaskActive = false
+    var iosStrategyStatus: String?
     var profileMutationBlocked: Bool { connected || tunnelTransitioning || userDisconnectInProgress }
     func finishTask() async { while userDisconnectInProgress { await Task.yield() } }
     // SHIPPING_METHODS
@@ -118,8 +121,10 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
         model = fresh([slow]); model.disconnect(); await model.finishTask()
         check("stop timeout never fabricates disconnected", model.message.hasPrefix("Disconnect is unverified:") && model.connected && model.profileMutationBlocked)
         model = fresh([owned]); model.tunnelTransitioning = true
+        let pendingConnect = model.iosConnectGeneration
         let before = owned.connection.stops; model.disconnect(); await model.finishTask()
-        check("existing transition is not overlapped", owned.connection.stops == before)
+        check("Disconnect can cancel an active transition", owned.connection.stops == before + 1)
+        check("cancelled Connect cannot resume ownership", model.iosConnectGeneration != pendingConnect)
         print("iOS shipping disconnect ownership/readback: PASS (\(checks) executable checks)")
     }
 }

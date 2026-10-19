@@ -14,10 +14,11 @@ class Shipping(unittest.TestCase):
     def test_shared_policy_is_built_byte_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare:
+            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'),mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare:
                 PREPARE.prepare(vendor)
                 mtu_prepare.assert_called_once_with(vendor.resolve())
                 pq_prepare.assert_called_once_with(vendor.resolve())
+                strategy_prepare.assert_called_once_with(vendor.resolve())
             for source in (ROOT/'internal/mobileperf').glob('*.go'):
                 expected=source.read_text().replace('"router-vpn/internal/','"github.com/sagernet/sing-box/experimental/libbox/routervpn/')
                 self.assertEqual(expected,(vendor/'experimental/libbox/routervpn/mobileperf'/source.name).read_text())
@@ -64,8 +65,11 @@ class Shipping(unittest.TestCase):
         self.assertLess(multi.index('LibboxRouterApplyMultihopLANPolicy('),multi.index('performanceFiles(finalFiles'))
         self.assertLess(multi.index('if let exitError'),multi.index('engine.activatePerformance()'))
         self.assertLess(multi.index('engine.activatePerformance()'),multi.index('Multihop changed during performance activation.'))
-        single=source[source.index('private func startLibbox('):source.index('private func performanceFiles(')]
-        self.assertLess(single.index('performanceFiles(files'),single.index('engine.start('))
+        single=source[source.index('private func startLibbox('):source.index('private struct LibboxCompilation')]
+        compiler=source[source.index('private func compileLibbox('):source.index('private func performanceFiles(')]
+        self.assertLess(compiler.index('performanceFiles(files'),compiler.index('return LibboxCompilation(files: files'))
+        self.assertLess(single.index('let compiled = try compileLibbox('),single.index('let files = compiled.files'))
+        self.assertLess(single.index('let files = compiled.files'),single.index('engine.start(files: files'))
         self.assertLess(single.index('if let proofError'),single.index('engine.activatePerformance()'))
         self.assertIn('self.currentPathProofGuard() === singlePathGuard',single)
         engine=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()

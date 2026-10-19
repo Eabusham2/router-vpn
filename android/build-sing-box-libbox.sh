@@ -226,6 +226,7 @@ python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
   go_retry test ./experimental/libbox/routervpn/...
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
+  go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox -run 'TestRouter(Multihop|NativeWireGuard|NativeAmnezia|NativePerformance|NativeBaseStartLayer|NativeSIP003StartLayer|MTU)' -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./protocol/routervpnamnezia -count=1
   go_retry test -race -ldflags=-checklinkname=0 -tags with_wireguard,with_gvisor ./transport/wireguard -run TestRouterVPNClientBind -count=1

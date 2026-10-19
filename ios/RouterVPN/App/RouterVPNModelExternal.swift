@@ -8,7 +8,7 @@ extension RouterVPNModel {
 
     var selectedNodeProfile: RouterProfile? {
         guard let bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     var selectedNodeIsExternal: Bool { selectedNodeProfile?.normalizedNodeKind == "external" }
@@ -101,34 +101,26 @@ extension RouterVPNModel {
         } catch {
             connected = false; message = "Could not prepare the selected external runtime bundle: \(error.localizedDescription)"; return
         }
+        let generation = UUID(); iosConnectGeneration = generation
+        let protocolName = profile.external?.protocolName.lowercased() ?? ""
         tunnelTransitioning = true
-        defer { tunnelTransitioning = false }
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard managers.count <= 1 else {
-                message = "Multiple Router VPN tunnel configurations exist; resolve them before connecting."
-                return
+                throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN tunnel configurations make external connection ownership ambiguous.")
             }
             let manager = managers.first ?? NETunnelProviderManager()
-            guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
-                message = "An existing Router VPN tunnel is active or transitioning; disconnect it before replacement."
-                return
-            }
-            guard self.bundle?.selectedRouterID == bundle.selectedRouterID,
-                  self.bundle?.routerProfiles == bundle.routerProfiles,
-                  self.bundle?.profiles == bundle.profiles else {
-                message = "External node configuration changed while preparing the connection; no runtime was started."
-                return
-            }
+            try requireExternalPreparation(generation, source: bundle, manager: manager)
             let proto = NETunnelProviderProtocol()
             proto.providerBundleIdentifier = "com.eabusham.routervpn.PacketTunnel"
             proto.serverAddress = profile.endpoint
             proto.providerConfiguration = [
                 "engine": "external-libbox",
-                "mode": "external-\(selectedExternalProtocol)",
-                "modeCandidates": ["external-\(selectedExternalProtocol)"],
+                "mode": "external-\(protocolName)",
+                "modeCandidates": ["external-\(protocolName)"],
                 "logicalMode": "external-node",
                 "bundle": encodedBundle
             ]
@@ -143,20 +135,50 @@ extension RouterVPNModel {
             manager.isEnabled = true
             if strict { manager.onDemandRules = [NEOnDemandRuleConnect()]; manager.isOnDemandEnabled = true }
             else { manager.onDemandRules = []; manager.isOnDemandEnabled = false }
-            try await manager.saveToPreferences(); try await manager.loadFromPreferences()
-            message = "Starting external \(selectedExternalProtocol) PacketTunnel • proving exit \(expected)…"
+            try await manager.saveToPreferences()
+            try requireExternalPreparation(generation, source: bundle, manager: manager)
+            try await manager.loadFromPreferences()
+            try requireExternalPreparation(generation, source: bundle, manager: manager)
+            guard let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  saved.providerConfiguration?["bundle"] as? Data == encodedBundle,
+                  saved.providerConfiguration?["engine"] as? String == "external-libbox",
+                  manager.isEnabled, manager.isOnDemandEnabled == strict else {
+                throw IOSRuntimeSelectionError.unsupportedMode("External runtime preferences did not preserve the captured owner.")
+            }
+            message = "Starting external \(protocolName) PacketTunnel • proving exit \(expected)…"
             try manager.connection.startVPNTunnel()
-            let ok = await waitExternalConnection(manager, attempts: 48)
+            let ok = await waitExternalConnection(manager, attempts: 48, generation: generation)
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard ok else {
-                manager.isOnDemandEnabled = false; manager.onDemandRules = []; try? await manager.saveToPreferences(); manager.connection.stopVPNTunnel()
-                connected = false; activeEngine = "none"; activeRawProfile = ""
-                message = "External \(selectedExternalProtocol) failed closed before exact public-exit proof passed."
+                await refreshTunnelStatus()
+                guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
+                message = "External \(protocolName) has not completed exact public-exit proof. Check its protected status or Disconnect."
                 return
             }
-            connected = true; activeEngine = "external-libbox"; activeRawProfile = "external-\(selectedExternalProtocol)"
-            message = "Connected • external \(selectedExternalProtocol) • exact public-exit proof passed: \(expected)" + (strict ? " • strict route lockdown" : "")
+            await refreshTunnelStatus()
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
+            if connected {
+                message = "Connected • external \(protocolName) • exact public-exit proof passed: \(expected)" + (strict ? " • strict route lockdown" : "")
+            }
         } catch {
-            connected = false; activeEngine = "none"; activeRawProfile = ""; message = error.localizedDescription
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
+            let failure = error.localizedDescription
+            await refreshTunnelStatus()
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
+            message = "External startup was not completed: \(failure)"
+        }
+    }
+
+    private func requireExternalPreparation(_ generation: UUID, source: ClientBundle, manager: NETunnelProviderManager) throws {
+        try Task.checkCancellation()
+        guard iosConnectGeneration == generation, !iosUserDisconnectInProgress,
+              let current = bundle, current.selectedRouterID == source.selectedRouterID,
+              current.routerProfiles == source.routerProfiles, current.profiles == source.profiles,
+              manager.protocolConfiguration == nil || (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" else {
+            throw CancellationError()
+        }
+        guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
+            throw IOSRuntimeSelectionError.unsupportedMode("The external VPN owner changed during startup; disconnect before replacing it.")
         }
     }
 
@@ -210,9 +232,10 @@ extension RouterVPNModel {
         return ["strict", "always", "enabled", "on", "lockdown"].contains(value)
     }
 
-    private func waitExternalConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
+    private func waitExternalConnection(_ manager: NETunnelProviderManager, attempts: Int, generation: UUID) async -> Bool {
         var sawConnecting = false
         for _ in 0..<attempts {
+            guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return false }
             switch manager.connection.status {
             case .connected: return true
             case .invalid, .disconnecting: return false
@@ -225,6 +248,6 @@ extension RouterVPNModel {
             @unknown default: try? await Task.sleep(for: .milliseconds(250))
             }
         }
-        return manager.connection.status == .connected
+        return iosConnectGeneration == generation && !iosUserDisconnectInProgress && !Task.isCancelled && manager.connection.status == .connected
     }
 }

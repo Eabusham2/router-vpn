@@ -84,7 +84,9 @@ def main():
         subprocess.run([swift,'-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(tests),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=30)
     provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
-    section=provider[provider.index('private func startLibbox('):provider.index('private func startExternalLibbox(')]
-    assert section.index('LibboxRouterCompileSIP003Profile') < section.index('IOSStartLayer.apply') < section.index('engine.start(')
+    section=provider[provider.index('private func compileLibbox('):provider.index('private func performanceFiles(')]
+    assert section.index('LibboxRouterCompileSIP003Profile') < section.index('IOSStartLayer.apply') < section.index('return LibboxCompilation(files: files')
+    start=provider[provider.index('private func startLibbox('):provider.index('private struct LibboxCompilation')]
+    assert start.index('let compiled = try compileLibbox(') < start.index('let files = compiled.files') < start.index('engine.start(files: files')
     print('Shipping host composition and pre-start native validation are both wired.')
 if __name__=='__main__':main()

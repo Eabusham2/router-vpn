@@ -29,6 +29,10 @@ final class RouterVPNModel: ObservableObject {
     @Published var activeRawProfile = ""
     private(set) var activeSessionIdentity: IOSSessionIdentity?
     private var userDisconnectInProgress = false
+    var iosConnectGeneration = UUID()
+    var iosStrategyTaskActive = false
+    private(set) var iosStrategyStatus: IOSStrategyStatus?
+    var iosUserDisconnectInProgress: Bool { userDisconnectInProgress }
     @Published var forwardProtocol = "both"
     @Published var forwardFrom = "25565"
     @Published var forwardTo = "25565"
@@ -223,108 +227,61 @@ final class RouterVPNModel: ObservableObject {
     // an AWG Fast attempt into the preferred WG variant of the same mode.
     func connect(rawProfileID: String?) async {
         multihopProgressGeneration = UUID(); multihopProgressText = ""
-        if connected { message = "Disconnect before starting another VPN session"; return }
-        if tunnelTransitioning { message = "VPN transition already in progress"; return }
-        tunnelTransitioning = true
-        defer { tunnelTransitioning = false }
-        guard saveRouter() else { connected = false; return }
-        guard let bundle else { message = "Configure your home router first"; return }
-        let selections: [IOSRuntimeSelection]
-        do {
-            if selectedRouterProfile?.multihopEnabled == true {
-                selections = [try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)]
-            } else if let rawProfileID {
-                selections = [try IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawProfileID)]
-            } else if auto {
-                let runnable = IOSRuntimeSelector.runnableModes(in: bundle)
-                var values = try runnable.flatMap { try IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: $0.id) }
-                if let profile = selectedRouterProfile {
-                    let filtered = values.compactMap { selection -> (IOSRuntimeSelection, String?) in
-                        (selection, IOSStrategyCatalog.autoRequirementFailure(rawID: selection.rawProfileID, profile: profile))
-                    }
-                    let rejected = filtered.compactMap { pair in pair.1 }
-                    values = filtered.compactMap { pair in pair.1 == nil ? pair.0 : nil }
-                    if values.isEmpty && !rejected.isEmpty {
-                        throw IOSRuntimeSelectionError.unsupportedMode("AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements. " + rejected.joined(separator: " • "))
-                    }
-                }
-                let catalog = bundle.logicalModes.map(\.id)
-                values = values.enumerated().sorted { lhs, rhs in
-                    let a = lhs.element, b = rhs.element
-                    if a.engine != b.engine { return a.engine == .wireGuard }
-                    let left = catalog.firstIndex(of: a.logicalModeID) ?? Int.max
-                    let right = catalog.firstIndex(of: b.logicalModeID) ?? Int.max
-                    return left == right ? lhs.offset < rhs.offset : left < right
-                }.map(\.element)
-                guard !values.isEmpty else { throw IOSRuntimeSelectionError.unsupportedMode("This imported node has no iOS-runnable WireGuardKit or Libbox mode for the selected DNS policy.") }
-                selections = strictKillSwitchEnabled ? [values[0]] : values
-            } else {
-                let candidates = try IOSRuntimeSelector.candidates(bundle: bundle, logicalModeID: selectedLogicalMode)
-                selections = strictKillSwitchEnabled ? Array(candidates.prefix(1)) : candidates
-            }
-        } catch {
-            connected = false
-            message = error.localizedDescription
+        if selectedRouterProfile?.multihopEnabled != true {
+            do {
+                if !connected && !tunnelTransitioning { guard saveRouter() else { return } }
+                let kind: IOSStrategyPlan.Kind = rawProfileID != nil ? .manual :
+                    (auto ? .automatic : (selectedLogicalMode == "all" ? .all : .logical))
+                let candidates = try iosStrategySelections(kind: kind, rawProfileID: rawProfileID)
+                _ = await runIOSOwnedStrategy(kind: kind, selections: candidates)
+            } catch { message = error.localizedDescription }
             return
         }
-
+        guard !connected, !tunnelTransitioning, !userDisconnectInProgress else {
+            message = "Disconnect the current VPN before replacing its multihop graph."; return
+        }
+        let generation = UUID(); iosConnectGeneration = generation
+        guard saveRouter(), let bundle else { return }
+        tunnelTransitioning = true
         do {
+            let selection = try IOSRuntimeSelector.selectMultihop(bundle: bundle, rawProfileID: rawProfileID)
             let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
+            guard iosConnectGeneration == generation, !userDisconnectInProgress else { return }
             guard managers.count <= 1 else {
-                message = "Multiple Router VPN tunnel configurations exist; resolve them before connecting."
-                return
+                throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN managers make connection ownership ambiguous.")
             }
             let manager = managers.first ?? NETunnelProviderManager()
-            guard manager.connection.status == .disconnected || manager.connection.status == .invalid else {
-                message = "An existing Router VPN tunnel is still active or transitioning; disconnect it before replacement."
-                return
+            guard manager.connection.status == .disconnected || manager.connection.status == .invalid,
+                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles else {
+                throw IOSRuntimeSelectionError.unsupportedMode("The selected node or VPN owner changed before multihop startup.")
             }
-            guard self.bundle?.selectedRouterID == bundle.selectedRouterID,
-                  self.bundle?.routerProfiles == bundle.routerProfiles,
-                  self.bundle?.profiles == bundle.profiles else {
-                message = "Node configuration changed while preparing the connection; no runtime was started."
-                return
+            let success = try await start(manager: manager, bundle: bundle, selection: selection)
+            guard iosConnectGeneration == generation, !userDisconnectInProgress else { return }
+            if success {
+                connected = true; activeEngine = selection.engine.rawValue; activeRawProfile = selection.rawProfileID
+                selectedLogicalMode = selection.logicalModeID; selectedMode = selection.rawProfileID
+                message = "Connected • \(engineName(selection)) • selected-node proof passed"
+                await refreshTunnelStatus()
+            } else {
+                connected = false
+                message = "The captured multihop graph did not complete both node proofs."
+                await refreshTunnelStatus()
             }
-            var failures: [String] = []
-            for (index, selection) in selections.enumerated() {
-                if auto { message = "AUTO \(index + 1)/\(selections.count) • trying \(modeName(selection.logicalModeID)) • \(engineName(selection))…" }
-                let success = try await start(manager: manager, bundle: bundle, selection: selection)
-                if success {
-                    connected = true
-                    activeEngine = selection.engine.rawValue
-                    activeRawProfile = selection.rawProfileID
-                    selectedLogicalMode = selection.logicalModeID
-                    selectedMode = selection.rawProfileID
-                    let strictText = strictKillSwitchEnabled ? " • strict route lockdown" : ""
-                    message = "Connected • \(modeName(selection.logicalModeID)) • \(engineName(selection))\(strictText) • selected-node proof passed"
-                    return
-                }
-                failures.append("\(modeName(selection.logicalModeID)) / \(engineName(selection))")
-                if strictKillSwitchEnabled {
-                    connected = false
-                    message = "Strict AUTO failed closed on \(failures[0]). iOS will not cycle to another engine after a failed strict tunnel because that transition could create a route-lockdown gap; choose another mode manually."
-                    return
-                }
-                guard await stopTrial(manager) else {
-                    message = "Previous VPN teardown is unverified; fallback was stopped rather than overlapping runtimes."
-                    return
-                }
-            }
-            connected = false
-            activeEngine = "none"
-            activeRawProfile = ""
-            message = "AUTO: no iOS runtime passed PacketTunnel + selected-node proof. Tried: \(failures.joined(separator: ", "))."
         } catch {
-            connected = false
-            activeEngine = "none"
-            activeRawProfile = ""
-            message = error.localizedDescription
+            guard iosConnectGeneration == generation, !userDisconnectInProgress else { return }
+            connected = false; activeSessionIdentity = nil
+            let failure = error.localizedDescription
+            await refreshTunnelStatus()
+            guard iosConnectGeneration == generation, !userDisconnectInProgress else { return }
+            message = "Multihop startup was not completed: \(failure)"
         }
     }
 
     private func start(manager: NETunnelProviderManager, bundle: ClientBundle, selection: IOSRuntimeSelection) async throws -> Bool {
+        let generation = iosConnectGeneration
         var launchBundle = bundle
         if selection.engine == .libbox && selection.files["xray.json"] != nil {
             // Carry the exact compiled wrapper, including legacy XHTTP imports,
@@ -369,7 +326,7 @@ final class RouterVPNModel: ObservableObject {
                 }
                 return output
             }.value
-            guard !Task.isCancelled,
+            guard !Task.isCancelled, iosConnectGeneration == generation, !userDisconnectInProgress,
                   self.bundle?.selectedRouterID == bundle.selectedRouterID,
                   self.bundle?.routerProfiles == bundle.routerProfiles,
                   self.bundle?.profiles == bundle.profiles,
@@ -435,8 +392,11 @@ final class RouterVPNModel: ObservableObject {
             manager.isOnDemandEnabled = false
             manager.onDemandRules = []
         }
+        guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         try await manager.saveToPreferences()
+        guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         try await manager.loadFromPreferences()
+        guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         let mtuHold = IOSMTUMeasurementGate.current
         let options: [String: NSObject]? = mtuHold.isEmpty ? nil : ["routervpn_mtu_hold": mtuHold as NSString]
         try manager.connection.startVPNTunnel(options: options)
@@ -447,8 +407,10 @@ final class RouterVPNModel: ObservableObject {
     }
 
     private func waitForConnection(_ manager: NETunnelProviderManager, attempts: Int) async -> Bool {
+        let generation = iosConnectGeneration
         var sawConnecting = false
         for _ in 0..<attempts {
+            guard iosConnectGeneration == generation, !userDisconnectInProgress, !Task.isCancelled else { return false }
             switch manager.connection.status {
             case .connected: return true
             case .invalid: return false
@@ -466,17 +428,28 @@ final class RouterVPNModel: ObservableObject {
         return manager.connection.status == .connected
     }
 
-    private func stopTrial(_ manager: NETunnelProviderManager) async -> Bool {
-        manager.isOnDemandEnabled = false
-        manager.onDemandRules = []
-        do { try await manager.saveToPreferences() }
-        catch { manager.connection.stopVPNTunnel(); return false }
-        manager.connection.stopVPNTunnel()
-        for _ in 0..<12 {
-            if manager.connection.status == .disconnected || manager.connection.status == .invalid { return true }
-            try? await Task.sleep(for: .milliseconds(150))
+    func iosInvalidateStrategyIdentity() {
+        connected = false; activeSessionIdentity = nil
+        tunnelTransitioning = true
+    }
+
+    func iosAdoptStrategyStatus(_ status: IOSStrategyStatus, manager: NETunnelProviderManager, bundleData: Data) throws {
+        guard !userDisconnectInProgress, manager.connection.status == .connected,
+              let connectedAt = manager.connection.connectedDate else { throw CancellationError() }
+        iosStrategyStatus = status
+        connected = status.isProven
+        tunnelTransitioning = !status.isProven
+        activeSessionIdentity = nil
+        activeEngine = status.isProven ? "libbox" : "none"
+        activeRawProfile = status.currentRaw
+        message = status.message
+        if status.isProven {
+            let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: "libbox", rawProfile: status.provenRaw,
+                bundleData: bundleData, entryBundleData: nil, providerSession: status.providerSession, runtimeEpoch: status.runtimeEpoch)
+            activeSessionIdentity = identity
+            selectedMode = status.provenRaw
+            selectedLogicalMode = status.kind == .all ? "all" : status.provenLogical
         }
-        return manager.connection.status == .disconnected || manager.connection.status == .invalid
     }
 
     private func modeName(_ id: String) -> String { logicalModes.first(where: { $0.id == id })?.name ?? id }
@@ -486,15 +459,17 @@ final class RouterVPNModel: ObservableObject {
 
     func refreshTunnelStatus() async {
         guard !userDisconnectInProgress else { return }
+        let generation = iosConnectGeneration
         do {
             let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
             guard !userDisconnectInProgress else { return }
+            guard iosConnectGeneration == generation else { return }
             guard managers.count <= 1 else { throw IOSRuntimeSelectionError.unsupportedMode("Multiple Router VPN sessions make status ownership ambiguous.") }
             guard let manager = managers.first else {
                 connected = false; tunnelTransitioning = false; activeSessionIdentity = nil
-                activeEngine = "none"; activeRawProfile = ""; return
+                activeEngine = "none"; activeRawProfile = ""; iosStrategyStatus = nil; return
             }
             let status = manager.connection.status
             tunnelTransitioning = status == .connecting || status == .disconnecting || status == .reasserting
@@ -507,6 +482,22 @@ final class RouterVPNModel: ObservableObject {
                       let connectedAt = manager.connection.connectedDate else {
                     throw IOSRuntimeSelectionError.unsupportedMode("The connected tunnel did not provide its frozen session identity.")
                 }
+                if configuration["strategy_catalog"] != nil {
+                    connected = false
+                    guard let session = manager.connection as? NETunnelProviderSession else {
+                        throw IOSStrategyWire.failure("The strategy tunnel has no owned provider session.")
+                    }
+                    let catalog = try IOSStrategyWire.catalog(configuration)
+                    let digest = Self.iosStrategyDigest(data)
+                    let reply = try await IOSStrategyTransport.send(session, request: ["operation": "strategy-status", "bundle_digest": digest])
+                    guard iosConnectGeneration == generation, !userDisconnectInProgress,
+                          session.status == .connected, session.connectedDate == connectedAt,
+                          (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["bundle"] as? Data == data else { return }
+                    let strategy = try IOSStrategyWire.status(reply, bundleDigest: digest, catalog: catalog)
+                    try iosAdoptStrategyStatus(strategy, manager: manager, bundleData: data)
+                    return
+                }
+                iosStrategyStatus = nil
                 let engine = configuration["engine"] as? String ?? "wireguard"
                 let raw = configuration["rawProfileID"] as? String ?? configuration["mode"] as? String ?? "wg"
                 let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: engine, rawProfile: raw,
@@ -515,9 +506,11 @@ final class RouterVPNModel: ObservableObject {
             }
         } catch {
             guard !userDisconnectInProgress else { return }
+            guard iosConnectGeneration == generation else { return }
             // Failure to read preferences is UNKNOWN, not proof that the VPN is
             // down. Lock mutations and invalidate measurements until readback.
             activeSessionIdentity = nil
+            connected = false
             tunnelTransitioning = true
             message = "Tunnel status is unverified: \(error.localizedDescription)"
         }
@@ -525,7 +518,8 @@ final class RouterVPNModel: ObservableObject {
 
     func disconnect() {
         multihopProgressGeneration = UUID(); multihopProgressText = ""
-        guard !tunnelTransitioning, !userDisconnectInProgress else { return }
+        guard !userDisconnectInProgress else { return }
+        iosConnectGeneration = UUID(); iosStrategyTaskActive = false; iosStrategyStatus = nil
         userDisconnectInProgress = true
         tunnelTransitioning = true
         activeSessionIdentity = nil

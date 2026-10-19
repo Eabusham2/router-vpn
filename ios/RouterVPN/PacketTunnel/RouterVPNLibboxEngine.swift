@@ -15,10 +15,19 @@ final class RouterVPNLibboxEngine {
     private let ownershipLock = NSLock()
     private var ownershipGeneration = UUID()
     private var starting = false
+    let settingsEpoch: String
+    private let strategyOwned: Bool
+    private var nativeCloseFailure: Error?
+    private var measurementLease = ""
+    private var permanentlyStopped = false
 
-    init(tunnel: PacketTunnelProvider) {
+    init(tunnel: PacketTunnelProvider, strategyEpoch: String? = nil) {
         self.tunnel = tunnel
-        self.platform = RouterVPNLibboxPlatform(tunnel: tunnel)
+        let capturedEpoch = strategyEpoch ?? UUID().uuidString
+        self.settingsEpoch = capturedEpoch
+        self.strategyOwned = strategyEpoch != nil
+        self.platform = RouterVPNLibboxPlatform(tunnel: tunnel, settingsEpoch: capturedEpoch)
+        if strategyEpoch == nil { tunnel.beginLibboxSettings(epoch: capturedEpoch) }
         platform.onLog = { [weak tunnel] message in tunnel?.writeLibboxLog(message) }
         platform.onStopService = { [weak self] in try self?.closeService() }
         platform.onReloadService = { [weak self] in try self?.reloadService() }
@@ -33,7 +42,7 @@ final class RouterVPNLibboxEngine {
         let capturedExit = try IOSMultihopStartLayer.requiredExitSource(metadata: multihopMetadata, source: exitStartLayerSource)
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
         ownershipLock.lock()
-        guard server == nil, !starting else { ownershipLock.unlock(); throw error("Libbox service is already running") }
+        guard server == nil, !starting, !permanentlyStopped else { ownershipLock.unlock(); throw error("Libbox service is already running or retired") }
         starting = true
         let generation = ownershipGeneration
         ownershipLock.unlock()
@@ -42,7 +51,7 @@ final class RouterVPNLibboxEngine {
             ownershipLock.lock()
             if ownershipGeneration == generation { starting = false }
             ownershipLock.unlock()
-            if !adopted { stopGeneration(generation) }
+            if !adopted { _ = stopGeneration(generation) }
         }
         // Factory registration owns no peer or socket. Native PQ endpoints
         // create independent protocol handles only under this captured runtime.
@@ -97,13 +106,17 @@ final class RouterVPNLibboxEngine {
             adopted = ownershipGeneration == generation && server === created
             ownershipLock.unlock()
             if !adopted { throw error("Libbox startup was cancelled") }
-        } catch { stopGeneration(generation); throw error }
+        } catch { _ = stopGeneration(generation); throw error }
     }
 
-    func stop() { stopGeneration(nil) }
-    private func stopGeneration(_ expected: UUID?) {
+    func stop() { _ = stopGeneration(nil) }
+    func stopCheckedForStrategy() throws {
+        if let failure = stopGeneration(nil) { throw failure }
+    }
+    private func stopGeneration(_ expected: UUID?) -> Error? {
         ownershipLock.lock()
-        if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return }
+        if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return nil }
+        permanentlyStopped = true
         ownershipGeneration = UUID()
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth
         hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
@@ -117,13 +130,47 @@ final class RouterVPNLibboxEngine {
             do { try plan.close() }
             catch { tunnel?.writeLibboxLog("Server multihop cleanup was not confirmed; its bounded lease expiry remains in force.") }
         }
-        if let owned { try? owned.closeService(); owned.close() }
+        var closeFailure: Error?
+        if let owned {
+            if strategyOwned {
+                var failure: NSError?
+                let closed = LibboxRouterStrategyCloseService(owned, &failure)
+                if !closed || failure != nil { closeFailure = failure ?? error("Native strategy teardown was not verified") }
+            } else { try? owned.closeService() }
+            owned.close()
+        }
         platform.reset()
         if let directory { try? FileManager.default.removeItem(at: directory) }
+        ownershipLock.lock()
+        if let closeFailure { nativeCloseFailure = closeFailure }
+        let result = nativeCloseFailure
+        ownershipLock.unlock()
+        return result
+    }
+
+    func proveStrategyDNS() throws {
+        ownershipLock.lock()
+        let owned = server, generation = ownershipGeneration
+        ownershipLock.unlock()
+        guard strategyOwned, let owned else { throw error("Strategy DNS proof has no owned native runtime") }
+        var failure: NSError?
+        let proved = LibboxRouterStrategyDNSProof(owned, &failure)
+        if let failure { throw failure }
+        guard proved else { throw error("The selected native DNS route did not pass proof") }
+        ownershipLock.lock()
+        let current = server === owned && ownershipGeneration == generation
+        ownershipLock.unlock()
+        guard current else { throw error("Strategy DNS proof belongs to a replaced native runtime") }
     }
     /// Activate only after the final selected path is proved. The services
     /// remain owned by this native instance and are closed with it.
-    func prepareMTUHold(_ lease: String) throws { try platform.mtu.initialMeasurementHold(lease) }
+    func prepareMTUHold(_ lease: String) throws {
+        try platform.mtu.initialMeasurementHold(lease)
+        ownershipLock.lock(); measurementLease = lease; ownershipLock.unlock()
+    }
+    var strategyMTUHold: String {
+        ownershipLock.lock(); defer { ownershipLock.unlock() }; return measurementLease
+    }
 
     func activateMTU(profile: [String: Any]) {
         guard let data = try? JSONSerialization.data(withJSONObject: profile), data.count <= 65536,
@@ -138,7 +185,15 @@ final class RouterVPNLibboxEngine {
         if !current { platform.mtu.stop() }
     }
     func mtuRequest(operation: String, request: String, session: String) -> Data? {
-        platform.mtu.request(operation: operation, request: request, session: session)
+        ownershipLock.lock(); let generation = ownershipGeneration; ownershipLock.unlock()
+        let result = platform.mtu.request(operation: operation, request: request, session: session)
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        guard ownershipGeneration == generation else { return nil }
+        if result != nil {
+            if operation == "mtu-hold" { measurementLease = request }
+            if operation == "mtu-release" { measurementLease = "" }
+        }
+        return result
     }
     private final class MTUFailureDelivery: @unchecked Sendable {
         private weak var owner: RouterVPNLibboxEngine?
@@ -149,7 +204,7 @@ final class RouterVPNLibboxEngine {
             owner.ownershipLock.lock()
             let current = owner.ownershipGeneration == generation && owner.server != nil
             owner.ownershipLock.unlock()
-            if current { owner.tunnel?.cancelTunnelWithError(owner.error(message)) }
+            if current { owner.tunnel?.nativeLibboxFailure(owner, error: owner.error(message)) }
         }
     }
 
@@ -190,7 +245,7 @@ final class RouterVPNLibboxEngine {
             owner.ownershipLock.lock()
             let stillCurrent = owner.server === server && owner.ownershipGeneration == generation
             owner.ownershipLock.unlock()
-            if stillCurrent { owner.tunnel?.cancelTunnelWithError(owner.error("Requested padding stopped or its private path changed.")) }
+            if stillCurrent { owner.tunnel?.nativeLibboxFailure(owner, error: owner.error("Requested padding stopped or its private path changed.")) }
         }
     }
 
@@ -328,10 +383,22 @@ final class RouterVPNLibboxEngine {
     private func startService() throws {
         ownershipLock.lock(); let owned = server, content = configContent; ownershipLock.unlock()
         guard let server = owned, !content.isEmpty else { throw error("Libbox service is not configured") }
-        try server.startOrReloadService(content, options: LibboxOverrideOptions())
+        if strategyOwned {
+            var failure: NSError?
+            let started = LibboxRouterStrategyStartService(server, content, &failure)
+            if let failure { throw failure }
+            guard started else { throw error("The fresh native strategy runtime did not start") }
+        } else { try server.startOrReloadService(content, options: LibboxOverrideOptions()) }
     }
-    private func closeService() throws { platform.mtu.stop(); ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService() }
+    private func closeService() throws {
+        if strategyOwned {
+            tunnel?.nativeLibboxFailure(self, error: error("The owned native strategy requested service stop."))
+            return
+        }
+        platform.mtu.stop(); ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService()
+    }
     private func reloadService() throws {
+        guard !strategyOwned else { throw error("Provider strategies require a fresh owned native generation") }
         ownershipLock.lock(); let comparing = multihop != nil || hopMeasurement != nil || performanceHealth != nil; ownershipLock.unlock()
         guard !comparing, !platform.mtu.hasOwner else { throw error("Native reload requires a fresh owned comparison and MTU session") }
         try startService()

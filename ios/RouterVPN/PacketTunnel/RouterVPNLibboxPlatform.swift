@@ -16,8 +16,11 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     private let settingsLock = NSRecursiveLock()
     private var networkSettings: NEPacketTunnelNetworkSettings?
     private var monitor: NWPathMonitor?
+    private let settingsEpoch: String
 
-    init(tunnel: PacketTunnelProvider) { self.tunnel = tunnel }
+    init(tunnel: PacketTunnelProvider, settingsEpoch: String) {
+        self.tunnel = tunnel; self.settingsEpoch = settingsEpoch
+    }
 
     func openTun(_ options: LibboxTunOptionsProtocol?, ret0_: UnsafeMutablePointer<Int32>?) throws {
         guard let options, let ret0_, let tunnel else { throw error("Libbox requested TUN with missing options/provider/output pointer") }
@@ -151,10 +154,18 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
     func includeAllNetworks() -> Bool { includeAllNetworksRequested }
     func clearDNSCache() {
         if mtu.isChanging { return }
-        if mtu.hasOwner { mtu.invalidate() }
+        if mtu.hasOwner {
+            mtu.invalidate()
+            tunnel?.nativeLibboxSettingsInvalidated(epoch: settingsEpoch)
+            return
+        }
+        settingsLock.lock(); defer { settingsLock.unlock() }
         guard let tunnel, let settings = networkSettings else { return }
-        tunnel.reasserting = true
-        tunnel.setTunnelNetworkSettings(nil) { _ in tunnel.setTunnelNetworkSettings(settings) { _ in tunnel.reasserting = false } }
+        // Clearing settings would remove route protection during a strategy
+        // transition. Reapply only this generation's non-nil DNS/TUN settings;
+        // the provider serializes OS callbacks and rejects retired platforms.
+        do { try apply(settings, to: tunnel) }
+        catch { tunnel.nativeLibboxSettingsInvalidated(epoch: settingsEpoch) }
     }
     func readWIFIState() -> LibboxWIFIState? { nil }
     func readWIFISSID() -> String? { nil }
@@ -169,6 +180,7 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         settingsLock.lock(); defer { settingsLock.unlock() }
         if mtu.isChanging { throw error("Finish the owned MTU transaction before changing system proxy settings") }
         guard let tunnel, let settings = networkSettings, let proxy = settings.proxySettings, proxy.httpServer != nil else { return }
+        guard !tunnel.isStrategySettings(epoch: settingsEpoch) else { throw error("The strategy's captured proxy policy is immutable") }
         if proxy.httpEnabled == enabled { return }
         if mtu.hasOwner { mtu.invalidate() }
         proxy.httpEnabled = enabled; proxy.httpsEnabled = enabled; settings.proxySettings = proxy; try apply(settings, to: tunnel)
@@ -205,6 +217,7 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         mtu.stop()
         settingsLock.lock(); defer { settingsLock.unlock() }
         networkSettings = nil; monitor?.cancel(); monitor = nil
+        tunnel?.retireLibboxSettings(epoch: settingsEpoch)
     }
 
     private static func update(_ listener: LibboxInterfaceUpdateListenerProtocol, from path: NWPath) {
@@ -241,11 +254,8 @@ final class RouterVPNLibboxPlatform: NSObject, LibboxPlatformInterfaceProtocol, 
         }
     }
 
-    private func apply(_ settings: NEPacketTunnelNetworkSettings?, to tunnel: PacketTunnelProvider) throws {
-        let semaphore = DispatchSemaphore(value: 0); var failure: Error?
-        tunnel.setTunnelNetworkSettings(settings) { error in failure = error; semaphore.signal() }
-        if semaphore.wait(timeout: .now() + 10) == .timedOut { throw error("Timed out applying PacketTunnel network settings") }
-        if let failure { throw failure }
+    private func apply(_ settings: NEPacketTunnelNetworkSettings, to tunnel: PacketTunnelProvider) throws {
+        try tunnel.applyLibboxSettings(settings, epoch: settingsEpoch)
     }
     private func error(_ message: String) -> NSError { NSError(domain: "RouterVPN.LibboxPlatform", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
 

@@ -1,0 +1,46 @@
+package libbox
+
+import (
+	"errors"
+	"path/filepath"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/service/powerreport"
+)
+
+func RouterStrategyStartService(server *CommandServer, configContent string) error {
+	if server == nil || server.StartedService == nil || configContent == "" {
+		return errors.New("strategy startup owner is unavailable")
+	}
+	saveConfigSnapshot(configContent)
+	if server.powerManager.Recorder() != nil {
+		copyConfigSnapshot(filepath.Join(sWorkingPath, powerreport.DraftDirectoryName))
+	}
+	return server.StartedService.RouterVPNStrategyStartService(server.ctx, configContent, &daemon.OverrideOptions{})
+}
+
+// RouterStrategyDNSProof accepts only the extension-owned command server.
+// Both adoption checks use the exact same native instance, never its label.
+func RouterStrategyDNSProof(server *CommandServer) error {
+	if server == nil || server.StartedService == nil {
+		return errors.New("strategy DNS owner is unavailable")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return errors.New("strategy DNS instance is unavailable")
+	}
+	if err := instance.Box().RouterVPNStrategyDNSProof(); err != nil {
+		return err
+	}
+	if instance != server.StartedService.Instance() {
+		return errors.New("strategy DNS proof belongs to a retired native instance")
+	}
+	return nil
+}
+
+func RouterStrategyCloseService(server *CommandServer) error {
+	if server == nil || server.StartedService == nil {
+		return nil
+	}
+	return server.StartedService.RouterVPNStrategyCloseService()
+}

@@ -45,14 +45,27 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     private var initialMTUHold = ""
     private var forwardingChannel: RouterVPNForwardingChannel?
+    private var networkSettingsOwner: RouterVPNSettingsQueue<NEPacketTunnelNetworkSettings>?
+    private let strategyOwnerLock = NSLock()
+    private var providerStrategy: RouterVPNProviderStrategy?
+    private var strategyDriver: StrategyRuntimeDriver?
 
     override init() {
         super.init()
         forwardingChannel = RouterVPNForwardingChannel(provider: self)
+        networkSettingsOwner = RouterVPNSettingsQueue { [weak self] settings, completion in
+            guard let self else { completion(NSError(domain: "RouterVPN.NetworkSettings", code: 1)); return }
+            self.setTunnelNetworkSettings(settings, completionHandler: completion)
+        }
     }
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         guard let completionHandler else { return }
+        if messageData.count <= 8192,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any],
+           let operation = request["operation"] as? String, operation.hasPrefix("strategy-") {
+            completionHandler(currentProviderStrategy()?.handle(messageData)); return
+        }
         if messageData.count <= 128,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request == ["operation": "multihop-progress"] {
@@ -74,6 +87,227 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             completionHandler(libboxEngine?.mtuRequest(operation: operation, request: id, session: session)); return
         }
         forwardingChannel?.handle(messageData, completion: completionHandler)
+    }
+
+    private func currentProviderStrategy() -> RouterVPNProviderStrategy? {
+        strategyOwnerLock.lock(); defer { strategyOwnerLock.unlock() }; return providerStrategy
+    }
+
+    func beginLibboxSettings(epoch: String) { networkSettingsOwner?.begin(epoch: epoch) }
+    func retireLibboxSettings(epoch: String) { networkSettingsOwner?.retire(epoch: epoch) }
+    func isStrategySettings(epoch: String) -> Bool { currentProviderStrategy()?.isCurrent(epoch) == true }
+
+    func applyLibboxSettings(_ settings: NEPacketTunnelNetworkSettings, epoch: String) throws {
+        guard let owner = networkSettingsOwner else { throw tunnelError(70, "The provider has no network settings owner.") }
+        let result = RouterVPNSettingsResult()
+        owner.submit(settings, epoch: epoch) { error in result.finish(error) }
+        guard result.completed.wait(timeout: .now() + 10) != .timedOut else {
+            owner.retire(epoch: epoch)
+            throw tunnelError(70, "Timed out applying owned PacketTunnel network settings.")
+        }
+        if let error = result.error { throw error }
+        guard owner.current(epoch) else { throw tunnelError(70, "The native network settings owner changed during application.") }
+    }
+
+    func nativeLibboxSettingsInvalidated(epoch: String) {
+        if let strategy = currentProviderStrategy() {
+            strategy.invalidate(epoch: epoch)
+        } else if let engine = libboxEngine, engine.settingsEpoch == epoch {
+            nativeLibboxFailure(engine, error: tunnelError(70, "Native DNS/TUN settings invalidated their path proof."))
+        }
+    }
+
+    func nativeLibboxFailure(_ engine: RouterVPNLibboxEngine, error: Error) {
+        if let strategy = currentProviderStrategy() {
+            strategy.invalidate(epoch: engine.settingsEpoch)
+            return
+        }
+        guard libboxEngine === engine else { return }
+        cancelTunnelWithError(error)
+    }
+
+    private func beginProviderStrategy(provider: [String: Any], bundleData: Data, root: [String: Any],
+                                       selectedProfile: [String: Any], strict: Bool,
+                                       completionHandler: @escaping (Error?) -> Void) throws {
+        guard let catalog = provider["strategy_catalog"] as? [String: Any],
+              let request = provider["strategy"] as? [String: Any] else {
+            throw tunnelError(70, "A provider strategy requires its immutable catalog and initial request.")
+        }
+        let policy = try RouterVPNStrategyPolicy(catalog: catalog, root: root, profile: selectedProfile)
+        let plan = try policy.plan(request, initial: true)
+        var nodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
+        if nodeID.isEmpty {
+            let normal = try RouterVPNWireGuardConfig.parse(wireGuardLikeProfile(root, rawProfileID: "wg"), name: "Router VPN")
+            guard normal.peers.count == 1, let peer = normal.peers.first else { throw tunnelError(70, "Strategy node identity is missing.") }
+            nodeID = deriveNodeProof(from: peer.publicKey.base64Key)
+        }
+        var profile = selectedProfile
+        profile["node_proof_id"] = nodeID
+        let digest = SHA256.hash(data: bundleData).map { String(format: "%02x", $0) }.joined()
+        let driver = StrategyRuntimeDriver(provider: self, bundle: bundleData,
+            profile: try JSONSerialization.data(withJSONObject: profile), strict: strict, initialHold: initialMTUHold)
+        let strategy = try RouterVPNProviderStrategy(policy: policy, plan: plan, bundleDigest: digest, nodeID: nodeID, driver: driver)
+        strategyOwnerLock.lock()
+        guard providerStrategy == nil else { strategyOwnerLock.unlock(); throw tunnelError(70, "This provider already owns a strategy session.") }
+        providerStrategy = strategy; strategyDriver = driver
+        strategyOwnerLock.unlock()
+        // The OS may consider this provider connected while it is a protected
+        // packet sink. Only the epoch-bound status can report a proved runtime.
+        // No nil settings or system VPN stop occurs between candidate attempts.
+        let hold = NEPacketTunnelNetworkSettings(tunnelRemoteAddress: "127.0.0.1")
+        hold.mtu = 1280
+        let ipv4 = NEIPv4Settings(addresses: ["198.18.0.1"], subnetMasks: ["255.255.255.252"])
+        ipv4.includedRoutes = [NEIPv4Route.default()]; hold.ipv4Settings = ipv4
+        let ipv6 = NEIPv6Settings(addresses: ["fd00:726f:7574::1"], networkPrefixLengths: [126])
+        ipv6.includedRoutes = [NEIPv6Route.default()]; hold.ipv6Settings = ipv6
+        let dns = NEDNSSettings(servers: ["198.18.0.2"])
+        dns.matchDomains = [""]; dns.matchDomainsNoSearch = true; hold.dnsSettings = dns
+        beginLibboxSettings(epoch: strategy.currentEpoch)
+        do { try applyLibboxSettings(hold, epoch: strategy.currentEpoch) }
+        catch { strategy.stop(); throw error }
+        reasserting = true
+        completionHandler(nil)
+        strategy.start()
+    }
+
+    /// All native creation, teardown, proof adoption and final activation run
+    /// on this one queue. Only this delivery box crosses Sendable boundaries;
+    /// generated Libbox handles remain confined to their captured generation.
+    private final class StrategyRuntimeDriver: RouterVPNStrategyDriver, @unchecked Sendable {
+        private weak var provider: PacketTunnelProvider?
+        private let bundle: Data
+        private let profile: Data
+        private let strict: Bool
+        private let queue = DispatchQueue(label: "routervpn.provider.strategy", qos: .userInitiated)
+        private var measurementLease: String
+        private var compiled: LibboxCompilation?
+        private var capturedGuard: NetworkProofGuard?
+        private var deadline: DispatchWorkItem?
+        private var quarantined = false
+
+        init(provider: PacketTunnelProvider, bundle: Data, profile: Data, strict: Bool, initialHold: String) {
+            self.provider = provider; self.bundle = bundle; self.profile = profile
+            self.strict = strict; measurementLease = initialHold
+        }
+
+        private func current(_ attempt: RouterVPNStrategyAttempt) -> PacketTunnelProvider? {
+            guard let provider, provider.currentProviderStrategy()?.isCurrent(attempt.epoch) == true else { return nil }
+            return provider
+        }
+
+        private func provedOwner(_ attempt: RouterVPNStrategyAttempt) -> (PacketTunnelProvider, RouterVPNLibboxEngine)? {
+            guard let provider = current(attempt), let engine = provider.libboxEngine,
+                  engine.settingsEpoch == attempt.epoch, let capturedGuard,
+                  provider.currentPathProofGuard() === capturedGuard else { return nil }
+            return (provider, engine)
+        }
+
+        func replace(_ attempt: RouterVPNStrategyAttempt, proving: @escaping @Sendable () -> Void,
+                     completion: @escaping @Sendable (Result<RouterVPNStrategyProof, Error>) -> Void) {
+            queue.async { [self] in begin(attempt, proving: proving, completion: completion) }
+        }
+
+        private func begin(_ attempt: RouterVPNStrategyAttempt, proving: @escaping @Sendable () -> Void,
+                           completion: @escaping @Sendable (Result<RouterVPNStrategyProof, Error>) -> Void) {
+            guard let provider = current(attempt), let strategy = provider.currentProviderStrategy() else { return }
+            deadline?.cancel(); deadline = nil
+            guard strategy.withCurrentEpoch(attempt.epoch, {
+                provider.reasserting = true
+                provider.beginLibboxSettings(epoch: attempt.epoch)
+            }) else { return }
+            provider.clearPathProofGuard(); provider.cancelActiveProof()
+            capturedGuard = nil; compiled = nil
+            if let old = provider.libboxEngine {
+                measurementLease = old.strategyMTUHold
+                provider.libboxEngine = nil
+                do { try old.stopCheckedForStrategy() }
+                catch { quarantined = true }
+            }
+            guard !quarantined else { strategy.teardownFailed(epoch: attempt.epoch); return }
+            let expiry = StrategyExpiry(provider: provider, epoch: attempt.epoch)
+            let timeout = DispatchWorkItem { expiry.expire() }
+            deadline = timeout
+            DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 45, execute: timeout)
+            do {
+                guard let root = try JSONSerialization.jsonObject(with: bundle) as? [String: Any],
+                      let profile = try JSONSerialization.jsonObject(with: profile) as? [String: Any] else {
+                    throw RouterVPNStrategyPolicy.error("The immutable strategy capture is invalid.")
+                }
+                let compiled = try provider.compileLibbox(provider: ["rawProfileID": attempt.candidate.raw], root: root, selectedProfile: profile)
+                guard current(attempt) != nil else { return }
+                self.compiled = compiled
+                let engine = RouterVPNLibboxEngine(tunnel: provider, strategyEpoch: attempt.epoch)
+                guard strategy.withCurrentEpoch(attempt.epoch, { provider.libboxEngine = engine }) else { engine.stop(); return }
+                try engine.prepareMTUHold(measurementLease)
+                try engine.start(files: compiled.files, strict: strict)
+                guard current(attempt) != nil, provider.libboxEngine === engine else { engine.stop(); return }
+                capturedGuard = provider.armNetworkProofGuard()
+                proving()
+                provider.proveSelectedNode(url: compiled.proofURL, expectedNodeID: compiled.nodeID,
+                                          proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] error in
+                    guard let self else { return }
+                    self.queue.async { [self] in finishNodeProof(attempt, error: error, completion: completion) }
+                }
+            } catch {
+                completion(.failure(error))
+            }
+        }
+
+        private func finishNodeProof(_ attempt: RouterVPNStrategyAttempt, error: Error?,
+                                     completion: @escaping @Sendable (Result<RouterVPNStrategyProof, Error>) -> Void) {
+            guard current(attempt) != nil else { return }
+            if let error { completion(.failure(error)); return }
+            guard let (_, engine) = provedOwner(attempt), let compiled else {
+                completion(.failure(RouterVPNStrategyPolicy.error("The native path changed during node proof."))); return
+            }
+            do {
+                try engine.proveStrategyDNS()
+                guard provedOwner(attempt) != nil else { throw RouterVPNStrategyPolicy.error("The native path changed during DNS proof.") }
+                try engine.activatePerformance()
+                guard provedOwner(attempt) != nil else { throw RouterVPNStrategyPolicy.error("The native path changed during performance activation.") }
+                completion(.success(RouterVPNStrategyProof(nodeID: compiled.nodeID, dns: true)))
+            } catch { completion(.failure(error)) }
+        }
+
+        func activate(_ attempt: RouterVPNStrategyAttempt, completion: @escaping @Sendable (Error?) -> Void) {
+            queue.async { [self] in
+                guard let (provider, engine) = provedOwner(attempt), let compiled,
+                      let profile = try? JSONSerialization.jsonObject(with: compiled.profile) as? [String: Any] else {
+                    completion(RouterVPNStrategyPolicy.error("The final native strategy owner was replaced.")); return
+                }
+                engine.activateMTU(profile: profile)
+                guard provedOwner(attempt) != nil else { completion(RouterVPNStrategyPolicy.error("The native path changed during MTU activation.")); return }
+                provider.enableForwarding(profileData: compiled.profile, proofID: compiled.nodeID)
+                guard provedOwner(attempt) != nil else {
+                    provider.forwardingChannel?.invalidate()
+                    completion(RouterVPNStrategyPolicy.error("The native path changed during forwarding activation.")); return
+                }
+                deadline?.cancel(); deadline = nil
+                completion(nil)
+                provider.currentProviderStrategy()?.withCurrentEpoch(attempt.epoch) { provider.reasserting = false }
+            }
+        }
+
+        func protect(epoch: String) {
+            queue.async { [self] in
+                guard let provider, let strategy = provider.currentProviderStrategy(), strategy.isCurrent(epoch) else { return }
+                deadline?.cancel(); deadline = nil
+                strategy.withCurrentEpoch(epoch) { provider.reasserting = true; provider.beginLibboxSettings(epoch: epoch) }
+                provider.clearPathProofGuard(); provider.cancelActiveProof()
+                capturedGuard = nil; compiled = nil
+                if let engine = provider.libboxEngine {
+                    measurementLease = engine.strategyMTUHold; provider.libboxEngine = nil
+                    do { try engine.stopCheckedForStrategy() } catch { quarantined = true }
+                }
+            }
+        }
+    }
+
+    private final class StrategyExpiry: @unchecked Sendable {
+        private weak var provider: PacketTunnelProvider?
+        private let epoch: String
+        init(provider: PacketTunnelProvider, epoch: String) { self.provider = provider; self.epoch = epoch }
+        func expire() { provider?.currentProviderStrategy()?.invalidate(epoch: epoch) }
     }
 
     private func enableForwarding(profileData: Data, proofID: String) {
@@ -111,6 +345,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
+            if provider["strategy"] != nil || provider["strategy_catalog"] != nil {
+                guard engine == "libbox" else { throw tunnelError(70, "Owned strategies require the single native Libbox dataplane.") }
+                try beginProviderStrategy(provider: provider, bundleData: bundleData, root: root,
+                                          selectedProfile: selectedProfile, strict: strict, completionHandler: completionHandler)
+                return
+            }
             switch engine {
             case "wireguard": try startWireGuard(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
             case "multihop-libbox": try startMultihop(provider: provider, root: root, selectedProfile: selectedProfile, completionHandler: completionHandler)
@@ -462,6 +702,36 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private func startLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any], strict: Bool, completionHandler: @escaping (Error?) -> Void) throws {
+        let compiled = try compileLibbox(provider: provider, root: root, selectedProfile: selectedProfile)
+        let files = compiled.files, provenNodeID = compiled.nodeID
+        let proofURL = compiled.proofURL, forwardingProfileData = compiled.profile
+        let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
+        try engine.prepareMTUHold(initialMTUHold)
+        do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
+        let singlePathGuard = self.armNetworkProofGuard()
+        proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
+            guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
+            guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
+            if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
+            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during node proof.")); return }
+            do { try engine.activatePerformance() } catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
+            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during performance activation.")); return }
+            var mtuProfile = selectedProfile
+            mtuProfile["node_proof_id"] = provenNodeID
+            engine.activateMTU(profile: mtuProfile)
+            self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
+            completionHandler(nil)
+        }
+    }
+
+    private struct LibboxCompilation {
+        let files: [String: Data]
+        let nodeID: String
+        let proofURL: URL
+        let profile: Data
+    }
+
+    private func compileLibbox(provider: [String: Any], root: [String: Any], selectedProfile: [String: Any]) throws -> LibboxCompilation {
         let rawProfileID = (provider["rawProfileID"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
         guard rawProfileID.range(of: "^[A-Za-z0-9._-]{1,96}$", options: .regularExpression) != nil, !rawProfileID.contains("..") else { throw tunnelError(13, "iOS Libbox raw profile id is invalid.") }
         var expectedNodeID = try suppliedNodeProof(root: root, selectedProfile: selectedProfile)
@@ -529,8 +799,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             rawFiles["sing-box.json"] = Data(compiled.utf8)
         }
         // The complete-chain compiler already owns MAX's selected outer layer.
+        var compositionRoot = root
+        if let source = rawFiles["start-layer-source.json"] {
+            guard rawFiles["xray.json"] != nil, !source.isEmpty, source.count <= Self.maxProfileBytes,
+                  var profiles = root["profiles"] as? [String: Any],
+                  var shadowsocks = profiles["shadowsocks"] as? [String: Any] else {
+                throw tunnelError(58, "A frozen Xray Start Layer source has no matching captured graph.")
+            }
+            shadowsocks["sing-box.json"] = source.base64EncodedString()
+            profiles["shadowsocks"] = shadowsocks; compositionRoot["profiles"] = profiles
+        }
         let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles
-            : IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
+            : IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)
         var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)
         if rawFiles["xray.json"] != nil {
             files = try IOSXrayDevicePolicy.apply(files: files, profile: selectedProfile)
@@ -548,26 +828,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var performanceProfile = selectedProfile
         performanceProfile["node_proof_id"] = expectedNodeID
         files = try performanceFiles(files, entryProfile: performanceProfile, exitProfile: performanceProfile)
-        let provenNodeID = expectedNodeID
-        let proofURL = try selectedProofURL(selectedProfile)
-        let forwardingProfileData = try JSONSerialization.data(withJSONObject: selectedProfile)
-        let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
-        try engine.prepareMTUHold(initialMTUHold)
-        do { try engine.start(files: files, strict: strict) } catch { libboxEngine = nil; throw tunnelError(15, "Libbox engine failed to start: \(error.localizedDescription)") }
-        let singlePathGuard = self.armNetworkProofGuard()
-        proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID, proxyPort: RouterVPNLibboxEngine.proofProxyPort) { [weak self] proofError in
-            guard let self else { completionHandler(NSError(domain: "RouterVPN.PacketTunnel", code: 16, userInfo: [NSLocalizedDescriptionKey: "Router VPN PacketTunnel was released during Libbox proof."])); return }
-            guard self.libboxEngine === engine else { engine.stop(); completionHandler(self.tunnelError(42, "A newer iOS Libbox runtime replaced this proof attempt.")); return }
-            if let proofError { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(proofError); return }
-            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during node proof.")); return }
-            do { try engine.activatePerformance() } catch { engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }; completionHandler(error); return }
-            guard self.currentPathProofGuard() === singlePathGuard else { engine.stop(); completionHandler(self.tunnelError(57,"Native path changed during performance activation.")); return }
-            var mtuProfile = selectedProfile
-            mtuProfile["node_proof_id"] = provenNodeID
-            engine.activateMTU(profile: mtuProfile)
-            self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
-            completionHandler(nil)
-        }
+        return LibboxCompilation(files: files, nodeID: expectedNodeID,
+                                 proofURL: try selectedProofURL(selectedProfile),
+                                 profile: try JSONSerialization.data(withJSONObject: selectedProfile))
     }
 
     private func performanceFiles(_ files: [String: Data], entryProfile: [String: Any], exitProfile: [String: Any]) throws -> [String: Data] {
@@ -629,6 +892,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor?.cancel()
         libboxEngine?.invalidateMultihop()
         forwardingChannel?.invalidate()
+        if let strategy = currentProviderStrategy() {
+            strategy.invalidate(epoch: libboxEngine?.settingsEpoch ?? strategy.currentEpoch)
+            return
+        }
         cancelTunnelWithError(tunnelError(19, "Underlying network changed; selected-node/public-exit proof was invalidated. Reconnect must establish and prove the selected path again."))
     }
 
@@ -661,6 +928,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     override func stopTunnel(with reason: NEProviderStopReason, completionHandler: @escaping () -> Void) {
+        if let strategy = currentProviderStrategy() {
+            let epoch = strategy.currentEpoch
+            strategy.stop()
+            retireLibboxSettings(epoch: epoch)
+        }
         clearPathProofGuard()
         cancelActiveProof()
         if let engine = libboxEngine { libboxEngine = nil; engine.stop() }
@@ -674,8 +946,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         libboxEngine?.wake()
         // Sleep is a path-proof lifetime boundary even when iOS resumes onto a
         // cached NWPath that does not emit a second update. Force this proved
-        // tunnel down; strict on-demand may reconnect, but every reconnect must
-        // start a new PacketTunnel and re-prove the selected node/public exit.
+        // path invalid; every reconnect must re-prove the selected node/public
+        // exit. An owned strategy retains this provider and creates a fresh
+        // native generation; legacy sessions use their existing reconnect path.
         if let guardState = currentPathProofGuard() { invalidateSelectedPathProof(guardState) }
     }
     func writeLibboxLog(_ message: String) { if !message.isEmpty { NSLog("RouterVPN Libbox: %@", message) } }

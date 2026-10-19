@@ -60,19 +60,23 @@ for marker in [
 strategy=app.joinpath('IOSStrategySupport.swift').read_text()
 for marker in [
     'runIOSSmartAuto()', 'runIOSCustom(layers requestedRaw: [String])',
-    'SMART AUTO is unavailable while iOS Always/strict route lockdown is enabled',
+    'runIOSOwnedStrategy(kind: .smart',
     'selected-node proof passed', 'IOSRuntimeSelector.selectRaw',
     'customLayers = requested', 'applyIOSStartupPolicyIfNeeded()',
     'router-vpn.ios.last-runtime-v1', 'autoRequirementFailure',
-    'encryptedLayers', 'obfuscationLayers', 'skipping simplification',
+    'encryptedLayers', 'obfuscationLayers', 'runIOSOwnedStrategy(kind: .custom',
 ]:
     assert marker in strategy, marker
+assert 'stopVPNTunnel()' not in strategy and 'prefix(1)' not in strategy
 
 model=app.joinpath('RouterVPNModel.swift').read_text()
+owned=app.joinpath('IOSOwnedStrategy.swift').read_text()
 for marker in [
     'IOSStrategyCatalog.autoRequirementFailure',
     'AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements',
 ]:
+    assert marker in owned, marker
+for marker in ['iosAdoptStrategyStatus', 'connected = status.isProven', 'runtimeEpoch: status.runtimeEpoch', 'iosConnectGeneration = UUID()']:
     assert marker in model, marker
 
 product=app.joinpath('ProductRootView.swift').read_text()
@@ -120,6 +124,9 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_runtime_labels.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_session_identity.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_strategy_session.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_strategy.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_runtime_driver.py')], check=True, timeout=150)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_owned_strategy_app.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_xray_profiles.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_xray_start_layer.py')], check=True, timeout=240)

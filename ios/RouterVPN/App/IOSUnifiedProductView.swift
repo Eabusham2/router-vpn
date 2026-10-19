@@ -316,11 +316,12 @@ struct IOSUnifiedProductView: View {
     }
     private var connectionStateTitle: String {
         if model.connected { return "Connected" }
+        if model.iosStrategyStatus?.phase == .blocked { return "Protected • no proven path" }
         if model.tunnelTransitioning { return model.message.lowercased().contains("disconnect") ? "Disconnecting…" : "Connecting…" }
         return "Disconnected"
     }
     private var connectionButtonTitle: String {
-        if model.tunnelTransitioning { return model.message.lowercased().contains("disconnect") ? "Disconnecting…" : "Connecting…" }
+        if model.tunnelTransitioning { return model.iosUserDisconnectInProgress ? "Disconnecting…" : "Cancel & disconnect" }
         return model.connected ? "Disconnect" : "Connect"
     }
     private var selectedModeTitle: String {
@@ -365,7 +366,7 @@ struct IOSUnifiedProductView: View {
 
                         Button { connectOrDisconnect() } label: { Text(connectionButtonTitle).font(.headline).frame(maxWidth: .infinity).padding(.vertical, 7) }
                             .buttonStyle(.borderedProminent).tint(model.connected ? .red : .accentColor)
-                            .disabled(model.tunnelTransitioning)
+                            .disabled(model.iosUserDisconnectInProgress)
 
                         if let ms = telemetry.livePathMs, model.connected { Text(String(format: "%.1f\nms", ms)).font(.caption2.bold()).monospacedDigit().multilineTextAlignment(.center) }
                         Toggle(isOn: Binding(get: { model.unifiedQuickKillSwitch }, set: { model.setUnifiedQuickKillSwitch($0) })) { Image(systemName: "lock.shield.fill") }
@@ -461,7 +462,7 @@ struct IOSUnifiedProductView: View {
         model.message = "Selected fastest live node: \(winner.name) • \(winner.shortLabel). Press Connect when ready with \(selectedModeTitle)."
     }
     private func connectOrDisconnect() {
-        guard !model.tunnelTransitioning else { return }
+        if model.tunnelTransitioning || model.connected { model.disconnect(); return }
         if !model.connected, selectedProfile?.multihopEnabled == true { Task { await model.connect() }; return }
         if model.connected { model.disconnect(); return }
         guard let profile = selectedProfile else { showingNodes = true; return }
@@ -489,7 +490,7 @@ private struct IOSUnifiedModePicker: View {
         NavigationStack {
             List {
                 Section("Automatic") {
-                    choice("SMART AUTO", subtitle: "Recommended • connect, simplify, prove, restore last good on failure", id: IOSUnifiedModeSelection.smart, available: !model.iosStrategyStrictLockdown)
+                    choice("SMART AUTO", subtitle: "Recommended • connect, simplify, prove, restore last good on failure", id: IOSUnifiedModeSelection.smart, available: true)
                     choice("AUTO", subtitle: "First iOS-runnable path that really passes PacketTunnel + selected-node proof", id: IOSUnifiedModeSelection.auto, available: true)
                 }
                 Section("Mode presets") {

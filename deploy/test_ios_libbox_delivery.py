@@ -80,6 +80,8 @@ public final class LibboxCommandServer {
     private let paddingCount: Int64
     private var invalidated=false
     private var active=false
+    private var strategyEvents: [String] = []
+    private var failDNS = false, failClose = false
     public init(_ count: Int64 = 0) { paddingCount=count }
     public func activate(_ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
         lock.lock();defer { lock.unlock() }
@@ -88,6 +90,15 @@ public final class LibboxCommandServer {
     }
     public func invalidatePadding() { lock.lock(); invalidated=true; active=false; lock.unlock() }
     public func performanceFailure() -> String { lock.lock(); defer { lock.unlock() }; return paddingCount==0 || (active && !invalidated) ? "" : "fixture path invalidated" }
+    public func configureStrategy(dns: Bool = false, close: Bool = false) { lock.lock(); failDNS=dns; failClose=close; lock.unlock() }
+    public func strategyCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return strategyEvents }
+    public func strategy(_ operation: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
+        lock.lock(); defer { lock.unlock() }; strategyEvents.append(operation)
+        if (operation == "dns" && failDNS) || (operation == "close" && failClose) {
+            failure?.pointee=NSError(domain:"NativeStrategyFixture",code:8);return false
+        }
+        return true
+    }
 
     public func start() throws { LibboxTestState.shared.started() }
     public func startOrReloadService(_ text: String, options: LibboxOverrideOptions) throws {}
@@ -115,6 +126,9 @@ public final class LibboxRouterHopMeasurement {
 public func LibboxRouterStartPerformance(_ server: LibboxCommandServer, _ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.activate(count,failure) }
 public func LibboxRouterInvalidatePerformance(_ server: LibboxCommandServer) { server.invalidatePadding() }
 public func LibboxRouterPerformanceFailure(_ server: LibboxCommandServer) -> String? { server.performanceFailure() }
+public func LibboxRouterStrategyStartService(_ server: LibboxCommandServer, _ content: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("start",failure) }
+public func LibboxRouterStrategyDNSProof(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("dns",failure) }
+public func LibboxRouterStrategyCloseService(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("close",failure) }
 
 public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? { LibboxRouterHopMeasurement() }
 
@@ -132,6 +146,8 @@ final class PacketTunnelProvider {
     private var cancels = 0
     func writeLibboxLog(_ text: String) {}
     func cancelTunnelWithError(_ error: Error) { lock.lock(); cancels += 1; lock.unlock() }
+    func beginLibboxSettings(epoch: String) {}
+    func nativeLibboxFailure(_ engine: RouterVPNLibboxEngine, error: Error) { cancelTunnelWithError(error) }
     func count() -> Int { lock.lock(); defer { lock.unlock() }; return cancels }
 }
 final class MTUPlatformDouble {
@@ -145,7 +161,7 @@ final class MTUPlatformDouble {
 }
 final class RouterVPNLibboxPlatform {
     let mtu = MTUPlatformDouble()
-    init(tunnel: PacketTunnelProvider) {}
+    init(tunnel: PacketTunnelProvider, settingsEpoch: String) {}
     var onLog: ((String) -> Void)?
     var onStopService: (() throws -> Void)?
     var onReloadService: (() throws -> Void)?
@@ -187,9 +203,11 @@ final class CompletionState: @unchecked Sendable {
             var rejected = false
             do { try engine.start(files: files, strict: true) } catch { rejected = true }
             check("failed protocol registration cannot create a native service", rejected && state.counts() == before)
-            try engine.start(files: files, strict: true)
-            check("registration failure releases startup ownership", state.currentServer() != nil)
-            engine.stop()
+            do { try engine.start(files: files, strict: true); fatalError("retired startup owner was reused") } catch { checks += 1 }
+            let replacement = RouterVPNLibboxEngine(tunnel: PacketTunnelProvider())
+            try replacement.start(files: files, strict: true)
+            check("registration failure allows a fresh startup owner", state.currentServer() != nil)
+            replacement.stop()
         }
         do {
             let provider = PacketTunnelProvider()
@@ -226,14 +244,15 @@ final class CompletionState: @unchecked Sendable {
             check("cancelled comparison returns", completed.wait())
             check("cancelled comparison cannot claim success", completed.values() == (1, 1))
             state.configure()
-            try engine.start(files: files, strict: false, multihopMetadata: "{}")
-            let replacement = CompletionState(); engine.completeMultihopExecution(replacement.finish)
+            let replacementEngine = RouterVPNLibboxEngine(tunnel: provider)
+            try replacementEngine.start(files: files, strict: false, multihopMetadata: "{}")
+            let replacement = CompletionState(); replacementEngine.completeMultihopExecution(replacement.finish)
             check("replacement completed", replacement.wait())
             check("replacement succeeded", replacement.values() == (1, 0))
             old.allowCompletion(); Thread.sleep(forTimeInterval: 1.15)
             check("old health task cannot cancel replacement", provider.count() == 0)
             check("old completion remains one-shot", completed.values() == (1, 1))
-            engine.stop()
+            replacementEngine.stop()
         }
         do {
             state.configure(fail: true)
@@ -280,6 +299,39 @@ final class CompletionState: @unchecked Sendable {
             check("stopped padding timer cannot cancel again",provider.count()==before)
             state.configurePadding(0)
         }
+        do {
+            let provider=PacketTunnelProvider()
+            let owner=RouterVPNLibboxEngine(tunnel:provider,strategyEpoch:UUID().uuidString)
+            let lease=String(repeating:"1",count:32)
+            try owner.prepareMTUHold(lease)
+            try owner.start(files:files,strict:true)
+            let server=state.currentServer()!
+            try owner.proveStrategyDNS()
+            check("strategy engine uses fresh-start and owned DNS APIs",server.strategyCalls()==["start","dns"])
+            check("actual strategy engine retains acknowledged measurement lease",owner.strategyMTUHold==lease)
+            try owner.stopCheckedForStrategy()
+            check("strategy engine uses checked teardown",server.strategyCalls()==["start","dns","close"])
+            let before=state.counts()
+            var refused=false
+            do { try owner.start(files:files,strict:true) } catch { refused=true }
+            check("retired strategy native handle cannot restart",refused && state.counts()==before)
+        }
+        do {
+            let provider=PacketTunnelProvider()
+            let owner=RouterVPNLibboxEngine(tunnel:provider,strategyEpoch:UUID().uuidString)
+            try owner.start(files:files,strict:true)
+            let server=state.currentServer()!
+            server.configureStrategy(dns:true,close:true)
+            var refused=false
+            do { try owner.proveStrategyDNS() } catch { refused=true }
+            check("native DNS error reaches engine caller",refused)
+            for _ in 0..<2 {
+                refused=false
+                do { try owner.stopCheckedForStrategy() } catch { refused=true }
+                check("unverified teardown remains sticky after owner retirement",refused)
+            }
+            check("repeated checked teardown never reenters retired native handle",server.strategyCalls()==["start","dns","close"])
+        }
         for execution in ["local","server","auto"] {
             state.configure()
             let profile:[String:Any] = ["node_kind":"router-vpn","start_layer":"aes"]
@@ -296,7 +348,8 @@ final class CompletionState: @unchecked Sendable {
             for source in [nil,"", "{}"] as [String?] {
                 let stoppedBefore=state.counts()
                 var rejected=false
-                do {try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:source)}catch{rejected=true}
+                let invalidOwner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+                do {try invalidOwner.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:source)}catch{rejected=true}
                 check("missing or changed layer cannot start a native service",rejected && state.counts()==stoppedBefore)
             }
         }
@@ -319,13 +372,15 @@ final class CompletionState: @unchecked Sendable {
                 if source==entry.source && source != nil {continue}
                 let previous=state.counts(),pairCount=state.pairs().count
                 var refused=false
-                do{try engine.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:entry.source,exitStartLayerSource:source)}catch{refused=true}
+                let invalidOwner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+                do{try invalidOwner.start(files:files,strict:true,multihopMetadata:metadata,entryStartLayerSource:entry.source,exitStartLayerSource:source)}catch{refused=true}
                 check("missing exit cannot start a bare engine",refused && state.counts()==previous && state.pairs().count==pairCount)
             }
             var missingOwner=value;missingOwner.removeValue(forKey:"exit_start_layer")
             let wrong=String(decoding:try JSONSerialization.data(withJSONObject:missingOwner),as:UTF8.self)
             var refused=false
-            do{try engine.start(files:files,strict:true,multihopMetadata:wrong,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)}catch{refused=true}
+            let invalidOwner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            do{try invalidOwner.start(files:files,strict:true,multihopMetadata:wrong,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)}catch{refused=true}
             check("unrequested exit source not activated",refused)
         }}}
         check("no mock native server survives tests", state.counts().0 == state.counts().1)

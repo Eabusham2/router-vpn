@@ -1,0 +1,105 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net/netip"
+	"strings"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	F "github.com/sagernet/sing/common/format"
+)
+
+// RouterVPNStrategyStart runs the pinned startup stages without discarding a
+// failed start's cleanup result. The daemon retains this Box until its owner
+// calls checked close; a replacement cannot hide an unverified TUN teardown.
+func (s *Box) RouterVPNStrategyStart() error {
+	if err := s.start(); err != nil {
+		return err
+	}
+	s.logger.Info("sing-box started (", F.Seconds(time.Since(s.createdAt).Seconds()), "s)")
+	return nil
+}
+
+// RouterVPNStrategyDNSProof exercises the DNS router of this exact Box using
+// the owned TUN's inbound metadata. It does not choose another DNS transport,
+// create an underlay socket, or use a platform/default resolver.
+func (s *Box) RouterVPNStrategyDNSProof() error {
+	if s == nil || s.dnsRouter == nil || s.inbound == nil {
+		return errors.New("strategy DNS owner is unavailable")
+	}
+	var tunTag string
+	var tunCount int
+	for _, inbound := range s.inbound.Inbounds() {
+		if inbound.Type() == C.TypeTun {
+			tunCount++
+			tunTag = inbound.Tag()
+		}
+	}
+	if tunCount != 1 || tunTag == "" {
+		return errors.New("strategy DNS proof requires exactly one owned tagged TUN")
+	}
+	ctx, cancel := context.WithTimeout(s.ctx, 5*time.Second)
+	defer cancel()
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{
+		Inbound: tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns",
+	})
+	return routerVPNStrategyDNSExchange(ctx, s.dnsRouter.Exchange)
+}
+
+func routerVPNStrategyDNSExchange(ctx context.Context, exchange func(context.Context, *dns.Msg, adapter.DNSQueryOptions) (*dns.Msg, error)) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	question := new(dns.Msg)
+	question.SetQuestion("example.com.", dns.TypeA)
+	expectedID, expectedQuestion := question.Id, question.Question[0]
+	answer, err := exchange(ctx, question, adapter.DNSQueryOptions{
+		DisableCache: true, DisableOptimisticCache: true, Timeout: 5 * time.Second,
+	})
+	if err != nil {
+		return errors.New("the captured native DNS route did not answer its live proof")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if answer == nil || !answer.Response || answer.Truncated || answer.Id != expectedID ||
+		answer.Opcode != dns.OpcodeQuery || answer.Rcode != dns.RcodeSuccess ||
+		len(answer.Question) != 1 || answer.Question[0] != expectedQuestion ||
+		len(answer.Answer) == 0 || len(answer.Answer) > 128 || answer.Len() > 16*1024 {
+		return errors.New("the captured native DNS route returned an invalid proof")
+	}
+	// Follow only the answer's bounded CNAME chain. Unrelated injected records
+	// and sinkhole answers cannot turn a failed question into a successful proof.
+	name := "example.com."
+	visited := map[string]bool{}
+	for hop := 0; hop < 16; hop++ {
+		if visited[name] {
+			break
+		}
+		visited[name] = true
+		next := ""
+		for _, record := range answer.Answer {
+			if record.Header().Class != dns.ClassINET || !strings.EqualFold(record.Header().Name, name) {
+				continue
+			}
+			switch value := record.(type) {
+			case *dns.A:
+				address, ok := netip.AddrFromSlice(value.A.To4())
+				if ok && address.IsGlobalUnicast() && !address.IsPrivate() && !address.IsLoopback() && !address.IsUnspecified() {
+					return nil
+				}
+			case *dns.CNAME:
+				next = strings.ToLower(value.Target)
+			}
+		}
+		if next == "" {
+			break
+		}
+		name = next
+	}
+	return errors.New("the captured native DNS route did not return a usable answer")
+}

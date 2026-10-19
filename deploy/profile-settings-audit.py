@@ -258,10 +258,10 @@ require(
 require(
     "ios/RouterVPN/App/IOSStrategySupport.swift",
     "autoRequirementFailure", "encryptedLayers", "obfuscationLayers",
-    "profile.autoRequireEncrypted", "profile.autoRequireObfuscation", "SMART AUTO •", "skipping simplification",
+    "profile.autoRequireEncrypted", "profile.autoRequireObfuscation", "runIOSOwnedStrategy(kind: .smart", "runIOSOwnedStrategy(kind: .custom",
 )
 require(
-    "ios/RouterVPN/App/RouterVPNModel.swift",
+    "ios/RouterVPN/App/IOSOwnedStrategy.swift",
     "IOSStrategyCatalog.autoRequirementFailure", "AUTO failed closed: no iOS-runnable candidate satisfies the saved requirements",
 )
 ios_home = require("ios/RouterVPN/App/IOSHomeSummaryView.swift", "IOSProfileSettingsView", "Advanced Settings")

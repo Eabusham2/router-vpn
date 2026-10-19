@@ -26,6 +26,29 @@ func compileMAX(_ mode:String,_ files:String,_ policy:String)throws->String {try
   defer{TestCompiler.shared.close()}
   let path=ProcessInfo.processInfo.environment["ROUTERVPN_MAX_PROFILE_FIXTURES"]!
   let fixtures=try object(Data(contentsOf:URL(fileURLWithPath:path)))
+  let first=fixtures["max-tls-wg"] as! [String:Any],firstPolicy=first["policy"] as! [String:String]
+  var allProfile=profile(firstPolicy["node_id"]!,"home","off")
+  allProfile["endpoint"]=firstPolicy["endpoint"];allProfile["router_api"]=firstPolicy["router_api"]
+  var allBundle=try bundle("max-tls-wg",first["files"] as! [String:String],firstPolicy["node_id"]!,allProfile)
+  for mode in ["max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"] { allBundle.profiles[mode]=(fixtures[mode] as! [String:Any])["files"] as? [String:String] }
+  allBundle.logicalModes=[
+   LogicalMode(id:"max-tls",name:"TLS",description:"",baseSelector:true,fallback:true,variants:["wg":"max-tls-wg","awg":"max-tls-awg"]),
+   LogicalMode(id:"max-quic",name:"QUIC",description:"",baseSelector:true,fallback:true,variants:["wg":"max-quic-wg","awg":"max-quic-awg"]),
+   LogicalMode(id:"all",name:"ALL",description:"",baseSelector:true,fallback:true,variants:["wg":"all","awg":"all"])]
+  for (base,fallback,expected) in [
+   ("auto",false,["max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]),
+   ("wg",false,["max-tls-wg","max-quic-wg"]),
+   ("awg",false,["max-tls-awg","max-quic-awg"]),
+   ("wg",true,["max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]),
+   ("awg",true,["max-tls-awg","max-tls-wg","max-quic-awg","max-quic-wg"])] {
+    allBundle.routerProfiles[0].baseTunnel=base;allBundle.routerProfiles[0].baseFallback=fallback
+    let selections=try IOSRuntimeSelector.candidates(bundle:allBundle,logicalModeID:"all")
+    try check("ALL exact complete TLS then QUIC order "+base,selections.map(\.rawProfileID)==expected)
+    try check("ALL uses canonical captured MAX membership",selections.allSatisfy{$0.logicalModeID==($0.rawProfileID.hasPrefix("max-tls-") ? "max-tls":"max-quic")})
+    try check("ALL appears as executable logical choice",IOSRuntimeSelector.runnableModes(in:allBundle).contains{$0.id=="all"})
+  }
+  var noMAX=allBundle;noMAX.profiles.removeAll();reject("ALL cannot substitute a weaker mode"){_ = try IOSRuntimeSelector.candidates(bundle:noMAX,logicalModeID:"all")}
+  allBundle.routerProfiles[0].baseTunnel="foreign";reject("ALL rejects unknown base"){_ = try IOSRuntimeSelector.candidates(bundle:allBundle,logicalModeID:"all")}
   var graphs=0
   for mode in ["max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]{
    let fixture=fixtures[mode] as! [String:Any],assets=fixture["files"] as! [String:String],policy=fixture["policy"] as! [String:String],node=policy["node_id"]!
@@ -105,9 +128,12 @@ def main():
             if before is None:os.environ.pop('ROUTERVPN_MAX_PROFILE_FIXTURES',None)
             else:os.environ['ROUTERVPN_MAX_PROFILE_FIXTURES']=before
     source=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
-    start=source[source.index('    private func startLibbox('):source.index('    private func startExternalLibbox(')]
-    assert start.index('IOSNativeMAXProfile.compile(')<start.index('engine.start(')<start.index('proveSelectedNode(')
-    for token in ('LibboxRouterCompileMAXProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox(', 'expectedNodeID: provenNodeID'):
-        assert token in start,token
+    start=source[source.index('    private func startLibbox('):source.index('    private struct LibboxCompilation')]
+    compiler=source[source.index('    private func compileLibbox('):source.index('    private func performanceFiles(')]
+    assert start.index('let compiled = try compileLibbox(')<start.index('let files = compiled.files, provenNodeID = compiled.nodeID')<start.index('engine.start(files: files')<start.index('proveSelectedNode(')
+    assert compiler.index('IOSNativeMAXProfile.compile(')<compiler.index('return LibboxCompilation(files: files, nodeID: expectedNodeID')
+    assert 'expectedNodeID: provenNodeID' in start
+    for token in ('LibboxRouterCompileMAXProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox('):
+        assert token in compiler,token
 
 if __name__=='__main__':main()

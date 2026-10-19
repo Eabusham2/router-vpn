@@ -123,9 +123,11 @@ def main():
     assert 'self.bundle?.profiles == bundle.profiles' in source
     assert '"bundle": try JSONEncoder().encode(launchBundle)' in source
     provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
-    start=provider.index('private func startLibbox(');end=provider.index('private func startExternalLibbox(',start)
+    start=provider.index('private func compileLibbox(');end=provider.index('private func performanceFiles(',start)
     body=provider[start:end]
-    assert body.index('LibboxRouterCompileXrayProfile') < body.index('IOSStartLayer.apply') < body.index('engine.start(')
+    assert body.index('LibboxRouterCompileXrayProfile') < body.index('IOSStartLayer.apply') < body.index('return LibboxCompilation(files: files')
+    launch=provider[provider.index('private func startLibbox('):provider.index('private struct LibboxCompilation')]
+    assert launch.index('let compiled = try compileLibbox(') < launch.index('let files = compiled.files') < launch.index('engine.start(files: files')
     print('Pure host policy uses production Swift; native core parsing/transport is a separate mandatory pinned-engine gate.')
 
 if __name__=='__main__':main()

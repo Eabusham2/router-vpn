@@ -13,7 +13,7 @@ struct IOSStrategyCandidate: Codable, Equatable, Sendable {
 }
 
 struct IOSStrategyPlan: Codable, Sendable {
-    enum Kind: String, Codable, Sendable { case automatic = "auto", smart, custom, manual, logical }
+    enum Kind: String, Codable, Sendable { case automatic = "auto", smart, custom, manual, logical, all }
     let version: Int
     let requestID: String
     let kind: Kind

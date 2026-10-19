@@ -335,10 +335,13 @@ def main():
         subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSRuntimeSelection.swift'),str(TUN/'RouterVPNMultihopGraph.swift'),str(TUN/'RouterVPNMTUPolicy.swift'),str(TUN/'IOSStartLayer.swift'),str(source),'-o',str(temp/'tests')],check=True,timeout=120)
         subprocess.run([str(temp/'tests'),str(binary)],check=True,timeout=150)
     provider=(TUN/'PacketTunnelProvider.swift').read_text()
-    start=provider[provider.index('    private func startLibbox('):provider.index('    private func startExternalLibbox(')]
-    for required in ['IOSNativePQProfile.compile(', 'LibboxRouterCompilePQProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox(', 'performanceFiles(', 'expectedNodeID: provenNodeID']:
-        assert required in start,required
-    assert start.index('IOSNativePQProfile.compile(')<start.index('engine.start(')
+    start=provider[provider.index('    private func startLibbox('):provider.index('    private struct LibboxCompilation')]
+    compiler=provider[provider.index('    private func compileLibbox('):provider.index('    private func performanceFiles(')]
+    for required in ['IOSNativePQProfile.compile(', 'LibboxRouterCompilePQProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox(', 'performanceFiles(']:
+        assert required in compiler,required
+    assert compiler.index('IOSNativePQProfile.compile(')<compiler.index('return LibboxCompilation(files: files, nodeID: expectedNodeID')
+    assert start.index('let compiled = try compileLibbox(')<start.index('let files = compiled.files, provenNodeID = compiled.nodeID')<start.index('engine.start(files: files')
+    assert 'expectedNodeID: provenNodeID' in start
     assert start.index('engine.start(')<start.index('proveSelectedNode(')
     assert 'IOSNativePQProfile' not in provider[provider.index('    private func startWireGuard('):provider.index('    private func startMultihop(')]
     multi=provider[provider.index('    private func startMultihop('):provider.index('    private func startLibbox(')]

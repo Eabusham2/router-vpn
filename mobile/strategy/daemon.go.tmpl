@@ -1,0 +1,93 @@
+package daemon
+
+import (
+	"context"
+	"errors"
+	"os"
+	runtimeDebug "runtime/debug"
+	"time"
+)
+
+// RouterVPNStrategyStartService accepts a fresh command server only. On any
+// partial startup failure the exact instance remains owned until checked close
+// returns the real teardown result; neither layer silently closes/discards it.
+func (s *StartedService) RouterVPNStrategyStartService(ctx context.Context, profileContent string, options *OverrideOptions) error {
+	s.lifecycleAccess.Lock()
+	defer s.lifecycleAccess.Unlock()
+	s.serviceAccess.Lock()
+	if s.closed {
+		s.serviceAccess.Unlock()
+		return os.ErrClosed
+	}
+	if s.instance != nil || s.serviceStatus.Status == ServiceStatus_STARTING || s.serviceStatus.Status == ServiceStatus_STARTED {
+		s.serviceAccess.Unlock()
+		return errors.New("strategy startup requires a fresh native owner")
+	}
+	s.startInterrupted = false
+	s.updateStatus(ServiceStatus_STARTING)
+	s.resetLogs()
+	s.serviceAccess.Unlock()
+	instance, err := s.newInstance(ctx, profileContent, options)
+	if err != nil {
+		s.serviceAccess.Lock()
+		s.updateStatusError(err)
+		s.serviceAccess.Unlock()
+		return err
+	}
+	instance.urlTestHistoryStorage.AddUpdateHook(s.urlTestSubscriber)
+	if instance.clashMode != nil {
+		instance.clashMode.AddUpdateHook(s.clashModeSubscriber)
+	}
+	s.serviceAccess.Lock()
+	s.instance = instance
+	s.serviceAccess.Unlock()
+	err = instance.Box().RouterVPNStrategyStart()
+	s.serviceAccess.Lock()
+	defer s.serviceAccess.Unlock()
+	if s.startInterrupted {
+		s.startInterrupted = false
+		if err == nil {
+			err = context.Canceled
+		}
+	}
+	if err != nil {
+		s.updateStatusError(err)
+		return err
+	}
+	s.startedAt = time.Now()
+	s.updateStatus(ServiceStatus_STARTED)
+	runtimeDebug.FreeOSMemory()
+	return nil
+}
+
+// RouterVPNStrategyCloseService retains the pinned daemon's lifecycle lock,
+// cancellation and status transitions, and also returns Box.Close's error.
+// A strategy must never start a replacement after unverified native teardown.
+func (s *StartedService) RouterVPNStrategyCloseService() error {
+	s.interruptStart()
+	s.lifecycleAccess.Lock()
+	defer s.lifecycleAccess.Unlock()
+	s.serviceAccess.Lock()
+	instance := s.instance
+	if instance == nil && s.serviceStatus.Status != ServiceStatus_STARTING && s.serviceStatus.Status != ServiceStatus_STARTED {
+		s.serviceAccess.Unlock()
+		return nil
+	}
+	s.instance = nil
+	s.updateStatus(ServiceStatus_STOPPING)
+	s.serviceAccess.Unlock()
+	var closeError error
+	if instance != nil {
+		closeError = instance.Close()
+	}
+	s.serviceAccess.Lock()
+	s.startedAt = time.Time{}
+	if closeError != nil {
+		s.updateStatusError(closeError)
+	} else {
+		s.updateStatus(ServiceStatus_IDLE)
+	}
+	s.serviceAccess.Unlock()
+	runtimeDebug.FreeOSMemory()
+	return closeError
+}

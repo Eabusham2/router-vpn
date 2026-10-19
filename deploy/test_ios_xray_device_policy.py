@@ -94,7 +94,9 @@ def main():
   subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'), str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSRuntimeSelection.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUPolicy.swift'),str(ROOT/'ios/RouterVPN/PacketTunnel/IOSXrayDevicePolicy.swift'),str(tmp/'Tests.swift'),'-o',str(tmp/'tests')],check=True,timeout=120)
   subprocess.run([str(tmp/'tests'),str(tmp/'compiler')],check=True,timeout=120)
  source=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
- start=source.index('private func startLibbox(');end=source.index('private func startExternalLibbox(',start);body=source[start:end]
- assert body.index('LibboxRouterCompileXrayProfile')<body.index('IOSXrayDevicePolicy.apply')<body.index('engine.start(')
+ start=source.index('private func compileLibbox(');end=source.index('private func performanceFiles(',start);body=source[start:end]
+ assert body.index('LibboxRouterCompileXrayProfile')<body.index('IOSXrayDevicePolicy.apply')<body.index('return LibboxCompilation(files: files')
  assert body.index('RouterVPNMTUPolicy.libbox')<body.index('IOSXrayDevicePolicy.apply')<body.index('performanceFiles(')
+ launch=source[source.index('private func startLibbox('):source.index('private struct LibboxCompilation')]
+ assert launch.index('let compiled = try compileLibbox(')<launch.index('let files = compiled.files')<launch.index('engine.start(files: files')
 if __name__=='__main__':main()

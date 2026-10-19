@@ -80,7 +80,7 @@ private struct IOSLastRuntime: Codable {
 extension RouterVPNModel {
     private var iosStrategyProfile: RouterProfile? {
         guard let bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     var iosStrategyStrictLockdown: Bool {
@@ -105,48 +105,12 @@ extension RouterVPNModel {
         Set((iosStrategyProfile?.customLayers ?? []).map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })
     }
 
-    private func stopIOSStrategyTunnel() async -> Bool {
-        let managers: [NETunnelProviderManager]
-        do {
-            managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
-                ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
-            }
-        } catch {
-            message = "Cannot verify the previous VPN session; no replacement runtime was started."
-            return false
-        }
-        var saved = true
-        for manager in managers {
-            manager.isOnDemandEnabled = false
-            manager.onDemandRules = []
-            do { try await manager.saveToPreferences() } catch { saved = false }
-            manager.connection.stopVPNTunnel()
-        }
-        for _ in 0..<24 {
-            if managers.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) { break }
-            try? await Task.sleep(for: .milliseconds(150))
-        }
-        guard saved, managers.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) else {
-            message = "Previous VPN teardown is unverified; retry Disconnect before starting another runtime."
-            return false
-        }
-        connected = false
-        activeEngine = "none"
-        activeRawProfile = ""
-        return true
-    }
-
     private func connectIOSRawCandidate(_ rawID: String) async -> Bool {
-        guard let bundle,
-              let selection = try? IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawID) else { return false }
-        if connected { guard await stopIOSStrategyTunnel() else { return false } }
-        auto = false
-        selectedLogicalMode = selection.logicalModeID
-        selectedMode = rawID
+        guard !connected, !tunnelTransitioning,
+              let bundle, let selection = try? IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: rawID) else { return false }
+        auto = false; selectedLogicalMode = selection.logicalModeID; selectedMode = rawID
         await connect(rawProfileID: rawID)
-        let exact = connected && activeRawProfile == rawID
-        if connected && !exact { _ = await stopIOSStrategyTunnel() }
-        return exact
+        return connected && activeRawProfile == rawID
     }
 
     func runIOSSmartAuto() async {
@@ -157,51 +121,24 @@ extension RouterVPNModel {
     private func runIOSSmartAutoHeld() async {
         if selectedNodeProfile?.multihopEnabled == true { await connect(); return }
         guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn" else {
-            message = "SMART AUTO requires a selected Router VPN node; external exits use their own direct/hop path."
-            return
+            message = "SMART AUTO requires a selected Router VPN node."; return
         }
-        guard !iosStrategyStrictLockdown else {
-            message = "SMART AUTO is unavailable while iOS Always/strict route lockdown is enabled: changing PacketTunnel engines after a proven connection could create an unproven transition gap. Use strict AUTO or choose a mode manually."
-            return
-        }
-        if connected { guard await stopIOSStrategyTunnel() else { return } }
-        auto = true
-        await connect()
-        guard connected, !activeRawProfile.isEmpty else { return }
-
-        var best = activeRawProfile
-        var visited: Set<String> = [best]
-        while true {
-            var changed = false
-            for candidate in IOSStrategyCatalog.simplify[best] ?? [] {
-                if visited.contains(candidate) { continue }
-                visited.insert(candidate)
-                if let requirement = IOSStrategyCatalog.autoRequirementFailure(rawID: candidate, profile: profile) {
-                    message = "SMART AUTO • \(requirement); skipping simplification."
-                    continue
-                }
-                guard let bundle,
-                      (try? IOSRuntimeSelector.selectRaw(bundle: bundle, rawProfileID: candidate)) != nil else { continue }
-                let lastGood = best
-                message = "SMART AUTO • testing simplification \(lastGood) → \(candidate)…"
-                if await connectIOSRawCandidate(candidate) {
-                    best = candidate
-                    changed = true
-                    break
-                }
-                message = "SMART AUTO • \(candidate) failed proof; restoring \(lastGood)…"
-                guard await connectIOSRawCandidate(lastGood) else {
-                    connected = false
-                    message = "SMART AUTO failed closed: simplification \(candidate) failed and last-known-good \(lastGood) could not be restored."
-                    return
-                }
-                best = lastGood
+        do {
+            if !connected && !tunnelTransitioning { guard saveRouter() else { return } }
+            let candidates = try iosStrategySelections(kind: .smart)
+            var preferred = connected ? activeRawProfile : nil
+            if preferred == nil,
+               let data = UserDefaults.standard.data(forKey: "router-vpn.ios.last-runtime-v1"),
+               let saved = try? JSONDecoder().decode(IOSLastRuntime.self, from: data), saved.routerID == profile.id {
+                preferred = saved.rawProfileID
             }
-            if !changed { break }
-        }
-        auto = false
-        recordIOSLastRuntime()
-        message = "SMART AUTO connected • \(best) • selected-node proof passed • no further iOS-runnable simplification preserved proof and AUTO requirements."
+            // The provider re-proves this remembered candidate, validates each
+            // simplification edge and restores the captured last good on failure.
+            if await runIOSOwnedStrategy(kind: .smart, selections: candidates, preferredRaw: preferred) {
+                auto = false; recordIOSLastRuntime()
+                message = "SMART AUTO connected • \(activeRawProfile) • selected-node proof passed • selected DNS proved inside the owned VPN."
+            }
+        } catch { message = error.localizedDescription }
     }
 
     func runIOSCustom(layers requestedRaw: [String]) async {
@@ -217,9 +154,15 @@ extension RouterVPNModel {
         let requested = Array(Set(requestedRaw.map { $0.trimmingCharacters(in: .whitespacesAndNewlines).lowercased() }.filter { !$0.isEmpty })).sorted()
         guard !requested.isEmpty else { message = "CUSTOM requires at least one exact layer."; return }
 
-        var current = bundle
-        if let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first {
-            current.routerProfiles[index].customLayers = requested
+        if profileMutationBlocked {
+            guard iosSavedCustomLayers() == Set(requested) else {
+                message = "This CUSTOM selection changes the captured policy. Save it while disconnected before running it."; return
+            }
+        } else {
+            var current = bundle
+            let matches = current.routerProfiles.indices.filter { current.routerProfiles[$0].id == current.selectedRouterID }
+            guard matches.count == 1 else { message = "CUSTOM requires one exact selected profile."; return }
+            current.routerProfiles[matches[0]].customLayers = requested
             do { try importBundle(JSONEncoder().encode(current)) }
             catch { message = "CUSTOM could not save its private layer selection: \(error.localizedDescription)"; return }
         }
@@ -255,22 +198,12 @@ extension RouterVPNModel {
             return
         }
 
-        if connected { guard await stopIOSStrategyTunnel() else { return } }
-        let attempts = iosStrategyStrictLockdown ? Array(candidates.prefix(1)) : candidates
-        for (index, candidate) in attempts.enumerated() {
-            message = "CUSTOM \(index + 1)/\(attempts.count) • trying \(candidate.raw) for \(requested.joined(separator: ", "))…"
-            if await connectIOSRawCandidate(candidate.raw) {
-                auto = false
-                recordIOSLastRuntime()
-                message = "CUSTOM connected • \(candidate.raw) • every requested layer present • selected-node proof passed."
-                return
-            }
-            if iosStrategyStrictLockdown {
-                message = "CUSTOM failed closed on \(candidate.raw) under iOS strict route lockdown; Router VPN will not cycle engines across an unproven transition."
-                return
-            }
+        guard let captured = self.bundle else { return }
+        let selections = candidates.compactMap { try? IOSRuntimeSelector.selectRaw(bundle: captured, rawProfileID: $0.raw) }
+        if await runIOSOwnedStrategy(kind: .custom, selections: selections) {
+            auto = false; recordIOSLastRuntime()
+            message = "CUSTOM connected • \(activeRawProfile) • every requested layer present • selected-node proof passed and selected DNS proved."
         }
-        message = "CUSTOM matching iOS stacks existed, but none passed the exact selected-node PacketTunnel proof."
     }
 
     func recordIOSLastRuntime() {

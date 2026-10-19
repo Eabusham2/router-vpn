@@ -106,6 +106,26 @@ enum IOSRuntimeSelector {
             throw IOSRuntimeSelectionError.missingLogicalMode
         }
 
+        if logicalModeID == "all" {
+            let profile = IOSDNSRuntimePolicy.selectedProfile(in: bundle)
+            let base = (profile?.baseTunnel ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            let preferred: String
+            switch base {
+            case "", "auto", "wg", "wireguard": preferred = "wg"
+            case "awg", "awg2", "amneziawg": preferred = "awg"
+            default: throw IOSRuntimeSelectionError.unsupportedMode("Unknown saved tunnel base; refusing a silent ALL fallback.")
+            }
+            let fallback = base.isEmpty || base == "auto" || (logical.fallback && profile?.baseFallback == true)
+            let bases = fallback ? [preferred, preferred == "wg" ? "awg" : "wg"] : [preferred]
+            let values = ["max-tls-", "max-quic-"].flatMap { prefix in
+                bases.compactMap { try? selectRaw(bundle: bundle, rawProfileID: prefix + $0) }
+            }
+            guard !values.isEmpty else {
+                throw IOSRuntimeSelectionError.unsupportedMode("ALL requires a complete MAX TLS or QUIC graph under the captured base and fallback policy.")
+            }
+            return values
+        }
+
         var lastReason = "no validated native WireGuard/AmneziaWG or self-contained Libbox variant is present"
         var selections: [IOSRuntimeSelection] = []
         for rawID in try orderedVariantIDs(logical, bundle: bundle) {

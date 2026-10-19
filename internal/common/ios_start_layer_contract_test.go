@@ -38,7 +38,8 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		"try IOSStartLayer.validateWireGuard(profile: selectedProfile)",
 		"rawFiles = try layeredProfile(root, rawProfileID: rawProfileID)",
 		"let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles",
-		": IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
+		": IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)",
+		"var compositionRoot = root",
 		"var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)",
 		"try IOSStartLayer.validateExternal(profile: selectedProfile)",
 		"try engine.start(files: files, strict: strict)",
@@ -49,18 +50,25 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		}
 	}
 
-	// The engine must receive the result of both composers, in that order.
+	// Both callers receive only the completed compiler result. Keep the actual
+	// compiler stages and the runtime's consumption/proof order separate.
 	start := strings.Index(provider, "private func startLibbox(")
 	end := strings.Index(provider, "private func startExternalLibbox(")
 	if start < 0 || end <= start {
 		t.Fatal("PacketTunnel Libbox composition owner is missing")
 	}
 	body := provider[start:end]
-	native := strings.Index(body, "LibboxRouterCompileXrayProfile(")
-	compose := strings.Index(body, "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(")
-	mtu := strings.Index(body, "var files = try RouterVPNMTUPolicy.libbox(composedFiles,")
-	run := strings.Index(body, "try engine.start(files: files, strict: strict)")
-	if !appleSingleLayerDispatchIsOwned(body) || native < 0 || compose <= native || mtu <= compose || run <= mtu {
+	compilerStart := strings.Index(body, "private func compileLibbox(")
+	compilerEnd := strings.Index(body, "private func performanceFiles(")
+	if compilerStart < 0 || compilerEnd <= compilerStart {
+		t.Fatal("shared PacketTunnel compiler owner is missing")
+	}
+	compiler := body[compilerStart:compilerEnd]
+	native := strings.Index(compiler, "LibboxRouterCompileXrayProfile(")
+	compose := strings.Index(compiler, "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(")
+	mtu := strings.Index(compiler, "var files = try RouterVPNMTUPolicy.libbox(composedFiles,")
+	result := strings.Index(compiler, "return LibboxCompilation(files: files, nodeID: expectedNodeID")
+	if !appleSingleLayerDispatchIsOwned(body) || native < 0 || compose <= native || mtu <= compose || result <= mtu {
 		t.Fatal("Start Layer and MTU must both compose before the native engine starts")
 	}
 
@@ -68,10 +76,10 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		"RouterVPNMultihopGraph.wireGuardFiles(",
 		"RouterVPNMultihopGraph.singleWireGuardPolicy(",
 		"LibboxRouterApplyMultihopLANPolicy(",
-		"let provenNodeID = expectedNodeID",
+		"guard expectedNodeID.range(of:",
 	} {
-		position := strings.Index(body, required)
-		if position < 0 || position >= run {
+		position := strings.Index(compiler, required)
+		if position < 0 || position >= result {
 			t.Fatalf("native WG validation must precede engine launch: %q", required)
 		}
 	}
@@ -169,19 +177,29 @@ func TestNativeBaseStartLayerHostsShareTheCompiler(t *testing.T) {
 // Start Layer. Every ordinary mode must still pass through IOSStartLayer.apply.
 func appleSingleLayerDispatchIsOwned(body string) bool {
 	normalized := strings.Join(strings.Fields(body), " ")
-	dispatch := "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles : IOSStartLayer.apply(root: root, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)"
-	pos := strings.Index(normalized, dispatch)
-	if pos < 0 || strings.Count(normalized, "let composedFiles =") != 1 {
+	compilerStart := strings.Index(normalized, "private func compileLibbox(")
+	compilerEnd := strings.Index(normalized, "private func performanceFiles(")
+	if compilerStart < 0 || compilerEnd <= compilerStart {
 		return false
 	}
-	compile := strings.Index(normalized, "rawFiles = try IOSNativeMAXProfile.compile(")
-	selected := strings.Index(normalized, "let start = try IOSStartLayer.selectedMode(profile: selectedProfile)")
-	capture := strings.Index(normalized, "profile: selectedProfile, startLayer: start)")
-	bridge := strings.Index(normalized, "LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)")
-	mtu := strings.Index(normalized, "var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)")
-	run := strings.Index(normalized, "try engine.start(files: files, strict: strict)")
-	proof := strings.Index(normalized, "proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID")
-	return selected >= 0 && compile > selected && capture > compile && bridge > capture && pos > bridge && mtu > pos && run > mtu && proof > run
+	launch, compiler := normalized[:compilerStart], normalized[compilerStart:compilerEnd]
+	dispatch := "let composedFiles = try IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles : IOSStartLayer.apply(root: compositionRoot, selectedProfile: selectedProfile, files: rawFiles, rawProfileID: rawProfileID)"
+	pos := strings.Index(compiler, dispatch)
+	if pos < 0 || strings.Count(compiler, "let composedFiles =") != 1 || !strings.Contains(compiler, "var compositionRoot = root") {
+		return false
+	}
+	compile := strings.Index(compiler, "rawFiles = try IOSNativeMAXProfile.compile(")
+	selected := strings.Index(compiler, "let start = try IOSStartLayer.selectedMode(profile: selectedProfile)")
+	capture := strings.Index(compiler, "profile: selectedProfile, startLayer: start)")
+	bridge := strings.Index(compiler, "LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)")
+	mtu := strings.Index(compiler, "var files = try RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)")
+	result := strings.Index(compiler, "return LibboxCompilation(files: files, nodeID: expectedNodeID,")
+	prepare := strings.Index(launch, "let compiled = try compileLibbox(provider: provider, root: root, selectedProfile: selectedProfile)")
+	consume := strings.Index(launch, "let files = compiled.files, provenNodeID = compiled.nodeID")
+	run := strings.Index(launch, "try engine.start(files: files, strict: strict)")
+	proof := strings.Index(launch, "proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID")
+	return selected >= 0 && compile > selected && capture > compile && bridge > capture && pos > bridge && mtu > pos && result > mtu &&
+		prepare >= 0 && consume > prepare && run > consume && proof > run
 }
 
 func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
@@ -202,6 +220,10 @@ func TestAppleSingleLayerDispatchRejectsUnownedMAXBypass(t *testing.T) {
 		{"profile: selectedProfile, startLayer: start)", "profile: selectedProfile, startLayer: \"off\")"},
 		{"LibboxRouterCompileMAXProfile(mode, assets, metadata, &failure)", "fakeGraph(mode)"},
 		{"RouterVPNMTUPolicy.libbox(composedFiles, profile: selectedProfile)", "RouterVPNMTUPolicy.libbox(rawFiles, profile: selectedProfile)"},
+		{"var compositionRoot = root", "var compositionRoot: [String: Any] = [:]"},
+		{"return LibboxCompilation(files: files, nodeID: expectedNodeID,", "return LibboxCompilation(files: rawFiles, nodeID: expectedNodeID,"},
+		{"let compiled = try compileLibbox(provider: provider, root: root, selectedProfile: selectedProfile)", "let compiled = try unownedGraph()"},
+		{"let files = compiled.files, provenNodeID = compiled.nodeID", "let files = originalFiles, provenNodeID = compiled.nodeID"},
 		{"engine.start(files: files, strict: strict)", "engine.start(files: rawFiles, strict: strict)"},
 		{"proveSelectedNode(url: proofURL, expectedNodeID: provenNodeID", "pretendConnected(url: proofURL, expectedNodeID: provenNodeID"},
 	}

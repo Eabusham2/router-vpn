@@ -1,0 +1,83 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"testing"
+	"time"
+
+	"github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func TestRouterVPNStrategyDNSProofUsesFreshOwnedRouter(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	calls := 0
+	err := routerVPNStrategyDNSExchange(ctx, func(got context.Context, query *dns.Msg, options adapter.DNSQueryOptions) (*dns.Msg, error) {
+		calls++
+		if got != ctx || !options.DisableCache || !options.DisableOptimisticCache || options.Transport != nil || options.Timeout != 5*time.Second {
+			t.Fatal("DNS proof changed its owner, transport or freshness policy")
+		}
+		if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+			t.Fatal("unbounded proof target")
+		}
+		response := new(dns.Msg).SetReply(query)
+		response.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+		return response, nil
+	})
+	if err != nil || calls != 1 {
+		t.Fatalf("live owned proof: calls=%d err=%v", calls, err)
+	}
+}
+
+func TestRouterVPNStrategyDNSProofRejectsInvalidOrCancelledResponses(t *testing.T) {
+	for _, mode := range []string{"error", "nil", "id", "question", "rcode", "truncated", "query", "empty", "sinkhole", "unrelated", "cancel"} {
+		t.Run(mode, func(t *testing.T) {
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			err := routerVPNStrategyDNSExchange(ctx, func(_ context.Context, query *dns.Msg, _ adapter.DNSQueryOptions) (*dns.Msg, error) {
+				response := new(dns.Msg).SetReply(query)
+				answer := &dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}
+				response.Answer = []dns.RR{answer}
+				switch mode {
+				case "error":
+					return nil, errors.New("private details must not leave DNS proof")
+				case "nil":
+					return nil, nil
+				case "id":
+					response.Id++
+				case "question":
+					response.Question[0].Name = "unrelated.invalid."
+				case "rcode":
+					response.Rcode = dns.RcodeNameError
+				case "truncated":
+					response.Truncated = true
+				case "query":
+					response.Response = false
+				case "empty":
+					response.Answer = nil
+				case "sinkhole":
+					answer.A = net.ParseIP("0.0.0.0")
+				case "unrelated":
+					answer.Hdr.Name = "unrelated.invalid."
+				case "cancel":
+					cancel()
+				}
+				return response, nil
+			})
+			if err == nil {
+				t.Fatal("invalid or stale DNS response was adopted")
+			}
+		})
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := routerVPNStrategyDNSExchange(ctx, func(context.Context, *dns.Msg, adapter.DNSQueryOptions) (*dns.Msg, error) {
+		t.Fatal("a cancelled owner contacted DNS")
+		return nil, nil
+	}); err == nil {
+		t.Fatal("cancelled owner accepted")
+	}
+}

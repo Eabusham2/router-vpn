@@ -1,0 +1,142 @@
+package daemon_test
+
+import (
+	"context"
+	"errors"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+)
+
+var (
+	strategyStartFailure = errors.New("injected native start failure")
+	strategyCloseFailure = errors.New("injected native close failure")
+)
+
+type strategyLifecycleFixture struct {
+	boxService.Adapter
+	ctx        context.Context
+	failStart  bool
+	failClose  bool
+	interrupt  chan struct{}
+	startCount atomic.Int32
+	closeCount atomic.Int32
+}
+
+func (s *strategyLifecycleFixture) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStart {
+		return nil
+	}
+	s.startCount.Add(1)
+	if s.interrupt != nil {
+		close(s.interrupt)
+		<-s.ctx.Done()
+		return s.ctx.Err()
+	}
+	if s.failStart {
+		return strategyStartFailure
+	}
+	return nil
+}
+
+func (s *strategyLifecycleFixture) Close() error {
+	s.closeCount.Add(1)
+	if s.failClose {
+		return strategyCloseFailure
+	}
+	return nil
+}
+
+func strategyNativeOwner(t *testing.T, fixture *strategyLifecycleFixture) *daemon.StartedService {
+	t.Helper()
+	services := include.ServiceRegistry()
+	boxService.Register[struct{}](services, "routervpn-strategy-fixture",
+		func(ctx context.Context, _ log.ContextLogger, tag string, _ struct{}) (adapter.Service, error) {
+			fixture.Adapter = boxService.NewAdapter("routervpn-strategy-fixture", tag)
+			fixture.ctx = ctx
+			return fixture, nil
+		})
+	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(),
+		include.EndpointRegistry(), include.DNSTransportRegistry(), services, include.CertificateProviderRegistry())
+	owner := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	t.Cleanup(func() { _ = owner.RouterVPNStrategyCloseService(); owner.Close() })
+	return owner
+}
+
+const strategyFixtureConfig = `{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}],"services":[{"type":"routervpn-strategy-fixture","tag":"fixture"}]}`
+
+func TestRouterVPNStrategyFailedStartRetainsCheckedClose(t *testing.T) {
+	fixture := &strategyLifecycleFixture{failStart: true, failClose: true}
+	owner := strategyNativeOwner(t, fixture)
+	if err := owner.RouterVPNStrategyStartService(context.Background(), strategyFixtureConfig, nil); !errors.Is(err, strategyStartFailure) {
+		t.Fatalf("lost actual native start error: %v", err)
+	}
+	if owner.Instance() == nil || fixture.closeCount.Load() != 0 {
+		t.Fatal("failed native start silently discarded or closed its owner")
+	}
+	if err := owner.RouterVPNStrategyStartService(context.Background(), strategyFixtureConfig, nil); err == nil || fixture.startCount.Load() != 1 {
+		t.Fatal("a failed-start instance was replaced before checked teardown")
+	}
+	if err := owner.RouterVPNStrategyCloseService(); !errors.Is(err, strategyCloseFailure) {
+		t.Fatalf("partial startup lost native close failure: %v", err)
+	}
+	if owner.Instance() != nil || fixture.closeCount.Load() != 1 {
+		t.Fatal("checked teardown did not retire exactly the failed instance")
+	}
+}
+
+func TestRouterVPNStrategyCheckedCloseKeepsNativeFailure(t *testing.T) {
+	fixture := &strategyLifecycleFixture{failClose: true}
+	owner := strategyNativeOwner(t, fixture)
+	if err := owner.RouterVPNStrategyStartService(context.Background(), strategyFixtureConfig, nil); err != nil {
+		t.Fatal(err)
+	}
+	captured := owner.Instance()
+	if err := owner.RouterVPNStrategyStartService(context.Background(), strategyFixtureConfig, nil); err == nil || owner.Instance() != captured {
+		t.Fatal("fresh-only start replaced a running Box")
+	}
+	if err := owner.RouterVPNStrategyCloseService(); !errors.Is(err, strategyCloseFailure) {
+		t.Fatalf("active native teardown failure disappeared: %v", err)
+	}
+	if fixture.closeCount.Load() != 1 || owner.Instance() != nil {
+		t.Fatal("active teardown did not retire exactly its captured Box")
+	}
+	if err := owner.RouterVPNStrategyCloseService(); err != nil || fixture.closeCount.Load() != 1 {
+		t.Fatal("a repeated close re-entered the retired native instance")
+	}
+}
+
+func TestRouterVPNStrategyInterruptedStartIsClosedOnce(t *testing.T) {
+	fixture := &strategyLifecycleFixture{interrupt: make(chan struct{})}
+	owner := strategyNativeOwner(t, fixture)
+	started := make(chan error, 1)
+	go func() {
+		started <- owner.RouterVPNStrategyStartService(context.Background(), strategyFixtureConfig, nil)
+	}()
+	select {
+	case <-fixture.interrupt:
+	case <-time.After(5 * time.Second):
+		t.Fatal("native fixture did not enter startup")
+	}
+	if err := owner.RouterVPNStrategyCloseService(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case err := <-started:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("interrupted native startup reported success: %v", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("checked close did not join interrupted native startup")
+	}
+	if fixture.closeCount.Load() != 1 || owner.Instance() != nil {
+		t.Fatal("interrupted startup did not close exactly one owned Box")
+	}
+}
