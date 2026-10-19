@@ -189,7 +189,7 @@ func torPredecessor(source string) (map[string]any, map[string]any, string, erro
 			seen[tag] = true
 			if tag == final {
 				switch outbound["type"] {
-				case "wireguard", "amneziawg", "routervpn-pq-wireguard", "shadowsocks", "hysteria2", "routervpn-xray", "routervpn-composite", "routervpn-max", "naive", "openvpn-client":
+				case "wireguard", "routervpn-amneziawg", "routervpn-pq", "shadowsocks", "hysteria2", "routervpn-xray", "routervpn-composite", "naive", "openvpn-client":
 					finalFound = true
 				default:
 					return nil, nil, "", failure

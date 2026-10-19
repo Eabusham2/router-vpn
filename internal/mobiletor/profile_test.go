@@ -129,6 +129,19 @@ func TestTorLastHopKeepsCompletePredecessorAndSeparateBootstrap(t *testing.T) {
 	}
 }
 
+func TestTorPredecessorKeepsRegisteredWGAndPQOwners(t *testing.T) {
+	for _, kind := range []string{"wireguard", "routervpn-amneziawg", "routervpn-pq"} {
+		base, _ := profileObject(torHostBase(t), 4*1024*1024)
+		entry := base["outbounds"].([]any)[0].(map[string]any)
+		entry["type"] = kind
+		base["outbounds"], base["endpoints"] = []any{}, []any{entry}
+		root := torHostCompile(t, torHostProfile(), torHostEncode(t, base))
+		if !reflect.DeepEqual(root["endpoints"], base["endpoints"]) {
+			t.Fatal("registered native endpoint owner changed", kind)
+		}
+	}
+}
+
 func TestTorDevicePolicyCapturesLANIPv6AndCurrentInterfaceMTU(t *testing.T) {
 	profile := torHostProfile()
 	profile["home_lan_access"], profile["ipv6_mode"] = false, "off"
