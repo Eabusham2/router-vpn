@@ -186,7 +186,7 @@ for marker in (
     "protectionRank",
     "vless-pq",
     "ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof",
-    "Composite desktop MAX chains remain separate and are never faked on Android",
+    "ALL requires a complete MAX TLS/QUIC branch under the selected base, fallback and Start Layer policy",
 ):
     assert marker in orch, f"AndroidModeOrchestrator missing truth marker: {marker}"
 assert "collect(bundle,false,false)" in orch, "ALL must inspect all actually native candidates, not just AUTO ordering"
@@ -296,6 +296,7 @@ for executable_contract in (
     "test_android_multihop_layers.py",
     "test_android_layered_service_compile.py",
     "test_android_custom_preset_commit.py",
+    "test_android_mode_orchestrator.py",
     "test_android_runtime_teardown.py",
     "test_android_service_stop_confirmation.py",
     "test_android_mutation_idle_proof.py",
