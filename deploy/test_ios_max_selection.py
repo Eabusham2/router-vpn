@@ -133,7 +133,7 @@ def main():
     assert start.index('let compiled = try compileLibbox(')<start.index('let files = compiled.files, provenNodeID = compiled.nodeID')<start.index('engine.start(files: files')<start.index('proveSelectedNode(')
     assert compiler.index('IOSNativeMAXProfile.compile(')<compiler.index('return LibboxCompilation(files: files, nodeID: expectedNodeID')
     assert 'expectedNodeID: provenNodeID' in start
-    for token in ('LibboxRouterCompileMAXProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'IOSNativeMAXProfile.modeIDs.contains(rawProfileID) ? rawFiles', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox('):
+    for token in ('LibboxRouterCompileMAXProfile(', 'RouterVPNMultihopGraph.singlePQPolicy(', 'let completeChain = IOSNativeMAXProfile.modeIDs.contains(rawProfileID) || IOSNativeCompositeMultihop.modeIDs.contains(rawProfileID)', 'let composedFiles = try completeChain ? rawFiles', 'LibboxRouterApplyMultihopLANPolicy(', 'RouterVPNMTUPolicy.libbox('):
         assert token in compiler,token
 
 if __name__=='__main__':main()
