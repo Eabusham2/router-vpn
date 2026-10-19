@@ -38,6 +38,17 @@ func ValidLayerMode(mode string) bool {
 // On a phone the outer transport itself goes through the captured entry; on a
 // private relay it owns the physical exit path. DNS always remains on the inner.
 func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, tag, via string) (map[string]any, map[string]any, error) {
+	return wrapStartLayer(transport, mode, layer, tag, via, false)
+}
+
+// WrapStartLayerForSelection proves the complete same-node outer layer before
+// an explicit owner resolves that node. It opens nothing; runtime callers must
+// use WrapStartLayer again after capturing a literal address.
+func WrapStartLayerForSelection(transport map[string]any, mode string, layer *StartLayer, tag, via string) (map[string]any, map[string]any, error) {
+	return wrapStartLayer(transport, mode, layer, tag, via, true)
+}
+
+func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, tag, via string, allowHostname bool) (map[string]any, map[string]any, error) {
 	bad := errors.New("invalid captured exit Start Layer ownership")
 	if layer == nil || !ValidLayerMode(layer.Mode) || !ident.MatchString(tag) || (via != "" && !ident.MatchString(via)) || tag == via {
 		return nil, nil, bad
@@ -77,7 +88,7 @@ func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 		}
 		delete(checked, "listen_port")
 	}
-	if _, e = validateTransport(Exit{Mode: mode, NodeID: stringValue(checked["node_id"]), DNS: address.String(), Transport: checked}); e != nil {
+	if _, e = validateTransportForSelection(Exit{Mode: mode, NodeID: stringValue(checked["node_id"]), DNS: address.String(), Transport: checked}, allowHostname); e != nil {
 		return nil, nil, bad
 	}
 	var host string
@@ -85,7 +96,11 @@ func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 		host, _ = inner["peers"].([]any)[0].(map[string]any)["address"].(string)
 	} else if applexray.SingleTransportMode(mode) {
 		raw, _ := inner["config_json"].(string)
-		plan, err := applexray.Prepare(mode, []byte(raw))
+		prepare := applexray.Prepare
+		if allowHostname {
+			prepare = applexray.PrepareForSelection
+		}
+		plan, err := prepare(mode, []byte(raw))
 		if err != nil {
 			return nil, nil, bad
 		}
@@ -109,7 +124,9 @@ func WrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 	}
 	left, e1 := netip.ParseAddr(host)
 	right, e2 := netip.ParseAddr(stringValue(outer["server"]))
-	if e1 != nil || e2 != nil || left != right || !literalServer(host) || !literalServer(outer["server"]) {
+	sameLiteral := e1 == nil && e2 == nil && left == right && literalServer(host) && literalServer(outer["server"])
+	sameHostname := allowHostname && host == stringValue(outer["server"]) && applexray.ValidNodeHostname(host)
+	if !sameLiteral && !sameHostname {
 		return nil, nil, errors.New("exit Start Layer belongs to a different paired server")
 	}
 	password, ok := outer["password"].(string)

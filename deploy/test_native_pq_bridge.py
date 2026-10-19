@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest import mock
 import importlib.util
+import os
 import subprocess
 import tempfile
 import unittest
@@ -31,6 +32,7 @@ class Prepare(unittest.TestCase):
                 P.prepare(vendor)
                 self.assertEqual((vendor/'protocol/routervpnpq/endpoint.go').read_bytes(),(ROOT/'mobile/pq/endpoint.go.tmpl').read_bytes())
                 self.assertEqual((vendor/'experimental/libbox/routervpn_pq_bridge.go').read_bytes(),(ROOT/'mobile/routervpn_pq_bridge.go.tmpl').read_bytes())
+                self.assertEqual((vendor/'experimental/libbox/routervpn_max_resolve_bridge.go').read_bytes(),(ROOT/'mobile/routervpn_max_resolve_bridge.go.tmpl').read_bytes())
                 before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
                 P.prepare(vendor)
                 self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
@@ -72,6 +74,7 @@ func TestCapturedJudgeAndNotReadyRejection(t *testing.T){
     def test_dependency_inputs_include_bridge_and_runtime(self):
         paths={p.relative_to(ROOT).as_posix() for p in P.inputs()}
         self.assertIn('mobile/routervpn_pq_bridge.go.tmpl',paths)
+        self.assertIn('mobile/routervpn_max_resolve_bridge.go.tmpl',paths)
         self.assertIn('mobile/pq/endpoint.go.tmpl',paths)
         self.assertIn('mobile/pq/wireguard_transport.go.tmpl',paths)
         self.assertNotEqual(P.digest(),'')
@@ -115,6 +118,48 @@ func TestBridgeCloseJoinsConcurrentCallers(t *testing.T){
  var wg sync.WaitGroup
  for n:=0;n<40;n++{wg.Add(1);go func(){defer wg.Done();if err:=p.Close();err==nil||err.Error()=="private close detail"{t.Error(err)}}()};wg.Wait()
  if native.closes!=1{t.Fatal("native owner closed repeatedly")}
+}
+'''
+MAX_BRIDGE_TEST=r'''
+package libbox
+import("encoding/base64";"encoding/json";"os";"strings";"sync/atomic";"testing")
+type maxResolverProbe struct{calls atomic.Int32;closes atomic.Int32;current atomic.Bool}
+func(p *maxResolverProbe)OwnerID()string{return "captured-network-17"}
+func(p *maxResolverProbe)Current()bool{return p.current.Load()}
+func(p *maxResolverProbe)Cancel(){p.closes.Add(1)}
+func(p *maxResolverProbe)Lookup(host string)(string,error){
+ p.calls.Add(1);raw,_:=json.Marshal(map[string]any{"owner_id":p.OwnerID(),"hostname":host,"addresses":[]string{"192.0.2.71"}});return string(raw),nil
+}
+func TestMAXNativeBridgeUsesActualCapturedCompilerAndResolver(t *testing.T){
+ raw,err:=os.ReadFile(os.Getenv("ROUTERVPN_MAX_PROFILE_FIXTURES"));if err!=nil{t.Fatal(err)}
+ var fixtures map[string]struct{Files map[string]string `json:"files"`;Policy map[string]any `json:"policy"`}
+ if json.Unmarshal(raw,&fixtures)!=nil||len(fixtures)!=4{t.Fatal("missing actual compiler fixtures")}
+ for mode,fixture:=range fixtures{
+  endpoint:="captured-max.example";fixture.Policy["endpoint"]=endpoint;fixture.Policy["start_layer"]="aes-256-gcm+xor-whitening"
+  name:="middle-sing-box.json";if strings.HasPrefix(mode,"max-tls-"){name="outer-xray.json"}
+  source,_:=base64.StdEncoding.DecodeString(fixture.Files[name]);var graph map[string]any
+  if json.Unmarshal(source,&graph)!=nil{t.Fatal("invalid actual outer fixture")}
+  out:=graph["outbounds"].([]any)[0].(map[string]any)
+  if strings.HasPrefix(mode,"max-tls-"){out["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["address"]=endpoint}else{out["server"]=endpoint}
+  source,_=json.Marshal(graph);fixture.Files[name]=base64.StdEncoding.EncodeToString(source)
+  files,_:=json.Marshal(fixture.Files);metadata,_:=json.Marshal(fixture.Policy)
+  digest,err:=RouterCheckMAXProfile(mode,string(files),string(metadata));if err!=nil||len(digest)!=64{t.Fatal("pure native hostname readiness failed",err)}
+  if _,err=RouterCompileMAXProfile(mode,string(files),string(metadata));err==nil{t.Fatal("readiness relaxed literal-only runtime")}
+  resolver:=&maxResolverProbe{};resolver.current.Store(true)
+  request,err:=RouterCreateMAXProfileRequest(mode,string(files),string(metadata),resolver)
+  if err!=nil||request.Healthy()||resolver.calls.Load()!=0||request.SourceSHA256()!=digest{t.Fatal("native capture opened DNS or lost source binding",err)}
+  result,err:=request.Run();if err!=nil||!request.Healthy()||resolver.calls.Load()!=1{t.Fatal("actual bridge failed",err)}
+  var envelope map[string]any;if json.Unmarshal([]byte(result),&envelope)!=nil||envelope["source_sha256"]!=request.SourceSHA256()||envelope["owner_id"]!=resolver.OwnerID()||envelope["hostname"]!=endpoint||envelope["endpoint"]!="192.0.2.71"{t.Fatal("bridge lost exact captured owner")}
+  compiled,err:=RouterCompileMAXProfile(mode,envelope["files_json"].(string),envelope["metadata_json"].(string))
+  if err!=nil||compiled!=envelope["config_json"]{t.Fatal("bridge bypassed literal-only compiler",err)}
+  if _,err=request.Run();err==nil||resolver.calls.Load()!=1{t.Fatal("bridge repeated native request")}
+  request.Cancel();if request.Healthy(){t.Fatal("bridge Cancel did not retire exact owner")};request.Close();if resolver.closes.Load()!=1{t.Fatal("bridge Close did not join captured owner")}
+  resolver=&maxResolverProbe{};resolver.current.Store(true)
+  request,err=RouterCreateMAXProfileRequest(mode,string(files),string(metadata),resolver);if err!=nil{t.Fatal(err)}
+  request.Cancel();if result,err=request.Run();result!=""||err==nil||resolver.calls.Load()!=0{t.Fatal("pre-canceled bridge resolved or staged a launch")};request.Close()
+ }
+ var empty *RouterMAXProfileRequest
+ if result,err:=empty.Run();result!=""||err==nil||empty.Healthy()||empty.SourceSHA256()!=""{t.Fatal("nil native request accepted")};empty.Cancel();empty.Close()
 }
 '''
 SETTER_TEST=r'''
@@ -165,6 +210,22 @@ func TestAWGInitialAndRepeatedPeerUpdates(t *testing.T){
 '''
 
 class Executable(unittest.TestCase):
+    def test_blocking_foreign_cancel_negative_control(self):
+        source=ROOT/'internal/mobilemultihop/max_request.go'
+        original=source.read_text()
+        anchor='\t\tgo func() {\n\t\t\tdefer close(r.closed)'
+        self.assertEqual(original.count(anchor),1)
+        with tempfile.TemporaryDirectory(prefix='max-cancel-control-') as tmp:
+            work=Path(tmp)
+            mutation=work/'max_request.go'
+            mutation.write_text(original.replace(anchor,anchor.replace('go func','func'),1))
+            overlay=work/'overlay.json'
+            import json
+            overlay.write_text(json.dumps({'Replace':{str(source):str(mutation)}}))
+            result=subprocess.run(['go','test','-overlay',str(overlay),'-count=1','-run','^TestMAXNativeRequestJoinsLookupAndCancellationBeforeClose$','-timeout=15s','./internal/mobilemultihop'],cwd=ROOT,text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=60)
+            self.assertNotEqual(result.returncode,0,result.stdout)
+            self.assertIn('immediate Cancel blocked on a foreign resolver callback',result.stdout)
+
     def test_actual_bridge_and_psk_setters(self):
         with tempfile.TemporaryDirectory(prefix='pq-executable-',dir=ROOT/'deploy') as tmp:
             work=Path(tmp)
@@ -176,7 +237,12 @@ class Executable(unittest.TestCase):
             (work/'go.mod').write_text('module router-vpn/deploy/pq-executable\n\ngo 1.23\n\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n')
             (work/'bridge.go').write_text(bridge)
             (work/'bridge_test.go').write_text(BRIDGE_TEST.replace('github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq','router-vpn/internal/mobilepq'))
+            max_bridge=(ROOT/'mobile/routervpn_max_resolve_bridge.go.tmpl').read_text().replace('github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop','router-vpn/internal/mobilemultihop')
+            (work/'max_bridge.go').write_text(max_bridge)
+            (work/'max_bridge_test.go').write_text(MAX_BRIDGE_TEST)
+            environment=dict(os.environ,ROUTERVPN_MAX_PROFILE_FIXTURES=str(work/'max-profiles.json'))
+            subprocess.run(['go','test','-count=1','-run','^TestExportMAXMobileProfiles$','./internal/mobilemultihop'],cwd=ROOT,env=environment,check=True,timeout=90)
             for name,source,test in [('wg','mobile/pq/wireguard_transport.go.tmpl',SETTER_TEST),('awg','mobile/amnezia/pq.go.tmpl',AWG_TEST)]:
                 p=work/name;p.mkdir();(p/'setter.go').write_bytes((ROOT/source).read_bytes());(p/'setter_test.go').write_text(test)
-            subprocess.run(['go','test','-race','-count=10','-timeout=45s','./...'],cwd=work,check=True,timeout=90)
+            subprocess.run(['go','test','-race','-count=10','-timeout=45s','./...'],cwd=work,env=environment,check=True,timeout=90)
 if __name__=='__main__':unittest.main()

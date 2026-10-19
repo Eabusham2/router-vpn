@@ -45,6 +45,10 @@ func proxyModeForOutbound(out map[string]any) string {
 // authentication and wrapper policy, and returns only its owned outbound.
 // No hostname lookup, listener, device, credential rewrite, or file staging.
 func compileXrayEntry(profile, mode string) (string, error) {
+	return compileXrayEntryForSelection(profile, mode, false)
+}
+
+func compileXrayEntryForSelection(profile, mode string, allowHostname bool) (string, error) {
 	bad := errors.New("Xray entry requires one self-contained authenticated native profile")
 	if !XrayEntryMode(mode) {
 		return "", bad
@@ -70,11 +74,17 @@ func compileXrayEntry(profile, mode string) (string, error) {
 		files[name] = raw
 	}
 	original := files["xray.json"]
-	plan, e := applexray.Prepare(mode, original)
+	prepare := applexray.Prepare
+	compile := applexray.Compile
+	if allowHostname {
+		prepare = applexray.PrepareForSelection
+		compile = applexray.CompileForSelection
+	}
+	plan, e := prepare(mode, original)
 	if e != nil {
 		return "", bad
 	}
-	if !wireGuardServerIP(plan.ServerHost) {
+	if !wireGuardServerIP(plan.ServerHost) && !(allowHostname && applexray.ValidNodeHostname(plan.ServerHost)) {
 		return "", errors.New("Xray entry requires a literal unicast server; resolve before capturing the graph")
 	}
 	wrapper := files["sing-box.json"]
@@ -90,7 +100,7 @@ func compileXrayEntry(profile, mode string) (string, error) {
 			return "", bad
 		}
 	}
-	compiled, e := applexray.Compile(mode, wrapper, original)
+	compiled, e := compile(mode, wrapper, original)
 	if e != nil {
 		return "", bad
 	}
@@ -160,7 +170,7 @@ func compileXrayEntry(profile, mode string) (string, error) {
 		return "", bad
 	}
 	entry["tag"] = "routervpn-hop-entry"
-	if e = validateXrayEntry(entry, mode); e != nil {
+	if e = validateXrayEntryForSelection(entry, mode, allowHostname); e != nil {
 		return "", e
 	}
 	result, e := json.Marshal(entry)
@@ -171,6 +181,10 @@ func compileXrayEntry(profile, mode string) (string, error) {
 // A forged label cannot turn a TCP-only, unauthenticated or multi-owner graph
 // into an entry, and a pre-existing detour can never be overwritten silently.
 func validateXrayEntry(entry map[string]any, mode string) error {
+	return validateXrayEntryForSelection(entry, mode, false)
+}
+
+func validateXrayEntryForSelection(entry map[string]any, mode string, allowHostname bool) error {
 	bad := errors.New("Xray entry lost its exact native authentication or transport ownership")
 	if !XrayEntryMode(mode) || entry["type"] != applexray.Type || entry["mode"] != mode || len(entry) != 4 {
 		return bad
@@ -183,8 +197,12 @@ func validateXrayEntry(entry map[string]any, mode string) error {
 	if !ok {
 		return bad
 	}
-	plan, e := applexray.Prepare(mode, []byte(raw))
-	if e != nil || !wireGuardServerIP(plan.ServerHost) {
+	prepare := applexray.Prepare
+	if allowHostname {
+		prepare = applexray.PrepareForSelection
+	}
+	plan, e := prepare(mode, []byte(raw))
+	if e != nil || (!wireGuardServerIP(plan.ServerHost) && !(allowHostname && applexray.ValidNodeHostname(plan.ServerHost))) {
 		return bad
 	}
 	return nil

@@ -17,6 +17,16 @@ func SingleTransportMode(mode string) bool {
 // dial policy or helper assets. Callers add only their explicitly owned detour
 // after this validation. Prepare prohibits file paths, listeners and DNS escape.
 func ValidateSingleTransport(value map[string]any, mode string) error {
+	return validateSingleTransport(value, mode, false)
+}
+
+// ValidateSingleTransportForSelection validates a captured hostname without
+// allowing the native runtime to resolve it or use an implicit DNS owner.
+func ValidateSingleTransportForSelection(value map[string]any, mode string) error {
+	return validateSingleTransport(value, mode, true)
+}
+
+func validateSingleTransport(value map[string]any, mode string, allowHostname bool) error {
 	bad := errors.New("native Xray transport lost its exact protocol or ownership")
 	if !SingleTransportMode(mode) || len(value) != 4 || value["type"] != Type || value["mode"] != mode {
 		return bad
@@ -29,7 +39,11 @@ func ValidateSingleTransport(value map[string]any, mode string) error {
 	if !ok {
 		return bad
 	}
-	if _, e := Prepare(mode, []byte(raw)); e != nil {
+	validate := Prepare
+	if allowHostname {
+		validate = PrepareForSelection
+	}
+	if _, e := validate(mode, []byte(raw)); e != nil {
 		return bad
 	}
 	return nil

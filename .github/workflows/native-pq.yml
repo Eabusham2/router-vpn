@@ -8,7 +8,14 @@ on:
       - '.github/workflows/native-pq.yml'
       - 'mobile/rosenpass/**'
       - 'internal/mobilepq/**'
+      - 'internal/mobilemultihop/**'
+      - 'internal/multihoprelay/**'
+      - 'internal/applexray/**'
       - 'mobile/pq/**'
+      - 'mobile/routervpn_pq_bridge.go.tmpl'
+      - 'mobile/routervpn_max_resolve_bridge.go.tmpl'
+      - 'deploy/prepare-mobile-pq.py'
+      - 'deploy/test_native_pq_bridge.py'
       - 'deploy/test_server_pq_real.py'
       - 'deploy/test_native_pq_pairing.py'
       - 'server/scripts/provision-multihop-relays.py'
@@ -56,6 +63,10 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Verify captured MAX resolution and native bridge ownership
+        run: |
+          go test -race -count=1 -timeout=90s ./internal/mobilemultihop -run '^TestMAX(Hostname|Resolver|Literal|Native)'
+          python3 deploy/test_native_pq_bridge.py
       - name: Execute actual private PQ pairing compiler
         run: python3 deploy/test_native_pq_pairing.py
       - name: Verify real server Go/C/Rust exchange and rekey

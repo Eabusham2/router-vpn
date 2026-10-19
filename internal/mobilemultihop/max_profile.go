@@ -38,9 +38,13 @@ type maxPolicy struct {
 }
 
 func capturedMAXPolicy(raw string) (maxPolicy, string, error) {
+	return capturedMAXPolicyForSelection(raw, false)
+}
+
+func capturedMAXPolicyForSelection(raw string, allowHostname bool) (maxPolicy, string, error) {
 	var policy maxPolicy
 	bad := errors.New("MAX requires the exact selected Router VPN node and private service")
-	if exactJSON([]byte(raw), &policy, 16384) != nil || !proofID.MatchString(policy.NodeID) || policy.NodeKind != "router-vpn" || !wireGuardServerIP(policy.Endpoint) {
+	if exactJSON([]byte(raw), &policy, 16384) != nil || !proofID.MatchString(policy.NodeID) || policy.NodeKind != "router-vpn" || (!wireGuardServerIP(policy.Endpoint) && !(allowHostname && applexray.ValidNodeHostname(policy.Endpoint))) {
 		return policy, "", bad
 	}
 	var fields map[string]json.RawMessage
@@ -83,11 +87,15 @@ func capturedMAXPolicy(raw string) (maxPolicy, string, error) {
 // before the base peer starts, avoiding a circular or weaker bootstrap tunnel.
 // The output is private configuration, not telemetry; no file or socket opens.
 func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
+	return compileMAXProfile(mode, encodedFiles, metadata, false)
+}
+
+func compileMAXProfile(mode, encodedFiles, metadata string, allowHostname bool) (string, error) {
 	bad := errors.New("invalid or incomplete captured MAX chain")
 	if !MAXMode(mode) {
 		return "", bad
 	}
-	policy, service, err := capturedMAXPolicy(metadata)
+	policy, service, err := capturedMAXPolicyForSelection(metadata, allowHostname)
 	if err != nil {
 		return "", err
 	}
@@ -209,12 +217,16 @@ func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
 		if len(outer) != 5 || outer["type"] != "socks" || outer["tag"] != "outer" || outer["server"] != "127.0.0.1" || outer["version"] != "5" {
 			return "", bad
 		}
-		plan, e := applexray.Prepare("reality-xhttp", files["outer-xray.json"])
+		prepare := applexray.Prepare
+		if allowHostname {
+			prepare = applexray.PrepareForSelection
+		}
+		plan, e := prepare("reality-xhttp", files["outer-xray.json"])
 		if e != nil || !maxTLSLayers(files["outer-xray.json"]) || plan.ServerHost != policy.Endpoint || outer["server_port"] != float64(plan.ListenerPort) {
 			return "", errors.New("MAX TLS outer protocol does not belong to the selected node")
 		}
 		profile, _ := json.Marshal(map[string]string{"xray.json": encoded["outer-xray.json"]})
-		value, e := CompileProxyEntry(string(profile), "reality-xhttp")
+		value, e := compileXrayEntryForSelection(string(profile), "reality-xhttp", allowHostname)
 		if e != nil {
 			return "", e
 		}
@@ -232,9 +244,14 @@ func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
 		if !ok || trust["certificate_path"] != "cert.pem" || trust["certificate"] != nil || !validEntryCertificate(files["cert.pem"]) {
 			return "", errors.New("MAX QUIC must retain its captured native TLS certificate")
 		}
+		if allowHostname && applexray.ValidNodeHostname(policy.Endpoint) {
+			if err = captureMAXTLSName(trust, policy.Endpoint); err != nil {
+				return "", err
+			}
+		}
 		delete(trust, "certificate_path")
 		trust["certificate"] = []any{string(files["cert.pem"])}
-		if err = validateProxyEntry(outer, "hysteria2"); err != nil {
+		if err = validateProxyEntryForSelection(outer, "hysteria2", allowHostname); err != nil {
 			return "", err
 		}
 	}
@@ -283,7 +300,11 @@ func CompileMAXProfile(mode, encodedFiles, metadata string) (string, error) {
 			}
 			api.Host = net.JoinHostPort(service, port)
 		}
-		inner, added, wrapErr := multihoprelay.WrapStartLayer(outer, outerMode,
+		wrap := multihoprelay.WrapStartLayer
+		if allowHostname {
+			wrap = multihoprelay.WrapStartLayerForSelection
+		}
+		inner, added, wrapErr := wrap(outer, outerMode,
 			&multihoprelay.StartLayer{Mode: policy.StartLayer, API: api.String(), Transport: aes}, MAXStartLayerTag, "")
 		if wrapErr != nil {
 			return "", wrapErr

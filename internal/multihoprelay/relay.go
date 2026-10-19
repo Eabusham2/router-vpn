@@ -451,6 +451,10 @@ func key32(v any) bool {
 	return e == nil && len(b) == 32
 }
 func validateTransport(e Exit) (map[string]any, error) {
+	return validateTransportForSelection(e, false)
+}
+
+func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, error) {
 	if !literalServer(e.DNS) {
 		return nil, errors.New("relay exit requires a literal exit-routed DNS server")
 	}
@@ -513,7 +517,11 @@ func validateTransport(e Exit) (map[string]any, error) {
 			return nil, err
 		}
 	} else if applexray.SingleTransportMode(e.Mode) {
-		if err := applexray.ValidateSingleTransport(p, e.Mode); err != nil {
+		validate := applexray.ValidateSingleTransport
+		if allowHostname {
+			validate = applexray.ValidateSingleTransportForSelection
+		}
+		if err := validate(p, e.Mode); err != nil {
 			return nil, err
 		}
 	} else if mobilepq.IsMode(e.Mode) {
@@ -542,7 +550,8 @@ func validateTransport(e Exit) (map[string]any, error) {
 			}
 		}
 	} else {
-		if (e.Mode != "shadowsocks" && e.Mode != "hysteria2") || p["type"] != e.Mode || !literalServer(p["server"]) || !validPort(p["server_port"]) {
+		validHost := literalServer(p["server"]) || (allowHostname && e.Mode == "hysteria2" && applexray.ValidNodeHostname(stringValue(p["server"])))
+		if (e.Mode != "shadowsocks" && e.Mode != "hysteria2") || p["type"] != e.Mode || !validHost || !validPort(p["server_port"]) {
 			return nil, errors.New("relay exit must be a native paired WG/Shadowsocks/Hysteria2 transport")
 		}
 		password, ok := p["password"].(string)

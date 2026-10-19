@@ -1,0 +1,73 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// A host creates one immutable adapter for its captured pre-tunnel network and
+// selected bootstrap resolver. Lookup returns owner_id, hostname and literal
+// addresses as bounded JSON. It never resolves through a replacement session.
+type RouterMAXEndpointResolver interface {
+	OwnerID() string
+	Current() bool
+	Lookup(hostname string) (string, error)
+	Cancel()
+}
+
+type RouterMAXProfileRequest struct {
+	request *mobilemultihop.MAXResolveRequest
+}
+
+// RouterCheckMAXProfile returns the exact source digest after full, socket-free
+// selection validation. Readiness must not invoke a resolver or manufacture a
+// runnable graph with an unresolved hostname.
+func RouterCheckMAXProfile(mode, files, metadata string) (string, error) {
+	capture, err := mobilemultihop.CaptureMAXProfile(mode, files, metadata)
+	if err != nil {
+		return "", err
+	}
+	return capture.SourceSHA256(), nil
+}
+
+// Capture/validation happens before the foreign lookup callback can run. The
+// private request owns cancellation; no system/default DNS is used by Libbox.
+func RouterCreateMAXProfileRequest(mode, files, metadata string, resolver RouterMAXEndpointResolver) (*RouterMAXProfileRequest, error) {
+	request, err := mobilemultihop.NewMAXResolveRequest(context.Background(), mode, files, metadata, resolver)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterMAXProfileRequest{request: request}, nil
+}
+
+func (r *RouterMAXProfileRequest) Run() (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("native MAX endpoint request is unavailable")
+	}
+	return r.request.Run()
+}
+
+func (r *RouterMAXProfileRequest) SourceSHA256() string {
+	if r == nil || r.request == nil {
+		return ""
+	}
+	return r.request.SourceSHA256()
+}
+
+func (r *RouterMAXProfileRequest) Cancel() {
+	if r != nil && r.request != nil {
+		r.request.Cancel()
+	}
+}
+
+func (r *RouterMAXProfileRequest) Close() {
+	if r != nil && r.request != nil {
+		r.request.Close()
+	}
+}
+
+func (r *RouterMAXProfileRequest) Healthy() bool {
+	return r != nil && r.request != nil && r.request.Healthy()
+}

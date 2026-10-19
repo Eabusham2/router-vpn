@@ -12,6 +12,26 @@ import (
 // The PacketTunnel adapter never calls it or falls back to a system resolver.
 type Lookup func(context.Context, string) ([]netip.Addr, error)
 
+// PrepareForSelection checks the complete authenticated transport before a
+// captured host starts endpoint resolution. The returned plan is not runtime
+// permission: Prepare still requires a literal address.
+func PrepareForSelection(mode string, raw []byte) (Plan, error) {
+	plan, err := prepare(mode, raw, true)
+	if err == nil && !plan.Server.IsValid() && !ValidNodeHostname(plan.ServerHost) {
+		return Plan{}, errors.New("Xray selection requires an allowed captured node hostname")
+	}
+	return plan, err
+}
+
+// ValidNodeHostname is only a selection-time name check. A disallowed literal
+// address must never be reinterpreted as a hostname to bypass runtime policy.
+func ValidNodeHostname(host string) bool {
+	if _, err := netip.ParseAddr(host); err == nil {
+		return false
+	}
+	return safeHostname(host) && !strings.EqualFold(strings.TrimSuffix(host, "."), "localhost")
+}
+
 // ResolveAndCompile resolves only the configured node's outer hostname before
 // its TUN starts. It never resolves application or encrypted-DNS destinations.
 // Certificate names, VLESS keys/flow, path, fragmentation and selected DNS stay

@@ -28,7 +28,7 @@ def patch_wireguard(source):
     return result
 
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'mobile/routervpn_pq_bridge.go.tmpl']+sorted((ROOT/'mobile/pq').rglob('*.tmpl'))
+    return [Path(__file__).resolve(),ROOT/'mobile/routervpn_pq_bridge.go.tmpl',ROOT/'mobile/routervpn_max_resolve_bridge.go.tmpl']+sorted((ROOT/'mobile/pq').rglob('*.tmpl'))
 def digest():
     h=hashlib.sha256()
     for p in inputs():h.update(str(p.relative_to(ROOT)).encode()+b'\0'+p.read_bytes())
@@ -60,6 +60,7 @@ def prepare(vendor):
         'mobile/pq/wireguard_protocol.go.tmpl':'protocol/wireguard/routervpn_pq.go',
         'mobile/pq/wireguard_transport.go.tmpl':'transport/wireguard/routervpn_pq.go',
         'mobile/routervpn_pq_bridge.go.tmpl':'experimental/libbox/routervpn_pq_bridge.go',
+        'mobile/routervpn_max_resolve_bridge.go.tmpl':'experimental/libbox/routervpn_max_resolve_bridge.go',
     }
     for src,dst in copies.items():write(vendor,dst,(ROOT/src).read_bytes())
     write(vendor,'include/registry.go',registration.encode())

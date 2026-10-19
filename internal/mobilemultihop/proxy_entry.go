@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/multihoprelay"
 	"strings"
 	"unicode/utf8"
@@ -188,11 +189,15 @@ func validEntryCertificate(data []byte) bool {
 }
 
 func validateProxyEntry(entry map[string]any, mode string) error {
+	return validateProxyEntryForSelection(entry, mode, false)
+}
+
+func validateProxyEntryForSelection(entry map[string]any, mode string, allowHostname bool) error {
 	if multihoprelay.NaiveMode(mode) {
 		return multihoprelay.ValidateNaiveTransport(entry, mode)
 	}
 	if XrayEntryMode(mode) {
-		return validateXrayEntry(entry, mode)
+		return validateXrayEntryForSelection(entry, mode, allowHostname)
 	}
 	bad := errors.New("entry transport must retain its authenticated native TCP/UDP path")
 	if !ProxyEntryMode(mode) || entry["type"] != mode {
@@ -213,7 +218,7 @@ func validateProxyEntry(entry map[string]any, mode string) error {
 		}
 	}
 	host, ok := entry["server"].(string)
-	if !ok || !wireGuardServerIP(host) {
+	if !ok || (!wireGuardServerIP(host) && !(allowHostname && mode == "hysteria2" && applexray.ValidNodeHostname(host))) {
 		return errors.New("entry requires a literal unicast server; no physical DNS fallback is permitted")
 	}
 	port, ok := entry["server_port"].(float64)
