@@ -103,7 +103,8 @@ TEST = r'''
    finally{io.nekohasekai.libbox.Libbox.afterProxyEntryCompilation=null;Thread.interrupted();}
    check(failed&&sessions(app)==0,"cancelled exit compiler staged a new owner");
   }
-  for(String mode:new String[]{"max","split","tor","unregistered"}){boolean failed=false;try{normalizeMultiMode(mode);}catch(Exception expected){failed=true;}check(failed,"unsupported exit silently relabeled");}
+  for(String mode:new String[]{"max","split"})check(normalizeMultiMode(mode).equals(mode),"saved composite exit was relabeled");
+  for(String mode:new String[]{"tor","unregistered","max-unregistered","reality-unknown"}){boolean failed=false;try{normalizeMultiMode(mode);}catch(Exception expected){failed=true;}check(failed,"unsupported exit silently relabeled");}
   check(exitCases==87,"native exit matrix was not fully exercised");
   System.out.println("Android native Xray exits: PASS ("+exitCases+" graphs; "+checks+" executable checks; Android handles doubled)");
  }
