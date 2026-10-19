@@ -137,6 +137,48 @@ public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadat
 public func LibboxNewRouterMultihopWithStartLayers(_ text: String, _ metadata: String, _ entry: String, _ exit: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:entry,exit:exit) }
 public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
 public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
+
+public final class LibboxTorTestState: @unchecked Sendable {
+    public static let shared = LibboxTorTestState()
+    private let lock = NSLock()
+    private var block = false
+    private var payload: String?
+    private var request: LibboxRouterTorProofRequest?
+    private var roots: [String] = []
+    public func configure(block: Bool = false, payload: String? = nil) { lock.lock(); self.block=block; self.payload=payload; request=nil; lock.unlock() }
+    public func make(_ session: String) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload); request=value; return value }
+    public func current() -> LibboxRouterTorProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
+    public func saveRoot(_ path: String) { lock.lock(); roots.append(path); lock.unlock() }
+    public func stateRoots() -> [String] { lock.lock(); defer { lock.unlock() }; return roots }
+}
+// Deliberately non-Sendable, like the actual generated gomobile reference.
+public final class LibboxRouterTorProofRequest {
+    private let session: String, block: Bool, payload: String?
+    private let lock = NSLock()
+    private var cancels = 0
+    private let release = DispatchSemaphore(value:0)
+    public let entered = DispatchSemaphore(value:0)
+    init(_ session: String, _ block: Bool, _ payload: String?) { self.session=session;self.block=block;self.payload=payload }
+    public func run() throws -> String {
+        entered.signal()
+        if block { _ = release.wait(timeout:.now()+4) }
+        if let payload { return payload }
+        let clock=ISO8601DateFormatter();clock.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+        let value:[String:Any] = ["session_id":session,"ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date())]
+        return String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self)
+    }
+    // Intentionally permits late Run success after cancel. The shipping host
+    // must reject it even when a native callback arrives after its owner left.
+    public func cancel() { lock.lock(); cancels+=1;lock.unlock();release.signal() }
+    public func cancelCount() -> Int { lock.lock();defer {lock.unlock()};return cancels }
+    public func healthy() -> Bool { cancelCount()==0 }
+}
+public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutablePointer<NSError?>?) {
+    do { try FileManager.default.createDirectory(atPath:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]);LibboxTorTestState.shared.saveRoot(path) }
+    catch { failure?.pointee=error as NSError }
+}
+public func LibboxRouterTorCreateProof(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
+public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ profile:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
 '''
 HARNESS = r'''
 import Foundation
@@ -383,7 +425,71 @@ final class CompletionState: @unchecked Sendable {
             do{try invalidOwner.start(files:files,strict:true,multihopMetadata:wrong,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)}catch{refused=true}
             check("unrequested exit source not activated",refused)
         }}}
-        check("no mock native server survives tests", state.counts().0 == state.counts().1)
+        let torFiles=["sing-box.json":Data("{\"inbounds\":[],\"outbounds\":[{\"type\":\"routervpn-tor\",\"tag\":\"routervpn-tor-exit\",\"session_id\":\"tor-session\"}]}".utf8)]
+        let torState=LibboxTorTestState.shared
+        for cancelled in [false,true] {
+            torState.configure(block:cancelled)
+            let provider=PacketTunnelProvider(), owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:true)
+            let done=CompletionState()
+            owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let request=torState.current()!
+            if cancelled {
+                check("Tor native wait began",request.entered.wait(timeout:.now()+2) == .success)
+                owner.stop()
+                check("Tor stop cancels captured request immediately",request.cancelCount()>0)
+            }
+            check("Tor proof callback consumed once",done.wait() && done.values()==(1,cancelled ? 1 : 0))
+            owner.stop();Thread.sleep(forTimeInterval:0.04)
+            check("late Tor success cannot reactivate retired session",done.values()==(1,cancelled ? 1 : 0) && provider.count()==0)
+        }
+        check("Tor uses a stable private directory across new engine roots",Set(torState.stateRoots()).count==1 && torState.stateRoots().count>=2 && !torState.stateRoots()[0].contains("routervpn-libbox-"))
+        do {
+            torState.configure()
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
+            try owner.start(files:torFiles,strict:true)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            check("Tor circuit retained before runtime health test",done.wait() && done.values()==(1,0))
+            torState.current()!.cancel()
+            let until=Date().addingTimeInterval(2.5)
+            while provider.count()==0 && Date()<until {Thread.sleep(forTimeInterval:0.02)}
+            check("lost native Tor health retires only its retained session",provider.count()>0 && done.values()==(1,0))
+            owner.stop();let before=provider.count();Thread.sleep(forTimeInterval:1.15)
+            check("retired Tor health timer cannot touch a replacement",provider.count()==before)
+        }
+        for method in ["invalidate","pause"] {
+            torState.configure(block:true)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:false)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let request=torState.current()!
+            check("Tor wait entered before network invalidation",request.entered.wait(timeout:.now()+2) == .success)
+            if method=="pause" {owner.pause()}else{owner.invalidateMultihop()}
+            check("network/pause revoke the captured Tor proof",done.wait() && done.values()==(1,1) && request.cancelCount()>0)
+            owner.stop()
+        }
+        for payload in ["{}","{\"session_id\":\"other\",\"ip\":\"203.0.113.77\",\"is_tor\":true,\"checked_at\":\"2020-01-01T00:00:00Z\"}","{\"session_id\":\"tor-session\",\"ip\":\"203.0.113.77\",\"is_tor\":false,\"checked_at\":\"2026-10-19T00:00:00Z\"}"] {
+            torState.configure(payload:payload)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:false)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            check("malformed/replayed/non-Tor results cannot report Connected",done.wait() && done.values()==(1,1));owner.stop()
+        }
+        check("no mock native server survives successful shutdown", state.counts().0 == state.counts().1)
+        do {
+            torState.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:true)
+            let retained=state.currentServer()!,before=state.counts()
+            retained.configureStrategy(close:true)
+            var failed=false
+            do {try owner.stopCheckedForStrategy()}catch{failed=true}
+            check("unconfirmed Tor close retains native owner",failed && state.counts()==before && retained.strategyCalls()==["start","close"])
+            var blocked=false
+            let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            do{try replacement.start(files:files,strict:false)}catch{blocked=true}
+            check("quarantined Tor cannot overlap a replacement core",blocked && state.counts()==before)
+        }
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
     }
 }
@@ -406,10 +512,13 @@ def main():
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'
-        assert text.count(seam)==1
+        start=text.index('    func completeMultihopExecution(')
+        end=text.index('    /// Only this delivery object',start)
+        delivery=text[start:end]
+        assert delivery.count(seam)==1
         # Require an explicit Sendable closure: Apple's preconcurrency Dispatch
         # overload and compiler versions can diagnose inferred closures differently.
-        broken.write_text(text.replace(seam, 'let unsafe: @Sendable () -> Void = { try? plan.run(owned); completion(nil) }; DispatchQueue.global(qos: .userInitiated).async(execute: unsafe)'))
+        broken.write_text(text[:start]+delivery.replace(seam, 'let unsafe: @Sendable () -> Void = { try? plan.run(owned); completion(nil) }; DispatchQueue.global(qos: .userInitiated).async(execute: unsafe)')+text[end:])
         bad=subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(tmp/'bad')],capture_output=True,text=True,timeout=90)
         diagnostics = (bad.stdout + bad.stderr).lower()
         assert bad.returncode != 0 and ('sendable' in diagnostics or 'data race' in diagnostics), ('Regression control accepted unowned foreign captures or failed for another reason: ' + diagnostics[-2000:])
