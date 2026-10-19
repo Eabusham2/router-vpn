@@ -77,12 +77,33 @@ HARNESS = prefix + r'''
   }
   check(result!=null,"missing resolver "+tag);return result;
  }
+ static void capturedNaiveResolver(JSONObject graph,JSONObject previous,JSONObject before,JSONObject after)throws Exception{
+  JSONObject oldDNS=previous.getJSONObject("dns"),newDNS=graph.getJSONObject("dns");
+  check(!before.has("domain_resolver")&&!previous.getJSONObject("route").has("default_domain_resolver"),"Naive bootstrap fixture no longer exercises implicit entry DNS");
+  JSONObject query=after.getJSONObject("domain_resolver");
+  String tag="routervpn-tor-naive-bootstrap-0";
+  JSONObject expectedQuery=new JSONObject().put("server",tag);
+  Object strategy=before.has("domain_strategy")?before.get("domain_strategy"):oldDNS.opt("strategy");
+  if(strategy!=null)expectedQuery.put("strategy",strategy);
+  check(same(query,expectedQuery),"Naive bootstrap borrowed Tor resolver or changed entry query strategy");
+  JSONObject original=tagged(oldDNS.getJSONArray("servers"),oldDNS.getString("final"));
+  JSONObject expected=new JSONObject(original.toString()).put("tag",tag);expected.remove("detour");
+  if(before.has("detour"))expected.put("detour",before.get("detour"));
+  JSONObject bootstrap=tagged(newDNS.getJSONArray("servers"),tag);
+  check(same(bootstrap,expected),"Naive bootstrap changed captured DNS address, port, TLS, path or lower owner");
+  check(same(original,tagged(newDNS.getJSONArray("servers"),original.getString("tag"))),"Naive bootstrap rewrote the original entry application resolver");
+  check(newDNS.getJSONArray("servers").length()==oldDNS.getJSONArray("servers").length()+3,"Naive introduced an unowned DNS transport");
+ }
  static void capturedEntry(JSONObject graph,JSONObject previous,JSONObject source,String mode,String layer,String certificate)throws Exception{
   int expected=1;
   for(String family:new String[]{"endpoints","outbounds"}){
    JSONArray rows=previous.optJSONArray(family);if(rows==null)continue;expected+=rows.length();
    for(int i=0;i<rows.length();i++){JSONObject row=rows.getJSONObject(i);
-    check(same(row,byTag(graph,row.getString("tag"))),"Tor changed a predecessor key, lane or routing owner");
+    JSONObject actual=byTag(graph,row.getString("tag")),unchanged=new JSONObject(actual.toString());
+    if(row.optString("type").equals("naive")){
+     capturedNaiveResolver(graph,previous,row,actual);unchanged.remove("domain_resolver");
+    }
+    check(same(row,unchanged),"Tor changed a predecessor key, lane or routing owner");
    }
   }
   JSONArray endpoints=graph.optJSONArray("endpoints");

@@ -95,6 +95,9 @@ func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, err
 	if err != nil {
 		return "", err
 	}
+	if err := torFreezeNaiveDNS(root); err != nil {
+		return "", err
+	}
 	selected, err := torSelectedDNS(profile)
 	if err != nil {
 		return "", err
@@ -154,6 +157,206 @@ func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, err
 		return "", errors.New("Tor runtime configuration exceeds its native bound")
 	}
 	return string(data), nil
+}
+
+// Naive always constructs an explicit native resolver, even for a literal
+// server. Freeze that selection before adding Tor's DNS transports: otherwise
+// a formerly single-server graph becomes ambiguous, or resolves its own first
+// connection through the Tor exit that still depends on it.
+func torFreezeNaiveDNS(root map[string]any) error {
+	var naives []map[string]any
+	nodes := map[string]map[string]any{}
+	for _, field := range []string{"outbounds", "endpoints"} {
+		rows, _ := root[field].([]any)
+		for _, raw := range rows {
+			node := raw.(map[string]any) // torPredecessor already checked these rows.
+			nodes[profileString(node, "tag")] = node
+			if node["type"] == "naive" {
+				naives = append(naives, node)
+			}
+		}
+	}
+	if len(naives) == 0 {
+		return nil
+	}
+	failure := errors.New("Naive Tor entry requires its captured nonrecursive bootstrap DNS")
+	dns, ok := root["dns"].(map[string]any)
+	if !ok {
+		return failure
+	}
+	servers, ok := dns["servers"].([]any)
+	if !ok || len(servers) == 0 {
+		return failure
+	}
+	resolvers := map[string]map[string]any{}
+	for _, raw := range servers {
+		server, ok := raw.(map[string]any)
+		tag := profileString(server, "tag")
+		if !ok || !profileIdentifier.MatchString(tag) || resolvers[tag] != nil {
+			return failure
+		}
+		resolvers[tag] = server
+	}
+	route := root["route"].(map[string]any)
+	implicit := profileString(dns, "final")
+	if implicit == "" && len(servers) == 1 {
+		implicit = profileString(servers[0].(map[string]any), "tag")
+	}
+	for index, naive := range naives {
+		selection := naive["domain_resolver"]
+		if selection == nil {
+			selection = route["default_domain_resolver"]
+		}
+		var query map[string]any
+		if selection != nil {
+			var err error
+			query, err = torResolverSelection(selection)
+			if err != nil {
+				return failure
+			}
+		} else {
+			// Capture the entry's selected resolver, not the new Tor policy or a
+			// machine default. Only this new bootstrap copy uses the Naive
+			// lower path; application DNS and its exact saved policy stay intact.
+			source := resolvers[implicit]
+			if source == nil {
+				return failure
+			}
+			tag := "routervpn-tor-naive-bootstrap-" + strconv.Itoa(index)
+			if resolvers[tag] != nil {
+				return failure
+			}
+			bootstrap := make(map[string]any, len(source))
+			for key, value := range source {
+				bootstrap[key] = value
+			}
+			bootstrap["tag"] = tag
+			delete(bootstrap, "detour")
+			if detour, exists := naive["detour"]; exists {
+				if text, ok := detour.(string); !ok || !profileIdentifier.MatchString(text) {
+					return failure
+				}
+				bootstrap["detour"] = detour
+			}
+			resolvers[tag] = bootstrap
+			servers = append(servers, bootstrap)
+			query = map[string]any{"server": tag}
+			strategy := naive["domain_strategy"]
+			if strategy == nil {
+				strategy = dns["strategy"]
+			}
+			if strategy != nil {
+				if _, ok := strategy.(string); !ok {
+					return failure
+				}
+				query["strategy"] = strategy
+			}
+		}
+		if !torNaiveDNSPath(profileString(query, "server"), profileString(naive, "tag"), resolvers, nodes, route) {
+			return failure
+		}
+		naive["domain_resolver"] = query
+	}
+	dns["servers"] = servers
+	return nil
+}
+
+func torResolverSelection(value any) (map[string]any, error) {
+	result := map[string]any{}
+	switch value := value.(type) {
+	case string:
+		result["server"] = value
+	case map[string]any:
+		for key, content := range value {
+			result[key] = content
+		}
+	default:
+		return nil, errors.New("invalid captured DNS selection")
+	}
+	if !profileIdentifier.MatchString(profileString(result, "server")) {
+		return nil, errors.New("missing captured DNS selection")
+	}
+	return result, nil
+}
+
+// The bootstrap transport must be numeric and remotely selected. Follow its
+// actual named DNS/detour dependencies before any I/O, rejecting unresolved,
+// dynamic or recursive paths instead of falling back to dns.final or the OS.
+func torNaiveDNSPath(first, blocked string, resolvers, nodes map[string]map[string]any, route map[string]any) bool {
+	active := map[string]bool{}
+	checked := map[string]bool{}
+	var visit func(string, bool) bool
+	visit = func(tag string, dns bool) bool {
+		if !profileIdentifier.MatchString(tag) || tag == ProfileOutboundTag {
+			return false
+		}
+		key := "outbound:" + tag
+		rows := nodes
+		if dns {
+			key, rows = "dns:"+tag, resolvers
+		} else if tag == blocked {
+			return false
+		}
+		value := rows[tag]
+		if value == nil || active[key] || len(active) >= 128 {
+			return false
+		}
+		if checked[key] {
+			return true
+		}
+		active[key] = true
+		defer delete(active, key)
+		if dns {
+			switch value["type"] {
+			case "udp", "tcp", "tls", "https", "h3", "quic":
+			default:
+				return false
+			}
+			address, err := netip.ParseAddr(profileString(value, "server"))
+			if err != nil || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || address.IsLinkLocalUnicast() {
+				return false
+			}
+			if address.IsLoopback() && profileString(value, "detour") == "" {
+				return false
+			}
+		} else {
+			switch value["type"] {
+			case "direct", "shadowsocks", "routervpn-aes-xor", "hysteria2", "wireguard", "routervpn-amneziawg", "routervpn-pq", "routervpn-xray", "openvpn-client":
+			case "routervpn-composite":
+				if !visit(profileString(value, "tcp"), false) || !visit(profileString(value, "udp"), false) {
+					return false
+				}
+			default:
+				return false
+			}
+		}
+		if raw, exists := value["detour"]; exists {
+			detour, ok := raw.(string)
+			if !ok || !visit(detour, false) {
+				return false
+			}
+		}
+		selection := value["domain_resolver"]
+		if !dns && selection == nil {
+			if host := profileString(value, "server"); host != "" {
+				if _, err := netip.ParseAddr(host); err != nil {
+					selection = route["default_domain_resolver"]
+					if selection == nil {
+						return false
+					}
+				}
+			}
+		}
+		if selection != nil {
+			query, err := torResolverSelection(selection)
+			if err != nil || !visit(profileString(query, "server"), true) {
+				return false
+			}
+		}
+		checked[key] = true
+		return true
+	}
+	return visit(first, true)
 }
 
 func torPredecessor(source string) (map[string]any, map[string]any, string, error) {

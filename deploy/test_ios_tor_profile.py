@@ -321,7 +321,22 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    try check("Tor traverses exact complete predecessor",out["detour"] as? String==previousRoute["final"] as? String && bootstrap["detour"] as? String==previousRoute["final"] as? String)
    try check("predecessor bootstrap remains unchanged",text(["value":previousRoute["default_domain_resolver"] ?? NSNull()])==text(["value":route["default_domain_resolver"] ?? NSNull()]))
    for family in ["endpoints","outbounds"] {for row in previous[family] as? [[String:Any]] ?? [] {
-    try check("complete predecessor keys and lanes preserved",json(row)==json(tagged(graph,row["tag"] as! String)))
+    var actual=try tagged(graph,row["tag"] as! String)
+    if row["type"] as? String=="naive" {
+     let previousDNS=previous["dns"] as! [String:Any],originalServers=previousDNS["servers"] as! [[String:Any]]
+     let tag="routervpn-tor-naive-bootstrap-0",query=actual["domain_resolver"] as? [String:Any]
+     var expectedQuery:[String:Any]=["server":tag]
+     expectedQuery["strategy"]=row["domain_strategy"] ?? previousDNS["strategy"]
+     try check("Naive captures its entry DNS query policy",row["domain_resolver"]==nil && query != nil && text(query!)==text(expectedQuery))
+     let original=originalServers.first{$0["tag"] as? String==previousDNS["final"] as? String}!
+     var expectedBootstrap=original;expectedBootstrap["tag"]=tag;expectedBootstrap["detour"]=row["detour"]
+     let captured=servers.filter{$0["tag"] as? String==tag}
+     try check("Naive bootstrap keeps exact entry resolver and lower owner",captured.count==1 && text(captured[0])==text(expectedBootstrap))
+     let retained=servers.filter{$0["tag"] as? String==original["tag"] as? String}
+     try check("Naive bootstrap preserves entry application DNS",retained.count==1 && text(retained[0])==text(original))
+     actual.removeValue(forKey:"domain_resolver")
+    }
+    try check("complete predecessor keys and lanes preserved",json(row)==json(actual))
    }}
    try check("performance owner remains captured",json(previous["services"] ?? [])==json(graph["services"] ?? []))
    for (name,data) in baseline where name != "sing-box.json" {try check("captured auxiliary bytes preserved",runtime.files[name]==data)}

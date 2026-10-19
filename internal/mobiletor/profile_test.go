@@ -130,6 +130,166 @@ func TestTorLastHopKeepsCompletePredecessorAndSeparateBootstrap(t *testing.T) {
 	}
 }
 
+func torHostNaiveBase(t *testing.T, layer string, quic bool) map[string]any {
+	t.Helper()
+	base, _ := profileObject(torHostBase(t), 4*1024*1024)
+	naive := map[string]any{"type": "naive", "tag": "proxy", "server": "198.51.100.22", "server_port": json.Number("13443"),
+		"username": "captured-private-user", "password": "captured-private-password", "quic": quic,
+		"tls":          map[string]any{"enabled": true, "server_name": "entry.example.test", "certificate": []any{"exact captured trust"}},
+		"udp_over_tcp": map[string]any{"enabled": true, "version": json.Number("2")}}
+	base["outbounds"] = []any{naive}
+	if layer != "off" {
+		kind := "shadowsocks"
+		if layer == "aes-xor" {
+			kind = "routervpn-aes-xor"
+		}
+		base["outbounds"] = append(base["outbounds"].([]any), map[string]any{"type": kind, "tag": "captured-start-layer",
+			"server": "198.51.100.22", "server_port": json.Number("8388"), "method": "2022-blake3-aes-256-gcm",
+			"password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))})
+		naive["detour"], naive["server"] = "captured-start-layer", "127.0.0.1"
+	}
+	dns := base["dns"].(map[string]any)
+	dns["strategy"] = "prefer_ipv6"
+	selected := dns["servers"].([]any)[0].(map[string]any)
+	selected["detour"], selected["server_port"], selected["path"] = "proxy", json.Number("8443"), "/captured-entry-dns?policy=one"
+	delete(base["route"].(map[string]any), "default_domain_resolver")
+	return base
+}
+
+func TestTorNaiveBootstrapCapturesEntryDNSBeforeAddingTor(t *testing.T) {
+	for _, layer := range []string{"off", "aes", "aes-xor"} {
+		for _, quic := range []bool{false, true} {
+			for _, protocol := range []string{"tcp", "dot", "doh"} {
+				base := torHostNaiveBase(t, layer, quic)
+				source := torHostEncode(t, base)
+				profile := torHostProfile()
+				profile["dns_protocol"], profile["dns_server_name"], profile["dns_path"], profile["ipv6_mode"] = protocol, "tor-dns.example", "/tor-query", "off"
+				root := torHostCompile(t, profile, source)
+				if source != torHostEncode(t, base) {
+					t.Fatal("captured predecessor mutated")
+				}
+				naive := torHostTagged(t, root["outbounds"], "proxy")
+				selection := naive["domain_resolver"].(map[string]any)
+				if selection["strategy"] != "prefer_ipv6" {
+					t.Fatal("Tor exit IPv6 policy changed the entry resolver strategy")
+				}
+				dns := root["dns"].(map[string]any)
+				bootstrap := torHostTagged(t, dns["servers"], profileString(selection, "server"))
+				original := base["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+				wanted := map[string]any{}
+				for key, value := range original {
+					wanted[key] = value
+				}
+				wanted["tag"] = selection["server"]
+				delete(wanted, "detour")
+				if layer != "off" {
+					wanted["detour"] = "captured-start-layer"
+				}
+				if !reflect.DeepEqual(wanted, bootstrap) {
+					t.Fatal("Naive bootstrap changed the captured resolver address, port, TLS, path or lower owner")
+				}
+				if !reflect.DeepEqual(original, torHostTagged(t, dns["servers"], "entry-underlay-dns")) {
+					t.Fatal("entry application resolver was rewritten")
+				}
+				delete(naive, "domain_resolver")
+				if !reflect.DeepEqual(naive, base["outbounds"].([]any)[0]) {
+					t.Fatal("Naive endpoint, credentials, SNI, trust, HTTP or UDP settings changed")
+				}
+				if root["route"].(map[string]any)["default_domain_resolver"] != nil || dns["final"] != profileDNS {
+					t.Fatal("bootstrap became a new default or displaced Tor application DNS")
+				}
+			}
+		}
+	}
+}
+
+func TestTorNaiveBootstrapPreservesExplicitResolverOptions(t *testing.T) {
+	for _, inherited := range []bool{false, true} {
+		base := torHostNaiveBase(t, "aes-xor", true)
+		naive := base["outbounds"].([]any)[0].(map[string]any)
+		resolver := base["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
+		resolver["detour"] = "captured-start-layer"
+		options := map[string]any{"server": "entry-underlay-dns", "strategy": "ipv4_only", "timeout": "9s",
+			"disable_cache": true, "disable_optimistic_cache": true, "rewrite_ttl": json.Number("42"), "client_subnet": "192.0.2.0/24"}
+		if inherited {
+			base["route"].(map[string]any)["default_domain_resolver"] = options
+		} else {
+			naive["domain_resolver"] = options
+		}
+		root := torHostCompile(t, torHostProfile(), torHostEncode(t, base))
+		if !reflect.DeepEqual(torHostTagged(t, root["outbounds"], "proxy")["domain_resolver"], options) {
+			t.Fatal("explicit entry DNS query options changed")
+		}
+		if len(root["dns"].(map[string]any)["servers"].([]any)) != 3 {
+			t.Fatal("explicit resolver unnecessarily replaced")
+		}
+		if !reflect.DeepEqual(root["route"].(map[string]any)["default_domain_resolver"], base["route"].(map[string]any)["default_domain_resolver"]) {
+			t.Fatal("another native owner's default resolver changed")
+		}
+	}
+}
+
+func TestTorNaiveBootstrapRejectsAmbiguityAndRecursiveOwners(t *testing.T) {
+	for name, change := range map[string]func(map[string]any){
+		"missing-dns":      func(root map[string]any) { delete(root, "dns") },
+		"missing-selected": func(root map[string]any) { root["dns"].(map[string]any)["final"] = "unowned" },
+		"ambient-local": func(root map[string]any) {
+			root["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["type"] = "local"
+		},
+		"uncaptured-hostname": func(root map[string]any) {
+			root["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "system-bootstrap.example"
+		},
+		"ambiguous": func(root map[string]any) {
+			dns := root["dns"].(map[string]any)
+			delete(dns, "final")
+			dns["servers"] = append(dns["servers"].([]any), map[string]any{"tag": "another", "type": "tcp", "server": "9.9.9.9"})
+		},
+		"reserved-tag": func(root map[string]any) {
+			dns := root["dns"].(map[string]any)
+			dns["servers"] = append(dns["servers"].([]any), map[string]any{"tag": "routervpn-tor-naive-bootstrap-0", "type": "tcp", "server": "9.9.9.9"})
+		},
+		"explicit-self-resolver": func(root map[string]any) {
+			root["outbounds"].([]any)[0].(map[string]any)["domain_resolver"] = "entry-underlay-dns"
+		},
+		"inherited-self-resolver": func(root map[string]any) {
+			root["route"].(map[string]any)["default_domain_resolver"] = "entry-underlay-dns"
+		},
+		"unresolved-explicit": func(root map[string]any) {
+			root["outbounds"].([]any)[0].(map[string]any)["domain_resolver"] = "unowned"
+		},
+		"bootstrap-dns-cycle": func(root map[string]any) {
+			root["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["domain_resolver"] = "entry-underlay-dns"
+		},
+		"self-underlay": func(root map[string]any) {
+			root["outbounds"].([]any)[0].(map[string]any)["detour"] = "proxy"
+		},
+		"missing-underlay": func(root map[string]any) {
+			root["outbounds"].([]any)[0].(map[string]any)["detour"] = "unowned"
+		},
+		"indirect-self": func(root map[string]any) {
+			root["outbounds"].([]any)[1].(map[string]any)["detour"] = "proxy"
+		},
+		"lower-domain-without-captured-dns": func(root map[string]any) {
+			root["outbounds"].([]any)[1].(map[string]any)["server"] = "uncaptured.example"
+		},
+		"dynamic-lower": func(root map[string]any) {
+			root["outbounds"].([]any)[1].(map[string]any)["type"] = "selector"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			base := torHostNaiveBase(t, "aes-xor", false)
+			change(base)
+			value, err := CompileProfile(torHostEncode(t, torHostProfile()), "captured-session", torHostEncode(t, base))
+			if err == nil || value != "" {
+				t.Fatal("uncaptured or recursive Naive bootstrap was compiled")
+			}
+			if strings.Contains(err.Error(), "captured-private") {
+				t.Fatal("bootstrap failure exposed entry credentials")
+			}
+		})
+	}
+}
+
 func TestTorPredecessorKeepsRegisteredWGAndPQOwners(t *testing.T) {
 	for _, kind := range []string{"wireguard", "routervpn-amneziawg", "routervpn-pq"} {
 		base, _ := profileObject(torHostBase(t), 4*1024*1024)

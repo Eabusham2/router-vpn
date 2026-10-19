@@ -81,7 +81,11 @@ def run(vendor,package,go,clang=None):
         with tempfile.TemporaryDirectory(prefix='routervpn-android-tor-native-') as directory:
             work=Path(directory);graphs=work/'graphs';graphs.mkdir()
             env['ANDROID_JSON_JAR']=str(M.android_json_dependency(work,env));env['ROUTERVPN_ANDROID_TOR_GRAPHS']=str(graphs)
-            subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_profile.py')],cwd=ROOT,env=env,check=True,timeout=600)
+            # The Java/Go compiler fixture does not load native Tor. Passing
+            # its DSO link flags into pure Go asset tools can create an unused
+            # DT_NEEDED entry without the external linker's matching rpath.
+            profile_env=env.copy();profile_env.pop('CGO_LDFLAGS',None)
+            subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_profile.py')],cwd=ROOT,env=profile_env,check=True,timeout=600)
             matrix(graphs)
             subprocess.run([go,'test','-mod=readonly','-ldflags=-checklinkname=0','-tags','with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test','./experimental/libbox','-run','^TestRouterTorAndroidGeneratedGraphs$','-count=1','-timeout=120s','-v'],cwd=vendor,env=env,check=True,timeout=600)
         if before!=digest() or native!=hashlib.sha256(library.read_bytes()).hexdigest():raise ValueError('Android or native Tor source changed during validation')
