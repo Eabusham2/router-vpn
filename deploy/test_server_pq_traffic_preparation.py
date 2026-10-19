@@ -21,6 +21,9 @@ class TrafficPreparation(unittest.TestCase):
         ):
             path = core/destination;path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes((ROOT/source).read_bytes())
+        # The pinned core already contains these WireGuard package directories.
+        for destination in P.COPIES.values():
+            (core/destination).parent.mkdir(parents=True, exist_ok=True)
         library = root/'libroutervpn_rosenpass.a';library.write_bytes(b'test-only-placeholder')
         keys = root/'keys';keys.mkdir()
         return core, library, keys
