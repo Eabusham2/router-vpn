@@ -1,0 +1,226 @@
+#!/usr/bin/env python3
+"""Exercise the Apple native gate's source, matrix and real-engine boundaries.
+
+Only command execution is doubled here. The separate shipping gate executes
+the real Swift compilers, native Libbox constructor and C Tor ABI.
+"""
+from pathlib import Path
+import contextlib
+import hashlib
+import importlib.util
+import io
+import json
+import subprocess
+import tempfile
+from types import SimpleNamespace
+import unittest
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[1]
+spec = importlib.util.spec_from_file_location('apple_tor_native_gate', ROOT/'deploy/test_ios_tor_pinned.py')
+GATE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(GATE)
+REGISTRY = (b'package include\nimport (\n\t"github.com/sagernet/sing-box/protocol/socks"\n'
+            b'\t"github.com/sagernet/sing-box/protocol/routervpntor"\n)\n'
+            b'func OutboundRegistry() {\n\tsocks.RegisterOutbound(registry)\n'
+            b'\troutervpntor.RegisterOutbound(registry)\n}\n')
+
+
+def populate(folder):
+    for name, (mode, layer, kind) in GATE.cases().items():
+        entry = folder/name; entry.mkdir()
+        (entry/'fixture.json').write_text(json.dumps(dict(mode=mode, layer=layer, transport=kind, session='captured-session')))
+        (entry/'sing-box.json').write_text(json.dumps({'outbounds': [{'type': 'routervpn-tor', 'session_id': 'captured-session'}]}))
+        if mode in ('naive-h2', 'naive-h3', 'hysteria2'):
+            (entry/'trust.pem').write_text('exact test-only trust asset')
+        if mode in ('reality-vision', 'reality-pq-vision', 'reality-xhttp'):
+            (entry/'xray.json').write_text('{}')
+    report = dict(schema=1, graphs=348, profile_policy_combinations=320, public_tor_traffic=False,
+                  native_handles='boundary doubles',
+                  sources={str(path.relative_to(ROOT)): GATE.sha(path) for path in GATE.host_sources()})
+    (folder/'source-evidence.json').write_text(json.dumps(report))
+
+
+class AppleTorNativeGate(unittest.TestCase):
+    def test_exact_matrix_asset_and_session_ownership(self):
+        mutations = ('missing', 'extra', 'renamed', 'empty', 'oversized', 'linked-root',
+                     'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'stale-source')
+        for mutation in mutations:
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary); folder = root/'graphs'; folder.mkdir(); populate(folder)
+                self.assertEqual(len(GATE.require_matrix(folder)), 805)
+                entry = folder/'naive-h3-aes-256-gcm-snowflake'
+                graph = entry/'sing-box.json'
+                if mutation == 'missing': graph.unlink()
+                elif mutation == 'extra': (folder/'extra').mkdir()
+                elif mutation == 'renamed': entry.rename(folder/'unknown-profile')
+                elif mutation == 'empty': graph.write_bytes(b'')
+                elif mutation == 'oversized':
+                    with graph.open('wb') as stream: stream.truncate(4*1024*1024+1)
+                elif mutation == 'linked-root':
+                    alias = root/'alias'; alias.symlink_to(folder, target_is_directory=True); folder = alias
+                elif mutation == 'linked-graph':
+                    preserved = root/'preserved'; entry.rename(preserved); entry.symlink_to(preserved, target_is_directory=True)
+                elif mutation == 'linked-asset':
+                    graph.unlink(); graph.symlink_to(folder/'tor-does-not-exist')
+                elif mutation == 'missing-trust': (entry/'trust.pem').unlink()
+                elif mutation == 'wrong-session':
+                    graph.write_text(json.dumps({'outbounds': [{'type': 'routervpn-tor', 'session_id': 'another-session'}]}))
+                elif mutation == 'wrong-mode':
+                    data = json.loads((entry/'fixture.json').read_text()); data['mode'] = 'wg'
+                    (entry/'fixture.json').write_text(json.dumps(data))
+                else:
+                    data = json.loads((folder/'source-evidence.json').read_text())
+                    data['sources']['deploy/test_ios_tor_profile.py'] = '0'*64
+                    (folder/'source-evidence.json').write_text(json.dumps(data))
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    GATE.require_matrix(folder)
+
+    def test_missing_engine_overlay_removes_only_exact_registration(self):
+        changed = GATE.missing_tor_registry(REGISTRY)
+        self.assertEqual(changed, REGISTRY.replace(b'\t"github.com/sagernet/sing-box/protocol/routervpntor"\n', b'')
+                         .replace(b'\troutervpntor.RegisterOutbound(registry)\n', b''))
+        self.assertIn(b'socks.RegisterOutbound', changed)
+        for source in (changed, REGISTRY+REGISTRY, REGISTRY.replace(b'routervpntor.RegisterOutbound', b'other.RegisterOutbound')):
+            with self.assertRaises(ValueError): GATE.missing_tor_registry(source)
+
+    def exercise(self, fault=''):
+        with tempfile.TemporaryDirectory(prefix='apple-tor-gate-contract-') as temporary:
+            root = Path(temporary); vendor = root/'vendor'; package = root/'package'
+            (vendor/'experimental/libbox').mkdir(parents=True); (vendor/'include').mkdir()
+            (package/'lib').mkdir(parents=True)
+            (package/'lib/libroutervpn_tor.so').write_bytes(b'package boundary double')
+            for name in ('go.mod', 'go.sum'): (vendor/name).write_text('exact module fixture')
+            registry = vendor/'include/registry.go'; registry.write_bytes(REGISTRY)
+            target = vendor/'experimental/libbox/routervpn_tor_ios_graph_test.go'
+            if fault == 'occupied': target.write_text('existing owner')
+            calls, folders = [], []
+
+            def command(arguments, *, cwd, env, timeout, **kwargs):
+                self.assertGreater(timeout, 0)
+                calls.append(arguments)
+                if arguments[1] == str(GATE.FIXTURE):
+                    self.assertTrue(kwargs['check'])
+                    self.assertFalse(target.exists())
+                    self.assertNotIn('CGO_LDFLAGS', env, 'C Tor flags leaked into ordinary host fixture generators')
+                    if fault == 'swift': raise subprocess.CalledProcessError(1, arguments)
+                    folder = Path(arguments[arguments.index('--output')+1]); folders.append(folder)
+                    populate(folder)
+                    if fault == 'short': (folder/'direct-off-tor/sing-box.json').unlink()
+                    return SimpleNamespace(returncode=0)
+                self.assertEqual(Path(cwd), vendor)
+                self.assertEqual(env['CGO_LDFLAGS'], 'verified-native-library-and-rpath')
+                self.assertEqual(target.read_bytes(), GATE.TEMPLATE.read_bytes())
+                self.assertEqual(arguments[arguments.index('-tags')+1], GATE.TAGS)
+                self.assertIn('-mod=readonly', arguments)
+                self.assertIn('-count=1', arguments)
+                self.assertEqual(arguments[arguments.index('-run')+1], '^'+GATE.TEST+'$')
+                self.assertEqual(registry.read_bytes(), REGISTRY)
+                missing = env.get('ROUTERVPN_IOS_TOR_MISSING_ENGINE') == '1'
+                if missing:
+                    overlay = json.loads(Path(arguments[arguments.index('-overlay')+1]).read_text())
+                    replacement = Path(overlay['Replace'][str(registry)])
+                    self.assertEqual(replacement.read_bytes(), GATE.missing_tor_registry(REGISTRY))
+                else:
+                    self.assertNotIn('-overlay', arguments)
+                failed = fault == ('negative' if missing else 'native')
+                names = sorted(GATE.cases())
+                if fault == 'skipped' and missing: names.pop()
+                for name in names:
+                    kwargs['stdout'].write(json.dumps({'Action': 'pass', 'Test': GATE.TEST+'/'+name})+'\n')
+                return SimpleNamespace(returncode=1 if failed else 0)
+
+            with mock.patch.object(GATE.subprocess, 'check_output', return_value='wrong' if fault == 'pin' else GATE.PIN), \
+                 mock.patch.object(GATE.TOR.TORPACK.PACKAGE, 'verify', return_value={'platform': 'host-test'}), \
+                 mock.patch.object(GATE, 'verify_prepared'), \
+                 mock.patch.object(GATE, 'host_environment', return_value={'CGO_ENABLED': '1', 'CGO_LDFLAGS': 'verified-native-library-and-rpath'}), \
+                 mock.patch.object(GATE, 'source_hashes', return_value={'source': 'fixed'}), \
+                 mock.patch.object(GATE.subprocess, 'run', side_effect=command), contextlib.redirect_stdout(io.StringIO()):
+                if fault:
+                    with self.assertRaises((ValueError, FileNotFoundError, RuntimeError, subprocess.CalledProcessError)):
+                        GATE.run(vendor, package, 'go')
+                else:
+                    GATE.run(vendor, package, 'go')
+            self.assertEqual(registry.read_bytes(), REGISTRY, 'negative gate changed shipping registration')
+            if fault == 'occupied': self.assertEqual(target.read_text(), 'existing owner')
+            else: self.assertFalse(target.exists(), 'test-only source survived completion or failure')
+            for folder in folders: self.assertFalse(folder.exists(), 'temporary graph export survived')
+            return len(calls)
+
+    def test_actual_runner_requires_swift_then_both_native_passes(self):
+        self.assertEqual(self.exercise(), 3)
+
+    def test_source_and_host_failures_stop_before_native(self):
+        for fault, count in (('pin', 0), ('occupied', 0), ('swift', 1), ('short', 1)):
+            with self.subTest(fault=fault): self.assertEqual(self.exercise(fault), count)
+
+    def test_native_failure_and_skipped_negative_are_fatal(self):
+        for fault, count in (('native', 2), ('negative', 3), ('skipped', 3)):
+            with self.subTest(fault=fault): self.assertEqual(self.exercise(fault), count)
+
+    def test_prepared_gate_rejects_stale_source_and_fake_c_loader(self):
+        copied = {'protocol/routervpntor/owned.go': b'package owned\n'}
+        dns = (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes()
+        pack = GATE.TOR.TORPACK
+        loader = {'routervpn/nativetor/'+name: (pack.SOURCE/(name+'.tmpl')).read_bytes()
+                  for name in ('native.go', 'backend.go', 'unavailable.go')}
+        loader['routervpn/nativetor/routervpn_tor_host.h'] = (ROOT/'mobile/tor/routervpn_tor_host.h').read_bytes()
+        loader['experimental/libbox/routervpn_tor_native.go'] = (pack.SOURCE/'bridge.go.tmpl').read_bytes()
+        for mutation in ('source', 'stale', 'dns', 'loader', 'loader-record'):
+            with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                vendor = Path(temporary)
+                for relative, data in {**copied, **loader, 'dns/transport_adapter.go': dns}.items():
+                    path = vendor/relative; path.parent.mkdir(parents=True, exist_ok=True); path.write_bytes(data)
+                tor_record = dict(schema=1, core=GATE.PIN, source_sha256='current',
+                    dns_adapter_sha256=hashlib.sha256(dns).hexdigest(),
+                    files={name: hashlib.sha256(data).hexdigest() for name, data in copied.items()})
+                loader_record = dict(schema=1, core=GATE.PIN, source_sha256=pack.digest(),
+                    files={name: hashlib.sha256(data).hexdigest() for name, data in loader.items()})
+                (vendor/GATE.TOR.OWNER).write_text(json.dumps(tor_record))
+                (vendor/pack.OWNER).write_text(json.dumps(loader_record))
+                with mock.patch.object(GATE.TOR, 'copies', return_value=copied), mock.patch.object(GATE.TOR, 'digest', return_value='current'):
+                    GATE.verify_prepared(vendor)
+                    if mutation == 'source': (vendor/'protocol/routervpntor/owned.go').write_text('different native owner')
+                    elif mutation == 'stale':
+                        tor_record['source_sha256'] = 'stale'; (vendor/GATE.TOR.OWNER).write_text(json.dumps(tor_record))
+                    elif mutation == 'dns': (vendor/'dns/transport_adapter.go').write_text('different resolver owner')
+                    elif mutation == 'loader': (vendor/'routervpn/nativetor/backend.go').write_text('fake Tor ABI')
+                    else:
+                        loader_record['files']['routervpn/nativetor/backend.go'] = '0'*64
+                        (vendor/pack.OWNER).write_text(json.dumps(loader_record))
+                    with self.assertRaises(ValueError): GATE.verify_prepared(vendor)
+
+    def test_digest_captures_actual_host_and_native_inputs(self):
+        paths = GATE.inputs(); self.assertEqual(len(paths), len(set(paths)))
+        before = GATE.digest(); original = Path.read_bytes
+        for name in ('internal/mobiletor/profile.go', 'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift',
+                     'deploy/test_ios_tor_profile.py', 'mobile/routervpn_tor_ios_graph_test.go.tmpl',
+                     'deploy/native_tor_graph_host.py', 'mobile/torpack/backend.go.tmpl', 'mobile/torpt/SOURCE_LOCK.json'):
+            changed = ROOT/name; self.assertIn(changed, paths)
+            with mock.patch.object(Path, 'read_bytes', lambda path: original(path)+(b'changed' if path == changed else b'')):
+                self.assertNotEqual(before, GATE.digest())
+        with mock.patch.object(GATE.HOST, 'environment', return_value={}) as selected:
+            GATE.host_environment('go', Path('/host/libroutervpn_tor.so'), '/llvm/clang')
+        selected.assert_called_once_with('go', Path('/host/libroutervpn_tor.so'), '/llvm/clang', require_swift=True)
+
+    def test_linux_build_runs_gate_before_mobile_link_and_tracks_apple_changes(self):
+        shell = (ROOT/'android/build-sing-box-libbox.sh').read_text()
+        call = 'test_ios_tor_pinned.py" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE"'
+        self.assertIn(call, shell)
+        self.assertIn('--output "$TOR_GATE_PARENT/apple-graphs"', shell)
+        self.assertLess(shell.index(call), shell.index('go_retry run ./cmd/internal/build_libbox -target android'))
+        self.assertLess(shell.index('APPLE_TOR_GRAPH_SHA='), shell.index('if [[ -s "$AAR"'))
+        self.assertIn('"$OPENVPN_SHA" "$APPLE_TOR_GRAPH_SHA"', shell)
+        gradle = (ROOT/'android/app/build.gradle').read_text()
+        for name in ('test_ios_tor_pinned.py', 'test_ios_tor_pinned_contract.py',
+                     'test_ios_tor_profile.py', 'native_tor_graph_host.py'):
+            self.assertIn("rootProject.file('../deploy/"+name+"')", gradle)
+        self.assertIn("rootProject.fileTree('../mobile')", gradle)
+        for name in ('App', 'PacketTunnel'):
+            self.assertIn("rootProject.fileTree('../ios/RouterVPN/"+name+"')", gradle)
+        workflow = (ROOT/'.github/workflows/android-combined-runtime.yml').read_text()
+        self.assertIn('runs-on: ubuntu-24.04', workflow)
+
+
+if __name__ == '__main__':
+    unittest.main()

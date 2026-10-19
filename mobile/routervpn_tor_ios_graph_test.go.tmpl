@@ -1,0 +1,86 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// Every input is emitted by the shipping Swift profile creation and complete
+// provider assembly, using the actual shared Go compilers. CheckConfig creates
+// and closes native owners; this gate does not start a VPN or a Tor circuit.
+func TestRouterTorAppleGeneratedGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_IOS_TOR_GRAPHS")
+	if root == "" {
+		t.Skip("run deploy/test_ios_tor_pinned.py for the actual Apple matrix")
+	}
+	entries, err := os.ReadDir(root)
+	if err != nil || len(entries) != 349 {
+		t.Fatalf("exact Apple Tor matrix unavailable: %v (%d entries)", err, len(entries))
+	}
+	if RouterTorNativeABI() != 1 || RouterTorNativeVersion() != "tor 0.4.9.14" {
+		t.Fatal("the real pinned C Tor ABI is required even for configuration checks")
+	}
+	state := t.TempDir()
+	if err := RouterTorSetStateDirectory(filepath.Join(state, "tor-state")); err != nil {
+		t.Fatal(err)
+	}
+	missing := os.Getenv("ROUTERVPN_IOS_TOR_MISSING_ENGINE") == "1"
+	count := 0
+	for _, entry := range entries {
+		if entry.Name() == "source-evidence.json" && entry.Type().IsRegular() {
+			continue
+		}
+		count++
+		t.Run(entry.Name(), func(t *testing.T) {
+			if !entry.IsDir() || entry.Type()&os.ModeSymlink != 0 {
+				t.Fatal("unowned Apple graph directory")
+			}
+			folder := filepath.Join(root, entry.Name())
+			path := filepath.Join(folder, "sing-box.json")
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || info.Size() == 0 || info.Size() > 4<<20 {
+				t.Fatal("empty, oversized or unowned Apple graph")
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var graph struct {
+				Outbounds []struct {
+					Type      string `json:"type"`
+					SessionID string `json:"session_id"`
+				} `json:"outbounds"`
+			}
+			if err := json.Unmarshal(data, &graph); err != nil {
+				t.Fatal(err)
+			}
+			found := 0
+			for _, outbound := range graph.Outbounds {
+				if outbound.Type == "routervpn-tor" && outbound.SessionID != "" {
+					found++
+				}
+			}
+			if found != 1 {
+				t.Fatal("Apple graph has no unique captured native Tor owner")
+			}
+			// Use the same file-manager roots as a real host configuration check.
+			// The stable private Tor directory above is independent of these roots.
+			applySetupOptions(&SetupOptions{BasePath: folder, WorkingPath: folder,
+				TempPath: state, LogMaxLines: 100})
+			err = CheckConfig(string(data))
+			if missing {
+				if err == nil || !strings.Contains(err.Error(), "unknown outbound type: routervpn-tor") {
+					t.Fatalf("removing Tor registration must reject this unchanged graph: %v", err)
+				}
+			} else if err != nil {
+				t.Fatalf("real Apple graph rejected: %v", err)
+			}
+		})
+	}
+	if count != 348 {
+		t.Fatalf("expected 348 Apple graphs, checked %d", count)
+	}
+}
