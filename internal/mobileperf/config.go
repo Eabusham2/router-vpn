@@ -7,6 +7,8 @@ import (
 	"reflect"
 	"strings"
 	"unicode/utf8"
+
+	"router-vpn/internal/nativecomposite"
 )
 
 func exact(data string, out any, limit int) error {
@@ -250,7 +252,13 @@ func Apply(config, profiles string) (string, error) {
 		if kind := text(item.profile, "node_kind"); kind != "" && kind != "router-vpn" {
 			return "", errors.New("cover traffic requires a paired Router VPN node")
 		}
-		if !encrypted(byTag, item.packet, map[string]bool{}) || !encrypted(byTag, item.proof, map[string]bool{}) {
+		proved := func(tag string) bool {
+			if text(byTag[tag], "type") == nativecomposite.Type {
+				return encryptedComposite(root, byTag, tag, text(item.profile, "node_proof_id"), entryTag)
+			}
+			return encrypted(byTag, tag, map[string]bool{})
+		}
+		if !proved(item.packet) || !proved(item.proof) {
 			return "", errors.New("cover requires proved encrypted native legs")
 		}
 		host := text(item.profile, "daita_host")
@@ -314,6 +322,35 @@ func Apply(config, profiles string) (string, error) {
 	}
 	return string(result), nil
 }
+
+// A dispatcher owns two different protocols. Reuse the real composite
+// validator so a cover request cannot bless a label, borrowed lane, plaintext
+// fallback or changed outer encryption. Keeping the service on the dispatcher
+// routes its TCP proof and UDP packets through their respective captured lanes.
+func encryptedComposite(root map[string]any, tags map[string]map[string]any, tag, node, entry string) bool {
+	prefix, via := nativecomposite.SourcePrefix, ""
+	if entry != "" {
+		if tag == entry {
+			prefix = "routervpn-entry-composite-"
+		} else {
+			prefix, via = "routervpn-exit-composite-", entry
+		}
+	}
+	layer := ""
+	if start := tags[prefix+"start"]; start != nil {
+		switch text(start, "type") {
+		case "shadowsocks":
+			layer = "aes-256-gcm"
+		case "routervpn-aes-xor":
+			layer = "aes-256-gcm+xor-whitening"
+		default:
+			return false
+		}
+	}
+	_, err := nativecomposite.Extract(root, text(tags[tag], "mode"), node, layer, tag, prefix, via)
+	return err == nil
+}
+
 func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool) bool {
 	if seen[tag] || len(seen) > 12 {
 		return false

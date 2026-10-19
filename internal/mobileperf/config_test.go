@@ -1,9 +1,19 @@
 package mobileperf
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/json"
+	"encoding/pem"
+	"math/big"
 	"strings"
 	"testing"
+	"time"
+
+	"router-vpn/internal/nativecomposite"
 )
 
 func perfFixture() map[string]any {
@@ -91,6 +101,133 @@ func TestCoverPerHopAndSplitTransportOwnership(t *testing.T) {
 	service := out["services"].([]any)[0].(map[string]any)
 	if service["proof_tag"] != "tcp-stack" || service["packet_tag"] != "udp-stack" {
 		t.Fatal("split cover lost TCP/UDP ownership")
+	}
+}
+
+func compositeCoverFixture(t *testing.T, mode, layer, rootTag, prefix, via string) map[string]any {
+	t.Helper()
+	key := ed25519.NewKeyFromSeed(make([]byte, ed25519.SeedSize))
+	cert := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "node.test"}, DNSNames: []string{"node.test"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, cert, cert, key.Public(), key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secret := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+	user := map[string]any{"id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision", "encryption": "none"}
+	if mode == "max" {
+		user["encryption"] = "mlkem768x25519plus.native.0rtt.public-authentication-fixture"
+	}
+	helper := map[string]any{"inbounds": []any{map[string]any{"tag": "socks", "listen": "127.0.0.1", "port": 1090, "protocol": "socks", "settings": map[string]any{"auth": "noauth", "udp": true}}}, "outbounds": []any{map[string]any{"tag": "proxy", "protocol": "vless", "settings": map[string]any{"vnext": []any{map[string]any{"address": "192.0.2.1", "port": 10443, "users": []any{user}}}}, "streamSettings": map[string]any{"network": "raw", "security": "reality", "realitySettings": map[string]any{"serverName": "node.test", "fingerprint": "chrome", "password": "public-key-fixture", "shortId": "0123456789abcdef"}}}}}
+	helperName, port := "xray.json", 1090
+	if mode == "ss-v2ray" {
+		helperName, port = "sslocal.json", 1092
+		helper = map[string]any{"server": "192.0.2.1", "server_port": 10443, "password": secret, "method": "2022-blake3-aes-256-gcm", "local_address": "127.0.0.1", "local_port": port, "mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=node.test;path=/shadowsocks"}
+	}
+	graph := perfFixture()
+	graph["outbounds"] = []any{map[string]any{"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": port, "version": "5"}, map[string]any{"type": "hysteria2", "tag": "udp-stack", "server": "192.0.2.1", "server_port": 8443, "password": "fixture-password", "obfs": map[string]any{"type": "salamander", "password": "fixture-mask"}, "tls": map[string]any{"enabled": true, "server_name": "node.test", "certificate_path": "cert.pem"}}}
+	graph["route"] = map[string]any{"final": "tcp-stack", "rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}}
+	graph["dns"] = map[string]any{"final": "selected", "servers": []any{map[string]any{"type": "udp", "tag": "selected", "server": "10.77.0.1", "detour": "tcp-stack"}}}
+	assets := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(jsonText(graph))), helperName: base64.StdEncoding.EncodeToString([]byte(jsonText(helper))), "cert.pem": base64.StdEncoding.EncodeToString(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
+	if mode != "ss-v2ray" {
+		assets["stack.json"] = base64.StdEncoding.EncodeToString([]byte(jsonText(map[string]any{"name": "Dual Transport", "transport": "both", "post_quantum": mode == "max", "shared_layers": []string{"single TUN interface"}, "tcp_stack": []string{"VLESS", "REALITY", "XTLS Vision"}, "udp_stack": []string{"Hysteria2", "QUIC", "TLS 1.3"}})))
+	}
+	nodeID := strings.Repeat("a", 64)
+	compiled, err := nativecomposite.Compile(mode, jsonText(assets), jsonText(map[string]any{"node_id": nodeID, "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787", "start_layer": ""}), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	plan, err := nativecomposite.Plan(compiled, mode, nodeID, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if layer != "" {
+		outer := map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.1", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": secret}
+		plan, err = nativecomposite.WithStartLayer(plan, mode, nodeID, layer, "http://10.77.0.1:8787", outer)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	owner, children, err := nativecomposite.Relabel(plan, mode, nodeID, layer, rootTag, prefix, via)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := perfFixture()
+	result["outbounds"] = append([]any{owner}, children...)
+	if rootTag != "proxy" {
+		result["outbounds"] = append(result["outbounds"].([]any), map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.2", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": secret, "detour": rootTag})
+	}
+	if via != "" {
+		result["endpoints"] = []any{map[string]any{"type": "wireguard", "tag": via}}
+	}
+	return result
+}
+
+func TestCompositeCoverRequiresBothCapturedEncryptedLanes(t *testing.T) {
+	for _, mode := range []string{"ss-v2ray", "split", "max"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, placement := range []struct{ role, tag, prefix, via string }{{"single", "proxy", "routervpn-composite-", ""}, {"entry", "routervpn-hop-entry", "routervpn-entry-composite-", ""}, {"exit", "proxy", "routervpn-exit-composite-", "routervpn-hop-entry"}} {
+				t.Run(mode+"/"+layer+"/"+placement.role, func(t *testing.T) {
+					original := compositeCoverFixture(t, mode, layer, placement.tag, placement.prefix, placement.via)
+					entry, exit := node(), node()
+					if placement.role == "entry" {
+						entry["daita_enabled"] = true
+					} else {
+						exit["daita_enabled"] = true
+					}
+					if placement.role == "single" {
+						entry = exit
+					}
+					out, err := compilePerf(original, entry, exit)
+					if err != nil {
+						t.Fatal(err)
+					}
+					service := out["services"].([]any)[0].(map[string]any)
+					if service["packet_tag"] != placement.tag || service["proof_tag"] != placement.tag {
+						t.Fatal("cover bypassed captured TCP/UDP dispatcher")
+					}
+					for _, key := range []string{"outbounds", "endpoints", "inbounds", "dns", "route"} {
+						if jsonText(out[key]) != jsonText(original[key]) {
+							t.Fatal("cover changed captured", key)
+						}
+					}
+					for _, fault := range []string{"tcp-plain", "udp-plain", "udp-alias", "owner-node", "lane-node", "cycle", "bypass", "missing", "foreign-owner"} {
+						var bad map[string]any
+						_ = json.Unmarshal([]byte(jsonText(original)), &bad)
+						outputs := bad["outbounds"].([]any)
+						byTag := map[string]map[string]any{}
+						for _, raw := range outputs {
+							value := raw.(map[string]any)
+							byTag[value["tag"].(string)] = value
+						}
+						tcp, udp, owner := byTag[placement.prefix+"tcp"], byTag[placement.prefix+"udp"], byTag[placement.tag]
+						switch fault {
+						case "tcp-plain":
+							tcp["type"] = "direct"
+						case "udp-plain":
+							udp["type"] = "direct"
+						case "udp-alias":
+							owner["udp"] = owner["tcp"]
+						case "owner-node":
+							owner["node_id"] = strings.Repeat("b", 64)
+						case "lane-node":
+							udp["server"] = "192.0.2.99"
+						case "cycle":
+							tcp["detour"] = placement.tag
+						case "bypass":
+							udp["detour"] = "direct"
+						case "missing":
+							udp["tag"] = "missing-owned-udp"
+						case "foreign-owner":
+							owner["tcp"] = "routervpn-foreign-tcp"
+							owner["udp"] = "routervpn-foreign-udp"
+						}
+						if _, err = compilePerf(bad, entry, exit); err == nil {
+							t.Fatal("cover blessed", fault)
+						}
+					}
+				})
+			}
+		}
 	}
 }
 func TestPerformanceCannotIgnorePolicyOrCreateRawJumbo(t *testing.T) {
