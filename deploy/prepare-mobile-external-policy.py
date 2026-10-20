@@ -42,6 +42,12 @@ def prepare(vendor):
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
+    for source, target in (
+        ('measurement.go', 'routervpn_external_measurement.go'),
+        ('measurement_test.go', 'routervpn_external_measurement_test.go'),
+        ('tor_measurement.go', 'routervpn_tor_measurement.go'),
+    ):
+        (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

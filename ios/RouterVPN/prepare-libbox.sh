@@ -72,8 +72,11 @@ headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
     content=header.read_text()
-    for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest'):
+    for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest',
+                   'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement'):
         assert symbol in content, 'Missing external policy/proof API: '+symbol
+    measurement=re.search(r'@interface LibboxRouterHopMeasurement : NSObject .*?\n(.*?)@end',content,re.S)
+    assert measurement and 'drain:' in measurement.group(1), 'Missing native measurement request drain'
     external_request=re.search(r'@interface LibboxRouterExternalProofRequest : NSObject .*?\n(.*?)@end',content,re.S)
     assert external_request, 'Missing native external proof owner'
     for signature in ('- (void)cancel;', '- (BOOL)healthy;', '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;'):

@@ -106,9 +106,13 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerCompileExternalPolicy routerExternalCreateProof; do
+  for symbol in routerCompileExternalPolicy routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterHopMeasurement >"$tmp/router-hop-measurement.javap"
+  grep -Fq 'void drain(java.lang.String) throws java.lang.Exception;' "$tmp/router-hop-measurement.javap" || {
+    echo 'combined libbox AAR measurement owner lacks synchronous request drain' >&2; return 1
+  }
   javap -classpath "$classes" io.nekohasekai.libbox.RouterExternalProofRequest >"$tmp/router-external-proof.javap"
   for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
     grep -Fq "$signature" "$tmp/router-external-proof.javap" || {
