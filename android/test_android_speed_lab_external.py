@@ -58,6 +58,11 @@ final class AndroidSpeedLab{
  static Callback pending;static int starts;static String timing;static double min,max;
  AndroidSpeedLab(Activity a){}void run(String mode,double low,double high,Callback cb){starts++;timing=mode;min=low;max=high;pending=cb;}
 }
+final class AndroidNativeHopMeasurement{
+ interface Callback{void progress(String status);void finished(String status,Throwable error);}
+ void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native hops lost outer MTU hold");cb.finished("native measured paths",null);}
+}
+final class AndroidHopMeasurementDialog{static String renderStatus(String s){return s;}}
 final class AndroidSpeedLabHopMeter{
  static final class Hop{}interface Callback{void finished(List<Hop> hops,Throwable error);}AndroidSpeedLabHopMeter(Activity a){}
  void measure(AndroidNodeStore.Node a,AndroidNodeStore.Node b,Callback cb){cb.finished(Collections.emptyList(),null);}

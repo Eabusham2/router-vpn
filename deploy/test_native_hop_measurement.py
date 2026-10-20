@@ -53,12 +53,26 @@ class Tests(unittest.TestCase):
         self.assertIn('.disabled(runDisabled || hopProbe.running)',view)
     def test_android_real_service_owns_callbacks_and_metadata(self):
         service=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java').read_text()
-        self.assertLess(service.index('ownedExecution.run(ownedServer)'),service.index('hopMeasurement=Libbox.newRouterHopMeasurement'))
-        for marker in ('probe.networkChanged()', 'hopMeasurement.close()', 'synchronized(service.lock)', '"UP".equals(service.state)', 'response.length()>16384'):
+        self.assertLess(service.index('ownedExecution.run(ownedServer)'),service.index('adoptHopMeasurement(Libbox.newRouterHopMeasurement'))
+        for marker in ('probe.networkChanged()', 'hopMeasurement.close()', 'synchronized(service.lock)', '"UP".equals(service.state)', 'response.length()>16384',
+                       'adoptHopMeasurement(capturedExternal.newHopMeasurement()', 'adoptHopMeasurement(capturedTor.newHopMeasurement()',
+                       'static final class HopMeasurementOwner', 'service.hopMeasurement!=probe', 'service.commandServer!=server',
+                       'generation!=service.lifecycle.get()', 'network.equals(service.executionNetworkIdentity())', 'probe.drain(request)',
+                       'Hop measurement cleanup is still pending; its native owner is retained.'):
             self.assertIn(marker,service)
+        worker=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeHopMeasurement.java').read_text()
+        for marker in ('LayeredVpnService.captureHopMeasurement(job.id)', 'AndroidMTUMeasurementGate.owns(job.lease)',
+                       'job.owner.drain();joined=true;', 'if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease)',
+                       'id.equals(status.optString("request_id"))', 'status.getBoolean("drained")'):
+            self.assertIn(marker,worker)
+        self.assertLess(worker.index('job.owner.drain();joined=true;'),worker.index('if(job.releaseLease)AndroidMTUMeasurementGate.release(job.lease)'))
         ui=(ROOT/'android/app/src/main/java/com/eabusham/routervpn/AndroidHopMeasurementDialog.java').read_text()
-        for marker in ('setOnDismissListener','handler.removeCallbacks(poll)','id.equals(status.optString("request_id"))','Double.isFinite(rate)'):
+        for marker in ('setOnDismissListener','measurement.cancel()','measurement.run(null,','Double.isFinite(rate)',
+                       '"private-node".equals(kind)', '"public-path".equals(kind)', 'bytes*8.0/seconds/1000000.0-rate'):
             self.assertIn(marker,ui)
+        runner=(ROOT/'android/test_android_runtime_contract.py').read_text()
+        for test in ('test_android_native_hop_request.py','test_android_external_hop_measurement.py'):
+            self.assertIn(test,runner)
     def test_shipping_apple_result_renderer_rejects_fabricated_metrics(self):
         if not shutil.which('swiftc'):self.skipTest('Swift compiler runs on the Apple build host')
         source=(ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN\n')[1].split('// HOP_RESULT_TYPES_END')[0]

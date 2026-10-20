@@ -12,6 +12,7 @@ final class AndroidMTUMeasurementGate {
         active = new Object(); return active;
     }
     static synchronized boolean held() { return active != null; }
+    static synchronized boolean owns(Object lease) { return lease != null && active == lease; }
     static synchronized void release(Object lease) { if (lease != null && active == lease) active = null; }
     static synchronized void startMTU(Start operation) throws Exception {
         if (active != null) throw new IllegalStateException("Finish Speed Lab before MTU Retest.");

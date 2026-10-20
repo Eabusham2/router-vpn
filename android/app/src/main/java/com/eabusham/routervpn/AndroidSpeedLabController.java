@@ -29,6 +29,8 @@ final class AndroidSpeedLabController {
     private final AndroidUnifiedConnectionController connection;
     private final AndroidSpeedLab meter;
     private final AndroidSpeedLabHopMeter hopMeter;
+    private final AndroidNativeHopMeasurement nativeHopMeter=new AndroidNativeHopMeasurement();
+    private volatile String nativeHopStatus="";
     private final AtomicBoolean running=new AtomicBoolean(false);
     private volatile List<AndroidSpeedLabHopMeter.Hop> lastHops=Collections.emptyList();
     private volatile String lastHopError="";
@@ -55,6 +57,7 @@ final class AndroidSpeedLabController {
     boolean isRunning(){return running.get();}
     List<AndroidSpeedLabHopMeter.Hop> hops(){return new ArrayList<>(lastHops);}
     String hopError(){return lastHopError;}
+    String nativeHops(){return nativeHopStatus;}
 
     void run(Request request,Callback callback){
         if(request==null){callback.finished(null,new IllegalArgumentException("Speed Lab request is required."));return;}
@@ -91,7 +94,7 @@ final class AndroidSpeedLabController {
     }
 
     private void runOwned(Request request,Callback callback,long owner){
-        lastHops=Collections.emptyList();lastHopError="";
+        lastHops=Collections.emptyList();lastHopError="";nativeHopStatus="";
         boolean temporaryRuntimeRequested=false;
         try{
             String scope=normalize(request.scope,"current");
@@ -136,6 +139,20 @@ final class AndroidSpeedLabController {
             if(error!=null){complete(callback,cleanup,result,error);return;}
             if(externalTemporary&&!externalCurrent(request)){complete(callback,cleanup,null,new IllegalStateException("The temporary external path changed during measurement."));return;}
             AndroidHomeStateStore.Snapshot runtime=AndroidHomeStateStore.snapshot(activity);
+            if(runtime.connected&&"external".equals(runtime.logicalMode)){
+                callback.progress("Measuring the captured entry and routed external path…");
+                nativeHopMeter.run(mtuLease,new AndroidNativeHopMeasurement.Callback(){
+                    public void progress(String status){if(current(owner))callback.progress("Measuring captured native paths; MTU remains held until cleanup drains…");}
+                    public void finished(String status,Throwable hopError){activity.runOnUiThread(()->{
+                        if(!current(owner)||completionStarted)return;
+                        if(hopError!=null){complete(callback,cleanup,null,hopError);return;}
+                        if(externalTemporary&&!externalCurrent(request)){complete(callback,cleanup,null,new IllegalStateException("The temporary external path changed during native measurement."));return;}
+                        try{nativeHopStatus=AndroidHopMeasurementDialog.renderStatus(status);}catch(Exception invalid){complete(callback,cleanup,null,invalid);return;}
+                        complete(callback,cleanup,result,null);
+                    });}
+                });
+                return;
+            }
             if(!runtime.connected||!"multihop".equals(runtime.logicalMode)){complete(callback,cleanup,result,null);return;}
             try{
                 AndroidNodeStore store=new AndroidNodeStore(activity);AndroidNodeStore.Node entry=find(store.list(),runtime.activeEntryId),exit=find(store.list(),runtime.activeExitId);

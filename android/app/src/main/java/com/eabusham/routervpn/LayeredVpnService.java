@@ -104,7 +104,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(owned==null||!"UP".equals(service.state)||service.explicitStop)throw new IllegalStateException("Connect a proved Router VPN path first.");
             if("start".equals(operation)&&service.hopMeasurement!=null){
                 JSONObject progress=new JSONObject(service.hopMeasurement.statusJSON());
-                if(!progress.optBoolean("complete",false)&&!progress.optString("request_id","").isEmpty())throw new IllegalStateException("Finish hop measurement before MTU Retest.");
+                if(!progress.optBoolean("drained",false)&&!progress.optString("request_id","").isEmpty())throw new IllegalStateException("Finish hop measurement and its native cleanup before MTU Retest.");
             }
             return owned.request(operation,session,request);
         }
@@ -153,6 +153,34 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if(response==null||response.length()>16384)throw new IllegalStateException("Oversized measurement status.");
             return response;
         }
+    }
+
+    /** Retains the old native probe so cancellation can drain it after replacement. */
+    static final class HopMeasurementOwner {
+        private final LayeredVpnService service;
+        private final io.nekohasekai.libbox.RouterHopMeasurement probe;
+        private final CommandServer server;
+        private final long generation;
+        private final String request,network;
+        private volatile boolean started;
+        private HopMeasurementOwner(LayeredVpnService service,String request){this.service=service;probe=service.hopMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;this.request=request;}
+        private void requireCurrent(){
+            if(probe==null||server==null||service.hopMeasurement!=probe||service.commandServer!=server||generation!=service.lifecycle.get()
+                    ||service.explicitStop||!"UP".equals(service.state)||!network.equals(service.executionNetworkIdentity()))throw new IllegalStateException("The captured path measurement session changed.");
+        }
+        void start()throws Exception{
+            synchronized(service.lock){requireCurrent();if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");probe.start(request,8388608);started=true;requireCurrent();}
+        }
+        boolean started(){return started;}
+        String status()throws Exception{
+            synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.length()>16384)throw new IllegalStateException("Oversized measurement status.");return response;}
+        }
+        void cancel(){probe.cancel(request);}
+        void drain()throws Exception{probe.drain(request);}
+    }
+    static HopMeasurementOwner captureHopMeasurement(String request)throws Exception{
+        LayeredVpnService service=currentService.get();if(service==null||request==null||!request.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured path measurement session.");
+        synchronized(service.lock){HopMeasurementOwner owner=new HopMeasurementOwner(service,request);owner.requireCurrent();return owner;}
     }
     static String torProofJSON(String sessionID, String externalID) throws Exception {
         LayeredVpnService service = currentService.get();
@@ -633,7 +661,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executionHandler.removeCallbacks(performanceWatch);
         if (commandServer != null) Libbox.routerInvalidatePerformance(commandServer);
         executionHandler.removeCallbacks(executionWatch);
-        if(hopMeasurement!=null){try{hopMeasurement.close();}catch(Exception error){Log.w(TAG,"Hop measurement teardown is pending.");}hopMeasurement=null;}
+        if(hopMeasurement!=null){
+            try{hopMeasurement.close();}
+            catch(Exception error){publish("STOPPING",activeMode,"Hop measurement cleanup is still pending; its native owner is retained.");throw new IllegalStateException("Hop measurement teardown has not drained.");}
+            hopMeasurement=null;
+        }
         if(executionController!=null){
             try{executionController.close();}catch(Exception failure){Log.w(TAG,"Server lease cleanup was not confirmed; bounded server expiry remains in force.");}
             executionController=null;executionProved=false;

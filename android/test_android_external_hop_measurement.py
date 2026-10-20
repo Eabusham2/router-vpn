@@ -19,11 +19,12 @@ spec.loader.exec_module(T)
 SOURCES = dict(T.SOURCES)
 SOURCES["io/nekohasekai/libbox/RouterHopMeasurement.java"] = r'''package io.nekohasekai.libbox;
 public class RouterHopMeasurement {
- public int closes,invalidations,starts,cancels;public String request="";
- public void close(){closes++;}public void networkChanged(){invalidations++;}
- public void start(String id,long bytes){if(bytes!=8388608)throw new AssertionError("unbounded request");starts++;request=id;}
+ public int closes,invalidations,starts,cancels,drains;public String request="";public boolean closePending;public Runnable onStart,onStatus;
+ public void close(){closes++;if(closePending)throw new IllegalStateException("native worker pending");}public void networkChanged(){invalidations++;}
+ public void start(String id,long bytes){if(bytes!=8388608)throw new AssertionError("unbounded request");starts++;request=id;if(onStart!=null)onStart.run();}
  public void cancel(String id){if(!id.equals(request))throw new AssertionError("cancel lost request");cancels++;}
- public String statusJSON(){return "{\"request_id\":\""+request+"\",\"complete\":false}";}
+ public void drain(String id){if(!id.equals(request))throw new AssertionError("drain lost request");drains++;}
+ public String statusJSON(){if(onStatus!=null)onStatus.run();return "{\"request_id\":\""+request+"\",\"complete\":false}";}
 }'''
 native = SOURCES["io/nekohasekai/libbox/Libbox.java"]
 native = native.replace(
@@ -105,8 +106,26 @@ public class ExternalHopMeasurementTest {
   }
   Libbox.measurementReset();CommandServer server=new CommandServer(null,null);LayeredVpnService s=service(server);RouterHopMeasurement m=new RouterHopMeasurement();adopt(s,m,server,0);field("externalOwner").setBoolean(s,true);Libbox.failClose=true;
   reject(()->invoke(s,"closeCoreLocked",new Class<?>[]{}));check(m.invalidations==1&&m.closes==0&&field("hopMeasurement").get(s)==m,"unconfirmed Box drain released active measurement");Libbox.failClose=false;invoke(s,"closeCoreLocked",new Class<?>[]{});check(m.closes==1&&field("hopMeasurement").get(s)==null,"confirmed Box drain retained measurement");s.onDestroy();
+  server=new CommandServer(null,null);LayeredVpnService pendingService=service(server);RouterHopMeasurement pending=new RouterHopMeasurement();adopt(pendingService,pending,server,0);pending.closePending=true;
+  reject(()->invoke(pendingService,"closeCoreLocked",new Class<?>[]{}));check(field("hopMeasurement").get(pendingService)==pending&&field("commandServer").get(pendingService)==server,"unconfirmed measurement close released its native owner");pending.closePending=false;invoke(pendingService,"closeCoreLocked",new Class<?>[]{});check(pending.closes==2&&field("hopMeasurement").get(pendingService)==null,"retained measurement teardown was not retried");pendingService.onDestroy();
  }
- public static void main(String[] args)throws Exception{exactAndRejected();lateFactory();serviceAdoption();System.out.println("Android external/Tor measurement ownership: "+checks+" checks; exact proof, late factories, native adoption and retained teardown");}
+ static void capturedRequests()throws Exception{
+  final String id="1234567890abcdef1234567890abcdef";
+  for(String reason:new String[]{"valid","generation","server","network","replacement","stop","state","late-start","late-status"}){
+   Libbox.measurementReset();CommandServer server=new CommandServer(null,null);LayeredVpnService s=service(server);RouterHopMeasurement probe=new RouterHopMeasurement();adopt(s,probe,server,0);field("state").set(s,"UP");field("currentService").set(null,new java.lang.ref.WeakReference<>(s));
+   LayeredVpnService.HopMeasurementOwner owner=LayeredVpnService.captureHopMeasurement(id);check(!owner.started(),"capturing a request started traffic");
+   java.util.concurrent.atomic.AtomicLong generation=(java.util.concurrent.atomic.AtomicLong)field("lifecycle").get(s);
+   if(reason.equals("late-start"))probe.onStart=()->generation.incrementAndGet();
+   if(reason.equals("late-start")){reject(owner::start);check(owner.started()&&probe.starts==1,"native started request was lost after post-start ownership failure");}
+   else{owner.start();check(owner.started()&&probe.starts==1,"captured native request not started once");}
+   if(reason.equals("generation"))generation.incrementAndGet();if(reason.equals("server"))field("commandServer").set(s,new CommandServer(null,null));if(reason.equals("network"))android.net.ConnectivityManager.networks=new android.net.Network[]{};if(reason.equals("replacement"))field("hopMeasurement").set(s,new RouterHopMeasurement());if(reason.equals("stop"))field("explicitStop").setBoolean(s,true);if(reason.equals("state"))field("state").set(s,"STOPPING");if(reason.equals("late-status"))probe.onStatus=()->generation.incrementAndGet();
+   if(reason.equals("valid"))check(new JSONObject(owner.status()).getString("request_id").equals(id),"captured result lost request identity");else reject(owner::status);
+   owner.cancel();owner.drain();check(probe.cancels==1&&probe.drains==1,"replacement prevented old probe cancellation/drain");
+   field("hopMeasurement").set(s,probe);s.onDestroy();
+  }
+  reject(()->LayeredVpnService.captureHopMeasurement("not-a-request"));
+ }
+ public static void main(String[] args)throws Exception{exactAndRejected();lateFactory();serviceAdoption();capturedRequests();System.out.println("Android external/Tor measurement ownership: "+checks+" checks; exact proof, late factories, native adoption, captured requests and retained teardown");}
 }'''
 
 
@@ -132,6 +151,8 @@ def main():
             ("AndroidExternalSession.java", "owned = request == proof && healthy();", "owned = true;", "external late factory"),
             ("AndroidTorSession.java", "owned = request == proof && healthy();", "owned = true;", "Tor late factory"),
             ("LayeredVpnService.java", "generation == lifecycle.get() && commandServer == server && hopMeasurement == null", "commandServer == server && hopMeasurement == null", "native generation adoption"),
+            ("LayeredVpnService.java", "service.hopMeasurement!=probe||", "", "captured request owner"),
+            ("LayeredVpnService.java", 'throw new IllegalStateException("Hop measurement teardown has not drained.");', "", "retained native drain"),
         ):
             path = app / name
             source = path.read_text()
@@ -141,7 +162,7 @@ def main():
             result = subprocess.run(run_args, capture_output=True, text=True, timeout=25)
             assert result.returncode != 0 and "AssertionError" in result.stderr, label + " negative control escaped"
             path.write_text(source)
-        print("Android external/Tor measurement negative controls: 3 rejected")
+        print("Android external/Tor measurement negative controls: 5 rejected")
 
 
 if __name__ == "__main__":
