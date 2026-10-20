@@ -62,7 +62,7 @@ final class AndroidStandardExitStore {
         r.add(new Capability("wireguard",true,"")); r.add(new Capability("socks5",true,""));
         r.add(new Capability("http",true,"")); r.add(new Capability("https",true,""));
         r.add(new Capability("shadowsocks",true,"")); r.add(new Capability("hysteria2",true,""));
-        r.add(new Capability("openvpn",true,"Native pinned OpenVPN client with exact public-exit proof."));
+        r.add(new Capability("openvpn",true,"Native pinned OpenVPN with saved DNS/network policy, complete Router VPN entries and current entry/DNS/public-exit proof."));
         r.add(new Capability("tor",true,"Native Tor circuit with dynamic Tor-exit proof."));
         r.add(new Capability("tor-bridge",true,"Native obfs4 / meek / Snowflake / WebTunnel / Custom bridge circuits with captured protected networking."));
         return r;

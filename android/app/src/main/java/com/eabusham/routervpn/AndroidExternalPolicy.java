@@ -25,7 +25,7 @@ final class AndroidExternalPolicy {
             "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu"));
 
     static boolean supports(String protocol) {
-        return Arrays.asList("wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2").contains(protocol);
+        return Arrays.asList("wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn").contains(protocol);
     }
 
     static String protocol(String value) {
@@ -107,6 +107,12 @@ final class AndroidExternalPolicy {
                 ext.put("shadowsocks", new JSONObject().put("server", exit.server).put("port", exit.serverPort).put("method", exit.method).put("password", exit.secret)); break;
             case "hysteria2":
                 ext.put("hysteria2", new JSONObject().put("server", exit.server).put("port", exit.serverPort).put("password", exit.secret).put("tls_server_name", exit.tlsServerName)); break;
+            case "openvpn":
+                // Capture the original inline profile, including its complete
+                // remote/TLS list. The shared compiler revalidates the exact
+                // native endpoint; credentials retain intentional whitespace.
+                ext.put("openvpn", new JSONObject().put("config", exit.openVPNConfig)
+                        .put("username", exit.username).put("password", exit.password)); break;
             default: throw new IllegalArgumentException("Unowned external transport.");
         }
         return policy.put("id", exit.id).put("node_kind", "external").put("external", ext);
@@ -174,7 +180,7 @@ final class AndroidExternalPolicy {
         }
         JSONObject transport = AndroidDirectStandardExitController.customExitJson(exit);
         if (!entryTag.isEmpty()&&captured==null) transport.put("detour", entryTag);
-        if ("wireguard".equals(exit.protocol)) endpoints.put(transport); else outbounds.put(transport);
+        if ("wireguard".equals(exit.protocol) || "openvpn".equals(exit.protocol)) endpoints.put(transport); else outbounds.put(transport);
         JSONObject source = new JSONObject().put("log", new JSONObject().put("level", "warn"))
                 .put("inbounds", new JSONArray().put(new JSONObject().put("type", "tun").put("tag", "tun-in")
                         .put("address", new JSONArray().put("172.29.93.1/30").put("fd29:93::1/126"))

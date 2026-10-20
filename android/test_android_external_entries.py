@@ -13,19 +13,28 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location("external_entry_fixture", ROOT / "android/test_android_tor_profile.py")
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
-T.EXTRA_SOURCES = ("AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidStandardExitController")
+T.EXTRA_SOURCES = ("AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidOpenVPN")
+T.TOR_BOUNDARIES = T.TOR_BOUNDARIES[:T.TOR_BOUNDARIES.index("final class AndroidOpenVPN")]
 T.EXTRA_LIBBOX = r'''
+ public static String version(){return "1.14.1";}
  public static String routerCompileExternalPolicy(String source,String capture)throws Exception{return call("external-policy",source,capture);}
+ public static String routerOpenVPNEndpoint(String config,String username,String password,String tag,String detour)throws Exception{return call("external-openvpn",new JSONObject().put("config",config).put("username",username).put("password",password).put("tag",tag).put("detour",detour).toString(),"");}
 '''
-T.GO = T.GO.replace('case "tor-profile":', '''case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+T.GO = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mobiletor";nativeopenvpn "router-vpn/mobile"', 1)
+T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
+  var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p)
+  if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
+ case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "tor-profile":''', 1)
 T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
+ static String externalCertificate;
  static AndroidStandardExitStore.Entry external(String kind,String dns)throws Exception{
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="ordinary-"+kind;e.name="Captured "+kind;e.protocol=kind;e.server="203.0.113.50";e.serverPort=443;e.expectedPublicIp="8.8.4.4";e.tlsServerName="exit.example.test";
   String key=MultihopGraphHarness.key('v');
   if(kind.equals("wireguard")){e.wgPrivateKey=key;e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;}
   if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exit-only-user";e.password="exit-only-password";}
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="exit-only-hy2";
+  if(kind.equals("openvpn")){e.username=" exit-only user ";e.password=" exit-only password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.50 443\nremote 203.0.113.51 1194 tcp-client\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\n<ca>\n"+externalCertificate+"\n</ca>\n";}
   e.policy=new JSONObject().put("dns_mode",dns).put("ipv6_mode","on").put("home_lan_access",false).put("home_lan_cidrs",new JSONArray().put("192.168.50.0/24")).put("mtu_policy","auto").put("effective_mtu",8800);
   if(!dns.equals("home"))e.policy.put("dns_protocol","tcp").put("dns_host","149.112.112.112").put("dns_port",5353);
   return e;
@@ -42,6 +51,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   check(proof.getString("predecessor_sha256").equals(AndroidTorProfile.digest(capture.getString("predecessor_config").getBytes(StandardCharsets.UTF_8))),"entry graph digest changed");
   JSONObject predecessor=new JSONObject(capture.getString("predecessor_config"));check(graph.getJSONArray("inbounds").length()==1&&graph.getJSONObject("route").getString("final").equals("custom-exit"),"entry created a second VPN owner");
   JSONObject output=byTag(graph,"custom-exit");check(output.getString("detour").equals("external-entry"),"selected external traffic bypassed entry");
+  if(kind.equals("openvpn")){JSONObject inline=capture.getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");check(output.getString("type").equals("openvpn-client")&&!output.getBoolean("system")&&output.getJSONArray("servers").length()==2,"OpenVPN lost its remote list or acquired a system TUN");check(output.getString("username").equals(exit.username)&&output.getString("password").equals(exit.password)&&inline.getString("config").equals(exit.openVPNConfig),"OpenVPN borrowed or normalized private credentials");check(output.getJSONObject("tls").getJSONArray("certificate").getString(0).equals(externalCertificate.trim()+"\n")&&output.getInt("mtu")==1380,"OpenVPN changed inline TLS or transport MTU");}
   JSONObject entryOutput=byTag(graph,"external-entry"),original=byTag(predecessor,predecessor.getJSONObject("route").getString("final"));check(entryOutput.getString("type").equals(original.getString("type")),"selected entry family changed");
   check(proof.getString("dns_server").equals(exit.policy.getString("dns_mode").equals("home")?profile(selected).getString("adguard_ipv4"):"149.112.112.112"),"entry replaced selected exit DNS");
   check(proof.getString("dns_detour").equals(exit.policy.getString("dns_mode").equals("home")?"external-entry":"custom-exit"),"selected DNS escaped captured owner");
@@ -64,9 +74,9 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   }
  }
  public static void main(String[] args)throws Exception{
-  Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");
-  for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2"})ordinary(dir,mode,layer,kind,certificate);
-  check(graphs==342,"ordinary encrypted entry matrix incomplete");ordinaryRejections(dir,certificate);
+  Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");externalCertificate=io.nekohasekai.libbox.Libbox.testCertificate("external-openvpn.example.test").trim();
+  for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"})ordinary(dir,mode,layer,kind,certificate);
+  check(graphs==399,"ordinary encrypted entry matrix incomplete");ordinaryRejections(dir,certificate);
   System.out.println("Android ordinary external entries: PASS "+graphs+" shipping Java/Go graphs, "+checks+" checks; all19 native entry modes and saved Start Layers");
  }
 }

@@ -170,7 +170,6 @@ final class AndroidRuntimeRegistry {
  AndroidRuntimeRegistry(android.content.Context context){singBox=new NativeSingBoxController(context);}
  static AndroidRuntimeRegistry get(android.content.Context context){return instances.computeIfAbsent(context.getFilesDir().toString(),key->new AndroidRuntimeRegistry(context));}
 }
-final class AndroidOpenVPN {static JSONObject endpoint(AndroidStandardExitStore.Entry e,String value){throw new AssertionError("Tor editor called OpenVPN");}}
 '''
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -291,11 +290,12 @@ public final class TorFormHarness {
   if(kind.equals("wireguard")){e.wgPrivateKey=key;e.wgPeerPublicKey=key;e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));e.wgMtu=1420;}
   if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="private-user";e.password="private-password";}
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="private-hy2-password";e.tlsServerName="exit.example.test";
+  if(kind.equals("openvpn")){e.username=" private OpenVPN user ";e.password=" private OpenVPN password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nauth-user-pass\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
   return e;
  }
  static void ordinaryPolicies()throws Exception{
   int ordinaryRoundtrips=0;
-  for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
+  for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
    if(dns.equals("doh3")&&(kind.equals("http")||kind.equals("https")))continue;
    StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-form-"),null);AndroidStandardExitStore.Entry selected=ordinary(kind);
    selected.policy=policy(dns.equals("tcp")?"custom":dns,dns.equals("rescue")?"tcp":dns);selected.policy.put("effective_mtu",8800);
@@ -318,15 +318,26 @@ public final class TorFormHarness {
   selected=store(activity).get(selected.id);String before=AndroidStandardExitStore.snapshot(selected);invoke(activity,"showExternalPolicyForm",selected);AlertDialog invalid=AlertDialog.last;field(invalid,"Fixed MTU 1280–9000 (blank: Auto baseline)").setText("9001");invalid.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(invalid.showing&&before.equals(AndroidStandardExitStore.snapshot(store(activity).get(selected.id))),"invalid ordinary MTU overwrote the saved policy");invalid.dismiss();
   invoke(activity,"showExternalPolicyForm",selected);AlertDialog active=AlertDialog.last;AndroidVpnMutationGuard.busy=true;active.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AndroidVpnMutationGuard.busy=false;check(active.showing&&before.equals(AndroidStandardExitStore.snapshot(store(activity).get(selected.id))),"ordinary editor changed a live capture");active.dismiss();
   for(String mutation:new String[]{"exit","denied"}){StandardExitActivity pending=activity(Files.createTempDirectory(root,"ordinary-permission-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");e.policy.put("dns_mode","rescue");store(pending).save(e);invoke(pending,"requestDirect",e);if(mutation.equals("exit")){e.policy.put("dns_mode","home");store(pending).save(e);}pending.onActivityResult(2101,mutation.equals("denied")?0:Activity.RESULT_OK,null);check(AndroidRuntimeRegistry.get(pending).standardExit.starts==0,"permission adopted changed external policy");}
-  for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2"})for(String mode:ALL){
+  for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"ordinary-mode-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node owned=node(directory);AndroidStandardExitStore.Entry e=ordinary(kind);e.policy.put("dns_mode","rescue");store(picker).save(e);
    invoke(picker,"chooseEntry",e);AlertDialog.last.clickItem(0);AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"ordinary external mode picker omitted a captured entry");int index=-1;for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"ordinary entry mode unavailable: "+mode);modes.clickItem(index);picker.onActivityResult(2101,Activity.RESULT_OK,null);
    AndroidStandardExitRuntime run=AndroidRuntimeRegistry.get(picker).standardExit;check(run.starts==1&&run.mode.equals(mode)&&run.entry.equals(owned.file)&&run.exit.protocol.equals(kind),"ordinary permission handoff changed selected mode or exit");
   }
   System.out.println("Android ordinary external settings: "+ordinaryRoundtrips+" real Java/Go graph roundtrips plus Home, rejection and permission ownership checks passed");
  }
+ static void openVPNForm()throws Exception{
+  StandardExitActivity activity=activity(Files.createTempDirectory(root,"openvpn-add-"),null);AndroidStandardExitStore.Entry example=ordinary("openvpn");
+  invoke(activity,"showOpenVPNForm");AlertDialog add=AlertDialog.last;EditText config=field(add,"Paste complete inline .ovpn profile"),username=field(add,"Username (when required)"),password=field(add,"Password (when required)");
+  field(add,"Display name").setText(example.name);field(add,"Expected public exit IP").setText(example.expectedPublicIp);config.setText(example.openVPNConfig);username.setText(example.username);password.setText(example.password);
+  check(!config.isSaveEnabled()&&!username.isSaveEnabled()&&!password.isSaveEnabled(),"OpenVPN form retained private credentials in Android saved state");
+  add.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog settings=AlertDialog.last;check(!add.showing&&settings.showing&&settings.title.toString().contains("Connection settings"),"OpenVPN skipped its saved policy form");
+  check(config.getText().length()==0&&username.getText().length()==0&&password.getText().length()==0,"OpenVPN credential fields survived dismissal");check(store(activity).list().isEmpty(),"OpenVPN was saved before policy capture");
+  check(spinner(settings,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0,"new OpenVPN node replaced Home default");settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!settings.showing&&store(activity).list().size()==1,"OpenVPN full private profile was not saved");
+  AndroidStandardExitStore.Entry saved=store(activity).list().get(0);check(saved.openVPNConfig.equals(example.openVPNConfig)&&saved.username.equals(example.username)&&saved.password.equals(example.password)&&saved.policy.getString("dns_mode").equals("home"),"OpenVPN settings handoff changed config, credentials or selected Home DNS");
+  boolean rejected=false;try{AndroidExternalPolicy.compile(saved,null,"external");}catch(Exception expected){rejected=true;}check(rejected,"new direct OpenVPN silently replaced Home DNS without a captured entry");
+ }
 
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();newFormAndRejections();dialogAndPermission();ordinaryPolicies();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();newFormAndRejections();dialogAndPermission();ordinaryPolicies();openVPNForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -337,7 +348,11 @@ def main():
         raise RuntimeError("Android JSON implementation required")
     with tempfile.TemporaryDirectory(prefix=".tor-form-policy-", dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix="android-tor-form-") as work:
         go_dir, work = Path(go_dir), Path(work)
-        (go_dir / "main.go").write_text(T.GO.replace('case "tor-profile":', 'case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)\n case "tor-profile":', 1))
+        code = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mobiletor";nativeopenvpn "router-vpn/mobile"', 1)
+        code = code.replace('case "tor-profile":', '''case "external-openvpn":var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
+ case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "tor-profile":''', 1)
+        (go_dir / "main.go").write_text(code)
         native = work / "policy"
         subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")], cwd=ROOT, check=True, timeout=90)
         stubs = dict(T.P.M.STUBS)
@@ -365,12 +380,13 @@ def main():
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
+ public static String version(){return "1.14.1";}public static String routerOpenVPNEndpoint(String config,String username,String password,String tag,String detour)throws Exception{return call("external-openvpn",new JSONObject().put("config",config).put("username",username).put("password",password).put("tag",tag).put("detour",detour).toString(),"");}
  public static String routerCompilePQProfile(''', 1)
             target = src / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "StandardExitActivity"):
+        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         (app / "MultihopGraphHarness.java").write_text(T.P.M.HARNESS)
         constants = "\n".join(re.findall(r" static final String (?:OBFS|MEEK|SNOW|WEB)=.*;", T.HARNESS))

@@ -14,9 +14,9 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 GO = r'''package main
-import("encoding/json";"fmt";"io";"os";"github.com/Eabusham2/router-vpn/internal/mobilemultihop")
+import("encoding/json";"fmt";"io";"os";"github.com/Eabusham2/router-vpn/internal/mobilemultihop";nativeopenvpn "github.com/Eabusham2/router-vpn/mobile")
 func main(){ raw,_:=io.ReadAll(os.Stdin); var args []string; if err:=json.Unmarshal(raw,&args);err!=nil{panic(err)}; var out string;var err error
-switch args[0]{case "external":out,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case "wg":out,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);default:panic("unknown operation")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(out)}'''
+switch args[0]{case "external":out,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case "wg":out,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case "openvpn":out,err=nativeopenvpn.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);default:panic("unknown operation")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(out)}'''
 
 STUBS = {
 "android/content/Context.java": '''package android.content; public class Context { final java.io.File root; public Context(java.io.File r){root=r;} public Context getApplicationContext(){return this;} public java.io.File getFilesDir(){return root;} }''',
@@ -26,6 +26,7 @@ import org.json.JSONArray;import java.nio.charset.StandardCharsets;
 public class Libbox { public static Runnable hook;public static String compiler;public static int checked;
 static String call(String...args)throws Exception{Process p=new ProcessBuilder(compiler).start();p.getOutputStream().write(new JSONArray(java.util.Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));p.getOutputStream().close();String out=new String(p.getInputStream().readAllBytes(),StandardCharsets.UTF_8),err=new String(p.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(p.waitFor()!=0)throw new IllegalStateException(err);return out;}
 public static String routerCompileExternalPolicy(String s,String c)throws Exception{String out=call("external",s,c);Runnable h=hook;hook=null;if(h!=null)h.run();return out;}
+public static String version(){return "1.14.1";}public static String routerOpenVPNEndpoint(String c,String u,String p,String t,String d)throws Exception{return call("openvpn",c,u,p,t,d);}
 public static String routerCompileWireGuardProfile(String s,String n)throws Exception{return call("wg",s,n);}public static void checkConfig(String c){checked++;}}
 ''',
 }
@@ -42,7 +43,6 @@ final class AndroidTorProfile {
  static String strictText(byte[] b)throws Exception{return java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}
  static String digest(byte[] b)throws Exception{StringBuilder s=new StringBuilder();for(byte x:java.security.MessageDigest.getInstance("SHA-256").digest(b))s.append(String.format(java.util.Locale.ROOT,"%02x",x&255));return s.toString();}
 }
-final class AndroidOpenVPN {static org.json.JSONObject endpoint(AndroidStandardExitStore.Entry e,String d){throw new IllegalArgumentException("OpenVPN boundary");}}
 final class AndroidKillSwitchPolicy {static final String SESSION_MARKER="strict";static boolean strictRequested(org.json.JSONObject b){return false;}}
 final class AndroidVpnMutationGuard {static boolean isBusy(android.content.Context c){return false;}}
 final class AndroidHomeStateStore {static class Snapshot{boolean connected=false;String phase="off";}static Snapshot snapshot(android.content.Context c){return new Snapshot();}}
@@ -67,6 +67,7 @@ static AndroidStandardExitStore.Entry exit(String kind)throws Exception{AndroidS
  if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exact user";e.password="exact-password";}
  if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key('s');}
  if(kind.equals("hysteria2"))e.secret="captured-only-secret";e.tlsServerName="selected.example.test";
+ if(kind.equals("openvpn")){e.username=" exact user ";e.password=" exact password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
  e.policy.put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","149.112.112.112").put("dns_port",5353)
  .put("ipv6_mode","off").put("home_lan_access",false).put("home_lan_cidrs",new JSONArray().put("192.168.50.0/24").put("fd12::/48"))
  .put("mtu_policy","auto").put("effective_mtu",8800);return e;}
@@ -77,7 +78,7 @@ static JSONObject entry()throws Exception{String pub=key('p');String proof=Andro
 static JSONObject copy(JSONObject p)throws Exception{return new JSONObject(p.toString());}
 static JSONObject find(JSONObject g,String tag)throws Exception{for(String f:List.of("outbounds","endpoints")){JSONArray a=g.optJSONArray(f);if(a!=null)for(int i=0;i<a.length();i++)if(tag.equals(a.getJSONObject(i).optString("tag")))return a.getJSONObject(i);}throw new AssertionError(tag);}
 public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libbox.compiler=args[0];Path root=Path.of(args[1]);android.content.Context context=new android.content.Context(root.toFile());
- String[] kinds={"wireguard","socks5","http","https","shadowsocks","hysteria2"};
+ String[] kinds={"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"};
  for(String kind:kinds)for(boolean hopped:new boolean[]{false,true}){
   AndroidStandardExitStore.Entry e=exit(kind);JSONObject b=hopped?entry():null;String before=AndroidStandardExitStore.snapshot(e),nodeBefore=b==null?"":b.toString();
   AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(e,b,hopped?"wg":"external");JSONObject g=new JSONObject(c.config),m=c.metadata;
@@ -87,6 +88,7 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
   check(g.getJSONArray("inbounds").length()==1,"second local VPN/listener");check(g.getJSONObject("route").getString("final").equals("custom-exit"),"final route owner");
   check(find(g,"custom-exit").optString("detour").equals(hopped?"entry-wg":""),"entry bypass");
   JSONObject captured=new JSONObject(c.capture);check(captured.getJSONObject("profile").getString("id").equals(e.id),"exit id changed");check(!captured.getJSONObject("profile").has("effective_mtu"),"stale policy captured");
+  if(kind.equals("openvpn")){JSONObject endpoint=find(g,"custom-exit"),inline=captured.getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");check(endpoint.getString("type").equals("openvpn-client")&&!endpoint.getBoolean("system")&&endpoint.getJSONArray("servers").length()==2,"OpenVPN remote/native owner was reduced");check(endpoint.getString("username").equals(e.username)&&endpoint.getString("password").equals(e.password)&&inline.getString("config").equals(e.openVPNConfig),"OpenVPN capture changed inline config or credential spacing");check(endpoint.getInt("mtu")==1380&&endpoint.getJSONObject("tls").getString("remote_certificate_tls").equals("server"),"OpenVPN transport MTU or authentication was changed");}
   for(String dns:List.of("home","rescue","doh","dot","doh3")){
    AndroidStandardExitStore.Entry d=AndroidStandardExitStore.copy(e);d.policy.put("dns_mode",dns);
    if(dns.equals("home")){d.policy.remove("dns_host");d.policy.put("dns_protocol","udp").put("dns_port",53);}
@@ -118,6 +120,8 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
  io.nekohasekai.libbox.Libbox.hook=()->Thread.currentThread().interrupt();reject(()->AndroidExternalPolicy.prepare(context,node.toFile(),saved,"wg"),"cancelled preparation staged");Thread.interrupted();check(before==root.resolve("layered-sessions").toFile().list().length,"cancelled capture wrote files");
  AndroidPrivateFileStore.failName=AndroidExternalPolicy.SESSION_FILE;reject(()->AndroidExternalPolicy.prepare(context,node.toFile(),saved,"wg"),"failed metadata write accepted");check(before==root.resolve("layered-sessions").toFile().list().length,"failed staging retained partial graph");AndroidPrivateFileStore.failName="";
  for(int n:new int[]{0,1279,9001}){AndroidStandardExitStore.Entry d=exit("socks5");d.policy.put("mtu_policy","fixed").put("manual_mtu",n);reject(()->AndroidExternalPolicy.compile(d,null,"external"),"invalid fixed MTU ignored");}
+ for(String forbidden:new String[]{"up /private/never-read", "plugin /private/never-load", "ca /private/never-read", "dhcp-option DNS 8.8.8.8", "remote localhost 1194"}){AndroidStandardExitStore.Entry e=exit("openvpn");e.openVPNConfig+=forbidden+"\n";reject(()->AndroidExternalPolicy.compile(e,null,"external"),"OpenVPN unsafe inline input reached shared policy");}
+ AndroidStandardExitStore.Entry ovpn=exit("openvpn");String ovpnBefore=AndroidStandardExitStore.snapshot(ovpn);store.save(ovpn);check(ovpnBefore.equals(AndroidStandardExitStore.snapshot(store.get(ovpn.id))),"OpenVPN inline credentials or policy changed in private persistence");ovpn.protocol=" OVPN ";NativeSingBoxController.SessionInfo ovpnSession=new AndroidDirectStandardExitController(context).prepare(ovpn);Path ovpnFolder=root.resolve("layered-sessions").resolve(ovpnSession.sessionId);check(Files.isRegularFile(ovpnFolder.resolve(AndroidExternalPolicy.SESSION_FILE)),"OpenVPN alias bypassed captured service proof");check(new JSONObject(Files.readString(ovpnFolder.resolve("sing-box.json"))).getJSONArray("inbounds").length()==1,"OpenVPN retained the old unowned public proof listener");
  System.out.println("Android external policy: "+checks+" executable checks passed");}
 }
 '''
@@ -141,7 +145,7 @@ def main():
             target.write_text(source)
         app = temp / "com/eabusham/routervpn"
         app.mkdir(parents=True, exist_ok=True)
-        for name in ("AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidNumericAddress"):
+        for name in ("AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidNumericAddress", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / f"{name}.java", app / f"{name}.java")
         (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n" + BOUNDARIES)
         (app / "ExternalPolicyTest.java").write_text(HARNESS)

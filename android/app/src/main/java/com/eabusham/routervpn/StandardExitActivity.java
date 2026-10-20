@@ -234,11 +234,11 @@ public final class StandardExitActivity extends Activity {
         }
         TextView error=text("",13,false);
         form.addView(name);form.addView(expected);form.addView(config);form.addView(username);form.addView(password);
-        form.addView(text("The native client reads the remote list and inline CA/client keys. Scripts, plugins and filesystem references are rejected. Exit verification still runs before Connected is shown.",13,false));
+        form.addView(text("The native client preserves the remote list and inline CA/client keys. Scripts, plugins and filesystem references are rejected. Next, choose the saved DNS and network settings; the selected entry, DNS and public exit are verified before Connected.",13,false));
         form.addView(error);
         ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Add OpenVPN exit").setView(scroll)
-                .setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+                .setPositiveButton("Next",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
             try{
@@ -247,8 +247,11 @@ public final class StandardExitActivity extends Activity {
                 entry.expectedPublicIp=expected.getText().toString();
                 entry.openVPNConfig=config.getText().toString();
                 entry.username=username.getText().toString();entry.password=password.getText().toString();
-                // The private store validates with the same native compiler as the live runtime.
-                exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
+                // Validate with the same native compiler as the live runtime;
+                // keep credentials private while collecting the full policy.
+                AndroidStandardExitStore.validate(entry);
+                entry.policy=AndroidExternalPolicy.editorPolicy(null);
+                dialog.dismiss();showExternalPolicyForm(entry);
             }catch(Exception failure){error.setText("Save failed: "+safe(failure));}
         }));
         dialog.setOnDismissListener(ignored->{config.setText("");username.setText("");password.setText("");});

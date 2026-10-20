@@ -23,6 +23,7 @@ import android.content.Context;
 import java.io.File;
 import java.util.Collections;
 import java.util.List;
+import java.util.Arrays;
 import java.util.concurrent.atomic.AtomicInteger;
 
 final class NativeSingBoxController {
@@ -99,7 +100,9 @@ final class AndroidStandardExitStore {
     static void validate(Entry entry){}
 }
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
-final class AndroidExternalPolicy {static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
+final class AndroidExternalPolicy {static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}
+    // PRODUCTION_EXTERNAL_PREDICATE
+}
 final class AndroidStandardExitController {
     static volatile String lastEntryMode="",lastProtocol="";
     AndroidStandardExitController(Context c) {}
@@ -408,7 +411,14 @@ public final class RuntimeTeardownHarness {
         test("ordinary external requires its native DNS and entry proof",()->{try(Owner owner=new Owner("external")){LayeredVpnService.externalHealthy=false;Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(!cb.ok&&!AndroidHomeStateStore.current.connected&&owner.engine.stops.get()>0&&publicProofs.get()==0,"missing native proof fell back to a public-IP-only check");awaitIdle(owner);}});
         test("ordinary external stale Home response cannot overwrite replacement",()->{try(Owner owner=new Owner("external")){Callback cb=new Callback(3);try{owner.connect(cb);cb.awaitEntered();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="new-session";replacement.phase="new-owner";AndroidHomeStateStore.current=replacement;}finally{cb.release.countDown();cb.awaitDone();}check(!cb.ok&&AndroidHomeStateStore.current.sessionId.equals("new-session")&&AndroidHomeStateStore.current.phase.equals("new-owner"),"stale ordinary completion overwrote a replacement owner");}});
         test("ordinary external freezes entry before queued work",()->{try(Owner owner=new Owner("external")){java.lang.reflect.Field f=owner.runtime().getClass().getDeclaredField("executor");f.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)f.get(owner.runtime());CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);executor.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});check(entered.await(3,TimeUnit.SECONDS),"queue did not block");AndroidExternalPolicy.entryVersion="original";Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),new AndroidStandardExitStore.Entry(),"wg",cb);AndroidExternalPolicy.entryVersion="replacement";release.countDown();cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.externalReads.get()==0,"queued source replacement started a native graph");awaitIdle(owner);}});
-        test("OpenVPN keeps its separate public exit adapter",()->{try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="openvpn";Callback cb=new Callback(0);owner.external.connectDirect(e,cb);cb.awaitDone();check(cb.ok&&publicProofs.get()>0&&LayeredVpnService.externalReads.get()==0,"ordinary compiler consumed the OpenVPN path");owner.disconnect();awaitIdle(owner);}});
+        for(String mode:new String[]{"external","wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"})for(boolean proof:new boolean[]{false,true})test("OpenVPN captured native policy "+mode+"/"+proof,()->{
+            try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="openvpn";LayeredVpnService.externalHealthy=proof;Callback cb=new Callback(0);
+                if(mode.equals("external"))owner.external.connectDirect(e,cb);else owner.external.connect(new java.io.File("a".repeat(32)+".json"),e,mode,cb);cb.awaitDone();
+                check(cb.ok==proof&&AndroidHomeStateStore.current.connected==proof,"OpenVPN ignored its exact captured native proof");check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()>0,"OpenVPN fell back to the retired public-IP-only adapter");
+                if(proof){check(AndroidHomeStateStore.current.activeExternalProtocol.equals("openvpn"),"OpenVPN borrowed another external identity");if(!mode.equals("external"))check(mode.equals(AndroidStandardExitController.lastEntryMode)&&mode.equals(AndroidHomeStateStore.current.activeEntryMode),"OpenVPN replaced its selected native entry");owner.disconnect();}else check(owner.engine.stops.get()>0,"failed OpenVPN proof left its native runtime alive");awaitIdle(owner);
+            }
+        });
+        test("OpenVPN cancellation cannot publish a stale proof",()->{try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="openvpn";Callback cb=new Callback(3);try{owner.external.connectDirect(e,cb);cb.awaitEntered();owner.disconnect();}finally{cb.release.countDown();cb.awaitDone();}check(!cb.ok&&!AndroidHomeStateStore.current.connected&&publicProofs.get()==0,"cancelled OpenVPN proof was adopted");awaitIdle(owner);}});
     }
     static AndroidStandardExitStore.Entry torEntry(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="tor-bridge";e.expectedPublicIp="";return e;}
     static void torTests(){
@@ -460,6 +470,10 @@ for name in ('nativeWireGuardFamily', 'nativePQFamily', 'nativeNaiveFamily', 'na
     assert len(matches) == 1, 'missing or ambiguous production transport predicate: ' + name
     predicates.append(matches[0])
 STUBS = STUBS.replace('    // PRODUCTION_TRANSPORT_PREDICATES', '\n'.join(predicates))
+external_source = (JAVA / 'AndroidExternalPolicy.java').read_text()
+external_predicate = re.findall(r'(?ms)^    static boolean supports\(String protocol\) \{\n.*?^    \}', external_source)
+assert len(external_predicate) == 1, 'missing exact external capability predicate'
+STUBS = STUBS.replace('    // PRODUCTION_EXTERNAL_PREDICATE', external_predicate[0])
 composite_source = (JAVA / 'AndroidNativeCompositeProfile.java').read_text()
 composite_predicate = re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}', composite_source)
 assert len(composite_predicate) == 1, 'missing exact composite transport predicate'
