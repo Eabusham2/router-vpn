@@ -123,6 +123,7 @@ func TestExternalFullPredecessorGeneratedFamiliesPreserveEveryOwner(t *testing.T
 						source, profile := externalPredecessorFixture(t, mode, layer, cover)
 						graph, capture := externalTestFixture(t, protocol, "")
 						capture["entry"], capture["entry_tag"], capture["predecessor_config"] = profile, externalEntryTag, source
+						capture["profile"].(map[string]any)["multihop_entry_mode"] = mode
 						before, selected := startJSON(t, graph), startJSON(t, capture)
 						compiled, err := NewExternalPolicy(before, selected)
 						if err != nil {
@@ -178,6 +179,25 @@ func TestExternalFullPredecessorGeneratedFamiliesPreserveEveryOwner(t *testing.T
 	}
 	if count != 684 {
 		t.Fatal("incomplete predecessor family coverage", count)
+	}
+}
+
+func TestExternalPredecessorRejectsDifferentCapturedMode(t *testing.T) {
+	for _, mode := range predecessorFamilies {
+		t.Run(mode, func(t *testing.T) {
+			source, entry := externalPredecessorFixture(t, mode, "", false)
+			graph, capture := externalTestFixture(t, "hysteria2", "")
+			capture["entry"], capture["entry_tag"], capture["predecessor_config"] = entry, externalEntryTag, source
+			for _, wrong := range []any{"unknown", "auto", true, map[string]any{}, "wg-pq", "max-tls-awg"} {
+				if wrong == mode {
+					continue
+				}
+				capture["profile"].(map[string]any)["multihop_entry_mode"] = wrong
+				if _, err := NewExternalPolicy(startJSON(t, graph), startJSON(t, capture)); err == nil {
+					t.Fatal("accepted changed mode", mode, wrong)
+				}
+			}
+		})
 	}
 }
 

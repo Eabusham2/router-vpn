@@ -113,6 +113,9 @@ func newExternalPredecessor(selection externalPolicyCapture) (*externalPredecess
 	if err := p.validateFamily(selection.Entry); err != nil {
 		return nil, err
 	}
+	if err := p.validateSelectedMode(selection.Profile); err != nil {
+		return nil, err
+	}
 	if err := p.captureRules(route); err != nil {
 		return nil, err
 	}
@@ -272,6 +275,52 @@ func (p *externalPredecessor) validateFamily(profile map[string]any) error {
 		}
 	} else if p.final["type"] == "routervpn-aes-xor" {
 		return externalPredecessorError
+	}
+	return nil
+}
+
+func (p *externalPredecessor) validateSelectedMode(profile map[string]any) error {
+	mode, err := externalOptionalString(profile, "multihop_entry_mode")
+	if err != nil {
+		return err
+	}
+	if mode == "" {
+		return nil // Older captures have no separate saved mode label.
+	}
+	actual := predecessorText(p.final, "type")
+	switch actual {
+	case "wireguard":
+		actual = "wg"
+	case AmneziaType:
+		// Fast and Strong are distinct imported asset selections. Their AWG
+		// parameters are intentionally not universal constants; the host must
+		// compile the exact selected asset and this merger preserves every byte.
+		if mode == "awg2-fast" || mode == "awg2-strong" {
+			return nil
+		}
+	case PQType:
+		actual = predecessorText(p.final, "mode")
+		if p.nodes[MAXOuterTag] != nil || p.nodes[MAXShadowsocksTag] != nil {
+			actual = "max-quic-wg"
+			if p.nodes[MAXOuterTag]["type"] == applexray.Type {
+				actual = "max-tls-wg"
+			}
+			if p.final["mode"] == "awg2-pq" {
+				actual = strings.TrimSuffix(actual, "wg") + "awg"
+			}
+		}
+	case applexray.Type, nativecomposite.Type:
+		actual = predecessorText(p.final, "mode")
+	case "routervpn-aes-xor":
+		actual = "shadowsocks"
+	case "naive":
+		actual = "naive-h2"
+		if p.final["quic"] == true {
+			actual = "naive-h3"
+		}
+	}
+	if actual != mode {
+		return errors.New("external predecessor differs from the captured entry mode")
 	}
 	return nil
 }
