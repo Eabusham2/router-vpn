@@ -53,7 +53,7 @@ struct IOSProfileSettingsView: View {
                             Text(item.0).tag(item.1)
                         }
                     }
-                    Text("AES uses vetted Shadowsocks 2022 BLAKE3 AES-256-GCM and is composed only into proved iOS Libbox raw modes: Shadowsocks, Hysteria2, Naive H2 and Naive H3. WireGuard and other unsupported modes fail closed instead of ignoring the preference. AES+XOR uses a tunnel-owned native outbound with no local listener or second VPN. XOR is obfuscation only and is never counted as encryption.")
+                    Text("AES uses Shadowsocks 2022 BLAKE3 AES-256-GCM. Compatible native WG/AWG, PQ, proxy, Xray and complete MAX paths preserve the selected Start Layer, including entry and exit layers in multihop. AES+XOR uses an owned native outbound in the same VPN interface. XOR adds obfuscation and always accompanies authenticated AES.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("AUTO / SMART AUTO requirements") {

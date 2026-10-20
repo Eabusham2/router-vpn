@@ -606,8 +606,8 @@ private struct IOSUnifiedSettingsView: View {
         NavigationStack {
             Form {
                 Section("Secure transport") {
-                    LabeledContent("Authenticated encryption", value: "Always on ✓")
-                    Text("Router VPN uses established Noise/TLS/AEAD or Tor ntor-v3 handshakes. Plain SOCKS5/HTTP/Tor bridge profiles must be followed by an encrypted inner tunnel; XOR and custom ciphers are rejected.").font(.caption).foregroundStyle(.secondary)
+                    LabeledContent("Selected transport", value: IOSUnifiedSecureTransport.protectionLabel(protocolName: model.selectedNodeIsExternal ? model.selectedExternalProtocol : "router-vpn"))
+                    Text("WireGuard, AmneziaWG, OpenVPN, Shadowsocks and Hysteria2 provide authenticated encryption. Tor uses encrypted relay circuits and verifies its dynamic exit. Plain SOCKS5 and HTTP CONNECT do not encrypt traffic. AES+XOR whitening adds obfuscation to authenticated AES; XOR alone is not encryption.").font(.caption).foregroundStyle(.secondary)
                     LabeledContent("Available bridges", value: "SOCKS5 • HTTP(S) • Shadowsocks • Tor")
                 }
                 Section("Quick settings") {
@@ -640,7 +640,7 @@ private struct IOSUnifiedSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Platform truth") {
-                    Text("DAITA-like traffic padding, Jumbo TUN, arbitrary tunnel port forwarding and full multihop are shown only when this Apple PacketTunnel/runtime can actually enforce them. Current unsupported paths stay unavailable instead of becoming cosmetic toggles.").font(.caption).foregroundStyle(.secondary)
+                    Text("Padding and Jumbo settings apply to compatible native paths. Multihop preserves each selected node and layer; external and Tor exits use their own DNS and exit proofs. Incoming forwarding requires a routable Router VPN path and the authenticated node's forwarding API.").font(.caption).foregroundStyle(.secondary)
                     Button("DNS details / Retest…") { dismiss(); DispatchQueue.main.async { model.message = "Open DNS from the main control sheet for resolver policy and real DNS-query RTT." } }
                 }
                 Section { Button("Done") { saveRequirements(); dismiss() } }

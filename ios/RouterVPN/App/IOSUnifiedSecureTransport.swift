@@ -12,10 +12,13 @@ enum IOSUnifiedSecureTransport {
     static let allowedFinalNodeTypes = Set([
         "router-vpn",
         "wireguard",
+        "amneziawg",
         "openvpn",
         "shadowsocks",
         "shadowsocks-2022",
         "hysteria2",
+        "tor",
+        "tor-bridge",
     ])
 
     // Node-builder/bridge catalog. Hysteria2 and Shadowsocks are also valid
@@ -29,20 +32,29 @@ enum IOSUnifiedSecureTransport {
         "hysteria2",
     ]
 
-    // Keep unsupported shared-product families visible as explicit unavailable
-    // truth instead of accidentally presenting desktop capability on iOS.
-    static let unavailableNodeTypes: [String: String] = [
-        "amneziawg": "AmneziaWG is unavailable on iOS until a pinned Apple PacketTunnel dataplane can enforce and prove it.",
-        "tor-bridge": "Tor bridges are unavailable on iOS until a native Tor + pluggable-transport PacketTunnel can prove the dynamic Tor exit.",
-    ]
+    // Tor bridges use the owned native Tor runtime and dynamic exit proof.
+    // Connection readiness still validates the complete selected native graph.
 
     static let suites = [
         "WireGuard Noise_IK + ChaCha20-Poly1305",
+        "AmneziaWG authenticated encryption + captured packet obfuscation",
         "OpenVPN verified TLS + negotiated data cipher",
         "HTTPS CONNECT TLS 1.3 with certificate verification",
         "Shadowsocks 2022 BLAKE3 + AEAD",
         "Hysteria2 QUIC + TLS 1.3",
+        "Tor encrypted relay circuits + owned bridge transports",
     ]
+
+    static func protectionLabel(protocolName: String) -> String {
+        switch protocolName.lowercased() {
+        case "socks5", "http-connect": return "No transport encryption"
+        case "https-connect": return "TLS to the selected proxy"
+        case "tor", "tor-bridge": return "Tor encrypted relay path"
+        case "router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks", "shadowsocks-2022", "hysteria2":
+            return "Authenticated encryption"
+        default: return "Check the selected runtime"
+        }
+    }
 
     // `connected` means PacketTunnel startup returned only after exact private
     // node proof or exact external public-exit proof. Do not call that generic

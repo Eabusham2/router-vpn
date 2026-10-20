@@ -104,8 +104,8 @@ forbid(
 
 # iOS policy must be an intersection of the shared product catalog and the real
 # Apple PacketTunnel, not a copy of desktop/cross-platform capability. The
-# PacketTunnel owns WG and the bounded Libbox external families, including
-# OpenVPN. The generic CUSTOM builder retains its own composition limits;
+# PacketTunnel owns WG/AWG and the bounded Libbox external families, including
+# OpenVPN and Tor. The generic CUSTOM builder retains its own composition limits;
 # dedicated external Tor controls require the native circuit and proof owner.
 need(
     "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
@@ -119,23 +119,39 @@ need(
     '"http-connect",',
     '"https-connect",',
     '"hysteria2",',
-    '"amneziawg": "AmneziaWG is unavailable on iOS',
+    '"amneziawg",',
     '"openvpn",',
     "OpenVPN verified TLS + negotiated data cipher",
-    '"tor-bridge": "Tor bridges are unavailable on iOS',
+    '"tor",',
+    '"tor-bridge",',
+    'case "socks5", "http-connect": return "No transport encryption"',
+    'case "https-connect": return "TLS to the selected proxy"',
     "Noise_IK",
     "TLS 1.3",
 )
 forbid(
     "ios/RouterVPN/App/IOSUnifiedSecureTransport.swift",
-    'Set(["router-vpn", "wireguard", "amneziawg", "openvpn", "shadowsocks-2022"])',
-    "AmneziaWG Noise_IK + ChaCha20-Poly1305",
+    "AmneziaWG is unavailable on iOS",
+    "Tor bridges are unavailable on iOS",
     "OpenVPN TLS 1.3 + AEAD",
     "Tor ntor-v3 outer bridge",
 )
+apple_transport = read("ios/RouterVPN/App/IOSUnifiedSecureTransport.swift")
+final_marker = "static let allowedFinalNodeTypes = Set(["
+if final_marker not in apple_transport:
+    errors.append("Apple native final transport catalog is missing")
+else:
+    final_catalog = apple_transport.split(final_marker, 1)[1].split("])", 1)[0]
+    if any('"' + item + '"' in final_catalog for item in ("socks5", "http-connect")):
+        errors.append("Apple plaintext proxy was mislabeled as an authenticated final transport")
+need("ios/RouterVPN/App/IOSUnifiedProductView.swift", "IOSUnifiedSecureTransport.protectionLabel(", "Plain SOCKS5 and HTTP CONNECT do not encrypt traffic")
+forbid("ios/RouterVPN/App/IOSUnifiedProductView.swift", 'LabeledContent("Authenticated encryption", value: "Always on')
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
+    '["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
+    'protocolName == "amneziawg" ? "routervpn-amneziawg" : "wireguard"',
+    'value["amnezia"] = parameters',
+    "LibboxRouterCompileExternalPolicy",
     "LibboxRouterOpenVPNEndpoint",
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
@@ -183,7 +199,7 @@ need(
     'new Capability("tor-bridge",true',
     'AndroidOpenVPN.endpoint(e, "")',
     "AndroidTorProfile.validate(e)",
-    'Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn")',
+    'Arrays.asList("wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn")',
     "must be a literal IP to avoid pre-tunnel DNS",
 )
 need(
