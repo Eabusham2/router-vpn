@@ -55,6 +55,13 @@ type app struct {
 }
 
 func main() {
+	if handled, err := bundledNativeUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := bundledAmneziaUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)

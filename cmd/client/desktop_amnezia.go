@@ -117,7 +117,7 @@ func desktopStandardEngineEnvironment(environment []string, amnezia bool) []stri
 	result := make([]string, 0, len(environment)+1)
 	for _, value := range environment {
 		upper := strings.ToUpper(value)
-		if !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") {
+		if !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_PACKAGE=") {
 			result = append(result, value)
 		}
 	}
