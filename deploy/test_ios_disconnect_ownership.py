@@ -72,7 +72,7 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
     var iosStrategyTaskActive = false
     var iosStrategyStatus: String?
     var profileMutationBlocked: Bool { connected || tunnelTransitioning || userDisconnectInProgress }
-    func finishTask() async { while userDisconnectInProgress { await Task.yield() } }
+    func finishTask() async { while userDisconnectInProgress { try? await Task.sleep(for: .milliseconds(1)) } }
     // SHIPPING_METHODS
 }
 @main struct Tests {
