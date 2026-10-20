@@ -27,6 +27,13 @@ private final class IOSMTUReply: @unchecked Sendable {
     static func failure(_ text: String) -> NSError {
         NSError(domain: "RouterVPN.MTU", code: 1, userInfo: [NSLocalizedDescriptionKey: text])
     }
+    static func retestTimeout(_ binding: Binding) -> TimeInterval {
+        // Tor has a bounded four-minute native transfer/proof transaction.
+        // Leave room for its final reply, using the frozen active runtime,
+        // never a subsequently selected node or a mutable display label.
+        let identity = binding.identity
+        return identity.engine == "external-libbox" && ["external-tor", "external-tor-bridge"].contains(identity.rawProfile) ? 270 : 55
+    }
     static func send(_ connection: NETunnelProviderSession, operation: String,
                      request: String, session: String) async throws -> Data {
         let payload = try JSONSerialization.data(withJSONObject:

@@ -1126,7 +1126,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let externalPathGuard = self.armNetworkProofGuard()
         let prove: (@escaping (Error?) -> Void) -> Void
         if let sessionID = runtime.torSessionID {
-            prove = { engine.proveTor(sessionID: sessionID, predecessorProfile: runtime.torPredecessorProfile, completion: $0) }
+            guard let profile = runtime.torProfileJSON else {
+                engine.stop(); if libboxEngine === engine { libboxEngine = nil }
+                releasePathProofGuard(externalPathGuard)
+                throw tunnelError(58, "Tor proof lost its exact compiled profile.")
+            }
+            prove = { engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile, completion: $0) }
         } else if runtime.policy != nil {
             prove = { engine.proveExternal(completion: $0) }
         } else {
@@ -1157,6 +1162,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     try engine.activateExternalMTU()
                     guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
                         throw self.tunnelError(57, "External path changed during MTU owner activation.")
+                    }
+                } else if runtime.torSessionID != nil {
+                    try engine.activateTorMTU()
+                    guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
+                        throw self.tunnelError(57, "Tor path changed during MTU owner activation.")
                     }
                 }
             } catch {

@@ -22,9 +22,10 @@ import Foundation
             guard decoded.verified == expected else { fatalError("MTU sample \(index) verification changed") }
             guard decoded.summary.contains("Verified current MTU:") == expected else { fatalError("Unverified measurement was labelled current") }
             if expected {
-                let external = decoded.source == "measured-public-system-tun-transfer"
+                let external = decoded.source == "measured-public-system-tun-transfer" || decoded.source == "measured-tor-system-tun-transfer"
                 guard decoded.summary.contains("HTTPS response and transfer tests") == external,
                       decoded.summary.contains("authenticated packets") == !external else { fatalError("MTU evidence was mislabeled") }
+                guard decoded.summary.contains("this proved Tor session") == (decoded.source == "measured-tor-system-tun-transfer") else {fatalError("Tor transfer evidence lost its actual session label")}
             }
         }
         print("Swift MTU status: \(samples.count) actual-decoder checks passed")
@@ -81,6 +82,13 @@ def cases():
     for key, value in [('source', public['source']), ('restored', True)]:
         data = json.loads(json.dumps(original)); data[key] = value
         samples.append({'status': data, 'verified': False})
+    # The same transfer evidence applies to Tor, with a distinct source and
+    # session label; it cannot inherit authenticated private datagram claims.
+    for row in list(samples):
+        if row['status'].get('source') == public['source']:
+            copied = json.loads(json.dumps(row))
+            copied['status']['source'] = 'measured-tor-system-tun-transfer'
+            samples.append(copied)
     return samples
 
 

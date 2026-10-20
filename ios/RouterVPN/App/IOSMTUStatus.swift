@@ -30,7 +30,7 @@ struct IOSMTUStatus: Decodable, Sendable {
                   let median_rtt_ms, median_rtt_ms.isFinite, median_rtt_ms > 0,
                   download?.valid == true, upload?.valid == true,
                   failure == nil || failure == "" else { return false }
-            if source == "measured-public-system-tun-transfer" {
+            if ["measured-public-system-tun-transfer", "measured-tor-system-tun-transfer"].contains(source) {
                 return latency_kind == "https-response" && packets_sent == 0 && packets_received == 0 && datagram_bytes == 0
             }
             guard source == "measured-private-system-tun", latency_kind == nil || latency_kind == "",
@@ -57,7 +57,7 @@ struct IOSMTUStatus: Decodable, Sendable {
         guard let session_id, UUID(uuidString: session_id) != nil,
               let request_id, request_id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               phase == "complete", complete == true, running == false, measured == true, restored != true,
-              let source, ["measured-private-system-tun", "measured-public-system-tun-transfer"].contains(source), let effective_mtu,
+              let source, ["measured-private-system-tun", "measured-public-system-tun-transfer", "measured-tor-system-tun-transfer"].contains(source), let effective_mtu,
               (1280...9000).contains(effective_mtu), let original_mtu,
               (1280...9000).contains(original_mtu), let candidates,
               (1...5).contains(candidates.count), Set(candidates.compactMap(\.mtu)).count == candidates.count,
@@ -66,8 +66,9 @@ struct IOSMTUStatus: Decodable, Sendable {
     }
     var summary: String {
         if verified, let effective_mtu {
-            let evidence = source == "measured-public-system-tun-transfer" ? "HTTPS response and transfer tests" : "authenticated packets and transfer tests"
-            return "Verified current MTU: \(effective_mtu) bytes • \(evidence) through this VPN"
+            let evidence = source == "measured-private-system-tun" ? "authenticated packets and transfer tests" : "HTTPS response and transfer tests"
+            let path = source == "measured-tor-system-tun-transfer" ? "this proved Tor session" : "this VPN"
+            return "Verified current MTU: \(effective_mtu) bytes • \(evidence) through \(path)"
         }
         if running == true { return "MTU test: \(phase ?? "measuring") • result not yet verified" }
         if restored == true { return "Original MTU restored • no new measurement adopted" }

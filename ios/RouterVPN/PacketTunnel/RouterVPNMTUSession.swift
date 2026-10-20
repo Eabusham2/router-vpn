@@ -166,6 +166,18 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         }) else { throw failure("External MTU could not retain its proved native TUN owner") }
     }
 
+    func activateTor(server: LibboxCommandServer, proof: LibboxRouterTorProofRequest,
+                     config: String, profile: String,
+                     onAbort: @escaping @Sendable (String) -> Void) throws {
+        guard !profile.isEmpty, profile.utf8.count <= 4 * 1024 * 1024,
+              (try JSONSerialization.jsonObject(with: Data(profile.utf8))) is [String: Any] else {
+            throw failure("Tor MTU lost its frozen profile")
+        }
+        guard activateOwned(profile: profile, onAbort: onAbort, create: { createError in
+            LibboxNewRouterTorMTU(server, self, proof, config, profile, &createError)
+        }) else { throw failure("Tor MTU could not retain its proved native TUN owner") }
+    }
+
     private func activateOwned(profile: String, onAbort: @escaping @Sendable (String) -> Void,
                                create: (inout NSError?) -> LibboxRouterMTU?) -> Bool {
         commandLock.lock(); defer { commandLock.unlock() }

@@ -36,7 +36,7 @@ import SwiftUI
                 guard generation == round, !IOSMTUMeasurementGate.held else { throw CancellationError() }
                 binding = captured; ownedRequest = request
                 var operation = "mtu-start"
-                let deadline = ProcessInfo.processInfo.systemUptime + 55
+                let deadline = ProcessInfo.processInfo.systemUptime + IOSMTUControl.retestTimeout(captured)
                 while ProcessInfo.processInfo.systemUptime < deadline {
                     try Task.checkCancellation()
                     guard generation == round, !IOSMTUMeasurementGate.held else { throw CancellationError() }
@@ -79,7 +79,7 @@ struct IOSMTUCard: View {
             Button(probe.running ? "Cancel MTU Retest" : "Retest current native MTU") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
             }.disabled(!model.connected || (!probe.running && (IOSMTUMeasurementGate.held || !model.activeEngine.contains("libbox"))))
-            Text("Router VPN nodes use authenticated packets and transfers. External exits use HTTPS response and transfer tests through the actual system VPN interface, with native DNS and exit verification. Saved values and restored settings are not fresh measurements. Manual and Jumbo policies do not enter Auto-MTU.")
+            Text("Router VPN nodes use authenticated packets and transfers. External and Tor exits use HTTPS response and transfer tests through the actual system VPN interface, with native DNS and exit verification. Tor tests can take up to four minutes; Cancel stops the owned test. Saved values and restored settings are not fresh measurements. Manual and Jumbo policies do not enter Auto-MTU.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task {

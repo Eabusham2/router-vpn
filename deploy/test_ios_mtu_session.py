@@ -21,6 +21,7 @@ public final class LibboxRouterMTUState:NSObject {
 }
 public final class LibboxCommandServer:NSObject {}
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
+public final class LibboxRouterTorProofRequest:NSObject { public var valid=true }
 public enum FakeOS {
  nonisolated(unsafe) public static var mtu:Int32=1420
  nonisolated(unsafe) public static var path="physical-path-a"
@@ -36,6 +37,9 @@ public enum FakeOS {
  nonisolated(unsafe) public static var externalCreated:(()->Void)?
  nonisolated(unsafe) public static var newCloseFailures=0
  nonisolated(unsafe) public static var returnOwnerWithError=false
+ nonisolated(unsafe) public static var torArguments:[String]=[]
+ nonisolated(unsafe) public static var torProof:LibboxRouterTorProofRequest?
+ nonisolated(unsafe) public static var torCreated:(()->Void)?
 }
 public final class LibboxRouterMTU:NSObject {
  private var active=false;private var request="";private var phase="idle"
@@ -71,6 +75,13 @@ public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:
  if FakeOS.returnOwnerWithError{error?.pointee=NSError(domain:"ExternalMTUFixture",code:2)}
  FakeOS.externalCreated?();return core
 }
+public func LibboxNewRouterTorMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterTorProofRequest?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ FakeOS.torArguments=[config ?? "",profile ?? ""];FakeOS.torProof=proof
+ guard proof?.valid==true,platform?.captureMTU() != nil else{error?.pointee=NSError(domain:"TorMTUFixture",code:1);return nil}
+ let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core
+ if FakeOS.returnOwnerWithError{error?.pointee=NSError(domain:"TorMTUFixture",code:2)}
+ FakeOS.torCreated?();return core
+}
 public func LibboxRouterMTUPhysicalPath(_ name:String?,_ error:UnsafeMutablePointer<NSError?>?)->String{
  if name != "en0" {error?.pointee=NSError(domain:"fixture",code:1);return ""};return FakeOS.path
 }
@@ -93,7 +104,7 @@ func request(_ owner:RouterVPNMTUSession,_ op:String,_ id:String,_ session:Strin
 }
 @MainActor func ready(_ hold:String="")->RouterVPNMTUSession{
  FakeOS.path="physical-path-a";FakeOS.mtu=1420;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
- FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil
+ FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil;FakeOS.torCreated=nil
  let owner=RouterVPNMTUSession();try! owner.initialMeasurementHold(hold)
  check(owner.captureMTU()==nil,"unopened TUN looked live")
  owner.observePhysicalPath(name:"en0",signature:"route-a")
@@ -238,6 +249,47 @@ for stoppedDuringFactory in [false,true] {for withError in [false,true] {
  let calls=FakeOS.closes;try late.stopChecked()
  check(FakeOS.closes==calls+1 && native==nil,"late factory owner did not survive until successful Close")
 }}
+for policy in ["auto","fixed","manual","default"] {for startupHold in ["",id] {
+ let tor=ready(startupHold),proof=LibboxRouterTorProofRequest(),starts=FakeOS.starts
+ let profile="{\"id\":\"frozen-tor\",\"mtu_policy\":\""+policy+"\",\"external\":{\"protocol\":\"tor\"}}"
+ try tor.activateTor(server:LibboxCommandServer(),proof:proof,config:"exact compiled Tor graph",profile:profile){_ in}
+ check(FakeOS.torArguments==["exact compiled Tor graph",profile] && FakeOS.torProof === proof,"Tor factory lost exact configuration, profile or retained proof")
+ check(tor.hasOwner && FakeOS.starts==starts+(policy=="auto" && startupHold.isEmpty ? 1:0),"Tor automatic start ignored fixed policy or startup hold")
+ let session=tor.captureMTU()!.session
+ if !startupHold.isEmpty {
+  check(request(tor,"mtu-start",other,session)?["measurement_hold"] as? Bool==true,"Tor Retest bypassed startup hold")
+  _=request(tor,"mtu-release",id,session)
+  check(FakeOS.starts==starts+(policy=="auto" ? 1:0),"Tor automatic startup did not follow captured policy on release")
+ }
+ if policy=="auto" {
+  check(request(tor,"mtu-hold",id,session)?["measurement_ready"] as? Bool==true,"Tor MTU was not drained before Speed Lab")
+  check(request(tor,"mtu-release",other,session)==nil,"foreign release stole Tor measurement hold")
+ }
+ rejects("duplicate Tor factory adopted another controller"){try tor.activateTor(server:LibboxCommandServer(),proof:proof,config:"foreign graph",profile:profile){_ in}}
+ try tor.stopChecked()
+}}
+let torJumbo=ready(),torJumboStarts=FakeOS.starts
+try torJumbo.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"exact",profile:"{\"mtu_policy\":\"auto\",\"jumbo_tun\":true}"){_ in}
+check(FakeOS.starts==torJumboStarts,"Tor Jumbo silently became Auto-MTU");try torJumbo.stopChecked()
+let torDenied=ready(),invalidTorProof=LibboxRouterTorProofRequest();invalidTorProof.valid=false
+rejects("invalid retained Tor proof enabled MTU"){try torDenied.activateTor(server:LibboxCommandServer(),proof:invalidTorProof,config:"exact",profile:"{}"){_ in}}
+try torDenied.stopChecked()
+for profile in ["", "[]", "null",String(repeating:" ",count:4*1024*1024+1)] {
+ let invalid=ready(),before=FakeOS.torArguments
+ rejects("malformed Tor profile reached factory"){try invalid.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"foreign",profile:profile){_ in}}
+ check(FakeOS.torArguments==before && !invalid.hasOwner,"malformed Tor profile took native ownership");try invalid.stopChecked()
+}
+for withError in [false,true] {
+ let late=ready(),starts=FakeOS.starts
+ FakeOS.newCloseFailures=1;FakeOS.returnOwnerWithError=withError
+ weak var native:LibboxRouterMTU?
+ FakeOS.torCreated={native=FakeOS.current;FakeOS.current=nil;if !withError{rejects("pending Tor factory was called drained"){try late.stopChecked()}}}
+ rejects("retired or error-bearing Tor factory became live"){try late.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"exact",profile:"{\"mtu_policy\":\"auto\"}"){_ in}}
+ FakeOS.torCreated=nil
+ check(FakeOS.starts==starts && native?.closeCalls==1 && native?.closed==false,"Tor factory lost a failed-Close owner")
+ let closes=FakeOS.closes;try late.stopChecked()
+ check(FakeOS.closes==closes+1 && native==nil,"Tor failed-Close owner was not retained until drain")
+}
 print("Production Swift MTU owner: PASS (\(checks) checks; Libbox/OS boundary doubled)")
 """
 GATE=r"""

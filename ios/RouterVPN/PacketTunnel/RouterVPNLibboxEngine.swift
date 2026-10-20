@@ -78,6 +78,7 @@ final class RouterVPNLibboxEngine {
         guard externalPolicy == nil || (multihopMetadata == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("External policy cannot replace another native graph owner") }
         var safeFiles = try validateAndInjectProof(files, externalPolicy: externalPolicy)
         let tor = try prepareTorState(safeFiles)
+        guard !tor || multihopMetadata == nil else { throw error("Tor owns its complete native graph and cannot adopt another comparison controller") }
         ownershipLock.lock(); torOwned = tor; ownershipLock.unlock()
         if let multihopMetadata {
             guard let raw = safeFiles["sing-box.json"], let text = String(data: raw, encoding: .utf8) else { throw error("Missing multihop graph") }
@@ -329,9 +330,11 @@ final class RouterVPNLibboxEngine {
         return true
     }
 
-    func proveTor(sessionID: String, predecessorProfile: String? = nil, completion: @escaping (Error?) -> Void) {
+    func proveTor(sessionID: String, profile: String, predecessorProfile: String? = nil, completion: @escaping (Error?) -> Void) {
         ownershipLock.lock()
-        guard let owned = server, torOwned, torProofDelivery == nil, !permanentlyStopped else {
+        guard let owned = server, torOwned, torProofDelivery == nil, !permanentlyStopped,
+              !profile.isEmpty, profile.utf8.count <= 4 * 1024 * 1024,
+              (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) is [String: Any] else {
             ownershipLock.unlock(); completion(error("Tor proof has no captured native session")); return
         }
         let generation = ownershipGeneration
@@ -343,7 +346,8 @@ final class RouterVPNLibboxEngine {
             request = LibboxRouterTorCreateProof(owned, "routervpn-tor-exit", sessionID, &failure)
         }
         guard let request, failure == nil else { ownershipLock.unlock(); completion(failure ?? error("Tor proof could not capture its native owner")); return }
-        let delivery = TorProofDelivery(owner: self, server: owned, generation: generation, sessionID: sessionID, request: request, completion: completion)
+        let delivery = TorProofDelivery(owner: self, server: owned, generation: generation, sessionID: sessionID,
+            config: configContent, profile: profile, request: request, completion: completion)
         torProofDelivery = delivery
         ownershipLock.unlock()
         DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
@@ -358,14 +362,17 @@ final class RouterVPNLibboxEngine {
         private let generation: UUID
         private let sessionID: String
         private let request: LibboxRouterTorProofRequest
+        private let config: String
+        private let profile: String
         private let lock = NSLock()
         private var callback: ((Error?) -> Void)?
         private var started = false
         private var cancelled = false
         init(owner: RouterVPNLibboxEngine, server: LibboxCommandServer, generation: UUID, sessionID: String,
-             request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
+             config: String, profile: String, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
             self.owner = owner; self.server = server; self.generation = generation; self.sessionID = sessionID
             self.request = request; self.callback = completion
+            self.config = config; self.profile = profile
         }
         private func current(_ owner: RouterVPNLibboxEngine) -> Bool {
             owner.ownershipLock.lock(); defer { owner.ownershipLock.unlock() }
@@ -433,6 +440,12 @@ final class RouterVPNLibboxEngine {
             guard current(owner), request.healthy() else { try probe.close(); throw retired() }
             return probe
         }
+        func activateMTU() throws {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            let delivery = MTUFailureDelivery(owner: owner, generation: generation)
+            try owner.platform.mtu.activateTor(server: server, proof: request, config: config, profile: profile) { message in delivery.fail(message) }
+            guard current(owner), request.healthy() else { owner.platform.mtu.stop(); throw retired() }
+        }
         private func retired() -> NSError {
             NSError(domain: "RouterVPN.Tor", code: 2, userInfo: [NSLocalizedDescriptionKey: "Tor exit proof is invalid or belongs to a retired session."])
         }
@@ -494,6 +507,14 @@ final class RouterVPNLibboxEngine {
         let current = server != nil && !starting && !permanentlyStopped && torProofDelivery == nil
         ownershipLock.unlock()
         guard current, let delivery else { throw error("External MTU requires the captured ordinary native proof") }
+        try delivery.activateMTU()
+    }
+    func activateTorMTU() throws {
+        ownershipLock.lock()
+        let delivery = torProofDelivery
+        let current = server != nil && torOwned && !starting && !permanentlyStopped && externalProofDelivery == nil
+        ownershipLock.unlock()
+        guard current, let delivery else { throw error("Tor MTU requires the captured native Tor proof") }
         try delivery.activateMTU()
     }
     func mtuRequest(operation: String, request: String, session: String) -> Data? {
@@ -809,6 +830,16 @@ final class RouterVPNLibboxEngine {
             guard config == Data(externalPolicy.config.utf8) else { throw error("External native graph differs from its compiled policy") }
             // The native proof request uses the captured outbounds directly.
             // Preserve exact compiler bytes and add no localhost bypass owner.
+            return result
+        }
+        let tor = (object["outbounds"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "routervpn-tor" }
+        if !tor.isEmpty {
+            guard tor.count == 1, tor[0]["tag"] as? String == "routervpn-tor-exit",
+                  (object["route"] as? [String: Any])?["final"] as? String == "routervpn-tor-exit",
+                  let owned = object["inbounds"] as? [[String: Any]], owned.count == 1,
+                  owned[0]["type"] as? String == "tun" else { throw error("Tor requires its complete one-TUN graph without an extra proof listener") }
+            // Both Tor and DNS proof use the retained native owner. Adding an
+            // unused local proxy would change that graph's authority.
             return result
         }
         var inbounds = object["inbounds"] as? [[String: Any]] ?? []

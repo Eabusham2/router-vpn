@@ -414,10 +414,12 @@ need(
 )
 need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
      "LibboxRouterCompileTorProfile", "torPredecessorProfile: proofProfile",
+     "torProfileJSON: String(decoding: source, as: UTF8.self)",
      'tor["session_id"] as? String == sessionID', 'tor["detour"] as? String == predecessorTag')
 need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
      'provider["tor_entry_bundle"]', "RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)",
-     "engine.proveTor(sessionID: sessionID, predecessorProfile: runtime.torPredecessorProfile", "self.currentPathProofGuard() === externalPathGuard")
+     "engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile",
+     "guard let profile = runtime.torProfileJSON", "engine.activateTorMTU()", "self.currentPathProofGuard() === externalPathGuard")
 need("ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
      "LibboxRouterTorSetStateDirectory", "LibboxRouterTorCreateProofWithPredecessor", "TorProofDelivery",
      "LibboxRouterStrategyDNSProof(server", "request.healthy()", "request.cancel()",

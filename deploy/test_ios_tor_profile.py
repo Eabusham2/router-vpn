@@ -49,6 +49,7 @@ GO = replace_once(P.GO, '"router-vpn/internal/mobileperf"',
 xray_fixture = A.GO_HELPER[A.GO_HELPER.index(' case "test-xray":'):A.GO_HELPER.index(' case "xray-check",')]
 GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)', r'''
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
+ case "tor-mtu-authority":value,err=mobiletor.MTUAuthority(r.Config,r.Policy,r.Node)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "openvpn":value,err=nativeopenvpn.CompileEndpoint(r.Config,r.Files,r.Node,r.Mode,r.Source)
  case "predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
@@ -310,6 +311,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let prepared=try owner.prepare(provider:provider,selectedProfile:selected,strict:true),runtime=prepared.runtime
   let graph=try object(runtime.files["sing-box.json"]!),out=try tagged(graph,"routervpn-tor-exit"),sid=runtime.torSessionID!
   try check("fresh session identity",sessions.insert(sid).inserted && out["session_id"] as? String==sid)
+  try check("Tor MTU retains the exact compiled profile capture",runtime.torProfileJSON==String(decoding:before,as:UTF8.self))
+  let authority=try object(Data(bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":sid]).utf8))
+  try check("native Tor options bind the frozen MTU and DNS policy",authority["source_kind"] as? String=="tor" && authority["id"] as? String==selected["id"] as? String)
+  var changedPolicy=selected;changedPolicy["mtu_policy"]="auto"
+  reject("Tor factory cannot change frozen policy after native construction"){_ = try bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":text(changedPolicy),"Node":sid])}
   try check("one TUN and one Tor",(graph["inbounds"] as! [[String:Any]]).count==1 && (graph["outbounds"] as! [[String:Any]]).filter{$0["type"] as? String=="routervpn-tor"}.count==1)
   try check("Tor keeps dynamic exit semantics",runtime.expectedPublicIP.isEmpty && (graph["route"] as! [String:Any])["final"] as? String=="routervpn-tor-exit")
   try check("Tor keeps bridge order and plain emptiness",out["bridges"] as? [String]==lines(kind))

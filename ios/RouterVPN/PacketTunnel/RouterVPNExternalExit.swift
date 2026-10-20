@@ -124,6 +124,7 @@ struct RouterVPNExternalExitRuntime {
     let files: [String: Data]
     var torSessionID: String? = nil
     var torPredecessorProfile: String? = nil
+    var torProfileJSON: String? = nil
     var policy: RouterVPNExternalPolicy? = nil
 }
 
@@ -182,7 +183,7 @@ enum RouterVPNExternalExitBuilder {
                 throw error("Tor compiler lost the selected session or final route.")
             }
             var files = predecessorFiles; files["sing-box.json"] = data
-            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile)
+            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: String(decoding: source, as: UTF8.self))
         }
         guard ordinaryProtocols.contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")

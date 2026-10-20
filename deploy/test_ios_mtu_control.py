@@ -67,6 +67,16 @@ import NetworkExtension
   let model=RouterVPNModel()
   let binding=try await IOSMTUControl.capture(model)
   check(binding.session==Fixture.session,"initial session handshake failed")
+  check(IOSMTUControl.retestTimeout(binding)==55,"ordinary native MTU timeout changed")
+  for raw in ["external-tor","external-tor-bridge","external-socks5"] {
+   let identity=try IOSSessionIdentity(connectedAt:binding.connectedDate,engine:"external-libbox",rawProfile:raw,bundleData:Data("captured".utf8),entryBundleData:nil)
+   let captured=IOSMTUControl.Binding(connection:binding.connection,connectedDate:binding.connectedDate,identity:identity,session:binding.session)
+   check(IOSMTUControl.retestTimeout(captured)==(raw=="external-socks5" ? 55:270),"Tor native proof budget was truncated or granted to another path")
+  }
+  let liveIdentity=model.activeSessionIdentity
+  model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:binding.connectedDate,engine:"external-libbox",rawProfile:"external-tor",bundleData:Data("new selection".utf8),entryBundleData:nil)
+  check(IOSMTUControl.retestTimeout(binding)==55,"mutable selection changed a captured measurement deadline")
+  model.activeSessionIdentity=liveIdentity
   let id=String(repeating:"c",count:32)
   _ = try await IOSMTUControl.message(binding,model:model,operation:"mtu-status",request:id)
   check(IOSMTUControl.current(binding,model:model),"owned tunnel unexpectedly stale")
@@ -129,6 +139,9 @@ def verify_startup_holds(provider):
         assert body.index('try engine.prepareMTUHold(initialMTUHold)') < body.index('engine.start('), start+' starts before holding MTU'
 
 provider=(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
+client=(ROOT/'ios/RouterVPN/App/IOSMTUClient.swift').read_text()
+assert 'ProcessInfo.processInfo.systemUptime + IOSMTUControl.retestTimeout(captured)' in client, 'Retest must honor its captured native runtime budget'
+assert 'ProcessInfo.processInfo.systemUptime + 55' not in client, 'Legacy UI timeout truncates Tor final proof'
 raw=provider[provider.index('        let requestedMode ='):provider.index('    private func startMultihop(')]
 assert raw.index('!RouterVPNMTUPolicy.requiresAdaptiveOwner(profile: selectedProfile)') < raw.index('WireGuardAdapter(with: self)')
 

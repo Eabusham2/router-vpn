@@ -85,6 +85,7 @@ public final class LibboxCommandServer {
     private var active=false
     private var strategyEvents: [String] = []
     private var failDNS = false, failClose = false
+    private var configuration = ""
     public init(_ count: Int64 = 0) { paddingCount=count }
     public func activate(_ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
         lock.lock();defer { lock.unlock() }
@@ -95,6 +96,8 @@ public final class LibboxCommandServer {
     public func performanceFailure() -> String { lock.lock(); defer { lock.unlock() }; return paddingCount==0 || (active && !invalidated) ? "" : "fixture path invalidated" }
     public func configureStrategy(dns: Bool = false, close: Bool = false) { lock.lock(); failDNS=dns; failClose=close; lock.unlock() }
     public func strategyCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return strategyEvents }
+    public func captureConfiguration(_ text:String){lock.lock();configuration=text;lock.unlock()}
+    public func capturedConfiguration()->String{lock.lock();defer{lock.unlock()};return configuration}
     public func strategy(_ operation: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
         lock.lock(); defer { lock.unlock() }; strategyEvents.append(operation)
         if (operation == "dns" && failDNS) || (operation == "close" && failClose) {
@@ -149,7 +152,7 @@ public final class LibboxHopTestState: @unchecked Sendable {
 public func LibboxRouterStartPerformance(_ server: LibboxCommandServer, _ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.activate(count,failure) }
 public func LibboxRouterInvalidatePerformance(_ server: LibboxCommandServer) { server.invalidatePadding() }
 public func LibboxRouterPerformanceFailure(_ server: LibboxCommandServer) -> String? { server.performanceFailure() }
-public func LibboxRouterStrategyStartService(_ server: LibboxCommandServer, _ content: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("start",failure) }
+public func LibboxRouterStrategyStartService(_ server: LibboxCommandServer, _ content: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.captureConfiguration(content);return server.strategy("start",failure) }
 public func LibboxRouterStrategyDNSProof(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("dns",failure) }
 public func LibboxRouterStrategyCloseService(_ server: LibboxCommandServer, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.strategy("close",failure) }
 
@@ -286,21 +289,28 @@ final class MTUPlatformDouble {
         guard proof.healthy() else{throw NSError(domain:"ExternalMTUFixture",code:1)}
         hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.record([source,capture],proof:proof)
     }
+    func activateTor(server:LibboxCommandServer,proof:LibboxRouterTorProofRequest,config:String,profile:String,onAbort:@escaping @Sendable(String)->Void)throws {
+        guard proof.healthy() else{throw NSError(domain:"TorMTUFixture",code:1)}
+        hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.recordTor([config,profile],proof:proof)
+    }
     func request(operation: String, request: String, session: String) -> Data? { nil }
 }
 final class MTUActivationFixture:@unchecked Sendable {
     static let shared=MTUActivationFixture()
     private let lock=NSLock()
     private var values:[String]=[],proof:LibboxRouterExternalProofRequest?,callback:(()->Void)?
+    private var torProof:LibboxRouterTorProofRequest?
     private var closeFailures=0
     private weak var platform:RouterVPNLibboxPlatform?
-    func configure(failures:Int=0,_ callback:(()->Void)?=nil){lock.lock();values=[];proof=nil;self.callback=callback;closeFailures=failures;lock.unlock()}
+    func configure(failures:Int=0,_ callback:(()->Void)?=nil){lock.lock();values=[];proof=nil;torProof=nil;self.callback=callback;closeFailures=failures;lock.unlock()}
     func failures()->Int{lock.lock();defer{lock.unlock()};return closeFailures}
     func retainWeak(_ platform:RouterVPNLibboxPlatform){lock.lock();self.platform=platform;lock.unlock()}
     func currentPlatform()->RouterVPNLibboxPlatform?{lock.lock();defer{lock.unlock()};return platform}
     func record(_ values:[String],proof:LibboxRouterExternalProofRequest){lock.lock();self.values=values;self.proof=proof;let callback=self.callback;lock.unlock();callback?()}
+    func recordTor(_ values:[String],proof:LibboxRouterTorProofRequest){lock.lock();self.values=values;torProof=proof;let callback=self.callback;lock.unlock();callback?()}
     func captured()->[String]{lock.lock();defer{lock.unlock()};return values}
     func owns(_ proof:LibboxRouterExternalProofRequest?)->Bool{lock.lock();defer{lock.unlock()};return self.proof === proof}
+    func ownsTor(_ proof:LibboxRouterTorProofRequest?)->Bool{lock.lock();defer{lock.unlock()};return torProof === proof}
 }
 final class RouterVPNLibboxPlatform {
     let mtu = MTUPlatformDouble()
@@ -527,7 +537,9 @@ final class CompletionState: @unchecked Sendable {
             do{try invalidOwner.start(files:files,strict:true,multihopMetadata:wrong,entryStartLayerSource:entry.source,exitStartLayerSource:exit.source)}catch{refused=true}
             check("unrequested exit source not activated",refused)
         }}}
-        let torFiles=["sing-box.json":Data("{\"inbounds\":[],\"outbounds\":[{\"type\":\"routervpn-tor\",\"tag\":\"routervpn-tor-exit\",\"session_id\":\"tor-session\"}]}".utf8)]
+        let torProfile="{\"id\":\"captured-tor\",\"node_kind\":\"external\",\"mtu_policy\":\"auto\",\"external\":{\"protocol\":\"tor\"}}"
+        let torConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\",\"mtu\":1380}],\"outbounds\":[{\"type\":\"routervpn-tor\",\"tag\":\"routervpn-tor-exit\",\"session_id\":\"tor-session\"}],\"route\":{\"final\":\"routervpn-tor-exit\"}}"
+        let torFiles=["sing-box.json":Data(torConfig.utf8)]
         let externalState=LibboxExternalTestState.shared
         let externalConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\"}],\"outbounds\":[] }"
         let externalFiles=["sing-box.json":Data(externalConfig.utf8)]
@@ -568,12 +580,33 @@ final class CompletionState: @unchecked Sendable {
             check("external compiler bytes cannot be silently rewritten",rejected)
         }
         let torState=LibboxTorTestState.shared
+        for profile in ["", "[]", "null",String(repeating:" ",count:4*1024*1024+1)] {
+            torState.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(files:torFiles,strict:true)
+            owner.proveTor(sessionID:"tor-session",profile:profile,completion:done.finish)
+            check("Tor proof rejects a missing or malformed frozen profile",done.values()==(1,1) && torState.current()==nil)
+            owner.stop()
+        }
+        for invalid in ["listener","second-tun","wrong-final","other-controller"] {
+            var graph=try JSONSerialization.jsonObject(with:Data(torConfig.utf8)) as! [String:Any]
+            var inbounds=graph["inbounds"] as! [[String:Any]]
+            if invalid=="listener"{inbounds.append(["type":"mixed","tag":"unused-proof","listen":"127.0.0.1","listen_port":1099])}
+            if invalid=="second-tun"{inbounds.append(["type":"tun","tag":"other-tun"])}
+            graph["inbounds"]=inbounds
+            if invalid=="wrong-final"{graph["route"]=["final":"direct"]}
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),before=state.counts()
+            var rejected=false
+            do{try owner.start(files:["sing-box.json":try JSONSerialization.data(withJSONObject:graph)],strict:true,multihopMetadata:invalid=="other-controller" ? "{}":nil)}catch{rejected=true}
+            check("Tor cannot gain an unproved listener or competing graph owner",rejected && state.counts()==before)
+        }
         for cancelled in [false,true] {
             torState.configure(block:cancelled)
             let provider=PacketTunnelProvider(), owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             try owner.start(files:torFiles,strict:true)
+            check("Tor keeps the exact compiled graph without a local proof listener",state.currentServer()!.capturedConfiguration()==torConfig)
             let done=CompletionState()
-            owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             let request=torState.current()!
             if cancelled {
                 check("Tor native wait began",request.entered.wait(timeout:.now()+2) == .success)
@@ -590,7 +623,7 @@ final class CompletionState: @unchecked Sendable {
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             try owner.start(files:torFiles,strict:true)
             let server=state.currentServer()!;server.configureStrategy(dns:fails)
-            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             check("Tor requires its selected native DNS before Connected",done.wait() && done.values()==(1,fails ? 1:0))
             check("Tor DNS proof belongs to the same captured runtime",server.strategyCalls()==["start","dns"])
             owner.stop()
@@ -599,7 +632,7 @@ final class CompletionState: @unchecked Sendable {
             torState.configure()
             let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
             try owner.start(files:torFiles,strict:true)
-            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             check("Tor circuit retained before runtime health test",done.wait() && done.values()==(1,0))
             torState.current()!.cancel()
             let until=Date().addingTimeInterval(2.5)
@@ -612,7 +645,7 @@ final class CompletionState: @unchecked Sendable {
             torState.configure(block:true)
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             try owner.start(files:torFiles,strict:false)
-            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             let request=torState.current()!
             check("Tor wait entered before network invalidation",request.entered.wait(timeout:.now()+2) == .success)
             if method=="pause" {owner.pause()}else{owner.invalidateMultihop()}
@@ -623,7 +656,7 @@ final class CompletionState: @unchecked Sendable {
             torState.configure(payload:payload)
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             try owner.start(files:torFiles,strict:false)
-            let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             check("malformed/replayed/non-Tor results cannot report Connected",done.wait() && done.values()==(1,1));owner.stop()
         }
         let hopState=LibboxHopTestState.shared
@@ -632,7 +665,7 @@ final class CompletionState: @unchecked Sendable {
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             if tor {try owner.start(files:torFiles,strict:true)}else{try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
             let done=CompletionState()
-            if tor{owner.proveTor(sessionID:"tor-session",completion:done.finish)}else{owner.proveExternal(completion:done.finish)}
+            if tor{owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)}else{owner.proveExternal(completion:done.finish)}
             check("measurement retains completed native proof",done.wait() && done.values()==(1,0))
             if action=="cancel-proof" {if tor{torState.current()!.cancel()}else{externalState.current()!.cancel()}}
             if action=="late-factory" {hopState.configure {owner.stop()}}
@@ -670,7 +703,7 @@ final class CompletionState: @unchecked Sendable {
         for event in ["stable","cancel-proof","late-factory","before-proof","tor"] {
             state.configure();externalState.configure();torState.configure();MTUActivationFixture.shared.configure()
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
-            if event=="tor" {try owner.start(files:torFiles,strict:true);owner.proveTor(sessionID:"tor-session",completion:done.finish)}
+            if event=="tor" {try owner.start(files:torFiles,strict:true);owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)}
             else {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy);if event != "before-proof" {owner.proveExternal(completion:done.finish)}}
             if event != "before-proof" {check("MTU factory follows final native proof",done.wait() && done.values()==(1,0))}
             if event=="cancel-proof" {externalState.current()!.cancel()}
@@ -680,6 +713,21 @@ final class CompletionState: @unchecked Sendable {
             if ["stable","late-factory"].contains(event) {
                 check("MTU receives exact source capture and retained proof",MTUActivationFixture.shared.captured()==[externalPolicy.sourceConfig,externalPolicy.capture] && MTUActivationFixture.shared.owns(externalState.current()))
             } else {check("unproved or Tor path never calls ordinary external MTU",MTUActivationFixture.shared.captured().isEmpty)}
+            owner.stop()
+        }
+        for event in ["stable","cancel-proof","late-factory","before-proof","external"] {
+            state.configure();externalState.configure();torState.configure();MTUActivationFixture.shared.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            if event=="external" {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy);owner.proveExternal(completion:done.finish)}
+            else {try owner.start(files:torFiles,strict:true);if event != "before-proof"{owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)}}
+            if event != "before-proof"{check("Tor MTU activation waits for final DNS and circuit proof",done.wait() && done.values()==(1,0))}
+            if event=="cancel-proof"{torState.current()!.cancel()}
+            if event=="late-factory"{MTUActivationFixture.shared.configure{owner.stop()}}
+            var failed=false;do{try owner.activateTorMTU()}catch{failed=true}
+            check("Tor MTU cannot adopt an ordinary, unproved or retired runtime",failed == (event != "stable"))
+            if ["stable","late-factory"].contains(event) {
+                check("Tor MTU receives exact graph profile and retained proof",MTUActivationFixture.shared.captured()==[torConfig,torProfile] && MTUActivationFixture.shared.ownsTor(torState.current()))
+            }else{check("unproved or ordinary path never calls Tor MTU",MTUActivationFixture.shared.captured().isEmpty)}
             owner.stop()
         }
         for external in [false,true] {
