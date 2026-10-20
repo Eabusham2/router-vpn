@@ -22,14 +22,20 @@ class NativePolicyScope(unittest.TestCase):
             parent=output/'preparation_test.go'
             if stale=='old':parent.write_bytes((ROOT/'internal/applexray/preparation_test.go').read_bytes())
             if stale=='foreign':parent.write_text('do not erase unknown test')
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','PQ','STRATEGY','COMPOSITE'):
-                if hasattr(module,hook):mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
+            # This fixture owns package copying, not vendored transport files.
+            # Every native patcher has its own exact-source/executable tests.
+            openvpn_close = None
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE'):
+                if hasattr(module,hook):
+                    prepared=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
+                    if hook=='OPENVPN_CLOSE':openvpn_close=prepared
             if hasattr(module,'CORE'):
                 mocks.enter_context(mock.patch.object(module.subprocess,'check_output',return_value=module.CORE+'\n'))
             if stale=='foreign':
                 with self.assertRaises(ValueError):module.prepare(vendor)
                 self.assertEqual(parent.read_text(),'do not erase unknown test');return
             module.prepare(vendor)
+            if openvpn_close is not None:openvpn_close.assert_called_once_with(vendor.resolve())
             self.assertFalse(parent.exists())
             for name in ('config.go','config_test.go','start_layer.go','start_layer_test.go'):
                 self.assertEqual((output/name).read_bytes(),(ROOT/'internal/applexray'/name).read_bytes())
@@ -43,6 +49,7 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertNotIn('"router-vpn/internal/', source.read_text())
             before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
             module.prepare(vendor)
+            if openvpn_close is not None:self.assertEqual(openvpn_close.call_args_list,[mock.call(vendor.resolve())]*2)
             self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
     def test_mobile_copy_does_not_export_parent_build_audits(self):self.copied('prepare-mobile-multihop.py')
     def test_relay_copy_does_not_export_parent_build_audits(self):self.copied('prepare-relay-core.py')
