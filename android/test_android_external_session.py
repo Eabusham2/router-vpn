@@ -41,6 +41,7 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
   if(externalFactoryEntered!=null){externalFactoryEntered.countDown();externalFactoryRelease.await();}return r;
  }
  public static void externalReset(){reset();externalNext=null;externalCreated=null;externalFactoryEntered=null;externalFactoryRelease=null;}
+ public static RouterHopMeasurement routerExternalCreateHopMeasurement(CommandServer s,RouterExternalProofRequest proof,String source,String capture,String id)throws Exception{return new RouterHopMeasurement();}
 }'''
 
 HARNESS = r'''package com.eabusham.routervpn;

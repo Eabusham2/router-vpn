@@ -59,6 +59,7 @@ LIBBOX = LIBBOX[:-1] + r'''
   if(factoryEntered!=null){factoryEntered.countDown();factoryRelease.await();}return r;
  }
  public static void routerStrategyDNSProof(CommandServer s)throws Exception{dnsCalls++;if(s!=created.server)throw new AssertionError("DNS used another native Box");if(dnsEntered!=null){dnsEntered.countDown();dnsRelease.await();}if(dnsFailure)throw new IllegalStateException("DNS failed");}
+ public static RouterHopMeasurement routerTorCreateHopMeasurement(CommandServer s,RouterTorProofRequest proof,String id)throws Exception{return new RouterHopMeasurement();}
 }'''
 SOURCES['io/nekohasekai/libbox/Libbox.java'] = LIBBOX
 HARNESS = r'''package com.eabusham.routervpn;

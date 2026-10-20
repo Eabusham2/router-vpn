@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterTorProofRequest;
+import io.nekohasekai.libbox.RouterHopMeasurement;
 import org.json.JSONObject;
 
 import java.net.InetAddress;
@@ -77,6 +78,17 @@ final class AndroidTorSession {
     synchronized String result(String session, String external) throws Exception {
         if (!sessionID.equals(session) || !externalID.equals(external) || !healthy()) throw unavailable();
         return result;
+    }
+
+    RouterHopMeasurement newHopMeasurement() throws Exception {
+        final RouterTorProofRequest proof;
+        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        RouterHopMeasurement measurement = Libbox.routerTorCreateHopMeasurement(server, proof, externalID);
+        if (measurement == null) throw unavailable();
+        final boolean owned;
+        synchronized (this) { owned = request == proof && healthy(); }
+        if (!owned) { measurement.close(); throw unavailable(); }
+        return measurement;
     }
 
     void cancel() {

@@ -142,7 +142,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if(service==null||id==null||!id.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured hop measurement session.");
         synchronized(service.lock){
             io.nekohasekai.libbox.RouterHopMeasurement probe=service.hopMeasurement;
-            if(probe==null||!"UP".equals(service.state))throw new IllegalStateException("The proved multihop runtime is unavailable.");
+            if(probe==null||!"UP".equals(service.state)||service.explicitStop)throw new IllegalStateException("The proved native path measurement runtime is unavailable.");
             if("start".equals(operation)){
                 if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("Finish MTU Retest before measuring hops.");
                 probe.start(id,8388608);
@@ -416,6 +416,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 executionHandler.post(executionWatch);
                 updateForeground("Proving Tor circuit and selected DNS…");
                 capturedTor.prove();
+                adoptHopMeasurement(capturedTor.newHopMeasurement(), ownedServer, generation);
             }
             if (externalMetadata != null) {
                 final AndroidExternalSession capturedExternal = new AndroidExternalSession(externalMetadata, ownedServer, new AndroidExternalSession.Owner() {
@@ -436,13 +437,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 executionHandler.post(executionWatch);
                 updateForeground("Proving captured entry, selected DNS and public exit…");
                 capturedExternal.prove();
+                adoptHopMeasurement(capturedExternal.newHopMeasurement(), ownedServer, generation);
             }
             if(hopMetadata!=null){
                 executionNetwork=executionNetworkIdentity();
                 if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
                 executionHandler.post(executionWatch);
                 if(ownedExecution!=null)ownedExecution.run(ownedServer);
-                synchronized(lock){hopMeasurement=Libbox.newRouterHopMeasurement(ownedServer,hopMetadata);}
+                adoptHopMeasurement(Libbox.newRouterHopMeasurement(ownedServer,hopMetadata),ownedServer,generation);
                 executionHandler.removeCallbacks(executionWatch);executionHandler.post(executionWatch);
             }
             long performanceServices = Libbox.routerStartPerformance(ownedServer);
@@ -467,6 +469,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             // adoption. Lockdown, permission and network failures happen earlier.
             discardPreparedSession(this,sessionId);
         }
+    }
+
+    private void adoptHopMeasurement(io.nekohasekai.libbox.RouterHopMeasurement measurement, CommandServer server, long generation) throws Exception {
+        if (measurement == null) throw new IllegalStateException("The captured path measurement owner is unavailable.");
+        synchronized (lock) {
+            if (!explicitStop && generation == lifecycle.get() && commandServer == server && hopMeasurement == null
+                    && executionNetwork.equals(executionNetworkIdentity())
+                    && (torSession == null || torSession.healthy()) && (externalSession == null || externalSession.healthy())) {
+                hopMeasurement = measurement;
+                return;
+            }
+        }
+        measurement.close();
+        throw new IllegalStateException("VPN ownership changed before path measurement adoption.");
     }
 
     static boolean discardPreparedSession(android.content.Context context, String sessionId) {
@@ -577,6 +593,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if(capturedTor!=null)capturedTor.cancel();
         AndroidExternalSession capturedExternal = externalSession;
         if(capturedExternal!=null)capturedExternal.cancel();
+        if(hopMeasurement!=null)hopMeasurement.networkChanged();
         if(startLayerRelay!=null){
             try{startLayerRelay.close();}
             catch(RuntimeException pending){
