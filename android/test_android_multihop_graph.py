@@ -139,7 +139,7 @@ final class AndroidServiceStopConfirmation {
  static String state(String key,java.util.function.Supplier<String> value){return value.get();}
 }
 final class RouterPQNative {static int installs;static boolean fail;static void install()throws Exception{if(fail)throw new java.io.IOException("test PQ initialization failure");installs++;}}
-final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
+final class LayeredVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode",EXTRA_HOME_SESSION_ID="home-session";}
 final class XrayVpnService {static final String ACTION_START="start",ACTION_STOP="stop",EXTRA_SESSION_ID="session",EXTRA_MODE_ID="mode";}
 ''',
 'io/nekohasekai/libbox/Libbox.java':r'''package io.nekohasekai.libbox;

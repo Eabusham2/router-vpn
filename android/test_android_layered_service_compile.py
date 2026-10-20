@@ -88,6 +88,12 @@ stub(PKG,'PlatformInterface','''{
  String tailscaleHostname();boolean usePlatformBridge();BridgeSession createBridge(BridgeOptions o)throws Exception;void triggerNativeCrash()throws Exception;int connectSSHAgent()throws Exception;
 }''','interface')
 APP='com.eabusham.routervpn'
+stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public boolean connected;public String phase="idle",pathProof="pending",sessionId="home-capture",activeExternalId="",activeExternalProtocol="",expectedExternalIp="",activeEntryId="",activeEntryMode="";}
+ public static volatile Snapshot value=new Snapshot();public static volatile boolean emergency;
+ public static Snapshot snapshot(android.content.Context c){return value;}public static boolean emergencyDisconnectPending(android.content.Context c){return emergency;}
+ public static boolean ownsPolicyExternal(android.content.Context c,Snapshot s){return s!=null&&s==value&&!emergency;}
+ public static boolean failedPolicyExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
+}''')
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
 stub(APP,'AndroidTorProfile','{public static final String SESSION_FILE="routervpn-tor.json";public static final int MAX_METADATA=262144;public static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return null;}public static String strictText(byte[] data)throws Exception{return "";} }')
 stub(APP,'AndroidTorSession','{public interface Owner{boolean current(AndroidTorSession session,io.nekohasekai.libbox.CommandServer server);String network();}public AndroidTorSession(org.json.JSONObject m,io.nekohasekai.libbox.CommandServer s,Owner o)throws Exception{}public void prove()throws Exception{}public void cancel(){}public boolean healthy(){return false;}public String result(String s,String e)throws Exception{return "";} }')

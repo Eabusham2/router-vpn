@@ -40,6 +40,10 @@ final class NativeSingBoxController {
         starts.incrementAndGet(); state = startState; mode = "standard-test";
         if (failStart) throw new IllegalStateException("start failed after engine ownership publication");
     }
+    void startExternal(SessionInfo session,String homeSession) {
+        if(!homeSession.equals(AndroidHomeStateStore.current.sessionId))throw new AssertionError("Native launch lost its exact Home owner");
+        start(session);
+    }
     void stop() {
         stops.incrementAndGet();
         if (failStop) throw new IllegalStateException("stop request failed");
@@ -47,6 +51,8 @@ final class NativeSingBoxController {
     }
 }
 final class LayeredVpnService {
+    static final AtomicInteger discarded=new AtomicInteger();
+    static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
     static String externalExitIP(String session,String exit){externalReads.incrementAndGet();if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external owner");return "1.1.1.1";}
     static final AtomicInteger torReads=new AtomicInteger();static volatile boolean torHealthy=true;
@@ -206,6 +212,7 @@ public final class RuntimeTeardownHarness {
         Owner(String kind) {
             this.kind=kind;LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
+            LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
@@ -284,6 +291,7 @@ public final class RuntimeTeardownHarness {
                 check(LayeredVpnService.mtuStarts.get()==(owner.multihop!=null?1:0),"MTU must start once, only after selected-router proof");
                 if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
                 if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==2,"ordinary external path bypassed captured entry/DNS/native proof");
+                if(kind.equals("external"))check(LayeredVpnService.discarded.get()==0,"successful native launch discarded its active session");
                 owner.disconnect();awaitIdle(owner);
             }
         });
@@ -368,6 +376,7 @@ public final class RuntimeTeardownHarness {
                 finally {cb.release.countDown();cb.awaitDone();}
                 check(owner.engine.starts.get()==0,"engine launched after Disconnect completed");
                 check(!cb.ok,"cancelled attempt reported Connected");check(LayeredVpnService.mtuStarts.get()==0,"cancelled attempt launched MTU");awaitIdle(owner);
+                if(kind.equals("external"))check(LayeredVpnService.discarded.get()==1,"cancellation leaked prepared private external files");
             }
         });
         test(kind+" partial start failure tears down",()->{
@@ -376,6 +385,7 @@ public final class RuntimeTeardownHarness {
                 check(!cb.ok,"failed start reported success");
                 check(owner.engine.stops.get()>0&&"DOWN".equals(owner.engine.state),"start threw after publishing engine ownership but cleanup was skipped");
                 awaitIdle(owner);
+                if(kind.equals("external"))check(LayeredVpnService.discarded.get()==1,"failed dispatched launch leaked its released external preparation");
             }
         });
         test(kind+" failed stop still reports failure",()->{
@@ -383,6 +393,7 @@ public final class RuntimeTeardownHarness {
                 owner.engine.startState="FAILED";owner.engine.failStop=true;
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();
                 check(!cb.ok,"stop exception reported success");check(owner.busy(),"stop exception released unproved ownership");
+                if(kind.equals("external"))check(LayeredVpnService.discarded.get()==0,"unconfirmed stop discarded live private session files");
             }
         });
         test(kind+" unknown engine state blocks start",()->{

@@ -60,6 +60,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     static final String ACTION_START = "com.eabusham.routervpn.LAYERED_START";
     static final String ACTION_STOP = "com.eabusham.routervpn.LAYERED_STOP";
     static final String EXTRA_SESSION_ID = "session_id";
+    static final String EXTRA_HOME_SESSION_ID = "external_home_session_id";
     static final String EXTRA_MODE_ID = "mode_id";
 
     private static final String TAG = "RouterVPN-Libbox";
@@ -125,6 +126,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile AndroidTorSession torSession;
     private volatile AndroidExternalSession externalSession;
     private volatile boolean externalOwner;
+    private volatile AndroidHomeStateStore.Snapshot externalHomeOwner;
     private volatile Network externalPhysicalNetwork;
     private volatile AndroidMAXProfilePreparation.Adopted maxSession;
     private volatile boolean torOwner;
@@ -181,6 +183,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final Runnable executionWatch=new Runnable(){public void run(){
         io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;AndroidExternalSession external=externalSession;AndroidMAXProfilePreparation.Adopted max=maxSession;if(plan==null&&hopMeasurement==null&&tor==null&&external==null&&max==null)return;
         if(max!=null&&!max.current(false)||!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())||(executionProved&&external!=null&&!external.healthy())){
+            if(external!=null)AndroidHomeStateStore.failedPolicyExternal(LayeredVpnService.this,externalHomeOwner,"The captured external exit, entry, DNS or network changed; reconnect to prove the path.",false);
             cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||external!=null&&externalSession!=external||max!=null&&maxSession!=max)return;shutdown("FAILED",max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":external!=null?"The captured external exit, entry, DNS or network changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
         }
         executionHandler.postDelayed(this,500);
@@ -225,17 +228,19 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         final String sessionId = intent.getStringExtra(EXTRA_SESSION_ID);
         final String modeId = intent.getStringExtra(EXTRA_MODE_ID);
         final String maxOwner = intent.getStringExtra(AndroidMAXProfilePreparation.EXTRA_OWNER);
+        final String homeSession = intent.getStringExtra(EXTRA_HOME_SESSION_ID);
         final long generation = lifecycle.incrementAndGet();
         explicitStop = false;
-        executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner));
+        executor.execute(() -> startLayered(sessionId, modeId, generation, maxOwner, homeSession));
         return Service.START_NOT_STICKY;
     }
 
-    private void startLayered(String sessionId, String modeId, long generation, String maxOwner) {
+    private void startLayered(String sessionId, String modeId, long generation, String maxOwner, String homeSession) {
         synchronized (lock) {
-            if (generation != lifecycle.get() || explicitStop) return;
-            if ("STARTING".equals(state) || "UP".equals(state)) return;
-            if (torOwner) throw new IllegalStateException("The previous native Tor owner has not finished teardown.");
+            if (generation != lifecycle.get() || explicitStop || "STARTING".equals(state) || "UP".equals(state) || torOwner || externalOwner) {
+                discardPreparedSession(this,sessionId);
+                return;
+            }
             publish("STARTING", modeId, "");
         }
         AndroidMAXProfilePreparation.Adopted preparedMAX = null;
@@ -268,11 +273,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             }
             File externalFile = new File(session, AndroidExternalPolicy.SESSION_FILE).getCanonicalFile();
             JSONObject externalMetadata = null;
+            AndroidHomeStateStore.Snapshot externalHome = null;
             String externalProtocol = modeId.startsWith("standard-direct-") ? modeId.substring("standard-direct-".length())
                     : modeId.startsWith("standard-") ? modeId.substring("standard-".length()) : "";
             if (externalFile.exists()) {
                 if (torMetadata != null || !externalFile.isFile() || !externalFile.getParentFile().equals(session)) throw new IllegalStateException("External policy has no exclusive private session owner.");
                 externalMetadata = AndroidExternalPolicy.session(config, AndroidTorProfile.strictText(readLimited(externalFile, AndroidExternalPolicy.MAX_METADATA)), sessionId, modeId);
+                externalHome = captureExternalHome(externalMetadata, homeSession);
             } else if (AndroidExternalPolicy.supports(externalProtocol)) {
                 throw new IllegalStateException("The ordinary external VPN has no captured policy and proof metadata.");
             }
@@ -370,6 +377,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 torPhysicalNetwork = torPhysical;
                 externalPhysicalNetwork = externalPhysical;
                 externalOwner = externalMetadata != null;
+                externalHomeOwner = externalHome;
+                if(externalHome!=null&&!AndroidHomeStateStore.ownsPolicyExternal(this,externalHome))throw new IllegalStateException("External Home owner changed before native startup.");
                 if(torMetadata!=null)executionNetwork=torNetwork;
                 else if(externalMetadata!=null)executionNetwork=externalNetwork;
                 else if(preparedMAX!=null)executionNetwork=executionNetworkIdentity();
@@ -410,7 +419,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 final AndroidExternalSession capturedExternal = new AndroidExternalSession(externalMetadata, ownedServer, new AndroidExternalSession.Owner() {
                     @Override public boolean current(AndroidExternalSession candidate, CommandServer nativeServer) {
                         return externalSession == candidate && commandServer == nativeServer && generation == lifecycle.get() && !explicitStop
-                                && activeSession != null && sessionId.equals(activeSession.getName());
+                                && activeSession != null && sessionId.equals(activeSession.getName())
+                                && AndroidHomeStateStore.ownsPolicyExternal(LayeredVpnService.this,externalHomeOwner);
                     }
                     @Override public String network() { return executionNetworkIdentity(); }
                 });
@@ -450,7 +460,48 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             shutdown("FAILED", safeMessage(error));
         } finally {
             if (preparedMAX != null && maxSession != preparedMAX) preparedMAX.cancel();
+            // This requested directory is retained only after actual runtime
+            // adoption. Lockdown, permission and network failures happen earlier.
+            discardPreparedSession(this,sessionId);
         }
+    }
+
+    static boolean discardPreparedSession(android.content.Context context, String sessionId) {
+        if(!safeToken(sessionId))return false;
+        LayeredVpnService service=currentService.get();
+        synchronized(service==null?LayeredVpnService.class:service.lock){
+            try{
+                File root=new File(context.getFilesDir(),"layered-sessions").getCanonicalFile();
+                File folder=new File(root,sessionId).getCanonicalFile();
+                if(!folder.getParentFile().equals(root))return false;
+                if(service!=null&&service.activeSession!=null&&folder.equals(service.activeSession.getCanonicalFile()))return false;
+                removePreparedTree(folder);
+                return !folder.exists();
+            }catch(Exception cleanup){return false;}
+        }
+    }
+
+    private static void removePreparedTree(File file) {
+        if(!java.nio.file.Files.isSymbolicLink(file.toPath())){
+            File[] children=file.listFiles();
+            if(children!=null)for(File child:children)removePreparedTree(child);
+        }
+        file.delete();
+    }
+
+    private AndroidHomeStateStore.Snapshot captureExternalHome(JSONObject metadata, String homeSession) throws Exception {
+        AndroidHomeStateStore.Snapshot home = AndroidHomeStateStore.snapshot(this);
+        JSONObject capture = new JSONObject(metadata.getString("capture_json"));
+        boolean entry = capture.optString("entry_tag", "").length() != 0;
+        if (homeSession == null || homeSession.isEmpty() || !homeSession.equals(home.sessionId)
+                || !metadata.getString("external_id").equals(home.activeExternalId)
+                || !metadata.getString("protocol").equals(home.activeExternalProtocol)
+                || !capture.getString("expected_public_ip").equals(home.expectedExternalIp)
+                || entry != !home.activeEntryId.isEmpty()
+                || entry && !metadata.getString("entry_mode").equals(home.activeEntryMode)
+                || !"connecting".equals(home.phase) || !"pending".equals(home.pathProof)
+                || !AndroidHomeStateStore.ownsPolicyExternal(this,home)) throw new IllegalStateException("External launch does not own the captured Home selection.");
+        return home;
     }
 
     @Override public void onRevoke() {
@@ -469,6 +520,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         String terminal = state;
         String mode = activeMode;
         File session;
+        AndroidHomeStateStore.Snapshot home = externalHomeOwner;
+        AndroidHomeStateStore.failedPolicyExternal(this,home,"The captured external VPN service stopped; its path proof is no longer valid.",false);
         synchronized (lock) {
             session = activeSession;
             try { closeCoreLocked(); }
@@ -482,6 +535,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             activeConfig = "";
         }
         if(currentService.get()==this)currentService.clear();
+        AndroidHomeStateStore.failedPolicyExternal(this,home,"The captured external VPN service stopped; reconnect to prove the path.",true);
         if (!explicitStop && ("UP".equals(terminal) || "STARTING".equals(terminal))) {
             publish("FAILED", mode, "Layered VPN service stopped unexpectedly.");
         }
@@ -493,16 +547,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void shutdown(String terminalState, String error) {
         String mode;
         File session;
+        AndroidHomeStateStore.Snapshot home;
         synchronized (lock) {
             if (!"DOWN".equals(terminalState) && !"FAILED".equals(terminalState) && !"REVOKED".equals(terminalState)) terminalState = "FAILED";
             if ("DOWN".equals(terminalState)) publish("STOPPING", activeMode, "");
             mode = activeMode;
             session = activeSession;
+            home = externalHomeOwner;
+            AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?"The captured external VPN is stopping; its path proof is no longer valid.":error,false);
             closeCoreLocked();
             activeSession = null;
             activeMode = "";
             activeConfig = "";
             publish(terminalState, "DOWN".equals(terminalState) ? "" : mode, error);
+            AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?"The captured external VPN stopped.":error,true);
         }
         if (session != null) deleteTree(session);
         stopForeground(STOP_FOREGROUND_REMOVE);
@@ -542,6 +600,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             externalSession = null;
             externalOwner = false;
             externalPhysicalNetwork = null;
+            externalHomeOwner = null;
             maxSession = null;
         }
         AndroidMTUSession oldMTU=mtuSession;

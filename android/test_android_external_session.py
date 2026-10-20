@@ -18,6 +18,9 @@ T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 SOURCES = dict(T.SOURCES)
 SOURCES.pop("com/eabusham/routervpn/AndroidExternalSession.java")
+SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}")
+SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
+SOURCES["android/net/VpnService.java"] = SOURCES["android/net/VpnService.java"].replace("public boolean isAlwaysOn(){return true;}public boolean isLockdownEnabled(){return true;}", "public static boolean lockdown=true;public boolean isAlwaysOn(){return lockdown;}public boolean isLockdownEnabled(){return lockdown;}")
 SOURCES["io/nekohasekai/libbox/RouterExternalProofRequest.java"] = r'''package io.nekohasekai.libbox;
 import org.json.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;
 public class RouterExternalProofRequest {
@@ -87,7 +90,41 @@ public class ExternalSessionTest {
   p.autoDetectInterfaceControl(100);check(physical.fdBinds==1&&android.os.ParcelFileDescriptor.duplicate.closed,"external native FD escaped physical owner");p.protectRelaySocket(new java.net.Socket());p.protectRelaySocket((java.net.DatagramSocket)null);check(physical.tcpBinds==1&&physical.udpBinds==1,"relay sockets escaped physical owner");
   android.net.ConnectivityManager.networks=new android.net.Network[]{new android.net.Network()};reject(()->p.autoDetectInterfaceControl(101));check(physical.fdBinds==1,"changed network opened new traffic");p.onDestroy();
  }
- public static void main(String[]args)throws Exception{success();rejection();cancellation();serviceOwner();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}
+ static Object invoke(LayeredVpnService service,String name,Class<?>[] types,Object...args)throws Exception{Method method=LayeredVpnService.class.getDeclaredMethod(name,types);method.setAccessible(true);try{return method.invoke(service,args);}catch(InvocationTargetException e){throw (Exception)e.getCause();}}
+ static void drain(LayeredVpnService s)throws Exception{((java.util.concurrent.ExecutorService)field("executor").get(s)).submit(()->{}).get(2,TimeUnit.SECONDS);}
+ static AndroidHomeStateStore.Snapshot home(boolean connected){AndroidHomeStateStore.Snapshot h=new AndroidHomeStateStore.Snapshot();h.sessionId="home-owned";h.phase=connected?"connected":"connecting";h.pathProof=connected?"passed":"pending";h.connected=connected;h.activeExternalId="exit-owned";h.activeExternalProtocol="socks5";h.expectedExternalIp="8.8.4.4";AndroidHomeStateStore.value=h;AndroidHomeStateStore.emergency=false;return h;}
+ static void homeCapture()throws Exception{
+  LayeredVpnService s=new LayeredVpnService();AndroidHomeStateStore.Snapshot h=home(false);JSONObject metadata=new JSONObject().put("external_id","exit-owned").put("protocol","socks5").put("entry_mode","external").put("capture_json",new JSONObject().put("expected_public_ip","8.8.4.4").toString());
+  Class<?>[] signature={JSONObject.class,String.class};check(invoke(s,"captureExternalHome",signature,metadata,"home-owned")==h,"service substituted Home launch owner");
+  for(String altered:new String[]{"home","exit","protocol","ip","entry","proved","emergency"}){
+   h=home(false);JSONObject changed=new JSONObject(metadata.toString());String session="home-owned";
+   if(altered.equals("home"))session="new-owner";if(altered.equals("exit"))changed.put("external_id","other");if(altered.equals("protocol"))changed.put("protocol","http");if(altered.equals("ip"))h.expectedExternalIp="8.8.8.8";if(altered.equals("entry"))h.activeEntryId="entry-owned";if(altered.equals("proved"))h.phase="connected";if(altered.equals("emergency"))AndroidHomeStateStore.emergency=true;
+   final String selected=session;reject(()->invoke(s,"captureExternalHome",signature,changed,selected));
+  }
+  AndroidHomeStateStore.emergency=false;s.onDestroy();
+ }
+ static void failedHome()throws Exception{
+  for(boolean replacement:new boolean[]{false,true}){
+   Libbox.externalReset();Fixture f=new Fixture(false);f.session.prove();LayeredVpnService s=new LayeredVpnService();s.files=Files.createTempDirectory("external-home-service-").toFile();s.onCreate();
+   Path folder=s.files.toPath().resolve("layered-sessions/owned");Files.createDirectories(folder);Files.writeString(folder.resolve("capture"),"private");android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();
+   field("externalOwner").setBoolean(s,true);field("externalSession").set(s,f.session);field("externalHomeOwner").set(s,home(true));field("commandServer").set(s,f.server);field("tunDescriptor").set(s,tun);field("activeSession").set(s,folder.toFile());field("activeMode").set(s,"standard-direct-socks5");field("state").set(s,"UP");field("executionProved").setBoolean(s,true);field("connectivity").set(s,new android.net.ConnectivityManager());field("executionNetwork").set(s,invoke(s,"executionNetworkIdentity",new Class<?>[0]));
+   if(replacement){AndroidHomeStateStore.Snapshot newer=home(true);newer.sessionId="newer-owner";}
+   Libbox.externalCreated.alive=false;((Runnable)field("executionWatch").get(s)).run();drain(s);
+   check(replacement?AndroidHomeStateStore.value.connected:!AndroidHomeStateStore.value.connected,"external failure changed wrong Home or left stale Connected");check(replacement?AndroidHomeStateStore.value.sessionId.equals("newer-owner"):AndroidHomeStateStore.value.pathProof.equals("failed"),"external failure adopted stale proof");check(tun.closed&&!Files.exists(folder)&&field("commandServer").get(s)==null,"failed external owner did not clean native/session state");s.onDestroy();
+  }
+  Libbox.externalReset();LayeredVpnService s=new LayeredVpnService();AndroidHomeStateStore.Snapshot captured=home(true);field("externalHomeOwner").set(s,captured);field("externalOwner").setBoolean(s,true);CommandServer server=new CommandServer(s,s);field("commandServer").set(s,server);Libbox.failClose=true;
+  reject(()->invoke(s,"shutdown",new Class<?>[]{String.class,String.class},"FAILED","Lost external DNS proof"));check(!captured.connected&&captured.pathProof.equals("failed")&&!captured.activeExternalId.isEmpty(),"unconfirmed close left Connected or lost Home owner");check(field("externalHomeOwner").get(s)==captured&&field("commandServer").get(s)==server,"failed native drain lost exact Home/native identity");
+  Libbox.failClose=false;invoke(s,"shutdown",new Class<?>[]{String.class,String.class},"FAILED","Lost external DNS proof");check(captured.activeExternalId.isEmpty()&&field("externalHomeOwner").get(s)==null,"successful close retained released external identity");s.onDestroy();
+ }
+ static void preparedFiles()throws Exception{
+  LayeredVpnService s=new LayeredVpnService();s.files=Files.createTempDirectory("external-preflight-").toFile();s.onCreate();Path root=s.files.toPath().resolve("layered-sessions");Files.createDirectories(root);android.net.VpnService.lockdown=false;
+  for(int i=0;i<40;i++){String id="denied-"+i;Path folder=root.resolve(id);Files.createDirectory(folder);Files.writeString(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER),"1");invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},id,"standard-direct-socks5",0L,"","home-owned");check(!Files.exists(folder),"denied lockdown leaked prepared directory "+i);}
+  android.net.VpnService.lockdown=true;Path live=root.resolve("live"),pending=root.resolve("cancelled"),outside=s.files.toPath().resolve("outside");Files.createDirectory(live);Files.createDirectory(pending);Files.writeString(outside,"retain");field("activeSession").set(s,live.toFile());
+  check(!LayeredVpnService.discardPreparedSession(s,"live")&&Files.exists(live),"discard released an active native directory");check(LayeredVpnService.discardPreparedSession(s,"cancelled")&&!Files.exists(pending),"unclaimed cancelled preparation retained");check(!LayeredVpnService.discardPreparedSession(s,"../outside")&&Files.exists(outside),"discard escaped private session root");
+  Path link=root.resolve("link");Files.createSymbolicLink(link,outside);check(!LayeredVpnService.discardPreparedSession(s,"link")&&Files.exists(outside),"discard followed a foreign root symlink");Files.delete(link);
+  Path stopped=root.resolve("late-start");Files.createDirectory(stopped);field("explicitStop").setBoolean(s,true);invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},"late-start","standard-direct-socks5",0L,"","home-owned");check(!Files.exists(stopped),"retired queued launch leaked preparation");s.onDestroy();
+ }
+ public static void main(String[]args)throws Exception{success();rejection();cancellation();serviceOwner();homeCapture();failedHome();preparedFiles();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}
 }'''
 
 
@@ -113,6 +150,8 @@ def main():
             ("AndroidExternalSession.java", "if (cancelled || !current() || !captured.healthy()) throw unavailable();", "", "final proof ownership"),
             ("LayeredVpnService.java", "Libbox.routerStrategyCloseService(commandServer);", "commandServer.closeService();", "checked native drain"),
             ("LayeredVpnService.java", "capturedExternal.bindSocket(borrowed.getFileDescriptor());", "", "physical network binding"),
+            ("LayeredVpnService.java", "AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?\"The captured external VPN is stopping; its path proof is no longer valid.\":error,false);", "", "Home invalidation before native drain"),
+            ("LayeredVpnService.java", "discardPreparedSession(this,sessionId);\n        }\n    }", "\n        }\n    }", "preflight preparation cleanup"),
         ]
         for name, old, new, label in mutations:
             target = app / name
@@ -125,7 +164,7 @@ def main():
             if result.returncode == 0:
                 raise AssertionError(f"Regression escaped: {label}")
             target.write_text(original)
-        print("Android external owner negative controls: 3 rejected")
+        print("Android external owner negative controls: 5 rejected")
 
 
 if __name__ == "__main__":

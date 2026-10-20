@@ -3,7 +3,8 @@
 
 The complete Home store and NativeSingBoxController compile unchanged. Android
 preferences/OS handles use deterministic boundaries from the graph suite. This
-checks live state publication and rejection; graph/packet proof has other gates.
+checks live state publication, owner failure, and atomic adoption. A compiled
+negative control removes the Home transaction lock and must lose the race.
 """
 from pathlib import Path
 import importlib.util
@@ -43,19 +44,23 @@ public final class Context {
  public Object startService(Intent intent){throw new AssertionError("State publication cannot start a VPN");}
  public Object startForegroundService(Intent intent){throw new AssertionError("State publication cannot start a VPN");}
  public static final class Store implements SharedPreferences {
-  public final Map<String,Object> values=new HashMap<>();public int edits,writes;
-  public String getString(String key,String fallback){return values.containsKey(key)?(String)values.get(key):fallback;}
-  public long getLong(String key,long fallback){return values.containsKey(key)?(Long)values.get(key):fallback;}
-  public boolean getBoolean(String key,boolean fallback){return values.containsKey(key)?(Boolean)values.get(key):fallback;}
-  public Editor edit(){edits++;return new Editor(){
+  public final Map<String,Object> values=Collections.synchronizedMap(new HashMap<>());public int edits,writes;
+  public volatile Runnable beforeConnectedApply;
+  public String getString(String key,String fallback){synchronized(values){return values.containsKey(key)?(String)values.get(key):fallback;}}
+  public long getLong(String key,long fallback){synchronized(values){return values.containsKey(key)?(Long)values.get(key):fallback;}}
+  public boolean getBoolean(String key,boolean fallback){synchronized(values){return values.containsKey(key)?(Boolean)values.get(key):fallback;}}
+  public Editor edit(){synchronized(values){edits++;}return new Editor(){
    final Map<String,Object> staged=new LinkedHashMap<>();
    public Editor putString(String key,String value){staged.put(key,value);return this;}
    public Editor putLong(String key,long value){staged.put(key,value);return this;}
    public Editor putBoolean(String key,boolean value){staged.put(key,value);return this;}
    public Editor remove(String key){staged.put(key,null);return this;}
-   public void apply(){writes++;for(Map.Entry<String,Object> entry:staged.entrySet()){
+   public void apply(){
+    Runnable hook=beforeConnectedApply;
+    if(hook!=null&&"connected".equals(staged.get("phase"))&&Boolean.TRUE.equals(staged.get("connected")))hook.run();
+    synchronized(values){writes++;for(Map.Entry<String,Object> entry:staged.entrySet()){
     if(entry.getValue()==null)values.remove(entry.getKey());else values.put(entry.getKey(),entry.getValue());
-   }}
+   }}}
   };}
  }
 }''',
@@ -80,9 +85,11 @@ import android.content.Context;
 import org.json.*;
 import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.*;
+import java.util.concurrent.atomic.*;
 
 public final class MultihopHomeHarness {
- static int checks,pairs,rejections;static final List<String> failures=new ArrayList<>();
+ static int checks,pairs,rejections,atomicRaces;static final List<String> failures=new ArrayList<>();
  static final String ENTRY="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",EXIT="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
  static void check(boolean value,String message){checks++;if(!value)throw new AssertionError(message);}
  static String base(String mode){
@@ -167,7 +174,117 @@ public final class MultihopHomeHarness {
   check(!AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4"),"ordinary external accepted stale "+key);
   check(before.equals(context.store.values)&&writes==context.store.writes,"stale ordinary completion overwrote Home state: "+key);
  }
+ static AndroidHomeStateStore.Snapshot beginPolicy(Context context){
+  AndroidHomeStateStore.beginPolicyExternal(context,"ordinary-node","Selected exit","socks5","8.8.4.4",ENTRY,"naive-h3");
+  return AndroidHomeStateStore.snapshot(context);
+ }
+ static void externalFailure(boolean released,String phase,boolean emergency){
+  Context context=new Context();AndroidHomeStateStore.Snapshot captured=beginPolicy(context);
+  check(AndroidHomeStateStore.ownsPolicyExternal(context,captured),"pending external owner was rejected");
+  if(!phase.equals("pending")){
+   check(AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4"),"external failure fixture could not connect");
+   if(phase.equals("revalidating"))check(AndroidHomeStateStore.beginPathRevalidation(context,"Revalidating captured network")!=null,"external revalidation did not begin");
+  }
+  check(AndroidHomeStateStore.ownsPolicyExternal(context,captured),"same external session lost ownership during "+phase);
+  AndroidHomeStateStore.saveActualExit(context,captured.sessionId,"8.8.4.4");
+  String emergencyWarning="Emergency Disconnect requested; waiting for all captured owners";
+  if(emergency){AndroidHomeStateStore.warning(context,emergencyWarning);check(!AndroidHomeStateStore.ownsPolicyExternal(context,captured),"emergency retained a healthy external owner");}
+  AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.snapshot(context);
+  check(AndroidHomeStateStore.failedPolicyExternal(context,captured,"Captured native proof failed",released),"matching external failure was rejected after "+phase);
+  AndroidHomeStateStore.Snapshot failed=AndroidHomeStateStore.snapshot(context);
+  check(!failed.connected&&failed.phase.equals("failed")&&failed.pathProof.equals("failed"),"native failure retained Connected evidence");
+  check(failed.sessionId.equals(captured.sessionId)&&failed.pathGeneration==before.pathGeneration,"native failure replaced its session/generation");
+  check(failed.logicalMode.equals("external")&&failed.runtimeMode.equals(captured.runtimeMode),"native failure relabelled its runtime");
+  check(AndroidHomeStateStore.actualExitForCurrentSession(context).isEmpty()&&!context.store.values.containsKey("actual_exit_ip")&&!context.store.values.containsKey("actual_exit_session"),"native failure retained actual-IP evidence");
+  check(failed.warning.equals(emergency?emergencyWarning:"Captured native proof failed"),"native failure erased emergency warning or failure reason");
+  check(!AndroidHomeStateStore.ownsPolicyExternal(context,captured),"failed owner could still prove a path");
+  if(released){
+   check(failed.activeNodeId.isEmpty()&&failed.activeExitId.isEmpty()&&failed.activeEntryId.isEmpty()&&!context.store.values.containsKey("active_entry_mode"),"released external failure retained Router graph identity");
+   check(failed.activeExternalId.isEmpty()&&failed.activeExternalName.isEmpty()&&failed.activeExternalProtocol.isEmpty()&&failed.expectedExternalIp.isEmpty(),"released external failure retained external identity");
+   int writes=context.store.writes;check(!AndroidHomeStateStore.failedPolicyExternal(context,captured,"Late duplicate failure",false)&&writes==context.store.writes,"released owner rewrote Home on duplicate failure");
+  }else{
+   check(failed.activeEntryId.equals(before.activeEntryId)&&failed.activeEntryMode.equals(before.activeEntryMode)&&failed.activeNodeId.equals(before.activeNodeId)&&failed.activeExitId.equals(before.activeExitId),"unconfirmed teardown lost Router graph identity");
+   check(failed.activeExternalId.equals(before.activeExternalId)&&failed.activeExternalName.equals(before.activeExternalName)&&failed.activeExternalProtocol.equals(before.activeExternalProtocol)&&failed.expectedExternalIp.equals(before.expectedExternalIp),"unconfirmed teardown lost external identity");
+   check(AndroidHomeStateStore.failedPolicyExternal(context,captured,"Captured native drain completed",true),"retained external owner could not finish its later drain");
+   check(AndroidHomeStateStore.snapshot(context).activeExternalId.isEmpty(),"proved later drain failed to release external identity");
+   if(emergency)check(AndroidHomeStateStore.snapshot(context).warning.equals(emergencyWarning),"later drain erased pending emergency warning");
+  }
+ }
+ static void externalFailureStale(String key,Object value,boolean released){
+  Context context=new Context();AndroidHomeStateStore.Snapshot captured=beginPolicy(context);
+  context.store.values.put(key,value);Map<String,Object> before=new HashMap<>(context.store.values);int edits=context.store.edits,writes=context.store.writes;
+  check(!AndroidHomeStateStore.ownsPolicyExternal(context,captured),"external health accepted changed owner field "+key);
+  check(!AndroidHomeStateStore.failedPolicyExternal(context,captured,"Stale native failure",released),"external failure accepted changed owner field "+key);
+  check(before.equals(context.store.values)&&edits==context.store.edits&&writes==context.store.writes,"stale failure mutated replacement owner: "+key);
+ }
+ static void externalFailureBoundary(){
+  for(boolean released:new boolean[]{false,true})for(String phase:new String[]{"pending","connected","revalidating"})for(boolean emergency:new boolean[]{false,true})externalFailure(released,phase,emergency);
+  for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"active_node_id","other"},{"active_exit_id","other"}})for(boolean released:new boolean[]{false,true})externalFailureStale(change[0],change[1],released);
+  Context context=new Context();AndroidHomeStateStore.Snapshot captured=beginPolicy(context);int writes=context.store.writes;
+  check(!AndroidHomeStateStore.ownsPolicyExternal(context,null)&&!AndroidHomeStateStore.failedPolicyExternal(context,null,"Missing owner",true)&&writes==context.store.writes,"missing owner mutated Home");
+  for(String[] change:new String[][]{{"phase","off"},{"phase","failed"},{"path_proof","failed"}}){
+   Context invalid=new Context();AndroidHomeStateStore.Snapshot owner=beginPolicy(invalid);invalid.store.values.put(change[0],change[1]);
+   check(!AndroidHomeStateStore.ownsPolicyExternal(invalid,owner),"non-live external state retained native health: "+change[0]);
+  }
+  AndroidHomeStateStore.beginPolicyExternal(context,"ordinary-node","Selected exit","socks5","8.8.4.4",ENTRY,"naive-h3");
+  Map<String,Object> replacement=new HashMap<>(context.store.values);writes=context.store.writes;
+  check(!AndroidHomeStateStore.failedPolicyExternal(context,captured,"Same path, previous session",false)&&replacement.equals(context.store.values)&&writes==context.store.writes,"same selected path let an old service fail a replacement session");
+ }
+ static void await(CountDownLatch latch,String description){
+  try{if(!latch.await(5,TimeUnit.SECONDS))throw new AssertionError("Timed out waiting for "+description);}
+  catch(InterruptedException interrupted){Thread.currentThread().interrupt();throw new AssertionError(interrupted);}
+ }
+ static final class Job {
+  final CountDownLatch entered=new CountDownLatch(1),done=new CountDownLatch(1);
+  final AtomicReference<Throwable> error=new AtomicReference<>();final Thread thread;
+  Job(String name,Runnable action){thread=new Thread(()->{entered.countDown();try{action.run();}catch(Throwable failure){error.set(failure);}finally{done.countDown();}},name);thread.start();}
+  void finish()throws Exception{thread.join(5000);check(!thread.isAlive(),"Home worker did not finish: "+thread.getName());if(error.get()!=null)throw new AssertionError("Home worker failed: "+thread.getName(),error.get());}
+ }
+ static boolean blockedOnHome(Job job){
+  await(job.entered,"competing Home writer");long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+  while(job.thread.getState()!=Thread.State.BLOCKED&&job.done.getCount()!=0&&System.nanoTime()<deadline)Thread.yield();
+  return job.thread.getState()==Thread.State.BLOCKED&&job.done.getCount()!=0;
+ }
+ static void atomicAdoption(String adoption,String competing)throws Exception{
+  atomicRaces++;Context context=new Context();AndroidHomeStateStore.Snapshot owner;
+  if(adoption.equals("tor")){AndroidHomeStateStore.beginTorExternal(context,"tor-node","Tor","tor",ENTRY,"naive-h3");owner=AndroidHomeStateStore.snapshot(context);}
+  else owner=beginPolicy(context);
+  AndroidHomeStateStore.Snapshot token=owner;
+  if(adoption.equals("revalidation")){check(AndroidHomeStateStore.connectedPolicyExternal(context,owner,"8.8.4.4"),"atomic fixture could not connect");token=AndroidHomeStateStore.beginPathRevalidation(context,"Revalidating");}
+  final AndroidHomeStateStore.Snapshot captured=token;
+  CountDownLatch writing=new CountDownLatch(1),release=new CountDownLatch(1);
+  context.store.beforeConnectedApply=()->{writing.countDown();await(release,"adoption release");};
+  AtomicBoolean adopted=new AtomicBoolean();
+  Job proof=new Job("home-adoption-"+adoption,()->adopted.set(adoption.equals("tor")?AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"):adoption.equals("revalidation")?AndroidHomeStateStore.completePathRevalidation(context,captured):AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4")));
+  Job writer=null;boolean blocked=false;
+  try{
+   await(writing,"paused adoption preference write");
+   writer=new Job("home-competing-"+competing,()->{
+    if(competing.equals("warning"))AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; writer owns warning");
+    else if(competing.equals("begin"))AndroidHomeStateStore.beginPolicyExternal(context,"replacement-node","Replacement","http","9.9.9.9","","external");
+    else AndroidHomeStateStore.failed(context,"Competing runtime failure");
+   });
+   blocked=blockedOnHome(writer);
+  }finally{release.countDown();proof.finish();if(writer!=null)writer.finish();context.store.beforeConnectedApply=null;}
+  check(blocked,"Home transaction allowed competing "+competing+" while "+adoption+" adoption was paused");
+  check(adopted.get(),"serialized adoption unexpectedly failed");
+  AndroidHomeStateStore.Snapshot finalState=AndroidHomeStateStore.snapshot(context);
+  if(competing.equals("warning"))check(finalState.warning.equals("Emergency Disconnect requested; writer owns warning"),"adoption erased the later emergency warning");
+  else if(competing.equals("begin"))check(!finalState.connected&&finalState.phase.equals("connecting")&&!finalState.sessionId.equals(captured.sessionId)&&finalState.activeExternalId.equals("replacement-node")&&AndroidHomeStateStore.actualExitForCurrentSession(context).isEmpty(),"old adoption overwrote the replacement session");
+  else check(!finalState.connected&&finalState.phase.equals("failed")&&finalState.pathProof.equals("failed")&&finalState.warning.equals("Competing runtime failure")&&AndroidHomeStateStore.actualExitForCurrentSession(context).isEmpty(),"old adoption resurrected a failed owner");
+ }
+ static void atomicAdoptions()throws Exception{
+  for(String adoption:new String[]{"policy","tor","revalidation"})for(String competing:new String[]{"warning","begin","failed"})atomicAdoption(adoption,competing);
+  Context context=new Context();AndroidHomeStateStore.Snapshot owner=beginPolicy(context);
+  check(AndroidHomeStateStore.connectedPolicyExternal(context,owner,"8.8.4.4"),"emergency revalidation fixture could not connect");
+  AndroidHomeStateStore.Snapshot token=AndroidHomeStateStore.beginPathRevalidation(context,"Revalidating");
+  AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; proof must stay invalid");
+  Map<String,Object> before=new HashMap<>(context.store.values);int writes=context.store.writes;
+  check(!AndroidHomeStateStore.completePathRevalidation(context,token),"revalidation adopted after emergency was already pending");
+  check(before.equals(context.store.values)&&writes==context.store.writes,"revalidation erased an existing emergency warning");
+ }
  public static void main(String[] args)throws Exception {
+  if(args.length==1&&args[0].equals("--atomic-only")){atomicAdoptions();return;}
   JSONArray catalog=new JSONArray(Files.readString(Path.of(args[0])));List<String> supported=new ArrayList<>(),unsupported=new ArrayList<>();
   for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");
    (NativeSingBoxController.nativeMultihopEntry(id)?supported:unsupported).add(id);
@@ -180,6 +297,7 @@ public final class MultihopHomeHarness {
   externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);
   externalStale("path_generation",99L);
+  externalFailureBoundary();atomicAdoptions();
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","socks5"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})torStale(change[0],change[1]);
   torStale("path_generation",99L);
   unsupported.addAll(Arrays.asList(null,"","WG"," wg","wg ","unknown","naive","naive-h2;exec","max-tls-other"));
@@ -188,7 +306,7 @@ public final class MultihopHomeHarness {
   AndroidHomeStateStore.connectedMultihop(legacy,ENTRY,EXIT,"shadowsocks");
   verifyIdentity(AndroidHomeStateStore.snapshot(legacy),session,"wg","shadowsocks");
   if(!failures.isEmpty())throw new AssertionError(String.join("\n",failures));
-  System.out.println("Shipping Android multihop Home state: "+supported.size()+" exact entry modes, "+pairs+" identity pairs, "+rejections+" no-write rejections, "+checks+" checks PASS (OS handles doubled)");
+  System.out.println("Shipping Android multihop Home state: "+supported.size()+" exact entry modes, "+pairs+" identity pairs, "+rejections+" no-write rejections, "+atomicRaces+" serialized adoption races, "+checks+" checks PASS (OS handles doubled)");
  }
 }
 ''',
@@ -222,6 +340,25 @@ def main():
         subprocess.run(['java', '-cp', os.pathsep.join((str(root), str(jar))),
                         'com.eabusham.routervpn.MultihopHomeHarness', str(ROOT/'configs/client/modes.json')],
                        check=True, timeout=30)
+        home = root/'com/eabusham/routervpn/AndroidHomeStateStore.java'
+        unlocked = home.read_text().replace('static synchronized ', 'static ')
+        if unlocked == home.read_text():
+            raise AssertionError('Home negative control did not remove a transaction lock')
+        mutant = root/'negative-control-source/AndroidHomeStateStore.java'
+        mutant.parent.mkdir()
+        mutant.write_text(unlocked)
+        mutant_classes = root/'negative-control-classes'
+        mutant_classes.mkdir()
+        subprocess.run(['javac', '--release', '17', '-encoding', 'UTF-8', '-proc:none',
+                        '-cp', os.pathsep.join((str(root), str(jar))), '-d', str(mutant_classes), str(mutant)],
+                       check=True, timeout=60)
+        negative = subprocess.run(['java', '-cp', os.pathsep.join((str(mutant_classes), str(root), str(jar))),
+                                   'com.eabusham.routervpn.MultihopHomeHarness', '--atomic-only'],
+                                  capture_output=True, text=True, timeout=30)
+        if negative.returncode == 0 or 'Home transaction allowed competing' not in negative.stderr:
+            raise AssertionError('Unlocked Home negative control did not expose the adoption race:\n'
+                                 + negative.stdout + negative.stderr)
+        print('Unlocked Home transaction negative control: rejected the competing write PASS')
 
 
 if __name__ == '__main__':

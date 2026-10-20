@@ -18,43 +18,48 @@ final class AndroidHomeStateStore {
         final long pathGeneration;
         final boolean connected;
         Snapshot(SharedPreferences p) {
-            sessionId = p.getString("session_id", "");
-            phase = p.getString("phase", "off");
-            logicalMode = p.getString("logical_mode", "");
-            runtimeMode = p.getString("runtime_mode", "");
-            actualBase = p.getString("actual_base", "");
-            fallback = p.getString("fallback", "");
-            warning = p.getString("warning", "");
-            pathProof = p.getString("path_proof", connectedValue(p) ? "passed" : "not-run");
-            activeNodeId = p.getString("active_node_id", "");
-            activeEntryId = p.getString("active_entry_id", "");
-            activeEntryMode = p.getString("active_entry_mode", "wg");
-            activeExitId = p.getString("active_exit_id", "");
-            activeExternalId = p.getString("active_external_id", "");
-            activeExternalName = p.getString("active_external_name", "");
-            activeExternalProtocol = p.getString("active_external_protocol", "");
-            expectedExternalIp = p.getString("expected_external_ip", "");
-            pathGeneration = p.getLong("path_generation", 0L);
-            connected = connectedValue(p);
+            synchronized (AndroidHomeStateStore.class) {
+                sessionId = p.getString("session_id", "");
+                phase = p.getString("phase", "off");
+                logicalMode = p.getString("logical_mode", "");
+                runtimeMode = p.getString("runtime_mode", "");
+                actualBase = p.getString("actual_base", "");
+                fallback = p.getString("fallback", "");
+                warning = p.getString("warning", "");
+                pathProof = p.getString("path_proof", connectedValue(p) ? "passed" : "not-run");
+                activeNodeId = p.getString("active_node_id", "");
+                activeEntryId = p.getString("active_entry_id", "");
+                activeEntryMode = p.getString("active_entry_mode", "wg");
+                activeExitId = p.getString("active_exit_id", "");
+                activeExternalId = p.getString("active_external_id", "");
+                activeExternalName = p.getString("active_external_name", "");
+                activeExternalProtocol = p.getString("active_external_protocol", "");
+                expectedExternalIp = p.getString("expected_external_ip", "");
+                pathGeneration = p.getLong("path_generation", 0L);
+                connected = connectedValue(p);
+            }
         }
         private static boolean connectedValue(SharedPreferences p) { return p.getBoolean("connected", false); }
     }
 
-    private static SharedPreferences prefs(Context context) { return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
-    static Snapshot snapshot(Context context) { return new Snapshot(prefs(context)); }
+    // The class monitor owns complete preference transactions, including all
+    // reads that validate a later write. SharedPreferences only serializes its
+    // individual operations; it cannot make an owner check and apply atomic.
+    private static synchronized SharedPreferences prefs(Context context) { return context.getApplicationContext().getSharedPreferences(PREFS, Context.MODE_PRIVATE); }
+    static synchronized Snapshot snapshot(Context context) { return new Snapshot(prefs(context)); }
 
-    static String begin(Context context, String logicalMode, String runtimeMode, String base) { return begin(context, logicalMode, runtimeMode, base, ""); }
-    static String begin(Context context, String logicalMode, String runtimeMode, String base, String activeNodeId) {
+    static synchronized String begin(Context context, String logicalMode, String runtimeMode, String base) { return begin(context, logicalMode, runtimeMode, base, ""); }
+    static synchronized String begin(Context context, String logicalMode, String runtimeMode, String base, String activeNodeId) {
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearGraphAndExternal(baseSession(context, session, logicalMode, runtimeMode, base));
         e.putString("active_node_id", clean(activeNodeId)).apply();
         return session;
     }
 
-    static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+    static synchronized String beginMultihop(Context context, String entryId, String exitId, String runtimeMode) {
         return beginMultihop(context,entryId,exitId,runtimeMode,"wg");
     }
-    static String beginMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
+    static synchronized String beginMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearExternal(baseSession(context, session, "multihop", runtimeMode, multihopBase(entryMode)));
@@ -62,14 +67,14 @@ final class AndroidHomeStateStore {
         return session;
     }
 
-    static String beginExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base) {
+    static synchronized String beginExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base) {
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearRouterGraph(baseSession(context, session, "external", protocol, base));
         e.putString("active_external_id", clean(externalId)).putString("active_external_name", clean(name)).putString("active_external_protocol", clean(protocol)).putString("expected_external_ip", clean(expectedIp)).apply();
         return session;
     }
 
-    static String beginTorExternal(Context context, String externalId, String name, String protocol, String entryId, String entryMode) {
+    static synchronized String beginTorExternal(Context context, String externalId, String name, String protocol, String entryId, String entryMode) {
         if (!AndroidTorProfile.isTor(protocol) || (!entryId.isEmpty() && !NativeSingBoxController.nativeMultihopEntry(entryMode))) throw new IllegalArgumentException("Invalid captured Tor path.");
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearRouterGraph(baseSession(context, session, "external", protocol, entryId.isEmpty() ? "external" : multihopBase(entryMode)));
@@ -78,7 +83,7 @@ final class AndroidHomeStateStore {
         return session;
     }
 
-    static boolean connectedTorExternal(Context context, Snapshot captured, String observedIp) {
+    static synchronized boolean connectedTorExternal(Context context, Snapshot captured, String observedIp) {
         Snapshot now = snapshot(context);
         if (captured == null || !AndroidTorProfile.isTor(captured.activeExternalProtocol)
                 || !captured.sessionId.equals(now.sessionId) || captured.pathGeneration != now.pathGeneration
@@ -91,7 +96,7 @@ final class AndroidHomeStateStore {
         return true;
     }
 
-    static String beginPolicyExternal(Context context, String externalId, String name, String protocol, String expectedIp, String entryId, String entryMode) {
+    static synchronized String beginPolicyExternal(Context context, String externalId, String name, String protocol, String expectedIp, String entryId, String entryMode) {
         if (!AndroidExternalPolicy.supports(protocol) || (!entryId.isEmpty() && !NativeSingBoxController.nativeMultihopEntry(entryMode))) throw new IllegalArgumentException("Invalid captured external path.");
         String session = UUID.randomUUID().toString();
         SharedPreferences.Editor e = clearRouterGraph(baseSession(context, session, "external", protocol, entryId.isEmpty() ? "external" : multihopBase(entryMode)));
@@ -100,30 +105,61 @@ final class AndroidHomeStateStore {
         return session;
     }
 
-    static boolean connectedPolicyExternal(Context context, Snapshot captured, String observedIp) {
+    static synchronized boolean connectedPolicyExternal(Context context, Snapshot captured, String observedIp) {
         Snapshot now = snapshot(context);
-        if (captured == null || !AndroidExternalPolicy.supports(captured.activeExternalProtocol)
-                || !captured.sessionId.equals(now.sessionId) || captured.pathGeneration != now.pathGeneration
-                || !"external".equals(now.logicalMode) || !captured.activeExternalProtocol.equals(now.activeExternalProtocol) || !captured.runtimeMode.equals(now.runtimeMode)
-                || !captured.activeExternalId.equals(now.activeExternalId) || !captured.activeEntryId.equals(now.activeEntryId)
-                || !captured.expectedExternalIp.equals(now.expectedExternalIp) || !captured.activeEntryMode.equals(now.activeEntryMode)
+        if (!samePolicyExternalOwner(captured, now) || captured.pathGeneration != now.pathGeneration
                 || !"connecting".equals(now.phase) || !"pending".equals(now.pathProof) || emergencyDisconnectPending(context)) return false;
         prefs(context).edit().putString("phase", "connected").putString("path_proof", "passed").putString("warning", "")
                 .putBoolean("connected", true).putString("actual_exit_session", captured.sessionId).putString("actual_exit_ip", clean(observedIp)).apply();
         return true;
     }
 
-    static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback) { connected(context, logicalMode, runtimeMode, base, fallback, ""); }
-    static void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback, String activeNodeId) {
+    /** Revalidation may advance the path generation without replacing its native owner. */
+    static synchronized boolean ownsPolicyExternal(Context context, Snapshot captured) {
+        Snapshot now = snapshot(context);
+        return samePolicyExternalOwner(captured, now) && !emergencyDisconnectPending(context)
+                && (("connecting".equals(now.phase) && "pending".equals(now.pathProof) && !now.connected)
+                || ("connected".equals(now.phase) && "passed".equals(now.pathProof) && now.connected));
+    }
+
+    /** Invalidates only this external owner; failed native drain retains its identity for retry. */
+    static synchronized boolean failedPolicyExternal(Context context, Snapshot captured, String warning, boolean released) {
+        Snapshot now = snapshot(context);
+        if (!samePolicyExternalOwner(captured, now)) return false;
+        SharedPreferences.Editor e = prefs(context).edit()
+                .putString("phase", "failed")
+                .putString("warning", emergencyDisconnectPending(context) ? now.warning : clean(warning))
+                .putString("path_proof", "failed")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session");
+        if (released) clearAllIdentity(e);
+        e.apply();
+        return true;
+    }
+
+    private static boolean samePolicyExternalOwner(Snapshot captured, Snapshot now) {
+        return captured != null && !captured.sessionId.isEmpty()
+                && "external".equals(captured.logicalMode) && captured.logicalMode.equals(now.logicalMode)
+                && AndroidExternalPolicy.supports(captured.activeExternalProtocol)
+                && captured.sessionId.equals(now.sessionId) && captured.runtimeMode.equals(now.runtimeMode)
+                && captured.activeExternalId.equals(now.activeExternalId) && captured.activeExternalProtocol.equals(now.activeExternalProtocol)
+                && captured.expectedExternalIp.equals(now.expectedExternalIp) && captured.activeEntryId.equals(now.activeEntryId)
+                && captured.activeEntryMode.equals(now.activeEntryMode) && captured.activeNodeId.equals(now.activeNodeId)
+                && captured.activeExitId.equals(now.activeExitId);
+    }
+
+    static synchronized void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback) { connected(context, logicalMode, runtimeMode, base, fallback, ""); }
+    static synchronized void connected(Context context, String logicalMode, String runtimeMode, String base, String fallback, String activeNodeId) {
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
         SharedPreferences.Editor e = clearGraphAndExternal(p.edit());
         e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", clean(logicalMode)).putString("runtime_mode", clean(runtimeMode)).putString("actual_base", clean(base)).putString("active_node_id", clean(activeNodeId)).putString("fallback", clean(fallback)).putString("warning", "").putString("path_proof", "passed").putBoolean("connected", true).apply();
     }
 
-    static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode) {
+    static synchronized void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode) {
         connectedMultihop(context,entryId,exitId,runtimeMode,"wg");
     }
-    static void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
+    static synchronized void connectedMultihop(Context context, String entryId, String exitId, String runtimeMode, String entryMode) {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) throw new IllegalArgumentException("Invalid live entry transport.");
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
         SharedPreferences.Editor e = clearExternal(p.edit());
@@ -136,16 +172,16 @@ final class AndroidHomeStateStore {
         return "libbox";
     }
 
-    static void connectedExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base, String observedIp) {
+    static synchronized void connectedExternal(Context context, String externalId, String name, String protocol, String expectedIp, String base, String observedIp) {
         SharedPreferences p = prefs(context); String session = existingOrNewSession(p);
         SharedPreferences.Editor e = clearRouterGraph(p.edit());
         e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", "external").putString("runtime_mode", clean(protocol)).putString("actual_base", clean(base)).putString("fallback", "").putString("warning", "").putString("path_proof", "passed").putString("active_external_id", clean(externalId)).putString("active_external_name", clean(name)).putString("active_external_protocol", clean(protocol)).putString("expected_external_ip", clean(expectedIp)).putBoolean("connected", true).putString("actual_exit_session", session).putString("actual_exit_ip", clean(observedIp)).apply();
     }
 
-    static void warning(Context context, String warning) { prefs(context).edit().putString("warning", clean(warning)).apply(); }
-    static boolean emergencyDisconnectPending(Context context) { String warning=prefs(context).getString("warning","");return warning!=null&&warning.startsWith(EMERGENCY_PREFIX); }
-    static void clearActualExit(Context context) { prefs(context).edit().remove("actual_exit_ip").remove("actual_exit_session").apply(); }
-    static long advancePathGeneration(Context context) {
+    static synchronized void warning(Context context, String warning) { prefs(context).edit().putString("warning", clean(warning)).apply(); }
+    static synchronized boolean emergencyDisconnectPending(Context context) { String warning=prefs(context).getString("warning","");return warning!=null&&warning.startsWith(EMERGENCY_PREFIX); }
+    static synchronized void clearActualExit(Context context) { prefs(context).edit().remove("actual_exit_ip").remove("actual_exit_session").apply(); }
+    static synchronized long advancePathGeneration(Context context) {
         SharedPreferences p = prefs(context); long next = p.getLong("path_generation", 0L) + 1L;
         p.edit().putLong("path_generation", next).remove("actual_exit_ip").remove("actual_exit_session").apply();
         return next;
@@ -156,7 +192,7 @@ final class AndroidHomeStateStore {
      * its frozen logical/runtime/node identity. The returned snapshot is the
      * transaction token used by completePathRevalidation.
      */
-    static Snapshot beginPathRevalidation(Context context, String reason) {
+    static synchronized Snapshot beginPathRevalidation(Context context, String reason) {
         SharedPreferences p = prefs(context);
         Snapshot before = new Snapshot(p);
         if (!before.connected || before.sessionId == null || before.sessionId.isEmpty()) return null;
@@ -174,7 +210,7 @@ final class AndroidHomeStateStore {
     }
 
     /** Re-adopts proof only if the same session and exact next path generation still own the state. */
-    static boolean completePathRevalidation(Context context, Snapshot before) {
+    static synchronized boolean completePathRevalidation(Context context, Snapshot before) {
         if (before == null || before.sessionId == null || before.sessionId.isEmpty()) return false;
         SharedPreferences p = prefs(context);
         String currentSession = p.getString("session_id", "");
@@ -182,7 +218,7 @@ final class AndroidHomeStateStore {
         String currentPhase = p.getString("phase", "");
         if (!before.sessionId.equals(currentSession)
                 || currentGeneration != before.pathGeneration + 1L
-                || !"connecting".equals(currentPhase)) return false;
+                || !"connecting".equals(currentPhase) || emergencyDisconnectPending(context)) return false;
         p.edit()
                 .putString("phase", "connected")
                 .putString("warning", "")
@@ -192,7 +228,7 @@ final class AndroidHomeStateStore {
         return true;
     }
 
-    static void failed(Context context, String warning) {
+    static synchronized void failed(Context context, String warning) {
         SharedPreferences p = prefs(context);
         boolean retainOwnership = emergencyDisconnectPending(context);
         SharedPreferences.Editor e = p.edit()
@@ -207,7 +243,7 @@ final class AndroidHomeStateStore {
     }
 
     /** Marks proof/runtime failure while retaining the exact owner/session identity for later cleanup. */
-    static void failedPreservingOwnership(Context context, String warning) {
+    static synchronized void failedPreservingOwnership(Context context, String warning) {
         prefs(context).edit()
                 .putString("phase", "failed")
                 .putString("warning", clean(warning))
@@ -218,7 +254,7 @@ final class AndroidHomeStateStore {
                 .apply();
     }
 
-    static void disconnected(Context context) {
+    static synchronized void disconnected(Context context) {
         if (emergencyDisconnectPending(context)) {
             AndroidRuntimeRegistry runtime = AndroidRuntimeRegistry.get(context);
             if (runtime.wireGuard.getState() != com.wireguard.android.backend.Tunnel.State.DOWN
@@ -229,13 +265,13 @@ final class AndroidHomeStateStore {
         SharedPreferences.Editor e=prefs(context).edit().putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply();
     }
 
-    static void saveActualExit(Context context, String sessionId, String ip) { prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply(); }
-    static String actualExitForCurrentSession(Context context) { SharedPreferences p=prefs(context);String session=p.getString("session_id","");String proofSession=p.getString("actual_exit_session","");if(session==null||session.isEmpty()||!session.equals(proofSession))return"";return p.getString("actual_exit_ip",""); }
+    static synchronized void saveActualExit(Context context, String sessionId, String ip) { prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply(); }
+    static synchronized String actualExitForCurrentSession(Context context) { SharedPreferences p=prefs(context);String session=p.getString("session_id","");String proofSession=p.getString("actual_exit_session","");if(session==null||session.isEmpty()||!session.equals(proofSession))return"";return p.getString("actual_exit_ip",""); }
 
     static String nodeIdFromBundleFile(File file) { if(file==null)return"";String name=file.getName();return name!=null&&name.matches("[0-9a-f]{32}\\.json")?name.substring(0,32):""; }
 
-    private static SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){SharedPreferences p=prefs(context);long generation=p.getLong("path_generation",0L)+1L;return p.edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",generation).remove("actual_exit_ip").remove("actual_exit_session");}
-    private static String existingOrNewSession(SharedPreferences p){String session=p.getString("session_id","");return session==null||session.isEmpty()?UUID.randomUUID().toString():session;}
+    private static synchronized SharedPreferences.Editor baseSession(Context context,String session,String logical,String runtime,String base){SharedPreferences p=prefs(context);long generation=p.getLong("path_generation",0L)+1L;return p.edit().putString("session_id",session).putString("phase","connecting").putString("logical_mode",clean(logical)).putString("runtime_mode",clean(runtime)).putString("actual_base",clean(base)).putString("fallback","").putString("warning","").putString("path_proof","pending").putBoolean("connected",false).putLong("path_generation",generation).remove("actual_exit_ip").remove("actual_exit_session");}
+    private static synchronized String existingOrNewSession(SharedPreferences p){String session=p.getString("session_id","");return session==null||session.isEmpty()?UUID.randomUUID().toString():session;}
     private static SharedPreferences.Editor clearRouterGraph(SharedPreferences.Editor e){return e.remove("active_node_id").remove("active_entry_id").remove("active_entry_mode").remove("active_exit_id");}
     private static SharedPreferences.Editor clearExternal(SharedPreferences.Editor e){return e.remove("active_external_id").remove("active_external_name").remove("active_external_protocol").remove("expected_external_ip");}
     private static SharedPreferences.Editor clearGraphAndExternal(SharedPreferences.Editor e){return clearExternal(clearRouterGraph(e));}
