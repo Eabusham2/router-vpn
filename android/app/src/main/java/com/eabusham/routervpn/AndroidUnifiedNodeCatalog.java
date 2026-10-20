@@ -130,10 +130,7 @@ final class AndroidUnifiedNodeCatalog {
             while((n=in.read(buf))!=-1){total+=n;if(total>AndroidNodeStore.MAX_BUNDLE)throw new IllegalArgumentException("node bundle is too large");out.write(buf,0,n);}raw=out.toByteArray();
         }
         JSONObject bundle=new JSONObject(new String(raw,StandardCharsets.UTF_8));
-        JSONArray profiles=bundle.optJSONArray("routerProfiles");if(profiles==null||profiles.length()==0)return null;
-        String wanted=bundle.optString("selectedRouterID","").trim();
-        for(int i=0;i<profiles.length();i++){JSONObject p=profiles.optJSONObject(i);if(p!=null&&wanted.equals(p.optString("id","")))return p;}
-        return profiles.optJSONObject(0);
+        return AndroidProfileSelection.selectedRouterProfile(bundle);
     }
 
     private static Double number(JSONObject value,String key){if(value==null||!value.has(key))return null;double n=value.optDouble(key,Double.NaN);return Double.isFinite(n)?n:null;}
