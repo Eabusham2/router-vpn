@@ -33,6 +33,7 @@ final class NativeSingBoxController {
     volatile String state = "DOWN", mode = "";
     volatile String startState = "UP";
     volatile boolean failStart, failStop;
+    volatile Runnable duringStop;
     final AtomicInteger starts = new AtomicInteger(), stops = new AtomicInteger();
     String getState() { return state; }
     String getMode() { return mode; }
@@ -47,6 +48,7 @@ final class NativeSingBoxController {
     }
     void stop() {
         stops.incrementAndGet();
+        if(duringStop!=null)duringStop.run();
         if (failStop) throw new IllegalStateException("stop request failed");
         state = "DOWN";
     }
@@ -192,7 +194,7 @@ public final class RuntimeTeardownHarness {
     static final List<String> failures=new ArrayList<>();
     static final java.util.concurrent.atomic.AtomicInteger publicProofs=new java.util.concurrent.atomic.AtomicInteger();
     static final class Callback implements AndroidMultihopRuntime.Callback, AndroidStandardExitRuntime.Callback {
-        final int blockAt; int progressCalls; volatile boolean ok;
+        final int blockAt; int progressCalls; volatile boolean ok;volatile String homeOwner="";int ownerCalls;
         final CountDownLatch entered=new CountDownLatch(1), release=new CountDownLatch(1), done=new CountDownLatch(1);
         Callback(int blockAt) { this.blockAt=blockAt; }
         public void progress(String message) {
@@ -205,6 +207,7 @@ public final class RuntimeTeardownHarness {
             if (interrupted) Thread.currentThread().interrupt();
         }
         public void finished(boolean ok, String message) { this.ok=ok; done.countDown(); }
+        public void owned(String session) {homeOwner=session;ownerCalls++;}
         void awaitEntered() throws Exception { check(entered.await(3,TimeUnit.SECONDS),"worker never reached requested checkpoint"); }
         void awaitDone() throws Exception { check(done.await(3,TimeUnit.SECONDS),"worker failed without delivering a completion callback"); }
     }
@@ -246,6 +249,20 @@ public final class RuntimeTeardownHarness {
     static void tests(String kind) {
         if("tor".equals(kind))torTests();
         if("external".equals(kind))externalTests();
+        if(!"multihop".equals(kind)){
+            test(kind+" temporary cleanup retains its exact Home owner",()->{
+                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(cb.ok&&cb.ownerCalls==1&&cb.homeOwner.equals(AndroidHomeStateStore.current.sessionId),"runtime did not expose its exact captured Home owner");
+                    check(!owner.external.disconnectCaptured("stale-home")&&owner.engine.stops.get()==0&&AndroidHomeStateStore.current.connected,"stale temporary cleanup stopped the current native engine");
+                    check(owner.external.disconnectCaptured(cb.homeOwner)&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"captured temporary cleanup did not stop its own native engine");awaitIdle(owner);
+                }
+            });
+            test(kind+" delayed teardown cannot erase a newer Home owner",()->{
+                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="newer-home";replacement.phase="newer-owner";
+                    owner.engine.duringStop=()->AndroidHomeStateStore.current=replacement;check(owner.external.disconnectCaptured(cb.homeOwner),"captured teardown was skipped");
+                    check(AndroidHomeStateStore.current==replacement&&replacement.phase.equals("newer-owner"),"old teardown overwrote newer Home state");owner.engine.duringStop=null;
+                }
+            });
+        }
         if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
             test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {

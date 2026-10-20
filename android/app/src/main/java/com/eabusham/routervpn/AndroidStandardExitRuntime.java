@@ -11,7 +11,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Owns one custom-exit graph, its exact proof and cancellation through real teardown. */
 final class AndroidStandardExitRuntime implements AutoCloseable {
-    interface Callback{void progress(String message);void finished(boolean ok,String message);}
+    interface Callback{void progress(String message);void finished(boolean ok,String message);default void owned(String homeSession){}}
     private static final long TOR_START_TIMEOUT_MS=200000L;
     private static final long POLICY_START_TIMEOUT_MS=90000L;
     private static final long STOP_TIMEOUT_MS=8000L;
@@ -74,6 +74,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             else AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
             sessionStarted=true;
             capturedHome=AndroidHomeStateStore.snapshot(context);
+            cb.owned(capturedHome.sessionId);
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode);
             preparedSession=session;
@@ -207,12 +208,17 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         return home.connected||!("off".equals(phase)||"disconnected".equals(phase)||"failed".equals(phase));
     }
 
-    void disconnect(){
+    void disconnect(){ disconnectCaptured(""); }
+
+    boolean disconnectCaptured(String requiredSession){
         boolean emergency=AndroidHomeStateStore.emergencyDisconnectPending(context);
+        final String ownedSession;
         synchronized(this){
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+            if(!requiredSession.isEmpty()&&!requiredSession.equals(home.sessionId))return false;
             boolean owns=(active!=null&&!active.isDone())||"external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
-            if(!owns)return;
+            if(!owns)return false;
+            ownedSession=home.sessionId;
             if(!emergency)AndroidHomeStateStore.beginPathRevalidation(context,"Android custom-exit disconnect requested; retaining runtime ownership until embedded teardown is proved.");
             disconnectRequested=true;revalidationTeardown=false;teardownInProgress=true;
             if(workerThread!=null)workerThread.interrupt();
@@ -220,16 +226,20 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         boolean stopped=stopEmbeddedAndProve();
         synchronized(this){teardownInProgress=!stopped;}
         if(!stopped){
-            AndroidHomeStateStore.warning(context,emergency
-                    ?"Emergency Disconnect requested; Android custom-exit teardown was not proved; runtime ownership retained."
-                    :"Android custom-exit disconnect did not prove embedded engine teardown; runtime ownership retained.");
+            synchronized(AndroidHomeStateStore.class){
+                if(ownedSession.equals(AndroidHomeStateStore.snapshot(context).sessionId))AndroidHomeStateStore.warning(context,emergency
+                        ?"Emergency Disconnect requested; Android custom-exit teardown was not proved; runtime ownership retained."
+                        :"Android custom-exit disconnect did not prove embedded engine teardown; runtime ownership retained.");
+            }
             throw new IllegalStateException("Android custom-exit teardown did not reach DOWN/FAILED/REVOKED before timeout.");
         }
-        if(emergency){
-            AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; Android custom-exit graph stopped; awaiting remaining runtime teardown.");
-        }else{
-            AndroidHomeStateStore.disconnected(context);
+        synchronized(AndroidHomeStateStore.class){
+            if(ownedSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)){
+                if(emergency)AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; Android custom-exit graph stopped; awaiting remaining runtime teardown.");
+                else AndroidHomeStateStore.disconnected(context);
+            }
         }
+        return true;
     }
 
     /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */

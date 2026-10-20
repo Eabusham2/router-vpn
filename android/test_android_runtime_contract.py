@@ -318,6 +318,7 @@ for executable_contract in (
     "test_android_mutation_idle_proof.py",
     "test_android_private_benchmark_http.py",
     "test_android_speed_lab_http_cleanup.py",
+    "test_android_speed_lab_external.py",
 ):
     subprocess.run(
         [sys.executable, str(ROOT / executable_contract)],

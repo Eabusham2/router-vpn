@@ -126,11 +126,17 @@ assert "protocl" not in standard_runtime, "Android standard-exit source contains
 assert "boolean isActiveOrTransitioning() { return disconnecting.get() || AndroidVpnMutationGuard.isBusy(activity); }" in unified
 # Local disconnect verification must also freeze the Activity bridge before any
 # asynchronous engine operation, and the final callback must report actual success.
-disconnect = unified.split("void disconnect(Callback callback)", 1)[1].split("boolean onActivityResult", 1)[0]
+disconnect = unified.split("void disconnect(Callback callback)", 1)[1].split("void disconnectExternal", 1)[0]
 assert disconnect.index("disconnecting.compareAndSet(false,true)") < disconnect.index("multihop.isActiveOrTransitioning()")
 assert "orchestrator.disconnect(new AndroidModeOrchestrator.Callback()" in disconnect
 assert "callback.finished(success," in disconnect
 assert "callback.finished(true," not in disconnect
+captured_disconnect = unified.split("void disconnectExternal", 1)[1].split("boolean onActivityResult", 1)[0]
+assert "runtime.standardExit.disconnectCaptured(homeSession)" in captured_disconnect
+assert "orchestrator.disconnect" not in captured_disconnect
+assert "multihop.disconnect" not in captured_disconnect
+assert '!requiredSession.equals(home.sessionId)' in standard_runtime
+assert 'ownedSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)' in standard_runtime
 
 # Node and external-profile identity cannot mutate underneath a live/transitioning
 # tunnel. Public list/read operations remain available for rendering telemetry.

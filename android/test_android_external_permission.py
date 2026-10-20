@@ -52,9 +52,9 @@ final class AndroidMultihopRuntime {
  void disconnect(){}void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
- interface Callback{void progress(String s);void finished(boolean ok,String s);}
+ interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  int starts;String mode;File entry;AndroidStandardExitStore.Entry exit;
- boolean isActiveOrTransitioning(){return false;}void disconnect(){}
+ boolean isActiveOrTransitioning(){return false;}void disconnect(){}boolean disconnectCaptured(String id){return true;}
  void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){starts++;mode="external";exit=e;cb.finished(true,"owned direct");}
  void connect(File f,AndroidStandardExitStore.Entry e,Callback cb){connect(f,e,"wg",cb);}
  void connect(File f,AndroidStandardExitStore.Entry e,String m,Callback cb){starts++;entry=f;mode=m;exit=e;cb.finished(true,"owned entry");}

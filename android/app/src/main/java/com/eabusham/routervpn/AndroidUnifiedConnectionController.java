@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 
 /** Activity-owned UI bridge over app-process-owned VPN engines. */
 final class AndroidUnifiedConnectionController implements AutoCloseable {
-    interface Callback { void progress(String message); void finished(boolean ok, String message); }
+    interface Callback { void progress(String message); void finished(boolean ok, String message); default void owned(String homeSession) {} }
     static final int PREPARE_UNIFIED = 7605;
     private static final String STATE_PENDING="routervpn.pending",STATE_MODE="routervpn.pending.mode",STATE_LAYERS="routervpn.pending.layers",STATE_NODE="routervpn.pending.node",STATE_ENTRY="routervpn.pending.entry",STATE_EXIT="routervpn.pending.exit",STATE_EXIT_MODE="routervpn.pending.exit_mode",STATE_STANDARD_EXIT="routervpn.pending.standard_exit",STATE_EXTERNAL_DIRECT="routervpn.pending.external_direct";
 
@@ -193,6 +193,15 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         },"routervpn-unified-disconnect").start();
     }
 
+    /** A temporary external test may stop only the Home session it started. */
+    void disconnectExternal(String homeSession, Callback callback) {
+        if(homeSession==null||homeSession.isEmpty()){callback.finished(true,"No temporary external runtime was started.");return;}
+        new Thread(()->{
+            try{boolean stopped=runtime.standardExit.disconnectCaptured(homeSession);activity.runOnUiThread(()->callback.finished(true,stopped?"The captured temporary external path stopped.":"The temporary path was already replaced; its replacement is unchanged."));}
+            catch(Throwable failure){activity.runOnUiThread(()->callback.finished(false,"Temporary external cleanup remains pending: "+safe(failure)));}
+        },"routervpn-external-test-disconnect").start();
+    }
+
     boolean onActivityResult(int requestCode, int resultCode) { if(requestCode!=PREPARE_UNIFIED)return false;Callback cb=pendingCallback;if(resultCode!=Activity.RESULT_OK){clearPending();if(cb!=null)cb.finished(false,"Android VPN permission was not granted; Router VPN stayed disconnected.");return true;}startPending();return true; }
 
     private void requestPermission(String label) { Intent permission=VpnService.prepare(activity);if(permission==null){startPending();return;}if(pendingCallback!=null)pendingCallback.progress("Waiting for Android VPN permission for "+label+"…");activity.startActivityForResult(permission,PREPARE_UNIFIED); }
@@ -203,7 +212,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
         if("external".equals(mode)){
             try{if(isActiveOrTransitioning())throw new IllegalStateException("Another VPN owns the current path.");requireExternalCapture(entry,standardExit,externalDirect,entryDigest,externalDigest);if(!externalDirect&&!NativeSingBoxController.nativeMultihopEntry(entryMode))throw new IllegalArgumentException("The captured entry mode changed.");}
             catch(Exception changed){callback.finished(false,"The captured external path changed during Android permission; select it again.");return;}
-            AndroidStandardExitRuntime.Callback bridge=new AndroidStandardExitRuntime.Callback(){@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
+            AndroidStandardExitRuntime.Callback bridge=new AndroidStandardExitRuntime.Callback(){@Override public void owned(String homeSession){activity.runOnUiThread(()->callback.owned(homeSession));}@Override public void progress(String message){activity.runOnUiThread(()->callback.progress(message));}@Override public void finished(boolean ok,String message){activity.runOnUiThread(()->callback.finished(ok,message));}};
             if(externalDirect)runtime.standardExit.connectDirect(standardExit,bridge);else runtime.standardExit.connect(entry.file,standardExit,entryMode,bridge);return;
         }
         final File bundle;try{bundle=node!=null?node.file:activeBundle();if(bundle==null||!bundle.isFile()||bundle.length()<=0)throw new IllegalStateException("Requested Router VPN node bundle is missing.");}catch(Exception error){callback.finished(false,safe(error));return;}
