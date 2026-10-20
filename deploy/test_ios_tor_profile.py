@@ -49,6 +49,7 @@ GO = replace_once(P.GO, '"router-vpn/internal/mobileperf"',
 xray_fixture = A.GO_HELPER[A.GO_HELPER.index(' case "test-xray":'):A.GO_HELPER.index(' case "xray-check",')]
 GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)', r'''
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
+ case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
  case "hash":sum:=sha256.Sum256([]byte(r.Config));value=base64.StdEncoding.EncodeToString(sum[:])
  case "max":value,err=mobilemultihop.CompileMAXProfile(r.Mode,r.Files,r.Policy)
@@ -76,6 +77,9 @@ private func result(_ error:inout NSError?,_ request:[String:String])->String {
 public func LibboxVersion()->String { "1.14.1" }
 public func LibboxRouterCompileTorProfile(_ profile:String,_ session:String,_ predecessor:String,_ error:inout NSError?)->String {
  result(&error,["Op":"tor","Config":profile,"Node":session,"Source":predecessor])
+}
+public func LibboxRouterCompileExternalPolicy(_ config:String,_ capture:String,_ error:inout NSError?)->String {
+ result(&error,["Op":"external-policy","Config":config,"Policy":capture])
 }
 public func LibboxRouterCompileMAXProfile(_ mode:String,_ files:String,_ policy:String,_ error:inout NSError?)->String {
  result(&error,["Op":"max","Mode":mode,"Files":files,"Policy":policy])

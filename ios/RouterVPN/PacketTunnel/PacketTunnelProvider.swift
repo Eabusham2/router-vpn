@@ -1089,12 +1089,17 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         try engine.prepareMTUHold(initialMTUHold)
-        let files = runtime.torSessionID == nil ? try RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile) : runtime.files
-        do { try engine.start(files: files, strict: effectiveStrict) } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
+        let files = runtime.torSessionID == nil && runtime.policy == nil ? try RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile) : runtime.files
+        do {
+            if let policy = runtime.policy { try engine.start(files: files, strict: effectiveStrict, externalPolicy: policy) }
+            else { try engine.start(files: files, strict: effectiveStrict) }
+        } catch { libboxEngine = nil; throw tunnelError(17, "External Libbox engine failed to start: \(error.localizedDescription)") }
         let externalPathGuard = self.armNetworkProofGuard()
         let prove: (@escaping (Error?) -> Void) -> Void
         if let sessionID = runtime.torSessionID {
             prove = { engine.proveTor(sessionID: sessionID, predecessorProfile: runtime.torPredecessorProfile, completion: $0) }
+        } else if runtime.policy != nil {
+            prove = { engine.proveExternal(completion: $0) }
         } else {
             prove = { self.proveExternalExit(expectedPublicIP: runtime.expectedPublicIP, proxyPort: RouterVPNLibboxEngine.proofProxyPort, completion: $0) }
         }
@@ -1108,7 +1113,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
             guard self.currentPathProofGuard() === externalPathGuard else {
                 engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }
-                completionHandler(self.tunnelError(57, "External path changed during public-exit proof."))
+                completionHandler(self.tunnelError(57, "External path changed during native DNS and exit proof."))
                 return
             }
             completionHandler(nil)

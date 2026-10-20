@@ -1,6 +1,107 @@
 import Foundation
+import CoreFoundation
 import Network
 import Libbox
+#if canImport(CryptoKit)
+import CryptoKit
+#endif
+
+/// The native compiler freezes both transport bytes and saved policy. This
+/// record describes that configuration; it is never a successful live proof.
+struct RouterVPNExternalPolicy: Sendable {
+    let sourceConfig: String
+    let capture: String
+    let config: String
+    let metadata: String
+    let sourceSHA256: String
+
+    static func compile(config: String, profile: [String: Any], protocolName: String,
+                        expectedPublicIP: String, entry: [String: Any]? = nil,
+                        entryTag: String? = nil) throws -> RouterVPNExternalPolicy {
+        guard let exitID = profile["id"] as? String, !exitID.isEmpty,
+              (entry == nil) == (entryTag == nil) else { throw issue() }
+        var selected: [String: Any] = ["schema": 1, "exit_id": exitID, "protocol": protocolName,
+            "expected_public_ip": expectedPublicIP, "profile": profile]
+        if let entry, let entryTag { selected["entry"] = entry; selected["entry_tag"] = entryTag }
+        let capture = String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self)
+        var failure: NSError?
+        let encoded = LibboxRouterCompileExternalPolicy(config, capture, &failure)
+        if let failure { throw failure }
+        return try adopt(encoded, source: config, capture: capture, exitID: exitID,
+                         protocolName: protocolName, expectedPublicIP: expectedPublicIP,
+                         entryID: entry?["id"] as? String, entryTag: entryTag)
+    }
+
+    static func adopt(_ encoded: String, source: String, capture: String, exitID: String,
+                      protocolName: String, expectedPublicIP: String, entryID: String?, entryTag: String?) throws -> RouterVPNExternalPolicy {
+        guard encoded.utf8.count <= 8 * 1024 * 1024,
+              let envelope = try JSONSerialization.jsonObject(with: Data(encoded.utf8)) as? [String: Any],
+              Set(envelope.keys) == ["schema", "source_sha256", "config_json", "metadata_json"],
+              envelope["schema"] as? Int == 1,
+              let config = envelope["config_json"] as? String, !config.isEmpty, config.utf8.count <= 4 * 1024 * 1024,
+              let metadata = envelope["metadata_json"] as? String, metadata.utf8.count <= 65536,
+              let values = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any],
+              values["schema"] as? Int == 1,
+              let sourceHash = envelope["source_sha256"] as? String,
+              sourceHash == (try sourceDigest(source: source, capture: capture)),
+              values["source_sha256"] as? String == sourceHash,
+              values["config_sha256"] as? String == digest(Data(config.utf8)),
+              values["exit_id"] as? String == exitID, values["policy_id"] as? String == exitID,
+              values["protocol"] as? String == protocolName,
+              values["expected_public_ip"] as? String == expectedPublicIP,
+              values["entry_id"] as? String == entryID, values["entry_tag"] as? String == entryTag,
+              values["final_tag"] as? String == "custom-exit",
+              values["dns_proof"] as? String == "required", values["public_exit_proof"] as? String == "required",
+              ["not-requested", "unmeasured"].contains(values["auto_mtu"] as? String ?? "") else { throw issue() }
+        return RouterVPNExternalPolicy(sourceConfig: source, capture: capture, config: config,
+                                       metadata: metadata, sourceSHA256: sourceHash)
+    }
+
+    func validateProof(_ result: String, sessionID: String, began: Date) throws {
+        guard result.utf8.count <= 8192,
+              let value = try JSONSerialization.jsonObject(with: Data(result.utf8)) as? [String: Any],
+              let selected = try JSONSerialization.jsonObject(with: Data(capture.utf8)) as? [String: Any],
+              let schema = value["schema"] as? NSNumber, CFGetTypeID(schema) != CFBooleanGetTypeID(), schema.intValue == 1, schema.doubleValue == 1,
+              value["session_id"] as? String == sessionID,
+              value["source_sha256"] as? String == sourceSHA256,
+              value["config_sha256"] as? String == Self.digest(Data(config.utf8)),
+              value["exit_id"] as? String == selected["exit_id"] as? String,
+              let dns = value["dns_proven"] as? NSNumber, CFGetTypeID(dns) == CFBooleanGetTypeID(), dns.boolValue,
+              let entryProven = value["entry_proven"] as? NSNumber, CFGetTypeID(entryProven) == CFBooleanGetTypeID(),
+              let ip = value["ip"] as? String, let expected = selected["expected_public_ip"] as? String,
+              Self.sameIP(ip, expected),
+              let timestamp = value["checked_at"] as? NSNumber, CFGetTypeID(timestamp) != CFBooleanGetTypeID(),
+              timestamp.doubleValue.isFinite, timestamp.doubleValue.rounded() == timestamp.doubleValue else { throw Self.issue() }
+        let entry = selected["entry"] as? [String: Any]
+        guard entryProven.boolValue == (entry != nil),
+              (value["entry_id"] as? String ?? "") == (entry?["id"] as? String ?? ""),
+              (value["entry_node_id"] as? String ?? "") == (entry?["node_proof_id"] as? String ?? "") else { throw Self.issue() }
+        let checked = Date(timeIntervalSince1970: timestamp.doubleValue / 1000)
+        guard checked >= began.addingTimeInterval(-2), checked <= Date().addingTimeInterval(5) else { throw Self.issue() }
+    }
+
+    private static func sameIP(_ lhs: String, _ rhs: String) -> Bool {
+        guard lhs == lhs.trimmingCharacters(in: .whitespacesAndNewlines), !lhs.contains("%") else { return false }
+        if let left = IPv4Address(lhs), let right = IPv4Address(rhs) { return left.rawValue == right.rawValue }
+        if let left = IPv6Address(lhs), let right = IPv6Address(rhs) { return left.rawValue == right.rawValue }
+        return false
+    }
+
+    private static func sourceDigest(source: String, capture: String) throws -> String {
+        // encoding/json hashes the exact UTF-8 strings, including its HTML and
+        // U+2028/U+2029 escaping. Do not hash a reserialized source dictionary.
+        let data = try JSONSerialization.data(withJSONObject: ["routervpn-external-policy-v1", source, capture], options: [.withoutEscapingSlashes])
+        let text = String(decoding: data, as: UTF8.self)
+            .replacingOccurrences(of: "&", with: "\\u0026")
+            .replacingOccurrences(of: "<", with: "\\u003c")
+            .replacingOccurrences(of: ">", with: "\\u003e")
+            .replacingOccurrences(of: "\u{2028}", with: "\\u2028")
+            .replacingOccurrences(of: "\u{2029}", with: "\\u2029")
+        return digest(Data(text.utf8))
+    }
+    private static func digest(_ data: Data) -> String { SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined() }
+    private static func issue() -> NSError { NSError(domain: "RouterVPN.ExternalPolicy", code: 1, userInfo: [NSLocalizedDescriptionKey: "External policy does not belong to the exact captured node, graph and preferences."]) }
+}
 
 struct RouterVPNExternalExitRuntime {
     let protocolName: String
@@ -8,9 +109,11 @@ struct RouterVPNExternalExitRuntime {
     let files: [String: Data]
     var torSessionID: String? = nil
     var torPredecessorProfile: String? = nil
+    var policy: RouterVPNExternalPolicy? = nil
 }
 
 enum RouterVPNExternalExitBuilder {
+    static let ordinaryProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
     static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
     static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()
@@ -83,18 +186,25 @@ enum RouterVPNExternalExitBuilder {
             "address": ["172.29.94.1/30", "fd29:94::1/126"],
             "mtu": mtu, "auto_route": true, "strict_route": true, "stack": "system"
         ]
-        let dns = try selectedDNS(profile)
         let route: [String: Any] = [
             "rules": [["protocol": "dns", "action": "hijack-dns"]],
             "final": "custom-exit", "auto_detect_interface": true
         ]
-        let config: [String: Any] = [
+        var config: [String: Any] = [
             "log": ["level": "warn", "timestamp": true],
-            "dns": ["servers": [dns], "final": "selected-dns"],
             "inbounds": [tun], "endpoints": endpoints, "outbounds": outbounds, "route": route
         ]
+        // OpenVPN retains its validated endpoint compiler and existing DNS
+        // adapter. Ordinary nodes use the shared captured-policy compiler.
+        if protocolName == "openvpn" { config["dns"] = ["servers": [try selectedDNS(profile)], "final": "selected-dns"] }
         let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
         guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw error("iOS external Libbox config exceeds safety limit.") }
+        if ordinaryProtocols.contains(protocolName) {
+            let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
+                                                            protocolName: protocolName, expectedPublicIP: expected)
+            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
+                                                files: ["sing-box.json": Data(policy.config.utf8)], policy: policy)
+        }
         return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected, files: ["sing-box.json": data])
     }
 
@@ -128,7 +238,7 @@ enum RouterVPNExternalExitBuilder {
             guard let socks = external["socks5"] as? [String: Any] else { throw error("External SOCKS5 block is missing.") }
             let server = try literalServer(string(socks["host"]), label: "SOCKS5 server"), port = try port(socks["port"])
             var value: [String: Any] = ["type": "socks", "tag": "custom-exit", "server": server, "server_port": port, "version": "5"]
-            let user = string(socks["username"]), pass = string(socks["password"])
+            let user = socks["username"] as? String ?? "", pass = socks["password"] as? String ?? ""
             guard user.isEmpty == pass.isEmpty else { throw error("External SOCKS5 username/password must be supplied together.") }
             if !user.isEmpty { value["username"] = user; value["password"] = pass }
             return value
@@ -137,7 +247,7 @@ enum RouterVPNExternalExitBuilder {
             let key = secure ? "https_connect" : "http_connect"
             guard let proxy = external[key] as? [String: Any] else { throw error("External \(secure ? "HTTPS" : "HTTP") CONNECT block is missing.") }
             let server = try literalServer(string(proxy["host"]), label: "\(secure ? "HTTPS" : "HTTP") CONNECT server"), p = try port(proxy["port"])
-            let user = string(proxy["username"]), pass = string(proxy["password"])
+            let user = proxy["username"] as? String ?? "", pass = proxy["password"] as? String ?? ""
             guard user.isEmpty == pass.isEmpty else { throw error("External CONNECT username/password must be supplied together.") }
             var value: [String: Any] = ["type": "http", "tag": "custom-exit", "server": server, "server_port": p]
             if !user.isEmpty { value["username"] = user; value["password"] = pass }
@@ -152,14 +262,14 @@ enum RouterVPNExternalExitBuilder {
         case "shadowsocks":
             guard let ss = external["shadowsocks"] as? [String: Any] else { throw error("External Shadowsocks block is missing.") }
             let server = try literalServer(string(ss["server"]), label: "Shadowsocks server"), p = try port(ss["port"])
-            let method = string(ss["method"]).lowercased(), password = string(ss["password"])
+            let method = string(ss["method"]).lowercased(), password = ss["password"] as? String ?? ""
             let allowed = ["2022-blake3-aes-128-gcm", "2022-blake3-aes-256-gcm", "2022-blake3-chacha20-poly1305", "aes-128-gcm", "aes-256-gcm", "chacha20-ietf-poly1305"]
             guard allowed.contains(method), !password.isEmpty else { throw error("External Shadowsocks method/password is invalid.") }
             return ["type": "shadowsocks", "tag": "custom-exit", "server": server, "server_port": p, "method": method, "password": password]
         case "hysteria2":
             guard let hy = external["hysteria2"] as? [String: Any] else { throw error("External Hysteria2 block is missing.") }
             let server = try literalServer(string(hy["server"]), label: "Hysteria2 server"), p = try port(hy["port"])
-            let password = string(hy["password"]), sni = string(hy["tls_server_name"])
+            let password = hy["password"] as? String ?? "", sni = string(hy["tls_server_name"])
             guard !password.isEmpty, safeHostname(sni) else { throw error("External Hysteria2 password/TLS server name is invalid.") }
             return ["type": "hysteria2", "tag": "custom-exit", "server": server, "server_port": p, "password": password, "tls": ["enabled": true, "server_name": sni]]
         default: throw error("Unsupported external protocol.")

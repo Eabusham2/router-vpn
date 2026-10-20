@@ -179,10 +179,50 @@ public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutab
 }
 public func LibboxRouterTorCreateProof(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
 public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ profile:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
+public final class LibboxExternalTestState: @unchecked Sendable {
+    public static let shared = LibboxExternalTestState()
+    private let lock = NSLock()
+    private var block = false, invalid = false
+    private var request: LibboxRouterExternalProofRequest?
+    private var capture: [String] = []
+    public func configure(block: Bool = false, invalid: Bool = false) { lock.lock(); self.block=block; self.invalid=invalid; request=nil; lock.unlock() }
+    public func make(_ source: String, _ capture: String, _ session: String) -> LibboxRouterExternalProofRequest {
+        lock.lock(); defer { lock.unlock() }
+        self.capture=[source,capture,session]; let value=LibboxRouterExternalProofRequest(session,block,invalid);request=value;return value
+    }
+    public func current() -> LibboxRouterExternalProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
+    public func captured() -> [String] { lock.lock(); defer { lock.unlock() }; return capture }
+}
+// Foreign native references deliberately remain non-Sendable. Result-policy
+// validation is exercised separately against shipping Swift and the Go compiler.
+public final class LibboxRouterExternalProofRequest {
+    private let session: String, block: Bool, invalid: Bool
+    private let lock=NSLock(), release=DispatchSemaphore(value:0)
+    private var cancels=0
+    public let entered=DispatchSemaphore(value:0)
+    init(_ session:String,_ block:Bool,_ invalid:Bool){self.session=session;self.block=block;self.invalid=invalid}
+    public func run() throws -> String {
+        entered.signal();if block {_ = release.wait(timeout:.now()+4)}
+        return String(decoding:try JSONSerialization.data(withJSONObject:["session_id":session,"valid": !invalid]),as:UTF8.self)
+    }
+    public func cancel(){lock.lock();cancels+=1;lock.unlock();release.signal()}
+    public func cancelCount()->Int{lock.lock();defer{lock.unlock()};return cancels}
+    public func healthy()->Bool{cancelCount()==0}
+}
+public func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterExternalProofRequest? { LibboxExternalTestState.shared.make(source,capture,session) }
 '''
 HARNESS = r'''
 import Foundation
 import Libbox
+// Policy compilation and schema validation have a real Swift/Go gate. This
+// boundary isolates foreign-handle delivery, cancellation and exact config use.
+struct RouterVPNExternalPolicy: Sendable {
+    let sourceConfig: String, capture: String, config: String
+    func validateProof(_ result:String,sessionID:String,began:Date)throws {
+        guard let value=try JSONSerialization.jsonObject(with:Data(result.utf8)) as? [String:Any],
+              value["session_id"] as? String==sessionID,value["valid"] as? Bool==true else {throw NSError(domain:"ExternalPolicyFixture",code:1)}
+    }
+}
 final class PacketTunnelProvider {
     private let lock = NSLock()
     private var cancels = 0
@@ -426,6 +466,45 @@ final class CompletionState: @unchecked Sendable {
             check("unrequested exit source not activated",refused)
         }}}
         let torFiles=["sing-box.json":Data("{\"inbounds\":[],\"outbounds\":[{\"type\":\"routervpn-tor\",\"tag\":\"routervpn-tor-exit\",\"session_id\":\"tor-session\"}]}".utf8)]
+        let externalState=LibboxExternalTestState.shared
+        let externalConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\"}],\"outbounds\":[] }"
+        let externalFiles=["sing-box.json":Data(externalConfig.utf8)]
+        let externalPolicy=RouterVPNExternalPolicy(sourceConfig:"exact source bytes",capture:"frozen profile/policy",config:externalConfig)
+        for action in ["stable","stop","network","pause","invalid"] {
+            state.configure();externalState.configure(block:["stop","network","pause"].contains(action),invalid:action=="invalid")
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
+            try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)
+            let server=state.currentServer()!,done=CompletionState()
+            owner.proveExternal(completion:done.finish)
+            guard let request=externalState.current()else{fatalError("missing external proof")}
+            if ["stop","network","pause"].contains(action) {
+                check("external native proof entered",request.entered.wait(timeout:.now()+2) == .success)
+                if action=="stop"{owner.stop()}else if action=="network"{owner.invalidateMultihop()}else{owner.pause()}
+                check("external interruption cancels its native handle",request.cancelCount()>0)
+            }
+            check("external result delivered exactly once",done.wait() && done.values()==(1,action=="stable" ? 0:1))
+            check("external proof receives exact compiler source and capture",Array(externalState.captured().prefix(2))==[externalPolicy.sourceConfig,externalPolicy.capture])
+            check("external startup uses bounded owned service",server.strategyCalls().first=="start")
+            owner.stop();request.cancel()
+            check("late external result cannot touch a retired owner",done.values()==(1,action=="stable" ? 0:1) && provider.count()==0)
+        }
+        do {
+            state.configure();externalState.configure()
+            let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
+            try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)
+            let done=CompletionState();owner.proveExternal(completion:done.finish)
+            check("external native proof retained before health loss",done.wait() && done.values()==(1,0))
+            externalState.current()!.cancel()
+            let deadline=Date().addingTimeInterval(3)
+            while provider.count()==0 && Date()<deadline{Thread.sleep(forTimeInterval:0.02)}
+            check("external health loss invalidates retained owner",provider.count()>0)
+            owner.stop()
+        }
+        do {
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider());var rejected=false
+            do{try owner.start(files:["sing-box.json":Data((externalConfig+" ").utf8)],strict:true,externalPolicy:externalPolicy)}catch{rejected=true}
+            check("external compiler bytes cannot be silently rewritten",rejected)
+        }
         let torState=LibboxTorTestState.shared
         for cancelled in [false,true] {
             torState.configure(block:cancelled)
