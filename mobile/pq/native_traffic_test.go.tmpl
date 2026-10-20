@@ -35,10 +35,11 @@ import (
 // an ordinary-network path. The endpoint, PQ protocol and WG/AWG crypto are real.
 type pqTrafficUnderlay struct {
 	outbound.Adapter
-	targets map[string]string
-	active  atomic.Int64
-	calls   sync.Map
-	bad     atomic.Int64
+	targets    map[string]string
+	active     atomic.Int64
+	calls      sync.Map
+	bad        atomic.Int64
+	initialKey <-chan struct{}
 }
 type pqTrafficConn struct {
 	net.Conn
@@ -56,6 +57,21 @@ func (d *pqTrafficUnderlay) DialContext(ctx context.Context, network string, add
 	if !ok || network != "udp" {
 		d.bad.Add(1)
 		return nil, errors.New("unowned physical route")
+	}
+	if address.Port == 51820 {
+		// The PQ acknowledgement and the first WG keepalive use independent
+		// sockets. Begin this cipher test only once the reference has installed
+		// its real negotiated key. A readback after peer startup is too late:
+		// the first handshake may already be waiting on WG's retry timer.
+		timer := time.NewTimer(2 * time.Second)
+		defer timer.Stop()
+		select {
+		case <-d.initialKey:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-timer.C:
+			return nil, errors.New("reference has not adopted the authenticated PQ key")
+		}
 	}
 	v, _ := d.calls.LoadOrStore(address.String(), &atomic.Int64{})
 	v.(*atomic.Int64).Add(1)
@@ -93,13 +109,15 @@ func (pqTrafficNetwork) AutoRedirectOutputMark() uint32                { return 
 // is installed into the independently generated WG/AWG reference peer before
 // sending the protocol's next packet. No expected/derived key is supplied.
 type pqTrafficServer struct {
-	conn     *net.UDPConn
-	protocol mobilepq.Protocol
-	peer     *routervpnamnezia.NativePQTrafficReference
-	rekey    chan chan error
-	done     chan struct{}
-	failure  chan error
-	stop     sync.Once
+	conn       *net.UDPConn
+	protocol   mobilepq.Protocol
+	peer       *routervpnamnezia.NativePQTrafficReference
+	rekey      chan chan error
+	done       chan struct{}
+	failure    chan error
+	stop       sync.Once
+	initialKey chan struct{}
+	adopted    sync.Once
 }
 
 func newPQTrafficServer(t *testing.T, peer *routervpnamnezia.NativePQTrafficReference, version int) *pqTrafficServer {
@@ -108,7 +126,7 @@ func newPQTrafficServer(t *testing.T, peer *routervpnamnezia.NativePQTrafficRefe
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &pqTrafficServer{conn: conn, protocol: realOwner(t, "server", "client", version), peer: peer, rekey: make(chan chan error), done: make(chan struct{}), failure: make(chan error, 1)}
+	server := &pqTrafficServer{conn: conn, protocol: realOwner(t, "server", "client", version), peer: peer, rekey: make(chan chan error), done: make(chan struct{}), failure: make(chan error, 1), initialKey: make(chan struct{})}
 	t.Cleanup(server.close)
 	go server.run()
 	return server
@@ -128,6 +146,7 @@ func (s *pqTrafficServer) run() {
 			if err := s.peer.SetKey(event.Key); err != nil {
 				return err
 			}
+			s.adopted.Do(func() { close(s.initialKey) })
 		}
 		if len(event.Packet) != 0 && remote != nil {
 			_, err := s.conn.WriteToUDP(event.Packet, remote)
@@ -221,7 +240,7 @@ func pqTrafficClient(t *testing.T, mode string, version int, wrongPeer bool) (*E
 	}
 	reference := routervpnamnezia.NewNativePQTrafficReference(t, private.PublicKey().Bytes(), mode == "awg2-pq")
 	server := newPQTrafficServer(t, reference, version)
-	underlay := &pqTrafficUnderlay{Adapter: outbound.NewAdapter("test-owned-physical", "pq-test-underlay", []string{"udp"}, nil), targets: map[string]string{
+	underlay := &pqTrafficUnderlay{Adapter: outbound.NewAdapter("test-owned-physical", "pq-test-underlay", []string{"udp"}, nil), initialKey: server.initialKey, targets: map[string]string{
 		"192.0.2.1:51820": reference.Address(), "192.0.2.1:51822": server.conn.LocalAddr().String()}}
 	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), &pqTrafficManager{out: underlay})
 	ctx = service.ContextWith[adapter.NetworkManager](ctx, pqTrafficNetwork{})
@@ -274,7 +293,7 @@ func pqTrafficExchange(t *testing.T, ep *Endpoint, network, host string, epoch i
 	defer cancel()
 	c, err := ep.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
 	if err != nil {
-		t.Fatal(network, host, err)
+		t.Fatal(network, host, "epoch", epoch, err)
 	}
 	defer c.Close()
 	if err = c.SetDeadline(time.Now().Add(3 * time.Second)); err != nil {
@@ -444,5 +463,60 @@ func TestRealPQTrafficWrongPeerCannotStartOrFallback(t *testing.T) {
 				t.Fatal("wrong-peer cleanup leaked a transport or used fallback")
 			}
 		})
+	}
+}
+
+func TestRealPQTrafficChangedReferenceKeyRejectsData(t *testing.T) {
+	for _, mode := range []string{"wg-pq", "awg2-pq"} {
+		t.Run(mode, func(t *testing.T) {
+			ep, underlay, server, reference := pqTrafficClient(t, mode, 3, false)
+			pqTrafficStart(t, ep)
+			pqTrafficAgreedKeys(t, ep, server, reference, [32]byte{}, 0)
+			wrong := make([]byte, 32)
+			if _, err := rand.Read(wrong); err != nil {
+				t.Fatal(err)
+			}
+			defer clear(wrong)
+			if err := reference.SetKey(wrong); err != nil {
+				t.Fatal(err)
+			}
+			native := ep.base.(nativePQReadback)
+			if err := reference.Rehandshake(); err != nil {
+				t.Fatal(err)
+			}
+			if err := native.RouterVPNTestPQRehandshake(); err != nil {
+				t.Fatal(err)
+			}
+			local, le := native.RouterVPNTestPQSnapshot()
+			remote, re := reference.Snapshot()
+			if le != nil || re != nil || local.KeyDigest == remote.KeyDigest {
+				t.Fatal("negative control did not change the real reference key")
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 400*time.Millisecond)
+			defer cancel()
+			conn, err := ep.DialContext(ctx, "tcp", M.ParseSocksaddr("10.78.0.1:9999"))
+			if conn != nil {
+				_ = conn.Close()
+			}
+			if err == nil {
+				t.Fatal("cipher test accepted a different reference PSK")
+			}
+			if err = ep.Close(); err != nil || underlay.active.Load() != 0 || underlay.bad.Load() != 0 {
+				t.Fatal("wrong-key test leaked or bypassed the captured transport", err)
+			}
+		})
+	}
+}
+
+func TestRealPQTrafficInitialBarrierHonorsCancellation(t *testing.T) {
+	underlay := &pqTrafficUnderlay{targets: map[string]string{"192.0.2.1:51820": "127.0.0.1:1"}, initialKey: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	conn, err := underlay.DialContext(ctx, "udp", M.ParseSocksaddr("192.0.2.1:51820"))
+	if conn != nil || !errors.Is(err, context.Canceled) || underlay.active.Load() != 0 {
+		t.Fatal("unadopted reference acquired a transport after cancellation", err)
+	}
+	if _, found := underlay.calls.Load("192.0.2.1:51820"); found {
+		t.Fatal("initial-key fixture barrier was bypassed")
 	}
 }
