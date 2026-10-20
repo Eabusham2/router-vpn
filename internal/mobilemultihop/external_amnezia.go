@@ -28,17 +28,7 @@ func externalCapturedAmnezia(endpoint, source map[string]any) error {
 	if !ok {
 		return bad
 	}
-	value := func(object map[string]any) (float64, bool) {
-		raw, exists := object["persistent_keepalive_interval"]
-		if !exists {
-			return 0, true
-		}
-		n, ok := raw.(float64)
-		return n, ok && n >= 0 && n <= 65535 && float64(int(n)) == n
-	}
-	want, valid := value(source)
-	actual, nativeValid := value(peer)
-	if !valid || !nativeValid || want != actual {
+	if !externalCapturedKeepalive(peer, source) {
 		return bad
 	}
 	return nil

@@ -713,6 +713,9 @@ func externalCapturedTransport(out, profile map[string]any) error {
 			!reflect.DeepEqual(peer["public_key"], source["peer_public_key"]) || !reflect.DeepEqual(peer["allowed_ips"], source["allowed_ips"]) {
 			return bad
 		}
+		if !externalCapturedKeepalive(peer, source) {
+			return bad
+		}
 		endpoint, _ := source["endpoint"].(string)
 		host, port, err := net.SplitHostPort(endpoint)
 		if err != nil || peer["address"] != host || fmt.Sprint(peer["port"]) != port {
