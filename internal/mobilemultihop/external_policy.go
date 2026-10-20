@@ -111,6 +111,9 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	if !externalOrdinaryProtocol(selection.Protocol) {
 		return nil, errors.New("external policy requires a native ordinary exit protocol")
 	}
+	if selection.Protocol == "openvpn" && selection.Profile["node_kind"] != "external" {
+		return nil, errors.New("OpenVPN requires its exact captured external inline profile")
+	}
 	if !externalPublicIP(selection.ExpectedPublicIP) {
 		return nil, errors.New("external policy requires the selected public exit proof address")
 	}
@@ -188,8 +191,13 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 		return nil, err
 	}
 	udp := externalUDP(selection.Protocol) && (entryProtocol == "" || externalUDP(entryProtocol))
-	if entryProtocol != "" && !externalUDP(entryProtocol) && (selection.Protocol == "wireguard" || selection.Protocol == "hysteria2") {
+	if entryProtocol != "" && !externalUDP(entryProtocol) && externalExitRequiresUDP(exit, selection.Protocol) {
 		return nil, errors.New("the selected TCP-only predecessor cannot carry this exit's UDP transport")
+	}
+	if selection.Protocol == "openvpn" {
+		// The owned OpenVPN IP stack carries both application TCP and UDP,
+		// including DNS, even when its authenticated outer link uses TCP.
+		udp = true
 	}
 	dns, dnsMeta, err := externalSelectedDNS(selection, ipv6, udp)
 	if err != nil {
@@ -299,7 +307,7 @@ func externalProfileIdentity(profile map[string]any) (string, error) {
 
 func externalOrdinaryProtocol(protocol string) bool {
 	switch protocol {
-	case "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2":
+	case "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
 		return true
 	default:
 		return false
@@ -510,6 +518,14 @@ func externalTransport(out map[string]any, protocol, detour, family string, rout
 	}
 	// These adapters accept only literal physical/remote transport addresses.
 	// A different hostname owner must finish resolution before this boundary.
+	if protocol == "openvpn" {
+		if family != "endpoints" || out["type"] != externalOpenVPNType || out["system"] != false || out["mode"] != "tls" {
+			return bad
+		}
+		// Full option/remote/TLS/credential validation follows immediately in
+		// externalCapturedOpenVPN using the original selected inline profile.
+		return nil
+	}
 	if protocol == "wireguard" {
 		if family != "endpoints" || out["type"] != "wireguard" {
 			return bad
@@ -666,6 +682,8 @@ func externalCapturedTransport(out, profile map[string]any) error {
 		return reflect.DeepEqual(actual, want)
 	}
 	switch protocol {
+	case "openvpn":
+		return externalCapturedOpenVPN(out, source)
 	case "wireguard":
 		peers, ok := out["peers"].([]any)
 		if !ok || len(peers) != 1 {
@@ -887,8 +905,11 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 		}
 	}
 	if entry != nil {
-		if entry["type"] == "wireguard" {
+		if entry["type"] == "wireguard" || entry["type"] == externalOpenVPNType {
 			entryMTU = 1280
+			if entry["type"] == externalOpenVPNType {
+				entryMTU = 1500
+			}
 			if raw, exists := entry["mtu"]; exists {
 				entryMTU, err = mtuNumber(raw)
 				if err != nil {
@@ -941,6 +962,12 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 		exit["mtu"] = exitMTU
 		if fixed == 0 && mtu > exitMTU {
 			mtu = exitMTU
+		}
+	}
+	if exit["type"] == externalOpenVPNType {
+		mtu, err = externalOpenVPNMTU(tun, exit, mtu, entryMTU, fixed)
+		if err != nil {
+			return 0, 0, "", err
 		}
 	}
 	// Historical effective_mtu and its old network/probe fingerprints never
