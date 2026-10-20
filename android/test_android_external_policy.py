@@ -67,7 +67,7 @@ static AndroidStandardExitStore.Entry exit(String kind)throws Exception{AndroidS
  if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exact user";e.password="exact-password";}
  if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key('s');}
  if(kind.equals("hysteria2"))e.secret="captured-only-secret";e.tlsServerName="selected.example.test";
- if(kind.equals("openvpn")){e.username=" exact user ";e.password=" exact password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
+ if(kind.equals("openvpn")){e.username=" exact user ";e.password=" exact password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
  e.policy.put("dns_mode","custom").put("dns_protocol","tcp").put("dns_host","149.112.112.112").put("dns_port",5353)
  .put("ipv6_mode","off").put("home_lan_access",false).put("home_lan_cidrs",new JSONArray().put("192.168.50.0/24").put("fd12::/48"))
  .put("mtu_policy","auto").put("effective_mtu",8800);return e;}
