@@ -51,7 +51,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
  static func check(_ name:String,_ result:@autoclosure ()throws->Bool)throws{guard try result()else{throw NSError(domain:"ExternalSelection",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ operation:()throws->Void)throws{do{try operation()}catch{checks+=1;return};throw NSError(domain:"ExternalRejection",code:1,userInfo:[NSLocalizedDescriptionKey:name])}
  static func main()throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
    let entry=bundle(try profile("entry","external",entryProtocol)),model=RouterVPNModel()
    var exit=try profile("exit","external",exitProtocol);exit.multihopEnabled=true;exit.multihopEntryID="entry";exit.multihopEntryMode=entryProtocol;exit.multihopExitID="exit";exit.multihopExitMode=exitProtocol;exit.multihopExecution="local"

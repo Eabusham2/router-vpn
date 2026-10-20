@@ -128,7 +128,7 @@ struct RouterVPNExternalExitRuntime {
 }
 
 enum RouterVPNExternalExitBuilder {
-    static let ordinaryProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
+    static let ordinaryProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
     static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()
@@ -184,15 +184,11 @@ enum RouterVPNExternalExitBuilder {
             var files = predecessorFiles; files["sing-box.json"] = data
             return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile)
         }
-        guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) else {
+        guard ordinaryProtocols.contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")
         }
-        if protocolName == "openvpn" {
-            guard predecessorProfile == nil, predecessorFiles.isEmpty else { throw error("OpenVPN cannot discard a captured entry graph.") }
-        } else {
-            guard (profile["multihop_enabled"] as? Bool ?? false) == (predecessorProfile != nil) else {
-                throw error("The external graph does not match the captured entry selection.")
-            }
+        guard (profile["multihop_enabled"] as? Bool ?? false) == (predecessorProfile != nil) else {
+            throw error("The external graph does not match the captured entry selection.")
         }
         let expected = try publicLiteralIP(string(external["expected_public_ip"]), label: "expected public exit IP")
         var custom = try customExit(external: external, protocolName: protocolName)
@@ -220,7 +216,7 @@ enum RouterVPNExternalExitBuilder {
                 }
                 _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
                 var entry = try customExit(external: imported, protocolName: kind); entry["tag"] = tag
-                if kind == "wireguard" { endpoints.append(entry) } else { outbounds.append(entry) }
+                if ["wireguard", "openvpn"].contains(kind) { endpoints.append(entry) } else { outbounds.append(entry) }
                 custom["detour"] = tag
             } else {
                 guard predecessorProfile["node_kind"] as? String == "router-vpn",
@@ -252,24 +248,18 @@ enum RouterVPNExternalExitBuilder {
             "rules": [["protocol": "dns", "action": "hijack-dns"]],
             "final": "custom-exit", "auto_detect_interface": true
         ]
-        var config: [String: Any] = [
+        let config: [String: Any] = [
             "log": ["level": "warn", "timestamp": true],
             "inbounds": [tun], "endpoints": endpoints, "outbounds": outbounds, "route": route
         ]
-        // OpenVPN retains its validated endpoint compiler and existing DNS
-        // adapter. Ordinary nodes use the shared captured-policy compiler.
-        if protocolName == "openvpn" { config["dns"] = ["servers": [try selectedDNS(profile)], "final": "selected-dns"] }
         let data = try JSONSerialization.data(withJSONObject: config, options: [.prettyPrinted, .sortedKeys])
         guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw error("iOS external Libbox config exceeds safety limit.") }
-        if ordinaryProtocols.contains(protocolName) {
-            let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
-                                                            protocolName: protocolName, expectedPublicIP: expected,
-                                                            entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig)
-            var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
-            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
-                                                files: files, policy: policy)
-        }
-        return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected, files: ["sing-box.json": data])
+        let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
+                                                        protocolName: protocolName, expectedPublicIP: expected,
+                                                        entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig)
+        var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
+        return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
+                                            files: files, policy: policy)
     }
 
     private static func customExit(external: [String: Any], protocolName: String) throws -> [String: Any] {
@@ -338,31 +328,6 @@ enum RouterVPNExternalExitBuilder {
             return ["type": "hysteria2", "tag": "custom-exit", "server": server, "server_port": p, "password": password, "tls": ["enabled": true, "server_name": sni]]
         default: throw error("Unsupported external protocol.")
         }
-    }
-
-    private static func selectedDNS(_ profile: [String: Any]) throws -> [String: Any] {
-        let mode = string(profile["dns_mode"]).lowercased()
-        if mode.isEmpty || mode == "rescue" {
-            return ["type": "https", "tag": "selected-dns", "server": "1.1.1.1", "server_port": 443, "path": "/dns-query", "detour": "custom-exit", "tls": ["enabled": true, "server_name": "cloudflare-dns.com"]]
-        }
-        guard mode != "home" else { throw error("Home AdGuard cannot be claimed for a direct unrelated external iOS exit. Choose Rescue, Fastest, Custom, DoH, DoT or DoH3.") }
-        var protocolName = string(profile["dns_protocol"]).lowercased()
-        var host = string(profile["dns_host"])
-        if mode == "fastest" { host = string(profile["fastest_dns_host"]); protocolName = "udp" }
-        if protocolName == "doh" || mode == "doh" { protocolName = "https" }
-        if protocolName == "dot" || mode == "dot" { protocolName = "tls" }
-        if protocolName == "doh3" || mode == "doh3" { protocolName = "h3" }
-        if protocolName.isEmpty { protocolName = "udp" }
-        guard ["udp", "tcp", "tls", "https", "h3"].contains(protocolName) else { throw error("Unsupported external iOS DNS protocol \(protocolName).") }
-        host = try literalServer(host, label: "DNS server")
-        var p = int(profile["dns_port"]); if p <= 0 { p = protocolName == "tls" ? 853 : (protocolName == "https" || protocolName == "h3" ? 443 : 53) }
-        var server: [String: Any] = ["type": protocolName, "tag": "selected-dns", "server": host, "server_port": p, "detour": "custom-exit"]
-        if ["tls", "https", "h3"].contains(protocolName) {
-            let sni = string(profile["dns_server_name"]); guard safeHostname(sni) else { throw error("Encrypted external iOS DNS requires a safe TLS server name.") }
-            server["tls"] = ["enabled": true, "server_name": sni]
-        }
-        if protocolName == "https" || protocolName == "h3" { let path = string(profile["dns_path"]); server["path"] = path.isEmpty ? "/dns-query" : path }
-        return server
     }
 
     private static func externalMTU(external: [String: Any], protocolName: String) -> Int {

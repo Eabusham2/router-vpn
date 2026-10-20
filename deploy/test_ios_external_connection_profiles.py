@@ -64,6 +64,7 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
   case "http-connect","https-connect":external[kind.replacingOccurrences(of:"-",with:"_")]=["host":"198.51.100.1","port":8443,"username":"private-user","password":"NEVER_COPY_PASSWORD","tls_server_name":"exit.example.test"]
   case "shadowsocks":external["shadowsocks"]=["server":"198.51.100.1","port":8388,"method":"aes-256-gcm","password":"NEVER_COPY_PASSWORD"]
   case "hysteria2":external["hysteria2"]=["server":"198.51.100.1","port":443,"password":"NEVER_COPY_PASSWORD","tls_server_name":"exit.example.test"]
+  case "openvpn":external["openvpn"]=["config":"NEVER_COPY_OPENVPN_CONFIG","username":"private-user","password":"NEVER_COPY_PASSWORD"]
   default:external["expected_public_ip"]=""
   }
   let object:[String:Any]=["id":id,"name":"Saved external "+kind,"node_kind":"external","external":external,
@@ -98,7 +99,7 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try check("external record stores selected DNS exactly",saved.preferences?.dnsMode==p.dnsMode && saved.preferences?.dnsProtocol==p.dnsProtocol && saved.preferences?.dnsHost==p.dnsHost && saved.preferences?.dnsPort==p.dnsPort && saved.preferences?.dnsServerName==p.dnsServerName && saved.preferences?.dnsPath==p.dnsPath)
    try check("fixed MTU and protection are preserved",saved.preferences?.mtuPolicy=="fixed" && saved.preferences?.manualMTU==1380 && saved.preferences?.killSwitchPolicy=="strict" && saved.preferences?.ipv6Mode=="off" && saved.preferences?.homeLANAccess==false)
    let record=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
-   for secret in ["NEVER_COPY_PRIVATE_KEY","NEVER_COPY_PASSWORD","NEVER_COPY_API_TOKEN","NEVER_COPY_SOCKS_SECRET","NEVER_COPY_ASSET"]{try check("connection record never copies "+secret,!record.contains(secret))}
+   for secret in ["NEVER_COPY_PRIVATE_KEY","NEVER_COPY_PASSWORD","NEVER_COPY_API_TOKEN","NEVER_COPY_SOCKS_SECRET","NEVER_COPY_ASSET","NEVER_COPY_OPENVPN_CONFIG"]{try check("connection record never copies "+secret,!record.contains(secret))}
    try check("saving does not alter active selection",model.imports==0 && model.bundle!.profiles==source.profiles && model.bundle!.routerProfiles==source.routerProfiles)
    var changed=source;changed.routerProfiles[0].dnsMode="rescue";changed.routerProfiles[0].manualMTU=1600;changed.routerProfiles[0].multihopEnabled=false;changed.routerProfiles[0].homeLANAccess=true
    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed)

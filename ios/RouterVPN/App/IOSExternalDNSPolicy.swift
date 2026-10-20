@@ -4,7 +4,7 @@ import Network
 /// Settings validation only. The captured native compiler and owned tunnel
 /// prove the selected resolver again before connection completion.
 enum IOSExternalDNSPolicy {
-    static let protocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
+    static let protocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
 
     static func validate(_ profile: RouterProfile, entry: RouterProfile? = nil) throws {
         guard profile.normalizedNodeKind == "external", protocols.contains(profile.external?.protocolName ?? "") else {

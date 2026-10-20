@@ -34,6 +34,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   case "socks5": e["socks5"]=["host":"198.51.100.8","port":1080,"username":" saved &<> / user ","password":" saved p\"ass\\word \u{2028}\u{2029} "]
   case "http-connect", "https-connect": var proxy:[String:Any]=["host":"198.51.100.8","port":8443,"username":" exact user ","password":" exact secret "];if kind=="https-connect" {proxy["tls_server_name"]="exit.example.test"};e[kind.replacingOccurrences(of:"-",with:"_")]=proxy
   case "shadowsocks": e["shadowsocks"]=["server":"198.51.100.8","port":8388,"method":"aes-256-gcm","password":" exact &<> secret "]
+  case "openvpn": e["openvpn"]=["config":openVPNConfig(),"username":" exact user ","password":" exact OpenVPN secret "]
   default: e["hysteria2"]=["server":"198.51.100.8","port":443,"password":" exact secret ","tls_server_name":"exit.example.test"]
   }
   return ["id":"saved-exit","node_kind":"external","name":"Saved <&> / node \u{2028}\u{2029}","external":e,
@@ -41,8 +42,11 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
           "home_lan_access":false,"home_lan_cidrs":["192.168.50.0/24","fd12:3456::/48"],"ipv6_mode":"off",
           "mtu_policy":"fixed","manual_mtu":1380,"effective_mtu":8999,"start_layer":"off"]
  }
+ static func openVPNConfig(_ network:String="udp",_ address:String="198.51.100.8")->String {
+  "client\ndev tun\nproto \(network)\nremote \(address) 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
+ }
  static func policies()throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for kind in protocols {for dns in ["udp","tcp","tls","https","h3"] {for lan in [false,true] {for ipv6 in ["off","on"] {
    var p=profile(kind);p["dns_protocol"]=dns;p["home_lan_access"]=lan;p["ipv6_mode"]=ipv6
    if ["tls","https","h3"].contains(dns){p["dns_server_name"]="resolver.example.test";p["dns_path"]="/captured-query"}
@@ -101,6 +105,37 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   var bad=p;bad["dns_host"]="resolver.example.test"
   try reject("hostname DNS requires captured bootstrap"){_ = try RouterVPNExternalExitBuilder.build(profile:bad)}
  }
+ static func openVPNPaths()throws {
+  for network in ["udp","tcp-client"] {
+   var p=profile("openvpn"),external=p["external"] as! [String:Any],ovpn=external["openvpn"] as! [String:Any]
+   ovpn["config"]=openVPNConfig(network);external["openvpn"]=ovpn;p["external"]=external
+   let runtime=try RouterVPNExternalExitBuilder.build(profile:p),policy=runtime.policy!,graph=try object(Data(policy.config.utf8))
+   let endpoint=(graph["endpoints"] as! [[String:Any]])[0],capture=try object(Data(policy.capture.utf8))
+   try check("OpenVPN stays in the existing native endpoint",endpoint["type"] as? String=="openvpn-client" && endpoint["system"] as? Bool==false)
+   try check("OpenVPN credentials retain their exact bytes",endpoint["username"] as? String==ovpn["username"] as? String && endpoint["password"] as? String==ovpn["password"] as? String)
+   try check("OpenVPN raw profile remains captured",json((capture["profile"] as! [String:Any])["external"]!)==json(external))
+   try check("OpenVPN selected fixed MTU reaches the endpoint",endpoint["mtu"] as? Int==1380)
+   try check("OpenVPN requires native DNS and exit proof",(try object(Data(policy.metadata.utf8)))["dns_proof"] as? String=="required")
+   var entry=profile("http-connect");entry["id"]="http-entry"
+   p["multihop_enabled"]=true;p["multihop_entry_id"]="http-entry";p["multihop_entry_mode"]="http-connect";p["multihop_exit_id"]="saved-exit";p["multihop_exit_mode"]="openvpn";p["multihop_execution"]="local"
+   if network=="udp" {
+    try reject("UDP OpenVPN cannot be sent through a TCP-only entry"){_ = try RouterVPNExternalExitBuilder.build(profile:p,predecessorProfile:entry)}
+   } else {
+    for dns in ["tcp","udp","h3"] {
+     p["dns_protocol"]=dns
+     if dns=="h3" {p["dns_server_name"]="resolver.example.test";p["dns_path"]="/exact-query"}
+     let nested=try RouterVPNExternalExitBuilder.build(profile:p,predecessorProfile:entry),nestedGraph=try object(Data(nested.policy!.config.utf8)),meta=try object(Data(nested.policy!.metadata.utf8))
+     let final=(nestedGraph["endpoints"] as! [[String:Any]])[0]
+     try check("TCP OpenVPN keeps UDP payloads inside its own encrypted stream",final["detour"] as? String=="external-entry" && meta["udp_available"] as? Bool==true && meta["dns_protocol"] as? String==dns)
+    }
+   }
+  }
+  for invalid in ["up /private/unowned-script\n","ca /private/unowned-ca\n","remote resolver.example.test 1194\n"] {
+   var p=profile("openvpn"),external=p["external"] as! [String:Any],ovpn=external["openvpn"] as! [String:Any]
+   ovpn["config"]=openVPNConfig()+invalid;external["openvpn"]=ovpn;p["external"]=external
+   try reject("OpenVPN import never adds outside process/file/resolver owners"){_ = try RouterVPNExternalExitBuilder.build(profile:p)}
+  }
+ }
  static func proofResults()throws {
   let runtime=try RouterVPNExternalExitBuilder.build(profile:profile("socks5")),policy=runtime.policy!
   let meta=try object(Data(policy.metadata.utf8)),began=Date(),session="captured-session"
@@ -125,7 +160,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   try reject("oversized native response"){try policy.validateProof(String(repeating:" ",count:8193),sessionID:session,began:began)}
  }
  static func hostnameBootstrap()throws {
-  for kind in ["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"] {
+  for kind in ["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {
    for transport in ["tcp","udp","tls","https","h3"] {
     var p=profile(kind);p["dns_mode"]="doh";p["dns_host"]="resolver.example.test";p["dns_server_name"]="resolver.example.test";p["dns_port"]=443;p["dns_path"]="/captured-query"
     var server:[String:Any]=["type":transport,"tag":"external-dns-bootstrap","server":"9.9.9.9","server_port":5353,"detour":"custom-exit"]
@@ -162,14 +197,16 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   }
  }
  static func entryGraphs()throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryKind in protocols {for exitKind in protocols {
    var entry=profile(entryKind),exit=profile(exitKind)
    entry["id"]="saved-entry";entry["home_lan_cidrs"]=["10.20.0.0/16"];entry["ipv6_mode"]="off"
    if entryKind=="wireguard" {entry["manual_mtu"]=1500;var ext=entry["external"] as! [String:Any],wg=ext["wireguard"] as! [String:Any];wg["private_key"]=key(9);wg["peer_public_key"]=key(10);ext["wireguard"]=wg;entry["external"]=ext}
+   if entryKind=="openvpn" {entry["manual_mtu"]=1500}
+   if ["wireguard","openvpn"].contains(entryKind) && exitKind=="openvpn" {exit["manual_mtu"]=1280}
    exit["multihop_enabled"]=true;exit["multihop_entry_id"]="saved-entry";exit["multihop_entry_mode"]=entryKind
    exit["multihop_exit_id"]="saved-exit";exit["multihop_exit_mode"]=exitKind;exit["multihop_execution"]="local";exit["ipv6_mode"]="on"
-   if ["http-connect","https-connect"].contains(entryKind) && ["wireguard","hysteria2"].contains(exitKind) {
+   if ["http-connect","https-connect"].contains(entryKind) && ["wireguard","hysteria2","openvpn"].contains(exitKind) {
     try reject("TCP-only entry cannot carry UDP exit"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorProfile:entry)};continue
    }
    let beforeEntry=try json(entry),beforeExit=try json(exit)
@@ -204,7 +241,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
  static func main() {
   defer{RouterVPNTorTestClose()}
   do {
-   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap()
+   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap();try openVPNPaths()
    print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }

@@ -45,11 +45,12 @@ def replace_once(source, before, after):
 GO = replace_once(P.GO, '"router-vpn/internal/mobileperf"',
     '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor";'
     '"router-vpn/internal/applexray";"router-vpn/internal/nativesip003";'
-    '"crypto/ecdh";"crypto/mlkem"')
+    '"router-vpn/internal/nativeopenvpn";"crypto/ecdh";"crypto/mlkem"')
 xray_fixture = A.GO_HELPER[A.GO_HELPER.index(' case "test-xray":'):A.GO_HELPER.index(' case "xray-check",')]
 GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)', r'''
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "openvpn":value,err=nativeopenvpn.CompileEndpoint(r.Config,r.Files,r.Node,r.Mode,r.Source)
  case "predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
  case "hash":sum:=sha256.Sum256([]byte(r.Config));value=base64.StdEncoding.EncodeToString(sum[:])
  case "max":value,err=mobilemultihop.CompileMAXProfile(r.Mode,r.Files,r.Policy)
@@ -124,7 +125,7 @@ public func LibboxRouterApplyPerformancePolicy(_ config:String,_ policy:String,_
  result(&error,["Op":"performance","Config":config,"Policy":policy])
 }
 public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password:String,_ tag:String,_ detour:String,_ error:inout NSError?)->String {
- error=NSError(domain:"UnexercisedOpenVPNBoundary",code:1);return ""
+ result(&error,["Op":"openvpn","Config":config,"Files":user,"Node":password,"Mode":tag,"Source":detour])
 }
 '''
 
@@ -500,24 +501,29 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   }}
  }
  @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   var failures:[String]=[]
   for mode in modes {for layer in layers {
-   let entry=try root(mode,layer,maximum,composite),profile=(entry["routerProfiles"] as! [[String:Any]])[0]
+   var entry=try root(mode,layer,maximum,composite),profiles=entry["routerProfiles"] as! [[String:Any]]
+   if ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq"].contains(mode) || IOSNativeMAXProfile.modeIDs.contains(mode) {
+    profiles[0]["manual_mtu"]=1500;entry["routerProfiles"]=profiles
+   }
+   let profile=profiles[0]
    let owner=ProviderPreparation(),originalFiles=try owner.entry(entry,mode),previous=try object(originalFiles["sing-box.json"]!)
    let oldFinal=(previous["route"] as! [String:Any])["final"] as! String
    let packetEntry=["wireguard","routervpn-amneziawg","routervpn-pq"].contains(try tagged(previous,oldFinal)["type"] as? String ?? "")
    for kind in protocols {
     do {
      let model=RouterVPNModel()
-     let exitMTU=kind=="wireguard" && packetEntry ? 1280:1380
-     try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU)
+     let exitMTU=["wireguard","openvpn"].contains(kind) && packetEntry ? 1280:1380
+     let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
+     try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU,openVPNConfig:kind=="openvpn" ? openVPN:"")
      var exit=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
      exit["multihop_enabled"]=true;exit["multihop_entry_id"]="entry";exit["multihop_entry_mode"]=mode;exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind;exit["multihop_execution"]="local"
      exit["dns_mode"]="custom";exit["dns_protocol"]="tcp";exit["dns_host"]="9.9.9.9";exit["dns_port"]=5353;exit["mtu_policy"]="fixed";exit["manual_mtu"]=exitMTU;exit["home_lan_access"]=false;exit["ipv6_mode"]="on"
      let frozen=try json(exit),provider:[String:Any]=["external_entry_bundle":try json(entry),"external_entry_mode":mode]
-     if kind=="wireguard" && packetEntry {
-      var oversized=exit;oversized["manual_mtu"]=1380
+     if ["wireguard","openvpn"].contains(kind) && packetEntry {
+      var oversized=exit;oversized["manual_mtu"]=1500
       reject("nested fixed MTU cannot overwrite or exceed its entry"){_ = try owner.prepare(provider:provider,selectedProfile:oversized,strict:true)}
      }
      let prepared=try owner.prepare(provider:provider,selectedProfile:exit,strict:true),policy=prepared.runtime.policy!
@@ -549,12 +555,16 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]],selected=dns.first{$0["tag"] as? String=="selected-dns"}!
      try check("DNS selection and IPv6 policy remain captured",selected["type"] as? String=="tcp" && selected["server_port"] as? Int==5353 && selected["detour"] as? String=="custom-exit" && meta["ipv6_mode"] as? String=="off")
      try check("source entry and exit policies stay frozen",json(exit)==frozen && json(capture["entry"]!)==json(profile))
+     if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
+      let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+".json")
+      try prepared.runtime.files["sing-box.json"]!.write(to:file,options:.withoutOverwriting)
+     }
      externalGraphs+=1
     }catch{failures.append(mode+"/"+layer+"/"+kind+": "+error.localizedDescription)}
    }
   }}
   if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
-  try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==342)
+  try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==399)
  }
 }
 '''
@@ -568,6 +578,13 @@ def main():
     args = parser.parse_args()
     if args.entry_only and args.output:
         raise ValueError('--entry-only cannot produce complete Tor graph evidence')
+    external_output = os.environ.get('ROUTERVPN_IOS_EXTERNAL_GRAPHS')
+    if external_output is not None:
+        destination = Path(external_output)
+        if not external_output or not destination.is_dir() or destination.is_symlink() or any(destination.iterdir()):
+            raise ValueError('ROUTERVPN_IOS_EXTERNAL_GRAPHS must name an existing empty owned directory')
+        if args.entry_only:
+            raise ValueError('--entry-only cannot produce final external graphs')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')
@@ -617,7 +634,7 @@ def main():
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
         if args.output:
             inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'ordinary_external_graphs': 342, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            report = {'schema': 1, 'graphs': 348, 'ordinary_external_graphs': 399, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 
