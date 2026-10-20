@@ -128,14 +128,14 @@ final class LayeredVpnService {
  static void startAutomaticMTU(){if(!AndroidHomeStateStore.current.connected)throw new AssertionError("MTU before adoption");Env.mtuStarts++;}
 }
 final class AndroidHomeStateStore {
- static final class Snapshot {String sessionId="",phase="off",activeNodeId="",runtimeMode="",actualBase="",fallback="";boolean connected;}
+ static final class Snapshot {String sessionId="",phase="off",activeNodeId="",runtimeMode="",actualBase="",fallback="",logicalMode="";boolean connected;}
  static Snapshot current=new Snapshot();static boolean emergency;static int sequence;
  static void reset(){current=new Snapshot();emergency=false;}
  static Snapshot snapshot(Context context){return current;}
  static String nodeIdFromBundleFile(File file){return"captured-node";}
  static boolean emergencyDisconnectPending(Context context){return emergency;}
- static String begin(Context context,String logical,String raw,String base,String node){Snapshot s=new Snapshot();s.sessionId="selection-"+(++sequence);s.phase="connecting";s.activeNodeId=node;current=s;return s.sessionId;}
- static void connected(Context context,String logical,String raw,String base,String fallback,String node){current.phase="connected";current.connected=true;current.runtimeMode=raw;current.actualBase=base;current.fallback=fallback;current.activeNodeId=node;Env.adoptions++;}
+ static String begin(Context context,String logical,String raw,String base,String node){Snapshot s=new Snapshot();s.sessionId="selection-"+(++sequence);s.phase="connecting";s.activeNodeId=node;s.logicalMode=logical;current=s;return s.sessionId;}
+ static void connected(Context context,String logical,String raw,String base,String fallback,String node){current.phase="connected";current.logicalMode=logical;current.connected=true;current.runtimeMode=raw;current.actualBase=base;current.fallback=fallback;current.activeNodeId=node;Env.adoptions++;}
  static void beginPathRevalidation(Context context,String why){current.phase="disconnecting";current.connected=false;}
  static void failed(Context context,String why){current.phase="failed";current.connected=false;}
  static void failedPreservingOwnership(Context context,String why){failed(context,why);Env.preserved=true;}
@@ -164,7 +164,8 @@ public final class StrategyHarness {
   return new JSONObject().put("selectedRouterID","node").put("routerProfiles",new JSONArray().put(profile)).put("modes",modes).put("profiles",profiles).put("logicalModes",new JSONArray(logical.toString()));
  }
  static final class Result implements AndroidModeOrchestrator.Callback {
-  final CountDownLatch done=new CountDownLatch(1);final List<String>progress=new ArrayList<>();boolean success;String mode="",message="";
+  final CountDownLatch done=new CountDownLatch(1);final List<String>progress=new ArrayList<>();boolean success;String mode="",message="",owner="";
+  public void owned(String session){owner=session;}
   public void progress(String value){progress.add(value);}
   public void finished(boolean ok,String mode,String value){success=ok;this.mode=mode;message=value;done.countDown();}
  }
@@ -183,6 +184,21 @@ public final class StrategyHarness {
  static void attempted(String... modes){List<String>wanted=new ArrayList<>();for(String mode:modes)wanted.add("libbox:"+mode);check(Env.attempts.equals(wanted),"attempts changed: "+Env.attempts+" expected "+wanted);}
  static void stoppedBefore(String failed,String next){int stop=Env.events.indexOf("stop:"+failed),terminal=Env.events.indexOf("terminal:"+failed),prepare=Env.events.indexOf("prepare:"+next);check((stop>=0&&stop<prepare)||(terminal>=0&&terminal<prepare),"another candidate began before failed transport teardown: "+Env.events);}
  static Step badProof(){Step step=new Step("");step.proof=false;return step;}
+ static void await(Owner o,Result result)throws Exception{check(result.done.await(3,TimeUnit.SECONDS),"captured operation did not finish");long end=System.nanoTime()+TimeUnit.SECONDS.toNanos(2);while(o.chooser.isRunning()&&System.nanoTime()<end)Thread.yield();}
+ static void restorationTests()throws Exception{
+  for(String raw:new String[]{"wg","awg2-fast","awg2-strong","shadowsocks","hysteria2","reality-vision","reality-xhttp","max-tls-wg","max-quic-awg"})test("restore exact native candidate "+raw,()->{
+   try(Owner o=new Owner(source("auto",true,true,raw))){Result first=o.run("auto");check(first.success,"original path did not connect");String session=first.owner,source=o.chooser.captureSource(o.file,session,raw);String original=Files.readString(o.file.toPath());
+    Result stale=new Result();int stops=Env.events.size();o.chooser.disconnectCaptured("another-session",stale);await(o,stale);check(!stale.success&&AndroidHomeStateStore.current.connected&&Env.events.size()==stops,"captured stop changed another session");
+    Result stop=new Result();o.chooser.disconnectCaptured(session,stop);await(o,stop);check(stop.success&&!o.chooser.isActive(),"original path did not drain");
+    Result restore=new Result();o.chooser.restoreCaptured(o.file,raw,"SMART AUTO","original-fallback",source,restore);await(o,restore);
+    check(restore.success&&restore.mode.equals(raw)&&AndroidHomeStateStore.current.logicalMode.equals("SMART AUTO")&&AndroidHomeStateStore.current.fallback.equals("original-fallback"),"restore changed exact runtime or logical selection");
+    check(Env.attempts.equals(List.of("libbox:"+raw,"libbox:"+raw))&&Env.adoptions==2,"restore selected a substitute candidate or skipped fresh proof");check(Files.readString(o.file.toPath()).equals(original),"restore edited saved node preferences");
+   }
+  });
+  test("changed original profile prevents restoration",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){Result first=o.run("auto");String source=o.chooser.captureSource(o.file,first.owner,"wg");Result stop=new Result();o.chooser.disconnectCaptured(first.owner,stop);await(o,stop);Files.writeString(o.file.toPath(),new JSONObject(source).put("new-setting",true).toString());Result restore=new Result();int attempts=Env.attempts.size();o.chooser.restoreCaptured(o.file,"wg","AUTO","",source,restore);await(o,restore);check(!restore.success&&Env.attempts.size()==attempts&&!AndroidHomeStateStore.current.connected,"changed saved profile silently restored");}});
+  test("restoration failure cannot fallback to another mode",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){Result first=o.run("auto");String source=o.chooser.captureSource(o.file,first.owner,"wg");Result stop=new Result();o.chooser.disconnectCaptured(first.owner,stop);await(o,stop);Env.plan("wg",badProof());Result restore=new Result();o.chooser.restoreCaptured(o.file,"wg","AUTO","",source,restore);await(o,restore);check(!restore.success&&!AndroidHomeStateStore.current.connected&&Env.attempts.equals(List.of("libbox:wg","libbox:wg")),"failed exact restore switched to another candidate");}});
+  test("captured selector cancellation waits for late proof",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);Step late=new Step("");late.proved=()->{entered.countDown();boolean interrupted=false;while(true)try{release.await();break;}catch(InterruptedException ignored){interrupted=true;}if(interrupted)Thread.currentThread().interrupt();};Env.plan("wg",late);Result selected=new Result();o.chooser.auto(o.file,false,selected);check(entered.await(2,TimeUnit.SECONDS),"proof boundary missing");Result stop=new Result();o.chooser.disconnectCaptured(selected.owner,stop);try{check(!stop.done.await(100,TimeUnit.MILLISECONDS)&&o.chooser.isRunning(),"captured cleanup outran selector worker");}finally{release.countDown();}await(o,selected);await(o,stop);check(!selected.success&&stop.success&&!o.chooser.isActive()&&!AndroidHomeStateStore.current.connected,"late selected path survived captured cancellation");attempted("wg");}});
+ }
  public static void main(String[] args)throws Exception {
   directory=Path.of(args[0]);catalog=new JSONArray(Files.readString(Path.of(args[1])));logical=new JSONArray(Files.readString(Path.of(args[2])));
   for(String base:new String[]{"wg","awg"}){
@@ -217,6 +233,7 @@ public final class StrategyHarness {
   test("engine loss during successful proof cannot be adopted",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){Step step=new Step("");step.proved=()->o.sing.engine.state="DOWN";Env.plan("wg",step);o.selected(o.run("auto"),"awg2-fast");attempted("wg","awg2-fast");}});
   test("unknown base fails before any engine prepares",()->{try(Owner o=new Owner(source("invalid",true,true,MAX))){Result result=o.run("all");check(!result.success&&Env.attempts.isEmpty(),"unknown base silently defaulted to a real tunnel");}});
   test("typed fallback policy cannot silently enable another base",()->{JSONObject input=source("wg",true,true,MAX);input.getJSONArray("routerProfiles").getJSONObject(0).put("base_fallback","false");try(Owner o=new Owner(input)){Result result=o.run("all");check(!result.success&&Env.attempts.isEmpty(),"nonboolean fallback silently selected another base");}});
+  restorationTests();
   if(!failures.isEmpty())throw new AssertionError(String.join("\n",failures));
   System.out.println("Shipping Android strategy: "+cases+" scenarios, "+checks+" checks PASS (Android/engine boundaries doubled)");
  }

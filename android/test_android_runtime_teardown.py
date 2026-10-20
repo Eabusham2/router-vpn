@@ -144,7 +144,7 @@ final class AndroidHomeStateStore {
     static boolean emergencyDisconnectPending(Context c) { return false; }
     static String beginMultihop(Context c, String entry, String exit, String mode, String entryMode) {
         Snapshot s=new Snapshot(); s.logicalMode="multihop"; s.phase="connecting";
-        s.activeEntryId=entry; s.activeEntryMode=entryMode; s.activeExitId=exit; s.runtimeMode=mode; current=s; return "multi-session";
+        s.activeEntryId=entry; s.activeEntryMode=entryMode; s.activeExitId=exit; s.runtimeMode=mode; s.sessionId="multi-session"; current=s; return s.sessionId;
     }
     static void connectedMultihop(Context c, String entry, String exit, String mode, String entryMode) {
         beginMultihop(c,entry,exit,mode,entryMode); beforeConnectedWrite(); current.connected=true; current.phase="connected";
@@ -254,20 +254,30 @@ public final class RuntimeTeardownHarness {
     static void tests(String kind) {
         if("tor".equals(kind))torTests();
         if("external".equals(kind))externalTests();
-        if(!"multihop".equals(kind)){
+        {
             test(kind+" temporary cleanup retains its exact Home owner",()->{
                 try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(cb.ok&&cb.ownerCalls==1&&cb.homeOwner.equals(AndroidHomeStateStore.current.sessionId),"runtime did not expose its exact captured Home owner");
-                    check(!owner.external.disconnectCaptured("stale-home")&&owner.engine.stops.get()==0&&AndroidHomeStateStore.current.connected,"stale temporary cleanup stopped the current native engine");
-                    check(owner.external.disconnectCaptured(cb.homeOwner)&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"captured temporary cleanup did not stop its own native engine");awaitIdle(owner);
+                    check(!(owner.multihop!=null?owner.multihop.disconnectCaptured("stale-home"):owner.external.disconnectCaptured("stale-home"))&&owner.engine.stops.get()==0&&AndroidHomeStateStore.current.connected,"stale temporary cleanup stopped the current native engine");
+                    check((owner.multihop!=null?owner.multihop.disconnectCaptured(cb.homeOwner):owner.external.disconnectCaptured(cb.homeOwner))&&owner.engine.stops.get()==1&&!AndroidHomeStateStore.current.connected,"captured temporary cleanup did not stop its own native engine");awaitIdle(owner);
                 }
             });
             test(kind+" delayed teardown cannot erase a newer Home owner",()->{
                 try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="newer-home";replacement.phase="newer-owner";
-                    owner.engine.duringStop=()->AndroidHomeStateStore.current=replacement;check(owner.external.disconnectCaptured(cb.homeOwner),"captured teardown was skipped");
+                    owner.engine.duringStop=()->AndroidHomeStateStore.current=replacement;check((owner.multihop!=null?owner.multihop.disconnectCaptured(cb.homeOwner):owner.external.disconnectCaptured(cb.homeOwner)),"captured teardown was skipped");
                     check(AndroidHomeStateStore.current==replacement&&replacement.phase.equals("newer-owner"),"old teardown overwrote newer Home state");owner.engine.duringStop=null;
                 }
             });
         }
+        test(kind+" captured stop joins late preparation before reuse",()->{
+            try(Owner owner=new Owner(kind)){
+                Callback cb=new Callback(1);owner.connect(cb);cb.awaitEntered();String session=cb.homeOwner;check(!session.isEmpty(),"queued start did not expose its exact Home owner");
+                CountDownLatch done=new CountDownLatch(1);java.util.concurrent.atomic.AtomicReference<Throwable> error=new java.util.concurrent.atomic.AtomicReference<>();
+                Thread stop=new Thread(()->{try{check(owner.multihop!=null?owner.multihop.disconnectAndDrainCaptured(session):owner.external.disconnectAndDrainCaptured(session),"captured stop lost owner");}catch(Throwable failure){error.set(failure);}finally{done.countDown();}});
+                stop.start();try{check(!done.await(100,TimeUnit.MILLISECONDS)&&owner.busy(),"temporary cleanup returned before its preparing worker drained");}
+                finally{cb.release.countDown();}
+                check(done.await(3,TimeUnit.SECONDS),"captured worker never drained");cb.awaitDone();check(error.get()==null&&!cb.ok&&!AndroidHomeStateStore.current.connected,"late preparation adopted or escaped captured cleanup");check(owner.engine.starts.get()==0,"late preparation started a native engine after cancellation");awaitIdle(owner);
+            }
+        });
         if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
             test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {
@@ -276,6 +286,7 @@ public final class RuntimeTeardownHarness {
                     cb.awaitDone();
                     check(cb.ok&&execution.equals(AndroidMultihopController.lastExecution),"execution changed before preparation");
                     check(entryMode.equals(AndroidMultihopController.lastEntryMode),"entry transport changed before preparation");
+                    check(execution.equals(owner.multihop.activeExecution()),"runtime lost its selected execution preference");
                     check(entryMode.equals(owner.multihop.activeEntryMode())&&entryMode.equals(AndroidHomeStateStore.current.activeEntryMode),"proved live entry identity changed");
                     check(LayeredVpnService.mtuStarts.get()==1,"MTU did not start exactly once after path proof");
                     owner.disconnect();awaitIdle(owner);

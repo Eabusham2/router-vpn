@@ -14,6 +14,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     interface Callback {
         void progress(String message);
         void finished(boolean ok, String message);
+        default void owned(String homeSession) {}
     }
 
     private static final long START_TIMEOUT_MS = 20000L;
@@ -34,6 +35,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private String activeEntryMode = "";
     private String activeExitId = "";
     private String activeExitMode = "";
+    private String activeExecution = "";
 
     AndroidMultihopRuntime(Context context, NativeSingBoxController singBox) {
         this.context = context.getApplicationContext();
@@ -57,6 +59,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         reconcileRuntimeLocked();
         return connected;
     }
+
+    synchronized String activeExecution() { reconcileRuntimeLocked(); return connected ? activeExecution : ""; }
 
     synchronized String activeEntryMode() { reconcileRuntimeLocked(); return connected ? activeEntryMode : ""; }
 
@@ -94,9 +98,9 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         disconnectRequested = false;
         revalidationTeardown = false;
         clearActiveGraphLocked();
-        AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
+        String homeSession=AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
         try {
-            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, entryMode, callback));
+            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, entryMode, homeSession, callback));
         } catch (RuntimeException error) {
             transitioning = false;
             AndroidHomeStateStore.failed(context, nonEmpty(error.getMessage(), "Could not start Android multihop worker."));
@@ -104,12 +108,13 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
+    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, String homeSession, Callback callback) {
         boolean started = false;
         synchronized (this) { workerThread = Thread.currentThread(); }
         try {
+            callback.owned(homeSession);
             synchronized (this) {
-                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Multihop start cancelled.");
+                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted() || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)) throw new InterruptedException("Multihop start cancelled.");
             }
             String before = singBox.getState();
             if (!terminal(before)) throw new IllegalStateException("Disconnect the current embedded VPN before starting multihop.");
@@ -118,7 +123,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
             callback.progress("Starting one Android VpnService multihop graph…");
             synchronized (this) {
-                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Multihop start cancelled before engine launch.");
+                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted() || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)) throw new InterruptedException("Multihop start cancelled before engine launch.");
                 // A launch may publish ownership and then throw. Such a partial
                 // start still requires confirmed teardown.
                 started = true;
@@ -138,13 +143,14 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             callback.progress("Tunnel is UP; proving the selected exit node before Connected…");
             if (!AndroidPathProbe.prove(prepared.exitBundle, PROBE_TIMEOUT_MS)) throw new IllegalStateException("Exit-node private path proof failed; multihop was disconnected.");
             synchronized (this) {
-                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted()) throw new InterruptedException("Multihop start cancelled.");
+                if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted() || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)) throw new InterruptedException("Multihop start cancelled.");
                 transitioning = false;
                 connected = true;
                 activeEntryId = entry.id;
                 activeEntryMode = entryMode;
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
+                activeExecution = execution;
                 AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
                 // The captured graph's post-proof activation and completion are
                 // part of the same adoption as its state. Disconnect must not
@@ -160,7 +166,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             boolean suppressHome;
             synchronized (this) {
                 userCancelled = disconnectRequested || closed.get();
-                suppressHome = revalidationTeardown;
+                suppressHome = revalidationTeardown || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId);
                 transitioning = !stopped;
                 if (stopped) {
                     connected = false;
@@ -185,7 +191,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             boolean stopped = !started || stopEmbeddedAndProve();
             boolean suppressHome;
             synchronized (this) {
-                suppressHome = revalidationTeardown;
+                suppressHome = revalidationTeardown || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId);
                 transitioning = !stopped;
                 if (stopped) {
                     connected = false;
@@ -206,34 +212,46 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    void disconnect() {
+    void disconnect() { disconnectCaptured("",false); }
+    boolean disconnectCaptured(String session) { return disconnectCaptured(session,false); }
+    boolean disconnectAndDrainCaptured(String session) { return disconnectCaptured(session,true); }
+    private boolean disconnectCaptured(String requiredSession,boolean drain) {
         boolean emergency = AndroidHomeStateStore.emergencyDisconnectPending(context);
+        final String ownedSession;final Future<?> task;
         synchronized (this) {
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+            if(!requiredSession.isEmpty()&&!requiredSession.equals(home.sessionId))return false;
+            if(!requiredSession.isEmpty()&&!"multihop".equals(home.logicalMode))return false;
+            ownedSession=home.sessionId;task=active;
             if (!emergency) AndroidHomeStateStore.beginPathRevalidation(context, "Android multihop disconnect requested; retaining graph ownership until embedded teardown is proved.");
             disconnectRequested = true;
-            revalidationTeardown = false;
+            revalidationTeardown = drain;
             transitioning = true;
             if (workerThread != null) workerThread.interrupt();
         }
         boolean stopped = stopEmbeddedAndProve();
+        if(stopped&&drain)stopped=drainWorker(task);
         synchronized (this) {
             transitioning = !stopped;
-            if (stopped) {
-                connected = false;
-                clearActiveGraphLocked();
+            if (stopped) { connected = false; clearActiveGraphLocked(); }
+        }
+        synchronized(AndroidHomeStateStore.class){
+            if(ownedSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)){
+                if(!stopped)AndroidHomeStateStore.warning(context,"Android multihop teardown or worker drain remains unproved; graph ownership is retained.");
+                else if(emergency)AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; Android multihop graph stopped; awaiting remaining runtime teardown.");
+                else AndroidHomeStateStore.disconnected(context);
             }
         }
-        if (!stopped) {
-            AndroidHomeStateStore.warning(context, emergency
-                    ? "Emergency Disconnect requested; Android multihop teardown was not proved; graph ownership retained."
-                    : "Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.");
-            throw new IllegalStateException("Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.");
-        }
-        if (emergency) {
-            AndroidHomeStateStore.warning(context, "Emergency Disconnect requested; Android multihop graph stopped; awaiting remaining runtime teardown.");
-        } else {
-            AndroidHomeStateStore.disconnected(context);
-        }
+        if(!stopped)throw new IllegalStateException("Android multihop teardown or worker drain is still pending.");
+        return true;
+    }
+    private static boolean drainWorker(Future<?> task){
+        if(task==null)return true;boolean interrupted=Thread.interrupted();long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
+        try{while(true){try{task.get(Math.max(1,deadline-System.nanoTime()),java.util.concurrent.TimeUnit.NANOSECONDS);return true;}
+            catch(InterruptedException ignored){interrupted=true;if(System.nanoTime()>=deadline)return task.isDone();}
+            catch(java.util.concurrent.ExecutionException complete){return true;}
+            catch(java.util.concurrent.TimeoutException pending){return false;}}}
+        finally{if(interrupted)Thread.currentThread().interrupt();}
     }
 
     /** Tear down this owner's runtime without changing Home state; the revalidation transaction owns the final state write. */
@@ -333,6 +351,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         activeEntryMode = "";
         activeExitId = "";
         activeExitMode = "";
+        activeExecution = "";
     }
 
     private static String nonEmpty(String value, String fallback) { return value == null || value.trim().isEmpty() ? fallback : value.trim(); }

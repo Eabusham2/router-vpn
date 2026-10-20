@@ -212,20 +212,23 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
 
     void disconnect(){ disconnectCaptured(""); }
 
-    boolean disconnectCaptured(String requiredSession){
+    boolean disconnectCaptured(String requiredSession){ return disconnectCaptured(requiredSession,false); }
+    boolean disconnectAndDrainCaptured(String requiredSession){ return disconnectCaptured(requiredSession,true); }
+    private boolean disconnectCaptured(String requiredSession,boolean drain){
         boolean emergency=AndroidHomeStateStore.emergencyDisconnectPending(context);
-        final String ownedSession;
+        final String ownedSession;final Future<?> task;
         synchronized(this){
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
             if(!requiredSession.isEmpty()&&!requiredSession.equals(home.sessionId))return false;
             boolean owns=(active!=null&&!active.isDone())||"external".equals(home.logicalMode)||singBox.getMode().startsWith("standard-");
             if(!owns)return false;
-            ownedSession=home.sessionId;
+            ownedSession=home.sessionId;task=active;
             if(!emergency)AndroidHomeStateStore.beginPathRevalidation(context,"Android custom-exit disconnect requested; retaining runtime ownership until embedded teardown is proved.");
-            disconnectRequested=true;revalidationTeardown=false;teardownInProgress=true;
+            disconnectRequested=true;revalidationTeardown=drain;teardownInProgress=true;
             if(workerThread!=null)workerThread.interrupt();
         }
         boolean stopped=stopEmbeddedAndProve();
+        if(stopped&&drain)stopped=drainWorker(task);
         synchronized(this){teardownInProgress=!stopped;}
         if(!stopped){
             synchronized(AndroidHomeStateStore.class){
@@ -242,6 +245,15 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             }
         }
         return true;
+    }
+
+    private static boolean drainWorker(Future<?> task){
+        if(task==null)return true;boolean interrupted=Thread.interrupted();long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(8);
+        try{while(true){try{task.get(Math.max(1,deadline-System.nanoTime()),java.util.concurrent.TimeUnit.NANOSECONDS);return true;}
+            catch(InterruptedException ignored){interrupted=true;if(System.nanoTime()>=deadline)return task.isDone();}
+            catch(java.util.concurrent.ExecutionException complete){return true;}
+            catch(java.util.concurrent.TimeoutException pending){return false;}}}
+        finally{if(interrupted)Thread.currentThread().interrupt();}
     }
 
     /** Tear down this owner's runtime without changing Home state; revalidation owns the failed-state adoption. */
