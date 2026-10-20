@@ -386,8 +386,9 @@ need("android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java
 # Tor and ordinary external exits share the captured owner/entry selector. Keep
 # their executable cancellation, native-drain and permission negative coverage
 # required instead of requiring the former Tor-only method names.
-need("android/test_android_tor_session.py", "late DNS adoption", "unchecked close",
-     "lost network binding rejected")
+need("android/test_android_tor_session.py", "DNS completion owner check", "checked native close",
+     "captured physical network binding", "Tor MTU Home generation ownership",
+     "result.returncode!=0 and 'AssertionError' in result.stderr")
 need("android/test_android_external_session.py", "checked native drain",
      "Home invalidation before native drain")
 need("android/test_android_tor_form.py", "changed or denied permission started a stale capture",
