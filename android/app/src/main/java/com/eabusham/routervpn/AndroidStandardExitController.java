@@ -35,6 +35,10 @@ final class AndroidStandardExitController {
             if (entryBundle == null) throw new IllegalArgumentException("Choose the captured Router VPN entry.");
             return AndroidTorProfile.prepare(context, entryBundle, exit, entryMode);
         }
+        if (AndroidExternalPolicy.supports(exit.protocol)) {
+            if (entryBundle == null) throw new IllegalArgumentException("Choose the captured Router VPN entry.");
+            return AndroidExternalPolicy.prepare(context, entryBundle, exit, entryMode);
+        }
         if (!"wg".equals(entryMode)) throw new IllegalArgumentException("This external exit currently requires its WireGuard entry.");
         if(entryBundle==null)throw new IllegalArgumentException("Choose a Router VPN WireGuard entry node.");
         AndroidStandardExitStore.validate(exit);

@@ -47,6 +47,8 @@ final class NativeSingBoxController {
     }
 }
 final class LayeredVpnService {
+    static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
+    static String externalExitIP(String session,String exit){externalReads.incrementAndGet();if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external owner");return "1.1.1.1";}
     static final AtomicInteger torReads=new AtomicInteger();static volatile boolean torHealthy=true;
     static String torExitIP(String session,String exit){torReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor owner");return "8.8.4.4";}
     static final AtomicInteger mtuStarts = new AtomicInteger();
@@ -91,6 +93,7 @@ final class AndroidStandardExitStore {
     static void validate(Entry entry){}
 }
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
+final class AndroidExternalPolicy {static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
 final class AndroidStandardExitController {
     static volatile String lastEntryMode="",lastProtocol="";
     AndroidStandardExitController(Context c) {}
@@ -108,6 +111,8 @@ final class AndroidPathProbe {
 final class AndroidHomeStateStore {
     static final class Snapshot {
         boolean connected;
+        long pathGeneration;
+        String expectedExternalIp="";
         String logicalMode="", phase="off", activeEntryId="", activeExitId="", activeEntryMode="wg", runtimeMode="",sessionId="home-session",activeExternalId="external",activeExternalProtocol="socks5";
     }
     static volatile Snapshot current = new Snapshot();
@@ -133,6 +138,8 @@ final class AndroidHomeStateStore {
     }
     static String beginTorExternal(Context c,String id,String name,String protocol,String entry,String mode){beginExternal(c,id,name,protocol,"",mode);current.activeExternalProtocol=protocol;current.activeExternalId=id;current.activeEntryId=entry;current.activeEntryMode=mode;return "home-session";}
     static boolean connectedTorExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId))return false;beforeConnectedWrite();current.connected=true;current.phase="connected";return true;}
+    static String beginPolicyExternal(Context c,String id,String name,String protocol,String expected,String entry,String mode){beginTorExternal(c,id,name,protocol,entry,mode);current.expectedExternalIp=expected;return "home-session";}
+    static boolean connectedPolicyExternal(Context c,Snapshot s,String ip){if(!s.sessionId.equals(current.sessionId)||s.pathGeneration!=current.pathGeneration)return false;beforeConnectedWrite();current.connected=true;current.phase="connected";return true;}
     static void connectedExternal(Context c, String id, String name, String protocol, String ip, String base, String observed) {
         beginExternal(c,id,name,protocol,ip,base); beforeConnectedWrite(); current.connected=true; current.phase="connected";
     }
@@ -198,6 +205,7 @@ public final class RuntimeTeardownHarness {
         final String kind;
         Owner(String kind) {
             this.kind=kind;LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
             multihop="multihop".equals(kind)?new AndroidMultihopRuntime(context,engine):null;
             external=multihop==null?new AndroidStandardExitRuntime(context,engine):null;
@@ -274,6 +282,7 @@ public final class RuntimeTeardownHarness {
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
                 check(LayeredVpnService.mtuStarts.get()==(owner.multihop!=null?1:0),"MTU must start once, only after selected-router proof");
                 if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
+                if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==2,"ordinary external path bypassed captured entry/DNS/native proof");
                 owner.disconnect();awaitIdle(owner);
             }
         });

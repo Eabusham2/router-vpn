@@ -66,6 +66,7 @@ public interface Tunnel {enum State {DOWN,UP}}''',
     'com/eabusham/routervpn/HomeBoundaries.java': r'''package com.eabusham.routervpn;
 import android.content.Context;
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
+final class AndroidExternalPolicy {static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
 final class AndroidRuntimeRegistry {
  static final AndroidRuntimeRegistry INSTANCE=new AndroidRuntimeRegistry();
  static AndroidRuntimeRegistry get(Context context){return INSTANCE;}
@@ -150,6 +151,22 @@ public final class MultihopHomeHarness {
   check(!AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"Tor accepted stale "+key);
   check(before.equals(context.store.values)&&writes==context.store.writes,"stale Tor completion overwrote Home state: "+key);
  }
+ static void externalPolicy(String mode){
+  Context context=externalOwner();String entry=mode.equals("direct")?"":ENTRY;
+  String session=AndroidHomeStateStore.beginPolicyExternal(context,"ordinary-node","Selected exit","socks5","8.8.4.4",entry,entry.isEmpty()?"external":mode);
+  AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+  check(!captured.connected&&captured.pathProof.equals("pending")&&captured.expectedExternalIp.equals("8.8.4.4"),"ordinary external began before proof or changed expected exit");
+  check(captured.activeEntryId.equals(entry)&&captured.activeEntryMode.equals(entry.isEmpty()?"":mode),"ordinary external lost exact entry");
+  check(AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4"),"proved ordinary owner rejected");
+  check(AndroidHomeStateStore.snapshot(context).sessionId.equals(session)&&AndroidHomeStateStore.actualExitForCurrentSession(context).equals("8.8.4.4"),"ordinary external adopted another session");
+  check(!AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4"),"ordinary proof adopted twice");
+ }
+ static void externalStale(String key,Object value){
+  Context context=new Context();AndroidHomeStateStore.beginPolicyExternal(context,"ordinary-node","Selected exit","socks5","8.8.4.4",ENTRY,"naive-h3");AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+  context.store.values.put(key,value);Map<String,Object> before=new HashMap<>(context.store.values);int writes=context.store.writes;
+  check(!AndroidHomeStateStore.connectedPolicyExternal(context,captured,"8.8.4.4"),"ordinary external accepted stale "+key);
+  check(before.equals(context.store.values)&&writes==context.store.writes,"stale ordinary completion overwrote Home state: "+key);
+ }
  public static void main(String[] args)throws Exception {
   JSONArray catalog=new JSONArray(Files.readString(Path.of(args[0])));List<String> supported=new ArrayList<>(),unsupported=new ArrayList<>();
   for(int i=0;i<catalog.length();i++){String id=catalog.getJSONObject(i).getString("id");
@@ -160,6 +177,9 @@ public final class MultihopHomeHarness {
   }
   for(String entry:supported)for(String exit:supported)try{pair(entry,exit);}catch(Throwable error){failures.add(entry+" -> "+exit+": "+error);}
   tor("direct");for(String entry:supported)tor(entry);
+  externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
+  for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);
+  externalStale("path_generation",99L);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","socks5"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})torStale(change[0],change[1]);
   torStale("path_generation",99L);
   unsupported.addAll(Arrays.asList(null,"","WG"," wg","wg ","unknown","naive","naive-h2;exec","max-tls-other"));

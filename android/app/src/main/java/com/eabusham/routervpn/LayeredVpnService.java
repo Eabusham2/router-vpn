@@ -123,6 +123,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private volatile AndroidTorSession torSession;
+    private volatile AndroidExternalSession externalSession;
+    private volatile boolean externalOwner;
+    private volatile Network externalPhysicalNetwork;
     private volatile AndroidMAXProfilePreparation.Adopted maxSession;
     private volatile boolean torOwner;
     private volatile Network torPhysicalNetwork;
@@ -158,7 +161,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     static String torExitIP(String sessionID, String externalID) throws Exception {
         return new JSONObject(torProofJSON(sessionID, externalID)).getString("ip");
     }
-    private void cancelMultihopComparison(){AndroidMAXProfilePreparation.Adopted max=maxSession;if(max!=null)max.cancel();AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    static String externalExitIP(String sessionID, String externalID) throws Exception {
+        LayeredVpnService service = currentService.get();
+        AndroidExternalSession captured = service == null ? null : service.externalSession;
+        if (captured == null || !"UP".equals(service.state) || service.explicitStop) throw new IllegalStateException("The captured external VPN proof is unavailable.");
+        return new JSONObject(captured.result(sessionID, externalID)).getString("ip");
+    }
+    private void cancelMultihopComparison(){AndroidMAXProfilePreparation.Adopted max=maxSession;if(max!=null)max.cancel();AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidExternalSession external=externalSession;if(external!=null)external.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -170,9 +179,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         java.util.Collections.sort(values);return values.toString();
     }
     private final Runnable executionWatch=new Runnable(){public void run(){
-        io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;AndroidMAXProfilePreparation.Adopted max=maxSession;if(plan==null&&hopMeasurement==null&&tor==null&&max==null)return;
-        if(max!=null&&!max.current(false)||!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())){
-            cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||max!=null&&maxSession!=max)return;shutdown("FAILED",max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
+        io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;AndroidExternalSession external=externalSession;AndroidMAXProfilePreparation.Adopted max=maxSession;if(plan==null&&hopMeasurement==null&&tor==null&&external==null&&max==null)return;
+        if(max!=null&&!max.current(false)||!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())||(executionProved&&external!=null&&!external.healthy())){
+            cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||external!=null&&externalSession!=external||max!=null&&maxSession!=max)return;shutdown("FAILED",max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":external!=null?"The captured external exit, entry, DNS or network changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
         }
         executionHandler.postDelayed(this,500);
     }};
@@ -257,6 +266,16 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     || "standard-direct-tor".equals(modeId) || "standard-direct-tor-bridge".equals(modeId)) {
                 throw new IllegalStateException("The requested Tor VPN has no captured proof metadata.");
             }
+            File externalFile = new File(session, AndroidExternalPolicy.SESSION_FILE).getCanonicalFile();
+            JSONObject externalMetadata = null;
+            String externalProtocol = modeId.startsWith("standard-direct-") ? modeId.substring("standard-direct-".length())
+                    : modeId.startsWith("standard-") ? modeId.substring("standard-".length()) : "";
+            if (externalFile.exists()) {
+                if (torMetadata != null || !externalFile.isFile() || !externalFile.getParentFile().equals(session)) throw new IllegalStateException("External policy has no exclusive private session owner.");
+                externalMetadata = AndroidExternalPolicy.session(config, AndroidTorProfile.strictText(readLimited(externalFile, AndroidExternalPolicy.MAX_METADATA)), sessionId, modeId);
+            } else if (AndroidExternalPolicy.supports(externalProtocol)) {
+                throw new IllegalStateException("The ordinary external VPN has no captured policy and proof metadata.");
+            }
             preparedMAX = AndroidMAXProfilePreparation.claim(this, session, sessionId, modeId, config, maxOwner);
 
             File base = new File(getFilesDir(), "libbox-base");
@@ -288,7 +307,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 throw new IllegalStateException("Entry Start Layer has no owned multihop session.");
             }
             if(executionFile.isFile()){
-                if (torMetadata != null) throw new IllegalStateException("Tor cannot adopt a second multihop execution owner.");
+                if (torMetadata != null || externalMetadata != null) throw new IllegalStateException("A captured external path cannot adopt a second multihop execution owner.");
                 if(!modeId.startsWith("multihop-")||!executionFile.getParentFile().equals(session))throw new IllegalStateException("Unowned multihop metadata.");
                 String metadata=new String(readLimited(executionFile,16384),java.nio.charset.StandardCharsets.UTF_8);
                 hopMetadata=metadata;
@@ -327,6 +346,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             Network torPhysical = torMetadata == null ? null : connectivity.getActiveNetwork();
             if (torMetadata != null && (torPhysical == null || connectivity.getNetworkCapabilities(torPhysical) == null
                     || connectivity.getNetworkCapabilities(torPhysical).hasTransport(NetworkCapabilities.TRANSPORT_VPN))) throw new IllegalStateException("Tor requires an owned physical network before the VPN starts.");
+            String externalNetwork = externalMetadata == null ? "" : executionNetworkIdentity();
+            Network externalPhysical = externalMetadata == null ? null : connectivity.getActiveNetwork();
+            if (externalMetadata != null && (externalNetwork.isEmpty() || "[]".equals(externalNetwork) || externalPhysical == null
+                    || connectivity.getNetworkCapabilities(externalPhysical) == null
+                    || connectivity.getNetworkCapabilities(externalPhysical).hasTransport(NetworkCapabilities.TRANSPORT_VPN))) throw new IllegalStateException("External VPN requires its captured physical network before startup.");
             if (preparedMAX != null && (!preparedMAX.current(true)
                     || torPhysical != null && !preparedMAX.physical.network.equals(torPhysical))) throw new IllegalStateException("Complete MAX lost its captured physical network before native startup.");
 
@@ -344,7 +368,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 }));
                 executionController=preparedExecution;executionProved=false;
                 torPhysicalNetwork = torPhysical;
+                externalPhysicalNetwork = externalPhysical;
+                externalOwner = externalMetadata != null;
                 if(torMetadata!=null)executionNetwork=torNetwork;
+                else if(externalMetadata!=null)executionNetwork=externalNetwork;
                 else if(preparedMAX!=null)executionNetwork=executionNetworkIdentity();
                 torOwner = torMetadata != null;
                 startLayerRelay = AndroidStartLayerRelay.prepareIfConfigured(this, session, message -> executor.execute(() -> {
@@ -379,6 +406,25 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 updateForeground("Proving Tor circuit and selected DNS…");
                 capturedTor.prove();
             }
+            if (externalMetadata != null) {
+                final AndroidExternalSession capturedExternal = new AndroidExternalSession(externalMetadata, ownedServer, new AndroidExternalSession.Owner() {
+                    @Override public boolean current(AndroidExternalSession candidate, CommandServer nativeServer) {
+                        return externalSession == candidate && commandServer == nativeServer && generation == lifecycle.get() && !explicitStop
+                                && activeSession != null && sessionId.equals(activeSession.getName());
+                    }
+                    @Override public String network() { return executionNetworkIdentity(); }
+                });
+                synchronized (lock) {
+                    externalSession = capturedExternal;
+                    if (generation != lifecycle.get() || explicitStop || !externalNetwork.equals(executionNetworkIdentity())) {
+                        capturedExternal.cancel(); throw new IllegalStateException("External launch was cancelled or its captured network changed.");
+                    }
+                }
+                executionNetwork = externalNetwork;
+                executionHandler.post(executionWatch);
+                updateForeground("Proving captured entry, selected DNS and public exit…");
+                capturedExternal.prove();
+            }
             if(hopMetadata!=null){
                 executionNetwork=executionNetworkIdentity();
                 if(executionNetwork.isEmpty())throw new IllegalStateException("Underlying network identity is unavailable.");
@@ -390,7 +436,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             long performanceServices = Libbox.routerStartPerformance(ownedServer);
             synchronized(lock){
                 if(explicitStop||generation!=lifecycle.get()||commandServer!=ownedServer||executionController!=ownedExecution
-                        ||torSession!=null&&!torSession.healthy()||maxSession!=null&&!maxSession.current(true))throw new IllegalStateException("VPN ownership changed during path proof.");
+                        ||torSession!=null&&!torSession.healthy()||externalSession!=null&&!externalSession.healthy()||maxSession!=null&&!maxSession.current(true))throw new IllegalStateException("VPN ownership changed during path proof.");
                 performanceActive = performanceServices > 0;
                 executionProved=true;publish("UP",modeId,"");
             }
@@ -468,6 +514,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if (capturedMAX != null) capturedMAX.cancel();
         AndroidTorSession capturedTor = torSession;
         if(capturedTor!=null)capturedTor.cancel();
+        AndroidExternalSession capturedExternal = externalSession;
+        if(capturedExternal!=null)capturedExternal.cancel();
         if(startLayerRelay!=null){
             try{startLayerRelay.close();}
             catch(RuntimeException pending){
@@ -475,7 +523,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 throw new IllegalStateException("Start Layer teardown has not completed.");
             }
         }
-        if (torOwner || capturedMAX != null) {
+        if (torOwner || externalOwner || capturedMAX != null) {
             try {
                 // Checked native close keeps the Box owned on timeout. A stop
                 // acknowledgment and a new graph must wait for its real drain.
@@ -491,6 +539,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             torSession = null;
             torOwner = false;
             torPhysicalNetwork = null;
+            externalSession = null;
+            externalOwner = false;
+            externalPhysicalNetwork = null;
             maxSession = null;
         }
         AndroidMTUSession oldMTU=mtuSession;
@@ -544,6 +595,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             // cannot close the sole native socket; binding applies to both FDs.
             try(ParcelFileDescriptor borrowed=ParcelFileDescriptor.fromFd(fd)){captured.bindSocket(borrowed.getFileDescriptor());}
             requireTorNetwork(captured);
+        } else if(externalOwner){
+            Network capturedExternal=externalPhysicalNetwork;requireExternalNetwork(capturedExternal);
+            try(ParcelFileDescriptor borrowed=ParcelFileDescriptor.fromFd(fd)){capturedExternal.bindSocket(borrowed.getFileDescriptor());}
+            requireExternalNetwork(capturedExternal);
         }
     }
 
@@ -552,12 +607,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         AndroidMAXProfilePreparation.Adopted max=maxSession;
         if(max!=null){requireMAXNetwork(max);max.physical.network.bindSocket(socket);requireMAXNetwork(max);}
         else if(torOwner){Network captured=torPhysicalNetwork;requireTorNetwork(captured);captured.bindSocket(socket);requireTorNetwork(captured);}
+        else if(externalOwner){Network captured=externalPhysicalNetwork;requireExternalNetwork(captured);captured.bindSocket(socket);requireExternalNetwork(captured);}
     }
     @Override public void protectRelaySocket(java.net.DatagramSocket socket)throws Exception{
         if(!protect(socket))throw new IllegalStateException("Android refused the protected entry socket.");
         AndroidMAXProfilePreparation.Adopted max=maxSession;
         if(max!=null){requireMAXNetwork(max);max.physical.network.bindSocket(socket);requireMAXNetwork(max);}
         else if(torOwner){Network captured=torPhysicalNetwork;requireTorNetwork(captured);captured.bindSocket(socket);requireTorNetwork(captured);}
+        else if(externalOwner){Network captured=externalPhysicalNetwork;requireExternalNetwork(captured);captured.bindSocket(socket);requireExternalNetwork(captured);}
     }
     private void requireMAXNetwork(AndroidMAXProfilePreparation.Adopted captured) {
         if (explicitStop || captured != maxSession || !captured.current(false)) throw new IllegalStateException("The captured MAX physical network changed; reconnect before opening traffic.");
@@ -567,6 +624,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);
         if(explicitStop||!torOwner||captured!=torPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                 ||!executionNetwork.equals(executionNetworkIdentity()))throw new IllegalStateException("The captured Tor physical network changed; reconnect before opening traffic.");
+    }
+    private void requireExternalNetwork(Network captured){
+        NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);
+        if(explicitStop||!externalOwner||captured!=externalPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                ||!executionNetwork.equals(executionNetworkIdentity()))throw new IllegalStateException("The captured external physical network changed; reconnect before opening traffic.");
     }
 
     @Override public int openTun(TunOptions options) throws Exception {

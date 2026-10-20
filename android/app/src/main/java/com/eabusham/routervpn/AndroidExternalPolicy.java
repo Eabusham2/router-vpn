@@ -21,7 +21,7 @@ final class AndroidExternalPolicy {
     static final int MAX_METADATA = 6 * 1024 * 1024;
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
-            "fastest_dns_host", "dns_results", "dns_bootstrap", "ipv6_mode", "home_lan_access",
+            "fastest_dns_host", "fastest_dns_latency_ms", "dns_results", "dns_bootstrap", "ipv6_mode", "home_lan_access",
             "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu"));
 
     static boolean supports(String protocol) {

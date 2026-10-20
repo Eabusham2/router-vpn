@@ -22,6 +22,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);}
     private static final long START_TIMEOUT_MS=20000L;
     private static final long TOR_START_TIMEOUT_MS=200000L;
+    private static final long POLICY_START_TIMEOUT_MS=90000L;
     private static final long STOP_TIMEOUT_MS=8000L;
     private final Context context;
     private final NativeSingBoxController singBox;
@@ -35,6 +36,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private boolean revalidationTeardown;
     private boolean teardownInProgress;
     private String torNativeSession="",torHomeSession="",torExternalID="";
+    private String externalNativeSession="",externalHomeSession="",externalID="";
 
     AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
         this.context=context.getApplicationContext();
@@ -56,12 +58,14 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         catch(Exception invalid){cb.finished(false,"The saved custom-exit profile is invalid; review its settings before connecting.");return;}
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
         torNativeSession="";torHomeSession="";torExternalID="";
+        externalNativeSession="";externalHomeSession="";externalID="";
         active=executor.submit(()->run(entryBundle,captured,direct,entryMode,cb));
     }
 
     private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){
         boolean started=false,sessionStarted=false;
         boolean tor=AndroidTorProfile.isTor(exit.protocol);
+        boolean policy=AndroidExternalPolicy.supports(exit.protocol);
         AndroidHomeStateStore.Snapshot capturedHome=null;
         synchronized(this){workerThread=Thread.currentThread();}
         try{
@@ -70,6 +74,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             String before=singBox.getState();
             if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
             if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
+            else if(policy) AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
             else AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");
             sessionStarted=true;
             capturedHome=AndroidHomeStateStore.snapshot(context);
@@ -81,9 +86,10 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before engine launch.");
                 // A partially published start still owns cleanup when launch throws.
                 if(tor){torNativeSession=session.sessionId;torHomeSession=capturedHome.sessionId;torExternalID=exit.id;}
+                if(policy){externalNativeSession=session.sessionId;externalHomeSession=capturedHome.sessionId;externalID=exit.id;}
                 started=true;singBox.start(session);
             }
-            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:START_TIMEOUT_MS);
+            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:policy?POLICY_START_TIMEOUT_MS:START_TIMEOUT_MS);
             while(System.currentTimeMillis()<deadline){
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
                 String state=singBox.getState();
@@ -92,16 +98,20 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 Thread.sleep(250L);
             }
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
-            cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Tunnel is UP; proving the exact public custom exit before Connected…");
-            String observed=tor?capturedTorExit(capturedHome):proveExpectedPublicIp(exit.expectedPublicIp);
+            cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":policy?"Captured entry, selected DNS and public exit passed; checking current ownership…":"Tunnel is UP; proving the exact public custom exit before Connected…");
+            String observed=tor?capturedTorExit(capturedHome):policy?capturedExternalExit(capturedHome):proveExpectedPublicIp(exit.expectedPublicIp);
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
                 if(tor){
                     capturedTorExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
+                }else if(policy){
+                    capturedExternalExit(capturedHome);
+                    if(!AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed))throw new IllegalStateException("The captured external session changed before Connected adoption.");
                 }else AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
             }
             cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
+                    :policy?"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+". Captured entry, selected DNS and public exit proof passed: "+observed
                     :direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
@@ -140,7 +150,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     }
 
     private boolean sameHomeOwner(boolean tor,AndroidHomeStateStore.Snapshot captured){
-        return !tor||captured!=null&&captured.sessionId.equals(AndroidHomeStateStore.snapshot(context).sessionId);
+        return captured!=null&&captured.sessionId.equals(AndroidHomeStateStore.snapshot(context).sessionId);
     }
 
     synchronized String capturedTorExit(AndroidHomeStateStore.Snapshot owner)throws Exception{
@@ -150,6 +160,16 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 ||!torExternalID.equals(owner.activeExternalId)||!torExternalID.equals(current.activeExternalId)
                 ||!"UP".equals(singBox.getState()))throw new IllegalStateException("The captured Tor runtime is unavailable; reconnect to prove its path.");
         return LayeredVpnService.torExitIP(torNativeSession,torExternalID);
+    }
+
+    synchronized String capturedExternalExit(AndroidHomeStateStore.Snapshot owner)throws Exception{
+        AndroidHomeStateStore.Snapshot current=AndroidHomeStateStore.snapshot(context);
+        if(disconnectRequested||closed.get()||owner==null||!AndroidExternalPolicy.supports(owner.activeExternalProtocol)
+                ||externalNativeSession.isEmpty()||!externalHomeSession.equals(owner.sessionId)||!externalHomeSession.equals(current.sessionId)
+                ||owner.pathGeneration!=current.pathGeneration||!externalID.equals(owner.activeExternalId)||!externalID.equals(current.activeExternalId)
+                ||!owner.activeEntryId.equals(current.activeEntryId)||!owner.activeEntryMode.equals(current.activeEntryMode)
+                ||!owner.expectedExternalIp.equals(current.expectedExternalIp)||!"UP".equals(singBox.getState())) throw new IllegalStateException("The captured external runtime is unavailable; reconnect to prove its path.");
+        return LayeredVpnService.externalExitIP(externalNativeSession,externalID);
     }
 
     private static String entryID(File file){
