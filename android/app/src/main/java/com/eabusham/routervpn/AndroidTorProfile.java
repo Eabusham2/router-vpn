@@ -51,6 +51,26 @@ final class AndroidTorProfile {
         return policy;
     }
 
+    /** Keep untouched saved groups byte-for-byte in the captured profile. */
+    static JSONObject editedPolicy(AndroidStandardExitStore.Entry saved, JSONObject initial, JSONObject edited) throws Exception {
+        if (saved == null) return new JSONObject(edited.toString());
+        JSONObject result = saved.torPolicy == null ? new JSONObject() : new JSONObject(saved.torPolicy.toString());
+        for (String[] group : new String[][] {
+                {"dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path"},
+                {"ipv6_mode"}, {"home_lan_access", "home_lan_cidrs"}, {"mtu_policy", "manual_mtu"}}) {
+            boolean changed = false;
+            for (String key : group) {
+                if (initial.has(key) != edited.has(key) || !String.valueOf(initial.opt(key)).equals(String.valueOf(edited.opt(key)))) changed = true;
+            }
+            if (!changed) continue;
+            for (String key : group) {
+                result.remove(key);
+                if (edited.has(key)) result.put(key, edited.get(key));
+            }
+        }
+        return result;
+    }
+
     static JSONObject profile(AndroidStandardExitStore.Entry exit) throws Exception {
         if (exit == null || !isTor(exit.protocol)) throw new IllegalArgumentException("Select a saved Tor node.");
         JSONObject result = new JSONObject();

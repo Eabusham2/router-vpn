@@ -211,15 +211,38 @@ public final class TorFormHarness {
    JSONObject editor=AndroidTorProfile.editorPolicy(selected);editor.put("dns_host","192.0.2.199");
    check(before.equals(AndroidStandardExitStore.snapshot(selected)),"editor policy aliases the saved entry");
    AlertDialog dialog=form(activity,selected);check(dialog.showing,"saved valid policy did not open");
+   String expectedIPv6=policy.optString("ipv6_mode","");int ipIndex=expectedIPv6.equals("off")?0:expectedIPv6.equals("on")?2:1;
+   check(spinner(dialog,"IPv6 off").getSelectedItemPosition()==ipIndex,"Tor editor displayed another saved IPv6 policy");
+   check(lan(dialog).isChecked()==!policy.optBoolean("home_lan_access",true),"Tor editor displayed another saved LAN policy");
+   String expectedDNS=policy.optString("dns_mode","");String expectedProtocol=expectedDNS.equals("custom")?policy.optString("dns_protocol",""):expectedDNS;
+   int dnsIndex=expectedProtocol.equals("tcp")?1:(expectedProtocol.equals("dot")||expectedProtocol.equals("tls"))?2:(expectedProtocol.equals("doh")||expectedProtocol.equals("https"))?3:0;
+   check(spinner(dialog,"Rescue DoH (Cloudflare)").getSelectedItemPosition()==dnsIndex,"Tor editor displayed another saved DNS policy");
    EditText bridge=null;if(!kind.equals("tor")){bridge=field(dialog,"Paste bridge lines, one per line");check(!bridge.isSaveEnabled()&&bridge.getImportantForAutofill()==View.IMPORTANT_FOR_AUTOFILL_NO,"bridge credentials entered Android saved/autofill state");check(bridge.getText().toString().equals(String.join("\n",selected.torBridges)),"bridge order/credentials changed on edit");}
    field(dialog,"Display name").setText("Renamed private Tor node");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
    check(!dialog.showing,"valid name-only edit was rejected");AndroidStandardExitStore.Entry after=store(activity).get(selected.id);
    check(after.id.equals(selected.id)&&after.protocol.equals(selected.protocol)&&after.name.equals("Renamed private Tor node"),"editor replaced the saved node identity");
    check(same(graph,compiled(after)),"name-only edit changed effective DNS/IPv6/LAN/MTU/bridge policy: "+kind+" "+policy);
+   check(same(selected.torPolicy.toString(),after.torPolicy.toString()),"name-only edit rewrote the frozen Tor policy");
    check(before.equals(AndroidStandardExitStore.snapshot(selected)),"saving aliased its captured source");
    if(bridge!=null)check(bridge.getText().length()==0,"dismissed form retained bridge credentials");roundtrips++;
   }
   check(roundtrips==114,"Tor editor policy matrix incomplete");
+ }
+ static void independentPolicyEdits()throws Exception{
+  for(String initial:new String[]{"default","auto","fixed"}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"independent-"),null);AndroidStandardExitStore.Entry selected=tor("tor","doh");
+   selected.torPolicy=policy("dot","tcp").put("mtu_policy",initial).put("manual_mtu",1360);store(activity).save(selected);
+   AlertDialog dialog=form(activity,selected);field(dialog,"Custom DNS literal IP").setText("9.9.9.9");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing,"valid isolated DNS edit rejected");AndroidStandardExitStore.Entry changed=store(activity).get(selected.id);JSONObject expected=new JSONObject(selected.torPolicy.toString());
+   for(String key:new String[]{"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path"}){expected.remove(key);if(changed.torPolicy.has(key))expected.put(key,changed.torPolicy.get(key));}
+   check(changed.torPolicy.getString("dns_host").equals("9.9.9.9")&&same(expected.toString(),changed.torPolicy.toString()),"DNS edit changed unrelated saved policy");
+   check(changed.torPolicy.getString("mtu_policy").equals(initial),"DNS edit enabled or disabled adaptive MTU");compiled(changed);
+   dialog=form(activity,changed);field(dialog,"Manual interface MTU, 1280–9000 (blank uses automatic)").setText("1400");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing,"valid isolated MTU edit rejected");AndroidStandardExitStore.Entry resized=store(activity).get(selected.id);JSONObject resizedExpected=new JSONObject(changed.torPolicy.toString()).put("mtu_policy","manual").put("manual_mtu",1400);
+   check(same(resizedExpected.toString(),resized.torPolicy.toString()),"MTU edit changed another saved policy");compiled(resized);
+   dialog=form(activity,resized);field(dialog,"Manual interface MTU, 1280–9000 (blank uses automatic)").setText("");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing&&store(activity).get(selected.id).torPolicy.getString("mtu_policy").equals("auto")&&!store(activity).get(selected.id).torPolicy.has("manual_mtu"),"clearing fixed MTU failed to select Auto");
+  }
  }
  static void newFormAndRejections()throws Exception{
   StandardExitActivity activity=activity(Files.createTempDirectory(root,"create-"),null);AlertDialog dialog=form(activity,null);
@@ -348,7 +371,7 @@ public final class TorFormHarness {
   add.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog settings=AlertDialog.last;check(!add.showing&&settings.showing&&config.getText().length()==0&&store(activity).list().isEmpty(),"AmneziaWG skipped private policy capture or retained pasted keys");check(spinner(settings,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==2&&field(settings,"Selected DNS IP or hostname").getText().toString().equals("9.9.9.9"),"AmneziaWG silently replaced imported DNS selection");settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!settings.showing&&store(activity).list().size()==1,"AmneziaWG full profile not saved");
   AndroidStandardExitStore.Entry saved=store(activity).list().get(0);check(saved.protocol.equals("amneziawg")&&sameParams(saved.awgParameters,example.awgParameters)&&saved.wgKeepalive==17&&saved.wgDns.equals(List.of("9.9.9.9","2620:fe::fe")),"AmneziaWG form dropped parameters, keepalive or secondary DNS capture");check(new JSONObject(AndroidExternalPolicy.compile(saved,null,"external").config).getJSONArray("endpoints").getJSONObject(0).getString("type").equals("routervpn-amneziawg"),"saved AmneziaWG did not compile native protocol");
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();newFormAndRejections();dialogAndPermission();ordinaryPolicies();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -414,18 +437,22 @@ def main():
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.
         controls = (
+            ("rewritten-policy", "StandardExitActivity.java",
+             'entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);',
+             'entry.torPolicy=edited;',
+             "name-only edit"),
             ("ipv6-default", "AndroidTorProfile.java",
              'if (ipv6.isEmpty()) policy.put("ipv6_mode", "auto");',
              '// original editor omitted the saved IPv6 default',
-             "name-only edit changed effective DNS/IPv6/LAN/MTU/bridge policy"),
+             "Tor editor displayed another saved IPv6 policy"),
             ("lan-default", "AndroidTorProfile.java",
              'if (!policy.has("home_lan_access")) policy.put("home_lan_access", true);',
              '// original editor omitted the saved LAN default',
-             "name-only edit changed effective DNS/IPv6/LAN/MTU/bridge policy"),
+             "Tor editor displayed another saved LAN policy"),
             ("dns-precedence", "AndroidTorProfile.java",
              'String protocol = "custom".equals(mode) ? policy.optString("dns_protocol", "") : mode;',
              'String protocol = policy.optString("dns_protocol", mode);',
-             "name-only edit changed effective DNS/IPv6/LAN/MTU/bridge policy"),
+             "Tor editor displayed another saved DNS policy"),
             ("hidden-mode-list", "StandardExitActivity.java",
              '.setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof."))',
              '.setTitle("Exact Router VPN entry mode").setMessage("The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof.")',
@@ -445,7 +472,7 @@ def main():
             rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, capture_output=True, text=True, timeout=120)
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
-        print("Android Tor form: all four original-source negative controls rejected")
+        print("Android Tor form: all five original-source negative controls rejected")
 
 
 if __name__ == "__main__":

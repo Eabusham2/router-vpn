@@ -40,13 +40,28 @@ func TestAndroidRuntimeTeardownRetainsOwnershipUntilTerminalState(t *testing.T) 
 		"boolean revalidationTeardown",
 		"boolean stopped = stopEmbeddedAndProve();",
 		"suppressHome = revalidationTeardown",
-		"Android multihop teardown did not reach DOWN/FAILED/REVOKED before timeout.",
-		"Android multihop disconnect did not prove embedded engine teardown; runtime ownership retained.",
-		"Android multihop teardown was not proved; graph ownership retained.",
+		"boolean disconnectAndDrainCaptured(String session)",
+		"if(stopped&&drain)stopped=drainWorker(task);",
+		"if (stopped) { connected = false; clearActiveGraphLocked(); }",
+		"ownedSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)",
+		"Android multihop teardown or worker drain remains unproved; graph ownership is retained.",
+		"Android multihop teardown or worker drain is still pending.",
 		"return \"multihop\".equals(home.logicalMode) && runtimeBusy(singBox.getState());",
 	} {
 		if !strings.Contains(multihop, marker) {
 			t.Fatalf("Android multihop teardown ownership missing %q", marker)
+		}
+	}
+	behavior := repoFile(t, "android/test_android_runtime_teardown.py")
+	for _, marker := range []string{
+		"temporary cleanup retains its exact Home owner",
+		"delayed teardown cannot erase a newer Home owner",
+		"captured stop joins late preparation before reuse",
+		"temporary cleanup returned before its preparing worker drained",
+		"late preparation started a native engine after cancellation",
+	} {
+		if !strings.Contains(behavior, marker) {
+			t.Fatalf("Android teardown is missing executable lifecycle coverage: %q", marker)
 		}
 	}
 	for _, forbidden := range []string{
