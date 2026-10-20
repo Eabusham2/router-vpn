@@ -9,6 +9,7 @@ final class RouterVPNLibboxEngine {
     private var configContent = ""
     private var runtimeRoot: URL?
     private var multihop: LibboxRouterMultihop?
+    private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var hopMeasurement: LibboxRouterHopMeasurement?
     private var multihopHealth: DispatchSourceTimer?
     private var performanceHealth: DispatchSourceTimer?
@@ -148,7 +149,7 @@ final class RouterVPNLibboxEngine {
         ownershipGeneration = UUID()
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth, torDelivery = torProofDelivery, capturedTor = torOwned, torHealth = self.torHealth
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
-        hopMeasurement = nil; multihop = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
+        hopMeasurement = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         torProofDelivery = nil
         self.torHealth = nil
         externalProofDelivery = nil; self.externalHealth = nil; externalPolicy = nil
@@ -774,6 +775,41 @@ final class RouterVPNLibboxEngine {
         guard let plan else { return nil }
         let data = Data(plan.progressJSON().utf8)
         return data.count <= 16384 ? data : nil
+    }
+    /// Bound only after both native node proofs, performance and MTU adoption.
+    /// The receipt's source is the original pre-resolution bundle; metadata
+    /// confirms that the actual runtime uses those exact selected hop roles.
+    func bindMultihopExecutionSource(_ source: IOSMultihopExecution.Source, metadata: String) throws {
+        guard let value = try JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: String],
+              value["entry_id"] == source.entryID, value["exit_id"] == source.exitID,
+              value["entry_mode"] == source.entryMode, value["exit_mode"] == source.exitMode else {
+            throw IOSMultihopExecution.issue()
+        }
+        ownershipLock.lock()
+        defer { ownershipLock.unlock() }
+        guard !permanentlyStopped, !starting, multihop != nil, server != nil,
+              hopMeasurement != nil, multihopExecutionSource == nil else { throw IOSMultihopExecution.issue() }
+        multihopExecutionSource = source
+    }
+
+    func multihopExecutionSnapshot(request: String) -> Data? {
+        ownershipLock.lock()
+        let source = multihopExecutionSource, plan = multihop, owned = server, generation = ownershipGeneration
+        let available = !permanentlyStopped && !starting && hopMeasurement != nil
+        ownershipLock.unlock()
+        guard available, let source, let plan, let owned, plan.healthy() else { return nil }
+        let progress = Data(plan.progressJSON().utf8)
+        guard progress.count <= 16384,
+              let value = try? JSONSerialization.jsonObject(with: progress) as? [String: Any],
+              value["complete"] as? Bool == true, value["stage"] as? String == "selected",
+              let execution = value["execution"] as? String,
+              let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request),
+              plan.healthy() else { return nil }
+        ownershipLock.lock()
+        let current = ownershipGeneration == generation && server === owned && multihop === plan &&
+            multihopExecutionSource == source && !permanentlyStopped
+        ownershipLock.unlock()
+        return current ? (try? capture.encoded()) : nil
     }
     func invalidateMultihop() {
         platform.mtu.invalidate()

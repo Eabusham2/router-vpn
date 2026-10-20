@@ -62,6 +62,8 @@ public final class LibboxRouterMultihop {
     private let lock = NSLock()
     private var closed = false
     private var valid = true
+    private var completed = false
+    private var execution = "local"
     public let entered = DispatchSemaphore(value: 0)
     private let release = DispatchSemaphore(value: 0)
     init(_ text: String, block: Bool, fail: Bool) { self.text = text; self.block = block; self.fail = fail }
@@ -69,13 +71,14 @@ public final class LibboxRouterMultihop {
     public func run(_ server: LibboxCommandServer) throws {
         entered.signal()
         if block { _ = release.wait(timeout: .now() + 5) }
-        lock.lock(); let failed = closed || fail; lock.unlock()
+        lock.lock(); let failed = closed || fail; if !failed { completed = true }; lock.unlock()
         if failed { throw NSError(domain: "Fixture", code: 1) }
     }
     public func healthy() -> Bool { lock.lock(); defer { lock.unlock() }; return !closed && valid }
     public func networkChanged() { lock.lock(); valid = false; lock.unlock() }
     public func close() throws { lock.lock(); closed = true; lock.unlock(); release.signal() }
-    public func progressJSON() -> String { "{\"stage\":\"fixture\"}" }
+    public func progressJSON() -> String { lock.lock();defer{lock.unlock()};return String(decoding:try! JSONSerialization.data(withJSONObject:["stage":completed ? "selected":"pending","complete":completed,"execution":execution]),as:UTF8.self) }
+    public func setExecution(_ value:String,complete:Bool=true) { lock.lock();execution=value;completed=complete;lock.unlock() }
     public func allowCompletion() { release.signal() }
 }
 public final class LibboxCommandServer {
@@ -370,6 +373,34 @@ final class CompletionState: @unchecked Sendable {
             let completed = CompletionState(); engine.completeMultihopExecution(completed.finish)
             check("non-multihop completes immediately once", completed.values() == (1, 0))
             engine.stop()
+        }
+        for execution in ["local", "server"] {
+            state.configure()
+            let sourceBundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-quic-awg","multihop_exit_mode":"hysteria2","multihop_execution":"auto"]]])
+            let entryBundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]]])
+            let source=try IOSMultihopExecution.Source(configuration:["engine":"multihop-libbox","mode":"hysteria2","bundle":sourceBundle,"entryBundle":entryBundle]) { $0==sourceBundle ? String(repeating:"a",count:64):String(repeating:"b",count:64) }
+            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:["entry_id":"entry","exit_id":"exit","entry_mode":"max-quic-awg","exit_mode":"hysteria2","execution":execution]),as:UTF8.self)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState(),request=String(repeating:"c",count:32)
+            try owner.start(files:files,strict:true,multihopMetadata:metadata)
+            owner.completeMultihopExecution(done.finish)
+            check("restorable execution waits for controller completion",done.wait() && done.values()==(1,0))
+            state.current()!.setExecution(execution)
+            check("comparison alone cannot expose unproved original source",owner.multihopExecutionSnapshot(request:request)==nil)
+            try owner.enableHopMeasurement(metadata:metadata)
+            var rejected=false
+            do{try owner.bindMultihopExecutionSource(source,metadata:metadata.replacingOccurrences(of:"max-quic-awg",with:"wg"))}catch{rejected=true}
+            check("runtime source binding rejects changed entry mode",rejected)
+            try owner.bindMultihopExecutionSource(source,metadata:metadata)
+            let captured=try IOSMultihopExecution.Capture.decode(owner.multihopExecutionSnapshot(request:request)!,source:source,request:request)
+            check("receipt binds actual winner and native epoch without changing requested auto",captured.execution==execution && captured.sessionID==owner.settingsEpoch && captured.source.requested=="auto")
+            check("malformed request cannot mint a restoration receipt",owner.multihopExecutionSnapshot(request:"foreign")==nil)
+            state.current()!.setExecution(execution,complete:false)
+            check("unfinished comparison cannot be restored",owner.multihopExecutionSnapshot(request:request)==nil)
+            state.current()!.setExecution(execution)
+            owner.invalidateMultihop()
+            check("expired network or lease invalidates the winner receipt",owner.multihopExecutionSnapshot(request:request)==nil)
+            owner.stop()
+            check("retired native owner cannot expose a winner",owner.multihopExecutionSnapshot(request:request)==nil)
         }
         do {
             state.configure()
@@ -800,7 +831,7 @@ def main():
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(stub),
                         '-emit-module-path',str(tmp/'Libbox.swiftmodule'),'-o',str(lib)],check=True,timeout=60)
-        args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp)]
+        args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp),str(ROOT/'ios/RouterVPN/App/IOSMultihopExecution.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)

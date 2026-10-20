@@ -13,9 +13,11 @@ import Foundation
     private let savedOnDemand: Bool
     private let savedEnabled: Bool
     private let savedDescription: String?
+    private let multihopExecution: IOSMultihopExecution.Capture?
 
-    private init(identity: IOSSessionIdentity?, proto: NETunnelProviderProtocol?, manager: NETunnelProviderManager?) throws {
+    private init(identity: IOSSessionIdentity?, proto: NETunnelProviderProtocol?, manager: NETunnelProviderManager?, execution: IOSMultihopExecution.Capture? = nil) throws {
         self.identity = identity
+        multihopExecution = execution
         savedProtocol = proto.map { $0.copy() as! NETunnelProviderProtocol }
         savedRules = (manager?.onDemandRules ?? []).map { $0.copy() as! NEOnDemandRule }
         // The app owns simple Connect rules. Do not silently flatten an unknown
@@ -50,7 +52,11 @@ import Foundation
             } else {
                 guard idle(manager), !model.connected, !manager.isOnDemandEnabled else { throw CancellationError() }
             }
-            return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager)
+            var execution: IOSMultihopExecution.Capture?
+            if let identity, identity.engine == "multihop-libbox" {
+                execution = try await readExecution(manager, model: model, identity: identity, owner: owner)
+            }
+            return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager, execution: execution)
         }
         guard identity == nil, !model.connected else { throw CancellationError() }
         return try IOSSpeedLabTunnel(identity: nil, proto: nil, manager: nil)
@@ -66,6 +72,11 @@ import Foundation
         guard manager.connection.status == .connected,
               manager.connection.connectedDate == identity.connectedAt,
               Self.sameProtocol(manager.protocolConfiguration, expected) else { throw CancellationError() }
+        if let multihopExecution {
+            let current = try await Self.readExecution(manager, model: model, identity: identity, owner: owner)
+            guard current.source == multihopExecution.source, current.sessionID == multihopExecution.sessionID,
+                  current.execution == multihopExecution.execution else { throw IOSMultihopExecution.issue() }
+        }
         try await Self.stop(manager, expected: expected, model: model, owner: owner)
     }
 
@@ -190,7 +201,11 @@ import Foundation
         let generation = model.iosConnectGeneration
         let hold = IOSMTUMeasurementGate.current
         guard !hold.isEmpty else { throw Self.issue("Original-path restoration lost its MTU measurement lease.") }
-        try manager.connection.startVPNTunnel(options: ["routervpn_mtu_hold": hold as NSString])
+        var options: [String: NSObject] = ["routervpn_mtu_hold": hold as NSString]
+        if let multihopExecution {
+            options[IOSMultihopExecution.launchKey] = String(decoding: try multihopExecution.encoded(), as: UTF8.self) as NSString
+        }
+        try manager.connection.startVPNTunnel(options: options)
         let tor = ["external-tor", "external-tor-bridge"].contains(identity.rawProfile)
         let deadline = ProcessInfo.processInfo.systemUptime + (tor ? 210 : 130)
         var sawTransition = false
@@ -208,6 +223,11 @@ import Foundation
                       restored.bundleData == identity.bundleData, restored.entryBundleData == identity.entryBundleData,
                       restored.entryMode == identity.entryMode else {
                     throw Self.issue("Restoration proved a different runtime or predecessor source.")
+                }
+                if let multihopExecution {
+                    let current = try await Self.readExecution(manager, model: model, identity: restored, owner: owner)
+                    guard current.source == multihopExecution.source, current.execution == multihopExecution.execution,
+                          current.sessionID != multihopExecution.sessionID else { throw IOSMultihopExecution.issue() }
                 }
                 if onDemand {
                     manager.isOnDemandEnabled = true
@@ -227,6 +247,26 @@ import Foundation
             try await Task.sleep(for: .milliseconds(150))
         }
         throw Self.issue("The original VPN has not completed its fresh path proof; inspect its status or Disconnect.")
+    }
+
+    private static func readExecution(_ manager: NETunnelProviderManager, model: RouterVPNModel,
+                                      identity: IOSSessionIdentity, owner: UUID) async throws -> IOSMultihopExecution.Capture {
+        try model.iosSpeedLabOwnership.require(owner)
+        guard model.activeSessionIdentity == identity, model.connected,
+              let connection = manager.connection as? NETunnelProviderSession,
+              connection.status == .connected, connection.connectedDate == identity.connectedAt,
+              let config = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+              config["bundle"] as? Data == identity.bundleData, config["entryBundle"] as? Data == identity.entryBundleData else { throw CancellationError() }
+        let source = try IOSMultihopExecution.Source(configuration: config, digest: RouterVPNModel.iosStrategyDigest)
+        let request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let data = try await IOSMTUControl.send(connection, operation: "speed-lab-execution", request: request, session: "")
+        try model.iosSpeedLabOwnership.require(owner)
+        guard model.activeSessionIdentity == identity, model.connected,
+              connection.status == .connected, connection.connectedDate == identity.connectedAt,
+              let after = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
+              after["bundle"] as? Data == identity.bundleData, after["entryBundle"] as? Data == identity.entryBundleData else { throw CancellationError() }
+        guard try IOSMultihopExecution.Source(configuration: after, digest: RouterVPNModel.iosStrategyDigest) == source else { throw CancellationError() }
+        return try IOSMultihopExecution.Capture.decode(data, source: source, request: request)
     }
 
     private static func ownedManager() async throws -> NETunnelProviderManager? {

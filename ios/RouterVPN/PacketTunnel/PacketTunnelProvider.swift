@@ -44,6 +44,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     }
 
     private var initialMTUHold = ""
+    private var multihopExecutionSource: IOSMultihopExecution.Source?
+    private var restoredMultihopExecution: String?
     private var forwardingChannel: RouterVPNForwardingChannel?
     private var networkSettingsOwner: RouterVPNSettingsQueue<NEPacketTunnelNetworkSettings>?
     private let strategyOwnerLock = NSLock()
@@ -74,6 +76,16 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request == ["operation": "multihop-progress"] {
             completionHandler(libboxEngine?.multihopProgress()); return
+        }
+        if messageData.count <= 256,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           Set(request.keys) == Set(["operation", "request_id", "session_id"]),
+           request["operation"] == "speed-lab-execution", request["session_id"] == "",
+           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
+            guard let engine = libboxEngine, let guardState = currentPathProofGuard() else { completionHandler(nil); return }
+            let reply = engine.multihopExecutionSnapshot(request: id)
+            guard libboxEngine === engine, currentPathProofGuard() === guardState else { completionHandler(nil); return }
+            completionHandler(reply); return
         }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
@@ -418,6 +430,15 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
+            multihopExecutionSource = nil; restoredMultihopExecution = nil
+            if engine == "multihop-libbox" {
+                let source = try IOSMultihopExecution.Source(configuration: provider) {
+                    SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
+                }
+                restoredMultihopExecution = try IOSMultihopExecution.restoredExecution(
+                    option: options?[IOSMultihopExecution.launchKey], source: source, mtuHold: initialMTUHold)
+                multihopExecutionSource = source
+            } else if options?[IOSMultihopExecution.launchKey] != nil { throw IOSMultihopExecution.issue() }
             // This complete validation is socket-free. The app's exact source
             // stamps are checked again for every later strategy attempt.
             let maxCapture = try RouterVPNMAXPreparation(provider: provider)
@@ -718,7 +739,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             "entry_node_id": entryProofID, "exit_node_id": exitProofID,
             "entry_api": entryProfile["router_api"] as? String ?? "", "exit_api": selectedProfile["router_api"] as? String ?? "",
             "entry_token": entryProfile["api_token"] as? String ?? "", "exit_token": selectedProfile["api_token"] as? String ?? "",
-            "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": selectedProfile["multihop_execution"] as? String ?? "local"]
+            "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": restoredMultihopExecution ?? selectedProfile["multihop_execution"] as? String ?? "local"]
         if entryLayer.mode != "off" { metadata["entry_start_layer"] = entryLayer.mode }
         if exitLayer.mode != "off" { metadata["exit_start_layer"] = exitLayer.mode }
         let encoded = try JSONSerialization.data(withJSONObject: metadata)
@@ -784,13 +805,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         try engine.prepareMTUHold(initialMTUHold)
         libboxEngine = engine
         do {
-            let execution = selectedProfile["multihop_execution"] as? String ?? "local"
+            let execution = restoredMultihopExecution ?? selectedProfile["multihop_execution"] as? String ?? "local"
             guard ["local", "server", "auto"].contains(execution) else { throw tunnelError(56, "Unknown multihop execution choice") }
             if entryLayer.source != nil || exitLayer.source != nil || entryMAX != nil || exitMAX != nil || entryComposite != nil || exitComposite != nil {
                 try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata,
                                  entryStartLayerSource: entryLayer.source, exitStartLayerSource: exitLayer.source)
-            } else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }
-            else { try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata) }
+            } else { try engine.start(files: finalFiles, strict: strict, multihopMetadata: hopMetadata) }
         }
         catch { engine.stop(); libboxEngine = nil; throw error }
         // One guard spans the comparison and both node proofs. Rearming after
@@ -821,6 +841,8 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     }
                     mtuProfile["node_proof_id"] = exitProofID
                     engine.activateMTU(profile: mtuProfile)
+                    guard let source = self.multihopExecutionSource else { throw IOSMultihopExecution.issue() }
+                    try engine.bindMultihopExecutionSource(source, metadata: hopMetadata)
                 } catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
                 self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
                 completionHandler(nil)
