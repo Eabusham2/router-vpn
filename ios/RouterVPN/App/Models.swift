@@ -145,6 +145,7 @@ struct ExternalWireGuardConfig: Codable, Hashable {
     var allowedIPs: [String]
     var dns: [String]?
     var mtu: Int?
+    var persistentKeepaliveInterval: Int?
 
     enum CodingKeys: String, CodingKey {
         case addresses, endpoint, dns, mtu
@@ -152,6 +153,29 @@ struct ExternalWireGuardConfig: Codable, Hashable {
         case peerPublicKey = "peer_public_key"
         case presharedKey = "preshared_key"
         case allowedIPs = "allowed_ips"
+        case persistentKeepaliveInterval = "persistent_keepalive_interval"
+    }
+}
+
+struct ExternalAmneziaWGConfig: Codable, Hashable {
+    var privateKey: String
+    var addresses: [String]
+    var peerPublicKey: String
+    var presharedKey: String?
+    var endpoint: String
+    var allowedIPs: [String]
+    var dns: [String]?
+    var mtu: Int?
+    var persistentKeepaliveInterval: Int?
+    var parameters: [String: String]
+
+    enum CodingKeys: String, CodingKey {
+        case addresses, endpoint, dns, mtu, parameters
+        case privateKey = "private_key"
+        case peerPublicKey = "peer_public_key"
+        case presharedKey = "preshared_key"
+        case allowedIPs = "allowed_ips"
+        case persistentKeepaliveInterval = "persistent_keepalive_interval"
     }
 }
 
@@ -214,6 +238,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
     var wireGuard: ExternalWireGuardConfig?
+    var amneziaWG: ExternalAmneziaWGConfig?
     var openVPN: ExternalOpenVPNConfig?
     var shadowsocks: ExternalShadowsocksConfig?
     var socks5: ExternalSOCKS5Config?
@@ -224,6 +249,7 @@ struct ExternalNodeConfig: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case wireGuard = "wireguard"
+        case amneziaWG = "amneziawg"
         case openVPN = "openvpn"
         case httpConnect = "http_connect"
         case httpsConnect = "https_connect"

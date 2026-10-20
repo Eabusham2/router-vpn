@@ -30,6 +30,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
  static func profile(_ kind:String)->[String:Any] {
   var e:[String:Any]=["protocol":kind,"expected_public_ip":"203.0.113.88"]
   switch kind {
+  case "amneziawg": var block=(profile("wireguard")["external"] as! [String:Any])["wireguard"] as! [String:Any];block["parameters"]=amneziaParameters();block["persistent_keepalive_interval"]=29;e["amneziawg"]=block
   case "wireguard": e["wireguard"]=["endpoint":"198.51.100.8:51820","private_key":key(3),"peer_public_key":key(4),"preshared_key":key(5),"addresses":["10.8.0.2/24","fd00:8::2/64"],"allowed_ips":["0.0.0.0/0","::/0"],"mtu":1420]
   case "socks5": e["socks5"]=["host":"198.51.100.8","port":1080,"username":" saved &<> / user ","password":" saved p\"ass\\word \u{2028}\u{2029} "]
   case "http-connect", "https-connect": var proxy:[String:Any]=["host":"198.51.100.8","port":8443,"username":" exact user ","password":" exact secret "];if kind=="https-connect" {proxy["tls_server_name"]="exit.example.test"};e[kind.replacingOccurrences(of:"-",with:"_")]=proxy
@@ -42,11 +43,12 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
           "home_lan_access":false,"home_lan_cidrs":["192.168.50.0/24","fd12:3456::/48"],"ipv6_mode":"off",
           "mtu_policy":"fixed","manual_mtu":1380,"effective_mtu":8999,"start_layer":"off"]
  }
+ static func amneziaParameters()->[String:String] { ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"] }
  static func openVPNConfig(_ network:String="udp",_ address:String="198.51.100.8")->String {
   "client\ndev tun\nproto \(network)\nremote \(address) 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
  }
  static func policies()throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
+  let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for kind in protocols {for dns in ["udp","tcp","tls","https","h3"] {for lan in [false,true] {for ipv6 in ["off","on"] {
    var p=profile(kind);p["dns_protocol"]=dns;p["home_lan_access"]=lan;p["ipv6_mode"]=ipv6
    if ["tls","https","h3"].contains(dns){p["dns_server_name"]="resolver.example.test";p["dns_path"]="/captured-query"}
@@ -67,7 +69,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
    try check("LAN access follows the saved policy",rules.contains{($0["ip_cidr"] as? [String])?.contains("192.168.50.0/24")==true} == !lan)
    try check("DNS port is hijacked independently of protocol sniffing",rules.contains{$0["port"] as? Int==53 && $0["action"] as? String=="hijack-dns"})
    try check("source node remains unchanged",json(p)==before)
-   if kind=="wireguard"{try check("native endpoint owns fixed MTU",(graph["endpoints"] as? [[String:Any]])?[0]["mtu"] as? Int==1380)}
+   if ["wireguard","amneziawg"].contains(kind){try check("native endpoint owns fixed MTU",(graph["endpoints"] as? [[String:Any]])?[0]["mtu"] as? Int==1380)}
    if kind=="socks5" {let out=(graph["outbounds"] as! [[String:Any]])[0],saved=(p["external"] as! [String:Any])["socks5"] as! [String:Any];try check("credentials remain exact including spaces",out["username"] as? String==saved["username"] as? String && out["password"] as? String==saved["password"] as? String)}
   }}}}
   for kind in protocols {
@@ -160,7 +162,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   try reject("oversized native response"){try policy.validateProof(String(repeating:" ",count:8193),sessionID:session,began:began)}
  }
  static func hostnameBootstrap()throws {
-  for kind in ["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {
+  for kind in ["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"] {
    for transport in ["tcp","udp","tls","https","h3"] {
     var p=profile(kind);p["dns_mode"]="doh";p["dns_host"]="resolver.example.test";p["dns_server_name"]="resolver.example.test";p["dns_port"]=443;p["dns_path"]="/captured-query"
     var server:[String:Any]=["type":transport,"tag":"external-dns-bootstrap","server":"9.9.9.9","server_port":5353,"detour":"custom-exit"]
@@ -197,16 +199,16 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   }
  }
  static func entryGraphs()throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
+  let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryKind in protocols {for exitKind in protocols {
    var entry=profile(entryKind),exit=profile(exitKind)
    entry["id"]="saved-entry";entry["home_lan_cidrs"]=["10.20.0.0/16"];entry["ipv6_mode"]="off"
-   if entryKind=="wireguard" {entry["manual_mtu"]=1500;var ext=entry["external"] as! [String:Any],wg=ext["wireguard"] as! [String:Any];wg["private_key"]=key(9);wg["peer_public_key"]=key(10);ext["wireguard"]=wg;entry["external"]=ext}
+   if ["wireguard","amneziawg"].contains(entryKind) {entry["manual_mtu"]=1500;var ext=entry["external"] as! [String:Any],wg=ext[entryKind] as! [String:Any];wg["private_key"]=key(9);wg["peer_public_key"]=key(10);ext[entryKind]=wg;entry["external"]=ext}
    if entryKind=="openvpn" {entry["manual_mtu"]=1500}
-   if ["wireguard","openvpn"].contains(entryKind) && exitKind=="openvpn" {exit["manual_mtu"]=1280}
+   if ["wireguard","amneziawg","openvpn"].contains(entryKind) && ["wireguard","amneziawg","openvpn"].contains(exitKind) {exit["manual_mtu"]=1280}
    exit["multihop_enabled"]=true;exit["multihop_entry_id"]="saved-entry";exit["multihop_entry_mode"]=entryKind
    exit["multihop_exit_id"]="saved-exit";exit["multihop_exit_mode"]=exitKind;exit["multihop_execution"]="local";exit["ipv6_mode"]="on"
-   if ["http-connect","https-connect"].contains(entryKind) && ["wireguard","hysteria2","openvpn"].contains(exitKind) {
+   if ["http-connect","https-connect"].contains(entryKind) && ["wireguard","amneziawg","hysteria2","openvpn"].contains(exitKind) {
     try reject("TCP-only entry cannot carry UDP exit"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorProfile:entry)};continue
    }
    let beforeEntry=try json(entry),beforeExit=try json(exit)
@@ -238,10 +240,28 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   router["node_proof_id"]="invalid"
   try reject("Home DNS cannot adopt an unpaired entry"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorFiles:files,predecessorProfile:router)}
  }
+ static func importedAmnezia()throws {
+  let p=profile("amneziawg"),r=try RouterVPNExternalExitBuilder.build(profile:p),policy=r.policy!,g=try object(Data(policy.config.utf8))
+  let awg=(g["endpoints"] as! [[String:Any]])[0],peer=(awg["peers"] as! [[String:Any]])[0]
+  try check("imported AWG keeps its native protocol",awg["type"] as? String=="routervpn-amneziawg")
+  try check("all eleven strings and header ranges remain exact",json(awg["amnezia"]!)==json(amneziaParameters()) && peer["persistent_keepalive_interval"] as? Int==29)
+  for (field,value):(String,Any) in [("parameters",["s4":"32"]),("parameters",amneziaParameters().merging(["i1":"unowned"],uniquingKeysWith:{$1})),("parameters",amneziaParameters().merging(["s4":" 32"],uniquingKeysWith:{$1})),("parameters",amneziaParameters().merging(["h2":"10000001"],uniquingKeysWith:{$1})),("parameters",["jc":3]),("persistent_keepalive_interval",-1),("persistent_keepalive_interval",65536),("persistent_keepalive_interval",true),("persistent_keepalive_interval","29")] {
+   var bad=p,ext=bad["external"] as! [String:Any],block=ext["amneziawg"] as! [String:Any];block[field]=value;ext["amneziawg"]=block;bad["external"]=ext
+   try reject("invalid imported AWG "+field){_ = try RouterVPNExternalExitBuilder.build(profile:bad)}
+  }
+  var native=try object(Data(policy.sourceConfig.utf8)),endpoints=native["endpoints"] as! [[String:Any]]
+  endpoints[0]["type"]="wireguard";endpoints[0].removeValue(forKey:"amnezia");native["endpoints"]=endpoints
+  try reject("an imported AWG capture cannot become ordinary WG"){_ = try bridge(["Op":"external-policy","Config":text(native),"Policy":policy.capture])}
+  for value in [0,1,65535] {
+   var varied=p,ext=varied["external"] as! [String:Any],block=ext["amneziawg"] as! [String:Any];block["persistent_keepalive_interval"]=value;ext["amneziawg"]=block;varied["external"]=ext
+   let out=try RouterVPNExternalExitBuilder.build(profile:varied),graph=try object(Data(out.policy!.config.utf8)),endpoint=(graph["endpoints"] as! [[String:Any]])[0]
+   try check("every valid keepalive stays exact",(endpoint["peers"] as! [[String:Any]])[0]["persistent_keepalive_interval"] as? Int==value)
+  }
+ }
  static func main() {
   defer{RouterVPNTorTestClose()}
   do {
-   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap();try openVPNPaths()
+   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap();try openVPNPaths();try importedAmnezia()
    print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }

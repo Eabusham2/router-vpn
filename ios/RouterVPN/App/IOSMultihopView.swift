@@ -3,7 +3,7 @@ import SwiftUI
 
 @MainActor
 extension RouterVPNModel {
-    static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
+    static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     /// Return the complete *entry's* private bundle, never the selected exit's
     /// raw files with a different display id. Capture before suspension/start.
     func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {

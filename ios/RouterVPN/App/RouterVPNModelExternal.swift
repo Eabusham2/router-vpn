@@ -16,7 +16,7 @@ extension RouterVPNModel {
     var selectedExternalProtocol: String { selectedNodeProfile?.external?.protocolName.lowercased() ?? "" }
 
     var selectedExternalSupportedOnIOS: Bool {
-        selectedNodeIsExternal && ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"].contains(selectedExternalProtocol)
+        selectedNodeIsExternal && ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"].contains(selectedExternalProtocol)
     }
 
     func nodeRuntimeSummary(_ profile: RouterProfile) -> String {
@@ -25,7 +25,7 @@ extension RouterVPNModel {
             if protocolName == "openvpn" { return "External OpenVPN — selected native DNS and exact public-exit proof" }
             if protocolName == "tor" { return "Tor • current circuit exit verified before connection completes" }
             if protocolName == "tor-bridge" { return "Tor bridges • obfs4 / meek / Snowflake / WebTunnel • current circuit exit verification" }
-            if ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) { return "External \(protocolName) — selected DNS and exact exit proved by the native tunnel" }
+            if ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) { return "External \(protocolName) — selected DNS and exact exit proved by the native tunnel" }
             return "External \(protocolName) — unsupported"
         }
         return "Router VPN node — WireGuardKit / Libbox modes + exact private node proof"
@@ -93,7 +93,7 @@ extension RouterVPNModel {
             return
         }
         let tor = selectedExternalProtocol == "tor" || selectedExternalProtocol == "tor-bridge"
-        let ordinary = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selectedExternalProtocol)
+        let ordinary = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selectedExternalProtocol)
         let entryBundleKey = tor ? "tor_entry_bundle" : "external_entry_bundle"
         let entryModeKey = tor ? "tor_entry_mode" : "external_entry_mode"
         let expected = profile.external?.expectedPublicIP ?? ""
@@ -218,7 +218,7 @@ extension RouterVPNModel {
     private func externalTorEntryData(source: ClientBundle) throws -> Data? {
         guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: source) else { throw CancellationError() }
         guard selected.multihopEnabled == true else { return nil }
-        guard selected.normalizedNodeKind == "external", ["tor", "tor-bridge", "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selected.external?.protocolName ?? "") else {
+        guard selected.normalizedNodeKind == "external", ["tor", "tor-bridge", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selected.external?.protocolName ?? "") else {
             throw IOSRuntimeSelectionError.unsupportedMode("This external node has no saved native entry composition.")
         }
         let entry = try iosMultihopEntryBundle(for: source)

@@ -261,7 +261,7 @@ enum IOSMAXSourceSelection {
                   provider[ordinary ? "tor_entry_mode" : "external_entry_mode"] == nil,
                   let entryData = entryValue as? Data,
                   let external = selected["external"] as? [String: Any],
-                  (ordinary ? ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"] : ["tor", "tor-bridge"]).contains(external["protocol"] as? String ?? ""),
+                  (ordinary ? ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"] : ["tor", "tor-bridge"]).contains(external["protocol"] as? String ?? ""),
                   selected["multihop_enabled"] as? Bool == true,
                   let entryID = selected["multihop_entry_id"] as? String,
                   let mode = provider[modeKey] as? String,

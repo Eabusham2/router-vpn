@@ -128,7 +128,7 @@ struct RouterVPNExternalExitRuntime {
 }
 
 enum RouterVPNExternalExitBuilder {
-    static let ordinaryProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
+    static let ordinaryProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
     static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()
@@ -216,7 +216,7 @@ enum RouterVPNExternalExitBuilder {
                 }
                 _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
                 var entry = try customExit(external: imported, protocolName: kind); entry["tag"] = tag
-                if ["wireguard", "openvpn"].contains(kind) { endpoints.append(entry) } else { outbounds.append(entry) }
+                if ["wireguard", "amneziawg", "openvpn"].contains(kind) { endpoints.append(entry) } else { outbounds.append(entry) }
                 custom["detour"] = tag
             } else {
                 guard predecessorProfile["node_kind"] as? String == "router-vpn",
@@ -236,7 +236,7 @@ enum RouterVPNExternalExitBuilder {
             }
             entryTag = tag
         } else if !predecessorFiles.isEmpty { throw error("External startup cannot discard an unowned predecessor graph.") }
-        if protocolName == "wireguard" || protocolName == "openvpn" { endpoints.append(custom) } else { outbounds.append(custom) }
+        if ["wireguard", "amneziawg", "openvpn"].contains(protocolName) { endpoints.append(custom) } else { outbounds.append(custom) }
 
         let mtu = externalMTU(external: external, protocolName: protocolName)
         let tun: [String: Any] = [
@@ -276,8 +276,8 @@ enum RouterVPNExternalExitBuilder {
                   endpoint["type"] as? String == "openvpn-client", endpoint["system"] as? Bool == false,
                   endpoint["tag"] as? String == "custom-exit", endpoint["detour"] == nil else { throw error("OpenVPN native compiler returned an invalid owned endpoint.") }
             return endpoint
-        case "wireguard":
-            guard let wg = external["wireguard"] as? [String: Any] else { throw error("External WireGuard block is missing.") }
+        case "wireguard", "amneziawg":
+            guard let wg = external[protocolName] as? [String: Any] else { throw error("External \(protocolName) block is missing.") }
             let endpoint = string(wg["endpoint"])
             let (server, port) = try literalEndpoint(endpoint, defaultPort: 51820)
             let addresses = strings(wg["addresses"]), allowed = strings(wg["allowed_ips"])
@@ -285,8 +285,17 @@ enum RouterVPNExternalExitBuilder {
             guard !addresses.isEmpty, !allowed.isEmpty, !privateKey.isEmpty, !publicKey.isEmpty else { throw error("External WireGuard credentials/routes are incomplete.") }
             var peer: [String: Any] = ["address": server, "port": port, "public_key": publicKey, "allowed_ips": allowed]
             let psk = string(wg["preshared_key"]); if !psk.isEmpty { peer["pre_shared_key"] = psk }
-            var value: [String: Any] = ["type": "wireguard", "tag": "custom-exit", "address": addresses, "private_key": privateKey, "peers": [peer]]
+            if let keepalive = wg["persistent_keepalive_interval"] { peer["persistent_keepalive_interval"] = keepalive }
+            var value: [String: Any] = ["type": protocolName == "amneziawg" ? "routervpn-amneziawg" : "wireguard", "tag": "custom-exit", "address": addresses, "private_key": privateKey, "peers": [peer]]
             let mtu = int(wg["mtu"]); if mtu >= 1280 && mtu <= 9000 { value["mtu"] = mtu }
+            if protocolName == "amneziawg" {
+                // The shared compiler validates all eleven exact strings,
+                // including header ranges, S4 padding and imported keepalive.
+                // Never turn an imported policy into a Fast/Strong preset.
+                guard let parameters = wg["parameters"] as? [String: String] else { throw error("External AmneziaWG parameters are missing or not strings.") }
+                value["amnezia"] = parameters
+                if value["mtu"] == nil { value["mtu"] = 1280 }
+            }
             return value
         case "socks5":
             guard let socks = external["socks5"] as? [String: Any] else { throw error("External SOCKS5 block is missing.") }
@@ -331,7 +340,7 @@ enum RouterVPNExternalExitBuilder {
     }
 
     private static func externalMTU(external: [String: Any], protocolName: String) -> Int {
-        if protocolName == "wireguard", let wg = external["wireguard"] as? [String: Any] { let value = int(wg["mtu"]); if value >= 1280 && value <= 9000 { return value } }
+        if ["wireguard", "amneziawg"].contains(protocolName), let wg = external[protocolName] as? [String: Any] { let value = int(wg["mtu"]); if value >= 1280 && value <= 9000 { return value } }
         return 1280
     }
     private static func literalEndpoint(_ value: String, defaultPort: Int) throws -> (String, Int) {

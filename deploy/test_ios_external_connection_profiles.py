@@ -59,6 +59,7 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
  static func profile(_ kind:String,_ id:String="exit")->RouterProfile {
   var external:[String:Any]=["protocol":kind,"expected_public_ip":"203.0.113.99"]
   switch kind {
+  case "amneziawg":external["amneziawg"]=["private_key":"NEVER_COPY_PRIVATE_KEY","peer_public_key":"never-copy-peer","addresses":["10.8.0.2/24"],"endpoint":"198.51.100.1:51820","allowed_ips":["0.0.0.0/0","::/0"],"persistent_keepalive_interval":29,"parameters":["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]]
   case "wireguard":external["wireguard"]=["private_key":"NEVER_COPY_PRIVATE_KEY","peer_public_key":"never-copy-peer","addresses":["10.8.0.2/24"],"endpoint":"198.51.100.1:51820","allowed_ips":["0.0.0.0/0","::/0"]]
   case "socks5":external["socks5"]=["host":"198.51.100.1","port":1080,"username":"private-user","password":"NEVER_COPY_PASSWORD"]
   case "http-connect","https-connect":external[kind.replacingOccurrences(of:"-",with:"_")]=["host":"198.51.100.1","port":8443,"username":"private-user","password":"NEVER_COPY_PASSWORD","tls_server_name":"exit.example.test"]

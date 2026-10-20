@@ -468,6 +468,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try policies(maximum,composite)
   try negatives(maximum,composite)
   try ordinaryExternalEntry(maximum,composite)
+  try importedAmneziaCreation()
   try ordinaryExternalPredecessors(maximum,composite)
   print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor and \(externalGraphs) ordinary external graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
@@ -500,8 +501,27 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    reject("WireGuard private entry key must match paired identity"){_ = try owner.prepare(provider:wrong,selectedProfile:exit,strict:true)}
   }}
  }
+ @MainActor static func importedAmneziaCreation()throws {
+  let parameters=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]
+  let model=RouterVPNModel()
+  func save(_ p:[String:String],_ keepalive:Int?=29,_ protocolName:String="amneziawg")throws {
+   try model.createIOSExternalNode(protocolName:protocolName,name:"Imported AWG",server:"2001:db8::8",port:51820,expectedPublicIP:"203.0.113.88",username:"",password:"",method:"",secret:"",tlsServerName:"",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:["9.9.9.9"],wgMTU:1380,wgKeepalive:keepalive,awgParameters:p)
+  }
+  try save(parameters)
+  let saved=model.saved!,writes=model.writes,bundle=try JSONDecoder().decode(ClientBundle.self,from:saved),external=bundle.routerProfiles[0].external!
+  try check("AWG node persists distinct exact parameters",external.protocolName=="amneziawg" && external.wireGuard==nil && external.amneziaWG?.parameters==parameters)
+  try check("AWG peer credentials and keepalive round trip",external.amneziaWG?.privateKey==key(11) && external.amneziaWG?.peerPublicKey==key(12) && external.amneziaWG?.presharedKey==key(13) && external.amneziaWG?.persistentKeepaliveInterval==29 && external.amneziaWG?.endpoint=="[2001:db8::8]:51820")
+  let encoded=try JSONEncoder().encode(bundle),restored=try JSONDecoder().decode(ClientBundle.self,from:encoded)
+  try check("bundle serialization retains complete AWG payload",restored.routerProfiles[0].external==external)
+  for p in [[:],parameters.merging(["i1":"foreign"],uniquingKeysWith:{$1}),parameters.merging(["jc":"129"],uniquingKeysWith:{$1}),parameters.merging(["s4":" 32"],uniquingKeysWith:{$1}),parameters.merging(["h2":"10000001"],uniquingKeysWith:{$1})] {
+   reject("invalid AWG parameters fail native validation before persistence"){try save(p)}
+  }
+  reject("invalid keepalive cannot save"){try save(parameters,65536)}
+  reject("WG does not discard AWG parameters"){try save(parameters,29,"wireguard")}
+  try check("invalid AWG creation keeps the complete old source",model.saved==saved && model.writes==writes)
+ }
  @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
-  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
+  let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   var failures:[String]=[]
   for mode in modes {for layer in layers {
    var entry=try root(mode,layer,maximum,composite),profiles=entry["routerProfiles"] as! [[String:Any]]
@@ -515,14 +535,14 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    for kind in protocols {
     do {
      let model=RouterVPNModel()
-     let exitMTU=["wireguard","openvpn"].contains(kind) && packetEntry ? 1280:1380
+     let exitMTU=["wireguard","amneziawg","openvpn"].contains(kind) && packetEntry ? 1280:1380
      let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
-     try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU,openVPNConfig:kind=="openvpn" ? openVPN:"")
+     try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU,openVPNConfig:kind=="openvpn" ? openVPN:"",wgKeepalive:29,awgParameters:kind=="amneziawg" ? ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]:[:])
      var exit=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
      exit["multihop_enabled"]=true;exit["multihop_entry_id"]="entry";exit["multihop_entry_mode"]=mode;exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind;exit["multihop_execution"]="local"
      exit["dns_mode"]="custom";exit["dns_protocol"]="tcp";exit["dns_host"]="9.9.9.9";exit["dns_port"]=5353;exit["mtu_policy"]="fixed";exit["manual_mtu"]=exitMTU;exit["home_lan_access"]=false;exit["ipv6_mode"]="on"
      let frozen=try json(exit),provider:[String:Any]=["external_entry_bundle":try json(entry),"external_entry_mode":mode]
-     if ["wireguard","openvpn"].contains(kind) && packetEntry {
+     if ["wireguard","amneziawg","openvpn"].contains(kind) && packetEntry {
       var oversized=exit;oversized["manual_mtu"]=1500
       reject("nested fixed MTU cannot overwrite or exceed its entry"){_ = try owner.prepare(provider:provider,selectedProfile:oversized,strict:true)}
      }
@@ -564,7 +584,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    }
   }}
   if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
-  try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==399)
+  try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==456)
  }
 }
 '''
@@ -634,7 +654,7 @@ def main():
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
         if args.output:
             inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'ordinary_external_graphs': 399, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            report = {'schema': 1, 'graphs': 348, 'ordinary_external_graphs': 456, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 

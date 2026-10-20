@@ -16,7 +16,7 @@ private struct IOSConnectionCustomPresetMirror: Codable {
 
 private struct IOSConnectionSafePreferences: Codable, Hashable {
     static let routerHopModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"]
-    static let ordinaryExternalModes: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
+    static let ordinaryExternalModes: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     var homeLANAccess: Bool
     var killSwitch: Bool
     var killSwitchPolicy: String

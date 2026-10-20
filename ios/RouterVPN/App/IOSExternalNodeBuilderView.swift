@@ -4,6 +4,7 @@ import SwiftUI
 
 private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
     case wireguard
+    case amneziawg
     case socks5
     case httpConnect = "http-connect"
     case httpsConnect = "https-connect"
@@ -13,10 +14,12 @@ private enum IOSExternalNodeProtocol: String, CaseIterable, Identifiable {
     case tor
     case torBridge = "tor-bridge"
     var isTor: Bool { self == .tor || self == .torBridge }
+    var isWireGuardFamily: Bool { self == .wireguard || self == .amneziawg }
     var id: String { rawValue }
     var title: String {
         switch self {
         case .wireguard: return "WireGuard"
+        case .amneziawg: return "AmneziaWG"
         case .socks5: return "SOCKS5"
         case .httpConnect: return "HTTP CONNECT"
         case .httpsConnect: return "HTTPS CONNECT"
@@ -51,13 +54,15 @@ extension RouterVPNModel {
         wgMTU: Int?,
         openVPNConfig: String = "",
         torTransport: String = "custom",
-        torBridges: [String] = []
+        torBridges: [String] = [],
+        wgKeepalive: Int? = nil,
+        awgParameters: [String: String] = [:]
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
         }
         let tor = protocolName == "tor" || protocolName == "tor-bridge"
-        let supported = Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])
+        let supported = Set(["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])
         guard supported.contains(protocolName) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 2, userInfo: [NSLocalizedDescriptionKey: "This external protocol has no proven iOS PacketTunnel dataplane."])
         }
@@ -104,7 +109,7 @@ extension RouterVPNModel {
             // Persist the private source profile, not a second set of generated
             // credentials. PacketTunnel recompiles the frozen profile before use.
             external["openvpn"] = ["config": openVPNConfig, "username": username, "password": password]
-        case "wireguard":
+        case "wireguard", "amneziawg":
             guard !wgPrivateKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !wgPeerPublicKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   !wgAddresses.isEmpty, !wgAllowedIPs.isEmpty else {
@@ -126,7 +131,13 @@ extension RouterVPNModel {
                 }
                 block["mtu"] = mtu
             }
-            external["wireguard"] = block
+            if let wgKeepalive {
+                guard (0...65535).contains(wgKeepalive) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 36, userInfo: [NSLocalizedDescriptionKey: "Persistent keepalive must be 0..65535 seconds."]) }
+                block["persistent_keepalive_interval"] = wgKeepalive
+            }
+            if protocolName == "amneziawg" { block["parameters"] = awgParameters }
+            else if !awgParameters.isEmpty { throw NSError(domain: "RouterVPN.ExternalNode", code: 37, userInfo: [NSLocalizedDescriptionKey: "Choose AmneziaWG to retain obfuscation parameters."]) }
+            external[protocolName] = block
         case "socks5":
             let user = username
             guard user.isEmpty == password.isEmpty else {
@@ -201,6 +212,25 @@ extension RouterVPNModel {
             let compiled = LibboxRouterCompileTorProfile(String(decoding: captured, as: UTF8.self), UUID().uuidString.lowercased(), "", &failure)
             if let failure { throw failure }
             guard !compiled.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 35, userInfo: [NSLocalizedDescriptionKey: "Tor profile validation did not complete."]) }
+        }
+        if protocolName == "amneziawg", let block = external[protocolName] as? [String: Any] {
+            // Validate the imported node before storage with the same native
+            // policy compiler that later owns PacketTunnel startup. A compiler
+            // result is configuration validation, never a connection proof.
+            var peer: [String: Any] = ["address": server, "port": port, "public_key": block["peer_public_key"]!, "allowed_ips": block["allowed_ips"]!]
+            if let psk = block["preshared_key"] { peer["pre_shared_key"] = psk }
+            if let keepalive = block["persistent_keepalive_interval"] { peer["persistent_keepalive_interval"] = keepalive }
+            let native: [String: Any] = ["type": "routervpn-amneziawg", "tag": "custom-exit", "address": block["addresses"]!,
+                "private_key": block["private_key"]!, "peers": [peer], "amnezia": awgParameters, "mtu": wgMTU ?? 1280]
+            let graph: [String: Any] = ["inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.29.94.1/30", "fd29:94::1/126"], "mtu": wgMTU ?? 1280,
+                "auto_route": true, "strict_route": true, "stack": "system"]], "endpoints": [native], "outbounds": [], "route": ["final": "custom-exit", "auto_detect_interface": true]]
+            let selection: [String: Any] = ["schema": 1, "exit_id": profileID, "protocol": protocolName, "expected_public_ip": expected, "profile": profile]
+            let source = String(decoding: try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys]), as: UTF8.self)
+            let capture = String(decoding: try JSONSerialization.data(withJSONObject: selection, options: [.sortedKeys]), as: UTF8.self)
+            var failure: NSError?
+            let compiled = LibboxRouterCompileExternalPolicy(source, capture, &failure)
+            if let failure { throw failure }
+            guard !compiled.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 38, userInfo: [NSLocalizedDescriptionKey: "AmneziaWG profile validation did not complete."]) }
         }
         let bundleJSON: [String: Any] = [
             "bundleVersion": 4,
@@ -281,6 +311,8 @@ struct IOSExternalNodeBuilderView: View {
     @State private var wgAllowed = "0.0.0.0/0, ::/0"
     @State private var wgDNS = ""
     @State private var wgMTU = ""
+    @State private var wgKeepalive = ""
+    @State private var awgParameters: [String: String] = [:]
     @State private var openVPNConfig = ""
     @State private var torTransport = "custom"
     @State private var torBridges = ""
@@ -352,8 +384,8 @@ struct IOSExternalNodeBuilderView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                if selected == .wireguard {
-                    Section("WireGuard") {
+                if selected.isWireGuardFamily {
+                    Section(selected.title) {
                         SecureField("Private key", text: $wgPrivate)
                         TextField("Peer public key", text: $wgPeer).textInputAutocapitalization(.never).autocorrectionDisabled()
                         SecureField("Preshared key (optional)", text: $wgPSK)
@@ -361,6 +393,17 @@ struct IOSExternalNodeBuilderView: View {
                         TextField("AllowedIPs, comma-separated CIDRs", text: $wgAllowed).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("DNS IPs, comma-separated (optional)", text: $wgDNS).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("MTU (optional)", text: $wgMTU).keyboardType(.numberPad)
+                        TextField("Persistent keepalive seconds (optional)", text: $wgKeepalive).keyboardType(.numberPad)
+                    }
+                    if selected == .amneziawg {
+                        Section("AmneziaWG parameters") {
+                            ForEach(["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"], id: \.self) { key in
+                                TextField(key.uppercased(), text: Binding(get: { awgParameters[key] ?? "" }, set: { awgParameters[key] = $0 }))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            }
+                            Text("Copy all eleven values from this node’s configuration. Header ranges such as 10000000-19999999 are preserved exactly. These values must match the server.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 Section("Saved node") {
@@ -388,13 +431,16 @@ struct IOSExternalNodeBuilderView: View {
         do {
             guard let numericPort = (selected.isTor ? 0 : selected == .openvpn ? 1194 : Int(port)) else { throw NSError(domain: "RouterVPN.ExternalNode", code: 30, userInfo: [NSLocalizedDescriptionKey: "Enter a valid port."]) }
             let mtu = wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? nil : Int(wgMTU)
-            if selected == .wireguard && mtu == nil && !wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw NSError(domain: "RouterVPN.ExternalNode", code: 31, userInfo: [NSLocalizedDescriptionKey: "Enter a valid WireGuard MTU."]) }
+            if selected.isWireGuardFamily && mtu == nil && !wgMTU.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { throw NSError(domain: "RouterVPN.ExternalNode", code: 31, userInfo: [NSLocalizedDescriptionKey: "Enter a valid WireGuard-family MTU."]) }
+            let keepalive = wgKeepalive.isEmpty ? nil : Int(wgKeepalive)
+            if selected.isWireGuardFamily && !wgKeepalive.isEmpty && keepalive == nil { throw NSError(domain: "RouterVPN.ExternalNode", code: 36, userInfo: [NSLocalizedDescriptionKey: "Enter a valid persistent keepalive interval."]) }
             try model.createIOSExternalNode(
                 protocolName: selected.rawValue, name: name, server: server, port: numericPort, expectedPublicIP: expectedPublicIP,
                 username: username, password: password, method: method, secret: secret, tlsServerName: tlsName,
                 wgPrivateKey: wgPrivate, wgPeerPublicKey: wgPeer, wgPresharedKey: wgPSK,
                 wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig,
-                torTransport: torTransport, torBridges: selected == .torBridge ? torBridges.split(whereSeparator: \.isNewline).map { String($0) } : []
+                torTransport: torTransport, torBridges: selected == .torBridge ? torBridges.split(whereSeparator: \.isNewline).map { String($0) } : [],
+                wgKeepalive: selected.isWireGuardFamily ? keepalive : nil, awgParameters: selected == .amneziawg ? awgParameters : [:]
             )
             dismiss()
         } catch { errorText = error.localizedDescription }
