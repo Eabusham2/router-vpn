@@ -387,7 +387,19 @@ func (p *externalPredecessor) applyMTU(tun, exit map[string]any, selection exter
 }
 
 func predecessorNamespace(family, tag string) string {
-	return externalEntryTag + "-" + family + "-" + externalDigest([]byte(tag))[:24]
+	// Native composite factories bind their two lanes by a common prefix and
+	// explicit tcp/udp suffix. Hash the common original prefix together so that
+	// namespacing preserves that pairing without allowing another graph's tags.
+	suffix := ""
+	if family == "node" {
+		for _, lane := range []string{"tcp", "udp"} {
+			if strings.HasSuffix(tag, lane) {
+				tag, suffix = strings.TrimSuffix(tag, lane), "-"+lane
+				break
+			}
+		}
+	}
+	return externalEntryTag + "-" + family + "-" + externalDigest([]byte(tag))[:24] + suffix
 }
 
 func (p *externalPredecessor) merge(graph, tun, exit map[string]any) error {

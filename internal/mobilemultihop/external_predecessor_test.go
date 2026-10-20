@@ -11,6 +11,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/mobileperf"
+	"router-vpn/internal/nativecomposite"
 )
 
 var predecessorFamilies = []string{"wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3"}
@@ -148,6 +149,11 @@ func TestExternalFullPredecessorGeneratedFamiliesPreserveEveryOwner(t *testing.T
 									wantTag = externalEntryTag
 								}
 								actual := predecessorCopy(externalTestFind(t, result, wantTag))
+								if actual["type"] == nativecomposite.Type {
+									if err := nativecomposite.ValidateOwner(predecessorText(actual, "mode"), predecessorText(actual, "node_id"), predecessorText(actual, "tag"), predecessorText(actual, "tcp"), predecessorText(actual, "udp")); err != nil {
+										t.Fatal("namespaced native composite lost its paired lane ownership", err)
+									}
+								}
 								for _, key := range []string{"tag", "detour", "tcp", "udp", "domain_resolver"} {
 									delete(owner, key)
 									delete(actual, key)
