@@ -377,13 +377,24 @@ need("android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java",
      "Libbox.routerTorSetStateDirectory", "getNoBackupFilesDir()",
      "torPhysicalNetwork = torPhysical", "capturedTor.prove()",
      "Libbox.routerStrategyCloseService(commandServer)",
-     "if (torOwner || capturedMAX != null)",
+     "if (torOwner || externalOwner || capturedMAX != null)",
      "Native captured-path teardown remains unconfirmed; runtime ownership is retained.")
 need("android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java",
-     "showTorForm", "chooseTorEntryMode", "pendingEntryDigest", "pendingExitDigest",
+     "showTorForm", "chooseNativeEntryMode(nodes.get(w),exit)",
+     "NativeSingBoxController.nativeMultihopEntry(id)", "pendingEntryDigest", "pendingExitDigest",
      "A captured node changed while Android permission was open. Select the path again.")
+# Tor and ordinary external exits share the captured owner/entry selector. Keep
+# their executable cancellation, native-drain and permission negative coverage
+# required instead of requiring the former Tor-only method names.
+need("android/test_android_tor_session.py", "late DNS adoption", "unchecked close",
+     "lost network binding rejected")
+need("android/test_android_external_session.py", "checked native drain",
+     "Home invalidation before native drain")
+need("android/test_android_tor_form.py", "changed or denied permission started a stale capture",
+     '"hidden-mode-list"', "all four original-source negative controls rejected")
 need("android/test_android_runtime_contract.py", '"test_android_tor_profile.py"',
      '"test_android_tor_form.py"', '"test_android_tor_session.py"',
+     '"test_android_external_session.py"',
      '"test_android_start_layer_relay_lifecycle.py"')
 need("deploy/test_android_tor_pinned.py", "with_naive_outbound", "TestRouterTorAndroidGeneratedGraphs",
      "all 348 captured graphs and 348 missing-engine controls")
