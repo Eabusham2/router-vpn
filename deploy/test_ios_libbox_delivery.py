@@ -117,9 +117,11 @@ public final class LibboxOverrideOptions { public init() {} }
 public final class LibboxRouterHopMeasurement {
     private let lock=NSLock()
     private var request="",closed=0,complete=false,drained=false,failClose=false
+    private var cancelledRequests:[String]=[]
     public init() {}
     public func start(_ request: String, bytes: Int64) throws {lock.lock();self.request=request;complete=false;drained=false;lock.unlock()}
-    public func cancel(_ request: String) {lock.lock();if self.request==request{complete=true};lock.unlock()}
+    public func cancel(_ request: String) {lock.lock();cancelledRequests.append(request);if self.request==request{complete=true};lock.unlock()}
+    public func cancellationCalls()->[String]{lock.lock();defer{lock.unlock()};return cancelledRequests}
     public func configure(closeFails:Bool){lock.lock();failClose=closeFails;lock.unlock()}
     public func finishDrain(){lock.lock();complete=true;drained=true;lock.unlock()}
     public func closeCount()->Int{lock.lock();defer{lock.unlock()};return closed}
@@ -616,9 +618,11 @@ final class CompletionState: @unchecked Sendable {
             if !failed {
                 let id=String(repeating:tor ? "b":"a",count:32),other=String(repeating:"c",count:32)
                 check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch) != nil)
-                let beforeCancel=probe!.statusJSON()
+                let beforeCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
+                let beforeCancelCalls=probe!.cancellationCalls()
                 check("early cancel receives bounded discard receipt",owner.hopMeasurementRequest(operation:"hop-measure-cancel",request:other,session:owner.settingsEpoch) != nil)
-                check("foreign request cannot cancel current work",probe!.statusJSON()==beforeCancel)
+                let afterCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
+                check("foreign request cannot cancel current work",afterCancel.isEqual(beforeCancel) && probe!.cancellationCalls()==beforeCancelCalls)
                 check("late start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:owner.settingsEpoch)==nil)
                 check("retired session cannot start on current native owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:UUID().uuidString)==nil)
                 if action=="retired-reply" {
@@ -671,6 +675,14 @@ def main():
         subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
+        foreign_cancel='            guard let probe = owners[id] else {'
+        assert text.count(foreign_cancel)==1
+        broken.write_text(text.replace(foreign_cancel,
+            '            if operation == "hop-measure-cancel", owners[id] == nil { owners.values.first?.cancel(request) }\n'+foreign_cancel))
+        subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(tmp/'foreign-cancel')],check=True,timeout=90)
+        bad=subprocess.run([str(tmp/'foreign-cancel')],capture_output=True,text=True,timeout=25)
+        assert bad.returncode != 0 and 'FAIL: foreign request cannot cancel current work' in bad.stdout+bad.stderr, 'Foreign cancellation negative control did not fail at the ownership assertion'
+        print('Negative control: a foreign cancellation reaching the native owner is rejected')
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'
         start=text.index('    func completeMultihopExecution(')
         end=text.index('    /// Only this delivery object',start)
