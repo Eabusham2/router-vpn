@@ -1,0 +1,89 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// These tests exercise the shipping retained connection and native teardown
+// boundary. They do not invent a live Tor circuit or public throughput result.
+func TestTorMeasurementConnectionRetainsLateNativeClose(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releases, closes atomic.Int32
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	c := &torMeasurementConnection{done: make(chan struct{}),
+		closeNative: func() error { closes.Add(1); close(entered); <-release; return nil },
+		release:     func() { releases.Add(1) }}
+	c.mu.Lock()
+	c.stop = context.AfterFunc(ctx, func() { _ = c.Close() })
+	c.mu.Unlock()
+	cancel()
+	<-entered
+	finished := make(chan struct{})
+	var workers sync.WaitGroup
+	for range 8 {
+		workers.Add(1)
+		go func() { defer workers.Done(); _ = c.Close() }()
+	}
+	go func() { workers.Wait(); close(finished) }()
+	select {
+	case <-finished:
+		t.Fatal("released native measurement before its socket Close")
+	case <-time.After(15 * time.Millisecond):
+	}
+	if releases.Load() != 0 {
+		t.Fatal("Tor native worker was released before Close")
+	}
+	close(release)
+	select {
+	case <-finished:
+	case <-time.After(time.Second):
+		t.Fatal("joined native measurement did not drain")
+	}
+	if closes.Load() != 1 || releases.Load() != 1 {
+		t.Fatal("native close or worker ownership repeated")
+	}
+}
+
+func TestTorMeasurementRejectsUnprovedOrForeignCircuitWithoutDial(t *testing.T) {
+	var dials atomic.Int32
+	h, _ := torPredecessorFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		dials.Add(1)
+		return nil, errors.New("unexpected dial")
+	})
+	for _, session := range []string{"", "foreign-session", h.sessionID} {
+		for _, entry := range []bool{false, true} {
+			if connection, err := h.TorMeasurementDial(context.Background(), session, entry, "1.1.1.1:443"); err == nil || connection != nil {
+				t.Fatal("unproved circuit gained measurement authority")
+			}
+		}
+	}
+	if dials.Load() != 0 {
+		t.Fatal("unproved measurement reached a native transport")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestTorMeasurementCloseFailureRemainsOwnedAndPrivate(t *testing.T) {
+	h, _ := torPredecessorFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) { return nil, net.ErrClosed })
+	bad := &torProofSlowClose{entered: make(chan struct{}), release: make(chan struct{})}
+	close(bad.release)
+	err := h.closeMeasurement(bad)
+	if err == nil || strings.Contains(err.Error(), "private-entry-secret") {
+		t.Fatal("native close failure was lost or exposed", err)
+	}
+	if err := h.Close(); err == nil || strings.Contains(err.Error(), "private-entry-secret") {
+		t.Fatal("Tor owner accepted failed measurement close", err)
+	}
+}

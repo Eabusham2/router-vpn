@@ -1,0 +1,88 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Measurement dials join Tor's retained workers. A late predecessor dial or
+// close remains owned even if its host is cancelled while the native Box stops.
+func (h *Outbound) TorMeasurementDial(parent context.Context, session string, entry bool, address string) (net.Conn, error) {
+	if parent == nil || !h.TorHealthy(session) {
+		return nil, errors.New("Tor measurement has no healthy captured circuit")
+	}
+	h.mu.Lock()
+	if h.closing || h.ctx.Err() != nil || entry && (h.predecessor == "" || h.upstream == nil) {
+		h.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	h.proofWorkers.Add(1)
+	h.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	stopOwner := context.AfterFunc(h.ctx, cancel)
+	release := func() { stopOwner(); cancel(); h.proofWorkers.Done() }
+	var connection net.Conn
+	var err error
+	if entry {
+		connection, err = h.protectedDial(ctx, "tcp", address)
+	} else {
+		connection, err = h.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	}
+	if err != nil || connection == nil || ctx.Err() != nil || !h.TorHealthy(session) {
+		if connection != nil {
+			_ = h.closeMeasurement(connection)
+		}
+		release()
+		return nil, errors.New("Tor measurement native dial failed or retired")
+	}
+	owned := &torMeasurementConnection{Conn: connection, closeNative: func() error { return h.closeMeasurement(connection) }, release: release, done: make(chan struct{})}
+	owned.mu.Lock()
+	owned.stop = context.AfterFunc(ctx, func() { _ = owned.Close() })
+	owned.mu.Unlock()
+	return owned, nil
+}
+
+func (h *Outbound) closeMeasurement(connection net.Conn) error {
+	err := connection.Close()
+	if err == nil || errors.Is(err, net.ErrClosed) || errors.Is(err, io.ErrClosedPipe) {
+		return nil
+	}
+	failure := errors.New("native Tor measurement socket did not close cleanly")
+	h.mu.Lock()
+	h.proofCloseErr = errors.Join(h.proofCloseErr, failure)
+	h.mu.Unlock()
+	h.fail(failure)
+	return failure
+}
+
+type torMeasurementConnection struct {
+	net.Conn
+	mu          sync.Mutex
+	once        sync.Once
+	stop        func() bool
+	closeNative func() error
+	release     func()
+	done        chan struct{}
+	err         error
+}
+
+func (c *torMeasurementConnection) Close() error {
+	c.once.Do(func() {
+		c.mu.Lock()
+		stop := c.stop
+		c.mu.Unlock()
+		if stop != nil {
+			stop()
+		}
+		c.err = c.closeNative()
+		c.release()
+		close(c.done)
+	})
+	<-c.done
+	return c.err
+}

@@ -1,0 +1,47 @@
+package libbox
+
+import "errors"
+
+func RouterExternalCreateHopMeasurement(server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterHopMeasurement, error) {
+	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("external measurement has no successful native proof")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("external measurement native instance unavailable")
+	}
+	current := func() bool {
+		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
+	}
+	service, err := instance.Box().RouterVPNExternalHopMeasurement(proof.request, source, capture, session, current)
+	if err != nil {
+		return nil, err
+	}
+	if !current() {
+		_ = service.Close()
+		return nil, errors.New("external measurement native instance changed")
+	}
+	return &RouterHopMeasurement{service: service}, nil
+}
+
+func RouterTorCreateHopMeasurement(server *CommandServer, proof *RouterTorProofRequest, exitID string) (*RouterHopMeasurement, error) {
+	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("Tor measurement has no successful native proof")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("Tor measurement native instance unavailable")
+	}
+	current := func() bool {
+		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
+	}
+	service, err := instance.Box().RouterVPNTorHopMeasurement(proof.request, exitID, current)
+	if err != nil {
+		return nil, err
+	}
+	if !current() {
+		_ = service.Close()
+		return nil, errors.New("Tor measurement native instance changed")
+	}
+	return &RouterHopMeasurement{service: service}, nil
+}

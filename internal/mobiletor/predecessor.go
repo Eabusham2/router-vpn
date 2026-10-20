@@ -22,6 +22,7 @@ var predecessorNodeID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Its credentials are deliberately private and cannot be replaced after the
 // native Tor request captures the corresponding encrypted lower outbound.
 type PredecessorProof struct {
+	id      string
 	address string
 	target  string
 	token   string
@@ -53,7 +54,7 @@ func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
 		}
 	}
 	api.Path = "/health"
-	return &PredecessorProof{address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id")}, nil
+	return &PredecessorProof{id: profileString(profile, "id"), address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id")}, nil
 }
 
 // Prove sends only GET /health to the captured private literal origin through

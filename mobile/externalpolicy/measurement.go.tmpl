@@ -1,0 +1,91 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+)
+
+func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofRequest, source, capture, session string, current func() bool) (*hopmeasure.Service, error) {
+	if s == nil || proof == nil || proof.request == nil || !proof.Healthy() || current == nil || !current() {
+		return nil, errors.New("external measurement native proof is unavailable")
+	}
+	policy, err := mobilemultihop.NewExternalPolicy(source, capture)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || routerVPNExternalOptionsDigest(s.ctx, compiled) != s.routerVPNExternalOptions {
+		return nil, errors.New("external measurement is not the running native graph")
+	}
+	var meta struct {
+		EntryTag string `json:"entry_tag"`
+		TUNTag   string `json:"tun_tag"`
+	}
+	if json.Unmarshal([]byte(policy.Metadata()), &meta) != nil {
+		return nil, errors.New("external measurement metadata invalid")
+	}
+	core, err := s.routerVPNExternalEngine(meta.EntryTag, meta.TUNTag, compiled)
+	if err != nil {
+		return nil, err
+	}
+	engine := &routerVPNExternalMeasurementEngine{core: core, current: current, proof: proof, tunTag: meta.TUNTag}
+	return proof.request.NewHopMeasurement(source, capture, session, engine)
+}
+
+type routerVPNExternalMeasurementEngine struct {
+	core    *routerVPNExternalNativeEngine
+	current func() bool
+	proof   *RouterVPNExternalProofRequest
+	tunTag  string
+}
+
+func (e *routerVPNExternalMeasurementEngine) Identity() string {
+	if e == nil || e.current == nil || !e.current() || !e.proof.Healthy() {
+		return ""
+	}
+	return e.core.Identity()
+}
+func (e *routerVPNExternalMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if e.Identity() == "" || ctx.Err() != nil {
+		return nil, errors.New("external measurement owner retired")
+	}
+	if address != hopmeasure.PublicAddress {
+		return e.core.Dial(ctx, tag, address)
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	query = adapter.WithContext(query, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := e.core.box.dnsRouter.Lookup(query, hopmeasure.PublicHost, adapter.DNSQueryOptions{})
+	if err != nil || e.Identity() == "" || ctx.Err() != nil {
+		return nil, errors.New("captured external DNS lookup failed")
+	}
+	for _, ip := range addresses {
+		if !routerVPNPublicMeasurementAddress(ip) {
+			continue
+		}
+		connection, err := e.core.Dial(ctx, tag, net.JoinHostPort(ip.String(), "443"))
+		if err == nil && connection != nil && e.Identity() != "" && ctx.Err() == nil {
+			return connection, nil
+		}
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if e.Identity() == "" || ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.New("selected external route could not reach the public measurement origin")
+}
+func routerVPNPublicMeasurementAddress(ip netip.Addr) bool {
+	return ip.IsValid() && ip.Zone() == "" && !ip.Is4In6() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.IsLoopback() && !ip.IsLinkLocalUnicast() && !ip.IsUnspecified()
+}

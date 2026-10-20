@@ -1,0 +1,118 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"regexp"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNTorMeasurementOwner interface {
+	TorMeasurementDial(context.Context, string, bool, string) (net.Conn, error)
+}
+
+var routerVPNTorMeasurementID = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$`)
+
+func (s *Box) RouterVPNTorHopMeasurement(proof *RouterVPNTorProofRequest, exitID string, current func() bool) (*hopmeasure.Service, error) {
+	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.outbound == nil || s.dnsRouter == nil || s.dnsTransport == nil || proof == nil || !proof.Healthy() || current == nil || !current() || !routerVPNTorMeasurementID.MatchString(exitID) {
+		return nil, errors.New("Tor measurement requires its successful native circuit proof")
+	}
+	actual, ok := s.outbound.Outbound(mobiletor.ProfileOutboundTag)
+	owner, implements := proof.owner.(routerVPNTorMeasurementOwner)
+	if !ok || any(actual) != any(proof.owner) || !implements {
+		return nil, errors.New("Tor measurement does not belong to this native outbound")
+	}
+	dns, ok := s.dnsTransport.Transport("routervpn-tor-dns")
+	if !ok || dns == nil {
+		return nil, errors.New("Tor measurement selected DNS owner missing")
+	}
+	engine := &routerVPNTorMeasurementEngine{box: s, proof: proof, current: current, owner: owner, dns: dns}
+	hops := make([]hopmeasure.Hop, 0, 2)
+	if proof.predecessor != nil {
+		id, api, token, node := proof.predecessor.MeasurementIdentity()
+		hops = append(hops, hopmeasure.Hop{ID: id, Role: "entry", Tag: "external-entry", Kind: "private-node", API: api, Token: token, Proof: node})
+	}
+	hops = append(hops, hopmeasure.Hop{ID: exitID, Role: "exit", Tag: "custom-exit", Kind: "public-path", Label: "Tor circuit → Cloudflare edge"})
+	return hopmeasure.New(engine, hops)
+}
+
+type routerVPNTorMeasurementEngine struct {
+	box     *Box
+	proof   *RouterVPNTorProofRequest
+	current func() bool
+	owner   routerVPNTorMeasurementOwner
+	dns     adapter.DNSTransport
+}
+
+func (e *routerVPNTorMeasurementEngine) Identity() string {
+	if e == nil || e.box.ctx.Err() != nil || !e.current() || !e.proof.Healthy() {
+		return ""
+	}
+	select {
+	case <-e.box.done:
+		return ""
+	default:
+	}
+	selected, ok := e.box.dnsTransport.Transport("routervpn-tor-dns")
+	if !ok || selected != e.dns {
+		return ""
+	}
+	actual, ok := e.box.outbound.Outbound(mobiletor.ProfileOutboundTag)
+	if !ok || any(actual) != any(e.proof.owner) {
+		return ""
+	}
+	return fmt.Sprintf("%p:%s", e.box, e.proof.sessionID)
+}
+func (e *routerVPNTorMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if e.Identity() == "" || ctx.Err() != nil {
+		return nil, errors.New("Tor measurement owner retired")
+	}
+	entry := tag == "external-entry"
+	if tag != "custom-exit" && !entry || entry && e.proof.predecessor == nil {
+		return nil, errors.New("Tor measurement route is unowned")
+	}
+	if address != hopmeasure.PublicAddress {
+		_, api, _, _ := e.proof.predecessor.MeasurementIdentity()
+		if !entry || api != "http://"+address {
+			return nil, errors.New("Tor measurement must use its captured private entry")
+		}
+		return e.dial(ctx, entry, address)
+	}
+	query, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Tor's compiler owns this exact selected remote DNS transport; no system
+	// resolver or bridge-bootstrap transport may replace it for measurements.
+	addresses, err := e.box.dnsRouter.Lookup(query, hopmeasure.PublicHost, adapter.DNSQueryOptions{Transport: e.dns})
+	if err != nil || e.Identity() == "" || ctx.Err() != nil {
+		return nil, errors.New("Tor selected DNS lookup failed")
+	}
+	for _, ip := range addresses {
+		if !routerVPNPublicMeasurementAddress(ip) {
+			continue
+		}
+		connection, err := e.dial(ctx, entry, net.JoinHostPort(ip.String(), "443"))
+		if err == nil && connection != nil {
+			return connection, nil
+		}
+		if e.Identity() == "" || ctx.Err() != nil {
+			break
+		}
+	}
+	return nil, errors.New("Tor measurement could not reach its fixed public origin")
+}
+func (e *routerVPNTorMeasurementEngine) dial(ctx context.Context, entry bool, address string) (net.Conn, error) {
+	connection, err := e.owner.TorMeasurementDial(ctx, e.proof.sessionID, entry, address)
+	if err != nil || e.Identity() == "" || ctx.Err() != nil {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, errors.New("Tor measurement dial failed or became stale")
+	}
+	return connection, nil
+}

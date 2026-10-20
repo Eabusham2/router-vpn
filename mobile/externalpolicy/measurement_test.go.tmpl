@@ -1,0 +1,25 @@
+package box_test
+
+import "testing"
+
+// The real pinned Box, option parser, outbound/DNS managers and proof factory
+// are used; only the OS TUN is a test adapter in externalNativeFixture.
+func TestRouterVPNExternalMeasurementCannotReplaceSuccessfulNativeProofWithHostBoolean(t *testing.T) {
+	engine := externalNativeFixture(t, nil)
+	proof, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []func() bool{nil, func() bool { return false }, func() bool { return true }} {
+		if measurement, err := engine.RouterVPNExternalHopMeasurement(proof, externalFixtureSource, externalFixtureCapture, "owned-session", current); err == nil || measurement != nil {
+			t.Fatal("an unproved native connection or host Boolean gained measurement authority")
+		}
+	}
+	proof.Cancel()
+	if measurement, err := engine.RouterVPNExternalHopMeasurement(proof, externalFixtureSource, externalFixtureCapture, "owned-session", func() bool { return true }); err == nil || measurement != nil {
+		t.Fatal("cancelled native proof gained measurement authority")
+	}
+	if measurement, err := engine.RouterVPNExternalHopMeasurement(nil, externalFixtureSource, externalFixtureCapture, "owned-session", func() bool { return true }); err == nil || measurement != nil {
+		t.Fatal("missing native proof gained measurement authority")
+	}
+}
