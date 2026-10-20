@@ -152,7 +152,7 @@ func TestAndroidAESXORStartLayerOwnsProtectedRelayLifecycle(t *testing.T) {
 	homeState := repoFile(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidHomeStateStore.java")
 	for _, required := range []string{
 		`EMERGENCY_PREFIX = "Emergency Disconnect requested;"`,
-		"static boolean emergencyDisconnectPending(Context context)",
+		"static synchronized boolean emergencyDisconnectPending(Context context)",
 		"runtime.wireGuard.getState() != com.wireguard.android.backend.Tunnel.State.DOWN",
 		"runtime.amneziaWG.getState() != org.amnezia.awg.backend.Tunnel.State.DOWN",
 		"Emergency Disconnect cannot release session ownership until WireGuard and AmneziaWG both prove DOWN.",
