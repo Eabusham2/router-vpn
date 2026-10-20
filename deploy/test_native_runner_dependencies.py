@@ -87,7 +87,7 @@ sys.exit(status)
             subprocess.run([sys.executable, '-', str(ROOT), str(core)], input=block,
                            text=True, check=True, timeout=15)
             target = core / 'experimental/libbox/routervpn'
-            for package in ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'startwhitening', 'nativesip003', 'nativecomposite'):
+            for package in ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'startwhitening', 'nativesip003', 'nativecomposite', 'mobileperf', 'hopmeasure', 'nativeopenvpn'):
                 originals = {p.name for p in (ROOT/'internal'/package).glob('*.go') if not p.name.endswith('_test.go')}
                 self.assertEqual({p.name for p in (target/package).glob('*.go')}, originals)
             for source in target.rglob('*.go'):

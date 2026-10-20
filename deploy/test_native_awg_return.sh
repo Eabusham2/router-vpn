@@ -14,7 +14,7 @@ python3 - "$ROOT" "$WORK/core" <<'PY'
 from pathlib import Path
 import sys
 source,core=map(Path,sys.argv[1:])
-packages=('awgpolicy','routechoice','multihoprelay','mobilemultihop', 'mobilepq', 'applexray','startwhitening','nativesip003','nativecomposite')
+packages=('awgpolicy','routechoice','multihoprelay','mobilemultihop', 'mobilepq', 'applexray','startwhitening','nativesip003','nativecomposite','mobileperf','hopmeasure','nativeopenvpn')
 for package in packages:
     target=core/'experimental/libbox/routervpn'/package
     target.mkdir(parents=True,exist_ok=True)

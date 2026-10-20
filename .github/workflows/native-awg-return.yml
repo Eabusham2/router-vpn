@@ -31,6 +31,8 @@ jobs:
         with:
           go-version: '1.26.3'
           cache: false
+      - name: Check native runner package closure
+        run: python3 deploy/test_native_runner_dependencies.py
       - name: Verify captured encrypted entry and nested return paths
         shell: bash
         run: |
