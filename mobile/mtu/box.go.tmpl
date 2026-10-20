@@ -13,7 +13,9 @@ func (s *Box) RouterVPNChangeMTU(ctx context.Context, expected adapter.Inbound, 
  original, ok := expected.(*tun.Inbound)
  if !ok { return nil, errors.New("captured inbound is not the native TUN") }
  current, exists := s.inbound.Get(expected.Tag())
- if !exists || current != expected || ctx.Err() != nil { return current, errors.New("MTU inbound ownership changed") }
+ // A different live reader is not a result of this transaction. Returning it
+ // would let a stale MTU owner adopt another operation's interface on error.
+ if !exists || current != expected || ctx.Err() != nil { return expected, errors.New("MTU inbound ownership changed") }
  candidate, rollback, err := original.RouterVPNMTUReaders(mtu)
  if err != nil { return expected, err }
  return s.inbound.RouterVPNReplaceTun(ctx, expected, candidate, rollback)
