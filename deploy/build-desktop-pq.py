@@ -15,11 +15,17 @@ import re
 import shutil
 import subprocess
 import tempfile
+import contextlib
+import tarfile
+import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('desktop_mobile_pq', ROOT/'deploy/build-mobile-pq.py')
 MOBILE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(MOBILE)
+spec = importlib.util.spec_from_file_location('desktop_packet_pq', ROOT/'deploy/prepare-desktop-rosenpass.py')
+PACKET = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(PACKET)
 RUST = MOBILE.RUST
 REVISION = '00569eb273016a10d2e75e5142236f06f7c3d4b3'
 TARGETS = {
@@ -34,15 +40,19 @@ MAX_LIBRARY = 384 * 1024 * 1024
 
 
 def run(command, *, env=None, capture=True):
-    result = subprocess.run([str(arg) for arg in command], env=env, check=True,
+    result = subprocess.run([str(arg) for arg in command], env=env,
                             text=True, stdout=subprocess.PIPE if capture else None,
                             stderr=subprocess.STDOUT if capture else None, timeout=1800)
+    if result.returncode:
+        if result.stdout:
+            print(result.stdout[-24000:], flush=True)
+        result.check_returncode()
     return result.stdout or ''
 
 
 def digest():
     value = hashlib.sha256()
-    for path in (Path(__file__).resolve(), ROOT/'deploy/build-mobile-pq.py',
+    for path in (Path(__file__).resolve(), ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                  *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
                  *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                  *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
@@ -79,9 +89,14 @@ def verify(directory, target):
     flags = receipt.get('native_static_libs')
     if not isinstance(flags, list) or link_flags('note: native-static-libs: '+' '.join(flags)) != flags:
         raise ValueError('Invalid desktop PQ native dependency receipt')
+    names = {'libroutervpn_rosenpass.a', 'DESKTOP-PQ.json'}
+    if target.startswith('windows/'):
+        imported = regular(directory/'libwindows.a', 32 << 20)
+        required.update(windows_import_size=len(imported), windows_import_sha256=hashlib.sha256(imported).hexdigest())
+        names.add('libwindows.a')
     if receipt != {**required, 'native_static_libs': flags}:
         raise ValueError('Desktop PQ archive differs from its exact source/target receipt')
-    if set(path.name for path in directory.iterdir()) != {'libroutervpn_rosenpass.a', 'DESKTOP-PQ.json'}:
+    if set(path.name for path in directory.iterdir()) != names:
         raise ValueError('Unexpected desktop PQ bundle contents')
     return receipt
 
@@ -107,6 +122,54 @@ def environment(target, cache):
     return env
 
 
+def locked_metadata(env):
+    return json.loads(run(['cargo', 'metadata', '--locked', '--format-version=1',
+                           '--manifest-path', ROOT/'mobile/rosenpass/Cargo.toml'], env=env))
+
+
+def windows_import(target, metadata):
+    name = 'windows_'+('x86_64' if target.endswith('/amd64') else 'aarch64')+'_gnullvm'
+    entries = [item for item in metadata['packages'] if item['name'] == name and item['version'] == '0.42.2']
+    if len(entries) != 1 or not entries[0].get('source', '').startswith('registry+'):
+        raise ValueError('Windows import archive does not have its exact locked provenance')
+    package = Path(entries[0]['manifest_path']).parent
+    lock = tomllib.loads((ROOT/'mobile/rosenpass/Cargo.lock').read_text())
+    pins = [p for p in lock['package'] if p['name'] == name and p['version'] == '0.42.2']
+    if len(pins) != 1:
+        raise ValueError('Windows import archive version is ambiguous')
+    archive = package.parents[2]/'cache'/package.parent.name/(package.name+'.crate')
+    raw = regular(archive, 32 << 20)
+    if hashlib.sha256(raw).hexdigest() != pins[0]['checksum']:
+        raise ValueError('Windows import crate checksum differs from Cargo.lock')
+    with tarfile.open(archive, 'r:gz') as tar:
+        member = tar.getmember(package.name+'/lib/libwindows.a')
+        if not member.isfile() or not 0 < member.size <= 32 << 20:
+            raise ValueError('Invalid pinned Windows import archive member')
+        return tar.extractfile(member).read()
+
+
+@contextlib.contextmanager
+def native_manifest(target, env):
+    if not target.startswith('windows/'):
+        yield ROOT/'mobile/rosenpass/Cargo.toml', None
+        return
+    metadata = locked_metadata(env)
+    entries = [item for item in metadata['packages'] if item['name'] == 'rosenpass'
+               and item.get('source', '').endswith('#'+REVISION)]
+    if len(entries) != 1:
+        raise ValueError('Pinned packet protocol source is ambiguous')
+    source = Path(entries[0]['manifest_path']).parent.parent
+    with tempfile.TemporaryDirectory(prefix='routervpn-packet-protocol-') as temp:
+        manifest = PACKET.prepare(source, Path(temp)/'packet')
+        before = (ROOT/'mobile/rosenpass/Cargo.lock').read_bytes()
+        run(['cargo', 'metadata', '--offline', '--format-version=1', '--manifest-path', manifest], env=env)
+        frozen = manifest.with_name('Cargo.lock').read_bytes()
+        PACKET.verify_lock(before, frozen)
+        yield manifest, windows_import(target, metadata)
+        if manifest.with_name('Cargo.lock').read_bytes() != frozen:
+            raise ValueError('Desktop compilation modified the verified portable dependency lock')
+
+
 def build(target, output, cache):
     if target not in TARGETS:
         raise ValueError('Unsupported desktop PQ target')
@@ -123,11 +186,11 @@ def build(target, output, cache):
     if not run(['cargo', '--version'], env=env).startswith('cargo '+RUST+' '):
         raise ValueError('Desktop PQ requires the matching pinned Cargo compiler')
     lock = MOBILE.validate_lock()
-    manifest = ROOT/'mobile/rosenpass/Cargo.toml'
-    command = ['cargo', 'rustc', '--locked', '--manifest-path', manifest, '--target', TARGETS[target],
-               '--release', '--lib', '--', '--print', 'native-static-libs']
     print('Building actual pinned Rosenpass ABI for '+target, flush=True)
-    result = run(command, env=env)
+    with native_manifest(target, env) as (manifest, imported):
+        command = ['cargo', 'rustc', '--locked', '--manifest-path', manifest, '--target', TARGETS[target],
+                   '--release', '--lib', '--', '--print', 'native-static-libs']
+        result = run(command, env=env)
     flags = link_flags(result)
     if MOBILE.validate_lock() != lock:
         raise ValueError('Desktop PQ build changed the pinned dependency lock')
@@ -141,6 +204,9 @@ def build(target, output, cache):
                    'rust_toolchain': RUST, 'rosenpass_revision': REVISION,
                    'source_sha256': digest(), 'cargo_lock_sha256': lock,
                    'size': len(raw), 'sha256': hashlib.sha256(raw).hexdigest(), 'native_static_libs': flags}
+        if imported is not None:
+            (stage/'libwindows.a').write_bytes(imported)
+            receipt.update(windows_import_size=len(imported), windows_import_sha256=hashlib.sha256(imported).hexdigest())
         (stage/'DESKTOP-PQ.json').write_text(json.dumps(receipt, sort_keys=True, indent=2)+'\n')
         verify(stage, target)
         if output.exists():
