@@ -34,6 +34,7 @@ func (m *RouterHopMeasurement) Start(request string, bytes int64)error{
  return m.service.Start(request,int(bytes))
 }
 func (m *RouterHopMeasurement) Cancel(request string){m.service.Cancel(request)}
+func (m *RouterHopMeasurement) Drain(request string)error{return m.service.Drain(request)}
 func (m *RouterHopMeasurement) StatusJSON()string{return m.service.StatusJSON()}
 func (m *RouterHopMeasurement) Close()error{return m.service.Close()}
 func (m *RouterHopMeasurement) NetworkChanged(){m.service.Invalidate()}

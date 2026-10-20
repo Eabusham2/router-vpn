@@ -54,7 +54,7 @@ func (e *testEngine) Dial(ctx context.Context, tag, address string) (net.Conn, e
 func fixture(t *testing.T) (*Service, *testEngine) {
 	t.Helper()
 	e := &testEngine{gates: map[string]*atomic.Pointer[testLoadGate]{}, generation: "generation-one:local", bad: map[string]string{}, servers: map[string]*httptest.Server{}, requests: map[string]int{}, destinations: map[string]string{"entry-wg": "10.77.0.1:8787", "proxy": "10.88.0.1:8787"}}
-	hops := []Hop{{"one", "entry", "entry-wg", "http://10.77.0.1:8787", "token-one", strings.Repeat("a", 64)}, {"two", "exit", "proxy", "http://10.88.0.1:8787", "token-two", strings.Repeat("b", 64)}}
+	hops := []Hop{{ID: "one", Role: "entry", Tag: "entry-wg", API: "http://10.77.0.1:8787", Token: "token-one", Proof: strings.Repeat("a", 64)}, {ID: "two", Role: "exit", Tag: "proxy", API: "http://10.88.0.1:8787", Token: "token-two", Proof: strings.Repeat("b", 64)}}
 	for _, hop := range hops {
 		h := hop
 		load := &atomic.Pointer[testLoadGate]{}

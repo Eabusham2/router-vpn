@@ -6,6 +6,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"io"
@@ -42,6 +43,8 @@ type Hop struct {
 	API   string `json:"api"`
 	Token string `json:"token"`
 	Proof string `json:"proof"`
+	Kind  string `json:"kind,omitempty"`
+	Label string `json:"label,omitempty"`
 }
 type Latency struct {
 	Samples int     `json:"samples"`
@@ -63,6 +66,8 @@ type Transfer struct {
 type Result struct {
 	ID       string    `json:"node_id"`
 	Role     string    `json:"role"`
+	Kind     string    `json:"kind"`
+	Label    string    `json:"label"`
 	Ready    bool      `json:"ready"`
 	Failure  string    `json:"failure,omitempty"`
 	Idle     *Latency  `json:"idle,omitempty"`
@@ -73,6 +78,7 @@ type Status struct {
 	Request  string   `json:"request_id"`
 	Stage    string   `json:"stage"`
 	Complete bool     `json:"complete"`
+	Drained  bool     `json:"drained"`
 	Failure  string   `json:"failure,omitempty"`
 	Results  []Result `json:"results"`
 }
@@ -85,6 +91,8 @@ type Service struct {
 	state    Status
 	cancel   context.CancelFunc
 	done     chan struct{}
+	// Unexported trusted-root seam for local TLS protocol/lifetime tests.
+	publicTLS *tls.Config
 }
 
 func New(engine Engine, hops []Hop) (*Service, error) {
@@ -93,22 +101,47 @@ func New(engine Engine, hops []Hop) (*Service, error) {
 	}
 	seen := map[string]bool{}
 	copyHops := append([]Hop(nil), hops...)
-	for _, h := range copyHops {
-		if h.ID == "" || len(h.ID) > 128 || seen[h.ID] || !nodeID.MatchString(h.Proof) || h.Token == "" || len(h.Token) > 4096 || strings.ContainsAny(h.Token, "\r\n\x00") {
+	for index, h := range copyHops {
+		if h.ID == "" || len(h.ID) > 128 || seen[h.ID] || strings.ContainsAny(h.ID, "\r\n\x00") {
 			return nil, errors.New("invalid frozen hop identity")
 		}
-		if h.Tag != "proxy" && h.Tag != "entry-wg" && h.Tag != "routervpn-hop-entry" {
+		if h.Tag != "proxy" && h.Tag != "entry-wg" && h.Tag != "routervpn-hop-entry" && h.Tag != "custom-exit" && h.Tag != "external-entry" {
 			return nil, errors.New("unowned measurement route")
 		}
 		if h.Role != "entry" && h.Role != "exit" {
 			return nil, errors.New("unowned measurement role")
 		}
-		if (h.Role == "exit") != (h.Tag == "proxy") {
+		if (h.Role == "exit") != (h.Tag == "proxy" || h.Tag == "custom-exit") {
 			return nil, errors.New("hop role differs from native route")
 		}
-		if _, err := privateAPI(h.API); err != nil {
-			return nil, err
+		if h.Kind == "" {
+			h.Kind = "private-node"
 		}
+		switch h.Kind {
+		case "private-node":
+			if !nodeID.MatchString(h.Proof) || h.Token == "" || len(h.Token) > 4096 || strings.ContainsAny(h.Token, "\r\n\x00") {
+				return nil, errors.New("invalid captured private node proof")
+			}
+			if _, err := privateAPI(h.API); err != nil {
+				return nil, err
+			}
+			if h.Label == "" {
+				h.Label = "Router VPN " + h.Role + " private API"
+			}
+		case "public-path":
+			if h.API != "" || h.Token != "" || h.Proof != "" || h.Tag != "custom-exit" && h.Tag != "external-entry" {
+				return nil, errors.New("public path cannot claim a private node or unowned route")
+			}
+			if h.Label == "" {
+				h.Label = "External " + h.Role + " → Cloudflare edge"
+			}
+		default:
+			return nil, errors.New("unknown measurement kind")
+		}
+		if len(h.Label) > 160 || strings.ContainsAny(h.Label, "\r\n\x00") {
+			return nil, errors.New("invalid measurement label")
+		}
+		copyHops[index] = h
 		seen[h.ID] = true
 	}
 	return &Service{hops: copyHops, engine: engine, identity: engine.Identity(), state: Status{Stage: "idle", Results: []Result{}}}, nil
@@ -173,6 +206,30 @@ func (s *Service) Cancel(id string) {
 	}
 }
 
+// Drain joins only the named request. A cancellation acknowledgement is not
+// proof that a late native dial, transfer or socket close has finished. Hosts
+// keep the MTU measurement hold until this succeeds, including cancellation.
+func (s *Service) Drain(id string) error {
+	s.mu.Lock()
+	if id != s.state.Request {
+		s.mu.Unlock()
+		return errors.New("measurement drain belongs to another request")
+	}
+	done := s.done
+	s.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return errors.New("measurement request has not drained")
+	}
+}
+
 // Invalidate cancels immediately; Close performs the bounded drain on teardown.
 func (s *Service) Invalidate() {
 	s.mu.Lock()
@@ -181,7 +238,7 @@ func (s *Service) Invalidate() {
 	if s.cancel != nil {
 		s.cancel()
 	}
-	s.state = Status{Stage: "invalidated", Complete: true, Failure: "Native path changed", Results: []Result{}}
+	s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Native path changed", Results: []Result{}}
 }
 func (s *Service) Close() error {
 	s.mu.Lock()
@@ -190,7 +247,7 @@ func (s *Service) Close() error {
 		s.cancel()
 	}
 	done := s.done
-	s.state = Status{Stage: "invalidated", Complete: true, Failure: "Native path changed or closed", Results: []Result{}}
+	s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Native path changed or closed", Results: []Result{}}
 	s.mu.Unlock()
 	if done != nil {
 		select {
@@ -208,7 +265,15 @@ func (s *Service) StatusJSON() string {
 		if s.cancel != nil {
 			s.cancel()
 		}
-		s.state = Status{Stage: "invalidated", Complete: true, Failure: "Selected native path changed", Results: []Result{}}
+		s.state = Status{Request: s.state.Request, Stage: "invalidated", Complete: true, Failure: "Selected native path changed", Results: []Result{}}
+	}
+	s.state.Drained = s.done == nil
+	if s.done != nil {
+		select {
+		case <-s.done:
+			s.state.Drained = true
+		default:
+		}
 	}
 	b, _ := json.Marshal(s.state)
 	return string(b)
@@ -230,7 +295,7 @@ func (s *Service) run(ctx context.Context, id string, size int) {
 		if s.phase(ctx, id, h.Role+":idle") != nil {
 			break
 		}
-		r := Result{ID: h.ID, Role: h.Role}
+		r := Result{ID: h.ID, Role: h.Role, Kind: h.Kind, Label: h.Label}
 		idle, err := s.latency(ctx, h, 6)
 		if err == nil {
 			r.Idle = idle
@@ -342,6 +407,9 @@ func (s *Service) requestWithActivity(ctx context.Context, h Hop, path string, s
 	return resp, start, client, nil
 }
 func (s *Service) prove(parent context.Context, h Hop) (float64, error) {
+	if h.Kind == "public-path" {
+		return s.provePublic(parent, h)
+	}
 	ctx, cancel := context.WithTimeout(parent, 2*time.Second)
 	defer cancel()
 	resp, start, client, err := s.request(ctx, h, "/health", 0, false)
@@ -401,6 +469,9 @@ func distribution(samples []float64) *Latency {
 	return &Latency{len(v), v[0], median, total / float64(len(v)), v[int(math.Ceil(float64(len(v))*.9))-1], v[len(v)-1], jitter}
 }
 func (s *Service) transfer(parent context.Context, h Hop, size int, upload bool, idle *Latency) (*Transfer, error) {
+	if h.Kind == "public-path" {
+		return s.transferPublic(parent, h, size, upload, idle)
+	}
 	ctx, cancel := context.WithTimeout(parent, 20*time.Second)
 	defer cancel()
 	activity := newTransferActivity()
