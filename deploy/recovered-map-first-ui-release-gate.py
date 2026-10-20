@@ -18,6 +18,7 @@ GATES = (
     "speed-lab-shipping-audit.py",
     "setup-center-responsive-ui-audit.py",
     "tor-circumvention-audit.py",
+    "tor-circumvention-audit-test.py",
     "typed-external-node-audit.py",
     "recovered-native-ui-contract-test.py",
     "recovered-native-ui-contract-audit.py",

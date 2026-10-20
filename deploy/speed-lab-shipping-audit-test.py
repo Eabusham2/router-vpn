@@ -8,6 +8,7 @@ from unittest.mock import patch
 AUDIT = runpy.run_path(str(Path(__file__).with_name("speed-lab-shipping-audit.py")))
 CHECK = AUDIT["need_go_map_entry"]
 IOS_CHECK = AUDIT["need_ios_topology_routes"]
+ANDROID_CHECK = AUDIT["need_android_captured_transaction"]
 
 
 class SpeedLabResponseAuditTests(unittest.TestCase):
@@ -71,6 +72,31 @@ class SpeedLabIOSTopologyAuditTests(unittest.TestCase):
         marker = 'model.iosMultihopEntryBundle(for: saved)'
         changed = self.source.replace(marker, 'removed') + '\n// '+marker+'\n'
         self.assertTrue(self.check_source(changed))
+
+
+class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
+    source = (Path(__file__).resolve().parents[1]/"android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabController.java").read_text()
+
+    def check_source(self, source):
+        errors = []
+        with patch.dict(ANDROID_CHECK.__globals__, {"read": lambda _: source, "errors": errors}):
+            ANDROID_CHECK("fixture.java")
+        return errors
+
+    def test_captured_cleanup_and_exact_fresh_restoration_are_required(self):
+        self.assertEqual([], self.check_source(self.source))
+        for marker in ('original=connection.captureRestorePoint()',
+                       'connection.restorePointCurrent(original)',
+                       'connection.stopCaptured(home,topology,',
+                       'if(pathDecisionChanged||!connection.idleCurrent(idle))',
+                       'connection.restoreCaptured(original,idle,',
+                       '!connection.restoredCurrent(original,restoredOwner[0])',
+                       'meter.cancel()', 'nativeHopMeter.cancel()',
+                       'AndroidMTUMeasurementGate.release(lease)'):
+            with self.subTest(marker=marker):
+                changed = self.source.replace(marker, "removed")
+                self.assertTrue(self.check_source(changed))
+                self.assertTrue(self.check_source(changed + "\n// " + marker))
 
 
 if __name__ == "__main__":

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import ast
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -28,6 +29,23 @@ def forbid(path: str, *markers: str) -> None:
     for marker in markers:
         if marker in body:
             errors.append(f"{path}: forbidden Tor marker {marker!r}")
+
+
+def need_android_tor_editor_controls(path: str) -> None:
+    try:
+        tree = ast.parse(read(path))
+        controls = next(node for node in ast.walk(tree) if isinstance(node, ast.Assign)
+                        and any(isinstance(target, ast.Name) and target.id == "controls" for target in node.targets))
+        rows = ast.literal_eval(controls.value)
+        expected = {"rewritten-policy", "ipv6-default", "lan-default", "dns-precedence", "hidden-mode-list"}
+        if not expected.issubset({row[0] for row in rows}):
+            raise ValueError("an actual Tor editor mutation control is missing")
+        guard = "rejected.returncode == 0 or failure not in rejected.stderr"
+        if not any(isinstance(node, ast.If) and ast.unparse(node.test) == guard
+                   and any(isinstance(child, ast.Raise) for child in node.body) for node in ast.walk(tree)):
+            raise ValueError("mutated shipping editor must fail its specific executable assertion")
+    except (SyntaxError, ValueError, TypeError, IndexError, StopIteration) as error:
+        errors.append(f"{path}: Tor editor negative controls are incomplete: {error}")
 
 
 # Canonical external profile model: PT family is explicit, dynamic Tor exit is
@@ -392,7 +410,8 @@ need("android/test_android_tor_session.py", "DNS completion owner check", "check
 need("android/test_android_external_session.py", "checked native drain",
      "Home invalidation before native drain")
 need("android/test_android_tor_form.py", "changed or denied permission started a stale capture",
-     '"hidden-mode-list"', "all four original-source negative controls rejected")
+     '"hidden-mode-list"', "entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);")
+need_android_tor_editor_controls("android/test_android_tor_form.py")
 need("android/test_android_runtime_contract.py", '"test_android_tor_profile.py"',
      '"test_android_tor_form.py"', '"test_android_tor_session.py"',
      '"test_android_external_session.py"',

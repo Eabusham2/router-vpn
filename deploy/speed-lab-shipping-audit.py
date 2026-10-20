@@ -61,6 +61,21 @@ def need_ios_topology_routes(path: str) -> None:
         errors.append(f"{path}: direct external testing no longer rejects a saved multihop graph")
 
 
+def need_android_captured_transaction(path: str) -> None:
+    body = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/',
+                  lambda match: match.group(1) or "", read(path), flags=re.S)
+    for marker in ('original=connection.captureRestorePoint()',
+                   'connection.restorePointCurrent(original)',
+                   'connection.stopCaptured(home,topology,',
+                   'if(pathDecisionChanged||!connection.idleCurrent(idle))',
+                   'connection.restoreCaptured(original,idle,',
+                   '!connection.restoredCurrent(original,restoredOwner[0])',
+                   'meter.cancel()', 'nativeHopMeter.cancel()',
+                   'AndroidMTUMeasurementGate.release(lease)'):
+        if marker not in body:
+            errors.append(f"{path}: captured Android transaction lost {marker!r}")
+
+
 # Shared desktop controller: current path is identity-bound, temporary paths are
 # transactional/non-persistent, and real Mbps + idle/loaded latency are distinct.
 need(
@@ -304,8 +319,12 @@ need(
     "connectExternal",
     "AndroidSpeedLabHopMeter",
     "lastHops",
-    "connection.disconnect",
 )
+need_android_captured_transaction("android/app/src/main/java/com/eabusham/routervpn/AndroidSpeedLabController.java")
+need("android/test_android_speed_lab_restore.py", "fresh restoration owner", "captured original winner",
+     "HTTP cancellation", "native cancellation", "negative control escaped")
+need("android/test_android_runtime_contract.py", '"test_android_speed_lab_restore.py"',
+     '"test_android_multihop_restore.py"')
 need(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java",
     "ENTRY_PROOF_PORT = 1098",
