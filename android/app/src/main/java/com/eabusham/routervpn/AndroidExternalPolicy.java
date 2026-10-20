@@ -81,6 +81,7 @@ final class AndroidExternalPolicy {
         if (policy.length() == 0 && inherited != null) {
             for (String key : POLICY) if (inherited.has(key)) policy.put(key, inherited.get(key));
         }
+        if (!policy.has("ipv6_mode")) policy.put("ipv6_mode", "on");
         policy.remove("dns_bootstrap");
         policy.remove("effective_mtu"); // Historical measurements never size this new path.
         for (String field : new String[]{"dns_host", "fastest_dns_host"}) {

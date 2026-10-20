@@ -31,6 +31,7 @@ final class AndroidStandardExitController {
     }
 
     NativeSingBoxController.SessionInfo prepare(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode)throws Exception{
+        AndroidStandardExitStore.validate(exit);
         if (AndroidTorProfile.isTor(exit.protocol)) {
             if (entryBundle == null) throw new IllegalArgumentException("Choose the captured Router VPN entry.");
             return AndroidTorProfile.prepare(context, entryBundle, exit, entryMode);
@@ -41,7 +42,6 @@ final class AndroidStandardExitController {
         }
         if (!"wg".equals(entryMode)) throw new IllegalArgumentException("This external exit currently requires its WireGuard entry.");
         if(entryBundle==null)throw new IllegalArgumentException("Choose a Router VPN WireGuard entry node.");
-        AndroidStandardExitStore.validate(exit);
         JSONObject entry=loadBundle(entryBundle);AndroidNodeStore.validateBundle(entry);WgConfig wg=parseWireGuard(entry);
         JSONObject config=buildConfig(entry,wg,exit);byte[]raw=(config.toString(2)+"\n").getBytes(StandardCharsets.UTF_8);if(raw.length>MAX_CONFIG)throw new IllegalStateException("Android custom-exit config exceeds safety limit.");
         File root=new File(context.getFilesDir(),"layered-sessions");if(!root.isDirectory()&&!root.mkdirs())throw new IllegalStateException("Cannot create layered session directory.");File[]dirs=root.listFiles(File::isDirectory);if(dirs!=null&&dirs.length>=MAX_SESSION_DIRS)throw new IllegalStateException("Too many private layered sessions exist; disconnect before retrying.");

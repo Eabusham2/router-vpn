@@ -21,9 +21,9 @@ final class AndroidDirectStandardExitController {
     AndroidDirectStandardExitController(Context context) { this.context = context.getApplicationContext(); }
 
     NativeSingBoxController.SessionInfo prepare(AndroidStandardExitStore.Entry exit) throws Exception {
+        AndroidStandardExitStore.validate(exit);
         if (AndroidTorProfile.isTor(exit.protocol)) return AndroidTorProfile.prepare(context, null, exit, "external");
         if (AndroidExternalPolicy.supports(exit.protocol)) return AndroidExternalPolicy.prepare(context, null, exit, "external");
-        AndroidStandardExitStore.validate(exit);
 
         JSONObject custom = customExitJson(exit);
         JSONArray endpoints = new JSONArray();
