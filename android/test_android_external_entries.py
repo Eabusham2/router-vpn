@@ -34,7 +34,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   if(kind.equals("wireguard")){e.wgPrivateKey=key;e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;}
   if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exit-only-user";e.password="exit-only-password";}
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="exit-only-hy2";
-  if(kind.equals("openvpn")){e.username=" exit-only user ";e.password=" exit-only password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.50 443\nremote 203.0.113.51 1194 tcp-client\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n"+externalCertificate+"\n</ca>\n";}
+  if(kind.equals("openvpn")){e.username=" exit-only user ";e.password=" exit-only password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.50 443\nremote 203.0.113.51 1194 udp\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n"+externalCertificate+"\n</ca>\n";}
   e.policy=new JSONObject().put("dns_mode",dns).put("ipv6_mode","on").put("home_lan_access",false).put("home_lan_cidrs",new JSONArray().put("192.168.50.0/24")).put("mtu_policy","auto").put("effective_mtu",8800);
   if(!dns.equals("home"))e.policy.put("dns_protocol","tcp").put("dns_host","149.112.112.112").put("dns_port",5353);
   return e;

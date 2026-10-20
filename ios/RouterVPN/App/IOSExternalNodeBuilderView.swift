@@ -77,8 +77,14 @@ extension RouterVPNModel {
             }
             compiledOpenVPN = object
         } else { compiledOpenVPN = nil }
-        let server = tor ? "tor" : try iosExternalLiteralIP(compiledOpenVPN?["server"] as? String ?? rawServer, label: "External server")
-        let port = compiledOpenVPN?["server_port"] as? Int ?? port
+        // This address identifies the saved node in the UI. Native startup
+        // compiles the complete inline profile and preserves every remote.
+        let primaryOpenVPN = (compiledOpenVPN?["servers"] as? [[String: Any]])?.first ?? compiledOpenVPN
+        if compiledOpenVPN != nil && (primaryOpenVPN?["server"] as? String == nil || primaryOpenVPN?["server_port"] as? Int == nil) {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 33, userInfo: [NSLocalizedDescriptionKey: "Native OpenVPN compiler returned no valid primary remote."])
+        }
+        let server = tor ? "tor" : try iosExternalLiteralIP(primaryOpenVPN?["server"] as? String ?? rawServer, label: "External server")
+        let port = primaryOpenVPN?["server_port"] as? Int ?? port
         let expected = tor ? "" : try iosExternalPublicIP(rawExpected, label: "Expected public exit IP")
         guard tor || (1...65535).contains(port) else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 3, userInfo: [NSLocalizedDescriptionKey: "External server port must be 1..65535."])

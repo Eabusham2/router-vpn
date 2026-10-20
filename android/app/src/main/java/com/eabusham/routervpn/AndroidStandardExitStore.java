@@ -125,7 +125,11 @@ final class AndroidStandardExitStore {
         if(AndroidTorProfile.isTor(e.protocol)){AndroidTorProfile.validate(e);return;}
         if("openvpn".equals(e.protocol)){
             JSONObject compiled=AndroidOpenVPN.endpoint(e, "");
-            e.server=compiled.getString("server");e.serverPort=compiled.getInt("server_port");
+            // This primary address labels the saved node. Its native endpoint
+            // retains the complete remote list and must not gain a conflicting
+            // singular server merely to populate display fields.
+            JSONObject primary=compiled.has("servers")?compiled.getJSONArray("servers").getJSONObject(0):compiled;
+            e.server=primary.getString("server");e.serverPort=primary.getInt("server_port");
         }
         if(!Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(e.protocol))throw new IllegalArgumentException("Unsupported custom exit protocol: "+e.protocol);
         e.server=AndroidNumericAddress.canonical(e.server); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");

@@ -65,8 +65,14 @@ func TestNativeOpenVPNRemoteList(t *testing.T) {
 	text := strings.Replace(fixture, "remote 192.0.2.25 1194", "remote 192.0.2.25\nremote 2001:db8::25 443 tcp6-client\nrport 1443\nremote-random", 1)
 	p := compiled(t, text)
 	r := p["servers"].([]any)
-	if len(r) != 2 || p["server_port"] != float64(1443) || p["remote_random"] != true || r[1].(map[string]any)["network"] != "tcp6" {
+	if len(r) != 2 || r[0].(map[string]any)["server_port"] != float64(1443) || r[0].(map[string]any)["server"] != "192.0.2.25" || p["remote_random"] != true || r[1].(map[string]any)["network"] != "tcp6" || r[1].(map[string]any)["server"] != "2001:db8::25" {
 		t.Fatal("remote ordering/options not preserved")
+	}
+	if p["server"] != nil || p["server_port"] != nil {
+		t.Fatal("remote list conflicts with the native client's singular server representation")
+	}
+	if _, err := RouterOpenVPNEndpoint(text+"fragment 1200\n", "user", "password", "custom-exit", ""); err == nil {
+		t.Fatal("mixed TCP remote list accepted UDP-only fragment framing")
 	}
 	for _, n := range []string{"tcp-client", "tcp4-client", "udp4", "udp"} {
 		p := compiled(t, strings.Replace(fixture, "proto udp", "proto "+n, 1))

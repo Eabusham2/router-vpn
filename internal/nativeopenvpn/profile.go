@@ -94,12 +94,19 @@ func CompileEndpoint(config, username, password, tag, detour string) (string, er
 		if (strings.HasSuffix(network, "4") && !address.Is4()) || (strings.HasSuffix(network, "6") && !address.Is6()) {
 			return "", errors.New("OpenVPN remote address does not match its requested IP family")
 		}
+		if p.seen["fragment"] && strings.HasPrefix(network, "tcp") {
+			return "", errors.New("OpenVPN fragment requires UDP for every captured remote")
+		}
 	}
-	p.endpoint["server"] = p.remotes[0]["server"]
-	p.endpoint["server_port"] = p.remotes[0]["server_port"]
 	p.endpoint["network"] = p.remotes[0]["network"]
 	if len(p.remotes) > 1 {
+		// The pinned client accepts one remote representation. A singular
+		// fallback alongside this list makes native construction fail before
+		// authentication and must never replace any captured list member.
 		p.endpoint["servers"] = p.remotes
+	} else {
+		p.endpoint["server"] = p.remotes[0]["server"]
+		p.endpoint["server_port"] = p.remotes[0]["server_port"]
 	}
 	if detour != "" {
 		p.endpoint["detour"] = detour

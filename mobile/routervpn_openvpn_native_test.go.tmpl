@@ -100,6 +100,33 @@ func TestRouterOpenVPNNativeConfig(t *testing.T) {
 	}
 }
 
+func TestRouterOpenVPNNativeRemoteList(t *testing.T) {
+	ca, _, _, cert, key := routerNativeCertificates(t)
+	for _, network := range []string{"udp", "tcp-client"} {
+		source := strings.Replace(routerNativeProfile(ca, cert, key), "remote 192.0.2.1 1194", "remote 192.0.2.1 1194 "+network+"\nremote 2001:db8::25 1443 tcp6-client\nremote-random", 1)
+		raw, err := RouterOpenVPNEndpoint(source, "", "", "custom-exit", "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		var endpoint map[string]any
+		if err := json.Unmarshal([]byte(raw), &endpoint); err != nil {
+			t.Fatal(err)
+		}
+		config := routerNativeConfig(endpoint, 1099)
+		data, _ := json.Marshal(config)
+		if err := CheckConfig(string(data)); err != nil {
+			t.Fatalf("native multi-remote %s profile failed: %v", network, err)
+		}
+		// Reproduce the old emitted graph, which the real constructor rejects.
+		endpoint["server"] = "192.0.2.1"
+		endpoint["server_port"] = 1194
+		data, _ = json.Marshal(config)
+		if err := CheckConfig(string(data)); err == nil || !strings.Contains(err.Error(), "conflict with `servers`") {
+			t.Fatal("native multi-remote regression did not reject the conflicting singular representation", err)
+		}
+	}
+}
+
 type routerNativeOwner struct {
 	*box.Box
 	once       sync.Once
