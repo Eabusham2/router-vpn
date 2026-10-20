@@ -136,4 +136,5 @@ for marker in ['LibboxPlatformInterfaceProtocol','LibboxCommandServerHandlerProt
 subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_multihop_host_environment.py')], check=True, timeout=45)
 assert 'fake Connected' not in provider
 subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_direct_proof_lifecycle.py')], check=True, timeout=45)
+subprocess.run([sys.executable, str(root.parents[1] / 'deploy/test_ios_hop_measurement_transaction.py')], check=True, timeout=90)
 print('iOS PacketTunnel Libbox + async ownership/network-change/wake proof contract OK')

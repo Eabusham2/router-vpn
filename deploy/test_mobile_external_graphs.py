@@ -29,7 +29,7 @@ MODES = ('wg', 'awg2-fast', 'awg2-strong', 'wg-pq', 'awg2-pq', 'shadowsocks', 'h
          'max-quic-wg', 'max-quic-awg', 'ss-v2ray', 'split', 'max', 'naive-h2', 'naive-h3')
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
 PROTOCOLS = {
-    'android': ('wireguard', 'socks5', 'http', 'https', 'shadowsocks', 'hysteria2', 'openvpn'),
+    'android': ('wireguard', 'amneziawg', 'socks5', 'http', 'https', 'shadowsocks', 'hysteria2', 'openvpn'),
     'ios': ('wireguard', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn'),
 }
 
