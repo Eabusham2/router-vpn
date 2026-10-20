@@ -159,9 +159,33 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try reject("partial new external identity is not legacy"){_ = try IOSConnectionProfileStore.load(model:legacyModel,id:"legacy")}
   }
  }
+ static func conflictingProtectionAndRouterSelection()throws {
+  for flag in [false,true] {for policy in ["off","on-connect","always","strict"] {
+   var p=profile("socks5");p.killSwitch=flag;p.killSwitchPolicy=policy
+   let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Captured protection")
+   try check("snapshot preserves independent kill-switch Boolean",saved.preferences?.killSwitch==flag && saved.preferences?.killSwitchPolicy==policy)
+   var changed=bundle(p);changed.routerProfiles[0].killSwitch = !flag;changed.routerProfiles[0].killSwitchPolicy="off"
+   IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed)
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   let restored=model.selectedNodeProfile!
+   try check("load preserves both conflicting protection inputs",restored.killSwitch==flag && restored.killSwitchPolicy==policy)
+   let expectedStrict=flag || ["always","strict"].contains(policy)
+   let restoredStrict=restored.killSwitch==true || ["always","strict"].contains(restored.killSwitchPolicy ?? "")
+   try check("saved protection can never weaken native lockdown",expectedStrict==restoredStrict)
+  }}
+  for mode in ["invalid Router mode", "custom:stale", "custom:invalid:reference"] {
+   let model=try reset(profile("socks5"))
+   UserDefaults.standard.set(mode,forKey:iosConnectionModeKey)
+   UserDefaults.standard.set(try JSONEncoder().encode([IOSConnectionCustomPresetMirror(name:"stale",layers:["invalid Router layer"])]),forKey:iosConnectionCustomPresetsKey)
+   let originalPreset=UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)
+   let saved=try IOSConnectionProfileStore.add(model:model,name:"External is independent")
+   try check("external snapshot ignores stale Router mode and CUSTOM preset",saved.mode=="external" && saved.customLayers.isEmpty && saved.preferences != nil)
+   try check("saving external policy never rewrites Router selection",UserDefaults.standard.string(forKey:iosConnectionModeKey)==mode && UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)==originalPreset)
+  }
+ }
  static func main()throws {
-  defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey)}
-  try matrix();try legacyAndFailures()
+  defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  }
 }

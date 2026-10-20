@@ -176,8 +176,15 @@ private enum IOSConnectionProfileStore {
         guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before saving or updating a connection profile.") }
         let name = try cleanName(rawName)
         guard let selected = model.selectedNodeProfile else { throw issue("Select a linked Router or Custom node first.") }
-        let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
-        let layers = try customLayers(for: mode)
+        let selection: (mode: String, layers: [String])
+        if selected.normalizedNodeKind == "external" {
+            // External protocols belong to the imported node, independently
+            // of whichever Router mode or CUSTOM preset was last selected.
+            selection = ("external", [])
+        } else {
+            let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
+            selection = (mode, try customLayers(for: mode))
+        }
         let ordinaryExternal = selected.normalizedNodeKind == "external" && IOSConnectionSafePreferences.ordinaryExternalModes.contains(selected.external?.protocolName ?? "")
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" || ordinaryExternal {
@@ -218,8 +225,8 @@ private enum IOSConnectionProfileStore {
             prefs = nil
         }
         let record = IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
-                                          nodeKind: selected.normalizedNodeKind, mode: selected.normalizedNodeKind == "external" ? "external" : mode,
-                                          customLayers: selected.normalizedNodeKind == "external" ? [] : layers, preferences: prefs, updatedAt: Date(),
+                                          nodeKind: selected.normalizedNodeKind, mode: selection.mode,
+                                          customLayers: selection.layers, preferences: prefs, updatedAt: Date(),
                                           externalProtocol: ordinaryExternal ? selected.external?.protocolName : nil,
                                           externalPublicIP: ordinaryExternal ? selected.external?.expectedPublicIP : nil)
         return try validateStoredProfiles([record])[0]
@@ -406,7 +413,9 @@ private enum IOSConnectionProfileStore {
         var p = value
         p.killSwitchPolicy = p.killSwitchPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["off", "on-connect", "always"].contains(p.killSwitchPolicy) || (external && p.killSwitchPolicy == "strict") else { throw issue("Connection profile contains an invalid kill-switch policy.") }
-        p.killSwitch = p.killSwitchPolicy != "off"
+        // External startup also honors the independently imported Boolean.
+        // A true flag with explicit Off must not lose protection on Load.
+        if !external { p.killSwitch = p.killSwitchPolicy != "off" }
 
         p.ipv6Mode = p.ipv6Mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["on", "auto", "off"].contains(p.ipv6Mode) else { throw issue("Connection profile contains an invalid IPv6 policy.") }
