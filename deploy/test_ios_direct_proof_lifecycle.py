@@ -30,6 +30,7 @@ import Foundation
  var stops=0
  var started=false
  var externalStarted=false
+ var measurements:[String]=[]
  var held=""
  init(tunnel:PacketTunnelProvider){owner=tunnel}
  func prepareMTUHold(_ value:String)throws{held=value}
@@ -38,6 +39,7 @@ import Foundation
  func stop(){stops += 1;started=false}
  func proveTor(sessionID:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.proofCallback=completion}
  func proveExternal(completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil && externalStarted);owner.nativeExternalProof=true;owner.proofCallback=completion}
+ func enableExternalHopMeasurement(exitID:String)throws{precondition(owner.pathProofGuard != nil);measurements.append(exitID);owner.duringMeasurement?();if owner.measurementFails{throw NSError(domain:"MeasurementFixture",code:1)}}
 }
 enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{};static func selectedMode(profile:[String:Any])throws->String{"off"}}
 enum RouterVPNExternalExitBuilder {
@@ -62,6 +64,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var proofCallback:((Error?)->Void)?
  var torSession:String?
  var nativeExternalProof=false
+ var duringMeasurement:(()->Void)?,measurementFails=false
  var arms=0
  var forwarded=0
  var duringForwarding:(()->Void)?
@@ -71,7 +74,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  func enableForwarding(profileData:Data,proofID:String){forwarded += 1;duringForwarding?()}
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
  func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
- func beginExternal(tor:Bool=false,native:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["tor":tor,"native":native,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
+ func beginExternal(tor:Bool=false,native:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["id":"saved-exit","tor":tor,"native":native,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
  func strictKillSwitchRequested(_ profile:[String:Any])->Bool{profile["strict"] as? Bool == true}
  func selectedRouterProfile(_ root:[String:Any])throws->[String:Any]{root}
  func suppliedNodeProof(root:[String:Any],selectedProfile:[String:Any])throws->String{String(repeating:"a",count:64)}
@@ -92,8 +95,9 @@ TEST=r'''
   func check(_ name:String,_ test:Bool){if !test{fatalError(name)};checks += 1}
   let failure=NSError(domain:"Fixture",code:1)
   for kind in ["raw","external","native-external","tor"] {
-   for event in ["stable","network","proof-error","replacement","stop","forwarding-change"] {
+   for event in ["stable","network","proof-error","replacement","stop","forwarding-change","measurement-change","measurement-error"] {
     if kind != "raw" && event=="forwarding-change"{continue}
+    if ["measurement-change","measurement-error"].contains(event) && !["native-external","tor"].contains(kind){continue}
     let p=PacketTunnelProvider();var replies:[Error?]=[]
     if kind=="raw"{p.beginRaw{replies.append($0)};p.wireGuardAdapter!.startCallback!(nil)}
     else {try p.beginExternal(tor:kind=="tor",native:kind=="native-external"){replies.append($0)}}
@@ -110,6 +114,8 @@ TEST=r'''
      else {p.libboxEngine=RouterVPNLibboxEngine(tunnel:p)}
     }
     if event=="forwarding-change"{p.duringForwarding={p.pathProofGuard=nil}}
+    if event=="measurement-change"{p.duringMeasurement={p.pathProofGuard=nil}}
+    if event=="measurement-error"{p.measurementFails=true}
     let nextGuard=p.pathProofGuard,nextMonitor=p.pathMonitor,nextEngine=p.libboxEngine,nextAdapter=p.wireGuardAdapter
     p.proofCallback!(event=="proof-error" ? failure:nil)
     check("one terminal proof result",replies.count==1)
@@ -118,6 +124,7 @@ TEST=r'''
      check("success retains the original guard",p.pathProofGuard===guardState && p.arms==1 && monitor?.cancelled==false)
      check("successful engine retained",kind=="raw" ? adapter?.stops==0 : engine?.stops==0)
      check("forwarding only for verified owned home",p.forwarded==(kind=="raw" ? 1:0))
+     if ["native-external","tor"].contains(kind){check("measurement activation follows native proof and frozen exit",engine?.measurements==["saved-exit"])}
     }else{
      check("stale proof never becomes Connected",replies[0] != nil)
      check("only original engine stopped",kind=="raw" ? adapter?.stops==1 : engine?.stops==1)

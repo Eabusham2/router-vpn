@@ -77,10 +77,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
-           request.count == 2, let operation = request["operation"],
+           request.count == 3, let operation = request["operation"],
            ["hop-measure-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
-           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil {
-            completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id)); return
+           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+           let session = request["session_id"], UUID(uuidString: session) != nil {
+            completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id, session: session) ??
+                RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation: operation, request: id, session: session)); return
         }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
@@ -1142,6 +1144,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }
                 completionHandler(self.tunnelError(57, "External path changed during native DNS and exit proof."))
                 return
+            }
+            do {
+                if runtime.policy != nil || runtime.torSessionID != nil {
+                    guard let exitID = selectedProfile["id"] as? String else { throw self.tunnelError(58, "External measurement lost its captured exit identity.") }
+                    try engine.enableExternalHopMeasurement(exitID: exitID)
+                    guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
+                        throw self.tunnelError(57, "External path changed during measurement activation.")
+                    }
+                }
+            } catch {
+                self.releasePathProofGuard(externalPathGuard)
+                engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }
+                completionHandler(error); return
             }
             completionHandler(nil)
         }

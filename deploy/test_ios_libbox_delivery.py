@@ -115,12 +115,30 @@ public final class LibboxSetupOptions {
 }
 public final class LibboxOverrideOptions { public init() {} }
 public final class LibboxRouterHopMeasurement {
+    private let lock=NSLock()
+    private var request="",closed=0,complete=false,drained=false,failClose=false
     public init() {}
-    public func start(_ request: String, bytes: Int64) throws {}
-    public func cancel(_ request: String) {}
-    public func statusJSON() -> String { "{}" }
-    public func networkChanged() {}
-    public func close() throws {}
+    public func start(_ request: String, bytes: Int64) throws {lock.lock();self.request=request;complete=false;drained=false;lock.unlock()}
+    public func cancel(_ request: String) {lock.lock();if self.request==request{complete=true};lock.unlock()}
+    public func configure(closeFails:Bool){lock.lock();failClose=closeFails;lock.unlock()}
+    public func finishDrain(){lock.lock();complete=true;drained=true;lock.unlock()}
+    public func closeCount()->Int{lock.lock();defer{lock.unlock()};return closed}
+    public func statusJSON() -> String {
+        lock.lock();defer{lock.unlock()}
+        return String(decoding:try! JSONSerialization.data(withJSONObject:["request_id":request,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":[]]),as:UTF8.self)
+    }
+    public func networkChanged() {lock.lock();complete=true;lock.unlock()}
+    public func close() throws {lock.lock();closed+=1;complete=true;let failed=failClose;if !failed{drained=true};lock.unlock();if failed{throw NSError(domain:"HopCloseFixture",code:1)}}
+}
+public final class LibboxHopTestState: @unchecked Sendable {
+    public static let shared=LibboxHopTestState()
+    private let lock=NSLock()
+    private var probe:LibboxRouterHopMeasurement?,arguments:[String]=[]
+    private var callback:(()->Void)?
+    public func configure(_ callback:(()->Void)?=nil){lock.lock();probe=nil;arguments=[];self.callback=callback;lock.unlock()}
+    public func make(_ arguments:[String])->LibboxRouterHopMeasurement{lock.lock();let p=LibboxRouterHopMeasurement();probe=p;self.arguments=arguments;let callback=self.callback;lock.unlock();callback?();return p}
+    public func current()->LibboxRouterHopMeasurement?{lock.lock();defer{lock.unlock()};return probe}
+    public func captured()->[String]{lock.lock();defer{lock.unlock()};return arguments}
 }
 // Exact generated scalar/error ABI, including output and NSError pointers.
 public func LibboxRouterStartPerformance(_ server: LibboxCommandServer, _ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.activate(count,failure) }
@@ -155,13 +173,14 @@ public final class LibboxTorTestState: @unchecked Sendable {
 public final class LibboxRouterTorProofRequest {
     private let session: String, block: Bool, payload: String?
     private let lock = NSLock()
-    private var cancels = 0
+    private var cancels = 0, proved = false
     private let release = DispatchSemaphore(value:0)
     public let entered = DispatchSemaphore(value:0)
     init(_ session: String, _ block: Bool, _ payload: String?) { self.session=session;self.block=block;self.payload=payload }
     public func run() throws -> String {
         entered.signal()
         if block { _ = release.wait(timeout:.now()+4) }
+        lock.lock(); proved=true; lock.unlock()
         if let payload { return payload }
         let clock=ISO8601DateFormatter();clock.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
         let value:[String:Any] = ["session_id":session,"ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date())]
@@ -171,7 +190,7 @@ public final class LibboxRouterTorProofRequest {
     // must reject it even when a native callback arrives after its owner left.
     public func cancel() { lock.lock(); cancels+=1;lock.unlock();release.signal() }
     public func cancelCount() -> Int { lock.lock();defer {lock.unlock()};return cancels }
-    public func healthy() -> Bool { cancelCount()==0 }
+    public func healthy() -> Bool { lock.lock();defer{lock.unlock()};return cancels==0 && proved }
 }
 public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutablePointer<NSError?>?) {
     do { try FileManager.default.createDirectory(atPath:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]);LibboxTorTestState.shared.saveRoot(path) }
@@ -198,18 +217,28 @@ public final class LibboxExternalTestState: @unchecked Sendable {
 public final class LibboxRouterExternalProofRequest {
     private let session: String, block: Bool, invalid: Bool
     private let lock=NSLock(), release=DispatchSemaphore(value:0)
-    private var cancels=0
+    private var cancels=0,proved=false
     public let entered=DispatchSemaphore(value:0)
     init(_ session:String,_ block:Bool,_ invalid:Bool){self.session=session;self.block=block;self.invalid=invalid}
     public func run() throws -> String {
         entered.signal();if block {_ = release.wait(timeout:.now()+4)}
+        lock.lock();proved = !invalid;lock.unlock()
         return String(decoding:try JSONSerialization.data(withJSONObject:["session_id":session,"valid": !invalid]),as:UTF8.self)
     }
     public func cancel(){lock.lock();cancels+=1;lock.unlock();release.signal()}
     public func cancelCount()->Int{lock.lock();defer{lock.unlock()};return cancels}
-    public func healthy()->Bool{cancelCount()==0}
+    public func healthy()->Bool{lock.lock();defer{lock.unlock()};return cancels==0 && proved}
 }
 public func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterExternalProofRequest? { LibboxExternalTestState.shared.make(source,capture,session) }
+public func LibboxRouterExternalCreateHopMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? {
+    guard proof === LibboxExternalTestState.shared.current(),proof.healthy(),[source,capture,session]==LibboxExternalTestState.shared.captured()else{failure?.pointee=NSError(domain:"WrongNativeProof",code:1);return nil}
+    return LibboxHopTestState.shared.make(["external",source,capture,session])
+}
+public func LibboxRouterTorCreateHopMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterTorProofRequest,_ exitID:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? {
+    guard proof === LibboxTorTestState.shared.current(),proof.healthy()else{failure?.pointee=NSError(domain:"WrongNativeTorProof",code:1);return nil}
+    return LibboxHopTestState.shared.make(["tor",exitID])
+}
+
 '''
 HARNESS = r'''
 import Foundation
@@ -564,6 +593,45 @@ final class CompletionState: @unchecked Sendable {
             let done=CompletionState();owner.proveTor(sessionID:"tor-session",completion:done.finish)
             check("malformed/replayed/non-Tor results cannot report Connected",done.wait() && done.values()==(1,1));owner.stop()
         }
+        let hopState=LibboxHopTestState.shared
+        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply"] {
+            state.configure();externalState.configure();torState.configure();hopState.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            if tor {try owner.start(files:torFiles,strict:true)}else{try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
+            let done=CompletionState()
+            if tor{owner.proveTor(sessionID:"tor-session",completion:done.finish)}else{owner.proveExternal(completion:done.finish)}
+            check("measurement retains completed native proof",done.wait() && done.values()==(1,0))
+            if action=="cancel-proof" {if tor{torState.current()!.cancel()}else{externalState.current()!.cancel()}}
+            if action=="late-factory" {hopState.configure {owner.stop()}}
+            var failed=false
+            do{try owner.enableExternalHopMeasurement(exitID:"saved-exit")}catch{failed=true}
+            check("only the proved current factory is adopted",failed == ["cancel-proof","late-factory"].contains(action))
+            let probe=hopState.current()
+            if action=="cancel-proof" {check("failed native proof cannot call factory",probe==nil)}
+            else {
+                let expected=tor ? ["tor","saved-exit"]:["external"]+externalState.captured()
+                check("factory receives exact retained proof selection",hopState.captured()==expected)
+            }
+            if action=="late-factory" {check("late native measurement is closed",probe?.closeCount()==1)}
+            if !failed {
+                let id=String(repeating:tor ? "b":"a",count:32),other=String(repeating:"c",count:32)
+                check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch) != nil)
+                let beforeCancel=probe!.statusJSON()
+                check("early cancel receives bounded discard receipt",owner.hopMeasurementRequest(operation:"hop-measure-cancel",request:other,session:owner.settingsEpoch) != nil)
+                check("foreign request cannot cancel current work",probe!.statusJSON()==beforeCancel)
+                check("late start after early cancel is rejected",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:owner.settingsEpoch)==nil)
+                check("retired session cannot start on current native owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:other,session:UUID().uuidString)==nil)
+                if action=="retired-reply" {
+                    owner.stop()
+                    let response=RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-status",request:id,session:owner.settingsEpoch)!
+                    let value=try JSONSerialization.jsonObject(with:response) as! [String:Any]
+                    check("retired request can prove its actual drain",value["request_id"] as? String==id && value["drained"] as? Bool==true)
+                    check("retired receipt cannot start a new measurement",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch)==nil)
+                    check("retired receipt survives a late cancelled retry",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-cancel",request:id,session:owner.settingsEpoch) != nil)
+                }
+            }
+            owner.stop()
+        }}
         check("no mock native server survives successful shutdown", state.counts().0 == state.counts().1)
         do {
             torState.configure()

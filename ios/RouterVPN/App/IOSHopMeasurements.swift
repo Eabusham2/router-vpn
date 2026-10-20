@@ -4,6 +4,8 @@ import SwiftUI
 // HOP_RESULT_TYPES_BEGIN
 struct IOSHopMeasurementStatus: Decodable {
     let request_id: String?
+    let session_id: String
+    let drained: Bool
     let stage: String
     let complete: Bool
     let failure: String?
@@ -41,18 +43,23 @@ struct IOSHopMeasurementResult: Decodable {
     }
     let node_id: String
     let role: String
+    let kind: String
+    let label: String
     let ready: Bool
     let failure: String?
     let idle: Latency?
     let download: Transfer?
     let upload: Transfer?
     var summary: String {
-        let label = "\(role.capitalized) • \(node_id)"
-        guard ready, ["entry", "exit"].contains(role), let idle, idle.valid,
+        let safeLabel = !label.isEmpty && label.utf8.count <= 160 && !label.contains(where: { $0.isNewline || $0 == "\0" })
+        let heading = "\(role.capitalized) • \(node_id) • \(safeLabel ? label : "unverified path")"
+        guard ready, safeLabel, ["private-node", "public-path"].contains(kind),
+              !node_id.isEmpty, node_id.utf8.count <= 128, ["entry", "exit"].contains(role), let idle, idle.valid,
               let download, download.valid, let upload, upload.valid else {
-            return "\(label): unavailable — \(failure ?? "unverified or incomplete result")"
+            return "\(heading): unavailable — \(failure ?? "unverified or incomplete result")"
         }
-        var text = String(format: "%@\nIdle %.1f ms • median %.1f • p90 %.1f • jitter %.1f\nDownload %.2f Mbps • Upload %.2f Mbps", label, idle.average_ms, idle.median_ms, idle.p90_ms, idle.jitter_ms, download.mbps, upload.mbps)
+        let measurement = kind == "public-path" ? "HTTPS response" : "Private-node response"
+        var text = String(format: "%@\n%@ %.1f ms • median %.1f • p90 %.1f • jitter %.1f\nDownload %.2f Mbps • Upload %.2f Mbps", heading, measurement, idle.average_ms, idle.median_ms, idle.p90_ms, idle.jitter_ms, download.mbps, upload.mbps)
         for (name, transfer) in [("Download", download), ("Upload", upload)] {
             if let loaded = transfer.loaded, loaded.valid, let delta = transfer.bufferbloat_ms, delta.isFinite {
                 text += String(format: "\n%@ loaded %.1f ms • Δ %.1f ms (%d samples)", name, loaded.average_ms, delta, loaded.samples)
@@ -80,71 +87,122 @@ private final class IOSHopReply: @unchecked Sendable {
     }
 }
 
+// HOP_TRANSACTION_BEGIN
+// This transaction owns the native request through late IPC and native drain.
+// Cleanup runs in an uncancelled task; its caller retains the MTU hold until
+// this function returns, including cancellation, timeout and changed tunnels.
+@MainActor final class IOSHopMeasurementTransaction {
+    typealias Send = @MainActor (String) async throws -> Data
+    private let id: String, session: String
+    private let send: Send
+    private let pause: @MainActor () async -> Void
+    private var cancelled = false
+    private var cancellation: Task<IOSHopMeasurementStatus?, Never>?
+    init(id: String, session: String, send: @escaping Send,
+         pause: @escaping @MainActor () async -> Void = { try? await Task.sleep(for: .milliseconds(350)) }) throws {
+        guard id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+              UUID(uuidString: session) != nil else { throw CancellationError() }
+        self.id=id;self.session=session;self.send=send;self.pause=pause
+    }
+    private func status(_ operation: String) async throws -> IOSHopMeasurementStatus {
+        let data = try await send(operation)
+        guard !data.isEmpty, data.count <= 16384 else { throw CancellationError() }
+        let status = try JSONDecoder().decode(IOSHopMeasurementStatus.self, from: data)
+        guard status.request_id == id, status.session_id == session, status.results.count <= 2 else { throw CancellationError() }
+        return status
+    }
+    func cancel() {
+        cancelled = true
+        guard cancellation == nil else { return }
+        cancellation = Task { @MainActor in try? await self.status("hop-measure-cancel") }
+    }
+    private func drain() async {
+        if let status = await cancellation?.value, status.complete && status.drained { return }
+        while true {
+            if let status = try? await status("hop-measure-cancel"), status.complete && status.drained { return }
+            await pause()
+        }
+    }
+    func run(current: @MainActor () async -> Bool, update: @MainActor (IOSHopMeasurementStatus) -> Void) async throws {
+        do {
+            var operation = "hop-measure-start"
+            let deadline = ProcessInfo.processInfo.systemUptime + 100
+            while !cancelled && !Task.isCancelled && ProcessInfo.processInfo.systemUptime < deadline {
+                guard await current(), !cancelled, !Task.isCancelled else { throw CancellationError() }
+                let result = try await status(operation)
+                guard await current(), !cancelled, !Task.isCancelled else { throw CancellationError() }
+                update(result)
+                if result.complete && result.drained { return }
+                operation = "hop-measure-status"
+                await pause()
+            }
+            throw CancellationError()
+        } catch {
+            cancel()
+            let cleanup = Task { @MainActor in await self.drain() }
+            await cleanup.value
+            throw error
+        }
+    }
+}
+// HOP_TRANSACTION_END
+
 @MainActor final class IOSHopMeasurements: ObservableObject {
     @Published private(set) var running = false
     @Published private(set) var text = ""
     private var task: Task<Void, Never>?
-    private var session: NETunnelProviderSession?
-    private var requestID = ""
+    private var transaction: IOSHopMeasurementTransaction?
     private var generation = UUID()
 
+    static func supported(_ model: RouterVPNModel) -> Bool {
+        model.connected && ["multihop-libbox", "external-libbox"].contains(model.activeEngine)
+    }
     func start(model: RouterVPNModel) {
-        guard !running,
-              model.connected, model.activeEngine == "multihop-libbox" else { return }
-        let round = UUID(); generation = round; requestID = round.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        let id = requestID, captured = model.activeSessionIdentity
+        guard !running, Self.supported(model) else { return }
+        let round = UUID(); generation = round
+        let id = round.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let captured = model.activeSessionIdentity
         guard captured != nil else { text = "Current tunnel identity is unverified."; return }
-        running = true; text = "Proving and measuring the entry and exit paths…"
+        running = true; text = "Proving and measuring the captured routed paths…"
         task = Task { @MainActor [weak self, weak model] in
             guard let self, let model else { return }
-            defer { if self.generation == round { self.running = false; self.task = nil } }
+            defer { if self.generation == round { self.running = false; self.task = nil; self.transaction = nil } }
             do {
                 try await IOSMTUControl.withHold(model: model) {
-                let managers = try await NETunnelProviderManager.loadAllFromPreferences()
-                let owned = managers.filter { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }
-                guard owned.count == 1, let connection = owned[0].connection as? NETunnelProviderSession,
-                      connection.status == .connected, let date = connection.connectedDate else { throw CancellationError() }
-                self.session = connection
-                let deadline = Date().addingTimeInterval(100)
-                var operation = "hop-measure-start"
-                while !Task.isCancelled, self.generation == round, Date() < deadline {
-                    await model.refreshTunnelStatus()
-                    guard model.connected, model.activeSessionIdentity == captured,
-                          connection.status == .connected, connection.connectedDate == date else { throw CancellationError() }
-                    let data = try await self.send(connection, operation: operation, id: id)
-                    try Task.checkCancellation()
-                    guard self.generation == round, model.activeSessionIdentity == captured,
-                          connection.status == .connected, connection.connectedDate == date else { throw CancellationError() }
-                    let status = try JSONDecoder().decode(IOSHopMeasurementStatus.self, from: data)
-                    guard status.request_id == id, status.results.count <= 2 else { throw CancellationError() }
-                    self.text = (["Routed hops: \(status.stage)"] + status.results.map(\.summary) + (status.failure.map { [$0] } ?? [])).joined(separator: "\n\n")
-                    if status.complete { return }
-                    operation = "hop-measure-status"
-                    try await Task.sleep(for: .milliseconds(350))
-                }
-                throw CancellationError()
+                    let binding = try await IOSMTUControl.capture(model)
+                    guard binding.identity == captured else { throw CancellationError() }
+                    let connection = binding.connection, date = binding.connectedDate
+                    let owned = try IOSHopMeasurementTransaction(id: id, session: binding.session,
+                        send: { operation in try await self.send(connection, operation: operation, id: id, session: binding.session) })
+                    self.transaction = owned
+                    try await owned.run(current: {
+                        await model.refreshTunnelStatus()
+                        return self.generation == round && model.connected && model.activeSessionIdentity == captured &&
+                            connection.status == .connected && connection.connectedDate == date
+                    }, update: { status in
+                        self.text = (["Routed paths: \(status.stage)"] + status.results.map(\.summary) + (status.failure.map { [$0] } ?? [])).joined(separator: "\n\n")
+                    })
                 }
             } catch {
-                if self.generation == round { self.cancelRequest(); self.text = "Measurement discarded: the request failed, timed out, or its tunnel changed." }
+                if self.generation == round { self.text = "Measurement discarded: the request failed, timed out, or its tunnel changed." }
             }
         }
     }
-    private func send(_ session: NETunnelProviderSession, operation: String, id: String) async throws -> Data {
-        let request = try JSONSerialization.data(withJSONObject: ["operation": operation, "request_id": id])
+    private func send(_ connection: NETunnelProviderSession, operation: String, id: String, session: String) async throws -> Data {
+        let request = try JSONSerialization.data(withJSONObject: ["operation": operation, "request_id": id, "session_id": session])
+        guard request.count <= 256 else { throw CancellationError() }
         return try await withCheckedThrowingContinuation { continuation in
             let reply = IOSHopReply(continuation)
             DispatchQueue.global(qos: .utility).asyncAfter(deadline: .now() + 3) { reply.finish(nil) }
-            do { try session.sendProviderMessage(request) { reply.finish($0) } } catch { reply.finish(nil) }
+            do { try connection.sendProviderMessage(request) { reply.finish($0) } } catch { reply.finish(nil) }
         }
     }
-    private func cancelRequest() {
-        guard let session, !requestID.isEmpty,
-              let data = try? JSONSerialization.data(withJSONObject: ["operation": "hop-measure-cancel", "request_id": requestID]) else { return }
-        try? session.sendProviderMessage(data) { _ in }
-    }
     func cancel() {
-        cancelRequest(); generation = UUID(); task?.cancel(); task = nil; session = nil
-        running = false; text = ""
+        guard running else { return }
+        transaction?.cancel(); task?.cancel()
+        // Keep the owner, task and MTU hold alive until the exact native request
+        // reports drained. A second test cannot overlap its cancelled workers.
+        text = "Cancelling measurement; waiting for the captured probes to drain…"
     }
 }
 
@@ -155,11 +213,11 @@ struct IOSHopMeasurementsCard: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
             Label("Routed hop measurements", systemImage: "point.3.connected.trianglepath.dotted").font(.headline)
-            Text("Measures this device → entry and this device → entry → exit independently, using private node endpoints. These are cumulative path rates, not an inferred link speed between servers. The test transfers up to 32 MiB total and does not change your tunnel or saved profile.")
+            Text("Measures each captured cumulative route with actual transferred bytes. Router VPN hops use their private node API; external and Tor paths use the labelled Cloudflare HTTPS endpoint. These response times include the named path, and do not infer a server-to-server link speed. Up to 32 MiB is transferred while MTU adaptation is held.")
                 .font(.caption).foregroundStyle(.secondary)
-            Button(probe.running ? "Cancel hop measurements" : "Measure entry and exit") {
+            Button(probe.running ? "Cancel hop measurements" : "Measure routed paths") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
-            }.disabled(otherTestRunning || (!probe.running && (!model.connected || model.activeEngine != "multihop-libbox")))
+            }.disabled(otherTestRunning || (!probe.running && !IOSHopMeasurements.supported(model)))
             if !probe.text.isEmpty { Text(probe.text).font(.caption.monospacedDigit()).textSelection(.enabled) }
         }
         .padding(16).background(.background, in: RoundedRectangle(cornerRadius: 18))

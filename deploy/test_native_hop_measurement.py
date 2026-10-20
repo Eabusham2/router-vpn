@@ -42,12 +42,19 @@ class Tests(unittest.TestCase):
         self.assertLess(provider.index('if let exitError',start),gate)
         self.assertLess(provider.index('guard self.currentPathProofGuard() === comparisonGuard',start),gate)
         self.assertIn('messageData.count <= 256',provider)
-        self.assertIn('request.count == 2',provider)
+        self.assertIn('request.count == 3',provider)
+        self.assertIn('UUID(uuidString: session) != nil',provider)
         engine=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift').read_text()
-        self.assertIn('try? probe?.close()',engine)
+        self.assertIn('measurementCloseFailure',engine)
+        self.assertIn('do { try probe?.close()',engine)
+        self.assertIn('session == settingsEpoch',engine)
+        self.assertIn('Self.retiredMeasurements.start',engine)
         self.assertIn('probe?.networkChanged()',engine)
         ui=(ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text()
         for marker in ('connectedDate == date','self.generation == round','status.request_id == id','hop-measure-cancel','16384','CheckedContinuation<Data, Error>'):
+            self.assertIn(marker,ui)
+        for marker in ('status.session_id == session', 'result.complete && result.drained',
+                       'await cleanup.value', '["multihop-libbox", "external-libbox"]'):
             self.assertIn(marker,ui)
         view=(ROOT/'ios/RouterVPN/App/IOSSpeedLabView.swift').read_text()
         self.assertIn('.disabled(runDisabled || hopProbe.running)',view)
@@ -76,7 +83,7 @@ class Tests(unittest.TestCase):
     def test_shipping_apple_result_renderer_rejects_fabricated_metrics(self):
         if not shutil.which('swiftc'):self.skipTest('Swift compiler runs on the Apple build host')
         source=(ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN\n')[1].split('// HOP_RESULT_TYPES_END')[0]
-        sample={'node_id':'exit-id','role':'exit','ready':True,'idle':{'samples':6,'min_ms':1,'median_ms':2,'average_ms':2,'p90_ms':3,'max_ms':3,'jitter_ms':1},'download':{'bytes':65536,'seconds':.5,'mbps':1.048576,'loaded_reason':'short transfer'},'upload':{'bytes':65536,'seconds':.5,'mbps':1.048576,'loaded_reason':'short transfer'}}
+        sample={'node_id':'exit-id','role':'exit','kind':'private-node','label':'Router VPN exit private API','ready':True,'idle':{'samples':6,'min_ms':1,'median_ms':2,'average_ms':2,'p90_ms':3,'max_ms':3,'jitter_ms':1},'download':{'bytes':65536,'seconds':.5,'mbps':1.048576,'loaded_reason':'short transfer'},'upload':{'bytes':65536,'seconds':.5,'mbps':1.048576,'loaded_reason':'short transfer'}}
         text=json.dumps(sample,separators=(',',':'))
         test='''
 let raw = #"'''+text+'''"#.data(using: .utf8)!
@@ -85,6 +92,16 @@ let value=try decoder.decode(IOSHopMeasurementResult.self,from:raw)
 precondition(value.summary.contains("Download 1.05 Mbps"))
 precondition(value.summary.contains("loaded latency: unavailable"))
 var object=try JSONSerialization.jsonObject(with: raw) as! [String:Any]
+object["kind"]="public-path";object["label"]="Tor circuit → Cloudflare edge"
+let publicBytes=try JSONSerialization.data(withJSONObject:object)
+let publicPath=try decoder.decode(IOSHopMeasurementResult.self,from:publicBytes)
+precondition(publicPath.summary.contains("HTTPS response") && publicPath.summary.contains("Cloudflare edge") && !publicPath.summary.contains("private API"))
+for field in ["kind","label"] {
+ var invalid=object;invalid[field]=field=="kind" ? "invented-hop":"bad\\nlabel"
+ let bytes=try JSONSerialization.data(withJSONObject:invalid)
+ let decoded=try decoder.decode(IOSHopMeasurementResult.self,from:bytes)
+ precondition(decoded.summary.contains("unavailable") && !decoded.summary.contains("Mbps"))
+}
 for invalid in [0.0, 999.0, -1.0] {
     var d=object["download"] as! [String:Any];d["mbps"]=invalid;object["download"]=d
     let bytes=try JSONSerialization.data(withJSONObject:object)

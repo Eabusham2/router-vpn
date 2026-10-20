@@ -29,6 +29,8 @@ final class RouterVPNLibboxEngine {
     private var externalHealth: DispatchSourceTimer?
     private static let torRetirement = NativeRuntimeRetirement(label: "Tor")
     private static let externalRetirement = NativeRuntimeRetirement(label: "External VPN")
+    private static let measurementRetirement = NativeRuntimeRetirement(label: "VPN measurement")
+    private static let retiredMeasurements = RetiredHopMeasurements()
 
     init(tunnel: PacketTunnelProvider, strategyEpoch: String? = nil) {
         self.tunnel = tunnel
@@ -53,6 +55,7 @@ final class RouterVPNLibboxEngine {
     func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil) throws {
         try Self.torRetirement.requireAvailable()
         try Self.externalRetirement.requireAvailable()
+        try Self.measurementRetirement.requireAvailable()
         let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
         let capturedExit = try IOSMultihopStartLayer.requiredExitSource(metadata: multihopMetadata, source: exitStartLayerSource)
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
@@ -157,28 +160,40 @@ final class RouterVPNLibboxEngine {
         health?.cancel()
         paddingHealth?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
-        try? probe?.close()
+        // Keep the request reachable by its opaque ID while native shutdown
+        // drains. An application cancellation must not release its MTU hold
+        // merely because the provider replaced its current engine pointer.
+        if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
+        var measurementCloseFailure: Error?
+        do { try probe?.close() } catch { measurementCloseFailure = error }
         if let plan {
             do { try plan.close() }
             catch { tunnel?.writeLibboxLog("Server multihop cleanup was not confirmed; its bounded lease expiry remains in force.") }
         }
         var closeFailure: Error?
         if let owned {
-            if strategyOwned || capturedTor || capturedExternal {
+            if strategyOwned || capturedTor || capturedExternal || probe != nil {
                 var failure: NSError?
                 let closed = LibboxRouterStrategyCloseService(owned, &failure)
                 if !closed || failure != nil { closeFailure = failure ?? error("Native strategy teardown was not verified") }
             } else { try? owned.closeService() }
+            if probe != nil {
+                do { try probe?.close(); measurementCloseFailure = nil }
+                catch { measurementCloseFailure = error }
+            }
+            if closeFailure == nil { closeFailure = measurementCloseFailure }
             if capturedTor, let closeFailure {
                 // The C runtime must not lose its last native/TUN/file owners
                 // after an unconfirmed close. A new runtime in this extension
                 // process is rejected; an OS process restart releases it.
-                Self.torRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure)
+                Self.torRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else if capturedExternal, let closeFailure {
-                Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure)
+                Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
+            } else if probe != nil, let closeFailure {
+                Self.measurementRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else { owned.close() }
         }
-        if !((capturedTor || capturedExternal) && closeFailure != nil) {
+        if !((capturedTor || capturedExternal || probe != nil) && closeFailure != nil) {
             platform.reset()
             if let directory { try? FileManager.default.removeItem(at: directory) }
         }
@@ -264,6 +279,15 @@ final class RouterVPNLibboxEngine {
         private func checkHealth() {
             guard let owner, current(owner), !request.healthy(), current(owner) else { return }
             owner.tunnel?.nativeLibboxFailure(owner, error: retired())
+        }
+        func makeHopMeasurement() throws -> LibboxRouterHopMeasurement {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            var failure: NSError?
+            guard let probe = LibboxRouterExternalCreateHopMeasurement(server, request, policy.sourceConfig, policy.capture, sessionID, &failure), failure == nil else {
+                throw failure ?? retired()
+            }
+            guard current(owner), request.healthy() else { try probe.close(); throw retired() }
+            return probe
         }
         private func retired() -> NSError {
             NSError(domain: "RouterVPN.ExternalProof", code: 1, userInfo: [NSLocalizedDescriptionKey: "External DNS and node proof was cancelled or belongs to a retired native session."])
@@ -385,6 +409,15 @@ final class RouterVPNLibboxEngine {
             guard let owner, current(owner), !request.healthy(), current(owner) else { return }
             owner.tunnel?.nativeLibboxFailure(owner, error: retired())
         }
+        func makeHopMeasurement(exitID: String) throws -> LibboxRouterHopMeasurement {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            var failure: NSError?
+            guard let probe = LibboxRouterTorCreateHopMeasurement(server, request, exitID, &failure), failure == nil else {
+                throw failure ?? retired()
+            }
+            guard current(owner), request.healthy() else { try probe.close(); throw retired() }
+            return probe
+        }
         private func retired() -> NSError {
             NSError(domain: "RouterVPN.Tor", code: 2, userInfo: [NSLocalizedDescriptionKey: "Tor exit proof is invalid or belongs to a retired session."])
         }
@@ -393,10 +426,10 @@ final class RouterVPNLibboxEngine {
     private final class NativeRuntimeRetirement: @unchecked Sendable {
         private let lock = NSLock()
         private let label: String
-        private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?)] = []
+        private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?, LibboxRouterHopMeasurement?)] = []
         init(label: String) { self.label = label }
-        func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error) {
-            lock.lock(); retired.append((server, platform, directory)); lock.unlock()
+        func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error, measurement: LibboxRouterHopMeasurement? = nil) {
+            lock.lock(); retired.append((server, platform, directory, measurement)); lock.unlock()
         }
         func requireAvailable() throws {
             lock.lock(); let blocked = !retired.isEmpty; lock.unlock()
@@ -600,22 +633,97 @@ final class RouterVPNLibboxEngine {
         }
         hopMeasurement = probe
     }
-    func hopMeasurementRequest(operation: String, request: String) -> Data? {
+    func enableExternalHopMeasurement(exitID: String) throws {
+        ownershipLock.lock()
+        let external = externalProofDelivery, tor = torProofDelivery, generation = ownershipGeneration
+        let available = server != nil && !starting && !permanentlyStopped && hopMeasurement == nil
+        ownershipLock.unlock()
+        guard available, (external != nil) != (tor != nil) else { throw error("External measurement requires one captured native proof") }
+        let probe: LibboxRouterHopMeasurement
+        if let external { probe = try external.makeHopMeasurement() }
+        else if let tor { probe = try tor.makeHopMeasurement(exitID: exitID) }
+        else { throw error("External measurement proof was lost") }
+        ownershipLock.lock()
+        let current = ownershipGeneration == generation && !permanentlyStopped && hopMeasurement == nil &&
+            externalProofDelivery === external && torProofDelivery === tor
+        if current { hopMeasurement = probe }
+        ownershipLock.unlock()
+        guard current else { try probe.close(); throw error("External measurement belongs to a retired native generation") }
+    }
+    func hopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
         ownershipLock.lock()
         defer { ownershipLock.unlock() }
-        guard let probe = hopMeasurement else { return nil }
-        do {
-            switch operation {
-            case "hop-measure-start":
+        guard session == settingsEpoch, let probe = hopMeasurement, !permanentlyStopped else { return nil }
+        if operation == "hop-measure-start" {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
-                try probe.start(request, bytes: 8388608)
-            case "hop-measure-cancel": probe.cancel(request)
-            case "hop-measure-status": break
-            default: return nil
+            return Self.retiredMeasurements.start(probe, request: request, session: session)
+        }
+        return Self.retiredMeasurements.reply(operation: operation, request: request, session: session)
+    }
+    static func retiredHopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
+        retiredMeasurements.reply(operation: operation, request: request, session: session)
+    }
+    // Every request is registered before native Start. A cancel that overtakes
+    // Start creates a receipt and prevents that late message from doing work.
+    // The immutable settings epoch also rejects an old start on a new tunnel.
+    private final class RetiredHopMeasurements: @unchecked Sendable {
+        private let lock = NSLock()
+        private var owners: [String: LibboxRouterHopMeasurement] = [:]
+        private var receipts: [String: Data] = [:]
+        private var order: [String] = []
+        private func key(_ request: String, _ session: String) -> String { session + ":" + request }
+        private func data(_ probe: LibboxRouterHopMeasurement, request: String, session: String) -> Data? {
+            let raw = Data(probe.statusJSON().utf8)
+            guard raw.count <= 16384,
+                  var value = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+                  value["request_id"] as? String == request else { return nil }
+            value["session_id"] = session
+            guard let data = try? JSONSerialization.data(withJSONObject: value), data.count <= 16384 else { return nil }
+            return data
+        }
+        func start(_ probe: LibboxRouterHopMeasurement, request: String, session: String) -> Data? {
+            lock.lock(); defer { lock.unlock() }
+            let id = key(request, session)
+            guard owners[id] == nil, receipts[id] == nil, !owners.values.contains(where: { $0 === probe }) else { return nil }
+            do { try probe.start(request, bytes: 8388608) } catch { return nil }
+            owners[id] = probe
+            return data(probe, request: request, session: session)
+        }
+        func retain(_ probe: LibboxRouterHopMeasurement, session: String) {
+            let raw = Data(probe.statusJSON().utf8)
+            guard raw.count <= 16384,
+                  let value = try? JSONSerialization.jsonObject(with: raw) as? [String: Any],
+                  let request = value["request_id"] as? String,
+                  request.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { return }
+            let id = key(request, session)
+            lock.lock(); if receipts[id] == nil { owners[id] = probe }; lock.unlock()
+        }
+        private func save(_ data: Data, key: String) {
+            if receipts[key] == nil { order.append(key) }
+            receipts[key] = data
+            while order.count > 128 { receipts.removeValue(forKey: order.removeFirst()) }
+        }
+        func reply(operation: String, request: String, session: String) -> Data? {
+            guard operation == "hop-measure-status" || operation == "hop-measure-cancel" else { return nil }
+            lock.lock(); defer { lock.unlock() }
+            let id = key(request, session)
+            guard let probe = owners[id] else {
+                if let receipt = receipts[id] { return receipt }
+                guard operation == "hop-measure-cancel",
+                      let receipt = try? JSONSerialization.data(withJSONObject: ["request_id": request,
+                        "session_id": session, "stage": "cancelled", "complete": true,
+                        "drained": true, "results": [], "failure": "Measurement cancelled before activation."]) else { return nil }
+                save(receipt, key: id)
+                return receipt
             }
-            let data = Data(probe.statusJSON().utf8)
-            return data.count <= 16384 ? data : nil
-        } catch { return nil }
+            if operation == "hop-measure-cancel" { probe.cancel(request) }
+            guard let response = data(probe, request: request, session: session),
+                  let value = try? JSONSerialization.jsonObject(with: response) as? [String: Any] else { return nil }
+            if value["drained"] as? Bool == true {
+                owners.removeValue(forKey: id); save(response, key: id)
+            }
+            return response
+        }
     }
     func multihopProgress() -> Data? {
         ownershipLock.lock(); let plan = multihop; ownershipLock.unlock()
