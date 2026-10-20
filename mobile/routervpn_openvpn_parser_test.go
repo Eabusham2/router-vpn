@@ -1,6 +1,7 @@
 package libbox
 
 import (
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -17,7 +18,7 @@ func TestNativeOpenVPNQuotedControlsAreRejected(t *testing.T) {
 				t.Fatal("error leaked profile contents")
 			}
 		}
-		_, err := routerOpenVPNWords("verify-x509-name do-not-leak\\" + string(c))
+		_, err := RouterOpenVPNEndpoint(fixture+"verify-x509-name do-not-leak\\"+string(c)+" name\n", "user", "password", "exit", "")
 		if err == nil {
 			t.Fatalf("accepted escaped control %d", c)
 		}
@@ -26,13 +27,14 @@ func TestNativeOpenVPNQuotedControlsAreRejected(t *testing.T) {
 
 func TestNativeOpenVPNQuotedAndEscapedArguments(t *testing.T) {
 	for _, option := range []string{`verify-x509-name "VPN Server" name`, `verify-x509-name 'VPN Server' name`, `verify-x509-name VPN\ Server name`} {
-		words, err := routerOpenVPNWords(option)
-		if err != nil || len(words) != 3 || words[1] != "VPN Server" {
+		encoded, err := RouterOpenVPNEndpoint(fixture+option+"\n", "user", "password", "exit", "")
+		var endpoint map[string]any
+		if err != nil || json.Unmarshal([]byte(encoded), &endpoint) != nil || endpoint["tls"].(map[string]any)["server_name"] != "VPN Server" {
 			t.Fatal("valid OpenVPN quoting changed")
 		}
 	}
-	words, err := routerOpenVPNWords("client\t # comment")
-	if err != nil || len(words) != 1 || words[0] != "client" {
+	_, err := RouterOpenVPNEndpoint(strings.Replace(fixture, "client\n", "client\t # comment\n", 1), "user", "password", "exit", "")
+	if err != nil {
 		t.Fatal("tab-separated comments changed")
 	}
 }

@@ -18,7 +18,7 @@ trap 'rm -f "$TEST" "$POLICY_TEST"' EXIT
 python3 "$ROOT/deploy/mobile_openvpn_close_policy.py" "$VENDOR"
 install -m 0644 "$ROOT/mobile/openvpn/close_policy_test.go.tmpl" "$POLICY_TEST"
 install -m 0644 "$ROOT/mobile/routervpn_openvpn_native_test.go.tmpl" "$TEST"
-install -m 0644 "$ROOT/mobile/routervpn_openvpn.go" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
+python3 "$ROOT/deploy/prepare-mobile-openvpn.py" "$VENDOR"
 cd "$VENDOR"
 go test -count=1 -timeout=30s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./protocol/openvpn -run '^TestRouterVPNOpenVPNCloseError$' -v
 go test -count=1 -timeout=120s -ldflags=-checklinkname=0 -tags with_openvpn,with_wireguard,with_quic,with_gvisor ./experimental/libbox -run '^TestRouterOpenVPNNative' -v

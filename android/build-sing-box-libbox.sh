@@ -43,7 +43,7 @@ python3 "$ROOT/../deploy/build-mobile-tor-package.py" --platform android --outpu
 python3 "$ROOT/../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES"
 OPENVPN_SOURCE="$ROOT/../mobile/routervpn_openvpn.go"
 OPENVPN_STAMP="$LIBDIR/libbox.openvpn.sha256"
-OPENVPN_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$OPENVPN_SOURCE")
+OPENVPN_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" --digest)
 MULTIHOP_SHA=$(python3 "$ROOT/../deploy/prepare-mobile-multihop.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$MULTIHOP_SHA")
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$TOR_SOURCE_SHA")
@@ -244,7 +244,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
 install -m 0644 "$ROOT/routervpn_xray_bridge.go" "$VENDOR/experimental/libbox/routervpn_xray_bridge.go"
 # Same Go runtime and protected socket path as every other mobile Libbox mode.
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
-install -m 0644 "$OPENVPN_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
+python3 "$ROOT/../deploy/prepare-mobile-openvpn.py" "$VENDOR"
 python3 "$ROOT/../deploy/prepare-mobile-multihop.py" "$VENDOR"
 python3 "$ROOT/../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"

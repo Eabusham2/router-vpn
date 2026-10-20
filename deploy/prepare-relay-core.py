@@ -13,7 +13,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
-PACKAGES = ('awgpolicy', 'mobilemultihop', 'mobilepq', 'applexray', 'multihoprelay', 'routechoice', 'nativesip003', 'nativecomposite', 'mobileperf', 'hopmeasure')
+PACKAGES = ('awgpolicy', 'mobilemultihop', 'mobilepq', 'applexray', 'multihoprelay', 'routechoice', 'nativesip003', 'nativecomposite', 'mobileperf', 'hopmeasure', 'nativeopenvpn')
 spec = importlib.util.spec_from_file_location('relay_amnezia', ROOT/'deploy/prepare-mobile-amnezia.py')
 AMNEZIA = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(AMNEZIA)

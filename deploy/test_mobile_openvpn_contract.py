@@ -11,9 +11,10 @@ def need(path, *markers):
         assert marker in text, f"{path}: missing shipping OpenVPN connection {marker!r}"
     return text
 
-need('mobile/routervpn_openvpn.go', 'func RouterOpenVPNEndpoint(', '"openvpn-client"', '"system": false', '"remote_certificate_tls": "server"', 'netip.ParseAddr', 'file references are never read')
+need('mobile/routervpn_openvpn.go', 'func RouterOpenVPNEndpoint(', 'return nativeopenvpn.CompileEndpoint(config, username, password, tag, detour)')
+need('internal/nativeopenvpn/profile.go', 'func CompileEndpoint(', '"openvpn-client"', '"system": false', '"remote_certificate_tls": "server"', 'netip.ParseAddr', 'file references are never read')
 for path in ('ios/RouterVPN/prepare-libbox.sh', 'android/build-sing-box-libbox.sh'):
-    need(path, 'VERSION=1.14.1', 'COMMIT=1ac1a339cb1223e9c70eae14c44411c75033c02d', 'routervpn_openvpn.go', "grep -Fq 'with_openvpn'")
+    need(path, 'VERSION=1.14.1', 'COMMIT=1ac1a339cb1223e9c70eae14c44411c75033c02d', 'routervpn_openvpn.go', 'prepare-mobile-openvpn.py', "grep -Fq 'with_openvpn'")
 need('ios/RouterVPN/prepare-libbox.sh', 'BRIDGE_SHA', 'BRIDGE_STAMP', 'LibboxRouterOpenVPNEndpoint')
 need('android/build-sing-box-libbox.sh', 'OPENVPN_SHA', 'OPENVPN_STAMP', 'routerOpenVPNEndpoint', 'exactly one gomobile go.Seq runtime class', 'test_mobile_openvpn_pinned.sh')
 need('ios/RouterVPN/project.yml', 'test_mobile_openvpn_pinned.sh', '- framework: .deps/Libbox.xcframework')
@@ -54,4 +55,5 @@ for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift',
     assert 'guard let encoded,' not in text, 'OpenVPN binding returns a non-optional String'
 subprocess.run([sys.executable, str(ROOT/'deploy/test_mobile_openvpn_close_policy.py')], cwd=ROOT, check=True, timeout=180)
 subprocess.run(['go','test','-count=1','./mobile'],cwd=ROOT,check=True,timeout=45)
+subprocess.run(['python3',str(ROOT/'deploy/test_mobile_openvpn_source.py')],cwd=ROOT,check=True,timeout=90)
 print('Mobile OpenVPN shipping, private-store, owned-graph and parser contracts: PASS')

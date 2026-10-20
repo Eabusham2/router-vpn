@@ -25,7 +25,7 @@ STAMP="$DEPS/Libbox.xcframework.pin"
 LICENSE_OUT="$DEPS/libbox-LICENSE.txt"
 BRIDGE_SOURCE="$ROOT/../../mobile/routervpn_openvpn.go"
 BRIDGE_STAMP="$DEPS/Libbox.routervpn-openvpn.sha256"
-BRIDGE_SHA=$(python3 -c 'import hashlib,sys; print(hashlib.sha256(open(sys.argv[1],"rb").read()).hexdigest())' "$BRIDGE_SOURCE")
+BRIDGE_SHA=$(python3 "$ROOT/../../deploy/prepare-mobile-openvpn.py" --digest)
 MULTIHOP_SHA=$(python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" --digest)
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$MULTIHOP_SHA")
 BRIDGE_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$BRIDGE_SHA" "$TOR_SOURCE_SHA")
@@ -174,7 +174,7 @@ grep -Fq 'bindTarget = "ios,iossimulator,tvos,tvossimulator,macos"' "$VENDOR/cmd
 grep -Fq 'with_wireguard' "$VENDOR/cmd/internal/build_libbox/main.go"
 # Both native targets must contain the real OpenVPN endpoint, not a UI stub.
 grep -Fq 'with_openvpn' "$VENDOR/cmd/internal/build_libbox/main.go"
-install -m 0644 "$BRIDGE_SOURCE" "$VENDOR/experimental/libbox/routervpn_openvpn.go"
+python3 "$ROOT/../../deploy/prepare-mobile-openvpn.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-multihop.py" "$VENDOR"
 python3 "$ROOT/../../deploy/test_retained_strategy_preparation.py" "$VENDOR"
 python3 "$ROOT/../../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
