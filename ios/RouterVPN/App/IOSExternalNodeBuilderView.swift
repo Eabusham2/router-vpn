@@ -122,7 +122,7 @@ extension RouterVPNModel {
             }
             external["wireguard"] = block
         case "socks5":
-            let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = username
             guard user.isEmpty == password.isEmpty else {
                 throw NSError(domain: "RouterVPN.ExternalNode", code: 7, userInfo: [NSLocalizedDescriptionKey: "SOCKS5 username/password must both be set or both be empty."])
             }
@@ -131,7 +131,7 @@ extension RouterVPNModel {
             external["socks5"] = block
         case "http-connect", "https-connect":
             let secure = protocolName == "https-connect"
-            let user = username.trimmingCharacters(in: .whitespacesAndNewlines)
+            let user = username
             guard user.isEmpty == password.isEmpty else {
                 throw NSError(domain: "RouterVPN.ExternalNode", code: 8, userInfo: [NSLocalizedDescriptionKey: "CONNECT proxy username/password must both be set or both be empty."])
             }

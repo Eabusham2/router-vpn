@@ -169,15 +169,61 @@ enum RouterVPNExternalExitBuilder {
             var files = predecessorFiles; files["sing-box.json"] = data
             return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile)
         }
-        guard predecessorProfile == nil, predecessorFiles.isEmpty else { throw error("A non-Tor external node cannot discard an entry graph.") }
         guard ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")
         }
+        if protocolName == "openvpn" {
+            guard predecessorProfile == nil, predecessorFiles.isEmpty else { throw error("OpenVPN cannot discard a captured entry graph.") }
+        } else {
+            guard (profile["multihop_enabled"] as? Bool ?? false) == (predecessorProfile != nil) else {
+                throw error("The external graph does not match the captured entry selection.")
+            }
+        }
         let expected = try publicLiteralIP(string(external["expected_public_ip"]), label: "expected public exit IP")
-        let custom = try customExit(external: external, protocolName: protocolName)
+        var custom = try customExit(external: external, protocolName: protocolName)
 
         var endpoints: [[String: Any]] = []
         var outbounds: [[String: Any]] = []
+        var entryTag: String?
+        if let predecessorProfile {
+            guard ordinaryProtocols.contains(protocolName),
+                  profile["multihop_entry_id"] as? String == predecessorProfile["id"] as? String,
+                  predecessorProfile["id"] as? String != profile["id"] as? String,
+                  profile["multihop_exit_id"] as? String == profile["id"] as? String,
+                  profile["multihop_exit_mode"] as? String == protocolName,
+                  ["", "local"].contains(string(profile["multihop_execution"])) else {
+                throw error("The external graph belongs to another entry, exit or execution selection.")
+            }
+            let tag = "external-entry"
+            if predecessorProfile["node_kind"] as? String == "external" {
+                guard predecessorFiles.isEmpty, let imported = predecessorProfile["external"] as? [String: Any],
+                      let kind = imported["protocol"] as? String, ordinaryProtocols.contains(kind),
+                      profile["multihop_entry_mode"] as? String == kind,
+                      ["", "off"].contains(string(predecessorProfile["start_layer"])) else {
+                    throw error("The external entry must retain its exact native imported protocol.")
+                }
+                _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
+                var entry = try customExit(external: imported, protocolName: kind); entry["tag"] = tag
+                if kind == "wireguard" { endpoints.append(entry) } else { outbounds.append(entry) }
+            } else {
+                guard predecessorProfile["node_kind"] as? String == "router-vpn",
+                      profile["multihop_entry_mode"] as? String == "wg",
+                      ["", "off"].contains(string(predecessorProfile["start_layer"])),
+                      predecessorProfile["daita_enabled"] as? Bool != true,
+                      Set(predecessorFiles.keys) == ["sing-box.json"],
+                      let data = predecessorFiles["sing-box.json"],
+                      let graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                      Set(graph.keys) == ["endpoints", "route"],
+                      let entries = graph["endpoints"] as? [[String: Any]], entries.count == 1,
+                      (graph["outbounds"] as? [[String: Any]] ?? []).isEmpty,
+                      entries[0]["tag"] as? String == tag, entries[0]["type"] as? String == "wireguard",
+                      let route = graph["route"] as? [String: Any], Set(route.keys) == ["final"], route["final"] as? String == tag else {
+                    throw error("The Router VPN entry requires its complete captured native graph.")
+                }
+                endpoints += entries
+            }
+            entryTag = tag; custom["detour"] = tag
+        } else if !predecessorFiles.isEmpty { throw error("External startup cannot discard an unowned predecessor graph.") }
         if protocolName == "wireguard" || protocolName == "openvpn" { endpoints.append(custom) } else { outbounds.append(custom) }
 
         let mtu = externalMTU(external: external, protocolName: protocolName)
@@ -201,7 +247,8 @@ enum RouterVPNExternalExitBuilder {
         guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw error("iOS external Libbox config exceeds safety limit.") }
         if ordinaryProtocols.contains(protocolName) {
             let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
-                                                            protocolName: protocolName, expectedPublicIP: expected)
+                                                            protocolName: protocolName, expectedPublicIP: expected,
+                                                            entry: predecessorProfile, entryTag: entryTag)
             return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
                                                 files: ["sing-box.json": Data(policy.config.utf8)], policy: policy)
         }

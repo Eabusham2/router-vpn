@@ -39,9 +39,10 @@ import Foundation
  func proveTor(sessionID:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.proofCallback=completion}
  func proveExternal(completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil && externalStarted);owner.nativeExternalProof=true;owner.proofCallback=completion}
 }
-enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{}}
+enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{};static func selectedMode(profile:[String:Any])throws->String{"off"}}
 enum RouterVPNExternalExitBuilder {
  static let torEntryModes:Set<String>=["wg"]
+ static let ordinaryProtocols:Set<String>=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
  struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?;var policy:String?}
  static func build(profile:[String:Any],predecessorFiles:[String:Data],predecessorProfile:[String:Any]?)throws->Runtime{Runtime(torSessionID:profile["tor"] as? Bool == true ? "captured-tor-session":nil,policy:profile["native"] as? Bool == true ? "captured-policy":nil)}
 }
@@ -70,9 +71,11 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  func enableForwarding(profileData:Data,proofID:String){forwarded += 1;duringForwarding?()}
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
  func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
- func beginExternal(tor:Bool=false,native:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["tor":tor,"native":native],strict:true,completionHandler:done)}
+ func beginExternal(tor:Bool=false,native:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["tor":tor,"native":native,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
  func strictKillSwitchRequested(_ profile:[String:Any])->Bool{profile["strict"] as? Bool == true}
  func selectedRouterProfile(_ root:[String:Any])throws->[String:Any]{root}
+ func suppliedNodeProof(root:[String:Any],selectedProfile:[String:Any])throws->String{String(repeating:"a",count:64)}
+ func multihopWireGuardEndpoint(root:[String:Any],expectedProofID:String,name:String)throws->(endpoint:[String:Any],dns:[String]){(["type":"wireguard"],[])}
  struct Compilation {let files:[String:Data]=["sing-box.json":Data("{}".utf8)]}
  func compileLibbox(provider:[String:Any],root:[String:Any],selectedProfile:[String:Any])throws->Compilation{Compilation()}
  func beginRaw(_ completionHandler:@escaping(Error?)->Void){

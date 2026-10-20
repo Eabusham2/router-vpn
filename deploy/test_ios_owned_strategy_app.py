@@ -347,6 +347,32 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         duplicate.routerProfiles.append(duplicate.routerProfiles[0]); model.bundle = duplicate
         await model.connectSelectedExternal()
         check("duplicate external selection cannot choose another owner", NETunnelProviderManager.stored.isEmpty)
+        for change in ["stable", "entry-policy", "entry-assets", "entry-id", "slot"] {
+            model = try fresh(); model.bundle = try externalFixture()
+            var entry = try fixture(); entry.selectedRouterID="entry"; entry.routerProfiles[0].id="entry"
+            model.entryBundle=entry
+            model.bundle?.routerProfiles[0].multihopEnabled=true
+            model.bundle?.routerProfiles[0].multihopEntryID="entry"
+            model.bundle?.routerProfiles[0].multihopEntryMode="wg"
+            model.bundle?.routerProfiles[0].multihopExitID="home"
+            model.bundle?.routerProfiles[0].multihopExitMode="socks5"
+            model.bundle?.routerProfiles[0].multihopExecution="local"
+            let changing=model
+            NETunnelProviderManager.saveHook = {
+                if change=="entry-policy" { changing.entryBundle?.routerProfiles[0].homeLANAccess=true }
+                if change=="entry-assets" { changing.entryBundle?.profiles["wg"]?["wg.conf"]=Data("different private transport".utf8).base64EncodedString() }
+                if change=="entry-id" { changing.entryBundle?.selectedRouterID="missing" }
+                if change=="slot" { (NETunnelProviderManager.stored[0].protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration?["tor_entry_bundle"]=Data("foreign owner".utf8) }
+            }
+            await model.connectSelectedExternal()
+            let manager=NETunnelProviderManager.stored[0],session=manager.connection as! NETunnelProviderSession
+            if change=="stable" {
+                let config=(manager.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration!
+                let captured=try JSONDecoder().decode(ClientBundle.self,from:config["external_entry_bundle"] as! Data)
+                check("ordinary external app captures exact complete entry",model.connected && captured.routerProfiles==entry.routerProfiles && captured.profiles==entry.profiles && config["external_entry_mode"] as? String=="wg")
+                check("ordinary external app cannot retain a Tor owner",config["tor_entry_bundle"]==nil && config["tor_entry_mode"]==nil)
+            } else {check("changed external entry cannot start after preference save",session.starts==0 && !model.connected)}
+        }
         for raw in IOSNativeMAXProfile.modeIDs.sorted() {
             model = try fresh(); let captured = try maxAppFixture(raw); model.bundle = captured
             await model.connect(rawProfileID: raw)

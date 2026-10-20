@@ -3,9 +3,14 @@ import SwiftUI
 
 @MainActor
 extension RouterVPNModel {
+    static let ordinaryExternalHopProtocols: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
     /// Return the complete *entry's* private bundle, never the selected exit's
     /// raw files with a different display id. Capture before suspension/start.
     func iosMultihopEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
+        if let selected = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), selected.normalizedNodeKind == "external",
+           Self.ordinaryExternalHopProtocols.contains(selected.external?.protocolName ?? "") {
+            return try iosOrdinaryExternalEntryBundle(for: exitBundle)
+        }
         let selectedExit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle)
         let torExit = selectedExit?.normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains(selectedExit?.external?.protocolName ?? "")
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle),
@@ -60,8 +65,59 @@ extension RouterVPNModel {
         return entry
     }
 
+    private func iosOrdinaryExternalEntryBundle(for exitBundle: ClientBundle) throws -> ClientBundle {
+        guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), exit.normalizedNodeKind == "external",
+              let exitMode = exit.external?.protocolName, Self.ordinaryExternalHopProtocols.contains(exitMode),
+              exit.multihopEnabled == true, exit.multihopExitID == exit.id, exit.multihopExitMode == exitMode,
+              (exit.multihopExecution ?? "local") == "local", exit.external?.expectedPublicIP.isEmpty == false,
+              let entryID = exit.multihopEntryID, entryID != exit.id, let mode = exit.multihopEntryMode,
+              let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
+              data.count <= 32 * 1024 * 1024 else {
+            throw iosMultihopError("Choose distinct linked entry and external exit nodes with their exact saved transports.")
+        }
+        var entry = try JSONDecoder().decode(ClientBundle.self, from: data)
+        guard entry.routerProfiles.filter({ $0.id == entryID }).count == 1,
+              let profile = entry.routerProfiles.first(where: { $0.id == entryID }) else {
+            throw iosMultihopError("The captured entry bundle no longer selects exactly one linked node.")
+        }
+        let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
+        let capturedEntry = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
+        guard try IOSMultihopStartLayer.selected(capturedExit) == "off" else {
+            throw iosMultihopError("An ordinary external exit retains its imported native transport; select entry encryption on the entry.")
+        }
+        entry.selectedRouterID = entryID
+        entry.endpoint = profile.endpoint
+        if profile.normalizedNodeKind == "external" {
+            guard Self.ordinaryExternalHopProtocols.contains(mode), profile.external?.protocolName == mode,
+                  profile.external?.expectedPublicIP.isEmpty == false,
+                  try IOSMultihopStartLayer.selected(capturedEntry) == "off" else {
+                throw iosMultihopError("Choose the external entry's exact imported protocol and public proof address.")
+            }
+            entry.nodeProofID = ""
+            entry.routerAPI = ""; entry.apiToken = ""; entry.adGuardIPv4 = ""; entry.adGuardIPv6 = ""
+        } else {
+            guard profile.normalizedNodeKind == "router-vpn", mode == "wg", profile.daitaEnabled != true,
+                  try IOSMultihopStartLayer.selected(capturedEntry) == "off",
+                  let proof = profile.nodeProofID, proof.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
+                throw iosMultihopError("The Router VPN entry requires its exact native mode and paired private identity.")
+            }
+            entry.nodeProofID = proof
+            entry.routerAPI = profile.routerAPI; entry.apiToken = profile.apiToken
+            entry.adGuardIPv4 = profile.adGuardIPv4; entry.adGuardIPv6 = profile.adGuardIPv6
+            if IOSNativeMAXProfile.modeIDs.contains(mode) {
+                _ = try IOSNativeMAXProfile.decode(mode: mode, encoded: entry.profiles[mode] ?? [:])
+                _ = try IOSMultihopStartLayer.selected(capturedEntry)
+            } else if IOSNativePQProfile.modeIDs.contains(mode) {
+                _ = try IOSNativePQProfile.decode(mode: mode, encoded: entry.profiles[mode] ?? [:])
+                _ = try IOSMultihopStartLayer.capture(profile: capturedEntry, profiles: entry.profiles)
+            } else { _ = try IOSMultihopStartLayer.capture(profile: capturedEntry, profiles: entry.profiles) }
+            _ = try IOSRuntimeSelector.selectRaw(bundle: entry, rawProfileID: mode)
+        }
+        return entry
+    }
+
     func saveIOSMultihop(enabled: Bool, entryID: String, exitID: String, exitMode: String, execution: String = "local", entryMode: String = "wg") throws {
-        guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
+        guard IOSRuntimeSelector.multihopModeIDs.contains(entryMode) || Self.ordinaryExternalHopProtocols.contains(entryMode) else { throw iosMultihopError("Choose an exact native entry transport.") }
         guard ["local", "server", "auto"].contains(execution) else { throw iosMultihopError("Choose Local, Server, or Compare both.") }
         guard !profileMutationBlocked else { throw iosMultihopError("Disconnect before changing the active graph.") }
         if !enabled {
@@ -74,7 +130,7 @@ extension RouterVPNModel {
             message = "Multihop disabled. The next Connect uses the selected normal mode."
             return
         }
-        guard (IOSRuntimeSelector.multihopModeIDs.contains(exitMode) || ["tor", "tor-bridge"].contains(exitMode)), entryID != exitID,
+        guard (IOSRuntimeSelector.multihopModeIDs.contains(exitMode) || ["tor", "tor-bridge"].contains(exitMode) || Self.ordinaryExternalHopProtocols.contains(exitMode)), entryID != exitID,
               let data = IOSNodeBundleStore.shared.bundleData(containing: exitID, current: bundle) else {
             throw iosMultihopError("Choose two different linked Router VPN nodes and an exit transport.")
         }
@@ -82,8 +138,8 @@ extension RouterVPNModel {
         guard value.routerProfiles.filter({ $0.id == exitID }).count == 1,
               let index = value.routerProfiles.firstIndex(where: { $0.id == exitID }),
               value.routerProfiles[index].normalizedNodeKind == "router-vpn" ||
-                (value.routerProfiles[index].normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains(exitMode) && value.routerProfiles[index].external?.protocolName == exitMode) else {
-            throw iosMultihopError("Choose a Router VPN exit or the selected Tor node's exact protocol.")
+                (value.routerProfiles[index].normalizedNodeKind == "external" && (["tor", "tor-bridge"].contains(exitMode) || Self.ordinaryExternalHopProtocols.contains(exitMode)) && value.routerProfiles[index].external?.protocolName == exitMode) else {
+            throw iosMultihopError("Choose a Router VPN exit or the external node's exact imported protocol.")
         }
         value.selectedRouterID = exitID
         value.routerProfiles[index].multihopEnabled = true
@@ -124,15 +180,27 @@ struct IOSMultihopView: View {
     @State private var exitMode = "shadowsocks"
     @State private var execution = "local"
     @State private var detail = ""
-    private var nodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
+    private var nodes: [RouterProfile] {
+        model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
+            (ordinaryExitProtocol != nil && $0.normalizedNodeKind == "external" && RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "")) }
+    }
     private var exitNodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
-            ($0.normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains($0.external?.protocolName ?? "")) }
+            ($0.normalizedNodeKind == "external" && (["tor", "tor-bridge"].contains($0.external?.protocolName ?? "") || RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? ""))) }
     }
     private var torExitProtocol: String? {
         guard let node = exitNodes.first(where: { $0.id == exitID }), node.normalizedNodeKind == "external",
               let kind = node.external?.protocolName, ["tor", "tor-bridge"].contains(kind) else { return nil }
         return kind
+    }
+    private var ordinaryExitProtocol: String? {
+        guard let node = exitNodes.first(where: { $0.id == exitID }), node.normalizedNodeKind == "external",
+              let kind = node.external?.protocolName, RouterVPNModel.ordinaryExternalHopProtocols.contains(kind) else { return nil }
+        return kind
+    }
+    private var externalEntryProtocol: String? {
+        guard let node = nodes.first(where: { $0.id == entryID }), node.normalizedNodeKind == "external" else { return nil }
+        return node.external?.protocolName
     }
 
     var body: some View {
@@ -144,8 +212,12 @@ struct IOSMultihopView: View {
                         Text("Choose entry").tag("")
                         ForEach(nodes) { node in Text(node.name.isEmpty ? node.id : node.name).tag(node.id) }
                     }
+                    if let externalEntryProtocol {
+                        LabeledContent("Entry transport", value: externalEntryProtocol)
+                    } else {
                     Picker("Entry transport", selection: $entryMode) {
                         Text("WireGuard").tag("wg")
+                        if ordinaryExitProtocol == nil {
                         Text("AmneziaWG Fast").tag("awg2-fast")
                         Text("AmneziaWG Strong").tag("awg2-strong")
                         Text("WireGuard + Rosenpass PQ").tag("wg-pq")
@@ -164,6 +236,8 @@ struct IOSMultihopView: View {
                         Text("MAX TLS — AWG + PQ").tag("max-tls-awg")
                         Text("MAX QUIC — WG + PQ").tag("max-quic-wg")
                         Text("MAX QUIC — AWG + PQ").tag("max-quic-awg")
+                        }
+                    }
                     }
                     Picker("Exit node", selection: $exitID) {
                         Text("Choose exit").tag("")
@@ -172,6 +246,11 @@ struct IOSMultihopView: View {
                     if let torExitProtocol {
                         LabeledContent("Exit transport", value: torExitProtocol == "tor" ? "Tor" : "Tor with saved bridges")
                         Text("Tor connects through the selected entry. The app verifies that entry and the current Tor circuit before completing the connection. Tor carries TCP traffic; choose TCP, DoT or DoH for its exit DNS.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    } else if let ordinaryExitProtocol {
+                        LabeledContent("Exit transport", value: ordinaryExitProtocol)
+                        LabeledContent("Execution", value: "Local — one VPN interface")
+                        Text("The imported exit connects through the selected entry. The native tunnel proves both nodes and the selected DNS before Connected. Home AdGuard requires a paired Router VPN entry; HTTP CONNECT paths require TCP, DoT or DoH DNS.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
                     Picker("Exit transport", selection: $exitMode) {
@@ -212,7 +291,7 @@ struct IOSMultihopView: View {
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? exitMode, execution: torExitProtocol == nil ? execution : "local", entryMode: entryMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: torExitProtocol == nil && ordinaryExitProtocol == nil ? execution : "local", entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }

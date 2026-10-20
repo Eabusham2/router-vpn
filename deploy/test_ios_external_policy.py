@@ -124,9 +124,45 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   }
   try reject("oversized native response"){try policy.validateProof(String(repeating:" ",count:8193),sessionID:session,began:began)}
  }
+ static func entryGraphs()throws {
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  for entryKind in protocols {for exitKind in protocols {
+   var entry=profile(entryKind),exit=profile(exitKind)
+   entry["id"]="saved-entry";entry["home_lan_cidrs"]=["10.20.0.0/16"];entry["ipv6_mode"]="off"
+   if entryKind=="wireguard" {entry["manual_mtu"]=1500;var ext=entry["external"] as! [String:Any],wg=ext["wireguard"] as! [String:Any];wg["private_key"]=key(9);wg["peer_public_key"]=key(10);ext["wireguard"]=wg;entry["external"]=ext}
+   exit["multihop_enabled"]=true;exit["multihop_entry_id"]="saved-entry";exit["multihop_entry_mode"]=entryKind
+   exit["multihop_exit_id"]="saved-exit";exit["multihop_exit_mode"]=exitKind;exit["multihop_execution"]="local";exit["ipv6_mode"]="on"
+   if ["http-connect","https-connect"].contains(entryKind) && ["wireguard","hysteria2"].contains(exitKind) {
+    try reject("TCP-only entry cannot carry UDP exit"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorProfile:entry)};continue
+   }
+   let beforeEntry=try json(entry),beforeExit=try json(exit)
+   let r=try RouterVPNExternalExitBuilder.build(profile:exit,predecessorProfile:entry),graph=try object(r.files["sing-box.json"]!),meta=try object(Data(r.policy!.metadata.utf8))
+   let nodes=(graph["outbounds"] as! [[String:Any]])+(graph["endpoints"] as! [[String:Any]])
+   try check("both exact native owners survive",nodes.count==2 && nodes.filter{$0["tag"] as? String=="external-entry"}.count==1)
+   try check("selected exit is nested through entry",nodes.first{$0["tag"] as? String=="custom-exit"}?["detour"] as? String=="external-entry")
+   try check("entry policy participates in IPv6/LAN",meta["ipv6_mode"] as? String=="off" && (meta["blocked_lan_cidrs"] as? [String])?.contains("10.20.0.0/16")==true)
+   try check("exit DNS keeps the exit route",meta["dns_detour"] as? String=="custom-exit")
+   try check("captured entry profile remains private and exact",json(entry)==beforeEntry && json(exit)==beforeExit && meta["entry_id"] as? String=="saved-entry")
+   for field in ["multihop_entry_id","multihop_entry_mode","multihop_exit_id","multihop_exit_mode","multihop_execution"] {
+    var bad=exit;bad[field]="wrong"
+    try reject("foreign saved graph "+field){_ = try RouterVPNExternalExitBuilder.build(profile:bad,predecessorProfile:entry)}
+   }
+   try reject("missing captured entry cannot become direct"){_ = try RouterVPNExternalExitBuilder.build(profile:exit)}
+  }}
+  var router:[String:Any]=["id":"paired-home","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.8.0.1:8787","api_token":"private-entry-token","adguard_ipv4":"192.168.50.133","mtu_policy":"fixed","manual_mtu":1500,"home_lan_access":false,"ipv6_mode":"on","start_layer":"off"]
+  let direct=try RouterVPNExternalExitBuilder.build(profile:profile("wireguard")),original=try object(Data(direct.policy!.sourceConfig.utf8))
+  var endpoint=(original["endpoints"] as! [[String:Any]])[0];endpoint["tag"]="external-entry"
+  let files=["sing-box.json":try json(["endpoints":[endpoint],"route":["final":"external-entry"]])]
+  var exit=profile("socks5");exit["dns_mode"]="home";exit["dns_host"]="192.168.50.133";exit["multihop_enabled"]=true;exit["multihop_entry_id"]="paired-home";exit["multihop_entry_mode"]="wg";exit["multihop_exit_id"]="saved-exit";exit["multihop_exit_mode"]="socks5";exit["multihop_execution"]="local"
+  let r=try RouterVPNExternalExitBuilder.build(profile:exit,predecessorFiles:files,predecessorProfile:router),meta=try object(Data(r.policy!.metadata.utf8))
+  try check("Home DNS stays on the proven paired entry",meta["dns_detour"] as? String=="external-entry" && meta["dns_server"] as? String=="192.168.50.133" && meta["entry_proof"] as? String=="required")
+  try check("per-hop fixed MTUs retain separate owners",meta["entry_mtu"] as? Int==1500 && meta["configured_mtu"] as? Int==1380)
+  router["node_proof_id"]="invalid"
+  try reject("Home DNS cannot adopt an unpaired entry"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorFiles:files,predecessorProfile:router)}
+ }
  static func main()throws {
   defer{RouterVPNTorTestClose()}
-  try policies();try negativeAdoption();try proofResults()
+  try policies();try negativeAdoption();try proofResults();try entryGraphs()
   print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
  }
 }

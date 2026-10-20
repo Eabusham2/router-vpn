@@ -252,17 +252,22 @@ enum IOSMAXSourceSelection {
             let entryMode = selected["multihop_entry_mode"] as? String ?? "wg"
             if IOSNativeMAXProfile.modeIDs.contains(entryMode) { captures.append(("entryBundle", entryData, entryMode)) }
             if IOSNativeMAXProfile.modeIDs.contains(exitMode) { captures.append(("bundle", data, exitMode)) }
-        } else if let entryValue = provider["tor_entry_bundle"] {
+        } else if let entryValue = provider["tor_entry_bundle"] ?? provider["external_entry_bundle"] {
             let selected = try profile(root)
-            guard let entryData = entryValue as? Data,
+            let ordinary = provider["external_entry_bundle"] != nil
+            let slot = ordinary ? "external_entry_bundle" : "tor_entry_bundle"
+            let modeKey = ordinary ? "external_entry_mode" : "tor_entry_mode"
+            guard engine == "external-libbox", !(ordinary && provider["tor_entry_bundle"] != nil),
+                  provider[ordinary ? "tor_entry_mode" : "external_entry_mode"] == nil,
+                  let entryData = entryValue as? Data,
                   let external = selected["external"] as? [String: Any],
-                  ["tor", "tor-bridge"].contains(external["protocol"] as? String ?? ""),
+                  (ordinary ? ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"] : ["tor", "tor-bridge"]).contains(external["protocol"] as? String ?? ""),
                   selected["multihop_enabled"] as? Bool == true,
                   let entryID = selected["multihop_entry_id"] as? String,
-                  let mode = provider["tor_entry_mode"] as? String,
+                  let mode = provider[modeKey] as? String,
                   mode == (selected["multihop_entry_mode"] as? String ?? "wg"),
                   try profile(object(entryData))["id"] as? String == entryID else { throw issue() }
-            if IOSNativeMAXProfile.modeIDs.contains(mode) { captures.append(("tor_entry_bundle", entryData, mode)) }
+            if IOSNativeMAXProfile.modeIDs.contains(mode) { captures.append((slot, entryData, mode)) }
         }
         return try captures.map { slot, bytes, mode in
             let node = try object(bytes)

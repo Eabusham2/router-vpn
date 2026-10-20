@@ -395,8 +395,10 @@ need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     '"tor", "tor-bridge"',
     "capturedEntry = try externalTorEntryData(source: bundle)",
-    'proto.providerConfiguration?["tor_entry_bundle"] = capturedEntry',
-    'saved.providerConfiguration?["tor_entry_bundle"] as? Data == capturedEntry',
+    'let entryBundleKey = tor ? "tor_entry_bundle" : "external_entry_bundle"',
+    'proto.providerConfiguration?[entryBundleKey] = capturedEntry',
+    'saved.providerConfiguration?[entryBundleKey] as? Data == capturedEntry',
+    'saved.providerConfiguration?[tor ? "external_entry_bundle" : "tor_entry_bundle"] == nil',
     "current circuit exit verified",
 )
 need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",

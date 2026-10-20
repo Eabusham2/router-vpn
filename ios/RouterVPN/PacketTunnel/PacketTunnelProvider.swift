@@ -411,7 +411,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 // LAN policies. Comparing only the exit here rejects a valid
                 // entry-LAN-Off / exit-LAN-On graph before that check can run.
                 guard (provider["engine"] as? String) == "multihop-libbox" ||
-                    ((provider["engine"] as? String) == "external-libbox" && provider["tor_entry_bundle"] != nil) ||
+                    ((provider["engine"] as? String) == "external-libbox" && (provider["tor_entry_bundle"] != nil || provider["external_entry_bundle"] != nil)) ||
                     tunnelProtocol.excludeLocalNetworks == allowLAN else { throw tunnelError(5, "strict Apple kill switch LAN exclusion does not match the imported node policy") }
             }
 
@@ -1067,8 +1067,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         var entryFiles: [String: Data] = [:]
         var entryProfile: [String: Any]?
         var effectiveStrict = strict
+        let externalProtocol = (selectedProfile["external"] as? [String: Any])?["protocol"] as? String ?? ""
         if let entryData = provider["tor_entry_bundle"] {
-            guard let data = entryData as? Data, !data.isEmpty, data.count <= Self.maxBundleBytes,
+            guard ["tor", "tor-bridge"].contains(externalProtocol), provider["external_entry_bundle"] == nil, provider["external_entry_mode"] == nil,
+                  let data = entryData as? Data, !data.isEmpty, data.count <= Self.maxBundleBytes,
                   selectedProfile["multihop_enabled"] as? Bool == true,
                   let entryRoot = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let mode = provider["tor_entry_mode"] as? String,
@@ -1083,8 +1085,37 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol,
                   !effectiveStrict || (tunnelProtocol.includeAllNetworks && tunnelProtocol.enforceRoutes &&
                   tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))) else { throw tunnelError(58, "Tor entry and exit route lockdown was not preserved.") }
-        } else if provider["tor_entry_mode"] != nil || selectedProfile["multihop_enabled"] as? Bool == true {
-            throw tunnelError(58, "Saved Tor multihop cannot start without its captured entry.")
+        } else if let entryData = provider["external_entry_bundle"] {
+            guard RouterVPNExternalExitBuilder.ordinaryProtocols.contains(externalProtocol), provider["tor_entry_mode"] == nil,
+                  let data = entryData as? Data, !data.isEmpty, data.count <= Self.maxBundleBytes,
+                  selectedProfile["multihop_enabled"] as? Bool == true,
+                  let entryRoot = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  let mode = provider["external_entry_mode"] as? String,
+                  mode == selectedProfile["multihop_entry_mode"] as? String else { throw tunnelError(58, "External startup lost its captured entry bundle or transport.") }
+            let entry = try selectedRouterProfile(entryRoot)
+            guard entry["id"] as? String == selectedProfile["multihop_entry_id"] as? String else { throw tunnelError(58, "External entry bundle selected another node.") }
+            if entry["node_kind"] as? String == "external" {
+                guard RouterVPNExternalExitBuilder.ordinaryProtocols.contains(mode),
+                      (entry["external"] as? [String: Any])?["protocol"] as? String == mode else { throw tunnelError(58, "External entry protocol differs from its captured node.") }
+                try IOSStartLayer.validateExternal(profile: entry)
+            } else {
+                guard entry["node_kind"] as? String == "router-vpn", mode == "wg", entry["daita_enabled"] as? Bool != true,
+                      try IOSStartLayer.selectedMode(profile: entry) == "off" else {
+                    throw tunnelError(58, "This Router VPN entry requires its complete native graph adapter.")
+                }
+                let proof = try suppliedNodeProof(root: entryRoot, selectedProfile: entry)
+                var endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: proof, name: "External path entry").endpoint
+                endpoint["tag"] = "external-entry"
+                let graph: [String: Any] = ["endpoints": [endpoint], "route": ["final": "external-entry"]]
+                entryFiles = ["sing-box.json": try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])]
+            }
+            entryProfile = entry
+            effectiveStrict = strict || strictKillSwitchRequested(entry)
+            guard let tunnelProtocol = protocolConfiguration as? NETunnelProviderProtocol,
+                  !effectiveStrict || (tunnelProtocol.includeAllNetworks && tunnelProtocol.enforceRoutes &&
+                  tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))) else { throw tunnelError(58, "External entry and exit route lockdown was not preserved.") }
+        } else if provider["tor_entry_mode"] != nil || provider["external_entry_mode"] != nil || selectedProfile["multihop_enabled"] as? Bool == true {
+            throw tunnelError(58, "Saved external multihop cannot start without its captured entry.")
         }
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine

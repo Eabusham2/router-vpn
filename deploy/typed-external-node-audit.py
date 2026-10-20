@@ -209,9 +209,10 @@ need(
 )
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
+    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"]',
     "Tor bridges • obfs4 / meek / Snowflake / WebTunnel • current circuit exit verification",
-    'proto.providerConfiguration?["tor_entry_bundle"] = capturedEntry',
+    'let entryBundleKey = tor ? "tor_entry_bundle" : "external_entry_bundle"',
+    'proto.providerConfiguration?[entryBundleKey] = capturedEntry',
     "IOSNodeBundleStore.shared.link",
     'value.socks5Host = ""; value.socks5Port = 0',
     "externalRuntimeBundleData",

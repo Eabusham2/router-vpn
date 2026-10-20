@@ -455,10 +455,37 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete Tor matrix",graphs==348)
   try policies(maximum,composite)
   try negatives(maximum,composite)
+  try ordinaryExternalEntry(maximum,composite)
   print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) transport graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
+ }
+ @MainActor static func ordinaryExternalEntry(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  let model=RouterVPNModel()
+  try model.createIOSExternalNode(protocolName:"socks5",name:"Imported exit",server:"198.51.100.8",port:1080,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact secret ",method:"",secret:"",tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:nil)
+  let saved=try object(model.saved!)
+  var exit=(saved["routerProfiles"] as! [[String:Any]])[0]
+  let credentials=(exit["external"] as! [String:Any])["socks5"] as! [String:Any]
+  try check("external creation preserves exact credentials",credentials["username"] as? String==" exact user " && credentials["password"] as? String==" exact secret ")
+  exit["multihop_enabled"]=true;exit["multihop_entry_id"]="entry";exit["multihop_entry_mode"]="wg";exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]="socks5";exit["multihop_execution"]="local"
+  exit["dns_mode"]="home";exit["dns_host"]="192.168.50.133";exit["dns_protocol"]="tcp";exit["dns_port"]=5353;exit["mtu_policy"]="fixed";exit["manual_mtu"]=1380
+  for entryLAN in [false,true] {for exitLAN in [false,true] {
+   var source=try root("wg","off",maximum,composite),profiles=source["routerProfiles"] as! [[String:Any]]
+   profiles[0]["daita_enabled"]=false;profiles[0]["home_lan_access"]=entryLAN;profiles[0]["manual_mtu"]=1500
+   source["routerProfiles"]=profiles;exit["home_lan_access"]=exitLAN
+   let provider:[String:Any]=["external_entry_bundle":try json(source),"external_entry_mode":"wg"]
+   let owner=ProviderPreparation(),flags=owner.protocolConfiguration as! NETunnelProviderProtocol;flags.excludeLocalNetworks=entryLAN && exitLAN
+   let prepared=try owner.prepare(provider:provider,selectedProfile:exit,strict:true),policy=prepared.runtime.policy!,meta=try object(Data(policy.metadata.utf8))
+   try check("provider retains exact private entry identity",meta["entry_node_id"] as? String==profiles[0]["node_proof_id"] as? String && meta["dns_detour"] as? String=="external-entry")
+   try check("native policy does not report historical Auto MTU",meta["entry_mtu"] as? Int==1500 && meta["configured_mtu"] as? Int==1380)
+   var wrong=provider;wrong["tor_entry_bundle"]=provider["external_entry_bundle"]
+   reject("mixed Tor and ordinary entry owners"){_ = try owner.prepare(provider:wrong,selectedProfile:exit,strict:true)}
+   wrong=provider;wrong["external_entry_mode"]="hysteria2"
+   reject("ordinary provider rejects changed captured mode"){_ = try owner.prepare(provider:wrong,selectedProfile:exit,strict:true)}
+   profiles[0]["node_proof_id"]=String(repeating:"f",count:64);source["routerProfiles"]=profiles;wrong=provider;wrong["external_entry_bundle"]=try json(source)
+   reject("WireGuard private entry key must match paired identity"){_ = try owner.prepare(provider:wrong,selectedProfile:exit,strict:true)}
+  }}
  }
 }
 '''
