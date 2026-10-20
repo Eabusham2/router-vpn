@@ -305,7 +305,10 @@ public final class StandardExitActivity extends Activity {
             if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
             try{
                 AndroidStandardExitStore.Entry next=AndroidStandardExitStore.copy(captured);JSONObject p=new JSONObject(policy.toString());int n=dns.getSelectedItemPosition();
-                for(String key:new String[]{"dns_protocol","dns_host","dns_port","dns_server_name","dns_path","dns_bootstrap","effective_mtu","manual_mtu"})p.remove(key);
+                // An unrelated settings edit must retain the exact Home/Fastest
+                // resolver, transport and port already selected for this node.
+                if(n!=selected||(n>=2&&n<=6))for(String key:new String[]{"dns_protocol","dns_host","dns_port","dns_server_name","dns_path"})p.remove(key);
+                for(String key:new String[]{"dns_bootstrap","effective_mtu","manual_mtu"})p.remove(key);
                 p.put("dns_mode",n==0?"home":n==1?"rescue":n==7?"fastest":"custom");
                 if(n>=2&&n<=6){String transport=new String[]{"","","udp","tcp","tls","https","h3"}[n];String address=host.getText().toString().trim();if(address.isEmpty())throw new IllegalArgumentException("Enter the selected DNS address.");String number=port.getText().toString().trim();int value=number.isEmpty()?0:Integer.parseInt(number);if(value<0||value>65535)throw new IllegalArgumentException("DNS port must be 1–65535 or blank.");p.put("dns_protocol",transport).put("dns_host",address).put("dns_port",value);if(n>=4)p.put("dns_server_name",name.getText().toString().trim());if(n>=5)p.put("dns_path",path.getText().toString().trim());}
                 if(n==7&&(p.optString("fastest_dns_host","").isEmpty()||!p.has("dns_results")&&!p.has("fastest_dns_latency_ms")))throw new IllegalArgumentException("Run a successful DNS measurement before selecting its saved winner.");
