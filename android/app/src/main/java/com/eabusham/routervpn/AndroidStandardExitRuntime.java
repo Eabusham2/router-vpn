@@ -154,8 +154,12 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             }
             cb.finished(false,message);
         }finally{
-            if(policy&&releasePrepared&&preparedSession!=null)LayeredVpnService.discardPreparedSession(context,preparedSession.sessionId);
-            synchronized(this){workerThread=null;}
+            try{
+                if(policy&&releasePrepared&&preparedSession!=null){
+                    if(preparedSession.maxPreparation!=null)preparedSession.maxPreparation.close();
+                    LayeredVpnService.discardPreparedSession(context,preparedSession.sessionId);
+                }
+            }finally{synchronized(this){workerThread=null;}}
         }
     }
 

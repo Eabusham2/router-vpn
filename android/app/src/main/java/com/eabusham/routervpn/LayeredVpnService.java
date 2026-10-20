@@ -238,6 +238,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void startLayered(String sessionId, String modeId, long generation, String maxOwner, String homeSession) {
         synchronized (lock) {
             if (generation != lifecycle.get() || explicitStop || "STARTING".equals(state) || "UP".equals(state) || torOwner || externalOwner) {
+                AndroidMAXProfilePreparation.discardPrepared(sessionId,maxOwner);
                 discardPreparedSession(this,sessionId);
                 return;
             }
@@ -359,7 +360,8 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     || connectivity.getNetworkCapabilities(externalPhysical) == null
                     || connectivity.getNetworkCapabilities(externalPhysical).hasTransport(NetworkCapabilities.TRANSPORT_VPN))) throw new IllegalStateException("External VPN requires its captured physical network before startup.");
             if (preparedMAX != null && (!preparedMAX.current(true)
-                    || torPhysical != null && !preparedMAX.physical.network.equals(torPhysical))) throw new IllegalStateException("Complete MAX lost its captured physical network before native startup.");
+                    || torPhysical != null && !preparedMAX.physical.network.equals(torPhysical)
+                    || externalPhysical != null && !preparedMAX.physical.network.equals(externalPhysical))) throw new IllegalStateException("Complete MAX lost its captured physical network before native startup.");
 
             synchronized (lock) {
                 if (generation != lifecycle.get() || explicitStop) throw new IllegalStateException("VPN launch was cancelled before native startup.");
@@ -460,6 +462,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             shutdown("FAILED", safeMessage(error));
         } finally {
             if (preparedMAX != null && maxSession != preparedMAX) preparedMAX.cancel();
+            AndroidMAXProfilePreparation.discardPrepared(sessionId,maxOwner);
             // This requested directory is retained only after actual runtime
             // adoption. Lockdown, permission and network failures happen earlier.
             discardPreparedSession(this,sessionId);
@@ -678,6 +681,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private void requireMAXNetwork(AndroidMAXProfilePreparation.Adopted captured) {
         if (explicitStop || captured != maxSession || !captured.current(false)) throw new IllegalStateException("The captured MAX physical network changed; reconnect before opening traffic.");
         if (torOwner) requireTorNetwork(torPhysicalNetwork);
+        if (externalOwner) requireExternalNetwork(externalPhysicalNetwork);
     }
     private void requireTorNetwork(Network captured){
         NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);

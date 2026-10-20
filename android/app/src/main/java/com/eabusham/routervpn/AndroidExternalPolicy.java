@@ -17,8 +17,8 @@ import java.util.UUID;
 final class AndroidExternalPolicy {
     static final String SESSION_FILE = "routervpn-external-policy.json";
     static final int MAX_CONFIG = 4 * 1024 * 1024;
-    static final int MAX_CAPTURE = 512 * 1024;
-    static final int MAX_METADATA = 6 * 1024 * 1024;
+    static final int MAX_CAPTURE = 8 * 1024 * 1024;
+    static final int MAX_METADATA = 32 * 1024 * 1024;
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
             "fastest_dns_host", "fastest_dns_latency_ms", "dns_results", "dns_bootstrap", "ipv6_mode", "home_lan_access",
@@ -140,29 +140,40 @@ final class AndroidExternalPolicy {
 
     /** Pure shipping graph builder; tests call the same Java and Go compilers. */
     static Compiled compile(AndroidStandardExitStore.Entry exit, JSONObject entry, String entryMode) throws Exception {
+        return compile(exit,entry,entryMode,null);
+    }
+
+    static Compiled compile(AndroidStandardExitStore.Entry exit, JSONObject entry, String entryMode, AndroidExternalEntry captured) throws Exception {
         AndroidStandardExitStore.validate(exit);
         JSONArray endpoints = new JSONArray(), outbounds = new JSONArray();
         JSONObject predecessor = null;
         String entryTag = "";
         if (entry != null) {
-            if (!"wg".equals(entryMode)) throw new IllegalArgumentException("The external policy compiler needs the complete selected entry graph; this entry mode is not captured yet.");
+            if (captured==null&&!"wg".equals(entryMode)) throw new IllegalArgumentException("The selected entry requires its complete native graph capture.");
             AndroidNodeStore.validateBundle(entry);
             String selectedID = entry.optString("selectedRouterID", entry.optString("selected_id", ""));
             if (selectedID.isEmpty()) throw new IllegalArgumentException("Select the exact Router VPN entry profile before connecting.");
             predecessor = copy(AndroidProfileSelection.selectedRouterProfile(entry));
             String node = AndroidNodeStore.stableNodeIdentity(entry);
             if (!node.matches("[0-9a-f]{64}") || !node.equals(predecessor.optString("node_proof_id"))) throw new IllegalArgumentException("The entry lost its captured node identity.");
-            String start = AndroidStartLayer.selectedMode(entry);
-            if (!"off".equals(start)) throw new IllegalArgumentException("The selected Start Layer must be compiled into the complete external entry graph.");
-            String encoded = entry.getJSONObject("profiles").getJSONObject(entryMode).getString("wg.conf");
-            byte[] wg = Base64.decode(encoded, Base64.DEFAULT);
-            if (wg.length == 0 || wg.length > 1024 * 1024) throw new IllegalArgumentException("The captured WireGuard profile is empty or oversized.");
-            JSONObject parsed = new JSONObject(Libbox.routerCompileWireGuardProfile(AndroidTorProfile.strictText(wg), node));
-            entryTag = "entry-wg";
-            endpoints.put(parsed.getJSONObject("endpoint").put("tag", entryTag));
+            if(captured!=null){
+                if(!predecessor.toString().equals(captured.profile.toString()))throw new IllegalStateException("The compiled entry belongs to a different frozen profile.");
+                entryTag="external-entry";
+            }else{
+                String start = AndroidStartLayer.selectedMode(entry);
+                if (!"off".equals(start)) throw new IllegalArgumentException("The selected Start Layer must be compiled into the complete external entry graph.");
+                String encoded = entry.getJSONObject("profiles").getJSONObject(entryMode).getString("wg.conf");
+                byte[] wg = Base64.decode(encoded, Base64.DEFAULT);
+                if (wg.length == 0 || wg.length > 1024 * 1024) throw new IllegalArgumentException("The captured WireGuard profile is empty or oversized.");
+                JSONObject parsed = new JSONObject(Libbox.routerCompileWireGuardProfile(AndroidTorProfile.strictText(wg), node));
+                entryTag = "entry-wg";
+                endpoints.put(parsed.getJSONObject("endpoint").put("tag", entryTag));
+            }
+        }else if(captured!=null){
+            throw new IllegalArgumentException("A predecessor graph has no captured entry profile.");
         }
         JSONObject transport = AndroidDirectStandardExitController.customExitJson(exit);
-        if (!entryTag.isEmpty()) transport.put("detour", entryTag);
+        if (!entryTag.isEmpty()&&captured==null) transport.put("detour", entryTag);
         if ("wireguard".equals(exit.protocol)) endpoints.put(transport); else outbounds.put(transport);
         JSONObject source = new JSONObject().put("log", new JSONObject().put("level", "warn"))
                 .put("inbounds", new JSONArray().put(new JSONObject().put("type", "tun").put("tag", "tun-in")
@@ -173,6 +184,7 @@ final class AndroidExternalPolicy {
         JSONObject capture = new JSONObject().put("schema", 1).put("exit_id", exit.id).put("protocol", protocol(exit.protocol))
                 .put("expected_public_ip", exit.expectedPublicIp).put("profile", profile(exit, predecessor));
         if (predecessor != null) capture.put("entry", predecessor).put("entry_tag", entryTag);
+        if (captured != null) capture.put("predecessor_config",captured.config);
         JSONObject policy = exit.policy != null && exit.policy.length() != 0 ? exit.policy : predecessor;
         if (policy != null && policy.has("dns_bootstrap")) capture.put("dns_bootstrap", policy.getJSONObject("dns_bootstrap"));
         return new Compiled(source.toString(), capture.toString());
@@ -183,7 +195,9 @@ final class AndroidExternalPolicy {
         String exitSnapshot = AndroidStandardExitStore.snapshot(selected);
         byte[] entryBytes = entryFile == null ? null : AndroidPrivateFileStore.read(entryFile, AndroidNodeStore.MAX_BUNDLE);
         JSONObject entry = entryBytes == null ? null : new JSONObject(AndroidTorProfile.strictText(entryBytes));
-        Compiled compiled = compile(exit, entry, entryMode);
+        try(AndroidExternalEntry predecessor=entry==null?null:AndroidExternalEntry.prepare(context,entryFile,entry,entryMode)){
+        Compiled compiled = compile(exit, entry, entryMode,predecessor);
+        RouterPQNative.install();
         Libbox.checkConfig(compiled.config);
         String sessionId = UUID.randomUUID().toString();
         JSONObject metadata = new JSONObject().put("version", 1).put("session_id", sessionId).put("external_id", exit.id)
@@ -205,8 +219,11 @@ final class AndroidExternalPolicy {
             if (entry == null || AndroidKillSwitchPolicy.strictRequested(entry)) AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
             AndroidPrivateFileStore.write(new File(folder, "sing-box.json"), compiled.config.getBytes(StandardCharsets.UTF_8), MAX_CONFIG);
             AndroidPrivateFileStore.write(new File(folder, SESSION_FILE), text.getBytes(StandardCharsets.UTF_8), MAX_METADATA);
-            return new NativeSingBoxController.SessionInfo(sessionId, (entry == null ? "standard-direct-" : "standard-") + exit.protocol);
+            String mode=(entry == null ? "standard-direct-" : "standard-") + exit.protocol;
+            if(predecessor!=null)predecessor.stage(folder,sessionId,mode,compiled.config);
+            return new NativeSingBoxController.SessionInfo(sessionId,mode,predecessor==null?null:predecessor.maxPreparation);
         } catch (Throwable failure) { removeSession(folder); throw failure; }
+        }
     }
 
     static JSONObject session(String config, String text, String sessionID, String mode) throws Exception {

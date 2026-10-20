@@ -128,7 +128,7 @@ public final class StandardExitActivity extends Activity {
     private String capabilityText() {
         StringBuilder s=new StringBuilder("Supported now:");
         for(AndroidStandardExitStore.Capability c:AndroidStandardExitStore.capabilities()) s.append("\n").append(c.supported?"✓ ":"— ").append(c.protocol).append(c.supported?"":" — "+c.reason);
-        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Direct custom exits and every Tor path require Android Always-on VPN plus ‘Block connections without VPN’. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Tor after a Router VPN entry retains that exact mode and also proves the entry's private authenticated identity. Other hopped external exits currently use WireGuard. Secrets remain in app-private storage. Custom exit servers and DNS endpoints require literal IPs; Tor transport hostnames are resolved only through captured protected networking.");
+        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Direct custom exits and every Tor path require Android Always-on VPN plus ‘Block connections without VPN’. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Other supported native external exits retain their saved DNS, IPv6, LAN and MTU settings and prove the selected public exit before Connected. Choose the exact Router VPN entry mode and Start Layer for either path; the entry's private authenticated identity is also required. OpenVPN retains its WireGuard entry path. Secrets remain in app-private storage. External servers use literal IPs; a selected DNS hostname requires the explicit bootstrap saved in its settings. Tor transport hostnames use captured protected networking.");
         return s.toString();
     }
 
@@ -338,19 +338,19 @@ public final class StandardExitActivity extends Activity {
 
     private void chooseEntry(AndroidStandardExitStore.Entry exit) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        try{List<AndroidNodeStore.Node> nodes=nodeStore.list();if(nodes.isEmpty()){dialog("Router VPN entry required","Link a Router VPN node first. Tor can use its exact supported encrypted mode; other external exits require WireGuard.");return;}String[]labels=new String[nodes.size()];for(int i=0;i<nodes.size();i++)labels[i]=nodes.get(i).name+(nodes.get(i).endpoint.isEmpty()?"":" — "+nodes.get(i).endpoint);new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Choose Router VPN entry","Path: this device → Router VPN entry → "+exit.name+" → Internet")).setItems(labels,(d,w)->{if(AndroidTorProfile.isTor(exit.protocol))chooseTorEntryMode(nodes.get(w),exit);else requestConnect(nodes.get(w),exit,"wg");}).setNegativeButton("Cancel",null).show();}catch(Exception e){toast(safe(e));}
+        try{List<AndroidNodeStore.Node> nodes=nodeStore.list();if(nodes.isEmpty()){dialog("Router VPN entry required","Link a Router VPN node first, then select its exact encrypted mode for this external exit.");return;}String[]labels=new String[nodes.size()];for(int i=0;i<nodes.size();i++)labels[i]=nodes.get(i).name+(nodes.get(i).endpoint.isEmpty()?"":" — "+nodes.get(i).endpoint);new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Choose Router VPN entry","Path: this device → Router VPN entry → "+exit.name+" → Internet")).setItems(labels,(d,w)->{if(AndroidTorProfile.isTor(exit.protocol)||AndroidExternalPolicy.supports(exit.protocol))chooseNativeEntryMode(nodes.get(w),exit);else requestConnect(nodes.get(w),exit,"wg");}).setNegativeButton("Cancel",null).show();}catch(Exception e){toast(safe(e));}
     }
 
-    private void chooseTorEntryMode(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit){
-        if(activeOrTransitioning()){toast("Disconnect before selecting the Tor entry.");return;}
+    private void chooseNativeEntryMode(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit){
+        if(activeOrTransitioning()){toast("Disconnect before selecting the external entry.");return;}
         try{
             JSONObject bundle=new JSONObject(AndroidTorProfile.strictText(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE)));AndroidNodeStore.validateBundle(bundle);
             JSONObject profiles=bundle.getJSONObject("profiles");JSONArray modes=bundle.getJSONArray("modes");List<String> ids=new ArrayList<>(),labels=new ArrayList<>();
             for(int i=0;i<modes.length();i++){JSONObject mode=modes.getJSONObject(i);String id=mode.optString("id");if(NativeSingBoxController.nativeMultihopEntry(id)&&profiles.optJSONObject(id)!=null&&!ids.contains(id)){ids.add(id);labels.add(mode.optString("name",id)+" ["+id+"]");}}
             if(ids.isEmpty())throw new IllegalStateException("This saved entry has no supported native encrypted mode.");
-            new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before Tor. Both entry identity and the Tor circuit must pass proof."))
+            new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof."))
                     .setItems(labels.toArray(new String[0]),(d,w)->requestConnect(entry,exit,ids.get(w))).setNegativeButton("Cancel",null).show();
-        }catch(Exception error){toast("The saved entry cannot provide a captured native Tor path.");}
+        }catch(Exception error){toast("The saved entry cannot provide a captured native external path.");}
     }
 
     private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode) {

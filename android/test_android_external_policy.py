@@ -47,7 +47,11 @@ final class AndroidKillSwitchPolicy {static final String SESSION_MARKER="strict"
 final class AndroidVpnMutationGuard {static boolean isBusy(android.content.Context c){return false;}}
 final class AndroidHomeStateStore {static class Snapshot{boolean connected=false;String phase="off";}static Snapshot snapshot(android.content.Context c){return new Snapshot();}}
 final class AndroidRuntimeRegistry {final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}static class Engine{boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}String getState(){return "DOWN";}}}
-final class NativeSingBoxController {static class SessionInfo {final String sessionId,mode;SessionInfo(String s,String m){sessionId=s;mode=m;}}}
+final class NativeSingBoxController {static class SessionInfo {final String sessionId,mode;SessionInfo(String s,String m){sessionId=s;mode=m;}SessionInfo(String s,String m,Object owner){this(s,m);}}}
+// Full entry assembly is executed by test_android_external_entries.py. These
+// direct/policy-focused checks retain their strict raw-WG compiler boundary.
+final class AndroidExternalEntry implements AutoCloseable {org.json.JSONObject profile;String config;Object maxPreparation;static AndroidExternalEntry prepare(android.content.Context c,java.io.File f,org.json.JSONObject b,String mode){return null;}void stage(java.io.File f,String s,String m,String g){}public void close(){}}
+final class RouterPQNative {static void install(){}}
 final class AndroidNodeStore {static final int MAX_BUNDLE=32*1024*1024;static void validateBundle(org.json.JSONObject b)throws Exception{if(!b.has("profiles"))throw new IllegalArgumentException("bundle");}static String stableNodeIdentity(org.json.JSONObject b){return AndroidProfileSelection.selectedRouterProfile(b).optString("node_proof_id");}}
 final class AndroidStartLayer {static String selectedMode(org.json.JSONObject b)throws Exception{Object raw=AndroidProfileSelection.selectedRouterProfile(b).opt("start_layer");if(raw==null)return "off";if(!(raw instanceof String))throw new IllegalArgumentException("start layer");return (String)raw;}}
 '''

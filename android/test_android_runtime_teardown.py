@@ -28,7 +28,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 final class NativeSingBoxController {
     // PRODUCTION_TRANSPORT_PREDICATES
     static final class ModeInfo {}
-    static final class SessionInfo {final String sessionId="native-session";}
+    static final class SessionInfo {final String sessionId="native-session";final Preparation maxPreparation=null;}static final class Preparation{void close(){}}
     volatile String state = "DOWN", mode = "";
     volatile String startState = "UP";
     volatile boolean failStart, failStop;

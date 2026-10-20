@@ -15,6 +15,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
+EXTRA_SOURCES = ()
+EXTRA_LIBBOX = ""
 spec = importlib.util.spec_from_file_location("tor_composite_fixture", ROOT / "android/test_android_composite_multihop.py")
 C = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(C)
@@ -375,10 +377,12 @@ def run():
  public static String testTorPredecessor(String profile)throws Exception{return call("tor-predecessor",profile,"");}
  public static String routerCompilePQProfile(''', 1)
             target = src / path
+            if path.endswith("/Libbox.java") and EXTRA_LIBBOX:
+                end=text.rfind("}");text=text[:end]+EXTRA_LIBBOX+text[end:]
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore"):
+        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore") + EXTRA_SOURCES:
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         (app / "MultihopGraphHarness.java").write_text(P.M.HARNESS)
         (app / "PQSelectionHarness.java").write_text(HARNESS)

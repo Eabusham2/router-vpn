@@ -305,6 +305,7 @@ for executable_contract in (
     "test_android_tor_form.py",
     "test_android_tor_session.py",
     "test_android_external_policy.py",
+    "test_android_external_entries.py",
     "test_android_external_session.py",
     "test_android_start_layer_relay_lifecycle.py",
     "test_android_custom_preset_commit.py",
