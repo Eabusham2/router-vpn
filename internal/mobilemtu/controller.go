@@ -42,6 +42,7 @@ type Candidate struct {
 	PacketsReceived int                  `json:"packets_received"`
 	DatagramBytes   int                  `json:"datagram_bytes"`
 	MedianRTT       float64              `json:"median_rtt_ms"`
+	LatencyKind     string               `json:"latency_kind,omitempty"`
 	Download        *hopmeasure.Transfer `json:"download,omitempty"`
 	Upload          *hopmeasure.Transfer `json:"upload,omitempty"`
 	Failure         string               `json:"failure,omitempty"`
@@ -73,6 +74,7 @@ type Controller struct {
 	done          chan struct{}
 	status        Status
 	currentConfig string
+	external      *externalMeasurement
 }
 
 func New(owner Owner, config, profile string, cache Cache) (*Controller, error) {
@@ -83,6 +85,10 @@ func New(owner Owner, config, profile string, cache Cache) (*Controller, error) 
 	if err != nil {
 		return nil, err
 	}
+	return newController(owner, config, policy, cache)
+}
+
+func newController(owner Owner, config string, policy Profile, cache Cache) (*Controller, error) {
 	state, err := owner.Capture()
 	if err != nil || state.Session == "" || state.Path == "" || state.Interface == "" || state.MTU < MinMTU || state.MTU > MaxMTU {
 		return nil, errors.New("MTU must capture a running native VPN interface")
@@ -201,8 +207,14 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	}()
 	engine := &probeEngine{controller: c, state: expected}
 	hop := hopmeasure.Hop{ID: c.profile.ID, Role: "exit", Tag: "proxy", API: c.profile.API, Token: c.profile.Token, Proof: c.profile.Proof}
-	if _, err = hopmeasure.ProvePath(ctx, engine, hop); err != nil {
-		return errors.New("selected private node was not proved through the captured system TUN")
+	if c.external != nil {
+		hop = c.external.hop()
+		err = c.external.owner.VerifyExternal(ctx, expected)
+	} else {
+		_, err = hopmeasure.ProvePath(ctx, engine, hop)
+	}
+	if err != nil || !c.live(ctx, expected) {
+		return errors.New("selected exit was not proved through the captured system TUN")
 	}
 	cached := 0
 	if c.cache != nil && !force {
@@ -233,21 +245,25 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		c.phase("measuring " + strconv.Itoa(mtu))
 		candidate := Candidate{MTU: mtu}
 		candidateCtx, stop := context.WithTimeout(ctx, 8*time.Second)
-		_, measureErr := hopmeasure.ProvePath(candidateCtx, engine, hop)
-		if measureErr == nil {
-			measureErr = c.packets(candidateCtx, engine, &candidate)
-		}
-		if measureErr == nil {
-			result, transferErr := hopmeasure.MeasurePath(candidateCtx, engine, hop, 256<<10)
-			if transferErr == nil {
-				candidate.Working = true
-				candidate.Download = result.Download
-				candidate.Upload = result.Upload
-			} else {
-				candidate.Failure = "private transfer did not complete"
-			}
+		if c.external != nil {
+			candidate = c.measureExternal(candidateCtx, engine, mtu)
 		} else {
-			candidate.Failure = "private identity or authenticated packet-size test failed"
+			_, measureErr := hopmeasure.ProvePath(candidateCtx, engine, hop)
+			if measureErr == nil {
+				measureErr = c.packets(candidateCtx, engine, &candidate)
+			}
+			if measureErr == nil {
+				result, transferErr := hopmeasure.MeasurePath(candidateCtx, engine, hop, 256<<10)
+				if transferErr == nil {
+					candidate.Working = true
+					candidate.Download = result.Download
+					candidate.Upload = result.Upload
+				} else {
+					candidate.Failure = "private transfer did not complete"
+				}
+			} else {
+				candidate.Failure = "private identity or authenticated packet-size test failed"
+			}
 		}
 		stop()
 		c.mu.Lock()
@@ -261,7 +277,7 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		}
 	}
 	if len(passed) == 0 {
-		return errors.New("no MTU candidate passed the private packet and transfer measurements")
+		return errors.New("no MTU candidate passed its captured path measurements")
 	}
 	winner := Choose(passed, original.MTU)
 	if !winner.Working {
@@ -280,11 +296,18 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		return errors.New("measured winner was not applied to its captured interface")
 	}
 	verified := Candidate{MTU: winner.MTU}
-	if err = c.packets(ctx, engine, &verified); err != nil {
-		return errors.New("winner failed its fresh bidirectional verification")
-	}
-	if _, err = hopmeasure.ProvePath(ctx, engine, hop); err != nil {
-		return errors.New("winner's selected-node identity changed")
+	if c.external != nil {
+		verified = c.measureExternal(ctx, engine, winner.MTU)
+		if !verified.Working {
+			return errors.New("winner failed fresh external exit and transfer verification")
+		}
+	} else {
+		if err = c.packets(ctx, engine, &verified); err != nil {
+			return errors.New("winner failed its fresh bidirectional verification")
+		}
+		if _, err = hopmeasure.ProvePath(ctx, engine, hop); err != nil {
+			return errors.New("winner's selected-node identity changed")
+		}
 	}
 	valid := func() bool { return c.live(ctx, expected) }
 	if !valid() {
@@ -311,6 +334,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	c.status.Measured = true
 	c.status.EffectiveMTU = winner.MTU
 	c.status.Source = "measured-private-system-tun"
+	if c.external != nil {
+		c.status.Source = "measured-public-system-tun-transfer"
+	}
 	c.status.Phase = "complete"
 	c.mu.Unlock()
 	adopted = true
@@ -427,7 +453,11 @@ func (e *probeEngine) Identity() string {
 	return e.state.Session + ":" + e.state.Path + ":" + e.state.Interface
 }
 func (e *probeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	if tag != "proxy" {
+	ownedTag := "proxy"
+	if e.controller.external != nil {
+		ownedTag = "custom-exit"
+	}
+	if tag != ownedTag {
 		return nil, errors.New("unowned MTU proof route")
 	}
 	return e.dial(ctx, "tcp", address)
@@ -436,8 +466,11 @@ func (e *probeEngine) dial(ctx context.Context, network, address string) (net.Co
 	c := e.controller
 	api, _ := url.Parse(c.profile.API)
 	allowed := (network == "tcp" && address == api.Host) || (network == "udp" && address == net.JoinHostPort(c.profile.Sink, strconv.Itoa(ProbePort)))
+	if c.external != nil {
+		allowed = network == "tcp" && address == hopmeasure.PublicAddress
+	}
 	if !allowed || !c.live(ctx, e.state) {
-		return nil, errors.New("MTU socket is not owned by the captured private path")
+		return nil, errors.New("MTU socket is not owned by the captured path")
 	}
 	conn, err := c.owner.DialThroughTunnel(ctx, e.state, network, address)
 	if err != nil {
