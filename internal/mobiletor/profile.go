@@ -135,7 +135,11 @@ func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, err
 	delete(dns, "rules")
 	dns["independent_cache"] = true
 
-	tor := map[string]any{"type": "routervpn-tor", "tag": ProfileOutboundTag, "session_id": sessionID, "bridges": bridges}
+	profileDigest, err := torProfileDigest(profile)
+	if err != nil {
+		return "", err
+	}
+	tor := map[string]any{"type": "routervpn-tor", "tag": ProfileOutboundTag, "session_id": sessionID, "bridges": bridges, "profile_sha256": profileDigest}
 	if predecessor != "" {
 		tor["detour"] = predecessor
 	}

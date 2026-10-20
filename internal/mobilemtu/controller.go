@@ -335,7 +335,7 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 	c.status.EffectiveMTU = winner.MTU
 	c.status.Source = "measured-private-system-tun"
 	if c.external != nil {
-		c.status.Source = "measured-public-system-tun-transfer"
+		c.status.Source = c.external.source()
 	}
 	c.status.Phase = "complete"
 	c.mu.Unlock()
@@ -455,7 +455,7 @@ func (e *probeEngine) Identity() string {
 func (e *probeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	ownedTag := "proxy"
 	if e.controller.external != nil {
-		ownedTag = "custom-exit"
+		ownedTag = e.controller.external.hop().Tag
 	}
 	if tag != ownedTag {
 		return nil, errors.New("unowned MTU proof route")

@@ -54,17 +54,29 @@ func externalFixtureGraph() string {
 }
 
 func externalFixtureController(t *testing.T) (*Controller, *externalTestOwner, *testPreferences) {
+	return publicFixtureController(t, false)
+}
+
+func publicFixtureController(t *testing.T, tor bool) (*Controller, *externalTestOwner, *testPreferences) {
 	t.Helper()
 	o := &externalTestOwner{testOwner: &testOwner{state: State{Session: "native-external-session", Path: "WiFi-one", Interface: "tun-reader-0", MTU: 1380}}}
 	p := &testPreferences{}
-	c, err := NewExternal(o, externalFixtureGraph(), encoded(externalFixtureAuthority()), NewCache(p))
+	graph, authority := externalFixtureGraph(), externalFixtureAuthority()
+	constructor, expectedTag := NewExternal, "custom-exit"
+	if tor {
+		graph = strings.ReplaceAll(graph, "custom-exit", "routervpn-tor-exit")
+		authority["source_kind"] = "tor"
+		delete(authority, "expected_public_ip")
+		constructor, expectedTag = NewTor, "routervpn-tor-exit"
+	}
+	c, err := constructor(o, graph, encoded(authority), NewCache(p))
 	if err != nil {
 		t.Fatal(err)
 	}
 	// Public TLS framing/byte counts are exercised by hopmeasure's actual TLS
 	// fixture. This seam isolates the MTU application/ownership state machine.
 	c.external.measure = func(ctx context.Context, engine hopmeasure.Engine, hop hopmeasure.Hop, size int) (hopmeasure.Result, error) {
-		if hop.Kind != "public-path" || hop.Tag != "custom-exit" || hop.API != "" || hop.Token != "" || hop.Proof != "" || size != 256<<10 {
+		if hop.Kind != "public-path" || hop.Tag != expectedTag || hop.API != "" || hop.Token != "" || hop.Proof != "" || size != 256<<10 {
 			t.Fatal("public optimizer manufactured private authority or changed payload")
 		}
 		conn, err := engine.Dial(ctx, hop.Tag, hopmeasure.PublicAddress)
