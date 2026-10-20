@@ -22,6 +22,9 @@ _perf_spec.loader.exec_module(PERFORMANCE)
 _strategy_spec = importlib.util.spec_from_file_location('routervpn_strategy', ROOT/'deploy/prepare-mobile-strategy.py')
 STRATEGY = importlib.util.module_from_spec(_strategy_spec)
 _strategy_spec.loader.exec_module(STRATEGY)
+_external_spec = importlib.util.spec_from_file_location('routervpn_external_policy', ROOT/'deploy/prepare-mobile-external-policy.py')
+EXTERNAL_POLICY = importlib.util.module_from_spec(_external_spec)
+_external_spec.loader.exec_module(EXTERNAL_POLICY)
 _composite_spec = importlib.util.spec_from_file_location('routervpn_composite', ROOT/'deploy/prepare-mobile-composite.py')
 COMPOSITE = importlib.util.module_from_spec(_composite_spec)
 _composite_spec.loader.exec_module(COMPOSITE)
@@ -38,7 +41,7 @@ def inputs():
     paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -80,6 +83,7 @@ def prepare(vendor):
     PERFORMANCE.prepare(vendor)
     MTU.prepare(vendor)
     STRATEGY.prepare(vendor)
+    EXTERNAL_POLICY.prepare(vendor)
     COMPOSITE.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
     OPENVPN_CLOSE.prepare(vendor)

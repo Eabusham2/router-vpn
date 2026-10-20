@@ -1,0 +1,132 @@
+package box_test
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"testing"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+// The actual native parser, Box, managers, options and proof factory are used.
+// Only the OS TUN is replaced; no host route or public connection is opened.
+type externalFixtureTUN struct{ inbound.Adapter }
+
+func (*externalFixtureTUN) Start(adapter.StartStage) error { return nil }
+func (*externalFixtureTUN) Close() error                   { return nil }
+
+const externalFixtureSource = `{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","version":"5","server":"203.0.113.20","server_port":443,"username":"captured-user","password":"captured-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const externalFixtureCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"203.0.113.20","port":443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"rescue","mtu_policy":"fixed","manual_mtu":1280,"home_lan_access":false,"ipv6_mode":"off"}}`
+
+func externalNativeFixture(t *testing.T, mutate func(map[string]any)) *box.Box {
+	t.Helper()
+	policy, err := mobilemultihop.NewExternalPolicy(externalFixtureSource, externalFixtureCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw := policy.Config()
+	if mutate != nil {
+		var value map[string]any
+		if json.Unmarshal([]byte(raw), &value) != nil {
+			t.Fatal("bad fixture")
+		}
+		mutate(value)
+		data, _ := json.Marshal(value)
+		raw = string(data)
+	}
+	ins := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](ins, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &externalFixtureTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, ins, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(raw))
+	if err != nil {
+		t.Fatal("actual pinned parser", err)
+	}
+	engine, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal("actual pinned Box construction", err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	return engine
+}
+
+func TestRouterVPNExternalProofRequiresTheExactConstructedConfiguration(t *testing.T) {
+	engine := externalNativeFixture(t, nil)
+	request, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session")
+	if err != nil {
+		t.Fatal("factory rejected matching actual Box", err)
+	}
+	if request.Healthy() {
+		t.Fatal("factory manufactured successful traffic proof")
+	}
+	request.Cancel()
+	if raw, err := request.Run(); err == nil || raw != "" || request.Healthy() {
+		t.Fatal("canceled actual native request ran", raw, err)
+	}
+	for _, mutation := range []struct {
+		name   string
+		change func(map[string]any)
+	}{
+		{"DNS resolver", func(g map[string]any) {
+			g["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "1.0.0.1"
+		}},
+		{"LAN routing", func(g map[string]any) { g["route"].(map[string]any)["rules"] = []any{} }},
+		{"MTU", func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1400 }},
+		{"transport credentials", func(g map[string]any) { g["outbounds"].([]any)[0].(map[string]any)["password"] = "foreign-secret" }},
+		{"transport endpoint", func(g map[string]any) { g["outbounds"].([]any)[0].(map[string]any)["server"] = "198.51.100.20" }},
+	} {
+		t.Run(mutation.name, func(t *testing.T) {
+			changed := externalNativeFixture(t, mutation.change)
+			if _, err := changed.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session"); err == nil || strings.Contains(err.Error(), "foreign-secret") {
+				t.Fatal("foreign native configuration accepted or exposed", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalProofRetiresWhenActualOutboundIsRemoved(t *testing.T) {
+	engine := externalNativeFixture(t, nil)
+	r, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := engine.Outbound().Remove("custom-exit"); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err := r.Run(); err == nil || raw != "" || r.Healthy() {
+		t.Fatal("removed actual outbound retained proof ownership", raw, err)
+	}
+}
+
+func TestRouterVPNExternalProofPermitsLoggingOnlyAndRejectsOtherSources(t *testing.T) {
+	engine := externalNativeFixture(t, func(g map[string]any) { g["log"] = map[string]any{"disabled": true, "level": "debug"} })
+	if _, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session"); err != nil {
+		t.Fatal("logging changed network policy identity", err)
+	}
+	for _, capture := range []string{strings.ReplaceAll(externalFixtureCapture, "captured-secret", "foreign-secret"), strings.ReplaceAll(externalFixtureCapture, `"manual_mtu":1280`, `"manual_mtu":1400`), strings.ReplaceAll(externalFixtureCapture, `"ipv6_mode":"off"`, `"ipv6_mode":"on"`)} {
+		if _, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, capture, "owned-session"); err == nil {
+			t.Fatal("changed selected source adopted running Box")
+		}
+	}
+	if _, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, ""); err == nil {
+		t.Fatal("missing host session accepted")
+	}
+	if err := engine.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "replacement"); err == nil {
+		t.Fatal("closed Box accepted new proof")
+	}
+}

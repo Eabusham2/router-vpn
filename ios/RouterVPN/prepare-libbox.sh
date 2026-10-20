@@ -72,6 +72,12 @@ headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
     content=header.read_text()
+    for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest'):
+        assert symbol in content, 'Missing external policy/proof API: '+symbol
+    external_request=re.search(r'@interface LibboxRouterExternalProofRequest : NSObject .*?\n(.*?)@end',content,re.S)
+    assert external_request, 'Missing native external proof owner'
+    for signature in ('- (void)cancel;', '- (BOOL)healthy;', '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;'):
+        assert signature in external_request.group(1), 'External proof ownership API changed: '+signature
     for symbol in ('LibboxRouterCheckMAXProfile', 'LibboxRouterCreateMAXProfileRequest', 'LibboxRouterCompileMAXProfile'):
         assert symbol in content, str(header)
     resolver=re.search(r'@protocol LibboxRouterMAXEndpointResolver <NSObject>\n(.*?)@end',content,re.S)
@@ -195,6 +201,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_VENDOR"
   bash "$ROOT/../../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
+  bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -race ./adapter/inbound -run TestRouterVPN -count=1

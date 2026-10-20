@@ -1,0 +1,24 @@
+package libbox
+
+import (
+	"testing"
+
+	"github.com/sagernet/sing-box/daemon"
+)
+
+func TestRouterExternalProofRequiresAnActualStartedNativeInstance(t *testing.T) {
+	for _, server := range []*CommandServer{nil, {}, {StartedService: &daemon.StartedService{}}} {
+		if request, err := RouterExternalCreateProof(server, "private-source", "private-capture", "session"); err == nil || request != nil {
+			t.Fatal("unstarted native server manufactured proof", err)
+		}
+	}
+	for _, request := range []*RouterExternalProofRequest{nil, {}} {
+		request.Cancel()
+		if request.Healthy() {
+			t.Fatal("empty request manufactured health")
+		}
+		if result, err := request.Run(); result != "" || err == nil {
+			t.Fatal("empty native request ran", err)
+		}
+	}
+}

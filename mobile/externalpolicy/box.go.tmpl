@@ -1,0 +1,237 @@
+package box
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// Snapshot the actual options before construction can mutate nested native
+// adapters. Comparison later reparses the compiled graph with these registries.
+// Only logging and the daemon-owned OOM service are operational differences;
+// DNS, routes, packet policy, credentials, services and all detours remain bound.
+func routerVPNExternalOptionsDigest(ctx context.Context, options option.Options) string {
+	if options.Route == nil || options.Route.Final != mobilemultihop.ExternalFinalTag {
+		return ""
+	}
+	options.Log = nil
+	services := make([]option.Service, 0, len(options.Services))
+	for _, service := range options.Services {
+		if service.Type != C.TypeOOMKiller {
+			services = append(services, service)
+		}
+	}
+	options.Services = services
+	encoded, err := json.MarshalContext(ctx, options)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(encoded)
+	return hex.EncodeToString(sum[:])
+}
+
+type RouterVPNExternalProofRequest struct {
+	request *mobilemultihop.ExternalProofRequest
+}
+
+func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*RouterVPNExternalProofRequest, error) {
+	if s == nil || s.ctx == nil || s.ctx.Err() != nil || s.routerVPNExternalOptions == "" {
+		return nil, errors.New("external native Box is unavailable")
+	}
+	policy, err := mobilemultihop.NewExternalPolicy(source, capture)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || routerVPNExternalOptionsDigest(s.ctx, compiled) != s.routerVPNExternalOptions {
+		return nil, errors.New("external proof does not match the running native configuration")
+	}
+	var meta struct {
+		EntryTag string `json:"entry_tag"`
+		TUNTag   string `json:"tun_tag"`
+	}
+	if err := json.Unmarshal([]byte(policy.Metadata()), &meta); err != nil {
+		return nil, errors.New("external native policy metadata invalid")
+	}
+	engine, err := s.routerVPNExternalEngine(meta.EntryTag, meta.TUNTag, compiled)
+	if err != nil {
+		return nil, err
+	}
+	request, err := mobilemultihop.NewExternalProofRequest(s.ctx, policy, session, engine)
+	if err != nil {
+		return nil, err
+	}
+	return &RouterVPNExternalProofRequest{request: request}, nil
+}
+func (r *RouterVPNExternalProofRequest) Run() (string, error) {
+	if r == nil || r.request == nil {
+		return "", errors.New("external native proof request is unavailable")
+	}
+	return r.request.Run()
+}
+func (r *RouterVPNExternalProofRequest) Cancel() {
+	if r != nil && r.request != nil {
+		r.request.Cancel()
+	}
+}
+func (r *RouterVPNExternalProofRequest) Healthy() bool {
+	return r != nil && r.request != nil && r.request.Healthy()
+}
+
+type routerVPNExternalNativeEngine struct {
+	box      *Box
+	tun      adapter.Inbound
+	owners   map[string]adapter.Outbound
+	routes   map[string]adapter.Outbound
+	dns      map[string]adapter.DNSTransport
+	services map[string]adapter.Service
+}
+
+func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
+	if s.outbound == nil || s.dnsRouter == nil || s.dnsTransport == nil || s.inbound == nil || s.service == nil || tunTag == "" || compiled.DNS == nil {
+		return nil, errors.New("external native route owners missing")
+	}
+	tun, ok := s.inbound.Get(tunTag)
+	if !ok || tun == nil || tun.Type() != C.TypeTun || len(compiled.Inbounds) != 1 || compiled.Inbounds[0].Tag != tunTag {
+		return nil, errors.New("external native TUN owner missing")
+	}
+	// Enumerate the immutable compiled configuration, then use locked manager
+	// lookups. Iterating manager-owned slices while a teardown removes objects
+	// would race the native slice storage. Every encrypted dependency, DNS
+	// bootstrap and helper service remains bound, not only the final two tags.
+	owners := map[string]adapter.Outbound{}
+	tags := make([]string, 0, len(compiled.Outbounds)+len(compiled.Endpoints))
+	for _, outbound := range compiled.Outbounds {
+		tags = append(tags, outbound.Tag)
+	}
+	for _, endpoint := range compiled.Endpoints {
+		tags = append(tags, endpoint.Tag)
+	}
+	for _, tag := range tags {
+		owner, ok := s.outbound.Outbound(tag)
+		if tag == "" || !ok || owner == nil {
+			return nil, errors.New("external native transport owner missing")
+		}
+		owners[tag] = owner
+	}
+	routes := map[string]adapter.Outbound{}
+	for _, tag := range []string{mobilemultihop.ExternalFinalTag, entryTag} {
+		if tag == "" {
+			continue
+		}
+		owner := owners[tag]
+		if owner == nil {
+			return nil, errors.New("external native proof route missing")
+		}
+		routes[tag] = owner
+	}
+	dns := map[string]adapter.DNSTransport{}
+	for _, configured := range compiled.DNS.Servers {
+		owner, ok := s.dnsTransport.Transport(configured.Tag)
+		if configured.Tag == "" || !ok || owner == nil {
+			return nil, errors.New("external native DNS owner missing")
+		}
+		dns[configured.Tag] = owner
+	}
+	if dns[mobilemultihop.ExternalDNSTag] == nil {
+		return nil, errors.New("external selected DNS owner missing")
+	}
+	services := map[string]adapter.Service{}
+	for _, configured := range compiled.Services {
+		if configured.Type == C.TypeOOMKiller {
+			continue
+		}
+		owner, ok := s.service.Get(configured.Tag)
+		if configured.Tag == "" || !ok || owner == nil {
+			return nil, errors.New("external native helper owner missing")
+		}
+		services[configured.Tag] = owner
+	}
+	return &routerVPNExternalNativeEngine{box: s, tun: tun, dns: dns, owners: owners, routes: routes, services: services}, nil
+}
+func (e *routerVPNExternalNativeEngine) Identity() string {
+	if e == nil || e.box == nil || e.box.ctx.Err() != nil {
+		return ""
+	}
+	select {
+	case <-e.box.done:
+		return ""
+	default:
+	}
+	for tag, owner := range e.owners {
+		current, ok := e.box.outbound.Outbound(tag)
+		if !ok || current != owner {
+			return ""
+		}
+	}
+	for tag, owner := range e.dns {
+		current, ok := e.box.dnsTransport.Transport(tag)
+		if !ok || current != owner {
+			return ""
+		}
+	}
+	for tag, owner := range e.services {
+		current, ok := e.box.service.Get(tag)
+		if !ok || current != owner {
+			return ""
+		}
+	}
+	current, ok := e.box.inbound.Get(e.tun.Tag())
+	if !ok || current != e.tun {
+		return ""
+	}
+	return fmt.Sprintf("%p", e.box)
+}
+func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if e.Identity() == "" || ctx.Err() != nil {
+		return nil, errors.New("external native owner changed")
+	}
+	owner, ok := e.routes[tag]
+	if !ok {
+		return nil, errors.New("unowned external proof route")
+	}
+	host, _, err := net.SplitHostPort(address)
+	if err != nil {
+		return nil, errors.New("external proof destination invalid")
+	}
+	if _, err = netip.ParseAddr(host); err != nil {
+		return nil, errors.New("external proof cannot use a default resolver")
+	}
+	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if err != nil || ctx.Err() != nil || e.Identity() == "" {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, errors.New("external native dial failed or became stale")
+	}
+	return connection, nil
+}
+func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag string) error {
+	if e.Identity() == "" || e.tun.Tag() != tunTag {
+		return errors.New("external DNS proof belongs to another TUN")
+	}
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	// Uses the actual selected DNS router. Supplying a transport override here
+	// would bypass routing and could conceal a policy regression.
+	if err := routerVPNStrategyDNSExchange(ctx, e.box.dnsRouter.Exchange); err != nil {
+		return err
+	}
+	if e.Identity() == "" || ctx.Err() != nil {
+		return errors.New("external DNS owner changed during proof")
+	}
+	return nil
+}

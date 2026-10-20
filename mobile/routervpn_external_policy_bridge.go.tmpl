@@ -1,6 +1,10 @@
 package libbox
 
-import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+import (
+	"errors"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
 
 // RouterCompileExternalPolicy applies the exact captured ordinary external
 // DNS, IPv6, LAN and MTU policy without opening a socket or changing a profile.
@@ -8,4 +12,56 @@ import "github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultiho
 // Hosts must still prove the selected native DNS and exit before reporting UP.
 func RouterCompileExternalPolicy(config, capture string) (string, error) {
 	return mobilemultihop.CompileExternalPolicy(config, capture)
+}
+
+type RouterExternalProofRequest struct {
+	request *box.RouterVPNExternalProofRequest
+	current func() bool
+}
+
+// Factory captures the real Box before Run may block. Cancel only reaches
+// this request, even when the host has already replaced its StartedService.
+func RouterExternalCreateProof(server *CommandServer, source, capture, session string) (*RouterExternalProofRequest, error) {
+	if server == nil || server.StartedService == nil {
+		return nil, errors.New("external native service unavailable")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("external native instance unavailable")
+	}
+	request, err := instance.Box().RouterVPNExternalCreateProof(source, capture, session)
+	if err != nil {
+		return nil, err
+	}
+	current := func() bool { return server.StartedService != nil && server.StartedService.Instance() == instance }
+	if !current() {
+		request.Cancel()
+		return nil, errors.New("external native instance changed")
+	}
+	return &RouterExternalProofRequest{request: request, current: current}, nil
+}
+func (r *RouterExternalProofRequest) Run() (string, error) {
+	if r == nil || r.request == nil || r.current == nil || !r.current() {
+		if r != nil {
+			r.Cancel()
+		}
+		return "", errors.New("external native request retired")
+	}
+	result, err := r.request.Run()
+	if err != nil {
+		return "", err
+	}
+	if !r.current() || !r.request.Healthy() {
+		r.Cancel()
+		return "", errors.New("external native proof delivery retired")
+	}
+	return result, nil
+}
+func (r *RouterExternalProofRequest) Cancel() {
+	if r != nil && r.request != nil {
+		r.request.Cancel()
+	}
+}
+func (r *RouterExternalProofRequest) Healthy() bool {
+	return r != nil && r.request != nil && r.current != nil && r.current() && r.request.Healthy()
 }

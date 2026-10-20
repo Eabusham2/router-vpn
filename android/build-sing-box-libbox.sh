@@ -106,6 +106,15 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
+  for symbol in routerCompileExternalPolicy routerExternalCreateProof; do
+    grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
+  done
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterExternalProofRequest >"$tmp/router-external-proof.javap"
+  for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
+    grep -Fq "$signature" "$tmp/router-external-proof.javap" || {
+      echo 'combined libbox AAR external proof request has the wrong owned-lifecycle API' >&2; return 1
+    }
+  done
   for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
   done
@@ -279,6 +288,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   python3 "$ROOT/../deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
   go_retry test -ldflags=-checklinkname=0 -tags with_quic,with_wireguard,with_gvisor ./experimental/libbox
   bash "$ROOT/../deploy/test_mobile_openvpn_pinned.sh" "$VENDOR"
+  bash "$ROOT/../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_apple_xray_pinned.sh" "$VENDOR" "$XRAY_CORE_VENDOR"
   bash "$ROOT/../deploy/test_mobile_whitening_pinned.sh" "$VENDOR"
   bash "$ROOT/../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
