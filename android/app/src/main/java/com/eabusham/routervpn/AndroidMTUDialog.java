@@ -69,7 +69,7 @@ final class AndroidMTUDialog {
         if (row == null) return false;
         int mtu = row.optInt("mtu", 0), bytes = row.optInt("datagram_bytes", 0);
         double rtt = row.optDouble("median_rtt_ms", Double.NaN);
-        boolean publicTransfer = "measured-public-system-tun-transfer".equals(source)
+        boolean publicTransfer = ("measured-public-system-tun-transfer".equals(source) || "measured-tor-system-tun-transfer".equals(source))
                 && "https-response".equals(row.optString("latency_kind", ""))
                 && row.optInt("packets_sent", 0) == 0 && row.optInt("packets_received", 0) == 0 && bytes == 0 && rtt > 0;
         boolean privatePackets = "measured-private-system-tun".equals(source)
@@ -85,7 +85,8 @@ final class AndroidMTUDialog {
         if (!active.isEmpty()) request = active;
         int effective = result.optInt("effective_mtu", 0), original = result.optInt("original_mtu", 0);
         String source = result.optString("source", "");
-        boolean publicTransfer = "measured-public-system-tun-transfer".equals(source);
+        boolean torTransfer = "measured-tor-system-tun-transfer".equals(source);
+        boolean publicTransfer = torTransfer || "measured-public-system-tun-transfer".equals(source);
         JSONArray rows = result.optJSONArray("candidates");
         if (rows != null && rows.length() > 5) { disable("Oversized MTU sample set was discarded."); return; }
         boolean verifiedWinner = false;
@@ -97,7 +98,7 @@ final class AndroidMTUDialog {
         StringBuilder message = new StringBuilder("Phase: ").append(phase);
         if (verifiedWinner && result.optBoolean("measured", false) && !running && result.optBoolean("complete", false)
                 && effective >= 1280 && effective <= 1500)
-            message.append("\nVerified current MTU: ").append(effective).append(publicTransfer ? " (public HTTPS transfer test)" : " (authenticated packet test)");
+            message.append("\nVerified current MTU: ").append(effective).append(torTransfer ? " (Tor HTTPS transfer test)" : publicTransfer ? " (public HTTPS transfer test)" : " (authenticated packet test)");
         else message.append("\nNo current verified measurement is claimed.");
         if (original >= 1280 && original <= 9000) message.append("\nPre-test MTU: ").append(original);
 
@@ -112,7 +113,7 @@ final class AndroidMTUDialog {
             else message.append("rejected — ").append(row.optString("failure", "no valid sample"));
         }
         String failure = result.optString("failure", ""); if (!failure.isEmpty()) message.append("\n").append(failure);
-        message.append(publicTransfer ? "\n\nPublic HTTPS response and transfer measurements use this OS VPN; they do not establish an unfragmented UDP packet limit."
+        message.append(torTransfer ? "\n\nTor HTTPS response and transfer measurements use this circuit and OS VPN; they do not establish an unfragmented UDP packet limit." : publicTransfer ? "\n\nPublic HTTPS response and transfer measurements use this OS VPN; they do not establish an unfragmented UDP packet limit."
                 : "\n\nAuthenticated packets and private transfers use this OS VPN.");
         message.append(" Retest can interrupt existing connections while replacing its TUN reader. Cancel restores the pre-test MTU only while the same session and physical path remain valid. Cached sizes must be measured again.");
         text.setText(message.toString());

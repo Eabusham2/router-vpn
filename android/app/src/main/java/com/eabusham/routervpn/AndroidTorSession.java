@@ -4,6 +4,8 @@ import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterTorProofRequest;
 import io.nekohasekai.libbox.RouterHopMeasurement;
+import io.nekohasekai.libbox.RouterMTU;
+import io.nekohasekai.libbox.RouterMTUPlatform;
 import org.json.JSONObject;
 
 import java.net.InetAddress;
@@ -18,16 +20,19 @@ final class AndroidTorSession {
     }
 
     final String sessionID, externalID;
-    private final String predecessor, network;
+    private final String predecessor, network, config, profile;
     private final CommandServer server;
     private final Owner owner;
     private RouterTorProofRequest request;
     private boolean cancelled, proved, started;
     private String result = "";
 
-    AndroidTorSession(JSONObject metadata, CommandServer server, Owner owner) throws Exception {
+    AndroidTorSession(JSONObject metadata, String config, CommandServer server, Owner owner) throws Exception {
         this.sessionID = metadata.getString("session_id");
         this.externalID = metadata.getString("external_id");
+        this.config = config;
+        this.profile = metadata.getJSONObject("tor_profile").toString();
+        if (config == null || config.isEmpty() || !externalID.equals(new JSONObject(profile).getString("id"))) throw unavailable();
         this.predecessor = metadata.has("predecessor_profile") ? metadata.getJSONObject("predecessor_profile").toString() : "";
         this.server = server;
         this.owner = owner;
@@ -89,6 +94,21 @@ final class AndroidTorSession {
         synchronized (this) { owned = request == proof && healthy(); }
         if (!owned) { measurement.close(); throw unavailable(); }
         return measurement;
+    }
+
+    synchronized JSONObject mtuProfile() throws Exception {
+        if (!healthy()) throw unavailable();
+        return new JSONObject(profile);
+    }
+
+    RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {
+        final RouterTorProofRequest proof;
+        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        // The MTU adapter first adopts this handle, then rechecks ownership and
+        // retains it if its drain fails. Never abandon a late constructor here.
+        RouterMTU mtu = Libbox.newRouterTorMTU(server, platform, proof, config, profile);
+        if (mtu == null) throw unavailable();
+        return mtu;
     }
 
     void cancel() {

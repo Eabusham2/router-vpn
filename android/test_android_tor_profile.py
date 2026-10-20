@@ -167,6 +167,7 @@ HARNESS = prefix + r'''
   check(prepared.modeId.equals((source==null?"standard-direct-":"standard-")+selected.protocol),"Tor launch relabeled the captured selection");
   check(meta.getString("external_id").equals(selected.id)&&meta.getString("entry_mode").equals(source==null?"external":mode),"Tor metadata lost selected identities");
   check(meta.has("predecessor_profile")==(source!=null),"Tor metadata lost predecessor ownership");
+  check(meta.getJSONObject("tor_profile").toString().equals(AndroidTorProfile.profile(selected).toString()),"Tor metadata lost frozen selected policy");
   check(Files.readString(staged.resolve(AndroidKillSwitchPolicy.SESSION_MARKER)).equals("1\n"),"Tor did not stage strict lockdown");
   JSONObject tunnel=graph.getJSONArray("inbounds").getJSONObject(0),out=byTag(graph,AndroidTorProfile.OUTBOUND);
   check(graph.getJSONArray("inbounds").length()==1&&tunnel.getString("type").equals("tun")&&tunnel.getBoolean("auto_route")&&tunnel.getBoolean("strict_route"),"Tor created or weakened a second VPN");
@@ -284,7 +285,7 @@ HARNESS = prefix + r'''
   Path app=Files.createTempDirectory(dir,"session-owner-");NativeSingBoxController.SessionInfo info=AndroidTorProfile.prepare(new Context(app.toFile()),null,tor("obfs4","tcp"),"direct");
   Path staged=app.resolve("layered-sessions").resolve(info.sessionId);
   String raw=Files.readString(staged.resolve("sing-box.json")),metaRaw=Files.readString(staged.resolve(AndroidTorProfile.SESSION_FILE));
-  for(String fault:new String[]{"digest","session","version","protocol","final","tor-session","tor-tag","extra-tor","extra-tun","lost-tun","mode"}){
+  for(String fault:new String[]{"digest","session","version","protocol","final","tor-session","tor-tag","extra-tor","extra-tun","lost-tun","mode","lost-profile","profile-id","profile-protocol"}){
    JSONObject graph=new JSONObject(raw),meta=new JSONObject(metaRaw);String mode=info.modeId;
    switch(fault){
     case "digest":meta.put("config_sha256","0".repeat(64));break;
@@ -298,6 +299,9 @@ HARNESS = prefix + r'''
     case "extra-tun":graph.getJSONArray("inbounds").put(new JSONObject(graph.getJSONArray("inbounds").getJSONObject(0).toString()));break;
     case "lost-tun":graph.getJSONArray("inbounds").getJSONObject(0).put("type","mixed");break;
     case "mode":mode="standard-direct-socks5";break;
+    case "lost-profile":meta.remove("tor_profile");break;
+    case "profile-id":meta.getJSONObject("tor_profile").put("id","another-exit");break;
+    case "profile-protocol":meta.getJSONObject("tor_profile").getJSONObject("external").put("protocol","socks5");break;
    }
    String changed=graph.toString();if(!fault.equals("digest"))meta.put("config_sha256",AndroidTorProfile.digest(changed.getBytes(StandardCharsets.UTF_8)));
    boolean rejected=false;try{AndroidTorProfile.session(changed,meta.toString(),info.sessionId,mode);}catch(Exception expected){rejected=true;}

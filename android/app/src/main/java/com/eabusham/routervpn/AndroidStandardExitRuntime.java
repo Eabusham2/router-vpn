@@ -104,6 +104,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 if(tor){
                     capturedTorExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
+                    LayeredVpnService.startTorAutomaticMTU(torNativeSession,torExternalID,capturedHome.sessionId);
                 }else{
                     capturedExternalExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed))throw new IllegalStateException("The captured external session changed before Connected adoption.");

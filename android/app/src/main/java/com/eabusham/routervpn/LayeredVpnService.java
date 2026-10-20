@@ -79,7 +79,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private String mtuMetadata = "";
     static void startAutomaticMTU(){
         LayeredVpnService service=currentService.get();if(service==null)return;
-        service.scheduleAutomaticMTU(service.externalSession);
+        service.scheduleAutomaticMTU(service.externalSession,service.torSession);
     }
     static void startExternalAutomaticMTU(String session,String external,String home){
         LayeredVpnService service=currentService.get();if(service==null)return;
@@ -88,10 +88,30 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             AndroidHomeStateStore.Snapshot capturedHome=service.externalHomeOwner;
             if(owned==null||capturedHome==null||!owned.sessionID.equals(session)||!owned.externalID.equals(external)
                     ||!capturedHome.sessionId.equals(home))return;
-            service.scheduleAutomaticMTU(owned);
+            service.scheduleAutomaticMTU(owned,null);
         }
     }
-    private void scheduleAutomaticMTU(AndroidExternalSession external){
+    static void startTorAutomaticMTU(String session,String external,String home){
+        LayeredVpnService service=currentService.get();if(service==null)return;
+        synchronized(service.lock){
+            AndroidTorSession owned=service.torSession;
+            AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(service);
+            if(owned==null||!owned.sessionID.equals(session)||!owned.externalID.equals(external)
+                    ||!captured.sessionId.equals(home)||!captured.activeExternalId.equals(external)
+                    ||!AndroidTorProfile.isTor(captured.activeExternalProtocol)||!captured.connected
+                    ||!"passed".equals(captured.pathProof)||AndroidHomeStateStore.emergencyDisconnectPending(service))return;
+            service.torHomeOwner=captured;
+            service.scheduleAutomaticMTU(null,owned);
+        }
+    }
+    private boolean ownsTorMTUHome(){
+        AndroidHomeStateStore.Snapshot home=torHomeOwner,now=AndroidHomeStateStore.snapshot(this);
+        return home!=null&&now.connected&&"passed".equals(now.pathProof)&&!AndroidHomeStateStore.emergencyDisconnectPending(this)
+                &&home.sessionId.equals(now.sessionId)&&home.pathGeneration==now.pathGeneration
+                &&home.activeExternalId.equals(now.activeExternalId)&&home.activeExternalProtocol.equals(now.activeExternalProtocol)
+                &&home.activeEntryId.equals(now.activeEntryId)&&home.activeEntryMode.equals(now.activeEntryMode);
+    }
+    private void scheduleAutomaticMTU(AndroidExternalSession external,AndroidTorSession tor){
         LayeredVpnService service=this;
         CommandServer core=commandServer;AndroidMTUSession captured=mtuSession;
         long generation=lifecycle.get();
@@ -104,7 +124,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()
                         ||!AndroidHomeStateStore.ownsPolicyExternal(service,home))return;
                 captured.activateExternal(external);
-            }else if(service.externalSession==null&&!service.mtuMetadata.isEmpty())captured.activate(core,service.activeConfig,service.mtuMetadata);
+            }else if(tor!=null){
+                if(service.torSession!=tor||!tor.healthy()||!service.ownsTorMTUHome())return;
+                captured.activateTor(tor);
+            }else if(service.externalSession==null&&service.torSession==null&&!service.mtuMetadata.isEmpty())captured.activate(core,service.activeConfig,service.mtuMetadata);
         });
     }
     static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> completion){
@@ -146,6 +169,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private volatile AndroidTorSession torSession;
+    private volatile AndroidHomeStateStore.Snapshot torHomeOwner;
     private volatile AndroidExternalSession externalSession;
     private volatile boolean externalOwner;
     private volatile AndroidHomeStateStore.Snapshot externalHomeOwner;
@@ -451,7 +475,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if (preparedMAX != null) executionHandler.post(executionWatch);
             if (torMetadata != null) {
                 final CommandServer capturedServer = ownedServer;
-                final AndroidTorSession capturedTor = new AndroidTorSession(torMetadata, capturedServer, new AndroidTorSession.Owner() {
+                final AndroidTorSession capturedTor = new AndroidTorSession(torMetadata, config, capturedServer, new AndroidTorSession.Owner() {
                     @Override public boolean current(AndroidTorSession candidate, CommandServer nativeServer) {
                         return torSession == candidate && commandServer == nativeServer && generation == lifecycle.get() && !explicitStop
                                 && activeSession != null && sessionId.equals(activeSession.getName());
@@ -703,6 +727,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         unregisterInterfaceMonitorLocked();
         externalHomeOwner = null;
+        torHomeOwner = null;
     }
 
     private void publish(String newState, String mode, String error) {

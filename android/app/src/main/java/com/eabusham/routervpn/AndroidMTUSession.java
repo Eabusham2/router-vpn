@@ -236,6 +236,31 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             }
         }
     }
+    void activateTor(AndroidTorSession tor) {
+        synchronized (lifecycle) {
+            if (activated || closed || invalid) return;
+            activated = true;
+            try {
+                JSONObject profile = tor.mtuProfile();
+                String policy = profile.optString("mtu_policy", "").trim().toLowerCase(java.util.Locale.ROOT);
+                if (!"auto".equals(policy) || profile.optBoolean("jumbo_tun", false)) {
+                    notice = "Fixed, runtime-default and Jumbo modes do not enter Auto-MTU."; return;
+                }
+                long end = android.os.SystemClock.elapsedRealtime() + 2500;
+                while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
+                if (closed || invalid || !tor.healthy()) return;
+                RouterMTU created = tor.newMTU(this);
+                if (created == null) throw new IllegalStateException("Native Tor MTU owner was not created.");
+                controller = created;
+                if (closed || invalid || !tor.healthy()) { closeController(); return; }
+                if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
+                notice = "";
+            } catch (Exception error) {
+                notice = closed || invalid ? "MTU session is stopped or stale."
+                        : "Auto-MTU has no verified Tor-path measurement; configured MTU is retained.";
+            }
+        }
+    }
     private static JSONObject status(RouterMTU owned) throws Exception {
         String raw = owned.statusJSON();
         if (raw == null || raw.length() > 32768) throw new IllegalStateException("MTU status exceeds the IPC bound.");

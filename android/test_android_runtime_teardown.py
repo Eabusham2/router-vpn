@@ -65,6 +65,7 @@ final class LayeredVpnService {
         if(!"native-session".equals(session)||!"external".equals(exit)||!home.equals(AndroidHomeStateStore.current.sessionId))throw new AssertionError("MTU substituted its captured external or Home owner");
         startAutomaticMTU();
     }
+    static void startTorAutomaticMTU(String session,String exit,String home){startExternalAutomaticMTU(session,exit,home);}
     static volatile java.util.concurrent.CountDownLatch mtuEntered, mtuRelease;
     static void startAutomaticMTU() {
         if (!AndroidHomeStateStore.current.connected) throw new AssertionError("MTU started before path proof adoption");
@@ -312,7 +313,7 @@ public final class RuntimeTeardownHarness {
             try(Owner owner=new Owner(kind)) {
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
-                check(LayeredVpnService.mtuStarts.get()==(owner.multihop!=null||owner.kind.equals("external")?1:0),"MTU must start once, only after its captured path proof");
+                check(LayeredVpnService.mtuStarts.get()==1,"MTU must start once, only after its captured path proof");
                 if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
                 if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==2,"ordinary external path bypassed captured entry/DNS/native proof");
                 if(kind.equals("external"))check(LayeredVpnService.discarded.get()==0,"successful native launch discarded its active session");
@@ -369,7 +370,7 @@ public final class RuntimeTeardownHarness {
                 awaitIdle(owner);
             }
         });
-        if("multihop".equals(kind)) test("multihop MTU activation cannot escape captured adoption",()->{
+        test(kind+" MTU activation cannot escape captured adoption",()->{
             try(Owner owner=new Owner(kind)){
                 CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1),stopping=new CountDownLatch(1),finished=new CountDownLatch(1);
                 LayeredVpnService.mtuEntered=entered;LayeredVpnService.mtuRelease=release;

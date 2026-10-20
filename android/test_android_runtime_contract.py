@@ -310,7 +310,7 @@ for executable_contract in (
     "test_android_external_revalidation.py",
     "test_android_external_permission.py",
     "test_android_external_hop_measurement.py",
-    "test_android_external_mtu.py",
+    "test_android_external_mtu.py", "test_android_tor_mtu.py",
     "test_android_native_hop_request.py",
     "test_android_start_layer_relay_lifecycle.py",
     "test_android_custom_preset_commit.py",

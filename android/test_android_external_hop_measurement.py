@@ -59,7 +59,7 @@ public class ExternalHopMeasurementTest {
   Fixture(boolean isTor,boolean entry)throws Exception{this.isTor=isTor;JSONObject cap=new JSONObject();if(entry)cap.put("entry",new JSONObject().put("id","entry-owned"));capture=cap.toString();
    JSONObject policy=new JSONObject().put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("exit_id","exit-owned").put("expected_public_ip","8.8.4.4");if(entry)policy.put("entry_id","entry-owned").put("entry_node_id","c".repeat(64));
    external=new AndroidExternalSession(new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("source_config","exact-source").put("capture_json",capture).put("metadata_json",policy.toString()),server,this);
-   JSONObject metadata=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned");if(entry)metadata.put("predecessor_profile",new JSONObject().put("id","entry-owned"));tor=new AndroidTorSession(metadata,server,this);
+   JSONObject metadata=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned");if(entry)metadata.put("predecessor_profile",new JSONObject().put("id","entry-owned"));metadata.put("tor_profile",new JSONObject().put("id","exit-owned"));tor=new AndroidTorSession(metadata,"exact-config",server,this);
   }
   public boolean current(AndroidExternalSession s,CommandServer c){return current&&s==external&&c==currentServer;}
   public boolean current(AndroidTorSession s,CommandServer c){return current&&s==tor&&c==currentServer;}

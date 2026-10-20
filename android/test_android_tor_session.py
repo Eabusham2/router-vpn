@@ -18,13 +18,18 @@ B = importlib.util.module_from_spec(spec); spec.loader.exec_module(B)
 SOURCES = dict(B.STUBS)
 SOURCES.pop('org/json/JSONObject.java')
 SOURCES.pop('com/eabusham/routervpn/AndroidTorSession.java')
+SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void activateTor(AndroidTorSession tor){}', 'public int torStarts;public AndroidTorSession activatedTor;public void activateTor(AndroidTorSession tor){torStarts++;activatedTor=tor;}')
+SOURCES['io/nekohasekai/libbox/RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU {}'
+SOURCES['io/nekohasekai/libbox/RouterMTUPlatform.java'] = 'package io.nekohasekai.libbox;public interface RouterMTUPlatform {}'
 SOURCES['com/eabusham/routervpn/AndroidTorProfile.java'] = '''package com.eabusham.routervpn;
 final class AndroidTorProfile {
  static final String OUTBOUND="routervpn-tor-exit",SESSION_FILE="routervpn-tor.json";static final int MAX_METADATA=262144;
+ static boolean isTor(String value){return "tor".equals(value)||"tor-bridge".equals(value);}
  static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return new org.json.JSONObject(m);}
  static String strictText(byte[] b)throws Exception{return new String(b,java.nio.charset.StandardCharsets.UTF_8);}
 }'''
 SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace('return null;} public android.content.pm.PackageManager', '''return new SharedPreferences(){public Editor edit(){return new Editor(){public Editor putString(String a,String b){return this;}public void apply(){}};}};} public android.content.pm.PackageManager''')
+SOURCES['android/content/Context.java'] = SOURCES['android/content/Context.java'].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}").replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
 SOURCES['android/os/ParcelFileDescriptor.java'] = '''package android.os;
 public class ParcelFileDescriptor implements java.io.Closeable {public boolean closed;public static ParcelFileDescriptor duplicate;public static ParcelFileDescriptor fromFd(int fd){duplicate=new ParcelFileDescriptor();return duplicate;}public java.io.FileDescriptor getFileDescriptor(){return new java.io.FileDescriptor();}public int getFd(){return 1;}public void close(){closed=true;}}'''
 SOURCES['android/net/Network.java'] = '''package android.net;
@@ -60,6 +65,7 @@ LIBBOX = LIBBOX[:-1] + r'''
  }
  public static void routerStrategyDNSProof(CommandServer s)throws Exception{dnsCalls++;if(s!=created.server)throw new AssertionError("DNS used another native Box");if(dnsEntered!=null){dnsEntered.countDown();dnsRelease.await();}if(dnsFailure)throw new IllegalStateException("DNS failed");}
  public static RouterHopMeasurement routerTorCreateHopMeasurement(CommandServer s,RouterTorProofRequest proof,String id)throws Exception{return new RouterHopMeasurement();}
+ public static RouterMTU newRouterTorMTU(CommandServer s,RouterMTUPlatform platform,RouterTorProofRequest proof,String config,String profile)throws Exception{return new RouterMTU();}
 }'''
 SOURCES['io/nekohasekai/libbox/Libbox.java'] = LIBBOX
 HARNESS = r'''package com.eabusham.routervpn;
@@ -71,7 +77,7 @@ public final class TorSessionHarness {
  static void waitFor(CountDownLatch latch)throws Exception{check(latch.await(2,TimeUnit.SECONDS),"boundary was not reached");}
  static final class Fixture implements AndroidTorSession.Owner {
   CommandServer server=new CommandServer(null,null);volatile CommandServer currentServer=server;volatile String network="wifi-1";volatile AndroidTorSession session;
-  Fixture(boolean predecessor)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned");if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));session=new AndroidTorSession(m,server,this);}
+  Fixture(boolean predecessor)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned");if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));m.put("tor_profile",new JSONObject().put("id","exit-owned"));session=new AndroidTorSession(m,"exact-config",server,this);}
   public boolean current(AndroidTorSession s,CommandServer c){return s==session&&c==currentServer;}
   public String network(){return network;}
   RouterTorProofRequest blocked(boolean ignore){RouterTorProofRequest r=new RouterTorProofRequest(server,"session-owned","");r.entered=new CountDownLatch(1);r.release=new CountDownLatch(1);r.ignoreCancellation=ignore;Libbox.next=r;return r;}
@@ -134,7 +140,22 @@ public final class TorSessionHarness {
   rejected(()->close(service));check(Libbox.checkedCloses==0&&server.closes==0,"native owner was released before its Java lower worker joined");check(field("torOwner").getBoolean(service)&&field("startLayerRelay").get(service)==relay&&!tun.closed,"unconfirmed relay close released its graph or TUN");
   check(field("state").get(service).equals("STOPPING"),"unfinished Java lower reported terminal state");relay.pending=false;close(service);check(relay.closes==2&&Libbox.checkedCloses==1&&tun.closed,"retry did not drain the retained relay before its exact native Box");check(field("startLayerRelay").get(service)==null,"proved relay drain retained a stale owner");service.onDestroy();
  }
- public static void main(String[] args)throws Exception{successes();responses();cancellation();retainedClose();physicalNetwork();retainedRelayClose();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}
+ static void automaticMTU()throws Exception{
+  for(String changed:new String[]{"live","pending","session","exit","home","proof","generation","replaced","home-generation","home-replaced","emergency"}){
+   Libbox.reset();Fixture f=new Fixture(false);f.session.prove();LayeredVpnService service=new LayeredVpnService();service.files=Files.createTempDirectory("tor-mtu-adoption-").toFile();service.onCreate();
+   AndroidHomeStateStore.Snapshot home=new AndroidHomeStateStore.Snapshot();home.sessionId="home-owned";home.activeExternalId="exit-owned";home.activeExternalProtocol="tor";home.connected=true;home.pathProof="passed";AndroidHomeStateStore.value=home;AndroidHomeStateStore.emergency=false;
+   AndroidMTUSession mtu=new AndroidMTUSession(service,owner->{});field("mtuSession").set(service,mtu);field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("state").set(service,"UP");
+   ExecutorService worker=(ExecutorService)field("executor").get(service);CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);worker.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});waitFor(entered);
+   if(changed.equals("pending"))home.connected=false;if(changed.equals("proof"))Libbox.created.alive=false;
+   LayeredVpnService.startTorAutomaticMTU(changed.equals("session")?"other":"session-owned",changed.equals("exit")?"other":"exit-owned",changed.equals("home")?"other":"home-owned");
+   if(changed.equals("generation"))((AtomicLong)field("lifecycle").get(service)).incrementAndGet();if(changed.equals("replaced"))field("torSession").set(service,null);
+   if(changed.startsWith("home-")){AndroidHomeStateStore.Snapshot next=new AndroidHomeStateStore.Snapshot();next.sessionId=changed.equals("home-replaced")?"newer-owner":home.sessionId;next.pathGeneration=changed.equals("home-generation")?home.pathGeneration+1:home.pathGeneration;next.activeExternalId=home.activeExternalId;next.activeExternalProtocol=home.activeExternalProtocol;next.connected=true;next.pathProof="passed";AndroidHomeStateStore.value=next;}
+   if(changed.equals("emergency"))AndroidHomeStateStore.emergency=true;
+   release.countDown();worker.submit(()->{}).get(3,TimeUnit.SECONDS);check(mtu.torStarts==(changed.equals("live")?1:0),"Tor MTU adopted pending/replaced session: "+changed);
+   if(changed.equals("live"))check(mtu.activatedTor==f.session,"MTU borrowed another circuit proof");service.onDestroy();AndroidHomeStateStore.emergency=false;
+  }
+ }
+ public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();physicalNetwork();retainedRelayClose();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -155,13 +176,14 @@ def main():
         controls=[('AndroidTorSession.java','''            if (cancelled || !current() || !captured.healthy()) throw unavailable();
             result = response;''','''            result = response;''','DNS completion owner check'),
                   ('LayeredVpnService.java','Libbox.routerStrategyCloseService(commandServer);','commandServer.closeService();','checked native close'),
-                  ('LayeredVpnService.java','captured.bindSocket(borrowed.getFileDescriptor());','','captured physical network binding')]
+                  ('LayeredVpnService.java','captured.bindSocket(borrowed.getFileDescriptor());','','captured physical network binding'),
+                  ('LayeredVpnService.java','||!service.ownsTorMTUHome()','','Tor MTU Home generation ownership')]
         for name,old,new,label in controls:
             path=folder/'com/eabusham/routervpn'/name;original=path.read_text();assert original.count(old)==1,label
             path.write_text(original.replace(old,new));subprocess.run(compile_args,check=True,timeout=45)
             result=subprocess.run(run_args,capture_output=True,text=True,timeout=20);assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' control escaped'
             path.write_text(original)
-        print('Android Tor lifecycle negative controls: PASS (late DNS adoption, unchecked close and lost network binding rejected)')
+        print('Android Tor lifecycle negative controls: PASS (late DNS adoption, unchecked close, lost network binding and stale Tor MTU activation rejected)')
 
 
 if __name__=='__main__':main()

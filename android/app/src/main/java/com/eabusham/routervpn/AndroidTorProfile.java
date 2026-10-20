@@ -93,6 +93,7 @@ final class AndroidTorProfile {
         AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selected);
         AndroidStandardExitStore.validate(exit);
         String capturedExit = AndroidStandardExitStore.snapshot(exit);
+        String capturedProfile = profile(exit).toString();
         JSONObject entry = null, predecessorProfile = null;
         byte[] entryBytes = null;
         AndroidStartLayer.RelayPlan relay = null;
@@ -142,13 +143,14 @@ final class AndroidTorProfile {
                 predecessor = graph.toString();
             }
             String sessionId = UUID.randomUUID().toString();
-            String config = Libbox.routerCompileTorProfile(profile(exit).toString(), sessionId, predecessor);
+            String config = Libbox.routerCompileTorProfile(capturedProfile, sessionId, predecessor);
             if (!bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor did not compile the complete captured graph.");
             RouterPQNative.install();
             Libbox.checkConfig(config);
             JSONObject metadata = new JSONObject().put("version", 1).put("session_id", sessionId)
                     .put("external_id", exit.id).put("protocol", exit.protocol).put("config_sha256", digest(config.getBytes(StandardCharsets.UTF_8)))
-                    .put("entry_mode", entryFile == null ? "external" : entryMode);
+                    .put("entry_mode", entryFile == null ? "external" : entryMode)
+                    .put("tor_profile", new JSONObject(capturedProfile));
             if (predecessorProfile != null) metadata.put("predecessor_profile", predecessorProfile);
             String metadataText = metadata.toString();
             if (!bounded(metadataText, MAX_METADATA)) throw new IllegalStateException("Tor session metadata exceeds its bound.");
@@ -186,6 +188,10 @@ final class AndroidTorProfile {
     static JSONObject session(String config, String metadataText, String sessionId, String mode) throws Exception {
         if (!bounded(metadataText, MAX_METADATA) || !bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor session is empty or oversized.");
         JSONObject metadata = new JSONObject(metadataText), graph = new JSONObject(config);
+        JSONObject capturedProfile = metadata.getJSONObject("tor_profile");
+        if (!metadata.getString("external_id").equals(capturedProfile.getString("id"))
+                || !metadata.getString("protocol").equals(capturedProfile.getJSONObject("external").getString("protocol")))
+            throw new IllegalStateException("Tor lost its frozen selected profile.");
         if (metadata.getInt("version") != 1 || !sessionId.equals(metadata.getString("session_id"))
                 || !isTor(metadata.getString("protocol")) || !mode.equals((metadata.has("predecessor_profile") ? "standard-" : "standard-direct-") + metadata.getString("protocol"))
                 || !digest(config.getBytes(StandardCharsets.UTF_8)).equals(metadata.getString("config_sha256"))
