@@ -20,6 +20,7 @@ spec.loader.exec_module(TORPACK)
 def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
+        *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
         *(ROOT/'internal/mobiletor').glob('*.go'),
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
@@ -50,6 +51,7 @@ def rewrite(data):
     for source, target in (
         ('router-vpn/internal/mobiletor', MODULE+'/routervpn/mobiletor'),
         ('router-vpn/internal/common', MODULE+'/routervpn/common'),
+        ('router-vpn/internal/awgpolicy', MODULE+'/routervpn/awgpolicy'),
         ('router-vpn/mobile/torpt', MODULE+'/routervpn/torpt'),
     ):
         data = data.replace(('"'+source).encode(), ('"'+target).encode())
@@ -58,9 +60,9 @@ def rewrite(data):
 
 def copies():
     result = {}
-    for name in ('common', 'mobiletor'):
+    for name in ('common', 'mobiletor', 'awgpolicy'):
         for path in sorted((ROOT/'internal'/name).glob('*.go')):
-            if name == 'common' and path.name.endswith('_test.go'):
+            if name != 'mobiletor' and path.name.endswith('_test.go'):
                 continue
             result['routervpn/'+name+'/'+path.name] = rewrite(path.read_bytes())
     for path in sorted((ROOT/'mobile/torpt').rglob('*')):
@@ -179,7 +181,7 @@ def prepare(vendor, go='go'):
             raise ValueError('Native Tor source ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if relative not in content and not relative.startswith(('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/torpt/', 'routervpn/tornotices/', 'protocol/routervpntor/')):
+            if relative not in content and not relative.startswith(('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/awgpolicy/', 'routervpn/torpt/', 'routervpn/tornotices/', 'protocol/routervpntor/')):
                 raise ValueError('Native Tor cannot own unrelated core source')
             path = destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
@@ -188,7 +190,7 @@ def prepare(vendor, go='go'):
         path = destination(vendor, relative)
         if path.exists() and (not path.is_file() or relative not in previous and path.read_bytes() != data):
             raise ValueError('Refusing to overwrite unowned native Tor source')
-    for namespace in ('routervpn/common', 'routervpn/mobiletor', 'routervpn/torpt', 'routervpn/tornotices', 'protocol/routervpntor'):
+    for namespace in ('routervpn/common', 'routervpn/mobiletor', 'routervpn/awgpolicy', 'routervpn/torpt', 'routervpn/tornotices', 'protocol/routervpntor'):
         path = destination(vendor, namespace)
         if path.exists():
             for child in path.rglob('*'):
