@@ -25,7 +25,6 @@ $BridgeConfig=Join-Path $RuntimeDir 'entry-bridge.json'
 $OpenVPNPid=Join-Path $RuntimeDir 'openvpn-windows.process.json'
 $BridgePid=Join-Path $RuntimeDir 'openvpn-entry-bridge.process.json'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
-$SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
 $HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 
 function Stop-Owned {
@@ -88,6 +87,10 @@ if(-not(Test-Path -LiteralPath $KillSwitch -PathType Leaf)){throw 'Windows kill-
 $first=(& $OpenVPNBin --version 2>&1|Select-Object -First 1)
 if([string]$first-notmatch'^OpenVPN 2\.7\.'){throw "Router VPN requires OpenVPN 2.7.x; found '$first'."}
 if(Test-Path -LiteralPath $BridgeConfig -PathType Leaf){
+  $EngineSelector=Join-Path $PSScriptRoot 'Select-Standard-Engine.ps1'
+  Assert-RouterVPNNoReparseAncestors $EngineSelector
+  . $EngineSelector
+  $SingBox=Get-RouterVPNStandardEngine $Root
   if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'Pinned sing-box.exe is required for a hopped Windows OpenVPN exit.'}
   & $SingBox check -D $RuntimeDir -c $BridgeConfig|Out-Null
   if($LASTEXITCODE-ne 0){throw 'Pinned sing-box rejected the OpenVPN entry bridge.'}

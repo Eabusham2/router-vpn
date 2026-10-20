@@ -23,24 +23,26 @@ const (
 )
 
 type standardExit struct {
-	ID               string   `json:"id"`
-	Name             string   `json:"name"`
-	Protocol         string   `json:"protocol"`
-	Server           string   `json:"server"`
-	ServerPort       int      `json:"server_port"`
-	ExpectedPublicIP string   `json:"expected_public_ip"`
-	Username         string   `json:"username,omitempty"`
-	Password         string   `json:"password,omitempty"`
-	Method           string   `json:"method,omitempty"`
-	Secret           string   `json:"secret,omitempty"`
-	TLSServerName    string   `json:"tls_server_name,omitempty"`
-	WGAddresses      []string `json:"wg_addresses,omitempty"`
-	WGPrivateKey     string   `json:"wg_private_key,omitempty"`
-	WGPeerPublicKey  string   `json:"wg_peer_public_key,omitempty"`
-	WGPreSharedKey   string   `json:"wg_pre_shared_key,omitempty"`
-	WGAllowedIPs     []string `json:"wg_allowed_ips,omitempty"`
-	WGMTU            int      `json:"wg_mtu,omitempty"`
-	OpenVPNConfig    string   `json:"openvpn_config,omitempty"`
+	ID               string            `json:"id"`
+	Name             string            `json:"name"`
+	Protocol         string            `json:"protocol"`
+	Server           string            `json:"server"`
+	ServerPort       int               `json:"server_port"`
+	ExpectedPublicIP string            `json:"expected_public_ip"`
+	Username         string            `json:"username,omitempty"`
+	Password         string            `json:"password,omitempty"`
+	Method           string            `json:"method,omitempty"`
+	Secret           string            `json:"secret,omitempty"`
+	TLSServerName    string            `json:"tls_server_name,omitempty"`
+	WGAddresses      []string          `json:"wg_addresses,omitempty"`
+	WGPrivateKey     string            `json:"wg_private_key,omitempty"`
+	WGPeerPublicKey  string            `json:"wg_peer_public_key,omitempty"`
+	WGPreSharedKey   string            `json:"wg_pre_shared_key,omitempty"`
+	WGAllowedIPs     []string          `json:"wg_allowed_ips,omitempty"`
+	WGMTU            int               `json:"wg_mtu,omitempty"`
+	WGKeepalive      int               `json:"wg_keepalive,omitempty"`
+	AWGParameters    map[string]string `json:"awg_parameters,omitempty"`
+	OpenVPNConfig    string            `json:"openvpn_config,omitempty"`
 }
 
 type standardExitStore struct {
@@ -73,6 +75,7 @@ func standardExitCapabilities() []standardExitCapability {
 	openvpn.Implemented = true
 	return []standardExitCapability{
 		{Protocol: "wireguard", Implemented: true, Supported: true},
+		standardExitAmneziaCapability(),
 		{Protocol: "socks5", Implemented: true, Supported: true},
 		{Protocol: "http-connect", Implemented: true, Supported: true},
 		{Protocol: "https-connect", Implemented: true, Supported: true},
@@ -86,6 +89,8 @@ func normalizeStandardExitProtocol(value string) string {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "wg", "wireguard":
 		return "wireguard"
+	case "awg", "amneziawg":
+		return "amneziawg"
 	case "socks", "socks5":
 		return "socks5"
 	case "http", "http_connect", "http-connect":
@@ -163,9 +168,12 @@ func validateStandardExit(e *standardExit) error {
 	}
 	e.Protocol = normalizeStandardExitProtocol(e.Protocol)
 	switch e.Protocol {
-	case "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
+	case "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
 	default:
 		return fmt.Errorf("unsupported standard exit protocol %q", e.Protocol)
+	}
+	if e.Protocol != "amneziawg" && len(e.AWGParameters) != 0 {
+		return errors.New("AmneziaWG parameters cannot be discarded by another protocol")
 	}
 	if e.Protocol == "openvpn" {
 		if err := normalizeOpenVPNStandardExit(e); err != nil {
@@ -220,7 +228,7 @@ func validateStandardExit(e *standardExit) error {
 		if e.TLSServerName == "" || strings.ContainsAny(e.TLSServerName, " /\\?#@") {
 			return errors.New("Hysteria2 requires a valid TLS server name")
 		}
-	case "wireguard":
+	case "wireguard", "amneziawg":
 		if err := validateWGKey(e.WGPrivateKey, "WireGuard private key", false); err != nil {
 			return err
 		}
@@ -238,6 +246,14 @@ func validateStandardExit(e *standardExit) error {
 		}
 		if e.WGMTU != 0 && (e.WGMTU < 1280 || e.WGMTU > 9000) {
 			return errors.New("WireGuard MTU must be 1280..9000 when specified")
+		}
+		if e.WGKeepalive < 0 || e.WGKeepalive > 65535 {
+			return errors.New("WireGuard/AmneziaWG keepalive must be 0..65535")
+		}
+		if e.Protocol == "amneziawg" {
+			if _, err := desktopAmneziaEndpoint(*e, ""); err != nil {
+				return err
+			}
 		}
 	case "openvpn":
 		// Sanitization and structured auth validation were already performed.
@@ -324,8 +340,12 @@ func standardExitRuntimeParts(e standardExit, detour string) (map[string]any, ma
 	if e.Protocol == "openvpn" {
 		return nil, nil, errors.New("OpenVPN standard exits use the native OpenVPN adapter, not the sing-box graph")
 	}
+	if e.Protocol == "amneziawg" {
+		endpoint, err := desktopAmneziaEndpoint(e, detour)
+		return endpoint, nil, err
+	}
 	if e.Protocol == "wireguard" {
-		peer := map[string]any{"address": e.Server, "port": e.ServerPort, "public_key": e.WGPeerPublicKey, "allowed_ips": e.WGAllowedIPs}
+		peer := map[string]any{"address": e.Server, "port": e.ServerPort, "public_key": e.WGPeerPublicKey, "allowed_ips": e.WGAllowedIPs, "persistent_keepalive_interval": e.WGKeepalive}
 		if e.WGPreSharedKey != "" {
 			peer["pre_shared_key"] = e.WGPreSharedKey
 		}

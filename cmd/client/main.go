@@ -55,6 +55,13 @@ type app struct {
 }
 
 func main() {
+	if handled, err := bundledAmneziaUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	configPath := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
 	var c common.ClientConfig
 	b, err := readPrivateRegular(configPath, maxPrivateStoreBytes)

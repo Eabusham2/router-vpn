@@ -14,7 +14,6 @@ $RuntimeDir=Resolve-RouterVPNPrivateChild $Root $RuntimeDir
 $RunRoot=Resolve-RouterVPNPrivateChild $Root 'run'
 if(-not $RuntimeDir.StartsWith($RunRoot.TrimEnd('\')+'\',[StringComparison]::OrdinalIgnoreCase)){throw 'Refusing multihop runtime outside HOMEVPN_ROOT\run.'}
 $Config=Join-Path $RuntimeDir 'sing-box.json'
-$SingBox=Join-Path $Root 'runtime\windows\sing-box.exe'
 $KillSwitch=Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $PidFile=Join-Path $RuntimeDir 'native-multihop.process.json'
 $HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
@@ -29,6 +28,10 @@ if($Action-eq'down'){
   exit 0
 }
 if(-not(Test-Administrator)){throw 'Native Windows multihop requires an elevated Router VPN process.'}
+$EngineSelector=Join-Path $PSScriptRoot 'Select-Standard-Engine.ps1'
+Assert-RouterVPNNoReparseAncestors $EngineSelector
+. $EngineSelector
+$SingBox=Get-RouterVPNStandardEngine $Root
 if(-not(Test-Path -LiteralPath $Config -PathType Leaf)){throw 'Prepared multihop sing-box.json is missing.'}
 if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'Pinned native sing-box.exe is missing. Run Setup-Windows-Runtime.ps1.'}
 if(-not(Test-Path -LiteralPath $KillSwitch -PathType Leaf)){throw 'Windows kill-switch helper is missing.'}

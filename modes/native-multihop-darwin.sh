@@ -24,12 +24,10 @@ CONFIG="$RUNTIME_DIR/sing-box.json"
 PID_REGISTRY="$SCRIPT_DIR/runtime-pids.py"
 PID_MODE=native-multihop-darwin
 KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
-SING_BOX=$(command -v sing-box || true)
 
 [[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared multihop sing-box.json is missing or unsafe' >&2; exit 1; }
 [[ -f "$KILL_SWITCH" && ! -L "$KILL_SWITCH" ]] || { echo 'macOS kill-switch dispatcher is missing or unsafe' >&2; exit 1; }
 [[ -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'verified Router VPN PID registry is missing or unsafe' >&2; exit 1; }
-[[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for native macOS multihop' >&2; exit 1; }
 
 stop_owned() {
   local pid
@@ -68,6 +66,10 @@ if [[ "$ACTION" == "down" ]]; then
   exit 0
 fi
 
+[[ -f "$SCRIPT_DIR/select-standard-engine.sh" && ! -L "$SCRIPT_DIR/select-standard-engine.sh" ]] || { echo 'Owned engine selector is missing' >&2; exit 1; }
+source "$SCRIPT_DIR/select-standard-engine.sh"
+SING_BOX=$(router_vpn_standard_engine) || { echo 'The selected standard-node engine is unavailable' >&2; exit 1; }
+[[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for native macOS multihop' >&2; exit 1; }
 "$SING_BOX" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
 
 # The scoped PF policy is installed before the full-device TUN starts. Its

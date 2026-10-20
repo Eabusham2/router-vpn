@@ -226,6 +226,12 @@ func prepareOpenVPNRuntime(root string, control, entry common.RouterProfile, exi
 
 func openVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	useAmnezia := !direct && entry.External != nil && entry.External.Protocol == "amneziawg"
+	if useAmnezia {
+		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
+			return nil, err
+		}
+	}
 	dir, binary, err := prepareOpenVPNRuntime(root, control, entry, exit, direct)
 	if err != nil {
 		return nil, err
@@ -247,6 +253,7 @@ func openVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exi
 	cmd := exec.Command("bash", helper, "up", dir, endpoint, binary)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+runtimeProfileID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
+	cmd.Env = desktopStandardEngineEnvironment(cmd.Env, useAmnezia)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil

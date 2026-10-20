@@ -22,11 +22,9 @@ CONFIG="$RUNTIME_DIR/sing-box.json"
 PID_REGISTRY="$SCRIPT_DIR/runtime-pids.py"
 PID_MODE=native-standard-exit-linux
 KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
-SING_BOX=$(command -v sing-box || true)
 [[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared standard exit sing-box.json is missing or unsafe' >&2; exit 1; }
 [[ -f "$KILL_SWITCH" && ! -L "$KILL_SWITCH" ]] || { echo 'Linux kill-switch dispatcher is missing or unsafe' >&2; exit 1; }
 [[ -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'verified Router VPN PID registry is missing or unsafe' >&2; exit 1; }
-[[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for Linux standard exit' >&2; exit 1; }
 [[ "$TUNNEL_ALIAS" == "router-vpn" ]] || { echo 'Linux strict kill switch permits only the owned router-vpn TUN alias' >&2; exit 1; }
 
 stop_owned() {
@@ -59,6 +57,10 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
+[[ -f "$SCRIPT_DIR/select-standard-engine.sh" && ! -L "$SCRIPT_DIR/select-standard-engine.sh" ]] || { echo 'Owned engine selector is missing' >&2; exit 1; }
+source "$SCRIPT_DIR/select-standard-engine.sh"
+SING_BOX=$(router_vpn_standard_engine) || { echo 'The selected standard-node engine is unavailable' >&2; exit 1; }
+[[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for Linux standard exit' >&2; exit 1; }
 "$SING_BOX" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
 if [[ "$ACTION" == "check" ]]; then echo 'native Linux standard exit graph ready'; trap - EXIT INT TERM HUP; exit 0; fi
 

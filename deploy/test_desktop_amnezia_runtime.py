@@ -30,7 +30,12 @@ def test(source=None):
                         '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply)$'],
                        cwd=source, env=env, check=True, timeout=300)
         BUILD.reuse(bundle, target, BUILD.digest(), BUILD.environment(target))
+        env['ROUTERVPN_AWG_DESKTOP_BUNDLE'] = str(bundle)
+        subprocess.run(['go', 'test', '-race', '-count=1', '-timeout=150s',
+                        './cmd/client', '-run', '^TestDesktopAmnezia'],
+                       cwd=ROOT, env=env, check=True, timeout=300)
         print('Verified actual native desktop AWG TCP/UDP, IPv4/IPv6, wrong-key and owned shutdown on '+target, flush=True)
+        print('Verified shipping controller direct/multihop graphs, captured engine selection, package integrity and relocation', flush=True)
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)

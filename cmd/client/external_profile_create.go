@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"maps"
 	"math"
 	"net"
 	"net/http"
@@ -17,26 +18,28 @@ import (
 // paths, arbitrary sing-box JSON, torrc directives, or OpenVPN text. Those
 // richer imports keep their dedicated hardened import paths.
 type externalProfileCreateRequest struct {
-	Name             string   `json:"name"`
-	Protocol         string   `json:"protocol"`
-	ExpectedPublicIP string   `json:"expected_public_ip"`
-	Server           string   `json:"server"`
-	Port             int      `json:"port"`
-	Username         string   `json:"username,omitempty"`
-	Password         string   `json:"password,omitempty"`
-	Method           string   `json:"method,omitempty"`
-	Secret           string   `json:"secret,omitempty"`
-	TLSServerName    string   `json:"tls_server_name,omitempty"`
-	WGPrivateKey     string   `json:"wg_private_key,omitempty"`
-	WGAddresses      []string `json:"wg_addresses,omitempty"`
-	WGPeerPublicKey  string   `json:"wg_peer_public_key,omitempty"`
-	WGPresharedKey   string   `json:"wg_preshared_key,omitempty"`
-	WGAllowedIPs     []string `json:"wg_allowed_ips,omitempty"`
-	WGDNS            []string `json:"wg_dns,omitempty"`
-	WGMTU            int      `json:"wg_mtu,omitempty"`
-	Location         string   `json:"location,omitempty"`
-	Latitude         *float64 `json:"latitude,omitempty"`
-	Longitude        *float64 `json:"longitude,omitempty"`
+	Name             string            `json:"name"`
+	Protocol         string            `json:"protocol"`
+	ExpectedPublicIP string            `json:"expected_public_ip"`
+	Server           string            `json:"server"`
+	Port             int               `json:"port"`
+	Username         string            `json:"username,omitempty"`
+	Password         string            `json:"password,omitempty"`
+	Method           string            `json:"method,omitempty"`
+	Secret           string            `json:"secret,omitempty"`
+	TLSServerName    string            `json:"tls_server_name,omitempty"`
+	WGPrivateKey     string            `json:"wg_private_key,omitempty"`
+	WGAddresses      []string          `json:"wg_addresses,omitempty"`
+	WGPeerPublicKey  string            `json:"wg_peer_public_key,omitempty"`
+	WGPresharedKey   string            `json:"wg_preshared_key,omitempty"`
+	WGAllowedIPs     []string          `json:"wg_allowed_ips,omitempty"`
+	WGDNS            []string          `json:"wg_dns,omitempty"`
+	WGMTU            int               `json:"wg_mtu,omitempty"`
+	WGKeepalive      int               `json:"wg_keepalive,omitempty"`
+	AWGParameters    map[string]string `json:"awg_parameters,omitempty"`
+	Location         string            `json:"location,omitempty"`
+	Latitude         *float64          `json:"latitude,omitempty"`
+	Longitude        *float64          `json:"longitude,omitempty"`
 }
 
 func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.RouterProfile, error) {
@@ -63,6 +66,9 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	}
 
 	protocol := normalizeStandardExitProtocol(q.Protocol)
+	if protocol != "amneziawg" && len(q.AWGParameters) != 0 {
+		return common.RouterProfile{}, errors.New("AmneziaWG parameters require the AmneziaWG protocol")
+	}
 	p := common.RouterProfile{
 		ID:        newID(),
 		Name:      q.Name,
@@ -87,19 +93,25 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	}
 
 	switch protocol {
-	case "wireguard":
+	case "wireguard", "amneziawg":
 		if q.Port < 1 || q.Port > 65535 {
 			return common.RouterProfile{}, errors.New("WireGuard node requires a valid port")
 		}
-		p.External.WireGuard = &common.ExternalWireGuardConfig{
-			PrivateKey:    q.WGPrivateKey,
-			Addresses:     append([]string(nil), q.WGAddresses...),
-			PeerPublicKey: q.WGPeerPublicKey,
-			PresharedKey:  q.WGPresharedKey,
-			Endpoint:      net.JoinHostPort(host, strconv.Itoa(q.Port)),
-			AllowedIPs:    append([]string(nil), q.WGAllowedIPs...),
-			DNS:           append([]string(nil), q.WGDNS...),
-			MTU:           q.WGMTU,
+		wireGuard := common.ExternalWireGuardConfig{
+			PrivateKey:          q.WGPrivateKey,
+			Addresses:           append([]string(nil), q.WGAddresses...),
+			PeerPublicKey:       q.WGPeerPublicKey,
+			PresharedKey:        q.WGPresharedKey,
+			Endpoint:            net.JoinHostPort(host, strconv.Itoa(q.Port)),
+			AllowedIPs:          append([]string(nil), q.WGAllowedIPs...),
+			DNS:                 append([]string(nil), q.WGDNS...),
+			MTU:                 q.WGMTU,
+			PersistentKeepalive: q.WGKeepalive,
+		}
+		if protocol == "amneziawg" {
+			p.External.AmneziaWG = &common.ExternalAmneziaWGConfig{ExternalWireGuardConfig: wireGuard, Parameters: maps.Clone(q.AWGParameters)}
+		} else {
+			p.External.WireGuard = &wireGuard
 		}
 	case "socks5":
 		p.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: host, Port: q.Port, Username: q.Username, Password: q.Password}

@@ -78,6 +78,10 @@ func prepareExternalEntryStandardExit(root string, control, entryProfile common.
 	if err != nil {
 		return "", "", err
 	}
+	cfg, err = compileDesktopAmneziaPolicy(cfg, control, &entryProfile, exit)
+	if err != nil {
+		return "", "", err
+	}
 	return writeStandardExitRuntime(root, cfg)
 }
 
@@ -89,6 +93,12 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 	}
 	if entryExit.Protocol == "openvpn" {
 		return nil, errors.New("external OpenVPN cannot currently be used as an upstream hop; use it as the final exit")
+	}
+	useAmnezia := entryExit.Protocol == "amneziawg" || exit.Protocol == "amneziawg"
+	if useAmnezia {
+		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
+			return nil, err
+		}
 	}
 	runtimeDir, tunAlias, err := prepareExternalEntryStandardExit(root, control, entry, exit)
 	if err != nil {
@@ -132,6 +142,7 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 	}
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+entry.ID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
+	cmd.Env = desktopStandardEngineEnvironment(cmd.Env, useAmnezia)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil
@@ -147,17 +158,17 @@ func externalEntryBridgeConfig(entry standardExit, listenPort int) (map[string]a
 		return nil, err
 	}
 	final := entryTag
-	if len(endpoints) == 1 && len(outbounds) == 0 {
+	if entry.Protocol != "amneziawg" && len(endpoints) == 1 && len(outbounds) == 0 {
 		// A WireGuard endpoint is a dialer target rather than a route-final
 		// outbound, so provide one narrow direct outbound detoured through it.
 		final = "external-entry-egress"
 		outbounds = append(outbounds, map[string]any{"type": "direct", "tag": final, "detour": entryTag})
 	}
 	return map[string]any{
-		"log": map[string]any{"level": "warn", "timestamp": true},
-		"inbounds": []any{map[string]any{"type": "mixed", "tag": "openvpn-entry-socks", "listen": "127.0.0.1", "listen_port": listenPort}},
+		"log":       map[string]any{"level": "warn", "timestamp": true},
+		"inbounds":  []any{map[string]any{"type": "mixed", "tag": "openvpn-entry-socks", "listen": "127.0.0.1", "listen_port": listenPort}},
 		"endpoints": endpoints,
 		"outbounds": outbounds,
-		"route": map[string]any{"final": final, "auto_detect_interface": true},
+		"route":     map[string]any{"final": final, "auto_detect_interface": true},
 	}, nil
 }

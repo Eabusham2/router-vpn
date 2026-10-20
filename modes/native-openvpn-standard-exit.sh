@@ -34,7 +34,9 @@ KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
 SINGBOX=''
 if [[ -e "$BRIDGE_CONFIG" ]]; then
   [[ -f "$BRIDGE_CONFIG" && ! -L "$BRIDGE_CONFIG" ]] || { echo 'OpenVPN entry bridge config is unsafe' >&2; exit 1; }
-  SINGBOX=$(command -v sing-box || true)
+  [[ -f "$SCRIPT_DIR/select-standard-engine.sh" && ! -L "$SCRIPT_DIR/select-standard-engine.sh" ]] || { echo 'Owned engine selector is missing' >&2; exit 1; }
+  source "$SCRIPT_DIR/select-standard-engine.sh"
+  SINGBOX=$(router_vpn_standard_engine) || { echo 'The captured entry engine is unavailable' >&2; exit 1; }
   [[ -n "$SINGBOX" ]] || { echo 'sing-box is required for Router VPN -> OpenVPN hopping' >&2; exit 1; }
   "$SINGBOX" check -D "$RUNTIME_DIR" -c "$BRIDGE_CONFIG" >/dev/null
 fi
