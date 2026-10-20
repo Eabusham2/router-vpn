@@ -322,6 +322,7 @@ for executable_contract in (
     "test_android_speed_lab_http_cleanup.py",
     "test_android_speed_lab_cancel.py",
     "test_android_speed_lab_external.py",
+    "test_android_speed_lab_restore.py", "test_android_multihop_restore.py",
 ):
     subprocess.run(
         [sys.executable, str(ROOT / executable_contract)],

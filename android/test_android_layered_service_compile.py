@@ -88,7 +88,7 @@ stub(PKG,'PlatformInterface','''{
  String tailscaleHostname();boolean usePlatformBridge();BridgeSession createBridge(BridgeOptions o)throws Exception;void triggerNativeCrash()throws Exception;int connectSSHAgent()throws Exception;
 }''','interface')
 APP='com.eabusham.routervpn'
-stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public boolean connected;public long pathGeneration;public String phase="idle",pathProof="pending",sessionId="home-capture",activeExternalId="",activeExternalProtocol="",expectedExternalIp="",activeEntryId="",activeEntryMode="";}
+stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public boolean connected;public long pathGeneration;public String phase="idle",pathProof="pending",sessionId="home-capture",activeExternalId="",activeExternalProtocol="",expectedExternalIp="",activeEntryId="",activeExitId="",activeEntryMode="",runtimeMode="",logicalMode="";}
  public static volatile Snapshot value=new Snapshot();public static volatile boolean emergency;
  public static Snapshot snapshot(android.content.Context c){return value;}public static boolean emergencyDisconnectPending(android.content.Context c){return emergency;}
  public static boolean ownsPolicyExternal(android.content.Context c,Snapshot s){return s!=null&&s==value&&!emergency;}

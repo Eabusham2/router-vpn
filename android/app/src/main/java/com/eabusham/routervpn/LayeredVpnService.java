@@ -182,7 +182,44 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private final android.os.Handler executionHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private volatile String executionNetwork="";
     private volatile boolean executionProved;
+    private volatile String multihopMetadata;
+    private volatile AndroidHomeStateStore.Snapshot multihopHomeOwner;
     static String multihopProgressJSON(){LayeredVpnService service=currentService.get();io.nekohasekai.libbox.RouterMultihop plan=service==null?null:service.executionController;return plan==null?"":plan.progressJSON();}
+    /** A previous score is never reused; this only freezes the live route choice. */
+    static String capturedMultihopExecution(String homeSession) throws Exception {
+        LayeredVpnService service=currentService.get();
+        if(service==null||homeSession==null||homeSession.isEmpty())throw new IllegalStateException("The original multihop service is unavailable.");
+        synchronized(service.lock){
+            long generation=service.lifecycle.get();CommandServer server=service.commandServer;
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service),owner=service.multihopHomeOwner;
+            if(owner==null||!homeSession.equals(home.sessionId)||!homeSession.equals(owner.sessionId)||owner.pathGeneration!=home.pathGeneration
+                    ||!owner.activeEntryId.equals(home.activeEntryId)||!owner.activeExitId.equals(home.activeExitId)
+                    ||!owner.activeEntryMode.equals(home.activeEntryMode)||!owner.runtimeMode.equals(home.runtimeMode)
+                    ||!home.connected||!"connected".equals(home.phase)||!"passed".equals(home.pathProof)||!"multihop".equals(home.logicalMode)
+                    ||AndroidHomeStateStore.emergencyDisconnectPending(service)||service.explicitStop||!"UP".equals(service.state)
+                    ||!service.executionProved||service.commandServer==null||service.activeSession==null||service.hopMeasurement==null
+                    ||service.executionNetwork.isEmpty()||"[]".equals(service.executionNetwork)||!service.executionNetwork.equals(service.executionNetworkIdentity())
+                    ||service.multihopMetadata==null||service.multihopMetadata.length()>16384)throw new IllegalStateException("The original multihop path is no longer proved and owned.");
+            JSONObject metadata=new JSONObject(service.multihopMetadata);
+            String requested=metadata.optString("execution","local");
+            if(!home.runtimeMode.equals(metadata.getString("exit_mode"))||!home.activeEntryMode.equals(metadata.optString("entry_mode","wg")))throw new IllegalStateException("The original multihop transport changed.");
+            io.nekohasekai.libbox.RouterMultihop plan=service.executionController;
+            String selected="local";
+            if(plan==null){if(!"local".equals(requested))throw new IllegalStateException("The multihop comparison owner is missing.");}
+            else{
+                String raw=plan.progressJSON();if(raw==null||raw.length()>65536||!plan.healthy())throw new IllegalStateException("The selected multihop lease or native owner changed.");
+                JSONObject progress=new JSONObject(raw);selected=progress.getString("execution");
+                if(!progress.optBoolean("complete",false)||!"selected".equals(progress.optString("stage",""))||!progress.optString("failure","").isEmpty()
+                        ||!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(requested)&&!requested.equals(selected))throw new IllegalStateException("Multihop has no retained valid Local or Server selection.");
+            }
+            AndroidHomeStateStore.Snapshot after=AndroidHomeStateStore.snapshot(service);
+            if(currentService.get()!=service||service.explicitStop||!"UP".equals(service.state)||!service.executionProved||generation!=service.lifecycle.get()
+                    ||server!=service.commandServer||owner!=service.multihopHomeOwner||plan!=service.executionController
+                    ||!after.connected||!home.sessionId.equals(after.sessionId)||home.pathGeneration!=after.pathGeneration
+                    ||!service.executionNetwork.equals(service.executionNetworkIdentity())||plan!=null&&!plan.healthy())throw new IllegalStateException("Multihop changed during route capture.");
+            return selected;
+        }
+    }
     static String hopMeasurementRequest(String operation,String id) throws Exception {
         LayeredVpnService service=currentService.get();
         if(service==null||id==null||!id.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured hop measurement session.");
@@ -450,6 +487,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     if(mtuSession==owner)shutdown("FAILED","MTU transaction could not retain the verified VPN interface.");
                 }));
                 executionController=preparedExecution;executionProved=false;
+                multihopMetadata=hopMetadata;multihopHomeOwner=hopMetadata==null?null:AndroidHomeStateStore.snapshot(this);
                 torPhysicalNetwork = torPhysical;
                 externalPhysicalNetwork = externalPhysical;
                 externalOwner = externalMetadata != null;
@@ -716,6 +754,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             try{executionController.close();}catch(Exception failure){Log.w(TAG,"Server lease cleanup was not confirmed; bounded server expiry remains in force.");}
             executionController=null;executionProved=false;
         }
+        multihopMetadata=null;multihopHomeOwner=null;executionProved=false;
         if (commandServer != null) {
             try { commandServer.closeService(); } catch (Throwable ignored) { }
             try { commandServer.close(); } catch (Throwable ignored) { }

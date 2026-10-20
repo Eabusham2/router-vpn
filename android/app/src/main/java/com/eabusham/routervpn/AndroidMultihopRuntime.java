@@ -61,6 +61,11 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     }
 
     synchronized String activeExecution() { reconcileRuntimeLocked(); return connected ? activeExecution : ""; }
+    synchronized String activeSelectedExecution() throws Exception {
+        reconcileRuntimeLocked();
+        if(!connected||disconnectRequested||closed.get())throw new IllegalStateException("The original multihop owner is unavailable.");
+        return LayeredVpnService.capturedMultihopExecution(AndroidHomeStateStore.snapshot(context).sessionId);
+    }
 
     synchronized String activeEntryMode() { reconcileRuntimeLocked(); return connected ? activeEntryMode : ""; }
 
@@ -86,6 +91,15 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         connect(entry,exit,exitMode,execution,"wg",callback);
     }
     synchronized void connect(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
+        connectCaptured(entry,exit,exitMode,execution,execution,entryMode,callback);
+    }
+    /** Runtime-only winner override; the saved Compare preference remains unchanged. */
+    synchronized void restoreCaptured(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String exitMode,String policy,String selected,String entryMode,Callback callback){
+        if(!java.util.Arrays.asList("local","server").contains(selected)||!java.util.Arrays.asList("local","server","auto").contains(policy)
+                ||!"auto".equals(policy)&&!policy.equals(selected)){callback.finished(false,"The captured multihop winner does not match its original preference.");return;}
+        connectCaptured(entry,exit,exitMode,selected,policy,entryMode,callback);
+    }
+    private synchronized void connectCaptured(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, Callback callback) {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
@@ -100,7 +114,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         clearActiveGraphLocked();
         String homeSession=AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
         try {
-            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, entryMode, homeSession, callback));
+            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, policy, entryMode, homeSession, callback));
         } catch (RuntimeException error) {
             transitioning = false;
             AndroidHomeStateStore.failed(context, nonEmpty(error.getMessage(), "Could not start Android multihop worker."));
@@ -108,7 +122,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, String homeSession, Callback callback) {
+    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, String homeSession, Callback callback) {
         boolean started = false;
         synchronized (this) { workerThread = Thread.currentThread(); }
         try {
@@ -150,7 +164,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 activeEntryMode = entryMode;
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
-                activeExecution = execution;
+                activeExecution = policy;
                 AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
                 // The captured graph's post-proof activation and completion are
                 // part of the same adoption as its state. Disconnect must not

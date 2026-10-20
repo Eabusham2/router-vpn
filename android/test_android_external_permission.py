@@ -17,9 +17,9 @@ spec.loader.exec_module(T)
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import android.content.Context;import java.io.*;import java.util.*;import java.nio.file.*;import java.nio.charset.*;import org.json.*;
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
-final class AndroidTorProfile {static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
+final class AndroidTorProfile {static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}static String strictText(byte[] b)throws Exception{return StandardCharsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}static String digest(byte[] b)throws Exception{return java.util.HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(b));}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(Context c){return busy;}}
-final class AndroidHomeStateStore {static final class Snapshot{boolean connected;}static Snapshot snapshot(Context c){return new Snapshot();}}
+final class AndroidHomeStateStore {static final class Snapshot{boolean connected;long pathGeneration;String sessionId="",phase="off",pathProof="not-run",logicalMode="",runtimeMode="",fallback="",activeNodeId="",activeEntryId="",activeExitId="",activeEntryMode="",activeExternalId="",activeExternalProtocol="";}static Snapshot current=new Snapshot();static Snapshot snapshot(Context c){return current;}static long advancePathGeneration(Context c){return ++current.pathGeneration;}}
 final class AndroidNodeStore {
  static final int MAX_BUNDLE=32*1024*1024;static final List<Node> nodes=new ArrayList<>();
  static final class Node {final String id,name,endpoint="";final File file;Node(String id,File f){this.id=id;name=id;file=f;}}
@@ -43,17 +43,20 @@ final class AndroidNativeCompositeProfile {
  // PRODUCTION_COMPOSITE_PREDICATE
 }
 final class AndroidModeOrchestrator {
- interface Callback{void progress(String message);void finished(boolean ok,String mode,String message);}
+ interface Callback{void progress(String message);void finished(boolean ok,String mode,String message);default void owned(String id){}}
+ String captureSource(File f,String session,String raw)throws Exception{return Files.readString(f.toPath());}void restoreCaptured(File f,String raw,String logical,String fallback,String source,Callback cb){}void disconnectCaptured(String session,Callback cb){cb.finished(true,"","stopped");}
  void disconnect(Callback cb){cb.finished(true,"","stopped");}void auto(File f,boolean smart,Callback cb){}void all(File f,Callback cb){}void custom(File f,List<String> l,Callback cb){}void logical(File f,String m,Callback cb){}
 }
 final class AndroidMultihopRuntime {
- interface Callback{void progress(String s);void finished(boolean ok,String s);}
+ interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
+ String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String policy,String selected,String entry,Callback cb){}boolean disconnectAndDrainCaptured(String session){return true;}
  boolean isConnected(){return false;}boolean isActiveOrTransitioning(){return false;}String activeEntryId(){return "";}String activeExitId(){return "";}String activeEntryMode(){return "";}String activeExitMode(){return "";}
  void disconnect(){}void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  int starts;String mode;File entry;AndroidStandardExitStore.Entry exit;
+ String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}boolean disconnectAndDrainCaptured(String id){return true;}
  boolean isActiveOrTransitioning(){return false;}void disconnect(){}boolean disconnectCaptured(String id){return true;}
  void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){starts++;mode="external";exit=e;cb.finished(true,"owned direct");}
  void connect(File f,AndroidStandardExitStore.Entry e,Callback cb){connect(f,e,"wg",cb);}
@@ -74,7 +77,7 @@ public class ExternalPermissionTest {
  static final class Fixture {
   final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore(activity);final AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();final AndroidNodeStore.Node entry;
   AndroidUnifiedConnectionController controller;final Callback callback=new Callback();final Path file;
-  Fixture(Path root)throws Exception{AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;android.net.VpnService.needsPermission=true;
+  Fixture(Path root)throws Exception{AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();android.net.VpnService.needsPermission=true;
    file=Files.createTempFile(root,"entry-",".json");JSONObject profiles=new JSONObject();JSONArray modes=new JSONArray();for(String mode:ALL){profiles.put(mode,new JSONObject());modes.put(new JSONObject().put("id",mode).put("name","Captured "+mode));}
    modes.put(new JSONObject().put("id","wg").put("name","duplicate"));modes.put(new JSONObject().put("id","unowned"));Files.writeString(file,new JSONObject().put("profiles",profiles).put("modes",modes).toString());entry=new AndroidNodeStore.Node("entry-owned",file.toFile());AndroidNodeStore.nodes.add(entry);controller=new AndroidUnifiedConnectionController(activity,nodes);save();}
   void save(){AndroidStandardExitStore.saved.put(exit.id,AndroidStandardExitStore.copy(exit));}

@@ -283,6 +283,14 @@ public final class MultihopHomeHarness {
   check(!AndroidHomeStateStore.completePathRevalidation(context,token),"revalidation adopted after emergency was already pending");
   check(before.equals(context.store.values)&&writes==context.store.writes,"revalidation erased an existing emergency warning");
  }
+ static void idleRestorationEpochs(){
+  Context context=new Context();long idle=AndroidHomeStateStore.snapshot(context).pathGeneration;
+  AndroidHomeStateStore.disconnected(context);check(AndroidHomeStateStore.snapshot(context).pathGeneration==idle+1,"explicit idle Disconnect did not revoke a captured restoration");
+  AndroidHomeStateStore.disconnected(context);check(AndroidHomeStateStore.snapshot(context).pathGeneration==idle+2,"a repeated idle Disconnect reused an old restoration epoch");
+  long before=AndroidHomeStateStore.snapshot(context).pathGeneration;
+  AndroidHomeStateStore.warning(context,"Emergency Disconnect requested; cancel pending restoration");
+  check(AndroidHomeStateStore.snapshot(context).pathGeneration==before+1,"emergency stop did not revoke queued restoration");
+ }
  public static void main(String[] args)throws Exception {
   if(args.length==1&&args[0].equals("--atomic-only")){atomicAdoptions();return;}
   JSONArray catalog=new JSONArray(Files.readString(Path.of(args[0])));List<String> supported=new ArrayList<>(),unsupported=new ArrayList<>();
@@ -297,7 +305,7 @@ public final class MultihopHomeHarness {
   externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);
   externalStale("path_generation",99L);
-  externalFailureBoundary();atomicAdoptions();
+  externalFailureBoundary();atomicAdoptions();idleRestorationEpochs();
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","socks5"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})torStale(change[0],change[1]);
   torStale("path_generation",99L);
   unsupported.addAll(Arrays.asList(null,"","WG"," wg","wg ","unknown","naive","naive-h2;exec","max-tls-other"));

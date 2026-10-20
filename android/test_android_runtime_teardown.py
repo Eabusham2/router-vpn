@@ -54,6 +54,7 @@ final class NativeSingBoxController {
     }
 }
 final class LayeredVpnService {
+    static String capturedMultihopExecution(String session){if(!session.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("stale native graph");return AndroidMultihopController.lastExecution.equals("auto")?"server":AndroidMultihopController.lastExecution;}
     static final AtomicInteger discarded=new AtomicInteger();
     static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
@@ -294,6 +295,16 @@ public final class RuntimeTeardownHarness {
             });
         }
         if ("multihop".equals(kind)) {
+            for(String selected:new String[]{"local","server"})test("multihop restore keeps Compare preference and exact "+selected+" winner",()->{
+                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.multihop.restoreCaptured(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","auto",selected,"wg-pq",cb);cb.awaitDone();
+                    check(cb.ok&&selected.equals(AndroidMultihopController.lastExecution),"restoration reran the chooser or changed the original path");
+                    check(owner.multihop.activeExecution().equals("auto")&&owner.multihop.activeSelectedExecution().equals(selected),"runtime override overwrote Compare or lost actual native winner");
+                    owner.disconnect();awaitIdle(owner);
+                }
+            });
+            test("multihop restore rejects contradictory winner before launch",()->{
+                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.multihop.restoreCaptured(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","local","server","wg",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0,"incompatible restoration was launched");}
+            });
             for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) {
                 test("multihop restore exact entry "+entryMode,()->{
                     try(Owner owner=new Owner(kind)) {
@@ -441,6 +452,18 @@ public final class RuntimeTeardownHarness {
     }
 
     static void externalTests(){
+        for(String kind:new String[]{"external","tor"})for(String changed:new String[]{"idle-disconnect","replacement","entry"})test(kind+" queued selection rejects "+changed,()->{
+            try(Owner owner=new Owner(kind)){
+                java.lang.reflect.Field field=owner.runtime().getClass().getDeclaredField("executor");field.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)field.get(owner.runtime());
+                CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);executor.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});check(entered.await(3,TimeUnit.SECONDS),"queue did not block");
+                AndroidStandardExitStore.Entry exit=new AndroidStandardExitStore.Entry();if(kind.equals("tor"))exit.protocol="tor";Callback cb=new Callback(0);AndroidExternalPolicy.entryVersion="queued-original";
+                owner.external.connect(new java.io.File("a".repeat(32)+".json"),exit,"wg",cb);
+                AndroidHomeStateStore.Snapshot expected=AndroidHomeStateStore.current;
+                if(changed.equals("entry"))AndroidExternalPolicy.entryVersion="changed-entry";
+                else{expected=new AndroidHomeStateStore.Snapshot();expected.pathGeneration=7;if(changed.equals("replacement")){expected.sessionId="newer-owner";expected.phase="connecting";}AndroidHomeStateStore.current=expected;}
+                release.countDown();cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&AndroidHomeStateStore.current==expected,"queued external/Tor startup replaced a newer decision or source");awaitIdle(owner);
+            }
+        });
         test("unknown external protocol has no fallback owner",()->{try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="unowned";AndroidHomeStateStore.Snapshot before=AndroidHomeStateStore.current;Callback cb=new Callback(0);owner.external.connectDirect(e,cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.externalReads.get()==0&&publicProofs.get()==0,"unowned protocol reached a fallback graph or proof");check(AndroidHomeStateStore.current==before,"unowned protocol created a pending Home session");awaitIdle(owner);}});
         test("ordinary external requires its native DNS and entry proof",()->{try(Owner owner=new Owner("external")){LayeredVpnService.externalHealthy=false;Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(!cb.ok&&!AndroidHomeStateStore.current.connected&&owner.engine.stops.get()>0&&publicProofs.get()==0,"missing native proof fell back to a public-IP-only check");awaitIdle(owner);}});
         test("ordinary external stale Home response cannot overwrite replacement",()->{try(Owner owner=new Owner("external")){Callback cb=new Callback(3);try{owner.connect(cb);cb.awaitEntered();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="new-session";replacement.phase="new-owner";AndroidHomeStateStore.current=replacement;}finally{cb.release.countDown();cb.awaitDone();}check(!cb.ok&&AndroidHomeStateStore.current.sessionId.equals("new-session")&&AndroidHomeStateStore.current.phase.equals("new-owner"),"stale ordinary completion overwrote a replacement owner");}});

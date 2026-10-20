@@ -178,7 +178,7 @@ final class AndroidHomeStateStore {
         e.putString("session_id", session).putString("phase", "connected").putString("logical_mode", "external").putString("runtime_mode", clean(protocol)).putString("actual_base", clean(base)).putString("fallback", "").putString("warning", "").putString("path_proof", "passed").putString("active_external_id", clean(externalId)).putString("active_external_name", clean(name)).putString("active_external_protocol", clean(protocol)).putString("expected_external_ip", clean(expectedIp)).putBoolean("connected", true).putString("actual_exit_session", session).putString("actual_exit_ip", clean(observedIp)).apply();
     }
 
-    static synchronized void warning(Context context, String warning) { prefs(context).edit().putString("warning", clean(warning)).apply(); }
+    static synchronized void warning(Context context, String warning) { if(warning!=null&&warning.startsWith(EMERGENCY_PREFIX))advancePathGeneration(context);prefs(context).edit().putString("warning", clean(warning)).apply(); }
     static synchronized boolean emergencyDisconnectPending(Context context) { String warning=prefs(context).getString("warning","");return warning!=null&&warning.startsWith(EMERGENCY_PREFIX); }
     static synchronized void clearActualExit(Context context) { prefs(context).edit().remove("actual_exit_ip").remove("actual_exit_session").apply(); }
     static synchronized long advancePathGeneration(Context context) {
@@ -262,7 +262,7 @@ final class AndroidHomeStateStore {
                 throw new IllegalStateException("Emergency Disconnect cannot release session ownership until WireGuard and AmneziaWG both prove DOWN.");
             }
         }
-        SharedPreferences.Editor e=prefs(context).edit().putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply();
+        SharedPreferences p=prefs(context);SharedPreferences.Editor e=p.edit().putLong("path_generation",p.getLong("path_generation",0L)+1L).putString("session_id","").putString("phase","off").putString("logical_mode","").putString("runtime_mode","").putString("actual_base","").putString("fallback","").putString("warning","").putString("path_proof","not-run").putBoolean("connected",false);clearAllIdentity(e).apply();
     }
 
     static synchronized void saveActualExit(Context context, String sessionId, String ip) { prefs(context).edit().putString("actual_exit_session", clean(sessionId)).putString("actual_exit_ip", clean(ip)).apply(); }

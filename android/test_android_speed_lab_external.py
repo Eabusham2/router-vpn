@@ -35,20 +35,28 @@ final class AndroidStandardExitStore{
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("invalid external profile");}
 }
 final class AndroidHomeStateStore{
- static final class Snapshot{boolean connected;String sessionId="off",phase="off",pathProof="pending",logicalMode="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
+ static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
  static Snapshot value=new Snapshot();static Snapshot snapshot(Activity a){return value;}
 }
-final class LayeredVpnService{static Consumer<Throwable> quiesce;static int calls;static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){calls++;quiesce=cb;}}
+final class LayeredVpnService{static Consumer<Throwable> quiesce;static int calls;static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){calls++;quiesce=cb;}static void startAutomaticMTU(){}}
 final class AndroidUnifiedConnectionController{
- interface Callback{void progress(String m);void finished(boolean ok,String m);default void owned(String session){}}
+ interface Callback{void progress(String m);void finished(boolean ok,String m);default void owned(String session){}default void superseded(){}default void validate()throws Exception{}}
  int starts,broadStops,ownedStops,ownedRequests;String entryMode="",requestedCleanup="";boolean direct,busy,holdCleanup;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry external;Callback pending,cleanup;
+ static final class RestorePoint{final AndroidHomeStateStore.Snapshot home;final String topology="off";RestorePoint(AndroidHomeStateStore.Snapshot s){home=s;}boolean connected(){return home.connected;}}
+ RestorePoint captureRestorePoint(){if(isActiveOrTransitioning())throw new IllegalStateException("fixture has no captured live graph");return new RestorePoint(AndroidHomeStateStore.value);}
+ boolean restorePointCurrent(RestorePoint p){return idleCurrent(p.home);}
+ boolean idleCurrent(AndroidHomeStateStore.Snapshot idle){return !busy&&!AndroidHomeStateStore.value.connected&&idle.sessionId.equals(AndroidHomeStateStore.value.sessionId)&&idle.pathGeneration==AndroidHomeStateStore.value.pathGeneration;}
+ AndroidHomeStateStore.Snapshot captureIdle(){if(busy||AndroidHomeStateStore.value.connected)throw new IllegalStateException("native owner retained");return AndroidHomeStateStore.value;}
+ boolean restoredCurrent(RestorePoint point,String session){return false;}void restoreCaptured(RestorePoint p,AndroidHomeStateStore.Snapshot idle,Callback cb){throw new AssertionError("unexpected restore of off fixture");}
+ boolean cancelPending(Callback cb){if(cb!=pending)return false;pending=null;cb.finished(false,"permission cancelled");return true;}
+ void stopCaptured(String session,String topology,Callback cb){disconnectExternal(session,cb);}
  boolean isActiveOrTransitioning(){return busy||AndroidHomeStateStore.value.connected;}
  void connectExternal(AndroidNodeStore.Node node,AndroidStandardExitStore.Entry exit,boolean d,String mode,Callback cb){starts++;entry=node;external=exit;direct=d;entryMode=mode;pending=cb;}
  void connectNode(AndroidNodeStore.Node n,String mode,List<String> layers,Callback cb){starts++;pending=cb;}
  void connectMultihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;pending=cb;}
  void disconnect(Callback cb){broadStops++;AndroidHomeStateStore.value=new AndroidHomeStateStore.Snapshot();cb.finished(true,"broad native stop");}
  void disconnectExternal(String session,Callback cb){ownedRequests++;requestedCleanup=session;cleanup=cb;if(holdCleanup)return;completeCleanup();}
- void completeCleanup(){if(!requestedCleanup.isEmpty()&&requestedCleanup.equals(AndroidHomeStateStore.value.sessionId)){ownedStops++;AndroidHomeStateStore.value=new AndroidHomeStateStore.Snapshot();}cleanup.finished(true,"captured external stop");}
+ void completeCleanup(){boolean owned=!requestedCleanup.isEmpty()&&requestedCleanup.equals(AndroidHomeStateStore.value.sessionId);if(owned){ownedStops++;long g=AndroidHomeStateStore.value.pathGeneration;AndroidHomeStateStore.value=new AndroidHomeStateStore.Snapshot();AndroidHomeStateStore.value.pathGeneration=g+2;}cleanup.finished(owned,"captured external stop");}
  void prove(String id){AndroidHomeStateStore.Snapshot s=new AndroidHomeStateStore.Snapshot();s.connected=true;s.sessionId=id;s.phase="connected";s.pathProof="passed";s.logicalMode="external";s.activeExternalId=external.id;s.activeExternalProtocol=external.protocol;s.activeEntryId=direct?"":entry.id;s.activeEntryMode=direct?"external":entryMode;AndroidHomeStateStore.value=s;pending.owned(id);pending.finished(true,"proved");}
 }
 final class AndroidSpeedLab{
@@ -56,10 +64,11 @@ final class AndroidSpeedLab{
  // PRODUCTION_DURATION_POLICY
  static double round(double n){return n;}
  static Callback pending;static int starts;static String timing;static double min,max;
- AndroidSpeedLab(Activity a){}void run(String mode,double low,double high,Callback cb){starts++;timing=mode;min=low;max=high;pending=cb;}
+ AndroidSpeedLab(Activity a){}void cancel(){if(pending!=null)pending.finished(null,new IllegalStateException("cancelled"));}void run(String mode,double low,double high,Callback cb){starts++;timing=mode;min=low;max=high;pending=cb;}
 }
 final class AndroidNativeHopMeasurement{
  interface Callback{void progress(String status);void finished(String status,Throwable error);}
+ void cancel(){}
  void run(Object lease,Callback cb){if(!AndroidMTUMeasurementGate.owns(lease))throw new AssertionError("native hops lost outer MTU hold");cb.finished("native measured paths",null);}
 }
 final class AndroidHopMeasurementDialog{static String renderStatus(String s){return s;}}
@@ -144,7 +153,7 @@ def main():
         for old, new, label in (
             ("request.externalDirect,request.entryMode,bridge", 'request.externalDirect,"wg",bridge', "exact selected entry"),
             ("AndroidStandardExitStore.copy(input.standardExit)", "input.standardExit", "frozen external credentials"),
-            ("connection.disconnectExternal(externalHome,completed)", "connection.disconnect(completed)", "captured external cleanup"),
+            ("connection.stopCaptured(home,topology,new AndroidUnifiedConnectionController.Callback()", "connection.disconnect(new AndroidUnifiedConnectionController.Callback()", "captured external cleanup"),
         ):
             assert original.count(old) == 1, label
             path.write_text(original.replace(old, new))

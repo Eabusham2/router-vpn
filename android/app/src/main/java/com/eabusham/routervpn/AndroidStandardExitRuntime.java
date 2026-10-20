@@ -47,16 +47,17 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         final AndroidStandardExitStore.Entry captured;
         final String capturedEntry;
         try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured);
-            capturedEntry=!direct&&AndroidExternalPolicy.supports(captured.protocol)?AndroidExternalPolicy.entryDigest(entryBundle):"";
+            capturedEntry=!direct?AndroidExternalPolicy.entryDigest(entryBundle):"";
         }
         catch(Exception invalid){cb.finished(false,"The saved custom-exit profile is invalid; review its settings before connecting.");return;}
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
         torNativeSession="";torHomeSession="";torExternalID="";
         externalNativeSession="";externalHomeSession="";externalID="";
-        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,capturedEntry,cb));
+        AndroidHomeStateStore.Snapshot initialHome=AndroidHomeStateStore.snapshot(context);
+        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,capturedEntry,initialHome,cb));
     }
 
-    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String capturedEntry,Callback cb){
+    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String capturedEntry,AndroidHomeStateStore.Snapshot initialHome,Callback cb){
         boolean started=false,sessionStarted=false,releasePrepared=true;
         NativeSingBoxController.SessionInfo preparedSession=null;
         boolean tor=AndroidTorProfile.isTor(exit.protocol);
@@ -69,11 +70,16 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
             if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
-            if(policy&&!direct&&!capturedEntry.equals(AndroidExternalPolicy.entryDigest(entry)))throw new IllegalStateException("The selected external entry changed while its request was queued.");
-            if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
-            else AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
-            sessionStarted=true;
-            capturedHome=AndroidHomeStateStore.snapshot(context);
+            if(!direct&&!capturedEntry.equals(AndroidExternalPolicy.entryDigest(entry)))throw new IllegalStateException("The selected external entry changed while its request was queued.");
+            synchronized(AndroidHomeStateStore.class){
+                AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(context);
+                if(!initialHome.sessionId.equals(now.sessionId)||initialHome.pathGeneration!=now.pathGeneration||initialHome.connected!=now.connected||!initialHome.phase.equals(now.phase))
+                    throw new InterruptedException("A newer connection or Disconnect cancelled the queued external path.");
+                if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
+                else AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
+                sessionStarted=true;
+                capturedHome=AndroidHomeStateStore.snapshot(context);
+            }
             cb.owned(capturedHome.sessionId);
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode);
