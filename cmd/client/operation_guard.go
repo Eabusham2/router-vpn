@@ -51,6 +51,7 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 func preflightPrivateConnectionRuntime() error {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	for _, category := range []string{
+		"native-node",
 		"native-standard-exit",
 		"native-multihop",
 		"openvpn-standard-exit",

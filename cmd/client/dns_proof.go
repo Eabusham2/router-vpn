@@ -343,7 +343,10 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 	}
 	root := clientRoot(a)
 	var err error
-	if kernelDNSMode(runtimeID) {
+	_, nativeOwned, nativeErr := activeDNSRuntimeConfigFor(a, s.RouterID, runtimeID)
+	if nativeErr != nil {
+		err = nativeErr
+	} else if kernelDNSMode(runtimeID) && !nativeOwned {
 		err = verifyKernelDNSRuntimeContext(parent, root, s.RouterID, runtimeID, selected)
 	} else {
 		err = verifySingBoxDNSRuntimeForApp(a, root, s.RouterID, runtimeID, selected)

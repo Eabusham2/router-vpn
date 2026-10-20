@@ -1,0 +1,218 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"reflect"
+	"strings"
+	"testing"
+
+	"router-vpn/internal/common"
+)
+
+func desktopNodeFixture(t *testing.T, endpoint string) (common.RouterProfile, map[string][]byte) {
+	t.Helper()
+	raw := []byte("[Interface]\nPrivateKey = " + testWGKey('p') + "\nAddress = 10.77.0.2/32\nDNS = 192.168.50.133\n\n[Peer]\nPublicKey = " + testWGKey('q') + "\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = " + endpoint + ":51820\nPersistentKeepalive = 25\n")
+	node, err := nodeProofIDFromWGConfig(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return common.RouterProfile{ID: "captured", NodeKind: "router-vpn", Name: "Original", NodeProofID: node, Endpoint: endpoint, RouterAPI: "http://10.77.0.1:8787", APIToken: "private-token", AdGuardIPv4: "192.168.50.133", HomeLANAccess: true, IPv6Mode: "on", MTUPolicy: "auto"}, map[string][]byte{"wg.conf": raw}
+}
+
+func TestDesktopNativeHostnameCaptureAndCancellation(t *testing.T) {
+	p, files := desktopNodeFixture(t, "node.example.test")
+	original := string(files["wg.conf"])
+	calls := 0
+	lookup := func(ctx context.Context, host string) ([]netip.Addr, error) {
+		calls++
+		if host != p.Endpoint {
+			t.Fatal("unowned hostname", host)
+		}
+		return []netip.Addr{netip.MustParseAddr("198.51.100.8")}, nil
+	}
+	compiled, endpoint, err := compileDesktopNode(context.Background(), p, "wg", files, nil, lookup)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if endpoint != "198.51.100.8" || calls != 1 || !strings.Contains(compiled.Config(), endpoint) || !strings.Contains(compiled.Config(), p.AdGuardIPv4) || original != string(files["wg.conf"]) {
+		t.Fatal("captured node resolution changed source or DNS")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	if _, _, err := compileDesktopNode(ctx, p, "wg", files, nil, func(context.Context, string) ([]netip.Addr, error) {
+		cancel()
+		return []netip.Addr{netip.MustParseAddr("198.51.100.8")}, nil
+	}); err == nil {
+		t.Fatal("late cancelled lookup adopted")
+	}
+	for _, answer := range []string{"127.0.0.1", "::", "ff02::1"} {
+		if _, _, err := compileDesktopNode(context.Background(), p, "wg", files, nil, func(context.Context, string) ([]netip.Addr, error) {
+			return []netip.Addr{netip.MustParseAddr(answer)}, nil
+		}); err == nil {
+			t.Fatal("unsafe answer adopted", answer)
+		}
+	}
+	files["wg.conf"] = []byte("[Interface]\nPrivateKey = invalid\n")
+	before := calls
+	if _, _, err := compileDesktopNode(context.Background(), p, "wg", files, nil, lookup); err == nil || calls != before {
+		t.Fatal("invalid source reached resolver")
+	}
+}
+
+func TestDesktopNativeEndpointFreezePreservesDNSAndTLS(t *testing.T) {
+	body := []byte(`{"dns":{"servers":[{"server":"node.example.test"}]},"outbounds":[{"type":"hysteria2","server":"node.example.test","tls":{"enabled":true,"server_name":"certificate.example.test"}},{"protocol":"vless","settings":{"vnext":[{"address":"node.example.test","port":443,"users":[{"id":"captured"}]}]},"streamSettings":{"tlsSettings":{"serverName":"original.example.test"}}}]}`)
+	frozen, err := freezeDesktopNodeAssets(map[string][]byte{"sing-box.json": body, "rosenpass-client-secret": []byte("binary\x00node.example.test")}, "node.example.test", "198.51.100.8")
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := string(frozen["sing-box.json"])
+	if strings.Count(text, "198.51.100.8") != 2 || !strings.Contains(text, `"server":"node.example.test"`) || !strings.Contains(text, "certificate.example.test") || !strings.Contains(text, "original.example.test") || string(frozen["rosenpass-client-secret"]) != "binary\x00node.example.test" {
+		t.Fatal("resolution rewrote policy, trust or private key")
+	}
+	if _, err := freezeDesktopNodeAssets(map[string][]byte{"sing-box.json": []byte(`{"outbounds":[],"outbounds":[{}]}`)}, "node.example.test", "198.51.100.8"); err == nil {
+		t.Fatal("duplicate fields silently normalized")
+	}
+}
+
+func TestDesktopNativeDNSAndFixedPolicyReachCompiler(t *testing.T) {
+	p, files := desktopNodeFixture(t, "198.51.100.8")
+	p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName = "custom", "https", "dns.example.test", 8443, "certificate.example.test"
+	p.MTUPolicy, p.ManualMTU, p.EffectiveMTU, p.HomeLANAccess, p.IPv6Mode = "manual", 1392, 9000, false, "off"
+	compiled, _, err := compileDesktopNode(context.Background(), p, "wg", files, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var graph map[string]any
+	if json.Unmarshal([]byte(compiled.Config()), &graph) != nil {
+		t.Fatal("invalid graph")
+	}
+	tun := graph["inbounds"].([]any)[0].(map[string]any)
+	if tun["mtu"] != float64(1392) {
+		t.Fatal("stale measured MTU won")
+	}
+	dns := graph["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	if len(servers) != 2 || servers[0].(map[string]any)["server"] != p.DNSHost || servers[1].(map[string]any)["server"] != p.AdGuardIPv4 || servers[1].(map[string]any)["detour"] != "proxy" {
+		t.Fatal("selected DNS bootstrap escaped captured tunnel")
+	}
+	p.AdGuardIPv4 = ""
+	if _, _, err := compileDesktopNode(context.Background(), p, "wg", files, nil, nil); err == nil {
+		t.Fatal("uncaptured public bootstrap inferred")
+	}
+}
+
+func TestDesktopNativeAssetReaderRejectsLinkedAndForeignFiles(t *testing.T) {
+	root := t.TempDir()
+	p, files := desktopNodeFixture(t, "198.51.100.8")
+	dir := filepath.Join(root, "generated", p.ID, "wg")
+	if err := os.MkdirAll(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range files {
+		if err := os.WriteFile(filepath.Join(dir, name), body, 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := readDesktopNodeAssets(root, p.ID, "wg")
+	if err != nil || !reflect.DeepEqual(got, files) {
+		t.Fatal("exact assets changed", err)
+	}
+	if _, err := readDesktopNodeAssets(root, "../other", "wg"); err == nil {
+		t.Fatal("profile traversal accepted")
+	}
+	if err := os.Mkdir(filepath.Join(dir, "foreign"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := readDesktopNodeAssets(root, p.ID, "wg"); err == nil {
+		t.Fatal("foreign directory accepted")
+	}
+}
+
+func TestDesktopNativeStagingOwnsExactDirectoryAndEnvironment(t *testing.T) {
+	root := t.TempDir()
+	t.Setenv("HOMEVPN_ROOT", root)
+	a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
+	launch := &desktopNodeLaunch{root: root, endpoint: "198.51.100.8", profileID: "captured", mode: "wg", config: []byte(`{"owned":true}`), metadata: []byte(`{"schema":1}`)}
+	if err := stageDesktopNodeLaunch(a, launch); err != nil {
+		t.Fatal(err)
+	}
+	if launch.directory == "" || launch.command == nil || len(launch.config) != 0 || len(launch.metadata) != 0 {
+		t.Fatal("native stage did not transfer ownership")
+	}
+	if err := stageDesktopNodeLaunch(a, launch); err == nil {
+		t.Fatal("same capture staged twice")
+	}
+	for _, name := range []string{"sing-box.json", "capture.json"} {
+		info, err := os.Stat(filepath.Join(launch.directory, name))
+		if err != nil || info.Mode().Perm()&0077 != 0 {
+			t.Fatal("private capture not protected", err)
+		}
+	}
+	if runtimeDir, err := nativeMultihopRuntimeDirFromCommand(launch.command); err != nil || runtimeDir != launch.directory {
+		t.Fatal("launcher lost exact runtime directory", err)
+	}
+	env := desktopNativeEnvironment([]string{"HOMEVPN_STANDARD_ENGINE=stock", "HOMEVPN_NATIVE_PACKAGE=foreign", "HOMEVPN_AMNEZIA_CONTROLLER=foreign", "HOMEVPN_ROOT=foreign", "LD_PRELOAD=foreign"}, root, "captured", "198.51.100.8")
+	if strings.Contains(strings.Join(env, "\n"), "foreign") {
+		t.Fatal("ambient runtime owner survived", env)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	a.connectionContext = ctx
+	other := &desktopNodeLaunch{root: root, config: []byte(`{}`)}
+	if err := stageDesktopNodeLaunch(a, other); !errors.Is(err, errConnectionOperationCancelled) || other.directory != "" {
+		t.Fatal("cancelled capture staged", err)
+	}
+}
+
+func TestDesktopNodeCleanupChild(t *testing.T) {
+	if os.Getenv("ROUTERVPN_NATIVE_CLEANUP_TEST") != "1" {
+		return
+	}
+	if os.Getenv("ROUTERVPN_NATIVE_CLEANUP_FAIL") == "1" {
+		os.Exit(1)
+	}
+	if os.Getenv("ROUTERVPN_NATIVE_CLEANUP_RETAIN") != "1" {
+		_ = os.RemoveAll(os.Args[len(os.Args)-1])
+	}
+	os.Exit(0)
+}
+
+func TestDesktopNativeStopRetainsFailedOwnerAndRejectsReplacement(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "run")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(os.Args[0])
+	command.Dir = root
+	command.Env = append(os.Environ(), "ROUTERVPN_NATIVE_CLEANUP_TEST=1", "ROUTERVPN_NATIVE_CLEANUP_FAIL=1")
+	owner := &desktopNodeLaunch{directory: dir, command: command, stop: []string{os.Args[0], "-test.run=^TestDesktopNodeCleanupChild$", "--", dir}}
+	a := &app{}
+	desktopNodeOwners.Store(a, owner)
+	defer desktopNodeOwners.Delete(a)
+	if found, err := stopDesktopNodeRuntime(a, exec.Command(os.Args[0])); !found || err == nil {
+		t.Fatal("different process released owner")
+	}
+	if found, err := stopDesktopNodeRuntime(a, command); !found || err == nil {
+		t.Fatal("failed native stop reported complete")
+	}
+	if _, ok := desktopNodeOwners.Load(a); !ok {
+		t.Fatal("failed owner forgotten")
+	}
+	command.Env = append(os.Environ(), "ROUTERVPN_NATIVE_CLEANUP_TEST=1", "ROUTERVPN_NATIVE_CLEANUP_RETAIN=1")
+	if _, err := stopDesktopNodeRuntime(a, command); err == nil {
+		t.Fatal("success without retirement accepted")
+	}
+	command.Env = append(os.Environ(), "ROUTERVPN_NATIVE_CLEANUP_TEST=1")
+	if found, err := stopDesktopNodeRuntime(a, nil); !found || err != nil {
+		t.Fatal("captured cleanup retry failed", err)
+	}
+	if _, ok := desktopNodeOwners.Load(a); ok {
+		t.Fatal("retired owner retained")
+	}
+}

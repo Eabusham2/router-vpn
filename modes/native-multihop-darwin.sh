@@ -61,7 +61,7 @@ cleanup() {
 trap cleanup EXIT INT TERM HUP
 
 if [[ "$ACTION" == "down" ]]; then
-  release_guard
+  if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]; then release_guard; fi
   cleanup
   exit 0
 fi

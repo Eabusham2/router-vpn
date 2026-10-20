@@ -56,7 +56,10 @@ cleanup() {
 }
 trap cleanup EXIT INT TERM HUP
 
-if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
+if [[ "$ACTION" == "down" ]]; then
+  if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]; then release_guard; fi
+  cleanup
+fi
 [[ -f "$SCRIPT_DIR/select-standard-engine.sh" && ! -L "$SCRIPT_DIR/select-standard-engine.sh" ]] || { echo 'Owned engine selector is missing' >&2; exit 1; }
 source "$SCRIPT_DIR/select-standard-engine.sh"
 SING_BOX=$(router_vpn_standard_engine) || { echo 'The selected standard-node engine is unavailable' >&2; exit 1; }

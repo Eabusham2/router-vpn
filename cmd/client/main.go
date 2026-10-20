@@ -812,6 +812,14 @@ func (a *app) listModes(w http.ResponseWriter, _ *http.Request) {
 }
 
 func (a *app) checkMode(m common.Mode) (bool, string) {
+	if desktopNodeNativeSelected(m.ID) {
+		// Native transport/configuration validation occurs for the exact captured
+		// node at launch. A catalog request must not resolve hosts or open tunnels.
+		if _, err := os.Stat(filepath.Join(desktopAmneziaPackageRoot(), "runtime", "native", nativeBinaryName())); err != nil {
+			return false, "The packaged native engine is missing."
+		}
+		return true, ""
+	}
 	if len(m.CheckCommand) == 0 {
 		return true, ""
 	}
@@ -929,7 +937,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 		return err
 	}
 	a.mu.Lock()
-	daita, jumbo := a.state.DAITA, a.state.Jumbo
+	daita, jumbo, socks := a.state.DAITA, a.state.Jumbo, a.state.Socks
 	a.mu.Unlock()
 	if daita && !m.DAITASupported {
 		return errors.New("DAITA is not available for this mode")
@@ -937,6 +945,29 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	if jumbo && !m.JumboSupported {
 		return errors.New("Jumbo TUN is not available for this mode; leave it off for WireGuard/AWG")
 	}
+	var native *desktopNodeLaunch
+	if desktopNodeNativeSelected(id) {
+		p.DAITAEnabled, p.JumboTUN, p.SocksEnabled = daita, jumbo, socks
+		native, err = prepareDesktopNodeLaunch(a, p, id)
+		if err != nil {
+			return err
+		}
+	}
+	nativeStarted := false
+	defer func() {
+		if native != nil && !nativeStarted {
+			clear(native.config)
+			clear(native.metadata)
+			if native.directory != "" {
+				_ = os.RemoveAll(native.directory)
+			}
+			if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
+				if identity, ok := raw.(activeDNSRuntimeIdentity); ok && identity.Config == filepath.Join(native.directory, "sing-box.json") {
+					activeDNSRuntimeIdentities.CompareAndDelete(a, identity)
+				}
+			}
+		}
+	}()
 	if err = a.stopModeWithIntent(true); err != nil {
 		return err
 	}
@@ -944,17 +975,34 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.mu.Lock()
 	env := append(os.Environ(), fmt.Sprintf("HOMEVPN_DAITA=%t", a.state.DAITA), fmt.Sprintf("HOMEVPN_JUMBO=%t", a.state.Jumbo), fmt.Sprintf("HOMEVPN_SOCKS=%t", a.state.Socks), fmt.Sprintf("HOMEVPN_MTU=%d", m.MTU), "HOMEVPN_PROFILE_ID="+p.ID, "HOMEVPN_ENDPOINT="+p.Endpoint, "HOMEVPN_ADGUARD4="+p.AdGuardIPv4, "HOMEVPN_ADGUARD6="+p.AdGuardIPv6, "HOMEVPN_SOCKS_HOST="+p.SocksHost, fmt.Sprintf("HOMEVPN_SOCKS_PORT=%d", p.SocksPort), "HOMEVPN_SOCKS_USER="+p.SocksUsername, "HOMEVPN_SOCKS_PASSWORD="+p.SocksPassword)
 	a.mu.Unlock()
-	if len(m.Command) == 0 {
+	if native == nil && len(m.Command) == 0 {
 		if !holdOnFailure {
 			_ = a.releaseTransitionKillSwitch()
 		}
 		return errors.New("mode has no command")
 	}
-	cmd := exec.Command(m.Command[0], m.Command[1:]...)
-	cmd.Env = env
-	cmd.Dir = a.cfg.ScriptsDir
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
+	var cmd *exec.Cmd
+	if native != nil {
+		if err = stageDesktopNodeLaunch(a, native); err != nil {
+			if !holdOnFailure {
+				_ = a.releaseTransitionKillSwitch()
+			}
+			return err
+		}
+		cmd = native.command
+		if err = registerActiveDNSRuntimeConfig(a, p.ID, id, filepath.Join(native.directory, "sing-box.json")); err != nil {
+			if !holdOnFailure {
+				_ = a.releaseTransitionKillSwitch()
+			}
+			return err
+		}
+	} else {
+		cmd = exec.Command(m.Command[0], m.Command[1:]...)
+		cmd.Env = env
+		cmd.Dir = a.cfg.ScriptsDir
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+	}
 	if err = a.checkConnectionOperation(); err != nil {
 		if !holdOnFailure {
 			_ = a.releaseTransitionKillSwitch()
@@ -962,10 +1010,17 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 		return err
 	}
 	if err = cmd.Start(); err != nil {
+		if native != nil {
+			clearActiveDNSRuntimeConfig(a)
+		}
 		if !holdOnFailure {
 			_ = a.releaseTransitionKillSwitch()
 		}
 		return err
+	}
+	if native != nil {
+		desktopNodeOwners.Store(a, native)
+		nativeStarted = true
 	}
 
 	a.mu.Lock()
@@ -1080,7 +1135,12 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 		}
 	}
 
-	if modeID != "off" {
+	nativeOwned, nativeErr := stopDesktopNodeRuntime(a, cmd)
+	if nativeErr != nil {
+		a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, nativeErr)
+		return nativeErr
+	}
+	if !nativeOwned && modeID != "off" {
 		m, err := a.mode(modeID)
 		if err != nil {
 			failure := fmt.Errorf("mode cleanup failed for %s: %w", modeID, err)
