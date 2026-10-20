@@ -189,7 +189,7 @@ func TestApplePacketTunnelRunsPinnedWireGuardAndLibboxAndKeepsUnsupportedModesFa
 		}
 	}
 	external := repoFile(t, "ios/RouterVPN/App/RouterVPNModelExternal.swift")
-	for _, required := range []string{"external-libbox", "External OpenVPN — native pinned client with exact public-exit proof", "exact public-exit proof"} {
+	for _, required := range []string{"external-libbox", "External OpenVPN — selected native DNS and exact public-exit proof", "exact public-exit proof"} {
 		if !strings.Contains(external, required) {
 			t.Fatalf("Apple external-node truth boundary missing %q", required)
 		}
