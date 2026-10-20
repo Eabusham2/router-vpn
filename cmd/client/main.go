@@ -1171,6 +1171,12 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 		}
 	}
 
+	if nativeOwned {
+		if err := finishDesktopNodeRuntime(a); err != nil {
+			a.failStopTransaction(modeID, logicalMode, runtimeMode, base, routerID, err)
+			return err
+		}
+	}
 	clearActiveMultihopGraph(a)
 	a.mu.Lock()
 	a.state.Connected = false

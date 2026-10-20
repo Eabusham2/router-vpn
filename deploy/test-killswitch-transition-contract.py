@@ -57,8 +57,10 @@ except IndexError as exc:
 assert "if !holdKillSwitch" in stop_body, "final/manual stop does not distinguish held transitions"
 assert "a.releaseTransitionKillSwitch()" in stop_body, "manual stop cannot clear stale on-connect state after controller restart"
 release_at = stop_body.index("a.releaseTransitionKillSwitch()")
-mode_guard_at = stop_body.index('if modeID != "off"')
+mode_guard_at = stop_body.index('if !nativeOwned && modeID != "off"')
 assert release_at > mode_guard_at, "persisted kill-switch release is incorrectly confined to remembered active-mode cleanup"
+assert stop_body.index("stopDesktopNodeRuntime(a, cmd)") < mode_guard_at, "captured native runtime does not retire before raw-mode fallback"
+assert stop_body.index("finishDesktopNodeRuntime(a)") > release_at, "native retry identity is discarded before firewall release commits"
 
 assert "a.startModeAttempt(candidate.RuntimeID, true)" in logical
 assert "a.releaseTransitionKillSwitch()" in logical

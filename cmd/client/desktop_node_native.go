@@ -417,9 +417,30 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 	} else if !errors.Is(err, os.ErrNotExist) {
 		return true, err
 	}
-	if !desktopNodeOwners.CompareAndDelete(a, owner) {
+	if current, ok := desktopNodeOwners.Load(a); !ok || current != owner {
 		return true, errors.New("native desktop owner changed during cleanup")
 	}
-	clearActiveDNSRuntimeConfig(a)
 	return true, nil
+}
+
+// Keep the retired runtime identity until the surrounding stop transaction has
+// also released its relay and protection. A failed firewall release must retry
+// this captured native owner, never run the unrelated raw-mode stop command.
+func finishDesktopNodeRuntime(a *app) error {
+	raw, exists := desktopNodeOwners.Load(a)
+	if !exists {
+		return nil
+	}
+	owner, ok := raw.(*desktopNodeLaunch)
+	if !ok || owner == nil {
+		return errors.New("native desktop retirement lost its captured owner")
+	}
+	if _, err := os.Lstat(owner.directory); !errors.Is(err, os.ErrNotExist) {
+		return errors.New("native desktop retirement still owns a private workspace")
+	}
+	if !desktopNodeOwners.CompareAndDelete(a, owner) {
+		return errors.New("native desktop owner changed before stop committed")
+	}
+	clearActiveDNSRuntimeConfig(a)
+	return nil
 }

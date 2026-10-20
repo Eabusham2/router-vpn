@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -212,7 +213,70 @@ func TestDesktopNativeStopRetainsFailedOwnerAndRejectsReplacement(t *testing.T) 
 	if found, err := stopDesktopNodeRuntime(a, nil); !found || err != nil {
 		t.Fatal("captured cleanup retry failed", err)
 	}
+	if _, ok := desktopNodeOwners.Load(a); !ok {
+		t.Fatal("native identity forgotten before outer stop committed")
+	}
+	if err := finishDesktopNodeRuntime(a); err != nil {
+		t.Fatal("retired stop did not commit", err)
+	}
 	if _, ok := desktopNodeOwners.Load(a); ok {
 		t.Fatal("retired owner retained")
+	}
+}
+
+func TestDesktopNativeStopRetainsIdentityUntilProtectionRelease(t *testing.T) {
+	if runtime.GOOS != "linux" && runtime.GOOS != "darwin" {
+		t.Skip("Unix controller firewall release adapter")
+	}
+	root := t.TempDir()
+	t.Setenv("HOMEVPN_ROOT", root)
+	dir := filepath.Join(root, "native-owned")
+	if err := os.Mkdir(dir, 0700); err != nil {
+		t.Fatal(err)
+	}
+	released := filepath.Join(root, "released")
+	helper := filepath.Join(root, "kill-switch-platform.py")
+	writeHelper := func(fail bool) {
+		t.Helper()
+		body := "from pathlib import Path\nimport sys\nPath(__file__).with_name('released').write_text('release')\n"
+		if fail {
+			body += "sys.exit(23)\n"
+		}
+		if err := os.WriteFile(helper, []byte(body), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeHelper(true)
+	command := exec.Command(os.Args[0])
+	command.Dir = root
+	command.Env = append(os.Environ(), "ROUTERVPN_NATIVE_CLEANUP_TEST=1", "ROUTERVPN_NATIVE_CLEANUP_FAIL=1")
+	owner := &desktopNodeLaunch{directory: dir, command: command, stop: []string{os.Args[0], "-test.run=^TestDesktopNodeCleanupChild$", "--", dir}}
+	a := &app{cfg: common.ClientConfig{ScriptsDir: root}, cmd: command,
+		modes: []common.Mode{{ID: "wg", StopCommand: []string{filepath.Join(root, "must-not-run-raw-stop")}}},
+		state: state{Connected: true, Mode: "wg", RuntimeMode: "wg", RouterID: "captured", Phase: "connected"}}
+	desktopNodeOwners.Store(a, owner)
+	defer desktopNodeOwners.Delete(a)
+	if err := a.stopModeWithIntent(false); err == nil {
+		t.Fatal("failed native cleanup was accepted")
+	}
+	if _, err := os.Stat(released); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("protection released before native retirement", err)
+	}
+	command.Env = append(os.Environ(), "ROUTERVPN_NATIVE_CLEANUP_TEST=1")
+	if err := a.stopModeWithIntent(false); err == nil || !strings.Contains(err.Error(), "release held kill switch") {
+		t.Fatal("failed protection release was not retained", err)
+	}
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("native workspace did not retire", err)
+	}
+	if current, ok := desktopNodeOwners.Load(a); !ok || current != owner || a.state.Mode != "wg" || a.state.Phase != "failed" {
+		t.Fatal("protection failure lost captured native retry identity")
+	}
+	writeHelper(false)
+	if err := a.stopModeWithIntent(false); err != nil {
+		t.Fatal("native recovery ran raw-mode cleanup or lost release", err)
+	}
+	if _, ok := desktopNodeOwners.Load(a); ok || a.state.Mode != "off" || a.state.Phase != "off" {
+		t.Fatal("stop did not commit retirement")
 	}
 }
