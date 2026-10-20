@@ -12,6 +12,23 @@ import (
 
 func compositeHopSource(t *testing.T, mode, node, layer, api string) string {
 	t.Helper()
+	files := compositeHopAssets(t, mode)
+	policy := map[string]any{"node_id": node, "node_kind": "router-vpn", "router_api": api, "start_layer": layer}
+	start := ""
+	if layer != "" {
+		key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
+		outer := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": key}}}
+		start = startJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(startJSON(t, outer)))})
+	}
+	compiled, err := CompileCompositeProfile(mode, startJSON(t, files), startJSON(t, policy), start)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func compositeHopAssets(t *testing.T, mode string) map[string]string {
+	t.Helper()
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("c", 32)))
 	helperPort, helperName := 1090, "xray.json"
 	user := map[string]any{"id": "11111111-1111-4111-8111-111111111111", "flow": "xtls-rprx-vision", "encryption": "none"}
@@ -29,18 +46,7 @@ func compositeHopSource(t *testing.T, mode, node, layer, api string) string {
 		"route":     map[string]any{"rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}, "final": "tcp-stack"},
 		"dns":       map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "selected", "server": "10.77.0.1", "detour": "tcp-stack"}}, "final": "selected"},
 	}
-	files := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(startJSON(t, graph))), helperName: base64.StdEncoding.EncodeToString([]byte(startJSON(t, helper))), "cert.pem": base64.StdEncoding.EncodeToString([]byte(entryCertificate(t)))}
-	policy := map[string]any{"node_id": node, "node_kind": "router-vpn", "router_api": api, "start_layer": layer}
-	start := ""
-	if layer != "" {
-		outer := map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": key}}}
-		start = startJSON(t, map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(startJSON(t, outer)))})
-	}
-	compiled, err := CompileCompositeProfile(mode, startJSON(t, files), startJSON(t, policy), start)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return compiled
+	return map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(startJSON(t, graph))), helperName: base64.StdEncoding.EncodeToString([]byte(startJSON(t, helper))), "cert.pem": base64.StdEncoding.EncodeToString([]byte(entryCertificate(t)))}
 }
 
 // MAX and paired-proxy composites coexist, while their independent source

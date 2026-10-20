@@ -59,6 +59,45 @@ func (p *externalPredecessor) captureDNS(route map[string]any) error {
 		implicit = predecessorText(servers[0].(map[string]any), "tag")
 	}
 	index := 0
+	// A selected encrypted resolver can itself have an explicitly captured
+	// bootstrap. Copy that complete resolver tree to the lower transport too;
+	// retaining a reference to its application-DNS copy would recurse into the
+	// Naive outbound whose startup requires this very resolver.
+	var bootstrap func(string, map[string]any, map[string]bool) (string, error)
+	bootstrap = func(source string, node map[string]any, visiting map[string]bool) (string, error) {
+		server := p.resolvers[source]
+		if server == nil || visiting[source] || len(visiting) >= 32 || len(p.resolvers) >= 96 {
+			return "", bad
+		}
+		visiting[source] = true
+		defer delete(visiting, source)
+		copy := predecessorCopy(server)
+		tag := "routervpn-predecessor-bootstrap-" + strconv.Itoa(index)
+		index++
+		if p.resolvers[tag] != nil {
+			return "", bad
+		}
+		copy["tag"] = tag
+		delete(copy, "detour")
+		if detour, exists := node["detour"]; exists {
+			copy["detour"] = detour
+		}
+		if selection := copy["domain_resolver"]; selection != nil {
+			query, err := predecessorResolverSelection(selection)
+			if err != nil {
+				return "", err
+			}
+			child, err := bootstrap(predecessorText(query, "server"), node, visiting)
+			if err != nil {
+				return "", err
+			}
+			query["server"] = child
+			copy["domain_resolver"] = query
+		}
+		p.resolvers[tag] = copy
+		servers = append(servers, copy)
+		return tag, nil
+	}
 	// Slice order is deterministic; map iteration must never choose or name a
 	// different bootstrap for the same captured source.
 	for _, family := range []string{"endpoints", "outbounds"} {
@@ -88,19 +127,10 @@ func (p *externalPredecessor) captureDNS(route map[string]any) error {
 					return bad
 				}
 				if node["type"] == "naive" {
-					bootstrap := predecessorCopy(server)
-					tag := "routervpn-predecessor-bootstrap-" + strconv.Itoa(index)
-					index++
-					if p.resolvers[tag] != nil {
-						return bad
+					tag, err := bootstrap(implicit, node, map[string]bool{})
+					if err != nil {
+						return err
 					}
-					bootstrap["tag"] = tag
-					delete(bootstrap, "detour")
-					if detour, exists := node["detour"]; exists {
-						bootstrap["detour"] = detour
-					}
-					p.resolvers[tag] = bootstrap
-					servers = append(servers, bootstrap)
 					query = map[string]any{"server": tag}
 				} else {
 					query = map[string]any{"server": implicit}
