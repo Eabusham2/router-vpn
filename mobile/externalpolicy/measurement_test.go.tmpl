@@ -23,3 +23,21 @@ func TestRouterVPNExternalMeasurementCannotReplaceSuccessfulNativeProofWithHostB
 		t.Fatal("missing native proof gained measurement authority")
 	}
 }
+
+func TestRouterVPNExternalMTUCannotReplaceProofWithHostSelection(t *testing.T) {
+	engine := externalNativeFixture(t, nil)
+	proof, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if lease, err := engine.RouterVPNExternalClaimMTU(proof, externalFixtureSource, externalFixtureCapture); err == nil || lease != nil {
+		t.Fatal("unproved native Box created an MTU lease")
+	}
+	proof.Cancel()
+	if lease, err := engine.RouterVPNExternalClaimMTU(proof, externalFixtureSource, externalFixtureCapture); err == nil || lease != nil {
+		t.Fatal("canceled proof created an MTU lease")
+	}
+	if lease, err := engine.RouterVPNExternalClaimMTU(nil, externalFixtureSource, externalFixtureCapture); err == nil || lease != nil {
+		t.Fatal("missing proof created an MTU lease")
+	}
+}

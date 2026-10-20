@@ -37,6 +37,8 @@ type routerMTUOwner struct {
  instance *daemon.Instance
  inbound adapter.Inbound
  session, path string
+ external routerMTUExternalLease
+ proofCurrent func() bool
 }
 
 type routerMTUPreferences struct { platform RouterMTUPlatform }
@@ -73,11 +75,24 @@ func NewRouterMTU(server *CommandServer, platform RouterMTUPlatform, config, pro
 func (m *RouterMTU) Start(request string,force bool) error { if m==nil||m.controller==nil{return errors.New("MTU owner is missing")};return m.controller.Start(request,force) }
 func (m *RouterMTU) Cancel(request string) { if m!=nil&&m.controller!=nil{m.controller.Cancel(request)} }
 func (m *RouterMTU) NetworkChanged() { if m!=nil&&m.owner!=nil{m.owner.invalid.Store(true);m.controller.Invalidate()} }
-func (m *RouterMTU) Close() error { if m==nil||m.controller==nil{return nil};m.owner.invalid.Store(true);return m.controller.Close() }
+func (m *RouterMTU) Close() error {
+ if m==nil||m.controller==nil{return nil}
+ m.owner.invalid.Store(true)
+ if err:=m.controller.Close();err!=nil{return err}
+ // A timed-out drain retains the exact claim, so a replacement optimizer
+ // cannot overlap its still-owned native transaction or public socket.
+ if m.owner.external!=nil{m.owner.external.Close()}
+ return nil
+}
 func (m *RouterMTU) Running() bool { return m!=nil&&m.controller!=nil&&m.controller.Running() }
 func (m *RouterMTU) StatusJSON() string { if m==nil||m.controller==nil{return "{}"};return m.controller.StatusJSON() }
 func (o *routerMTUOwner) currentLocked() bool {
- if o.invalid.Load() || o.server.Instance()!=o.instance || o.inbound==nil {return false}
+ if o.invalid.Load() || o.server==nil || o.server.StartedService==nil || o.instance==nil || o.server.Instance()!=o.instance || o.inbound==nil {return false}
+ if o.external!=nil {
+  if o.proofCurrent==nil||!o.proofCurrent(){return false}
+  captured,err:=o.external.Inbound()
+  if err!=nil||captured!=o.inbound{return false}
+ }
  current,ok:=o.instance.Box().Inbound().Get(o.inbound.Tag())
  return ok&&current==o.inbound
 }
@@ -94,7 +109,9 @@ func (o *routerMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State
  if err!=nil||state!=expected||ctx.Err()!=nil||mtu<1280||mtu>9000{return state,errors.New("stale or invalid MTU mutation")}
  if mtu==state.MTU{return state,nil}
  if err=o.platform.BeginMTUChange(routerMTUExport(expected));err!=nil{return state,err}
- current,changeErr:=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)
+ var current adapter.Inbound
+ var changeErr error
+ if o.external!=nil{current,changeErr=o.external.ChangeMTU(ctx,o.inbound,mtu)}else{current,changeErr=o.instance.Box().RouterVPNChangeMTU(ctx,o.inbound,mtu)}
  o.inbound=current
  endErr:=o.platform.EndMTUChange()
  after,captureErr:=o.captureLocked()
@@ -110,9 +127,17 @@ func (o *routerMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State
  return after,nil
 }
 func (o *routerMTUOwner) DialThroughTunnel(ctx context.Context, expected mobilemtu.State, network,address string) (net.Conn,error) {
+ if o.external!=nil{return o.dialExternal(ctx,expected,network,address)}
  // The controller further restricts these sockets to the frozen paired endpoint.
  host,port,err:=net.SplitHostPort(address);ip,ipErr:=netip.ParseAddr(host);number,portErr:=strconv.Atoi(port)
  if err!=nil||ipErr!=nil||portErr!=nil||number<1||number>65535||!ip.IsPrivate()||ip.Zone()!=""||ip.Is4In6()||(network!="tcp"&&network!="udp"){return nil,errors.New("invalid private MTU socket target")}
+ return o.dialBoundSocket(ctx,expected,network,address)
+}
+// All destinations are validated by the private or external caller before
+// this primitive receives a literal address. It never invokes a DNS resolver.
+func (o *routerMTUOwner) dialBoundSocket(ctx context.Context, expected mobilemtu.State, network,address string) (net.Conn,error) {
+ host,_,parseErr:=net.SplitHostPort(address)
+ if _,err:=netip.ParseAddr(host);parseErr!=nil||err!=nil{return nil,errors.New("MTU binding requires a literal address")}
  state,err:=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{return nil,errors.New("stale MTU socket owner")}
  dialer:=net.Dialer{ControlContext:func(ctx context.Context, transport,address string, raw syscall.RawConn)error{
   state,err:=o.Capture();if err!=nil||state!=expected||ctx.Err()!=nil{return errors.New("MTU socket invalidated before binding")}

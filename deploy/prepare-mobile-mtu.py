@@ -83,7 +83,7 @@ def prepare(vendor):
             text=text.replace(old,new)
         writes[path]=text
     targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go','pprof_maps_test.go':'experimental/libbox/internal/oomprofile/routervpn_maps_test.go'}
-    for name in ['bridge','interface','socket_linux','socket_darwin','socket_other','bridge_test']:
+    for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test']:
         targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
     for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_text()
     for package in PACKAGES:

@@ -16,7 +16,7 @@ import (
 )
 
 func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofRequest, source, capture, session string, current func() bool) (*hopmeasure.Service, error) {
-	if s == nil || proof == nil || proof.request == nil || !proof.Healthy() || current == nil || !current() {
+	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || !proof.Healthy() || current == nil || !current() {
 		return nil, errors.New("external measurement native proof is unavailable")
 	}
 	policy, err := mobilemultihop.NewExternalPolicy(source, capture)
@@ -34,11 +34,13 @@ func (s *Box) RouterVPNExternalHopMeasurement(proof *RouterVPNExternalProofReque
 	if json.Unmarshal([]byte(policy.Metadata()), &meta) != nil {
 		return nil, errors.New("external measurement metadata invalid")
 	}
-	core, err := s.routerVPNExternalEngine(meta.EntryTag, meta.TUNTag, compiled)
-	if err != nil {
-		return nil, err
+	// Reuse the proof's sole authorized TUN transition owner. A measurement
+	// created before Auto-MTU remains usable afterward; arbitrary replacement
+	// still retires every exact native transport, DNS and interface witness.
+	if proof.engine.tunTag != meta.TUNTag || proof.engine.Identity() == "" {
+		return nil, errors.New("external measurement lost its captured native TUN")
 	}
-	engine := &routerVPNExternalMeasurementEngine{core: core, current: current, proof: proof, tunTag: meta.TUNTag}
+	engine := &routerVPNExternalMeasurementEngine{core: proof.engine, current: current, proof: proof, tunTag: meta.TUNTag}
 	return proof.request.NewHopMeasurement(source, capture, session, engine)
 }
 
@@ -47,6 +49,21 @@ type routerVPNExternalMeasurementEngine struct {
 	current func() bool
 	proof   *RouterVPNExternalProofRequest
 	tunTag  string
+}
+
+func (e *routerVPNExternalMeasurementEngine) BeginMeasurement() (func(), error) {
+	if e.Identity() == "" {
+		return nil, errors.New("external measurement owner retired")
+	}
+	release, err := e.proof.activity.beginMeasurement()
+	if err != nil {
+		return nil, err
+	}
+	if e.Identity() == "" {
+		release()
+		return nil, errors.New("external measurement owner changed during capture")
+	}
+	return release, nil
 }
 
 func (e *routerVPNExternalMeasurementEngine) Identity() string {

@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"net"
 	"net/netip"
+	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/adapter"
@@ -44,6 +46,9 @@ func routerVPNExternalOptionsDigest(ctx context.Context, options option.Options)
 
 type RouterVPNExternalProofRequest struct {
 	request *mobilemultihop.ExternalProofRequest
+	engine *routerVPNExternalNativeEngine
+	mtu atomic.Pointer[RouterVPNExternalMTULease]
+	activity routerVPNExternalActivity
 }
 
 func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*RouterVPNExternalProofRequest, error) {
@@ -73,7 +78,7 @@ func (s *Box) RouterVPNExternalCreateProof(source, capture, session string) (*Ro
 	if err != nil {
 		return nil, err
 	}
-	return &RouterVPNExternalProofRequest{request: request}, nil
+	return &RouterVPNExternalProofRequest{request: request, engine: engine}, nil
 }
 func (r *RouterVPNExternalProofRequest) Run() (string, error) {
 	if r == nil || r.request == nil {
@@ -91,8 +96,10 @@ func (r *RouterVPNExternalProofRequest) Healthy() bool {
 }
 
 type routerVPNExternalNativeEngine struct {
+	mu       sync.RWMutex
 	box      *Box
 	tun      adapter.Inbound
+	tunTag   string
 	owners   map[string]adapter.Outbound
 	routes   map[string]adapter.Outbound
 	dns      map[string]adapter.DNSTransport
@@ -159,9 +166,15 @@ func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.O
 		}
 		services[configured.Tag] = owner
 	}
-	return &routerVPNExternalNativeEngine{box: s, tun: tun, dns: dns, owners: owners, routes: routes, services: services}, nil
+	return &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services}, nil
 }
 func (e *routerVPNExternalNativeEngine) Identity() string {
+	if e == nil { return "" }
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return e.identityLocked()
+}
+func (e *routerVPNExternalNativeEngine) identityLocked() string {
 	if e == nil || e.box == nil || e.box.ctx.Err() != nil {
 		return ""
 	}
@@ -188,7 +201,7 @@ func (e *routerVPNExternalNativeEngine) Identity() string {
 			return ""
 		}
 	}
-	current, ok := e.box.inbound.Get(e.tun.Tag())
+	current, ok := e.box.inbound.Get(e.tunTag)
 	if !ok || current != e.tun {
 		return ""
 	}
@@ -219,7 +232,7 @@ func (e *routerVPNExternalNativeEngine) Dial(ctx context.Context, tag, address s
 	return connection, nil
 }
 func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag string) error {
-	if e.Identity() == "" || e.tun.Tag() != tunTag {
+	if e.Identity() == "" || e.tunTag != tunTag {
 		return errors.New("external DNS proof belongs to another TUN")
 	}
 	ctx, cancel := context.WithTimeout(parent, 5*time.Second)

@@ -106,9 +106,12 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerCompileExternalPolicy routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement; do
+  for symbol in routerCompileExternalPolicy routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
+  grep -Fq 'io.nekohasekai.libbox.RouterMTU newRouterExternalMTU(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterMTUPlatform, io.nekohasekai.libbox.RouterExternalProofRequest, java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
+    echo 'combined libbox AAR external MTU factory has the wrong retained-proof API' >&2; return 1
+  }
   javap -classpath "$classes" io.nekohasekai.libbox.RouterHopMeasurement >"$tmp/router-hop-measurement.javap"
   grep -Fq 'void drain(java.lang.String) throws java.lang.Exception;' "$tmp/router-hop-measurement.javap" || {
     echo 'combined libbox AAR measurement owner lacks synchronous request drain' >&2; return 1

@@ -41,6 +41,16 @@ type externalMeasurementEngine struct {
 	identity string
 }
 
+func (e *externalMeasurementEngine) BeginMeasurement() (func(), error) {
+	if e.Identity() == "" {
+		return nil, errors.New("external measurement owner retired")
+	}
+	if scoped, ok := e.engine.(hopmeasure.MeasurementScope); ok {
+		return scoped.BeginMeasurement()
+	}
+	return func() {}, nil
+}
+
 func (e *externalMeasurementEngine) Identity() string {
 	if e == nil || !e.proof.Healthy() || e.engine.Identity() != e.identity {
 		return ""

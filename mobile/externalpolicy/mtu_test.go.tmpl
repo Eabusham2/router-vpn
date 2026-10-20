@@ -1,0 +1,96 @@
+package box
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+)
+
+func TestRouterVPNExternalMTUAndMeasurementsCannotOverlap(t *testing.T) {
+	var activity routerVPNExternalActivity
+	measurement, err := activity.beginMeasurement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := activity.beginMTU(); err == nil {
+		t.Fatal("MTU replaced a reader owned by a measurement")
+	}
+	if _, err := activity.beginMeasurement(); err == nil {
+		t.Fatal("another measurement overlapped its captured resource")
+	}
+	measurement()
+	measurement()
+	change, err := activity.beginMTU()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := activity.beginMeasurement(); err == nil {
+		t.Fatal("measurement adopted a reader during its MTU transaction")
+	}
+	if _, err := activity.beginMTU(); err == nil {
+		t.Fatal("MTU transactions overlapped")
+	}
+	change()
+	change()
+	measurement, err = activity.beginMeasurement()
+	if err != nil {
+		t.Fatal("measurement failed after authorized MTU release", err)
+	}
+	measurement()
+}
+
+func TestRouterVPNExternalNativeActivityConcurrency(t *testing.T) {
+	var activity routerVPNExternalActivity
+	var running atomic.Int32
+	var group sync.WaitGroup
+	for worker := 0; worker < 16; worker++ {
+		group.Add(1)
+		go func(mtu bool) {
+			defer group.Done()
+			for n := 0; n < 50; n++ {
+				var release func()
+				var err error
+				if mtu {
+					release, err = activity.beginMTU()
+				} else {
+					release, err = activity.beginMeasurement()
+				}
+				if err != nil {
+					continue
+				}
+				if running.Add(1) != 1 {
+					t.Error("native resource had overlapping owners")
+				}
+				running.Add(-1)
+				release()
+			}
+		}(worker%2 == 0)
+	}
+	group.Wait()
+	if running.Load() != 0 {
+		t.Fatal("native activity leaked")
+	}
+}
+
+func TestRouterVPNExternalEmptyMTULeaseCannotMintOwnership(t *testing.T) {
+	for _, lease := range []*RouterVPNExternalMTULease{nil, {}} {
+		if lease.Healthy() || lease.Config() != "" || lease.Authority() != "" {
+			t.Fatal("empty native lease became authoritative")
+		}
+		if _, err := lease.Inbound(); err == nil {
+			t.Fatal("empty lease gained TUN")
+		}
+		if _, _, err := lease.Lifetime(context.Background()); err == nil {
+			t.Fatal("empty lease gained lifetime")
+		}
+		if _, err := lease.ChangeMTU(context.Background(), nil, 1400); err == nil {
+			t.Fatal("empty lease changed native TUN")
+		}
+		if _, err := lease.Resolve(context.Background(), "speed.cloudflare.com"); err == nil {
+			t.Fatal("empty lease resolved public origin")
+		}
+		lease.Close()
+		lease.Close()
+	}
+}

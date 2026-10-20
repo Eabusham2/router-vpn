@@ -40,12 +40,16 @@ def prepare(vendor):
     for name in ('box.go','box_test.go'):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
+    for name in ('external', 'external_test'):
+        (vendor/'experimental/libbox'/('routervpn_mtu_'+name+'.go')).write_bytes((ROOT/'mobile/mtu'/(name+'.go.tmpl')).read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
     for source, target in (
         ('measurement.go', 'routervpn_external_measurement.go'),
         ('measurement_test.go', 'routervpn_external_measurement_test.go'),
         ('tor_measurement.go', 'routervpn_tor_measurement.go'),
+        ('mtu.go', 'routervpn_external_mtu.go'),
+        ('mtu_test.go', 'routervpn_external_mtu_test.go'),
     ):
         (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
 

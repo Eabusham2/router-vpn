@@ -73,8 +73,9 @@ assert headers, 'Libbox generated headers missing'
 for header in headers:
     content=header.read_text()
     for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest',
-                   'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement'):
+                   'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement', 'LibboxNewRouterExternalMTU'):
         assert symbol in content, 'Missing external policy/proof API: '+symbol
+    assert 'FOUNDATION_EXPORT LibboxRouterMTU* _Nullable LibboxNewRouterExternalMTU(LibboxCommandServer* _Nullable server, id<LibboxRouterMTUPlatform> _Nullable platform, LibboxRouterExternalProofRequest* _Nullable proof, NSString* _Nullable source, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);' in content, 'External MTU retained-proof factory signature changed'
     measurement=re.search(r'@interface LibboxRouterHopMeasurement : NSObject .*?\n(.*?)@end',content,re.S)
     assert measurement and 'drain:' in measurement.group(1), 'Missing native measurement request drain'
     external_request=re.search(r'@interface LibboxRouterExternalProofRequest : NSObject .*?\n(.*?)@end',content,re.S)

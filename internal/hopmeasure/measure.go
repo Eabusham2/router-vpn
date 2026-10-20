@@ -36,6 +36,13 @@ type Engine interface {
 	Identity() string
 	Dial(context.Context, string, string) (net.Conn, error)
 }
+
+// MeasurementScope is implemented by native owners that share mutable packet
+// resources with another controller. Its release is held through real worker
+// and socket drain, including cancellation, rather than just status completion.
+type MeasurementScope interface {
+	BeginMeasurement() (release func(), err error)
+}
 type Hop struct {
 	ID    string `json:"id"`
 	Role  string `json:"role"`
@@ -189,12 +196,23 @@ func (s *Service) Start(id string, size int) error {
 	if id == s.state.Request {
 		return errors.New("measurement request identifiers cannot be reused")
 	}
+	release := func() {}
+	if scoped, ok := s.engine.(MeasurementScope); ok {
+		var err error
+		release, err = scoped.BeginMeasurement()
+		if err != nil || release == nil {
+			if release != nil {
+				release()
+			}
+			return errors.New("native measurement resource is busy or retired")
+		}
+	}
 	ctx, cancel := context.WithTimeout(context.Background(), 90*time.Second)
 	s.cancel = cancel
 	s.done = make(chan struct{})
 	done := s.done
 	s.state = Status{Request: id, Stage: "starting", Results: []Result{}}
-	go func() { defer close(done); defer cancel(); s.run(ctx, id, size) }()
+	go func() { defer close(done); defer cancel(); defer release(); s.run(ctx, id, size) }()
 	return nil
 }
 func (s *Service) Cancel(id string) {

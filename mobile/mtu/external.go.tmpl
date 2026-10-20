@@ -1,0 +1,53 @@
+package libbox
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+// The successful native proof supplies the graph and policy. Host booleans,
+// current UI selection and cached MTU values cannot mint an optimizer owner.
+func NewRouterExternalMTU(server *CommandServer, platform RouterMTUPlatform, proof *RouterExternalProofRequest, source, capture string) (*RouterMTU, error) {
+	if server == nil || server.StartedService == nil || platform == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("external MTU requires its live native proof and interface")
+	}
+	instance := server.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("external MTU native service is not running")
+	}
+	state, err := routerMTUState(platform.CaptureMTU())
+	if err != nil {
+		return nil, err
+	}
+	lease, err := instance.Box().RouterVPNExternalClaimMTU(proof.request, source, capture)
+	if err != nil {
+		return nil, err
+	}
+	claimed := false
+	defer func() {
+		if !claimed {
+			lease.Close()
+		}
+	}()
+	plan, err := mobilemtu.NewPlan(lease.Config(), state.MTU)
+	if err != nil {
+		return nil, err
+	}
+	inbound, err := lease.Inbound()
+	if err != nil || inbound == nil || inbound.Type() != "tun" || inbound.Tag() != plan.TunTag {
+		return nil, errors.New("external MTU does not own the captured native TUN")
+	}
+	owner := &routerMTUOwner{platform: platform, server: server, instance: instance, inbound: inbound, session: state.Session, path: state.Path, external: lease, proofCurrent: proof.Healthy}
+	controller, err := mobilemtu.NewExternal(owner, lease.Config(), lease.Authority(), mobilemtu.NewCache(routerMTUPreferences{platform}))
+	if err != nil {
+		return nil, err
+	}
+	current, err := owner.Capture()
+	if err != nil || current != state {
+		_ = controller.Close()
+		return nil, errors.New("external MTU native session changed during adoption")
+	}
+	claimed = true
+	return &RouterMTU{controller: controller, owner: owner}, nil
+}

@@ -1,0 +1,118 @@
+package libbox
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"net"
+	"net/netip"
+	"sync"
+)
+
+// Only the full native external proof factory supplies this lease. Keeping its
+// contract separate lets private MTU builds retain their smaller dependency set.
+type routerMTUExternalLease interface {
+	Healthy() bool
+	Close()
+	Inbound() (adapter.Inbound, error)
+	ChangeMTU(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
+	Lifetime(context.Context) (context.Context, context.CancelFunc, error)
+	Verify(context.Context, func(context.Context, string, string) (net.Conn, error)) error
+	Resolve(context.Context, string) ([]netip.Addr, error)
+}
+
+func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
+	if o == nil || o.external == nil {
+		return errors.New("external MTU has no retained proof")
+	}
+	state, err := o.Capture()
+	if err != nil || state != expected || ctx.Err() != nil {
+		return errors.New("external MTU proof belongs to a stale TUN")
+	}
+	err = o.external.Verify(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
+		if tag != "custom-exit" || address != "1.1.1.1:443" {
+			return nil, errors.New("external MTU proof attempted another route")
+		}
+		return o.dialExternal(call, expected, "tcp", address)
+	})
+	after, captureErr := o.Capture()
+	if err != nil || captureErr != nil || after != expected || ctx.Err() != nil {
+		return errors.New("external MTU public/DNS proof failed or became stale")
+	}
+	return nil
+}
+
+func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
+	if o == nil || o.external == nil || network != "tcp" || (address != hopmeasure.PublicAddress && address != "1.1.1.1:443") {
+		return nil, errors.New("unowned external MTU measurement target")
+	}
+	ctx, release, err := o.external.Lifetime(parent)
+	if err != nil {
+		return nil, err
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			release()
+		}
+	}()
+	targets := []string{address}
+	if address == hopmeasure.PublicAddress {
+		addresses, err := o.external.Resolve(ctx, hopmeasure.PublicHost)
+		if err != nil {
+			return nil, err
+		}
+		targets = make([]string, 0, len(addresses))
+		for _, ip := range addresses {
+			targets = append(targets, net.JoinHostPort(ip.String(), "443"))
+		}
+	}
+	for _, target := range targets {
+		connection, err := o.dialBoundSocket(ctx, expected, network, target)
+		if err == nil && connection != nil {
+			owned := newRouterMTUOwnedSocket(ctx, release, connection)
+			if ctx.Err() != nil || !o.external.Healthy() {
+				_ = owned.Close()
+				return nil, errors.New("external MTU socket retired during adoption")
+			}
+			retained = true
+			return owned, nil
+		}
+		if connection != nil {
+			_ = connection.Close()
+		}
+		if ctx.Err() != nil || !o.external.Healthy() {
+			break
+		}
+	}
+	return nil, errors.New("external MTU origin could not be reached through its system VPN interface")
+}
+
+// The lease lifetime owns a connected socket until its real Close returns.
+// A delayed close cannot release the optimizer claim or MTU measurement hold.
+type routerMTUOwnedSocket struct {
+	net.Conn
+	release  context.CancelFunc
+	stop     func() bool
+	once     sync.Once
+	closed   chan struct{}
+	closeErr error
+}
+
+func newRouterMTUOwnedSocket(ctx context.Context, release context.CancelFunc, conn net.Conn) *routerMTUOwnedSocket {
+	owned := &routerMTUOwnedSocket{Conn: conn, release: release, closed: make(chan struct{})}
+	owned.stop = context.AfterFunc(ctx, owned.closeOwned)
+	return owned
+}
+func (c *routerMTUOwnedSocket) closeOwned() {
+	c.once.Do(func() { c.closeErr = c.Conn.Close(); close(c.closed) })
+}
+func (c *routerMTUOwnedSocket) Close() error {
+	c.stop()
+	c.closeOwned()
+	<-c.closed
+	c.release()
+	return c.closeErr
+}

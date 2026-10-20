@@ -1,0 +1,76 @@
+package libbox
+
+import (
+	"context"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+func TestRouterExternalMTURequiresSuccessfulOwnedNativeProof(t *testing.T) {
+	for _, server := range []*CommandServer{nil, {}, {StartedService: &daemon.StartedService{}}} {
+		for _, proof := range []*RouterExternalProofRequest{nil, {}} {
+			if result, err := NewRouterExternalMTU(server, &mtuPlatformFixture{}, proof, "private-source", "private-capture"); err == nil || result != nil {
+				t.Fatal("unproved native connection manufactured external MTU authority")
+			}
+		}
+	}
+	owner := &routerMTUOwner{}
+	state := mobilemtu.State{Session: "old", Path: "path", Interface: "tun", MTU: 1280}
+	if err := owner.VerifyExternal(context.Background(), state); err == nil {
+		t.Fatal("empty owner proved a public path")
+	}
+	for _, target := range []string{"speed.cloudflare.com:443", "1.1.1.1:443", "127.0.0.1:443", "private.invalid:443"} {
+		if conn, err := owner.dialExternal(context.Background(), state, "tcp", target); err == nil || conn != nil {
+			t.Fatal("empty owner opened an external socket")
+		}
+	}
+}
+
+type mtuDelayedClose struct {
+	net.Conn
+	once             sync.Once
+	entered, release chan struct{}
+}
+
+func (c *mtuDelayedClose) Close() error {
+	c.once.Do(func() { close(c.entered); <-c.release })
+	return c.Conn.Close()
+}
+
+func TestRouterExternalMTUSocketCancellationWaitsForRealClose(t *testing.T) {
+	left, right := net.Pipe()
+	defer right.Close()
+	ctx, cancel := context.WithCancel(context.Background())
+	var releases atomic.Int32
+	delayed := &mtuDelayedClose{Conn: left, entered: make(chan struct{}), release: make(chan struct{})}
+	owned := newRouterMTUOwnedSocket(ctx, func() { releases.Add(1) }, delayed)
+	cancel()
+	<-delayed.entered
+	done := make(chan error, 1)
+	go func() { done <- owned.Close() }()
+	select {
+	case err := <-done:
+		t.Fatal("close released a still-owned native socket", err)
+	case <-time.After(15 * time.Millisecond):
+	}
+	if releases.Load() != 0 {
+		t.Fatal("lease lifetime released before underlying close")
+	}
+	close(delayed.release)
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if releases.Load() != 1 {
+		t.Fatal("captured socket did not release its lifetime")
+	}
+	if _, err := owned.Write([]byte(strings.Repeat("x", 16))); err == nil {
+		t.Fatal("closed native socket accepted traffic")
+	}
+}
