@@ -316,7 +316,7 @@ func (s *Service) run(ctx context.Context, id string, size int) {
 			}
 		}
 		if err != nil {
-			r = Result{ID: h.ID, Role: h.Role, Failure: "Routed identity, byte count, or transfer deadline failed"}
+			r = Result{ID: h.ID, Role: h.Role, Kind: h.Kind, Label: h.Label, Failure: "Routed identity, byte count, or transfer deadline failed"}
 		} else {
 			r.Ready = true
 		}
@@ -344,25 +344,10 @@ func (s *Service) run(ctx context.Context, id string, size int) {
 	}
 }
 func (s *Service) client(h Hop) *http.Client {
-	return &http.Client{Transport: &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
-		TLSHandshakeTimeout: 2 * time.Second, ResponseHeaderTimeout: 3 * time.Second,
-		DialContext: func(ctx context.Context, network, address string) (net.Conn, error) {
-			if network != "tcp" {
-				return nil, errors.New("invalid measurement transport")
-			}
-			if err := s.valid(ctx); err != nil {
-				return nil, err
-			}
-			conn, err := s.engine.Dial(ctx, h.Tag, address)
-			if err != nil {
-				return nil, err
-			}
-			if err = s.valid(ctx); err != nil {
-				conn.Close()
-				return nil, err
-			}
-			return conn, nil
-		}},
+	transport := &privateMeasurementTransport{service: s, tag: h.Tag, connections: map[*privateMeasurementConn]struct{}{}}
+	transport.Transport = &http.Transport{Proxy: nil, DisableKeepAlives: true, DisableCompression: true,
+		TLSHandshakeTimeout: 2 * time.Second, ResponseHeaderTimeout: 3 * time.Second, DialContext: transport.dial}
+	return &http.Client{Transport: transport,
 		CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("measurement redirects are forbidden") }}
 }
 func (s *Service) request(ctx context.Context, h Hop, path string, size int, upload bool) (*http.Response, time.Time, *http.Client, error) {
