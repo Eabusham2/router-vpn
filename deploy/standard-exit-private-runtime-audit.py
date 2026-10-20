@@ -61,11 +61,11 @@ require(
 )
 require(
     "cmd/client/external_profile_connect.go",
-    '[]string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
+    '[]string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
 )
 require(
     "cmd/client/standard_exit_platform_routes.go",
-    '[]string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
+    '[]string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}',
 )
 require(
     "cmd/client/standard_exits_test.go",

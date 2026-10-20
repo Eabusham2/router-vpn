@@ -24,6 +24,22 @@ function TestUnifiedExternalMutationIdle{
 function SplitUnifiedExternalCsv([string]$Text){
     return @($Text -split ',' | ForEach-Object{$_.Trim()} | Where-Object{$_})
 }
+function ParseUnifiedExternalAmneziaParameters([string]$Text){
+    if([System.Text.Encoding]::UTF8.GetByteCount($Text) -gt 4096){throw 'AmneziaWG parameters are too long.'}
+    $Keys=@('jc','jmin','jmax','s1','s2','s3','s4','h1','h2','h3','h4')
+    $Values=@{}
+    foreach($Line in ($Text -split '[;\r\n]')){
+        if(-not $Line.Trim()){continue}
+        $Parts=@($Line -split '=')
+        if($Parts.Count -ne 2){throw 'Use one AmneziaWG key=value per line, or separate values with semicolons.'}
+        $Key=$Parts[0].Trim().ToLowerInvariant();$Value=$Parts[1].Trim()
+        $Pattern='^[0-9]+$';if($Key.StartsWith('h')){$Pattern='^[0-9]+(-[0-9]+)?$'}
+        if($Key -notin $Keys -or $Values.ContainsKey($Key) -or $Value -cnotmatch $Pattern){throw 'AmneziaWG parameters contain an unknown, duplicate or malformed value.'}
+        $Values[$Key]=$Value
+    }
+    if($Values.Count -ne $Keys.Count){throw 'Supply all 11 provider values: Jc, Jmin, Jmax, S1-S4 and H1-H4.'}
+    return $Values
+}
 function ShowUnifiedExternalNodeBuilder{
     if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before adding an external node. Unknown controller state fails closed.';return}
     [xml]$X=@"
@@ -31,7 +47,7 @@ function ShowUnifiedExternalNodeBuilder{
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Add external node" FontSize="26" FontWeight="Bold"/>
     <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Create a validated full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Secrets stay in the private controller store. Relevant fields depend on the selected protocol and the controller validates the final profile before persistence."/>
-    <TextBlock Text="Protocol"/><ComboBox Name="ExtProtocol" Margin="0,4,0,10"><ComboBoxItem Content="WireGuard" Tag="wireguard"/><ComboBoxItem Content="SOCKS5" Tag="socks5"/><ComboBoxItem Content="HTTP CONNECT" Tag="http-connect"/><ComboBoxItem Content="HTTPS CONNECT" Tag="https-connect"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
+    <TextBlock Text="Protocol"/><ComboBox Name="ExtProtocol" Margin="0,4,0,10"><ComboBoxItem Content="WireGuard" Tag="wireguard"/><ComboBoxItem Content="AmneziaWG" Tag="amneziawg"/><ComboBoxItem Content="SOCKS5" Tag="socks5"/><ComboBoxItem Content="HTTP CONNECT" Tag="http-connect"/><ComboBoxItem Content="HTTPS CONNECT" Tag="https-connect"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
     <TextBlock Text="Display name"/><TextBox Name="ExtName" Margin="0,4,0,8" Padding="7"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="Server IP / hostname"/><TextBox Name="ExtServer" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Port"/><TextBox Name="ExtPort" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
     <TextBlock Text="Expected public exit IP"/><TextBox Name="ExtExpected" Margin="0,4,0,8" Padding="7"/>
@@ -39,13 +55,17 @@ function ShowUnifiedExternalNodeBuilder{
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="Shadowsocks method"/><TextBox Name="ExtMethod" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Shadowsocks / Hysteria2 secret"/><PasswordBox Name="ExtSecret" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
     <TextBlock Text="TLS server name / SNI (HTTPS CONNECT or Hysteria2)"/><TextBox Name="ExtTLS" Margin="0,4,0,8" Padding="7"/>
     <Separator Margin="0,8"/>
-    <TextBlock Text="WireGuard fields" FontWeight="SemiBold"/>
+    <TextBlock Text="WireGuard / AmneziaWG peer" FontWeight="SemiBold"/>
     <TextBlock Text="Private key"/><PasswordBox Name="ExtWGPrivate" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Peer public key"/><TextBox Name="ExtWGPeer" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Preshared key (optional)"/><PasswordBox Name="ExtWGPSK" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Interface addresses — comma separated CIDRs"/><TextBox Name="ExtWGAddresses" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="AllowedIPs — comma separated CIDRs"/><TextBox Name="ExtWGAllowed" Margin="0,4,0,8" Padding="7"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="DNS IPs — comma separated"/><TextBox Name="ExtWGDNS" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="MTU (optional)"/><TextBox Name="ExtWGMTU" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
+    <TextBlock Text="Keepalive seconds — 0–65535; blank means disabled"/><TextBox Name="ExtWGKeepalive" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="AmneziaWG parameters — copy all 11 values from your provider"/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,4,0,4" Text="Use Jc=…; Jmin=…; Jmax=…; S1=…; S2=…; S3=…; S4=…; H1=…; H2=…; H3=…; H4=…. You can paste one key=value per line. Header ranges are preserved."/>
+    <TextBox Name="ExtAWGParameters" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Height="100" Margin="0,4,0,8" Padding="7" MaxLength="4096"/>
     <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,6,0,8" Text="Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker never accepts executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration."/>
     <TextBlock Name="ExtStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="ExtSave" Content="Save node" Padding="14,8"/><Button Name="ExtClose" Content="Close" Margin="8,0,0,0" Padding="14,8"/></StackPanel>
@@ -65,14 +85,16 @@ function ShowUnifiedExternalNodeBuilder{
             if($ID -eq 'https-connect'){$Body.tls_server_name=[string]$D.FindName('ExtTLS').Text}
             if($ID -eq 'shadowsocks'){$Body.method=[string]$D.FindName('ExtMethod').Text;$Body.secret=[string]$D.FindName('ExtSecret').Password}
             if($ID -eq 'hysteria2'){$Body.secret=[string]$D.FindName('ExtSecret').Password;$Body.tls_server_name=[string]$D.FindName('ExtTLS').Text}
-            if($ID -eq 'wireguard'){
+            if($ID -in @('wireguard','amneziawg')){
                 $Body.wg_private_key=[string]$D.FindName('ExtWGPrivate').Password
                 $Body.wg_peer_public_key=[string]$D.FindName('ExtWGPeer').Text
                 $Body.wg_addresses=@(SplitUnifiedExternalCsv ([string]$D.FindName('ExtWGAddresses').Text))
                 $Body.wg_allowed_ips=@(SplitUnifiedExternalCsv ([string]$D.FindName('ExtWGAllowed').Text))
                 $Body.wg_dns=@(SplitUnifiedExternalCsv ([string]$D.FindName('ExtWGDNS').Text))
                 $PSK=[string]$D.FindName('ExtWGPSK').Password;if($PSK.Trim()){$Body.wg_preshared_key=$PSK}
-                $MTUText=[string]$D.FindName('ExtWGMTU').Text;if($MTUText.Trim()){$Body.wg_mtu=[int]$MTUText}
+                $MTUText=[string]$D.FindName('ExtWGMTU').Text;if($MTUText.Trim()){$MTU=[int]$MTUText;if($MTU -lt 1280 -or $MTU -gt 9000){throw 'WireGuard / AmneziaWG MTU must be 1280–9000.'};$Body.wg_mtu=$MTU}
+                $KeepaliveText=[string]$D.FindName('ExtWGKeepalive').Text;if($KeepaliveText.Trim()){$Keepalive=[int]$KeepaliveText;if($Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Keepalive must be 0–65535 seconds.'};$Body.wg_keepalive=$Keepalive}
+                if($ID -eq 'amneziawg'){$Body.awg_parameters=ParseUnifiedExternalAmneziaParameters ([string]$D.FindName('ExtAWGParameters').Text)}
             }
             $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct
         }catch{$Status.Text='External node rejected: '+$_.Exception.Message}
@@ -84,7 +106,7 @@ function ShowUnifiedExternalNodeBuilder{
     $eventMarker="(Control 'UnifiedNodesButton').Add_Click({OpenUnifiedDetail 1})"
     if(-not $ProductSource.Contains($eventMarker)){throw 'Windows external-node UI: unified node event seam drifted.'}
     $ProductSource=$ProductSource.Replace($eventMarker,$eventMarker+"`r`n(Control 'UnifiedExternalNodeButton').Add_Click({ShowUnifiedExternalNodeBuilder})")
-    foreach($marker in @('UnifiedExternalNodeButton','Add external node…','ShowUnifiedExternalNodeBuilder','/api/external-profile/create','wireguard','socks5','http-connect','https-connect','shadowsocks','hysteria2','TestUnifiedExternalMutationIdle','VPN state changed while the external-node dialog was open','typed maker never accepts executable paths')){if(-not$ProductSource.Contains($marker)){throw "Windows external-node transform missing $marker"}}
+    foreach($marker in @('UnifiedExternalNodeButton','Add external node…','ShowUnifiedExternalNodeBuilder','/api/external-profile/create','wireguard','amneziawg','awg_parameters','socks5','http-connect','https-connect','shadowsocks','hysteria2','TestUnifiedExternalMutationIdle','VPN state changed while the external-node dialog was open','typed maker never accepts executable paths')){if(-not$ProductSource.Contains($marker)){throw "Windows external-node transform missing $marker"}}
     return $ProductSource
 }
 

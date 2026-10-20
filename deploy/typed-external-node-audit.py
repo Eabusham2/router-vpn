@@ -33,7 +33,7 @@ def forbid(path: str, *markers: str) -> None:
 need(
     "cmd/client/external_profile_create.go",
     "externalProfileCreateRequest",
-    'case "wireguard"', 'case "socks5"', 'case "http-connect"',
+    'case "wireguard", "amneziawg"', 'case "socks5"', 'case "http-connect"',
     'case "https-connect"', 'case "shadowsocks"', 'case "hysteria2"',
     "OpenVPN uses the hardened config import path",
     "Tor bridges use the dedicated censorship-circumvention builder",
@@ -82,7 +82,7 @@ need(
     "UnifiedExternalNodeButton",
     "Add external node…",
     "/api/external-profile/create",
-    "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2",
+    "wireguard", "amneziawg", "awg_parameters", "wg_keepalive", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2",
     "TestUnifiedExternalMutationIdle",
     "VPN state changed while the external-node dialog was open",
     "Add-RouterVPNExternalNodeWindowsShell -ProductSource",
@@ -94,7 +94,8 @@ need(
     "client/macos/RouterVPNMacExternalNode.swift",
     "addExternalNode",
     "/api/external-profile/create",
-    '"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"',
+    '"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"',
+    "externalAmneziaParameters", 'body["awg_parameters"]', 'body["wg_keepalive"]',
     "externalMutationIdle",
     "VPN state changed while the external-node dialog was open",
 )
@@ -106,7 +107,7 @@ need(
     "client/linux/routervpn-external-node-v14.inc",
     "LinuxExternalNodeV14",
     "/api/external-profile/create",
-    "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2",
+    "wireguard", "amneziawg", "awg_parameters", "wg_keepalive", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2",
     "linux_external_mutation_idle_v14",
     "VPN state changed while the external-node dialog was open",
 )
@@ -171,7 +172,7 @@ need(
     "IOSExternalNodeProtocol",
     'case httpConnect = "http-connect"',
     'case httpsConnect = "https-connect"',
-    'Set(["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])',
+    'Set(["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])',
     'case tor', 'case torBridge = "tor-bridge"',
     'LibboxRouterCompileTorProfile',
     'external["http_connect"] = block',
@@ -209,7 +210,7 @@ need(
 )
 need(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"]',
+    '["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"]',
     "Tor bridges • obfs4 / meek / Snowflake / WebTunnel • current circuit exit verification",
     'let entryBundleKey = tor ? "tor_entry_bundle" : "external_entry_bundle"',
     'proto.providerConfiguration?[entryBundleKey] = capturedEntry',
@@ -235,7 +236,7 @@ forbid(
 )
 need(
     "ios/RouterVPN/App/NodeManagerSheet.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"]',
+    '["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"]',
     "Connect external",
 )
 need(
@@ -280,7 +281,7 @@ forbid(
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-    '["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
+    '["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]',
     'case "http-connect", "https-connect"',
     'let key = secure ? "https_connect" : "http_connect"',
     '"type": "http"',

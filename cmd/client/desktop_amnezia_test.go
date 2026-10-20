@@ -5,11 +5,14 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"maps"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"reflect"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -35,6 +38,30 @@ func desktopAWGProfile(t *testing.T) common.RouterProfile {
 	p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "custom", "tcp", "9.9.9.9", 5353
 	p.IPv6Mode, p.HomeLANAccess, p.MTUPolicy, p.EffectiveMTU = "off", false, "auto", 9000
 	return p
+}
+
+func TestDesktopAmneziaCapabilityEndpointsAgree(t *testing.T) {
+	var a app
+	var previous []string
+	for _, handler := range []http.HandlerFunc{platformStandardExitCapabilitiesHandler, a.externalProfileCapabilities} {
+		response := httptest.NewRecorder()
+		handler(response, httptest.NewRequest(http.MethodGet, "/", nil))
+		var body struct {
+			Entries []string `json:"external_entry_protocols"`
+		}
+		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &body) != nil {
+			t.Fatal("capability response is invalid")
+		}
+		if !slices.Contains(body.Entries, "amneziawg") || (previous != nil && !reflect.DeepEqual(body.Entries, previous)) {
+			t.Fatal("desktop capability surfaces disagree with the implemented AmneziaWG entry")
+		}
+		previous = body.Entries
+	}
+	profile := desktopAWGProfile(t)
+	entry, kind, err := standardExitEntry([]common.RouterProfile{profile}, profile, standardExitConnectRequest{EntryID: profile.ID})
+	if err != nil || kind != "external" || entry.External.AmneziaWG == nil {
+		t.Fatalf("advertised AmneziaWG entry cannot be selected: %v", err)
+	}
 }
 
 func TestDesktopAmneziaCreationPreservesExactNativePeer(t *testing.T) {

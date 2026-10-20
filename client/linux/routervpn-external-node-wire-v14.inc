@@ -15,7 +15,7 @@ static GtkWidget *routervpn_make_button_external_v14(const char *label, GCallbac
     App *app = NULL;
     if (data != NULL) memcpy(&app, data, sizeof(app));
     GtkWidget *external = make_button("Add external node…", G_CALLBACK(on_linux_external_node_v14), app);
-    gtk_widget_set_tooltip_text(external, "Create WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks or Hysteria2 nodes. OpenVPN and Tor use their dedicated hardened flows.");
+    gtk_widget_set_tooltip_text(external, "Create WireGuard, AmneziaWG, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks or Hysteria2 nodes. OpenVPN and Tor use their dedicated hardened flows.");
     gtk_box_pack_start(GTK_BOX(row), external, FALSE, FALSE, 0);
     return row;
 }

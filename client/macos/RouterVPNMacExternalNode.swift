@@ -1,6 +1,35 @@
 import AppKit
 import Foundation
 
+// Keep the provider's numeric strings and header ranges intact. The controller
+// performs the native AWG bounds/overlap validation before saving the profile.
+func externalAmneziaParameters(_ raw: String) throws -> [String: String] {
+    let keys = Set(["jc", "jmin", "jmax", "s1", "s2", "s3", "s4", "h1", "h2", "h3", "h4"])
+    guard raw.utf8.count <= 4096 else {
+        throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "AmneziaWG parameters are too long."])
+    }
+    var result: [String: String] = [:]
+    for line in raw.components(separatedBy: CharacterSet(charactersIn: ";\r\n")) {
+        let line = line.trimmingCharacters(in: .whitespacesAndNewlines)
+        if line.isEmpty { continue }
+        let parts = line.components(separatedBy: "=")
+        guard parts.count == 2 else {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Use one AmneziaWG key=value per line or separate them with semicolons."])
+        }
+        let key = parts[0].trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let value = parts[1].trimmingCharacters(in: .whitespacesAndNewlines)
+        let pattern = key.hasPrefix("h") ? "^[0-9]+(-[0-9]+)?$" : "^[0-9]+$"
+        guard keys.contains(key), result[key] == nil, value.range(of: pattern, options: .regularExpression) != nil else {
+            throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "AmneziaWG parameters contain an unknown, duplicate or malformed value."])
+        }
+        result[key] = value
+    }
+    guard Set(result.keys) == keys else {
+        throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Supply all 11 provider values: Jc, Jmin, Jmax, S1–S4 and H1–H4."])
+    }
+    return result
+}
+
 extension ProductWindowController {
     private func externalMutationIdle() -> Bool {
         do {
@@ -37,7 +66,7 @@ extension ProductWindowController {
         panel.addButton(withTitle: "Cancel")
 
         let protocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        protocolPopup.addItems(withTitles: ["WireGuard", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks", "Hysteria2"])
+        protocolPopup.addItems(withTitles: ["WireGuard", "AmneziaWG", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks", "Hysteria2"])
         let name = externalField("Display name")
         let server = externalField("Server IP/hostname")
         let port = externalField("Port")
@@ -57,8 +86,11 @@ extension ProductWindowController {
         let wgAllowed = externalField("WG AllowedIPs, comma separated")
         let wgDNS = externalField("WG DNS IPs, comma separated")
         let wgMTU = externalField("WG MTU (optional)")
+        let wgKeepalive = externalField("Keepalive seconds 0–65535 (blank means disabled)")
+        let awgParameters = externalField("Jc=…; Jmin=…; Jmax=…; S1=…; S2=…; S3=…; S4=…; H1=…; H2=…; H3=…; H4=…")
+        awgParameters.toolTip = "Copy the exact 11 parameter values from the provider's AmneziaWG configuration, separated by semicolons. Header ranges such as H1=10-19 are preserved."
 
-        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. Optional coordinates are real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. HTTPS CONNECT and Hysteria2 require TLS/SNI. Plain HTTP CONNECT rejects TLS metadata. WireGuard requires keys, interface address and AllowedIPs. The controller re-validates everything before persistence.")
+        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. Optional coordinates are real values you provide. WireGuard and AmneziaWG use the peer fields below; AmneziaWG also requires all 11 values from your provider. Copy those values exactly from the provider's configuration.")
         note.textColor = .secondaryLabelColor
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Protocol"), protocolPopup],
@@ -81,6 +113,8 @@ extension ProductWindowController {
             [NSTextField(labelWithString: "WG AllowedIPs"), wgAllowed],
             [NSTextField(labelWithString: "WG DNS"), wgDNS],
             [NSTextField(labelWithString: "WG MTU"), wgMTU],
+            [NSTextField(labelWithString: "WG / AWG keepalive"), wgKeepalive],
+            [NSTextField(labelWithString: "AWG parameters"), awgParameters],
         ])
         grid.rowSpacing = 5
         grid.columnSpacing = 10
@@ -89,9 +123,14 @@ extension ProductWindowController {
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
-        content.setFrameSize(NSSize(width: 680, height: 640))
+        content.setFrameSize(NSSize(width: 660, height: 740))
         grid.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
-        panel.accessoryView = content
+        let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 680, height: 580))
+        scroll.hasVerticalScroller = true
+        scroll.documentView = content
+        scroll.contentView.scroll(to: NSPoint(x: 0, y: max(0, content.bounds.height - scroll.contentSize.height)))
+        scroll.reflectScrolledClipView(scroll.contentView)
+        panel.accessoryView = scroll
 
         guard panel.runModal() == .alertFirstButtonReturn else { return }
         guard externalMutationIdle() else {
@@ -99,7 +138,7 @@ extension ProductWindowController {
             return
         }
 
-        let protocols = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
+        let protocols = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
         let index = max(0, min(protocolPopup.indexOfSelectedItem, protocols.count - 1))
         let selected = protocols[index]
         var body: [String: Any] = [
@@ -136,7 +175,7 @@ extension ProductWindowController {
         if !secret.stringValue.isEmpty { body["secret"] = secret.stringValue }
         let sni = tlsName.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !sni.isEmpty { body["tls_server_name"] = sni }
-        if selected == "wireguard" {
+        if selected == "wireguard" || selected == "amneziawg" {
             body["wg_private_key"] = wgPrivate.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             body["wg_peer_public_key"] = wgPeer.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             let psk = wgPSK.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -144,7 +183,26 @@ extension ProductWindowController {
             body["wg_addresses"] = externalCSV(wgAddresses.stringValue)
             body["wg_allowed_ips"] = externalCSV(wgAllowed.stringValue)
             body["wg_dns"] = externalCSV(wgDNS.stringValue)
-            if let mtu = Int(wgMTU.stringValue), mtu > 0 { body["wg_mtu"] = mtu }
+            let mtuText = wgMTU.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !mtuText.isEmpty {
+                guard let mtu = Int(mtuText), (1280...9000).contains(mtu) else {
+                    appendHelp("WireGuard / AmneziaWG MTU must be 1280–9000. Nothing was saved.")
+                    return
+                }
+                body["wg_mtu"] = mtu
+            }
+            let keepaliveText = wgKeepalive.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+            if !keepaliveText.isEmpty {
+                guard let keepalive = Int(keepaliveText), (0...65535).contains(keepalive) else {
+                    appendHelp("Keepalive must be 0–65535 seconds. Nothing was saved.")
+                    return
+                }
+                body["wg_keepalive"] = keepalive
+            }
+            if selected == "amneziawg" {
+                do { body["awg_parameters"] = try externalAmneziaParameters(awgParameters.stringValue) }
+                catch { appendHelp(error.localizedDescription); return }
+            }
         }
 
         asyncAction {

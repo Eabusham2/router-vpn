@@ -22,7 +22,7 @@ func registerPlatformStandardExitRoutes(h *http.ServeMux, a *app) {
 func platformStandardExitCapabilitiesHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet { http.Error(w, "GET only", http.StatusMethodNotAllowed); return }
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": standardExitStoreVersion, "capabilities": externalProfileProtocolCapabilities(), "external_entry_hop": true, "external_entry_protocols": []string{"wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}, "openvpn_entry_hop": false})
+	_ = json.NewEncoder(w).Encode(map[string]any{"schema_version": standardExitStoreVersion, "capabilities": externalProfileProtocolCapabilities(), "external_entry_hop": true, "external_entry_protocols": []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}, "openvpn_entry_hop": false})
 }
 
 func standardExitEntry(profiles []common.RouterProfile, control common.RouterProfile, q standardExitConnectRequest) (common.RouterProfile, string, error) {
