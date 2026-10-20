@@ -68,6 +68,7 @@ enum Status { case invalid, disconnected, connecting, connected, reasserting, di
     var multihopProgressText = "Comparison in progress"
     private var userDisconnectInProgress = false
     var iosConnectGeneration = UUID()
+    let iosSpeedLabOwnership = IOSSpeedLabOwnership()
     var iosStrategyTaskActive = false
     var iosStrategyStatus: String?
     var profileMutationBlocked: Bool { connected || tunnelTransitioning || userDisconnectInProgress }
@@ -144,7 +145,7 @@ def main():
     assert 'connected || tunnelTransitioning || userDisconnectInProgress' in source
     with tempfile.TemporaryDirectory(prefix='routervpn-disconnect-') as tmp:
         path = Path(tmp) / 'Tests.swift'; binary = Path(tmp) / 'test'
-        path.write_text(SHIM.replace('    // SHIPPING_METHODS', methods))
+        path.write_text((APP / 'IOSSpeedLabOwnership.swift').read_text() + '\n' + SHIM.replace('    // SHIPPING_METHODS', methods))
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(path), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=25)
     print('Manager doubles verify ownership and error handling; this is not physical NetworkExtension acceptance.')

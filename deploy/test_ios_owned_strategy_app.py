@@ -186,6 +186,7 @@ func LibboxRouterCheckMAXProfile(_ mode: String, _ files: String, _ metadata: St
     var activeSessionIdentity: IOSSessionIdentity?
     var iosStrategyStatus: IOSStrategyStatus?
     var iosConnectGeneration = UUID(), multihopProgressGeneration = UUID()
+    let iosSpeedLabOwnership = IOSSpeedLabOwnership()
     var multihopProgressText = ""
     var iosStrategyTaskActive = false, userDisconnectInProgress = false
     var iosUserDisconnectInProgress: Bool { userDisconnectInProgress }
@@ -461,6 +462,7 @@ def main():
     external_methods = external[external.index('    func connectSelectedExternal() async'):]
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
+                 (APP / 'IOSSpeedLabOwnership.swift').read_text(),
                  (APP / 'IOSOwnedStrategy.swift').read_text(), (APP / 'IOSStrategySupport.swift').read_text().replace('UserDefaults.standard', 'FixturePreferences.standard'),
                  (APP / 'IOSNativePQProfile.swift').read_text(), (APP / 'IOSMultihopStartLayer.swift').read_text(),
                  (PROVIDER / 'RouterVPNStrategyPolicy.swift').read_text(), (PROVIDER / 'RouterVPNProviderStrategy.swift').read_text()]:

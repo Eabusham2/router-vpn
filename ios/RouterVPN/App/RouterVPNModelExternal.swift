@@ -36,6 +36,7 @@ extension RouterVPNModel {
     /// on iOS instead of merely keeping several metadata rows beside one set of
     /// node-specific wg/sing-box files.
     func selectNode(_ id: String) {
+        guard iosSpeedLabOwnership.admit(.profile) else { return }
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before selecting another node."; return }
         guard let data = IOSNodeBundleStore.shared.bundleData(containing: id, current: bundle),
               var value = try? JSONDecoder().decode(ClientBundle.self, from: data),
@@ -70,6 +71,7 @@ extension RouterVPNModel {
     /// their 64-hex selected-node proof so every home keeps its own raw profile
     /// assets. External-only bundles retain their validated profile ids.
     func linkNodeBundle(_ data: Data) throws {
+        guard iosSpeedLabOwnership.admit(.profile) else { throw CancellationError() }
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.NodeMutation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before linking node data."])
         }
@@ -79,6 +81,7 @@ extension RouterVPNModel {
     }
 
     func connectSelectedExternal() async {
+        guard iosSpeedLabOwnership.admit(.connection) else { return }
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before starting another external connection."; return }
         guard let bundle, let profile = selectedNodeProfile, profile.normalizedNodeKind == "external" else {
             message = "Choose an external custom node first"; return
@@ -149,6 +152,9 @@ extension RouterVPNModel {
                 return digest
             }
             if !maxSources.isEmpty { proto.providerConfiguration?["max_source_sha256"] = maxSources }
+            var ownedConfiguration = proto.providerConfiguration ?? [:]
+            IOSSpeedLabContext.mark(&ownedConfiguration)
+            proto.providerConfiguration = ownedConfiguration
             let strict = externalStrict(profile) || capturedEntryProfile.map(externalStrict) == true
             proto.includeAllNetworks = strict
             proto.enforceRoutes = strict
@@ -178,7 +184,9 @@ extension RouterVPNModel {
                 throw IOSRuntimeSelectionError.unsupportedMode("External runtime preferences did not preserve the captured owner.")
             }
             message = tor ? "Connecting to Tor • building the circuit and verifying its current exit…" : "Starting external \(protocolName) PacketTunnel • proving \(ordinary ? "selected DNS and " : "")exit \(expected)…"
-            try manager.connection.startVPNTunnel()
+            let hold = IOSMTUMeasurementGate.current
+            let options: [String: NSObject]? = hold.isEmpty ? nil : ["routervpn_mtu_hold": hold as NSString]
+            try manager.connection.startVPNTunnel(options: options)
             let ok = await waitExternalConnection(manager, attempts: tor ? 720 : 48, generation: generation)
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard ok else {

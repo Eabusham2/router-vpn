@@ -30,6 +30,7 @@ final class RouterVPNModel: ObservableObject {
     private(set) var activeSessionIdentity: IOSSessionIdentity?
     private var userDisconnectInProgress = false
     var iosConnectGeneration = UUID()
+    let iosSpeedLabOwnership = IOSSpeedLabOwnership()
     var iosStrategyTaskActive = false
     private(set) var iosStrategyStatus: IOSStrategyStatus?
     var iosUserDisconnectInProgress: Bool { userDisconnectInProgress }
@@ -123,6 +124,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func importBundle(_ data: Data) throws {
+        guard iosSpeedLabOwnership.admit(.profile) else { throw CancellationError() }
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
@@ -164,6 +166,7 @@ final class RouterVPNModel: ObservableObject {
 
     @discardableResult
     func saveRouter() -> Bool {
+        guard iosSpeedLabOwnership.admit(.profile) else { return false }
         guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Enter the home router public IP or hostname"; return false }
         var current = bundle ?? ClientBundle.empty
         current.endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -226,6 +229,7 @@ final class RouterVPNModel: ObservableObject {
     // rollback. Resolving them through the logical picker would silently turn
     // an AWG Fast attempt into the preferred WG variant of the same mode.
     func connect(rawProfileID: String?) async {
+        guard iosSpeedLabOwnership.admit(.connection) else { return }
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         if selectedRouterProfile?.multihopEnabled != true {
             do {
@@ -380,6 +384,7 @@ final class RouterVPNModel: ObservableObject {
             return digest
         }
         if !maxSources.isEmpty { configuration["max_source_sha256"] = maxSources }
+        IOSSpeedLabContext.mark(&configuration)
         proto.providerConfiguration = configuration
 
         let strict = strictKillSwitchEnabled || entryStrict
@@ -547,6 +552,7 @@ final class RouterVPNModel: ObservableObject {
     }
 
     func disconnect() {
+        guard iosSpeedLabOwnership.admit(.disconnect) else { return }
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard !userDisconnectInProgress else { return }
         iosConnectGeneration = UUID(); iosStrategyTaskActive = false; iosStrategyStatus = nil

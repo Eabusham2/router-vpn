@@ -144,6 +144,7 @@ import Libbox
 
     @discardableResult
     func runIOSOwnedStrategy(kind: IOSStrategyPlan.Kind, selections: [IOSRuntimeSelection], preferredRaw: String? = nil) async -> Bool {
+        guard iosSpeedLabOwnership.admit(.connection) else { return false }
         guard !iosStrategyTaskActive, !iosUserDisconnectInProgress else {
             message = "Another owned VPN operation is still running."; return false
         }
@@ -216,6 +217,7 @@ import Libbox
                     return digest
                 }
                 if !maxSources.isEmpty { captured["max_source_sha256"] = maxSources }
+                IOSSpeedLabContext.mark(&captured)
                 proto.providerConfiguration = captured
                 let strict = iosStrategyStrictLockdown
                 proto.includeAllNetworks = strict; proto.enforceRoutes = strict

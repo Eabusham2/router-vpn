@@ -114,6 +114,7 @@ extension RouterVPNModel {
     }
 
     func runIOSSmartAuto() async {
+        guard iosSpeedLabOwnership.admit(.connection) else { return }
         do { try await IOSMTUControl.withHold(model: self) { await runIOSSmartAutoHeld() } }
         catch { message = "SMART AUTO MTU isolation failed: \(error.localizedDescription)" }
     }
@@ -142,6 +143,7 @@ extension RouterVPNModel {
     }
 
     func runIOSCustom(layers requestedRaw: [String]) async {
+        guard iosSpeedLabOwnership.admit(.connection) else { return }
         do { try await IOSMTUControl.withHold(model: self) { await runIOSCustomHeld(layers: requestedRaw) } }
         catch { message = "CUSTOM MTU isolation failed: \(error.localizedDescription)" }
     }
