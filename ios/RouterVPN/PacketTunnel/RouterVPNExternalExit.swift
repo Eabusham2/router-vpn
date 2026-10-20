@@ -17,7 +17,7 @@ struct RouterVPNExternalPolicy: Sendable {
 
     static func compile(config: String, profile: [String: Any], protocolName: String,
                         expectedPublicIP: String, entry: [String: Any]? = nil,
-                        entryTag: String? = nil) throws -> RouterVPNExternalPolicy {
+                        entryTag: String? = nil, predecessorConfig: String? = nil) throws -> RouterVPNExternalPolicy {
         guard let exitID = profile["id"] as? String, !exitID.isEmpty,
               (entry == nil) == (entryTag == nil) else { throw issue() }
         var frozenProfile = profile
@@ -29,6 +29,11 @@ struct RouterVPNExternalPolicy: Sendable {
             selected["dns_bootstrap"] = owned
         }
         if let entry, let entryTag { selected["entry"] = entry; selected["entry_tag"] = entryTag }
+        if let predecessorConfig {
+            guard entry != nil, entryTag == "external-entry", !predecessorConfig.isEmpty,
+                  predecessorConfig.utf8.count <= 4 * 1024 * 1024 else { throw issue() }
+            selected["predecessor_config"] = predecessorConfig
+        }
         let capture = String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self)
         var failure: NSError?
         let encoded = LibboxRouterCompileExternalPolicy(config, capture, &failure)
@@ -59,6 +64,10 @@ struct RouterVPNExternalPolicy: Sendable {
               values["final_tag"] as? String == "custom-exit",
               values["dns_proof"] as? String == "required", values["public_exit_proof"] as? String == "required",
               ["not-requested", "unmeasured"].contains(values["auto_mtu"] as? String ?? "") else { throw issue() }
+        let selected = try JSONSerialization.jsonObject(with: Data(capture.utf8)) as? [String: Any]
+        if let predecessor = selected?["predecessor_config"] as? String {
+            guard values["predecessor_sha256"] as? String == digest(Data(predecessor.utf8)) else { throw issue() }
+        } else { guard values["predecessor_sha256"] == nil else { throw issue() } }
         return RouterVPNExternalPolicy(sourceConfig: source, capture: capture, config: config,
                                        metadata: metadata, sourceSHA256: sourceHash)
     }
@@ -191,6 +200,7 @@ enum RouterVPNExternalExitBuilder {
         var endpoints: [[String: Any]] = []
         var outbounds: [[String: Any]] = []
         var entryTag: String?
+        var predecessorConfig: String?
         if let predecessorProfile {
             guard ordinaryProtocols.contains(protocolName),
                   profile["multihop_entry_id"] as? String == predecessorProfile["id"] as? String,
@@ -211,24 +221,24 @@ enum RouterVPNExternalExitBuilder {
                 _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
                 var entry = try customExit(external: imported, protocolName: kind); entry["tag"] = tag
                 if kind == "wireguard" { endpoints.append(entry) } else { outbounds.append(entry) }
+                custom["detour"] = tag
             } else {
                 guard predecessorProfile["node_kind"] as? String == "router-vpn",
-                      profile["multihop_entry_mode"] as? String == "wg",
-                      ["", "off"].contains(string(predecessorProfile["start_layer"])),
-                      predecessorProfile["daita_enabled"] as? Bool != true,
-                      Set(predecessorFiles.keys) == ["sing-box.json"],
+                      let mode = profile["multihop_entry_mode"] as? String, torEntryModes.contains(mode),
+                      string(predecessorProfile["node_proof_id"]).range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
                       let data = predecessorFiles["sing-box.json"],
+                      !data.isEmpty, data.count <= 4 * 1024 * 1024, let source = String(data: data, encoding: .utf8),
                       let graph = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      Set(graph.keys) == ["endpoints", "route"],
-                      let entries = graph["endpoints"] as? [[String: Any]], entries.count == 1,
-                      (graph["outbounds"] as? [[String: Any]] ?? []).isEmpty,
-                      entries[0]["tag"] as? String == tag, entries[0]["type"] as? String == "wireguard",
-                      let route = graph["route"] as? [String: Any], Set(route.keys) == ["final"], route["final"] as? String == tag else {
+                      let inbounds = graph["inbounds"] as? [[String: Any]], inbounds.count == 1, inbounds[0]["type"] as? String == "tun",
+                      let route = graph["route"] as? [String: Any], let final = route["final"] as? String, !final.isEmpty else {
                     throw error("The Router VPN entry requires its complete captured native graph.")
                 }
-                endpoints += entries
+                // The shared compiler imports and namespaces the whole graph.
+                // Do not extract one endpoint and discard its Start Layer,
+                // PQ handshake, transport lanes, DNS bootstrap or services.
+                predecessorConfig = source
             }
-            entryTag = tag; custom["detour"] = tag
+            entryTag = tag
         } else if !predecessorFiles.isEmpty { throw error("External startup cannot discard an unowned predecessor graph.") }
         if protocolName == "wireguard" || protocolName == "openvpn" { endpoints.append(custom) } else { outbounds.append(custom) }
 
@@ -254,9 +264,10 @@ enum RouterVPNExternalExitBuilder {
         if ordinaryProtocols.contains(protocolName) {
             let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
                                                             protocolName: protocolName, expectedPublicIP: expected,
-                                                            entry: predecessorProfile, entryTag: entryTag)
+                                                            entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig)
+            var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
             return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
-                                                files: ["sing-box.json": Data(policy.config.utf8)], policy: policy)
+                                                files: files, policy: policy)
         }
         return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected, files: ["sing-box.json": data])
     }

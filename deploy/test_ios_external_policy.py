@@ -17,7 +17,7 @@ spec.loader.exec_module(T)
 
 SWIFT = T.SWIFT[:T.SWIFT.index('@MainActor final class RouterVPNModel')]
 SWIFT += r'''
-enum RouterVPNMultihopGraph { static let supportedExitModes:[String]=[] }
+enum RouterVPNMultihopGraph { static let supportedExitModes:[String]=["wg"] }
 enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
 @MainActor @main struct Tests {
  static var checks=0
@@ -186,10 +186,14 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
    }
    try reject("missing captured entry cannot become direct"){_ = try RouterVPNExternalExitBuilder.build(profile:exit)}
   }}
-  var router:[String:Any]=["id":"paired-home","node_kind":"router-vpn","node_proof_id":String(repeating:"a",count:64),"router_api":"http://10.8.0.1:8787","api_token":"private-entry-token","adguard_ipv4":"192.168.50.133","mtu_policy":"fixed","manual_mtu":1500,"home_lan_access":false,"ipv6_mode":"on","start_layer":"off"]
-  let direct=try RouterVPNExternalExitBuilder.build(profile:profile("wireguard")),original=try object(Data(direct.policy!.sourceConfig.utf8))
-  var endpoint=(original["endpoints"] as! [[String:Any]])[0];endpoint["tag"]="external-entry"
-  let files=["sing-box.json":try json(["endpoints":[endpoint],"route":["final":"external-entry"]])]
+  let node=SHA256.hash(data:Data(("router-vpn-node-proof-v1\n"+key(4)).utf8)).map{String(format:"%02x",$0)}.joined()
+  var router:[String:Any]=["id":"paired-home","node_kind":"router-vpn","node_proof_id":node,"router_api":"http://10.8.0.1:8787","api_token":"private-entry-token","adguard_ipv4":"192.168.50.133","mtu_policy":"fixed","manual_mtu":1500,"home_lan_access":false,"ipv6_mode":"on","start_layer":"off"]
+  var input=profile("wireguard");input["manual_mtu"]=1500;input["ipv6_mode"]="on"
+  let direct=try RouterVPNExternalExitBuilder.build(profile:input)
+  // A real lowered one-TUN source, retaining its DNS and route policy. Change
+  // only the test's final tag; the native predecessor validator checks keys.
+  let complete=direct.policy!.config.replacingOccurrences(of:"custom-exit",with:"proxy")
+  let files=["sing-box.json":Data(complete.utf8)]
   var exit=profile("socks5");exit["dns_mode"]="home";exit["dns_host"]="192.168.50.133";exit["multihop_enabled"]=true;exit["multihop_entry_id"]="paired-home";exit["multihop_entry_mode"]="wg";exit["multihop_exit_id"]="saved-exit";exit["multihop_exit_mode"]="socks5";exit["multihop_execution"]="local"
   let r=try RouterVPNExternalExitBuilder.build(profile:exit,predecessorFiles:files,predecessorProfile:router),meta=try object(Data(r.policy!.metadata.utf8))
   try check("Home DNS stays on the proven paired entry",meta["dns_detour"] as? String=="external-entry" && meta["dns_server"] as? String=="192.168.50.133" && meta["entry_proof"] as? String=="required")
@@ -197,10 +201,12 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   router["node_proof_id"]="invalid"
   try reject("Home DNS cannot adopt an unpaired entry"){_ = try RouterVPNExternalExitBuilder.build(profile:exit,predecessorFiles:files,predecessorProfile:router)}
  }
- static func main()throws {
+ static func main() {
   defer{RouterVPNTorTestClose()}
-  try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap()
-  print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
+  do {
+   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap()
+   print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
+  } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
 }
 '''

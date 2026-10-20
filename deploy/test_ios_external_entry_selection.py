@@ -13,7 +13,7 @@ APP = ROOT / 'ios/RouterVPN/App'
 STUBS = r'''
 import Foundation
 enum IOSRuntimeSelector {
- static let multihopModeIDs:Set<String>=["wg","awg2-fast","awg2-strong","shadowsocks","hysteria2"]
+ static let multihopModeIDs:Set<String>=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]
  static func selectRaw(bundle:ClientBundle,rawProfileID:String)throws->Int {
   guard bundle.profiles[rawProfileID]?.isEmpty==false else{throw NSError(domain:"NativeReadinessBoundary",code:1)};return 1
  }
@@ -70,7 +70,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   model.bundle=bundle(exit);IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry)]
   let captured=try model.iosMultihopEntryBundle(for:model.bundle!)
   try check("paired WG carries exact private assets",captured.profiles==entry.profiles && captured.nodeProofID==entry.routerProfiles[0].nodeProofID && captured.apiToken==entry.routerProfiles[0].apiToken)
-  for fault in ["duplicate","missing","unpaired","wrong-kind","missing-assets","padding","layer"] {
+  for fault in ["duplicate","missing","unpaired","wrong-kind","missing-assets","layer"] {
    var changed=entry
    switch fault {
    case "duplicate":changed.routerProfiles.append(changed.routerProfiles[0])
@@ -78,11 +78,21 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    case "unpaired":changed.routerProfiles[0].nodeProofID="invalid"
    case "wrong-kind":changed.routerProfiles[0].nodeKind="unknown"
    case "missing-assets":changed.profiles=[:]
-   case "padding":changed.routerProfiles[0].daitaEnabled=true
    default:changed.routerProfiles[0].startLayer="aes-256-gcm"
    }
    IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(changed)]
    try reject("invalid Router VPN predecessor "+fault){_ = try model.iosMultihopEntryBundle(for:model.bundle!)}
+  }
+  for mode in IOSRuntimeSelector.multihopModeIDs {
+   for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+    var complete=entry;complete.routerProfiles[0].daitaEnabled=true;complete.routerProfiles[0].startLayer=layer
+    complete.profiles[mode]=["selected-asset":Data(("exact "+mode+" "+layer).utf8).base64EncodedString()]
+    complete.profiles["shadowsocks"]=["sing-box.json":try encoded(["outbounds":[["type":"shadowsocks","tag":"proxy","server":"198.51.100.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:3,count:32).base64EncodedString()]]]).base64EncodedString()]
+    var selected=model.bundle!;selected.routerProfiles[0].multihopEntryMode=mode
+    IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(complete)]
+    let result=try model.iosMultihopEntryBundle(for:selected)
+    try check("full native mode and layer selection stays captured",result.profiles==complete.profiles && result.routerProfiles[0].startLayer==layer && result.routerProfiles[0].daitaEnabled==true)
+   }
   }
   IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry)]
   for execution in ["server","auto","unknown"]{var changed=model.bundle!;changed.routerProfiles[0].multihopExecution=execution;try reject("unowned external server execution"){_ = try model.iosMultihopEntryBundle(for:changed)}}

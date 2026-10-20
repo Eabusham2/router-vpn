@@ -96,8 +96,7 @@ extension RouterVPNModel {
             entry.nodeProofID = ""
             entry.routerAPI = ""; entry.apiToken = ""; entry.adGuardIPv4 = ""; entry.adGuardIPv6 = ""
         } else {
-            guard profile.normalizedNodeKind == "router-vpn", mode == "wg", profile.daitaEnabled != true,
-                  try IOSMultihopStartLayer.selected(capturedEntry) == "off",
+            guard profile.normalizedNodeKind == "router-vpn", IOSRuntimeSelector.multihopModeIDs.contains(mode),
                   let proof = profile.nodeProofID, proof.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else {
                 throw iosMultihopError("The Router VPN entry requires its exact native mode and paired private identity.")
             }
@@ -217,7 +216,6 @@ struct IOSMultihopView: View {
                     } else {
                     Picker("Entry transport", selection: $entryMode) {
                         Text("WireGuard").tag("wg")
-                        if ordinaryExitProtocol == nil {
                         Text("AmneziaWG Fast").tag("awg2-fast")
                         Text("AmneziaWG Strong").tag("awg2-strong")
                         Text("WireGuard + Rosenpass PQ").tag("wg-pq")
@@ -236,7 +234,6 @@ struct IOSMultihopView: View {
                         Text("MAX TLS — AWG + PQ").tag("max-tls-awg")
                         Text("MAX QUIC — WG + PQ").tag("max-quic-wg")
                         Text("MAX QUIC — AWG + PQ").tag("max-quic-awg")
-                        }
                     }
                     }
                     Picker("Exit node", selection: $exitID) {

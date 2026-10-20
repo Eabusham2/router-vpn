@@ -217,7 +217,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  func linkNodeBundle(_ data:Data)throws {_ = try JSONDecoder().decode(ClientBundle.self,from:data);saved=data;writes+=1}
 }
 @main struct Tests {
- @MainActor static var checks=0,graphs=0,policyCases=0,sessions=Set<String>()
+ @MainActor static var checks=0,graphs=0,policyCases=0,externalGraphs=0,sessions=Set<String>()
  static let modes=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"]
  static let kinds=["tor","obfs4","meek_lite","snowflake","webtunnel","custom"]
  static let layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
@@ -445,6 +445,17 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
   let maximum=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2]))),composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
+  if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_ENTRY_GRAPHS"] {
+   for mode in modes {for layer in layers {
+    let selected=try root(mode,layer,maximum,composite),files=try ProviderPreparation().entry(selected,mode)
+    let directory=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer)
+    try FileManager.default.createDirectory(at:directory,withIntermediateDirectories:false)
+    for (name,data) in files {try data.write(to:directory.appendingPathComponent(name))}
+    try json((selected["routerProfiles"] as! [[String:Any]])[0]).write(to:directory.appendingPathComponent("entry-profile.json"))
+    try json(["mode":mode,"layer":layer]).write(to:directory.appendingPathComponent("fixture.json"))
+   }}
+   if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_ENTRY_ONLY"]=="1" {print("Exported 57 complete shipping Apple entry graphs");return}
+  }
   try check("every supported Tor predecessor included",Set(modes)==RouterVPNExternalExitBuilder.torEntryModes)
   for kind in kinds {try verify(kind,"direct","off",maximum,composite)}
   var failures:[String]=[]
@@ -456,7 +467,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try policies(maximum,composite)
   try negatives(maximum,composite)
   try ordinaryExternalEntry(maximum,composite)
-  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) transport graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+  try ordinaryExternalPredecessors(maximum,composite)
+  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor and \(externalGraphs) ordinary external graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
@@ -487,6 +499,63 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    reject("WireGuard private entry key must match paired identity"){_ = try owner.prepare(provider:wrong,selectedProfile:exit,strict:true)}
   }}
  }
+ @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
+  var failures:[String]=[]
+  for mode in modes {for layer in layers {
+   let entry=try root(mode,layer,maximum,composite),profile=(entry["routerProfiles"] as! [[String:Any]])[0]
+   let owner=ProviderPreparation(),originalFiles=try owner.entry(entry,mode),previous=try object(originalFiles["sing-box.json"]!)
+   let oldFinal=(previous["route"] as! [String:Any])["final"] as! String
+   let packetEntry=["wireguard","routervpn-amneziawg","routervpn-pq"].contains(try tagged(previous,oldFinal)["type"] as? String ?? "")
+   for kind in protocols {
+    do {
+     let model=RouterVPNModel()
+     let exitMTU=kind=="wireguard" && packetEntry ? 1280:1380
+     try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU)
+     var exit=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
+     exit["multihop_enabled"]=true;exit["multihop_entry_id"]="entry";exit["multihop_entry_mode"]=mode;exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind;exit["multihop_execution"]="local"
+     exit["dns_mode"]="custom";exit["dns_protocol"]="tcp";exit["dns_host"]="9.9.9.9";exit["dns_port"]=5353;exit["mtu_policy"]="fixed";exit["manual_mtu"]=exitMTU;exit["home_lan_access"]=false;exit["ipv6_mode"]="on"
+     let frozen=try json(exit),provider:[String:Any]=["external_entry_bundle":try json(entry),"external_entry_mode":mode]
+     if kind=="wireguard" && packetEntry {
+      var oversized=exit;oversized["manual_mtu"]=1380
+      reject("nested fixed MTU cannot overwrite or exceed its entry"){_ = try owner.prepare(provider:provider,selectedProfile:oversized,strict:true)}
+     }
+     let prepared=try owner.prepare(provider:provider,selectedProfile:exit,strict:true),policy=prepared.runtime.policy!
+     let capture=try object(Data(policy.capture.utf8)),source=try object(Data(policy.sourceConfig.utf8)),graph=try object(Data(policy.config.utf8)),meta=try object(Data(policy.metadata.utf8))
+     try check("complete entry graph captured byte for byte",capture["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(capture["entry"]!)==json(profile))
+     try check("uncomposed source remains only the selected exit",(source["endpoints"] as! [[String:Any]]).count+(source["outbounds"] as! [[String:Any]]).count==1 && tagged(source,"custom-exit")["detour"]==nil)
+     try check("shared native compiler connects final exit to full entry",tagged(graph,"custom-exit")["detour"] as? String=="external-entry" && (graph["inbounds"] as! [[String:Any]]).count==1)
+     try check("exact entry family remains",tagged(graph,"external-entry")["type"] as? String==tagged(previous,oldFinal)["type"] as? String)
+     try check("the shared TUN retains the selected fixed MTU",meta["configured_mtu"] as? Int==exitMTU)
+     for family in ["endpoints","outbounds"] {
+      let before=previous[family] as? [[String:Any]] ?? [],after=(graph[family] as? [[String:Any]] ?? []).filter{($0["tag"] as? String ?? "").hasPrefix("external-entry")}
+      try check("all encrypted entry owners retained",before.count==after.count)
+      for (original,retained) in zip(before,after) {
+       for key in original.keys where !["tag","detour","tcp","udp","domain_resolver"].contains(key) {
+        try check("entry cryptography and native configuration unchanged",json(["value":original[key]!])==json(["value":retained[key] ?? NSNull()]))
+       }
+       for key in ["detour","tcp","udp"] where original[key] != nil {
+        guard let tag=retained[key] as? String else{throw NSError(domain:"MissingExternalPredecessorEdge",code:1)}
+        _=try tagged(graph,tag);checks+=1
+       }
+      }
+     }
+     let oldServices=previous["services"] as? [[String:Any]] ?? [],newServices=graph["services"] as? [[String:Any]] ?? []
+     try check("requested padding services retained",oldServices.count==newServices.count && !oldServices.isEmpty)
+     for (original,retained) in zip(oldServices,newServices) {for key in original.keys where !["tag","proof_tag","packet_tag"].contains(key) {
+      try check("padding identity target and rate stay owned",json(["value":original[key]!])==json(["value":retained[key] ?? NSNull()]))
+     }}
+     for (name,data) in originalFiles where name != "sing-box.json" {try check("auxiliary private files retain exact bytes",prepared.runtime.files[name]==data)}
+     let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]],selected=dns.first{$0["tag"] as? String=="selected-dns"}!
+     try check("DNS selection and IPv6 policy remain captured",selected["type"] as? String=="tcp" && selected["server_port"] as? Int==5353 && selected["detour"] as? String=="custom-exit" && meta["ipv6_mode"] as? String=="off")
+     try check("source entry and exit policies stay frozen",json(exit)==frozen && json(capture["entry"]!)==json(profile))
+     externalGraphs+=1
+    }catch{failures.append(mode+"/"+layer+"/"+kind+": "+error.localizedDescription)}
+   }
+  }}
+  if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
+  try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==342)
+ }
 }
 '''
 
@@ -494,12 +563,20 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--output', type=Path)
+    parser.add_argument('--entry-output', type=Path)
+    parser.add_argument('--entry-only', action='store_true')
     args = parser.parse_args()
+    if args.entry_only and args.output:
+        raise ValueError('--entry-only cannot produce complete Tor graph evidence')
     for tool in ('go', 'swiftc'):
         if not shutil.which(tool):
             raise RuntimeError(tool + ' is required')
     if args.output and (not args.output.is_dir() or any(args.output.iterdir()) or args.output.is_symlink()):
         raise ValueError('--output must be an existing empty owned directory')
+    if args.entry_output and (not args.entry_output.is_dir() or any(args.entry_output.iterdir()) or args.entry_output.is_symlink()):
+        raise ValueError('--entry-output must be an existing empty owned directory')
+    if args.entry_only and not args.entry_output:
+        raise ValueError('--entry-only requires --entry-output')
     with tempfile.TemporaryDirectory(prefix='.ios-tor-go-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-tor-profile-') as temporary:
         go_dir, work = Path(go_dir), Path(temporary)
         (go_dir / 'main.go').write_text(GO)
@@ -533,10 +610,14 @@ def main():
         environment = dict(os.environ)
         if args.output:
             environment['ROUTERVPN_IOS_TOR_GRAPHS'] = str(args.output.resolve())
+        if args.entry_output:
+            environment['ROUTERVPN_IOS_ENTRY_GRAPHS'] = str(args.entry_output.resolve())
+        if args.entry_only:
+            environment['ROUTERVPN_IOS_ENTRY_ONLY'] = '1'
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
         if args.output:
             inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            report = {'schema': 1, 'graphs': 348, 'ordinary_external_graphs': 342, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 

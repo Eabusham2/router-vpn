@@ -1099,15 +1099,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                       (entry["external"] as? [String: Any])?["protocol"] as? String == mode else { throw tunnelError(58, "External entry protocol differs from its captured node.") }
                 try IOSStartLayer.validateExternal(profile: entry)
             } else {
-                guard entry["node_kind"] as? String == "router-vpn", mode == "wg", entry["daita_enabled"] as? Bool != true,
-                      try IOSStartLayer.selectedMode(profile: entry) == "off" else {
-                    throw tunnelError(58, "This Router VPN entry requires its complete native graph adapter.")
+                guard entry["node_kind"] as? String == "router-vpn", RouterVPNExternalExitBuilder.torEntryModes.contains(mode) else {
+                    throw tunnelError(58, "The captured Router VPN entry transport is invalid.")
                 }
-                let proof = try suppliedNodeProof(root: entryRoot, selectedProfile: entry)
-                var endpoint = try multihopWireGuardEndpoint(root: entryRoot, expectedProofID: proof, name: "External path entry").endpoint
-                endpoint["tag"] = "external-entry"
-                let graph: [String: Any] = ["endpoints": [endpoint], "route": ["final": "external-entry"]]
-                entryFiles = ["sing-box.json": try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys])]
+                let compiled = try compileLibbox(provider: ["rawProfileID": mode], root: entryRoot, selectedProfile: entry)
+                entryFiles = compiled.files
             }
             entryProfile = entry
             effectiveStrict = strict || strictKillSwitchRequested(entry)
