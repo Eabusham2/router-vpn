@@ -22,6 +22,7 @@ const ExternalDNSTag = "selected-dns"
 // node, public-address or Auto-MTU proof.
 type ExternalPolicy struct {
 	config, metadata, source string
+	capture                  externalPolicyCapture
 }
 
 func (p *ExternalPolicy) Config() string       { return p.config }
@@ -213,9 +214,30 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 		MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, EntryMTU: entryMTU, UDPAvailable: udp,
 		AutoMTU: "not-requested",
 	}
-	if dnsMeta.mode == "home" {
-		meta.EntryNodeID, _ = selection.Entry["node_proof_id"].(string)
+	if selection.Entry != nil {
 		meta.EntryProof = "required"
+		if selection.Entry["node_kind"] != "external" {
+			meta.EntryNodeID, _ = selection.Entry["node_proof_id"].(string)
+			api, _ := selection.Entry["router_api"].(string)
+			token, _ := selection.Entry["api_token"].(string)
+			if !proofID.MatchString(meta.EntryNodeID) || token == "" || len(token) > 4096 || strings.TrimSpace(token) != token {
+				return nil, errors.New("external route requires the captured entry's private node proof")
+			}
+			for _, ch := range token {
+				if ch < 0x21 || ch > 0x7e {
+					return nil, errors.New("external entry proof credential is invalid")
+				}
+			}
+			if _, err := privateAPI(api); err != nil {
+				return nil, errors.New("external entry proof endpoint is invalid")
+			}
+		} else {
+			external, _ := selection.Entry["external"].(map[string]any)
+			ip, _ := external["expected_public_ip"].(string)
+			if !externalPublicIP(ip) {
+				return nil, errors.New("external entry requires its own expected public address")
+			}
+		}
 	}
 	if mtuPolicy == "auto" {
 		meta.AutoMTU = "unmeasured"
@@ -225,7 +247,7 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	return &ExternalPolicy{config: string(body), metadata: string(metadata), source: meta.SourceSHA256}, nil
+	return &ExternalPolicy{config: string(body), metadata: string(metadata), source: meta.SourceSHA256, capture: selection}, nil
 }
 
 func externalDigest(data []byte) string {
