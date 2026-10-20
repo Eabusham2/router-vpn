@@ -3,7 +3,8 @@
 ## Implemented path
 
 Android and iOS/iPadOS compile a private inline `.ovpn` profile through
-`mobile/routervpn_openvpn.go` into a native `openvpn-client` endpoint. The
+`internal/nativeopenvpn.CompileEndpoint`, exposed by the unchanged
+`mobile/routervpn_openvpn.go` binding, into a native `openvpn-client` endpoint. The
 endpoint runs inside the application's existing Libbox runtime with
 `system: false`; it does not launch a command-line VPN or install a second OS
 TUN. Both mobile builders pin sing-box 1.14.1 at
@@ -21,17 +22,33 @@ silently discarded. Scripts, plugins, management listeners, local file reference
 active compression and interactive authentication challenges are not accepted.
 This is not a promise to support every provider's OpenVPN profile.
 
-On Android, Add custom exit includes a private OpenVPN form. It feeds both the
-direct-exit builder and the existing WireGuard-entry/custom-exit builder. The
-latter sets `detour: entry-wg`. The new code retains the process-owned VpnService,
-socket protection, lockdown requirements and expected-public-exit verification.
+On Android, Add custom exit includes a private OpenVPN form. Direct connections
+and connections through a captured Router VPN entry use the shared external
+policy compiler. The predecessor is the complete selected entry graph, including
+its WG/AWG/PQ/Xray/MAX/helper transports, Start Layer and owned padding service.
+It retains the process-owned VpnService, socket protection and lockdown policy.
 The combined Libbox/Xray AAR remains one Go runtime.
 
 On iOS/iPadOS, Add External Node and Linked Nodes expose OpenVPN. The private
 linked-node store retains the original profile. PacketTunnel recompiles its
-frozen profile and requires the existing exact public-exit proof before startup
-completes. Only the unique Router VPN-owned manager may be selected for startup.
-This change does not add OpenVPN to every arbitrary iOS multihop composition.
+frozen profile and uses the same shared external policy and captured predecessor
+graph. Ordinary imported OpenVPN profiles can be entry or exit transports. Only
+the unique Router VPN-owned manager may be selected for startup.
+
+The policy compiler recompiles the exact original inline OpenVPN configuration
+and compares the entire endpoint before applying the captured path. Remote order,
+fallback transports, credentials and TLS material must agree. It retains the
+selected DNS transport, IPv6 and LAN conjunction, entry identity proof where
+applicable, and routed DNS and public-exit proofs. A TCP OpenVPN carrier can carry
+UDP application packets inside its encrypted stream; an OpenVPN profile with any
+UDP remote cannot use a TCP-only outer proxy.
+
+Endpoint MTU and the shared OS TUN remain separate owners. An imported explicit
+fragment size is preserved and checked against the enclosing packet tunnel;
+fragmentation is never added implicitly. Without explicit fragmentation, nested
+UDP OpenVPN reserves a conservative 160 bytes for supported encryption/framing
+and IPv6/UDP overhead. An oversized fixed inner MTU is rejected. These are
+configuration bounds, not an Auto-MTU measurement of an external provider.
 
 ## Executable evidence
 
@@ -49,6 +66,11 @@ private store, runtime builders, proof call sites and generated binding adapters
 The iPhone/iPad Xcode app/extension build and Android APK build are separate
 native gates. Marker checks are not substitutes for either native compilation
 or real traffic tests.
+
+`go test -race ./internal/mobilemultihop -run '^TestExternalOpenVPN'` also checks
+114 complete Router VPN predecessor graphs (19 modes, three Start Layers, and
+TCP/UDP OpenVPN exits), imported entry combinations, TLS/credential mutations,
+fallback transport rejection and nested MTU ownership.
 
 The release audits preserve their existing weights and manual evidence gates.
 Their source score is not a percentage of all original features delivered.

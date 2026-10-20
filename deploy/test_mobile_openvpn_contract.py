@@ -29,9 +29,24 @@ need('android/app/src/main/java/com/eabusham/routervpn/AndroidOpenVPN.java', 'Li
 store=need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java', 'AndroidOpenVPN.endpoint(e, "")', '.put("openvpn_config",e.openVPNConfig)', 'AndroidPrivateFileStore.write')
 summary=store.split('JSONObject summary()',1)[1].split('private final Context',1)[0]
 assert 'openVPNConfig' not in summary and '.put("password"' not in summary, 'raw credentials leaked in external summary'
-need('android/app/src/main/java/com/eabusham/routervpn/AndroidDirectStandardExitController.java', 'AndroidOpenVPN.endpoint(e, "")', '"openvpn".equals(exit.protocol)) endpoints.put(custom)')
-need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitController.java', 'AndroidOpenVPN.endpoint(e,"entry-wg")', '"openvpn".equals(exit.protocol))endpoints.put(custom)')
-need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java', 'proveExpectedPublicIp(exit.expectedPublicIp)', 'stopEmbeddedAndProve()')
+need('android/app/src/main/java/com/eabusham/routervpn/AndroidDirectStandardExitController.java', 'AndroidOpenVPN.endpoint(e, "")', 'AndroidExternalPolicy.prepare(context, null, exit, "external")')
+need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitController.java', 'AndroidExternalPolicy.prepare(context, entryBundle, exit, entryMode)')
+need('android/app/src/main/java/com/eabusham/routervpn/AndroidExternalPolicy.java',
+     'ext.put("openvpn", new JSONObject().put("config", exit.openVPNConfig)',
+     '.put("username", exit.username).put("password", exit.password)',
+     'AndroidDirectStandardExitController.customExitJson(exit)',
+     '"openvpn".equals(exit.protocol)) endpoints.put(transport)',
+     'Libbox.routerCompileExternalPolicy(source, capture)',
+     'AndroidExternalEntry.prepare(context,entryFile,entry,entryMode)',
+     '"predecessor_config",captured.config', 'Libbox.checkConfig(compiled.config)')
+need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java',
+     'capturedExternalExit(capturedHome)',
+     'LayeredVpnService.externalExitIP(externalNativeSession,externalID)',
+     'stopEmbeddedAndProve()')
+need('internal/mobilemultihop/external_openvpn.go',
+     'nativeopenvpn.CompileEndpoint(config, credentials[0], credentials[1]',
+     'reflect.DeepEqual(endpoint, expected)', 'externalOpenVPNRequiresUDP',
+     'externalOpenVPNMTU')
 for path in ('ios/RouterVPN/App/IOSUnifiedSecureTransport.swift','android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedControlCenterPolicy.java'):
     text=need(path, '"openvpn"', 'Tor bridges')
     assert 'OpenVPN is unavailable' not in text
