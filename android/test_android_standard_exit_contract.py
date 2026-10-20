@@ -57,7 +57,8 @@ for marker in ('RouterExternalProofRequest', 'routerExternalCreateProof(', 'dns_
 for marker in ('EXTRA_HOME_SESSION_ID', 'externalSession', 'externalExitIP(', 'failedPolicyExternal('):
     assert marker in service, marker
 for case in ('test_android_external_entries.py', 'test_android_external_policy.py',
-             'test_android_external_session.py', 'test_android_runtime_teardown.py'):
+             'test_android_external_session.py', 'test_android_external_revalidation.py',
+             'test_android_runtime_teardown.py'):
     assert (root/'android'/case).is_file(), f'executable external-policy coverage missing: {case}'
 # A stop request is not teardown proof. Both cancellation and failure must keep
 # ownership until the embedded engine reports a terminal state.
