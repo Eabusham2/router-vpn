@@ -42,9 +42,8 @@ final class AndroidSessionRevalidator {
                     observed=engines.standardExit.capturedTorExit(current);
                 }else{
                     if(current.expectedExternalIp==null||current.expectedExternalIp.isEmpty())throw new IllegalStateException("External session has no expected public-exit proof target.");
-                    observed=AndroidExternalPolicy.supports(current.activeExternalProtocol)
-                            ? engines.standardExit.capturedExternalExit(current)
-                            : AndroidStandardExitRuntime.proveExpectedPublicIp(current.expectedExternalIp);
+                    if(!AndroidExternalPolicy.supports(current.activeExternalProtocol))throw new IllegalStateException("External session has no captured native policy owner.");
+                    observed=engines.standardExit.capturedExternalExit(current);
                 }
                 current=requireSameRevalidation(token);
                 if(!AndroidHomeStateStore.completePathRevalidation(context,token))throw new IllegalStateException("External path proof completed for a stale Android session/generation.");

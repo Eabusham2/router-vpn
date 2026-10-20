@@ -2,15 +2,7 @@ package com.eabusham.routervpn;
 
 import android.content.Context;
 
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
-import java.net.HttpURLConnection;
-import java.net.InetAddress;
-import java.net.InetSocketAddress;
-import java.net.Proxy;
-import java.net.URL;
-import java.nio.charset.StandardCharsets;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -20,7 +12,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 /** Owns one custom-exit graph, its exact proof and cancellation through real teardown. */
 final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);}
-    private static final long START_TIMEOUT_MS=20000L;
     private static final long TOR_START_TIMEOUT_MS=200000L;
     private static final long POLICY_START_TIMEOUT_MS=90000L;
     private static final long STOP_TIMEOUT_MS=8000L;
@@ -74,13 +65,13 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         synchronized(this){workerThread=Thread.currentThread();}
         try{
             synchronized(this){if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled.");}
+            if(!tor&&!policy)throw new IllegalArgumentException("The selected external protocol has no captured native policy owner.");
             String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
             if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
             if(policy&&!direct&&!capturedEntry.equals(AndroidExternalPolicy.entryDigest(entry)))throw new IllegalStateException("The selected external entry changed while its request was queued.");
             if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
-            else if(policy) AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
-            else AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");
+            else AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
             sessionStarted=true;
             capturedHome=AndroidHomeStateStore.snapshot(context);
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
@@ -96,7 +87,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 started=true;releasePrepared=false;
                 if(policy)singBox.startExternal(session,capturedHome.sessionId);else singBox.start(session);
             }
-            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:policy?POLICY_START_TIMEOUT_MS:START_TIMEOUT_MS);
+            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:POLICY_START_TIMEOUT_MS);
             while(System.currentTimeMillis()<deadline){
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
                 String state=singBox.getState();
@@ -105,21 +96,20 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 Thread.sleep(250L);
             }
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
-            cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":policy?"Captured entry, selected DNS and public exit passed; checking current ownership…":"Tunnel is UP; proving the exact public custom exit before Connected…");
-            String observed=tor?capturedTorExit(capturedHome):policy?capturedExternalExit(capturedHome):proveExpectedPublicIp(exit.expectedPublicIp);
+            cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Captured entry, selected DNS and public exit passed; checking current ownership…");
+            String observed=tor?capturedTorExit(capturedHome):capturedExternalExit(capturedHome);
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
                 if(tor){
                     capturedTorExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
-                }else if(policy){
+                }else{
                     capturedExternalExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed))throw new IllegalStateException("The captured external session changed before Connected adoption.");
-                }else AndroidHomeStateStore.connectedExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg",observed);
+                }
             }
             cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
-                    :policy?"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+". Captured entry, selected DNS and public exit proof passed: "+observed
-                    :direct?"Connected: direct "+exit.protocol+" custom exit. Public exit proof passed: "+observed:"Connected: WireGuard entry → "+exit.protocol+" custom exit. Public exit proof passed: "+observed);
+                    :"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+". Captured entry, selected DNS and public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
             releasePrepared=stopped;
@@ -201,27 +191,6 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 ||engines.amneziaWG.getState()!=org.amnezia.awg.backend.Tunnel.State.DOWN
                 ||runtimeBusy(engines.xray.getState()))return "Wait for the current Router VPN transition to finish or disconnect before starting a custom exit.";
         return "";
-    }
-
-    static String proveExpectedPublicIp(String expected)throws Exception{
-        InetAddress wanted=InetAddress.getByName(expected);
-        Proxy proxy=new Proxy(Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",1099));
-        String[]providers={"https://api64.ipify.org","https://api.ipify.org"};
-        Exception last=null;long deadline=System.currentTimeMillis()+10000L;
-        while(System.currentTimeMillis()<deadline){
-            for(String endpoint:providers){
-                HttpURLConnection c=null;
-                try{
-                    c=(HttpURLConnection)new URL(endpoint).openConnection(proxy);c.setConnectTimeout(2000);c.setReadTimeout(2000);c.setInstanceFollowRedirects(false);c.setRequestProperty("Accept","text/plain");
-                    if(c.getResponseCode()/100!=2)throw new IllegalStateException("Exit proof HTTP "+c.getResponseCode());
-                    byte[]raw=readLimited(c.getInputStream(),256);String text=new String(raw,StandardCharsets.US_ASCII).trim();InetAddress seen=InetAddress.getByName(text);
-                    if(seen.equals(wanted))return seen.getHostAddress();
-                    last=new IllegalStateException("Custom exit reached "+seen.getHostAddress()+", expected "+wanted.getHostAddress()+".");
-                }catch(Exception error){last=error;}finally{if(c!=null)c.disconnect();}
-            }
-            Thread.sleep(250L);
-        }
-        throw last==null?new IllegalStateException("Custom exit public-IP proof timed out."):last;
     }
 
     synchronized boolean isActiveOrTransitioning(){
@@ -309,6 +278,5 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         return "DOWN".equals(normalized)||"FAILED".equals(normalized)||"REVOKED".equals(normalized);
     }
     private static boolean runtimeBusy(String state){return !terminal(state);}
-    private static byte[] readLimited(InputStream in,int max)throws Exception{try(InputStream input=in;ByteArrayOutputStream out=new ByteArrayOutputStream()){byte[]b=new byte[256];int total=0,n;while((n=input.read(b))!=-1){total+=n;if(total>max)throw new IllegalStateException("Custom exit proof response too large.");out.write(b,0,n);}return out.toByteArray();}}
     private static String nonEmpty(String value,String fallback){return value==null||value.trim().isEmpty()?fallback:value.trim();}
 }

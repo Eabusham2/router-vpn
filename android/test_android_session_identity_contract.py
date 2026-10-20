@@ -177,13 +177,15 @@ for marker in (
     "requireSameRevalidation(token)",
     "AndroidHomeStateStore.completePathRevalidation(context,token)",
     "AndroidPathProbe.prove(bundle,10000)",
-    "AndroidStandardExitRuntime.proveExpectedPublicIp",
+    "AndroidExternalPolicy.supports(current.activeExternalProtocol)",
+    "engines.standardExit.capturedExternalExit(current)",
     "AndroidHomeStateStore.saveActualExit(context,token.sessionId,observed)",
     '"pending".equals(now.pathProof)',
     "refusing to keep stale Connected proof",
 ):
     assert marker in revalidator, f"network-change revalidation lost marker: {marker}"
 assert "AndroidHomeStateStore.advancePathGeneration(context)" not in revalidator
+assert "proveExpectedPublicIp" not in revalidator, "external revalidation must retain native entry, DNS and path ownership"
 
 # Native WG/AWG are child transports when AUTO/SMART/CUSTOM/logical mode owns the
 # transaction. Direct raw-tunnel use may own Home state; managed child use may

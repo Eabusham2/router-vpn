@@ -6,16 +6,59 @@ controller=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidStanda
 direct=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidDirectStandardExitController.java').read_text()
 runtime=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitRuntime.java').read_text()
 activity=(root/'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java').read_text()
+policy=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalPolicy.java').read_text()
+entry=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalEntry.java').read_text()
+session=(root/'android/app/src/main/java/com/eabusham/routervpn/AndroidExternalSession.java').read_text()
+service=(root/'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java').read_text()
 for marker in ['"wireguard",true','"socks5",true','"http",true','"https",true','"shadowsocks",true','"hysteria2",true','"openvpn",true','standard-exits.json','Expected public exit IP must be public','AndroidOpenVPN.endpoint(e, "")','HTTPS proxy requires a valid TLS server name']:
     assert marker in store, marker
-for marker in ['put("detour","entry-wg")','put("tag","custom-exit")','put("final","custom-exit")','put("listen","127.0.0.1").put("listen_port",1099)','AndroidKillSwitchPolicy.SESSION_MARKER','literal DNS server IP','"http".equals(e.protocol)||"https".equals(e.protocol)','out.put("type","http")','put("server_name",e.tlsServerName)']:
+for marker in ['AndroidStandardExitStore.validate(exit)', 'AndroidExternalPolicy.supports(exit.protocol)',
+               'AndroidExternalPolicy.prepare(context, entryBundle, exit, entryMode)',
+               'The selected external protocol has no captured native policy owner.']:
     assert marker in controller, marker
-for marker in ['AndroidKillSwitchPolicy.SESSION_MARKER','put("strict_route", true)','put("server", "1.1.1.1")','put("detour", "custom-exit")','put("final", "custom-exit")','standard-direct-','AndroidOpenVPN.endpoint(e, "")','"http".equals(e.protocol) || "https".equals(e.protocol)','out.put("type", "http")','put("server_name", e.tlsServerName)']:
+for marker in ['AndroidStandardExitStore.validate(exit)', 'AndroidExternalPolicy.supports(exit.protocol)',
+               'AndroidExternalPolicy.prepare(context, null, exit, "external")',
+               'AndroidOpenVPN.endpoint(e, "")','"http".equals(e.protocol) || "https".equals(e.protocol)',
+               'out.put("type", "http")','put("server_name", e.tlsServerName)']:
     assert marker in direct, marker
-for marker in ['connectDirect(AndroidStandardExitStore.Entry exit','directBuilder.prepare(exit)','new Proxy(Proxy.Type.HTTP,new InetSocketAddress("127.0.0.1",1099))','proveExpectedPublicIp(exit.expectedPublicIp)','boolean stopped=!started||stopEmbeddedAndProve();','Public exit proof passed']:
+for marker in ['"wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn"',
+               'Libbox.routerCompileExternalPolicy(source, capture)',
+               '"openvpn".equals(exit.protocol)) endpoints.put(transport)',
+               'put("openvpn", new JSONObject().put("config", exit.openVPNConfig)',
+               'put("username", exit.username).put("password", exit.password)',
+               'AndroidExternalEntry.prepare(context,entryFile,entry,entryMode)',
+               'capture.put("predecessor_config",captured.config)',
+               'put("strict_route", true)', 'put("final", "custom-exit")',
+               'AndroidKillSwitchPolicy.SESSION_MARKER', 'standard-direct-',
+               'policy.remove("effective_mtu")', 'Libbox.checkConfig(compiled.config)']:
+    assert marker in policy, marker
+for marker in ['connectDirect(AndroidStandardExitStore.Entry exit','directBuilder.prepare(exit)',
+               'if(!tor&&!policy)throw', 'singBox.startExternal(session,capturedHome.sessionId)',
+               'capturedExternalExit(capturedHome)',
+               'AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed)',
+               'LayeredVpnService.externalExitIP(externalNativeSession,externalID)',
+               'boolean stopped=!started||stopEmbeddedAndProve();',
+               'Captured entry, selected DNS and public exit proof passed']:
     assert marker in runtime, marker
-for marker in ['Connect direct external exit','Connect via Router VPN entry → external exit','HTTP CONNECT','HTTPS CONNECT + TLS','requestDirect(','runtime.connectDirect(exit,cb)','Always-on VPN plus ‘Block connections without VPN’','Other hopped external exits currently use WireGuard','TLS server name / SNI for certificate verification']:
+for marker in ['Connect direct external exit','Connect via Router VPN entry → external exit','HTTP CONNECT','HTTPS CONNECT + TLS','requestDirect(','runtime.connectDirect(exit,cb)','Always-on VPN plus ‘Block connections without VPN’','Exact Router VPN entry mode','TLS server name / SNI for certificate verification',
+               'OpenVPN preserves its complete saved remote list and inline TLS settings',
+               'entry.policy=AndroidExternalPolicy.editorPolicy(null)',
+               'dialog.dismiss();showExternalPolicyForm(entry)']:
     assert marker in activity, marker
+# The previous WG-only builders and localhost public-IP listener could bypass
+# the selected DNS and complete entry proof. Every accepted non-Tor protocol
+# now reaches the one captured policy/session adapter instead.
+for text in (controller, direct, runtime):
+    for retired in ('proveExpectedPublicIp', '1099', '"1.1.1.1"', 'buildConfig('):
+        assert retired not in text, f'retired external fallback returned: {retired}'
+assert 'WireGuard entry path' not in activity
+for marker in ('RouterExternalProofRequest', 'routerExternalCreateProof(', 'dns_proven', 'entry_proven'):
+    assert marker in session, marker
+for marker in ('EXTRA_HOME_SESSION_ID', 'externalSession', 'externalExitIP(', 'failedPolicyExternal('):
+    assert marker in service, marker
+for case in ('test_android_external_entries.py', 'test_android_external_policy.py',
+             'test_android_external_session.py', 'test_android_runtime_teardown.py'):
+    assert (root/'android'/case).is_file(), f'executable external-policy coverage missing: {case}'
 # A stop request is not teardown proof. Both cancellation and failure must keep
 # ownership until the embedded engine reports a terminal state.
 assert runtime.count("boolean stopped=!started||stopEmbeddedAndProve();") == 2
