@@ -9,6 +9,7 @@ import (
 	"time"
 
 	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	"github.com/sagernet/sing/common/buf"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 )
@@ -130,6 +131,23 @@ func (b *peerBind) Send(packets [][]byte, remote awgconn.Endpoint) error {
 	for _, packet := range packets {
 		if len(packet) > 65535 {
 			return errors.New("oversized AWG datagram")
+		}
+		// Framed UDP transports expose PacketWriter so callers do not confuse
+		// protocol-header bytes with the datagram length. The pinned SOCKS
+		// net.Conn.Write reports its framed length; using it here aborted a
+		// valid AWG handshake prelude after its first junk packet.
+		if writer, ok := c.(N.PacketWriter); ok {
+			front, rear := N.CalculateFrontHeadroom(writer), N.CalculateRearHeadroom(writer)
+			if front < 0 || rear < 0 || front > 4096 || rear > 4096 {
+				return errors.New("unbounded AWG packet transport framing")
+			}
+			buffer := buf.NewSize(front + len(packet) + rear)
+			buffer.Resize(front, 0)
+			_, _ = buffer.Write(packet)
+			if err := writer.WritePacket(buffer, M.SocksaddrFromNetIP(b.target)); err != nil {
+				return err
+			}
+			continue
 		}
 		n, err := c.Write(packet)
 		if err != nil {

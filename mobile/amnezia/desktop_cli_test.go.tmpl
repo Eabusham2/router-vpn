@@ -1,0 +1,321 @@
+package routervpnamnezia
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/protocol/socks"
+)
+
+type desktopLoopbackDialer struct{}
+
+type desktopEchoHandler struct {
+	echoHandler
+	reads  atomic.Int64
+	writes atomic.Int64
+}
+
+func (h *desktopEchoHandler) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		_ = c.SetDeadline(time.Now().Add(10 * time.Second))
+		for {
+			p := buf.NewPacket()
+			address, err := c.ReadPacket(p)
+			if err != nil {
+				p.Release()
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+			h.reads.Add(1)
+			if err = c.WritePacket(p, address); err != nil {
+				if done != nil {
+					done(err)
+				}
+				return
+			}
+			h.writes.Add(1)
+		}
+	}()
+}
+
+func (desktopLoopbackDialer) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	if !address.Addr.IsLoopback() || (network != "tcp" && network != "udp") {
+		return nil, errors.New("desktop fixture cannot dial a non-loopback socket")
+	}
+	return (&net.Dialer{}).DialContext(ctx, network, address.String())
+}
+func (desktopLoopbackDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("desktop fixture cannot create an ambient UDP listener")
+}
+
+type desktopPhysicalProxy struct {
+	target M.Socksaddr
+	actual string
+	events chan string
+}
+
+func (desktopPhysicalProxy) NewConnectionEx(_ context.Context, c net.Conn, _, _ M.Socksaddr, done N.CloseHandlerFunc) {
+	_ = c.Close()
+	if done != nil {
+		done(errors.New("physical fixture supports only encrypted UDP"))
+	}
+}
+func (p desktopPhysicalProxy) NewPacketConnectionEx(ctx context.Context, c N.PacketConn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	go func() {
+		defer c.Close()
+		if destination != p.target {
+			if done != nil {
+				done(errors.New("physical fixture target differs"))
+			}
+			return
+		}
+		remote, err := (&net.Dialer{}).DialContext(ctx, "udp4", p.actual)
+		if err != nil {
+			if done != nil {
+				done(err)
+			}
+			return
+		}
+		defer remote.Close()
+		_ = remote.SetDeadline(time.Now().Add(15 * time.Second))
+		_ = c.SetDeadline(time.Now().Add(15 * time.Second))
+		returned := make(chan struct{})
+		go func() {
+			defer close(returned)
+			defer c.Close()
+			for {
+				packet := buf.NewSize(65535 + 256)
+				packet.Resize(256, 0)
+				n, err := remote.Read(packet.FreeBytes())
+				if err != nil {
+					packet.Release()
+					return
+				}
+				packet.Truncate(n)
+				if err := c.WritePacket(packet, p.target); err != nil {
+					return
+				}
+			}
+		}()
+		for {
+			packet := buf.NewPacket()
+			address, err := c.ReadPacket(packet)
+			if err != nil || address != p.target {
+				select {
+				case p.events <- fmt.Sprintf("physical read: %v %s (expected %s)", err, address, p.target):
+				default:
+				}
+				packet.Release()
+				break
+			}
+			_, err = remote.Write(packet.Bytes())
+			packet.Release()
+			if err != nil {
+				break
+			}
+		}
+		_ = remote.Close()
+		<-returned
+		if done != nil {
+			done(nil)
+		}
+	}()
+}
+
+func desktopPhysicalListener(t *testing.T, target M.Socksaddr, actual string, events chan string) *net.TCPAddr {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	var connections sync.Map
+	go func() {
+		for {
+			c, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			connections.Store(c, true)
+			go func() {
+				done := func(error) { _ = c.Close(); connections.Delete(c) }
+				if err := socks.HandleConnectionEx(ctx, c, bufio.NewReader(c), nil, desktopPhysicalProxy{target, actual, events}, nil, 10*time.Second, M.SocksaddrFromNet(c.RemoteAddr()), done); err != nil {
+					done(err)
+				}
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		cancel()
+		_ = listener.Close()
+		connections.Range(func(key, _ any) bool { _ = key.(net.Conn).Close(); return true })
+	})
+	return listener.Addr().(*net.TCPAddr)
+}
+
+// This runs the packaged CLI, not an in-process replacement for it. The only
+// physical detour maps one documentation address to our ephemeral loopback
+// reference. Neither an OS TUN nor a host route is created by the fixture.
+func TestDesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown(t *testing.T) {
+	binary := os.Getenv("ROUTERVPN_AWG_DESKTOP_CLI")
+	if binary == "" {
+		t.Skip("separate desktop CLI gate supplies its verified host executable")
+	}
+	info, err := os.Lstat(binary)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("desktop AWG gate requires a regular owned executable")
+	}
+	for _, wrongKey := range []bool{false, true} {
+		t.Run(map[bool]string{false: "encrypted-TCP-UDP-IPv4-IPv6", true: "wrong-key-rejected"}[wrongKey], func(t *testing.T) {
+			var captured Options
+			echo := new(desktopEchoHandler)
+			pair := newActualPairLifecycle(t, func(options *Options) { captured = *options }, echo, false)
+			captured.Tag, captured.Detour = "custom-exit", "fixture-physical"
+			if wrongKey {
+				captured.Peers = append(captured.Peers[:0:0], captured.Peers...)
+				captured.Peers[0].PreSharedKey = base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32))
+			}
+			reserved, err := net.Listen("tcp4", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			listener := reserved.Addr().(*net.TCPAddr)
+			_ = reserved.Close()
+			events := make(chan string, 16)
+			physical := desktopPhysicalListener(t, M.ParseSocksaddr(netip.AddrPortFrom(netip.MustParseAddr(captured.Peers[0].Address), uint16(captured.Peers[0].Port)).String()), pair.binding.address(), events)
+			graph := map[string]any{
+				"log":       map[string]any{"level": "error"},
+				"inbounds":  []any{map[string]any{"type": "mixed", "tag": "desktop-proof", "listen": "127.0.0.1", "listen_port": listener.Port}},
+				"endpoints": []any{captured},
+				"outbounds": []any{map[string]any{"type": "socks", "tag": "fixture-physical", "version": "5", "server": physical.IP.String(), "server_port": physical.Port}},
+				"route":     map[string]any{"final": "custom-exit"},
+			}
+			encoded, err := json.Marshal(graph)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(config, encoded, 0600); err != nil {
+				t.Fatal(err)
+			}
+			check := exec.Command(binary, "check", "-c", config)
+			if output, err := check.CombinedOutput(); err != nil {
+				t.Fatalf("desktop CLI rejected its captured native AWG config: %v %s", err, output)
+			}
+			logPath := filepath.Join(t.TempDir(), "cli.log")
+			logs, err := os.OpenFile(logPath, os.O_CREATE|os.O_WRONLY|os.O_EXCL, 0600)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer logs.Close()
+			command := exec.Command(binary, "run", "-c", config)
+			command.Stdout, command.Stderr = logs, logs
+			if err := command.Start(); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() { done <- command.Wait() }()
+			var once sync.Once
+			stop := func() {
+				once.Do(func() {
+					if err := command.Process.Signal(os.Interrupt); err != nil {
+						_ = command.Process.Kill()
+					}
+					select {
+					case <-done:
+					case <-time.After(3 * time.Second):
+						_ = command.Process.Kill()
+						<-done
+						t.Error("native CLI failed bounded owned shutdown")
+					}
+				})
+			}
+			defer stop()
+			address := listener.String()
+			ready := false
+			for deadline := time.Now().Add(5 * time.Second); time.Now().Before(deadline); {
+				connection, err := net.DialTimeout("tcp", address, 50*time.Millisecond)
+				if err == nil {
+					_ = connection.Close()
+					ready = true
+					break
+				}
+				time.Sleep(20 * time.Millisecond)
+			}
+			if !ready {
+				stop()
+				body, _ := os.ReadFile(logPath)
+				t.Fatalf("native CLI never opened its owned test listener: %s", body)
+			}
+			client := socks.NewClient(desktopLoopbackDialer{}, M.ParseSocksaddr(address), socks.Version5, "", "")
+			for _, network := range []string{"tcp", "udp"} {
+				for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
+					ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+					connection, err := client.DialContext(ctx, network, M.ParseSocksaddr(net.JoinHostPort(host, "9999")))
+					if err == nil {
+						_ = connection.SetDeadline(time.Now().Add(2 * time.Second))
+						payload := []byte("desktop-cli-through-pinned-native-AWG")
+						if _, err = connection.Write(payload); err == nil {
+							got := make([]byte, len(payload))
+							if network == "udp" {
+								// The SOCKS reader consumes its wire header in this
+								// buffer before returning one payload datagram.
+								got = make([]byte, 65535)
+								var n int
+								n, err = connection.Read(got)
+								got = got[:n]
+							} else {
+								_, err = io.ReadFull(connection, got)
+							}
+							if err == nil && !bytes.Equal(got, payload) {
+								err = errors.New("desktop native decrypted payload changed")
+							}
+						}
+						_ = connection.Close()
+					}
+					cancel()
+					if (err != nil) != wrongKey {
+						t.Logf("reference UDP received=%d replied=%d", echo.reads.Load(), echo.writes.Load())
+						for len(events) > 0 {
+							t.Log(<-events)
+						}
+						body, _ := os.ReadFile(logPath)
+						t.Fatalf("desktop native %s/%s encryption result differs: %v; physical packets %d; %s", network, host, err, pair.binding.packets.Load(), body)
+					}
+					if wrongKey {
+						break
+					}
+				}
+			}
+			if pair.binding.packets.Load() == 0 {
+				t.Fatal("desktop CLI did not contact the native encrypted reference")
+			}
+			stop()
+			if connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond); err == nil {
+				_ = connection.Close()
+				t.Fatal("closed desktop CLI retained its listener")
+			}
+		})
+	}
+}

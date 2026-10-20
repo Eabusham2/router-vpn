@@ -1,0 +1,127 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+type packetWriterFixture struct {
+	net.Conn
+	head        int
+	calls       int
+	destination M.Socksaddr
+	datagrams   [][]byte
+	fail        bool
+}
+
+func (p *packetWriterFixture) FrontHeadroom() int { return p.head }
+func (p *packetWriterFixture) Write(value []byte) (int, error) {
+	p.calls++
+	return len(value) + 10, nil // Pinned SOCKS Write returns its framed size.
+}
+func (p *packetWriterFixture) WritePacket(value *buf.Buffer, destination M.Socksaddr) error {
+	defer value.Release()
+	if p.fail {
+		return errors.New("fixture packet send failure")
+	}
+	if value.Start() < p.head {
+		return errors.New("missing native framing headroom")
+	}
+	p.destination = destination
+	p.datagrams = append(p.datagrams, append([]byte(nil), value.Bytes()...))
+	return nil
+}
+
+type shortDatagramFixture struct{ net.Conn }
+
+func (shortDatagramFixture) Write(value []byte) (int, error) { return len(value) - 1, nil }
+
+func TestBindPreservesPacketFramingAndShortWriteRejection(t *testing.T) {
+	target := netip.MustParseAddrPort("192.0.2.1:51820")
+	remote := peerEndpoint(target)
+	packets := [][]byte{[]byte("junk-one"), []byte("junk-two"), []byte("complete-handshake")}
+	writer := &packetWriterFixture{head: 64}
+	bind := &peerBind{ctx: context.Background(), target: target, conn: writer}
+	if err := bind.Send(packets, remote); err != nil {
+		t.Fatal(err)
+	}
+	if writer.calls != 0 || len(writer.datagrams) != len(packets) || writer.destination != M.SocksaddrFromNetIP(target) {
+		t.Fatal("framed send changed the datagram boundary or target")
+	}
+	for i := range packets {
+		if !bytes.Equal(writer.datagrams[i], packets[i]) {
+			t.Fatal("framed send changed an encrypted datagram")
+		}
+	}
+	writer.fail = true
+	if bind.Send(packets, remote) == nil {
+		t.Fatal("failed framed transport reported success")
+	}
+	writer.fail = false
+	writer.head = 4097
+	if bind.Send(packets, remote) == nil {
+		t.Fatal("unbounded framing allocation accepted")
+	}
+	bind.conn = shortDatagramFixture{}
+	if bind.Send(packets, remote) == nil {
+		t.Fatal("plain UDP short write reported success")
+	}
+	if bind.Send(packets, peerEndpoint(netip.MustParseAddrPort("192.0.2.2:51820"))) == nil {
+		t.Fatal("another peer received captured datagrams")
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	bind.ctx = ctx
+	if bind.Send(packets, remote) == nil {
+		t.Fatal("closed owner sent encrypted datagrams")
+	}
+}
+
+func TestActualAmneziaUnconnectedUDPReply(t *testing.T) {
+	var options Options
+	pair := newActualPairLifecycle(t, func(p *Options) { options = *p }, echoHandler{}, false)
+	client, err := newEndpoint(context.Background(), &rejectDesktopRouter{}, log.NewNOPFactory().Logger(), "proxy", options, pair.dialer, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err = client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	destination := M.ParseSocksaddr("10.78.0.1:9999")
+	c, err := client.ListenPacket(context.Background(), destination)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer c.Close()
+	_ = c.SetDeadline(time.Now().Add(2 * time.Second))
+	payload := []byte("native-listener-udp-payload")
+	if _, err = c.WriteTo(payload, destination.UDPAddr()); err != nil {
+		t.Fatal(err)
+	}
+	b := make([]byte, 100)
+	n, remote, err := c.ReadFrom(b)
+	if err != nil || !bytes.Equal(payload, b[:n]) || remote.String() != destination.String() {
+		t.Fatal("native listener lost its reply", err, remote)
+	}
+}
+
+type rejectDesktopRouter struct{ adapter.Router }
+
+func (*rejectDesktopRouter) RoutePacketConnectionEx(_ context.Context, c N.PacketConn, _ adapter.InboundContext, done N.CloseHandlerFunc) {
+	_ = c.Close()
+	if done != nil {
+		done(errors.New("UDP reply reached unowned router"))
+	}
+}
