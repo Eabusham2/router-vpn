@@ -30,14 +30,15 @@ func (p *ExternalPolicy) Metadata() string     { return p.metadata }
 func (p *ExternalPolicy) SourceSHA256() string { return p.source }
 
 type externalPolicyCapture struct {
-	Schema           int                   `json:"schema"`
-	ExitID           string                `json:"exit_id"`
-	Protocol         string                `json:"protocol"`
-	ExpectedPublicIP string                `json:"expected_public_ip"`
-	Profile          map[string]any        `json:"profile"`
-	EntryTag         string                `json:"entry_tag,omitempty"`
-	Entry            map[string]any        `json:"entry,omitempty"`
-	DNSBootstrap     *externalDNSBootstrap `json:"dns_bootstrap,omitempty"`
+	Schema            int                   `json:"schema"`
+	ExitID            string                `json:"exit_id"`
+	Protocol          string                `json:"protocol"`
+	ExpectedPublicIP  string                `json:"expected_public_ip"`
+	Profile           map[string]any        `json:"profile"`
+	EntryTag          string                `json:"entry_tag,omitempty"`
+	Entry             map[string]any        `json:"entry,omitempty"`
+	PredecessorConfig string                `json:"predecessor_config,omitempty"`
+	DNSBootstrap      *externalDNSBootstrap `json:"dns_bootstrap,omitempty"`
 }
 
 type externalPolicyMetadata struct {
@@ -51,6 +52,7 @@ type externalPolicyMetadata struct {
 	EntryID            string   `json:"entry_id,omitempty"`
 	EntryNodeID        string   `json:"entry_node_id,omitempty"`
 	EntryTag           string   `json:"entry_tag,omitempty"`
+	PredecessorSHA256  string   `json:"predecessor_sha256,omitempty"`
 	FinalTag           string   `json:"final_tag"`
 	TUNTag             string   `json:"tun_tag"`
 	DNSMode            string   `json:"dns_mode"`
@@ -92,13 +94,13 @@ func CompileExternalPolicy(config, capture string) (string, error) {
 }
 
 // NewExternalPolicy applies the saved DNS, IPv6, LAN and MTU selections to a
-// transport-validated ordinary external graph. This first adapter supports the
-// six native ordinary exit protocols, direct or through one captured native WG
-// / ordinary external entry. Tor, OpenVPN and composite entry assemblers retain
-// their own validated compilers and are never relabeled as ordinary hops.
+// transport-validated ordinary external graph. The six native ordinary exits
+// may connect directly, through an ordinary external entry, or through one
+// complete captured Router VPN predecessor. The latter preserves its native
+// layers, helper owners and bootstrap resolvers inside the same OS TUN.
 func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	var selection externalPolicyCapture
-	if exactJSON([]byte(capture), &selection, 512<<10) != nil || selection.Schema != 1 ||
+	if exactJSON([]byte(capture), &selection, 8<<20) != nil || selection.Schema != 1 ||
 		!exactID.MatchString(selection.ExitID) || selection.Profile == nil {
 		return nil, errors.New("external policy requires one bounded exact saved selection")
 	}
@@ -149,7 +151,15 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 		return nil, errors.New("external policy requires one bounded exact native graph")
 	}
 	entryKind, _ := selection.Entry["node_kind"].(string)
-	tun, exit, entry, route, err := externalOwnedGraph(graph, selection.Protocol, entryProtocol, selection.EntryTag, selection.Entry != nil && entryKind != "external")
+	predecessor, err := newExternalPredecessor(selection)
+	if err != nil {
+		return nil, err
+	}
+	graphEntryProtocol, graphEntryTag := entryProtocol, selection.EntryTag
+	if predecessor != nil {
+		graphEntryProtocol, graphEntryTag = "", ""
+	}
+	tun, exit, entry, route, err := externalOwnedGraph(graph, selection.Protocol, graphEntryProtocol, graphEntryTag, selection.Entry != nil && entryKind != "external")
 	if err != nil {
 		return nil, err
 	}
@@ -167,7 +177,13 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	if err != nil {
 		return nil, err
 	}
-	mtu, entryMTU, mtuPolicy, err := externalMTUPolicy(tun, exit, entry, selection.Profile, selection.Entry)
+	var mtu, entryMTU int
+	var mtuPolicy string
+	if predecessor != nil {
+		mtu, entryMTU, mtuPolicy, err = predecessor.applyMTU(tun, exit, selection)
+	} else {
+		mtu, entryMTU, mtuPolicy, err = externalMTUPolicy(tun, exit, entry, selection.Profile, selection.Entry)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -197,6 +213,11 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	// party exit. Native DNS detours do not enter this ordinary TUN rule path.
 	route["rules"] = rules
 	tun["route_address"] = append([]string{"0.0.0.0/0", "::/0"}, blocked...)
+	if predecessor != nil {
+		if err := predecessor.merge(graph, tun, exit); err != nil {
+			return nil, err
+		}
+	}
 	body, err := json.Marshal(graph)
 	if err != nil || len(body) > 4<<20 {
 		return nil, errors.New("compiled external graph exceeds its bound")
@@ -213,6 +234,9 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 		HomeLANAccess: len(blocked) == 0, BlockedLANCIDRs: blocked,
 		MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, EntryMTU: entryMTU, UDPAvailable: udp,
 		AutoMTU: "not-requested",
+	}
+	if predecessor != nil {
+		meta.PredecessorSHA256 = externalDigest([]byte(selection.PredecessorConfig))
 	}
 	if selection.Entry != nil {
 		meta.EntryProof = "required"
