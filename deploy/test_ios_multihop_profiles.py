@@ -105,7 +105,9 @@ def main() -> None:
     end = text.index('@MainActor\nprivate enum IOSConnectionProfileStore', start)
     # Put the unchanged private types and harness in the SAME source file so
     # Swift access control and synthesized Codable implementations stay real.
-    test = 'import Foundation\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
+    models = (SOURCE.parent / 'Models.swift').read_text()
+    bootstrap = models[models.index('struct ExternalDNSBootstrap:'):models.index('struct ExternalWireGuardConfig:')]
+    test = 'import Foundation\n' + bootstrap + '\n' + text[start:end] + '\n@MainActor private func runChecks() throws {\n' + TEST + '\n}\ntry runChecks()\n'
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-profiles-') as tmp:
         source, binary = Path(tmp) / 'main.swift', Path(tmp) / 'profiles'
         source.write_text(test)
