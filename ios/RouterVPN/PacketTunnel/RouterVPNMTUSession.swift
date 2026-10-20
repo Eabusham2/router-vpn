@@ -7,6 +7,7 @@ import Libbox
 final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unchecked Sendable {
     private let stateLock = NSRecursiveLock()
     private let commandLock = NSLock()
+    private let retirementLock = NSLock()
     private let cacheLock = NSLock()
     private let sessionID = UUID().uuidString
     private var physicalName = ""
@@ -23,6 +24,8 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     private var automaticPending = false
     private var heldBy = ""
     private var core: LibboxRouterMTU?
+    private var constructing = false
+    private var retired: [LibboxRouterMTU] = []
     private var unavailable = "MTU measurement has not been activated for this native session."
     private var abortHandler: (@Sendable (String) -> Void)?
     private let cacheURL: URL?
@@ -108,26 +111,80 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         captured?.networkChanged()
     }
     func stop() {
+        try? stopChecked()
+    }
+    func stopChecked() throws {
         stateLock.lock()
-        stopped = true; invalid = true; let captured = core; core = nil; abortHandler = nil
+        // Invalidation never waits for the factory/command lock. An in-flight
+        // factory may still return a native owner, which remains this session's
+        // cleanup responsibility until its Close succeeds.
+        stopped = true; invalid = true; abortHandler = nil
+        if let captured = core { retainForClose(captured); core = nil }
         stateLock.unlock()
-        try? captured?.close()
+        try drainRetired()
+        stateLock.lock(); let pending = constructing || !retired.isEmpty; stateLock.unlock()
+        if pending { throw failure("Native MTU ownership is still draining") }
+    }
+    // Called only while stateLock is held. Identity comparison prevents two
+    // cancellation paths from creating independent cleanup owners.
+    private func retainForClose(_ value: LibboxRouterMTU) {
+        if !retired.contains(where: { $0 === value }) { retired.append(value) }
+    }
+    private func drainRetired() throws {
+        retirementLock.lock(); defer { retirementLock.unlock() }
+        stateLock.lock(); let captured = retired; stateLock.unlock()
+        var closeFailure: Error?
+        for value in captured {
+            do {
+                try value.close()
+                stateLock.lock(); retired.removeAll { $0 === value }; stateLock.unlock()
+            } catch { closeFailure = error }
+        }
+        if let closeFailure { throw closeFailure }
     }
 
     func activate(server: LibboxCommandServer, config: String, profile: String,
                   onAbort: @escaping @Sendable (String) -> Void) {
+        _ = activateOwned(profile: profile, onAbort: onAbort) { createError in
+            LibboxNewRouterMTU(server, self, config, profile, &createError)
+        }
+    }
+
+    func activateExternal(server: LibboxCommandServer, proof: LibboxRouterExternalProofRequest,
+                          source: String, capture: String,
+                          onAbort: @escaping @Sendable (String) -> Void) throws {
+        guard capture.utf8.count <= 4 * 1024 * 1024,
+              let selection = try JSONSerialization.jsonObject(with: Data(capture.utf8)) as? [String: Any],
+              let frozen = selection["profile"] as? [String: Any],
+              let profile = String(data: try JSONSerialization.data(withJSONObject: frozen, options: [.sortedKeys]), encoding: .utf8) else {
+            throw failure("External MTU lost its frozen policy capture")
+        }
+        // The native factory binds the retained proof, all graph owners and
+        // actual OS-TUN sockets. Only its authorized TUN reader may change.
+        guard activateOwned(profile: profile, onAbort: onAbort, create: { createError in
+            LibboxNewRouterExternalMTU(server, self, proof, source, capture, &createError)
+        }) else { throw failure("External MTU could not retain its proved native TUN owner") }
+    }
+
+    private func activateOwned(profile: String, onAbort: @escaping @Sendable (String) -> Void,
+                               create: (inout NSError?) -> LibboxRouterMTU?) -> Bool {
         commandLock.lock(); defer { commandLock.unlock() }
         stateLock.lock()
-        guard !stopped, !invalid, !activated else { stateLock.unlock(); return }
-        activated = true; abortHandler = onAbort
+        guard !stopped, !invalid, !activated else { stateLock.unlock(); return false }
+        activated = true; constructing = true; abortHandler = onAbort
         stateLock.unlock()
         var createError: NSError?
-        let next = LibboxNewRouterMTU(server, self, config, profile, &createError)
+        let next = create(&createError)
         stateLock.lock()
-        guard !stopped, !invalid else { stateLock.unlock(); try? next?.close(); return }
-        guard let next, createError == nil else {
+        constructing = false
+        guard !stopped, !invalid, createError == nil, let next else {
+            if let next { retainForClose(next) }
             unavailable = "This native path could not provide a safe MTU measurement owner."
-            stateLock.unlock(); return
+            stateLock.unlock()
+            // A failed close retains the exact native reference. Engine
+            // teardown retries it after closing the Box before releasing us.
+            try? drainRetired()
+            return false
         }
         core = next
         let hold = !heldBy.isEmpty
@@ -141,6 +198,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         if automatic && policy?["jumbo_tun"] as? Bool != true && !hold {
             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)
         }
+        return true
     }
 
     func captureMTU() -> LibboxRouterMTUState? {

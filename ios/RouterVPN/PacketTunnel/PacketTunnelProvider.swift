@@ -1153,6 +1153,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                         throw self.tunnelError(57, "External path changed during measurement activation.")
                     }
                 }
+                if runtime.policy != nil {
+                    try engine.activateExternalMTU()
+                    guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
+                        throw self.tunnelError(57, "External path changed during MTU owner activation.")
+                    }
+                }
             } catch {
                 self.releasePathProofGuard(externalPathGuard)
                 engine.stop(); if self.libboxEngine === engine { self.libboxEngine = nil }

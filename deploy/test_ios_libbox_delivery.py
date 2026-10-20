@@ -27,6 +27,7 @@ public final class LibboxTestState: @unchecked Sendable {
     private var stops = 0
     private var paddingCount: Int64 = 0
     private var server: LibboxCommandServer?
+    private var setupPath = ""
     public func configure(block: Bool = false, fail: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         self.block = block; self.fail = fail; plan = nil
@@ -50,6 +51,8 @@ public final class LibboxTestState: @unchecked Sendable {
     public func started() { lock.lock(); starts += 1; lock.unlock() }
     public func stopped() { lock.lock(); stops += 1; lock.unlock() }
     public func counts() -> (Int, Int) { lock.lock(); defer { lock.unlock() }; return (starts, stops) }
+    public func setup(_ path:String){lock.lock();setupPath=path;lock.unlock()}
+    public func directory()->String{lock.lock();defer{lock.unlock()};return setupPath}
 }
 // Intentionally no Sendable conformance: these model generated Objective-C refs.
 public final class LibboxRouterMultihop {
@@ -155,7 +158,7 @@ public func LibboxNewRouterHopMeasurement(_ server: LibboxCommandServer, _ metad
 public func LibboxNewRouterMultihop(_ text: String, _ metadata: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text) }
 public func LibboxNewRouterMultihopWithEntryStartLayer(_ text: String, _ metadata: String, _ layer: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:layer) }
 public func LibboxNewRouterMultihopWithStartLayers(_ text: String, _ metadata: String, _ entry: String, _ exit: String, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxRouterMultihop? { LibboxTestState.shared.make(text,layer:entry,exit:exit) }
-public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {}
+public func LibboxSetup(_ setup: LibboxSetupOptions, _ failure: UnsafeMutablePointer<NSError?>?) {LibboxTestState.shared.setup(setup.basePath)}
 public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, _ failure: UnsafeMutablePointer<NSError?>?) -> LibboxCommandServer? { LibboxTestState.shared.makeServer() }
 
 public final class LibboxTorTestState: @unchecked Sendable {
@@ -266,20 +269,48 @@ final class PacketTunnelProvider {
 final class MTUPlatformDouble {
     var hasOwner = false
     var measurementReady = true
+    private var server:LibboxCommandServer?
+    private var failures=0,drained=false
+    private(set) var closeSnapshots:[[String]]=[]
     func initialMeasurementHold(_ lease: String) throws {}
-    func stop() {}
+    func stop(){try? stopChecked()}
+    func stopChecked()throws {
+        guard hasOwner,!drained else{return}
+        closeSnapshots.append(server?.strategyCalls() ?? [])
+        if failures>0{failures-=1;throw NSError(domain:"MTURetirementFixture",code:1)}
+        drained=true
+    }
     func invalidate() {}
-    func activate(server: LibboxCommandServer, config: String, profile: String, onAbort: @escaping @Sendable (String) -> Void) { hasOwner = true }
+    func activate(server: LibboxCommandServer, config: String, profile: String, onAbort: @escaping @Sendable (String) -> Void) { hasOwner = true;self.server=server;failures=MTUActivationFixture.shared.failures() }
+    func activateExternal(server:LibboxCommandServer,proof:LibboxRouterExternalProofRequest,source:String,capture:String,onAbort:@escaping @Sendable(String)->Void)throws {
+        guard proof.healthy() else{throw NSError(domain:"ExternalMTUFixture",code:1)}
+        hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.record([source,capture],proof:proof)
+    }
     func request(operation: String, request: String, session: String) -> Data? { nil }
+}
+final class MTUActivationFixture:@unchecked Sendable {
+    static let shared=MTUActivationFixture()
+    private let lock=NSLock()
+    private var values:[String]=[],proof:LibboxRouterExternalProofRequest?,callback:(()->Void)?
+    private var closeFailures=0
+    private weak var platform:RouterVPNLibboxPlatform?
+    func configure(failures:Int=0,_ callback:(()->Void)?=nil){lock.lock();values=[];proof=nil;self.callback=callback;closeFailures=failures;lock.unlock()}
+    func failures()->Int{lock.lock();defer{lock.unlock()};return closeFailures}
+    func retainWeak(_ platform:RouterVPNLibboxPlatform){lock.lock();self.platform=platform;lock.unlock()}
+    func currentPlatform()->RouterVPNLibboxPlatform?{lock.lock();defer{lock.unlock()};return platform}
+    func record(_ values:[String],proof:LibboxRouterExternalProofRequest){lock.lock();self.values=values;self.proof=proof;let callback=self.callback;lock.unlock();callback?()}
+    func captured()->[String]{lock.lock();defer{lock.unlock()};return values}
+    func owns(_ proof:LibboxRouterExternalProofRequest?)->Bool{lock.lock();defer{lock.unlock()};return self.proof === proof}
 }
 final class RouterVPNLibboxPlatform {
     let mtu = MTUPlatformDouble()
-    init(tunnel: PacketTunnelProvider, settingsEpoch: String) {}
+    private(set) var resets=0
+    init(tunnel: PacketTunnelProvider, settingsEpoch: String) {MTUActivationFixture.shared.retainWeak(self)}
     var onLog: ((String) -> Void)?
     var onStopService: (() throws -> Void)?
     var onReloadService: (() throws -> Void)?
     var includeAllNetworksRequested = false
-    func reset() {}
+    func reset() {resets+=1}
 }
 enum RouterVPNLibboxCompileProbe { static func verifyPinnedRuntime() throws {} }
 final class RouterVPNPQFactory: @unchecked Sendable {
@@ -636,22 +667,74 @@ final class CompletionState: @unchecked Sendable {
             }
             owner.stop()
         }}
+        for event in ["stable","cancel-proof","late-factory","before-proof","tor"] {
+            state.configure();externalState.configure();torState.configure();MTUActivationFixture.shared.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            if event=="tor" {try owner.start(files:torFiles,strict:true);owner.proveTor(sessionID:"tor-session",completion:done.finish)}
+            else {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy);if event != "before-proof" {owner.proveExternal(completion:done.finish)}}
+            if event != "before-proof" {check("MTU factory follows final native proof",done.wait() && done.values()==(1,0))}
+            if event=="cancel-proof" {externalState.current()!.cancel()}
+            if event=="late-factory" {MTUActivationFixture.shared.configure {owner.stop()}}
+            var failed=false;do{try owner.activateExternalMTU()}catch{failed=true}
+            check("external MTU cannot adopt an unproved or retired runtime",failed == (event != "stable"))
+            if ["stable","late-factory"].contains(event) {
+                check("MTU receives exact source capture and retained proof",MTUActivationFixture.shared.captured()==[externalPolicy.sourceConfig,externalPolicy.capture] && MTUActivationFixture.shared.owns(externalState.current()))
+            } else {check("unproved or Tor path never calls ordinary external MTU",MTUActivationFixture.shared.captured().isEmpty)}
+            owner.stop()
+        }
+        for external in [false,true] {
+            state.configure();externalState.configure();MTUActivationFixture.shared.configure(failures:1)
+            let provider=PacketTunnelProvider(),done=CompletionState()
+            let owner=RouterVPNLibboxEngine(tunnel:provider)
+            if external {
+                try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)
+                owner.proveExternal(completion:done.finish)
+                check("retirement fixture owns a proved external path",done.wait() && done.values()==(1,0))
+                try owner.activateExternalMTU()
+            } else {
+                try owner.start(files:files,strict:true)
+                owner.activateMTU(profile:["mtu_policy":"fixed","mtu":1420])
+            }
+            let platform=MTUActivationFixture.shared.currentPlatform()!,server=state.currentServer()!,directory=state.directory()
+            check("MTU retirement owns its private runtime files",FileManager.default.fileExists(atPath:directory))
+            if !external {
+                try platform.onStopService?()
+                check("native service stop cannot discard an owned MTU drain",provider.count()==1 && platform.mtu.closeSnapshots.isEmpty && platform.resets==0)
+            }
+            let before=state.counts();try owner.stopCheckedForStrategy()
+            check("MTU retries the exact owner only after its Box closes",platform.mtu.closeSnapshots == (external ? [["start"],["start","close"]] : [[],["close"]]))
+            check("successful MTU retry releases native resources",state.counts().0==before.0 && state.counts().1==before.1+1 && platform.resets==1 && !FileManager.default.fileExists(atPath:directory))
+            try owner.stopCheckedForStrategy()
+            check("retired MTU cannot close a replacement native owner",platform.mtu.closeSnapshots.count==2 && server.strategyCalls()==(external ? ["start","close"]:["close"]))
+            MTUActivationFixture.shared.configure()
+            let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try replacement.start(files:files,strict:false);replacement.stop()
+        }
         check("no mock native server survives successful shutdown", state.counts().0 == state.counts().1)
         do {
             torState.configure()
-            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            var owner:RouterVPNLibboxEngine?=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             let external=CommandLine.arguments.contains("--external-close")
-            if external {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
-            else {try owner.start(files:torFiles,strict:true)}
+            let mtu=CommandLine.arguments.contains("--mtu-close")
+            if mtu {
+                MTUActivationFixture.shared.configure(failures:2)
+                try owner!.start(files:files,strict:true);owner!.activateMTU(profile:["mtu_policy":"fixed","mtu":1420])
+            } else if external {try owner!.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
+            else {try owner!.start(files:torFiles,strict:true)}
+            let label=mtu ? "MTU":(external ? "external":"Tor"),directory=state.directory()
+            weak var platform=MTUActivationFixture.shared.currentPlatform()
             let retained=state.currentServer()!,before=state.counts()
-            retained.configureStrategy(close:true)
+            retained.configureStrategy(close:!mtu)
             var failed=false
-            do {try owner.stopCheckedForStrategy()}catch{failed=true}
-            check("unconfirmed \(external ? "external" : "Tor") close retains native owner",failed && state.counts()==before && retained.strategyCalls()==["start","close"])
+            do {try owner!.stopCheckedForStrategy()}catch{failed=true}
+            check("unconfirmed \(label) close retains native owner",failed && state.counts()==before && retained.strategyCalls()==(mtu ? ["close"]:["start","close"]))
+            if mtu {check("failed MTU retry belongs to the closed Box",platform?.mtu.closeSnapshots == [[],["close"]])}
+            owner=nil
+            check("failed \(label) drain retains platform and runtime files",platform != nil && platform?.resets==0 && FileManager.default.fileExists(atPath:directory))
             var blocked=false
             let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             do{try replacement.start(files:files,strict:false)}catch{blocked=true}
-            check("quarantined \(external ? "external" : "Tor") cannot overlap a replacement core",blocked && state.counts()==before)
+            check("quarantined \(label) cannot overlap a replacement core",blocked && state.counts()==before)
         }
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
     }
@@ -673,6 +756,7 @@ def main():
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)
+        subprocess.run([str(tmp/'test'),'--mtu-close'],check=True,timeout=25)
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
         foreign_cancel='            guard let probe = owners[id] else {'

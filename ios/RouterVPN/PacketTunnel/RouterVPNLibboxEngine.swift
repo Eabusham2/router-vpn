@@ -156,7 +156,9 @@ final class RouterVPNLibboxEngine {
         torHealth?.cancel()
         externalDelivery?.cancel()
         externalHealth?.cancel()
-        platform.mtu.stop()
+        var mtuCloseFailure: Error?
+        do { try platform.mtu.stopChecked() } catch { mtuCloseFailure = error }
+        let mtuOwned = platform.mtu.hasOwner
         health?.cancel()
         paddingHealth?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
@@ -172,7 +174,7 @@ final class RouterVPNLibboxEngine {
         }
         var closeFailure: Error?
         if let owned {
-            if strategyOwned || capturedTor || capturedExternal || probe != nil {
+            if strategyOwned || capturedTor || capturedExternal || probe != nil || mtuOwned {
                 var failure: NSError?
                 let closed = LibboxRouterStrategyCloseService(owned, &failure)
                 if !closed || failure != nil { closeFailure = failure ?? error("Native strategy teardown was not verified") }
@@ -181,7 +183,14 @@ final class RouterVPNLibboxEngine {
                 do { try probe?.close(); measurementCloseFailure = nil }
                 catch { measurementCloseFailure = error }
             }
+            if mtuOwned {
+                // Closing the exact Box releases its blocked native I/O.
+                // Retry only the controller retained by this MTU session.
+                do { try platform.mtu.stopChecked(); mtuCloseFailure = nil }
+                catch { mtuCloseFailure = error }
+            }
             if closeFailure == nil { closeFailure = measurementCloseFailure }
+            if closeFailure == nil { closeFailure = mtuCloseFailure }
             if capturedTor, let closeFailure {
                 // The C runtime must not lose its last native/TUN/file owners
                 // after an unconfirmed close. A new runtime in this extension
@@ -189,11 +198,11 @@ final class RouterVPNLibboxEngine {
                 Self.torRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else if capturedExternal, let closeFailure {
                 Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
-            } else if probe != nil, let closeFailure {
+            } else if probe != nil || mtuOwned, let closeFailure {
                 Self.measurementRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else { owned.close() }
         }
-        if !((capturedTor || capturedExternal || probe != nil) && closeFailure != nil) {
+        if !((capturedTor || capturedExternal || probe != nil || mtuOwned) && closeFailure != nil) {
             platform.reset()
             if let directory { try? FileManager.default.removeItem(at: directory) }
         }
@@ -288,6 +297,12 @@ final class RouterVPNLibboxEngine {
             }
             guard current(owner), request.healthy() else { try probe.close(); throw retired() }
             return probe
+        }
+        func activateMTU() throws {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            let delivery = MTUFailureDelivery(owner: owner, generation: generation)
+            try owner.platform.mtu.activateExternal(server: server, proof: request, source: policy.sourceConfig, capture: policy.capture) { message in delivery.fail(message) }
+            guard current(owner), request.healthy() else { owner.platform.mtu.stop(); throw retired() }
         }
         private func retired() -> NSError {
             NSError(domain: "RouterVPN.ExternalProof", code: 1, userInfo: [NSLocalizedDescriptionKey: "External DNS and node proof was cancelled or belongs to a retired native session."])
@@ -472,6 +487,14 @@ final class RouterVPNLibboxEngine {
         platform.mtu.activate(server: owned, config: config, profile: metadata) { message in delivery.fail(message) }
         ownershipLock.lock(); let current = server === owned && ownershipGeneration == generation; ownershipLock.unlock()
         if !current { platform.mtu.stop() }
+    }
+    func activateExternalMTU() throws {
+        ownershipLock.lock()
+        let delivery = externalProofDelivery
+        let current = server != nil && !starting && !permanentlyStopped && torProofDelivery == nil
+        ownershipLock.unlock()
+        guard current, let delivery else { throw error("External MTU requires the captured ordinary native proof") }
+        try delivery.activateMTU()
     }
     func mtuRequest(operation: String, request: String, session: String) -> Data? {
         ownershipLock.lock(); let generation = ownershipGeneration; ownershipLock.unlock()
@@ -759,11 +782,11 @@ final class RouterVPNLibboxEngine {
         } else { try server.startOrReloadService(content, options: LibboxOverrideOptions()) }
     }
     private func closeService() throws {
-        if strategyOwned || torOwned || externalPolicy != nil {
+        if strategyOwned || torOwned || externalPolicy != nil || platform.mtu.hasOwner {
             tunnel?.nativeLibboxFailure(self, error: error("The owned native strategy requested service stop."))
             return
         }
-        platform.mtu.stop(); ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService()
+        try platform.mtu.stopChecked(); ownershipLock.lock(); let owned = server; ownershipLock.unlock(); try owned?.closeService()
     }
     private func reloadService() throws {
         guard !strategyOwned, !torOwned, externalPolicy == nil else { throw error("Provider strategies, Tor and external policies require a fresh owned native generation") }

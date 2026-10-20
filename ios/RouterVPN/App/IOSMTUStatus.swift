@@ -21,16 +21,22 @@ struct IOSMTUStatus: Decodable, Sendable {
         let packets_received: Int?
         let datagram_bytes: Int?
         let median_rtt_ms: Double?
+        let latency_kind: String?
         let download: Transfer?
         let upload: Transfer?
         let failure: String?
-        var valid: Bool {
+        func valid(source: String) -> Bool {
             guard let mtu, (1280...9000).contains(mtu), working == true,
-                  packets_sent == 6, packets_received == 6,
-                  let datagram_bytes, [mtu - 28, mtu - 48].contains(datagram_bytes),
                   let median_rtt_ms, median_rtt_ms.isFinite, median_rtt_ms > 0,
-                  download?.valid == true, upload?.valid == true else { return false }
-            return failure == nil || failure == ""
+                  download?.valid == true, upload?.valid == true,
+                  failure == nil || failure == "" else { return false }
+            if source == "measured-public-system-tun-transfer" {
+                return latency_kind == "https-response" && packets_sent == 0 && packets_received == 0 && datagram_bytes == 0
+            }
+            guard source == "measured-private-system-tun", latency_kind == nil || latency_kind == "",
+                  packets_sent == 6, packets_received == 6,
+                  let datagram_bytes, [mtu - 28, mtu - 48].contains(datagram_bytes) else { return false }
+            return true
         }
     }
     let session_id: String?
@@ -50,17 +56,18 @@ struct IOSMTUStatus: Decodable, Sendable {
     var verified: Bool {
         guard let session_id, UUID(uuidString: session_id) != nil,
               let request_id, request_id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
-              phase == "complete", complete == true, running == false, measured == true,
-              source == "measured-private-system-tun", let effective_mtu,
+              phase == "complete", complete == true, running == false, measured == true, restored != true,
+              let source, ["measured-private-system-tun", "measured-public-system-tun-transfer"].contains(source), let effective_mtu,
               (1280...9000).contains(effective_mtu), let original_mtu,
               (1280...9000).contains(original_mtu), let candidates,
               (1...5).contains(candidates.count), Set(candidates.compactMap(\.mtu)).count == candidates.count,
               failure == nil || failure == "" else { return false }
-        return candidates.contains { $0.mtu == effective_mtu && $0.valid }
+        return candidates.contains { $0.mtu == effective_mtu && $0.valid(source: source) }
     }
     var summary: String {
         if verified, let effective_mtu {
-            return "Verified current MTU: \(effective_mtu) bytes • measured through this VPN"
+            let evidence = source == "measured-public-system-tun-transfer" ? "HTTPS response and transfer tests" : "authenticated packets and transfer tests"
+            return "Verified current MTU: \(effective_mtu) bytes • \(evidence) through this VPN"
         }
         if running == true { return "MTU test: \(phase ?? "measuring") • result not yet verified" }
         if restored == true { return "Original MTU restored • no new measurement adopted" }

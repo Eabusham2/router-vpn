@@ -21,6 +21,11 @@ import Foundation
             let decoded = try JSONDecoder().decode(IOSMTUStatus.self, from: data)
             guard decoded.verified == expected else { fatalError("MTU sample \(index) verification changed") }
             guard decoded.summary.contains("Verified current MTU:") == expected else { fatalError("Unverified measurement was labelled current") }
+            if expected {
+                let external = decoded.source == "measured-public-system-tun-transfer"
+                guard decoded.summary.contains("HTTPS response and transfer tests") == external,
+                      decoded.summary.contains("authenticated packets") == !external else { fatalError("MTU evidence was mislabeled") }
+            }
         }
         print("Swift MTU status: \(samples.count) actual-decoder checks passed")
     }
@@ -55,6 +60,27 @@ def cases():
     samples.append({'status': data, 'verified': False})
     data = json.loads(json.dumps(original)); data['candidates'][0]['datagram_bytes'] = 1372
     samples.append({'status': data, 'verified': True})
+    public = json.loads(json.dumps(original))
+    public['source'] = 'measured-public-system-tun-transfer'
+    public['candidates'][0].update(packets_sent=0, packets_received=0, datagram_bytes=0, latency_kind='https-response')
+    samples.append({'status': public, 'verified': True})
+    for key, value in [('source', 'measured-private-system-tun'), ('source', 'cached'), ('source', 'restored-unmeasured'),
+                       ('restored', True), ('measured', False), ('running', True), ('complete', False),
+                       ('effective_mtu', 1380), ('failure', 'public identity changed')]:
+        data = json.loads(json.dumps(public)); data[key] = value
+        samples.append({'status': data, 'verified': False})
+    for key, value in [('latency_kind', None), ('latency_kind', 'icmp'), ('packets_sent', 6),
+                       ('packets_received', 6), ('datagram_bytes', 1392), ('packets_sent', None),
+                       ('median_rtt_ms', 0), ('working', False), ('failure', 'stale path')]:
+        data = json.loads(json.dumps(public)); data['candidates'][0][key] = value
+        samples.append({'status': data, 'verified': False})
+    for key, value in [('bytes', 262143), ('seconds', 0), ('seconds', -1), ('mbps', -1), ('mbps', 999), ('mbps', 0)]:
+        for direction in ['download', 'upload']:
+            data = json.loads(json.dumps(public)); data['candidates'][0][direction][key] = value
+            samples.append({'status': data, 'verified': False})
+    for key, value in [('source', public['source']), ('restored', True)]:
+        data = json.loads(json.dumps(original)); data[key] = value
+        samples.append({'status': data, 'verified': False})
     return samples
 
 

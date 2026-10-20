@@ -26,7 +26,7 @@ import SwiftUI
         guard !running, !IOSMTUMeasurementGate.held else { return }
         let round = UUID(); generation = round
         let request = round.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-        running = true; text = "Capturing the current native TUN and private node…"
+        running = true; text = "Capturing the current native TUN and proved exit…"
         task = Task { @MainActor [weak self, weak model] in
             guard let self, let model else { return }
             defer { if generation == round { running = false; task = nil; ownedRequest = ""; binding = nil } }
@@ -79,7 +79,7 @@ struct IOSMTUCard: View {
             Button(probe.running ? "Cancel MTU Retest" : "Retest current native MTU") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
             }.disabled(!model.connected || (!probe.running && (IOSMTUMeasurementGate.held || !model.activeEngine.contains("libbox"))))
-            Text("Measures authenticated private packets plus upload and download. Saved values and restored settings are never shown as fresh measurements. Manual and Jumbo policies do not enter Auto-MTU.")
+            Text("Router VPN nodes use authenticated packets and transfers. External exits use HTTPS response and transfer tests through the actual system VPN interface, with native DNS and exit verification. Saved values and restored settings are not fresh measurements. Manual and Jumbo policies do not enter Auto-MTU.")
                 .font(.caption).foregroundStyle(.secondary)
         }
         .task {

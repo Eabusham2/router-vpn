@@ -20,6 +20,7 @@ public final class LibboxRouterMTUState:NSObject {
  public var session="",path="",interface="";public var mtu:Int32=0
 }
 public final class LibboxCommandServer:NSObject {}
+public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
 public enum FakeOS {
  nonisolated(unsafe) public static var mtu:Int32=1420
  nonisolated(unsafe) public static var path="physical-path-a"
@@ -30,15 +31,27 @@ public enum FakeOS {
  nonisolated(unsafe) public static var starts=0
  nonisolated(unsafe) public static var closes=0
  nonisolated(unsafe) public static var current:LibboxRouterMTU?
+ nonisolated(unsafe) public static var externalArguments:[String]=[]
+ nonisolated(unsafe) public static var externalProof:LibboxRouterExternalProofRequest?
+ nonisolated(unsafe) public static var externalCreated:(()->Void)?
+ nonisolated(unsafe) public static var newCloseFailures=0
+ nonisolated(unsafe) public static var returnOwnerWithError=false
 }
 public final class LibboxRouterMTU:NSObject {
  private var active=false;private var request="";private var phase="idle"
+ public var closeFailures=0
+ public private(set) var closeCalls=0
+ public private(set) var closed=false
  public func start(_ request:String,force:Bool)throws {
-  if active {throw NSError(domain:"fixture",code:1)}
+  if active || closed {throw NSError(domain:"fixture",code:1)}
   self.request=request;active=true;phase="proving";FakeOS.starts += 1
  }
  public func cancel(_ request:String){if request==self.request{active=false;phase="cancelled"}}
- public func close()throws{FakeOS.closes += 1;active=false}
+ public func close()throws{
+  FakeOS.closes += 1;closeCalls += 1
+  if closeFailures>0{closeFailures -= 1;throw NSError(domain:"NativeMTUCloseFixture",code:1)}
+  active=false;closed=true
+ }
  public func networkChanged(){active=false;phase="invalidated"}
  public func running()->Bool{active}
  public func statusJSON()->String{
@@ -49,7 +62,14 @@ public final class LibboxRouterMTU:NSObject {
 }
 public func LibboxNewRouterMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  guard platform?.captureMTU() != nil else {error?.pointee=NSError(domain:"fixture",code:1);return nil}
- let core=LibboxRouterMTU();FakeOS.current=core;return core
+ let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core;return core
+}
+public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterExternalProofRequest?,_ source:String?,_ capture:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
+ FakeOS.externalArguments=[source ?? "",capture ?? ""];FakeOS.externalProof=proof
+ guard proof?.valid==true,platform?.captureMTU() != nil else{error?.pointee=NSError(domain:"ExternalMTUFixture",code:1);return nil}
+ let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core
+ if FakeOS.returnOwnerWithError{error?.pointee=NSError(domain:"ExternalMTUFixture",code:2)}
+ FakeOS.externalCreated?();return core
 }
 public func LibboxRouterMTUPhysicalPath(_ name:String?,_ error:UnsafeMutablePointer<NSError?>?)->String{
  if name != "en0" {error?.pointee=NSError(domain:"fixture",code:1);return ""};return FakeOS.path
@@ -73,6 +93,7 @@ func request(_ owner:RouterVPNMTUSession,_ op:String,_ id:String,_ session:Strin
 }
 @MainActor func ready(_ hold:String="")->RouterVPNMTUSession{
  FakeOS.path="physical-path-a";FakeOS.mtu=1420;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
+ FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil
  let owner=RouterVPNMTUSession();try! owner.initialMeasurementHold(hold)
  check(owner.captureMTU()==nil,"unopened TUN looked live")
  owner.observePhysicalPath(name:"en0",signature:"route-a")
@@ -142,6 +163,81 @@ manual.activate(server:LibboxCommandServer(),config:"{}",profile:"{\"mtu_policy\
 check(FakeOS.starts==manualStarts,"manual policy silently optimized")
 let jumbo=ready();jumbo.activate(server:LibboxCommandServer(),config:"{}",profile:"{\"mtu_policy\":\"auto\",\"jumbo_tun\":true}"){_ in}
 check(FakeOS.starts==manualStarts,"Jumbo silently optimized")
+for policy in ["auto","fixed","manual","default"] {for startupHold in ["",id] {
+ let external=ready(startupHold),proof=LibboxRouterExternalProofRequest(),starts=FakeOS.starts
+ let capture="{\"profile\":{\"id\":\"frozen-exit\",\"mtu_policy\":\""+policy+"\"},\"owned\":\"exact capture\"}"
+ try external.activateExternal(server:LibboxCommandServer(),proof:proof,source:"exact source graph",capture:capture){_ in}
+ check(FakeOS.externalArguments==["exact source graph",capture] && FakeOS.externalProof === proof,"external factory lost exact source, capture or native proof")
+ check(external.hasOwner && FakeOS.starts==starts+(policy=="auto" && startupHold.isEmpty ? 1:0),"external automatic start ignored fixed policy or startup hold")
+ let session=external.captureMTU()!.session
+ if !startupHold.isEmpty {
+  check(request(external,"mtu-start",other,session)?["measurement_hold"] as? Bool==true,"external Retest bypassed startup hold")
+  _=request(external,"mtu-release",id,session)
+  check(FakeOS.starts==starts+(policy=="auto" ? 1:0),"external automatic startup did not follow exact captured policy on release")
+ }
+ if policy=="auto" {
+  check(request(external,"mtu-hold",id,session)?["measurement_ready"] as? Bool==true,"external activity was not drained before measurement")
+  check(request(external,"mtu-release",other,session)==nil,"foreign release stole external hold")
+ }
+ rejects("duplicate external factory adopted a second controller"){try external.activateExternal(server:LibboxCommandServer(),proof:proof,source:"foreign",capture:capture){_ in}}
+ external.stop()
+}}
+let externalJumbo=ready(),jumboStarts=FakeOS.starts
+try externalJumbo.activateExternal(server:LibboxCommandServer(),proof:LibboxRouterExternalProofRequest(),source:"exact",capture:"{\"profile\":{\"mtu_policy\":\"auto\",\"jumbo_tun\":true}}"){_ in}
+check(FakeOS.starts==jumboStarts,"external Jumbo was called measured Auto-MTU");externalJumbo.stop()
+let denied=ready(),deadProof=LibboxRouterExternalProofRequest();deadProof.valid=false
+rejects("unhealthy retained native proof enabled external MTU"){try denied.activateExternal(server:LibboxCommandServer(),proof:deadProof,source:"exact",capture:"{\"profile\":{}}"){_ in}}
+denied.stop()
+for capture in ["{}","{\"profile\":[]}",String(repeating:" ",count:4*1024*1024+1)] {
+ let malformed=ready(),before=FakeOS.externalArguments
+ rejects("malformed capture reached external factory"){try malformed.activateExternal(server:LibboxCommandServer(),proof:LibboxRouterExternalProofRequest(),source:"foreign",capture:capture){_ in}}
+ check(FakeOS.externalArguments==before && !malformed.hasOwner,"malformed source took native ownership");malformed.stop()
+}
+for networkChange in [false,true] {
+ let late=ready(),closes=FakeOS.closes,starts=FakeOS.starts
+ FakeOS.externalCreated={if networkChange{late.invalidate()}else{late.stop()}}
+ rejects("late factory resurrected retired external TUN"){try late.activateExternal(server:LibboxCommandServer(),proof:LibboxRouterExternalProofRequest(),source:"exact",capture:"{\"profile\":{\"mtu_policy\":\"auto\"}}"){_ in}}
+ check(FakeOS.closes==closes+1 && FakeOS.starts==starts,"late native external controller was not closed before automatic start")
+ FakeOS.externalCreated=nil;late.stop()
+}
+for external in [false,true] {
+ let draining=ready();FakeOS.newCloseFailures=2
+ if external {
+  try draining.activateExternal(server:LibboxCommandServer(),proof:LibboxRouterExternalProofRequest(),source:"owned source",capture:"{\"profile\":{\"mtu_policy\":\"fixed\"}}"){_ in}
+ } else {draining.activate(server:LibboxCommandServer(),config:"owned config",profile:"{\"mtu_policy\":\"fixed\"}"){_ in}}
+ weak var native=FakeOS.current;FakeOS.current=nil
+ check(native != nil,"adopted MTU controller lost its only strong owner")
+ rejects("unconfirmed Close reported successful retirement"){try draining.stopChecked()}
+ check(draining.captureMTU()==nil && native?.closeCalls==1 && native?.closed==false,"failed Close lost the exact invalidated native owner")
+ draining.stop()
+ check(native?.closeCalls==2 && native?.closed==false,"nonthrowing Stop discarded the failed owner")
+ let calls=FakeOS.closes;try draining.stopChecked()
+ check(FakeOS.closes==calls+1 && native==nil,"checked retry did not release the exact drained native reference")
+ try draining.stopChecked()
+ check(FakeOS.closes==calls+1,"completed retirement closed an old native owner again")
+}
+for stoppedDuringFactory in [false,true] {for withError in [false,true] {
+ // A returned native handle remains owned even if the factory simultaneously
+ // reports failure, or Stop invalidates the session before the return.
+ if !stoppedDuringFactory && !withError {continue}
+ let late=ready(),starts=FakeOS.starts
+ FakeOS.newCloseFailures=2;FakeOS.returnOwnerWithError=withError
+ weak var native:LibboxRouterMTU?
+ FakeOS.externalCreated={
+  native=FakeOS.current;FakeOS.current=nil
+  if stoppedDuringFactory {
+   rejects("pending factory was called drained"){try late.stopChecked()}
+   check(late.captureMTU()==nil,"Stop waited for factory ownership before invalidating TUN")
+  }
+ }
+ rejects("unadoptable factory result became an active MTU owner"){try late.activateExternal(server:LibboxCommandServer(),proof:LibboxRouterExternalProofRequest(),source:"captured source",capture:"{\"profile\":{\"mtu_policy\":\"auto\"}}"){_ in}}
+ FakeOS.externalCreated=nil
+ check(FakeOS.starts==starts && native?.closeCalls==1 && native?.closed==false,"late or error-bearing owner was lost or automatically started")
+ rejects("failed late-owner drain was ignored"){try late.stopChecked()}
+ check(native?.closeCalls==2,"late drain retried a different owner")
+ let calls=FakeOS.closes;try late.stopChecked()
+ check(FakeOS.closes==calls+1 && native==nil,"late factory owner did not survive until successful Close")
+}}
 print("Production Swift MTU owner: PASS (\(checks) checks; Libbox/OS boundary doubled)")
 """
 GATE=r"""
@@ -172,6 +268,17 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  env['LD_LIBRARY_PATH']=str(tmp)
  env['DYLD_LIBRARY_PATH']=str(tmp)
  run([str(tmp/'test')])
+ # Reproduce the former loss of a returned owner after an unconfirmed Close.
+ # The executable weak-reference assertion must catch it, not a source marker.
+ broken=tmp/'LostFactoryOwner.swift'
+ text=source.read_text()
+ seam='            if let next { retainForClose(next) }'
+ assert text.count(seam)==1
+ broken.write_text(text.replace(seam,'            if let next { try? next.close() }'))
+ run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
+ bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
+ assert bad.returncode != 0 and 'late or error-bearing owner was lost or automatically started' in bad.stdout+bad.stderr, 'Lost-owner regression control did not fail at the native lifetime assertion'
+ print('Negative control: discarded failed-Close factory owner correctly rejected')
  (tmp/'gate.swift').write_text(GATE)
  run([SWIFT,'-swift-version','6',str(ROOT/'ios/RouterVPN/App/IOSMTUMeasurementGate.swift'),str(tmp/'gate.swift'),'-o',str(tmp/'gate')])
  run([str(tmp/'gate')])
