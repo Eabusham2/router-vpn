@@ -25,7 +25,7 @@ final class AndroidExternalPolicy {
             "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu"));
 
     static boolean supports(String protocol) {
-        return Arrays.asList("wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn").contains(protocol);
+        return Arrays.asList("wireguard", "amneziawg", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn").contains(protocol);
     }
 
     static String protocol(String value) {
@@ -91,13 +91,16 @@ final class AndroidExternalPolicy {
         JSONObject ext = new JSONObject().put("protocol", protocol(exit.protocol)).put("expected_public_ip", exit.expectedPublicIp);
         JSONObject transport;
         switch (exit.protocol) {
-            case "wireguard":
+            case "wireguard": case "amneziawg":
                 transport = new JSONObject().put("private_key", exit.wgPrivateKey).put("addresses", new JSONArray(exit.wgAddresses))
                         .put("peer_public_key", exit.wgPeerPublicKey).put("allowed_ips", new JSONArray(exit.wgAllowedIps))
                         .put("endpoint", (exit.server.contains(":") ? "[" + exit.server + "]" : exit.server) + ":" + exit.serverPort);
                 if (!exit.wgPreSharedKey.isEmpty()) transport.put("preshared_key", exit.wgPreSharedKey);
                 if (exit.wgMtu != 0) transport.put("mtu", exit.wgMtu);
-                ext.put("wireguard", transport); break;
+                if (exit.wgKeepalive != null) transport.put("persistent_keepalive_interval",exit.wgKeepalive);
+                if (!exit.wgDns.isEmpty()) transport.put("dns",new JSONArray(exit.wgDns));
+                if ("amneziawg".equals(exit.protocol)) transport.put("parameters",AndroidExternalAmnezia.parameters(exit.awgParameters));
+                ext.put(exit.protocol, transport); break;
             case "socks5": case "http": case "https":
                 transport = new JSONObject().put("host", exit.server).put("port", exit.serverPort);
                 if (!exit.username.isEmpty()) transport.put("username", exit.username).put("password", exit.password);
@@ -180,7 +183,7 @@ final class AndroidExternalPolicy {
         }
         JSONObject transport = AndroidDirectStandardExitController.customExitJson(exit);
         if (!entryTag.isEmpty()&&captured==null) transport.put("detour", entryTag);
-        if ("wireguard".equals(exit.protocol) || "openvpn".equals(exit.protocol)) endpoints.put(transport); else outbounds.put(transport);
+        if ("wireguard".equals(exit.protocol) || "amneziawg".equals(exit.protocol) || "openvpn".equals(exit.protocol)) endpoints.put(transport); else outbounds.put(transport);
         JSONObject source = new JSONObject().put("log", new JSONObject().put("level", "warn"))
                 .put("inbounds", new JSONArray().put(new JSONObject().put("type", "tun").put("tag", "tun-in")
                         .put("address", new JSONArray().put("172.29.93.1/30").put("fd29:93::1/126"))

@@ -134,16 +134,18 @@ public final class StandardExitActivity extends Activity {
 
     private void chooseProtocol() {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding or editing custom exits.");return;}
-        String[] protocols={"WireGuard","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN","Tor","Tor with bridges"};
+        String[] protocols={"WireGuard / AmneziaWG","SOCKS5","HTTP CONNECT","HTTPS CONNECT + TLS","Shadowsocks","Hysteria2","OpenVPN","Tor","Tor with bridges"};
         String[] ids={"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"};
         new AlertDialog.Builder(this).setTitle("Add custom exit protocol").setItems(protocols,(d,w)->{
-            showAddForm(ids[w]);
+            if("wireguard".equals(ids[w]))new AlertDialog.Builder(this).setTitle("WireGuard family").setItems(new String[]{"WireGuard","AmneziaWG"},(choice,index)->showAddForm(index==0?"wireguard":"amneziawg")).setNegativeButton("Cancel",null).show();
+            else showAddForm(ids[w]);
         }).setNegativeButton("Cancel",null).show();
     }
 
     private void showAddForm(String protocol) {
         if(activeOrTransitioning()){toast("Disconnect/finish the current VPN session before adding a custom exit.");return;}
         if("openvpn".equals(protocol)){showOpenVPNForm();return;}
+        if("amneziawg".equals(protocol)){showAmneziaForm();return;}
         if(AndroidTorProfile.isTor(protocol)){showTorForm(protocol,null);return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int p=dp(10);form.setPadding(p,p,p,p);
         EditText name=field("Name",false),server=field("Server literal IP",false),port=field("Server port",false),expected=field("Expected public exit IP",false);
@@ -258,10 +260,31 @@ public final class StandardExitActivity extends Activity {
         dialog.show();
     }
 
+    private void showAmneziaForm() {
+        if(activeOrTransitioning()){toast("Disconnect before importing an AmneziaWG exit.");return;}
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
+        EditText name=field("Display name",false),expected=field("Expected public exit IP",false),config=field("Paste complete AmneziaWG .conf profile",false);
+        config.setSingleLine(false);config.setMinLines(8);config.setMaxLines(14);config.setSaveEnabled(false);
+        config.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE|InputType.TYPE_TEXT_FLAG_NO_SUGGESTIONS);
+        if(android.os.Build.VERSION.SDK_INT>=26)config.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);
+        form.addView(name);form.addView(expected);form.addView(config);
+        form.addView(text("Paste the complete client configuration supplied by this server. Its eleven obfuscation parameters, keys, addresses, keepalive and transport MTU stay together. The next screen shows the imported DNS selection and saved connection settings.",13,false));
+        TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Import AmneziaWG exit").setView(scroll).setPositiveButton("Next",null).setNegativeButton("Cancel",null).create();
+        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before importing.");return;}
+            try{
+                AndroidStandardExitStore.Entry entry=AndroidExternalAmnezia.fromInline(config.getText().toString(),name.getText().toString(),expected.getText().toString());
+                dialog.dismiss();showExternalPolicyForm(entry);
+            }catch(Exception invalid){error.setText("Import failed. Check the complete AmneziaWG profile and expected public exit IP. No saved node was changed.");}
+        }));
+        dialog.setOnDismissListener(ignored->config.setText(""));dialog.show();
+    }
+
     private void showSavedExits(boolean connect, boolean direct) {
         try {
             List<AndroidStandardExitStore.Entry> exits=exitStore.list();
-            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add Tor, Tor bridges, WireGuard, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2 or OpenVPN first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
+            if(exits.isEmpty()){new AlertDialog.Builder(this).setTitle("No custom exits").setMessage("Add Tor, Tor bridges, WireGuard/AmneziaWG, SOCKS5, HTTP/HTTPS CONNECT, Shadowsocks, Hysteria2 or OpenVPN first.").setPositiveButton("Add",(d,w)->chooseProtocol()).setNegativeButton("Cancel",null).show();return;}
             String[] labels=new String[exits.size()];for(int i=0;i<exits.size();i++){AndroidStandardExitStore.Entry e=exits.get(i);labels[i]=e.name+"\n"+exitSummary(e);}
             String title=!connect?"Manage custom exits":direct?"Choose direct external exit":"Choose external exit after Router VPN entry";
             new AlertDialog.Builder(this).setTitle(title).setItems(labels,(d,w)->{if(connect){if(direct)requestDirect(exits.get(w));else chooseEntry(exits.get(w));}else showExitActions(exits.get(w));}).setPositiveButton(connect?"Cancel":"Add new",(d,w)->{if(!connect)chooseProtocol();}).setNegativeButton("Close",null).show();

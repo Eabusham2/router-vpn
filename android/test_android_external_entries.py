@@ -27,11 +27,12 @@ T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "tor-profile":''', 1)
 T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
+ static boolean sameParams(JSONObject a,JSONObject b)throws Exception{if(a.length()!=11||b.length()!=11)return false;for(String key:AndroidExternalAmnezia.PARAMETERS)if(!a.get(key).equals(b.get(key)))return false;return true;}
  static String externalCertificate;
  static AndroidStandardExitStore.Entry external(String kind,String dns)throws Exception{
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="ordinary-"+kind;e.name="Captured "+kind;e.protocol=kind;e.server="203.0.113.50";e.serverPort=443;e.expectedPublicIp="8.8.4.4";e.tlsServerName="exit.example.test";
   String key=MultihopGraphHarness.key('v');
-  if(kind.equals("wireguard")){e.wgPrivateKey=key;e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;}
+  if(kind.equals("wireguard")||kind.equals("amneziawg")){e.wgPrivateKey=key;e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;e.wgKeepalive=25;if(kind.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
   if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exit-only-user";e.password="exit-only-password";}
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="exit-only-hy2";
   if(kind.equals("openvpn")){e.username=" exit-only user ";e.password=" exit-only password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.50 443\nremote 203.0.113.51 1194 udp\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n"+externalCertificate+"\n</ca>\n";}
@@ -51,6 +52,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   check(proof.getString("predecessor_sha256").equals(AndroidTorProfile.digest(capture.getString("predecessor_config").getBytes(StandardCharsets.UTF_8))),"entry graph digest changed");
   JSONObject predecessor=new JSONObject(capture.getString("predecessor_config"));check(graph.getJSONArray("inbounds").length()==1&&graph.getJSONObject("route").getString("final").equals("custom-exit"),"entry created a second VPN owner");
   JSONObject output=byTag(graph,"custom-exit");check(output.getString("detour").equals("external-entry"),"selected external traffic bypassed entry");
+  if(kind.equals("amneziawg")){JSONObject imported=capture.getJSONObject("profile").getJSONObject("external").getJSONObject("amneziawg");check(output.getString("type").equals("routervpn-amneziawg")&&sameParams(output.getJSONObject("amnezia"),exit.awgParameters),"AWG output lost exact native parameters");check(sameParams(imported.getJSONObject("parameters"),exit.awgParameters)&&output.getJSONArray("peers").getJSONObject(0).getInt("persistent_keepalive_interval")==25,"AWG capture lost exact ranges or keepalive");}
   if(kind.equals("openvpn")){JSONObject inline=capture.getJSONObject("profile").getJSONObject("external").getJSONObject("openvpn");check(output.getString("type").equals("openvpn-client")&&!output.getBoolean("system")&&output.getJSONArray("servers").length()==2,"OpenVPN lost its remote list or acquired a system TUN");check(output.getString("username").equals(exit.username)&&output.getString("password").equals(exit.password)&&inline.getString("config").equals(exit.openVPNConfig),"OpenVPN borrowed or normalized private credentials");check(output.getJSONObject("tls").getJSONArray("certificate").getString(0).equals(externalCertificate.trim()+"\n")&&output.getInt("mtu")==1380&&output.getInt("fragment")==1200,"OpenVPN changed inline TLS, transport MTU or captured fragmentation");}
   JSONObject entryOutput=byTag(graph,"external-entry"),original=byTag(predecessor,predecessor.getJSONObject("route").getString("final"));check(entryOutput.getString("type").equals(original.getString("type")),"selected entry family changed");
   check(proof.getString("dns_server").equals(exit.policy.getString("dns_mode").equals("home")?profile(selected).getString("adguard_ipv4"):"149.112.112.112"),"entry replaced selected exit DNS");
@@ -80,8 +82,8 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  }
  public static void main(String[] args)throws Exception{
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");externalCertificate=io.nekohasekai.libbox.Libbox.testCertificate("external-openvpn.example.test").trim();
-  for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn"})ordinary(dir,mode,layer,kind,certificate);
-  check(graphs==399,"ordinary encrypted entry matrix incomplete");ordinaryRejections(dir,certificate);
+  for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})ordinary(dir,mode,layer,kind,certificate);
+  check(graphs==456,"ordinary encrypted entry matrix incomplete");ordinaryRejections(dir,certificate);
   System.out.println("Android ordinary external entries: PASS "+graphs+" shipping Java/Go graphs, "+checks+" checks; all19 native entry modes and saved Start Layers");
  }
 }

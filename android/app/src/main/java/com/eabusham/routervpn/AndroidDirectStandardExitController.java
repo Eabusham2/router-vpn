@@ -19,10 +19,12 @@ final class AndroidDirectStandardExitController {
 
     static JSONObject customExitJson(AndroidStandardExitStore.Entry e) throws Exception {
         if ("openvpn".equals(e.protocol)) return AndroidOpenVPN.endpoint(e, "");
+        if ("amneziawg".equals(e.protocol)) return AndroidExternalAmnezia.endpoint(e);
         if ("wireguard".equals(e.protocol)) {
             JSONObject peer = new JSONObject().put("address", e.server).put("port", e.serverPort)
                     .put("public_key", e.wgPeerPublicKey).put("allowed_ips", new JSONArray(e.wgAllowedIps));
             if (!e.wgPreSharedKey.isEmpty()) peer.put("pre_shared_key", e.wgPreSharedKey);
+            if (e.wgKeepalive != null) peer.put("persistent_keepalive_interval",e.wgKeepalive);
             JSONObject endpoint = new JSONObject().put("type", "wireguard").put("tag", "custom-exit")
                     .put("address", new JSONArray(e.wgAddresses)).put("private_key", e.wgPrivateKey)
                     .put("peers", new JSONArray().put(peer));

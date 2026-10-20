@@ -84,7 +84,7 @@ public class ExternalPermissionTest {
   void allow(){check(controller.onActivityResult(AndroidUnifiedConnectionController.PREPARE_UNIFIED,Activity.RESULT_OK),"permission result ignored");}
  }
  static void allModes(Path root)throws Exception{
-  for(String protocol:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL)for(boolean restore:new boolean[]{false,true}){
+  for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL)for(boolean restore:new boolean[]{false,true}){
    Fixture f=new Fixture(root);f.exit.protocol=protocol;f.save();Bundle state=f.request(mode,false);
    check(f.activity.permissionRequest==AndroidUnifiedConnectionController.PREPARE_UNIFIED&&f.runtime().starts==0,"external test ran before Android permission");
    check(!state.values.toString().contains(f.exit.secret)&&!state.values.toString().contains(f.exit.policy),"private profile was copied into Android saved state");
@@ -109,7 +109,7 @@ public class ExternalPermissionTest {
   }
   Fixture pending=new Fixture(root);pending.request("wg",false);Callback rejected=new Callback();pending.controller.connectExternal(pending.entry,pending.exit,false,"max",rejected);check(rejected.completions==1&&!rejected.ok,"new request overwrote pending external permission");pending.allow();check(pending.callback.ok&&pending.runtime().mode.equals("wg"),"second request replaced the original permission owner");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);changes(root);System.out.println("Android external permission: "+checks+" checks; all19 entries, nine exit protocols, restored/cancelled/stale requests");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);changes(root);System.out.println("Android external permission: "+checks+" checks; all19 entries, ten exit protocols, restored/cancelled/stale requests");}
 }
 '''
 

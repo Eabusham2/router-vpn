@@ -81,7 +81,7 @@ public class SpeedLabExternalTest{
   void run(){controller.run(request,result);}void drain(){LayeredVpnService.quiesce.accept(null);}void finish(){AndroidSpeedLab.pending.finished(new AndroidSpeedLab.Result(),null);}
  }
  static void allEntries(Path root)throws Exception{
-  for(String protocol:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL){
+  for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL){
    Fixture f=new Fixture(root);f.request.entryMode=mode;f.request.standardExit.protocol=protocol;String secret=f.request.standardExit.secret;f.run();check(f.connection.starts==0&&AndroidMTUMeasurementGate.held(),"temporary graph started before MTU drain");
    f.request.entryMode="wg";f.request.standardExit.secret="changed-caller-key";f.request.standardExit.protocol="http";f.request.minSeconds=7;f.request.topology="system-direct";f.drain();
    check(f.connection.starts==1&&f.connection.entryMode.equals(mode)&&f.connection.external.protocol.equals(protocol)&&f.connection.external.secret.equals(secret),"Speed Lab dropped captured external credentials or selected entry");
