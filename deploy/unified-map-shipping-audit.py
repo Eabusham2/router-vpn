@@ -86,14 +86,25 @@ need(
     "Require encrypted",
     "Require obfuscation",
     "IPv6",
-    "Jumbo TUN",
-    "DAITA-like",
+    'Button("Advanced node settings / MTU…") { showingAdvanced = true }',
+    '.sheet(isPresented: $showingAdvanced) { IOSProfileSettingsView().environmentObject(model) }',
+    "Padding and Jumbo settings apply to compatible native paths",
+    "external and Tor exits use their own DNS and exit proofs",
     "systemBlue",
     "systemOrange",
     "systemPink",
     "startPacketAnimation",
 )
 forbid("ios/RouterVPN/App/IOSUnifiedProductView.swift", "Test & connect fastest", "private func connectFastest")
+need(
+    "ios/RouterVPN/App/IOSProfileSettingsView.swift",
+    'Toggle("Jumbo TUN — compatible proxy paths", isOn: $jumboTUN)',
+    'Toggle("DAITA-like bounded traffic padding", isOn: $daitaEnabled)',
+    "It is not Mullvad DAITA",
+    "Jumbo sets a compatible proxy TUN to 9000 bytes",
+    "p.jumboTUN = jumboTUN",
+    "p.daitaEnabled = daitaEnabled",
+)
 
 # Android: ProductActivity is the only launcher; the old engine console is
 # disabled so the unified map/controller owns the process-visible product.

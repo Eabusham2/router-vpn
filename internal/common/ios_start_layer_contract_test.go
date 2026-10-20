@@ -103,13 +103,20 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		`@State private var startLayer = "off"`,
 		"AES-256-GCM — authenticated Libbox modes",
 		"AES-256-GCM + XOR whitening — native",
-		"tunnel-owned native outbound",
-		"XOR is obfuscation only and is never counted as encryption",
+		"Compatible native WG/AWG, PQ, proxy, Xray and complete MAX paths preserve the selected Start Layer",
+		"including entry and exit layers in multihop",
+		"AES+XOR uses an owned native outbound in the same VPN interface",
+		"XOR adds obfuscation and always accompanies authenticated AES",
 		`startLayer = (p.startLayer ?? "off").lowercased()`,
 		"p.startLayer = startLayer",
 	} {
 		if !strings.Contains(settings, required) {
 			t.Fatalf("iOS native Settings can no longer configure Start Layer truthfully: missing %q", required)
+		}
+	}
+	for _, rejected := range []string{"Start Layer is unavailable for WG/AWG", "XOR is encryption", "XOR alone"} {
+		if strings.Contains(settings, rejected) {
+			t.Fatalf("iOS native Settings misrepresents the authenticated Start Layer: %q", rejected)
 		}
 	}
 
