@@ -68,7 +68,7 @@ final class AndroidDirectStandardExitController {
         }
     }
 
-    private static JSONObject customExitJson(AndroidStandardExitStore.Entry e) throws Exception {
+    static JSONObject customExitJson(AndroidStandardExitStore.Entry e) throws Exception {
         if ("openvpn".equals(e.protocol)) return AndroidOpenVPN.endpoint(e, "");
         if ("wireguard".equals(e.protocol)) {
             JSONObject peer = new JSONObject().put("address", e.server).put("port", e.serverPort)
