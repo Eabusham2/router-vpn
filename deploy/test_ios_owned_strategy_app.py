@@ -260,7 +260,15 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
     @MainActor static func main() async throws {
         defer { TestCompiler.shared.close() }
         var checks = 0
-        func check(_ label: String, _ value: @autoclosure () -> Bool) { precondition(value(), label); checks += 1 }
+        func check(_ label: String, _ value: @autoclosure () -> Bool) {
+            guard value() else {
+                // A negative control must fail with its exact assertion even
+                // where the Swift crash reporter cannot inspect peer threads.
+                FileHandle.standardError.write(Data(("FAIL: " + label + "\n").utf8))
+                exit(1)
+            }
+            checks += 1
+        }
         func fresh() throws -> RouterVPNModel {
             RuntimeTrace.shared.reset(); NETunnelProviderManager.stored = []; NETunnelProviderManager.saveHook = nil
             NETunnelProviderManager.failLoad = false
