@@ -291,6 +291,18 @@ final class AndroidMAXProfilePreparation implements AutoCloseable {
         if (drainFailed) throw unavailable();
     }
     static void cancelActive() { AndroidMAXProfilePreparation captured; synchronized (REGISTRY) { captured = active; } if (captured != null) captured.cancel(); }
+    /** A failed service preflight may retire only the exact still-unclaimed preparation. */
+    static void discardPrepared(String sessionID, String ownerID) {
+        AndroidMAXProfilePreparation captured;
+        synchronized(REGISTRY){captured=active;}
+        if(captured==null||ownerID==null||ownerID.isEmpty())return;
+        synchronized(captured.lock){
+            if(!captured.identity.equals(ownerID)||!captured.session.equals(sessionID)||captured.adopting)return;
+            captured.beginDrainLocked();
+        }
+        AndroidMAXDNSOwner.await(captured.drained);
+        if(captured.drainFailed)throw unavailable();
+    }
     static boolean busy() { synchronized (REGISTRY) { return active != null; } }
     private static String strictText(byte[] bytes) throws Exception {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)

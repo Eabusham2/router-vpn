@@ -100,6 +100,13 @@ P.HARNESS = P.HARNESS[:P.HARNESS.index(' public static void main(')] + r'''
   }
  }
  static void lifetime(Path root)throws Exception{
+  {
+   reset();Owned captured=new Owned(root,"max-tls-wg","off");captured.compile();captured.stage();
+   AndroidMAXProfilePreparation.discardPrepared("foreign-session",captured.owner.identity);AndroidMAXProfilePreparation.discardPrepared(captured.session,"foreign-owner");
+   captured.owner.verify();check(AndroidMAXProfilePreparation.busy()&&captured.folder.exists(),"foreign preflight cancelled the current MAX owner");
+   AndroidMAXProfilePreparation.discardPrepared(captured.session,captured.owner.identity);check(!AndroidMAXProfilePreparation.busy()&&!captured.folder.exists(),"failed preflight retained its exact MAX preparation");reject(captured::claim);
+   reset();Owned next=new Owned(root,"max-quic-wg","off");next.compile();next.stage();AndroidMAXProfilePreparation.Adopted adopted=next.claim();AndroidMAXProfilePreparation.discardPrepared(next.session,next.owner.identity);check(adopted.current(true),"discard invalidated a successfully claimed MAX owner");adopted.cancel();
+  }
   for(String boundary:new String[]{"factory","run","close","claim-stop","claim-home"}){
    var state=reset();Owned o=new Owned(root,"max-tls-awg","off");java.util.concurrent.CountDownLatch entered=new java.util.concurrent.CountDownLatch(1),release=new java.util.concurrent.CountDownLatch(1);
    Job work;
