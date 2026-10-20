@@ -379,6 +379,15 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
                 let captured=try JSONDecoder().decode(ClientBundle.self,from:config["external_entry_bundle"] as! Data)
                 check("ordinary external app captures exact complete entry",model.connected && captured.routerProfiles==entry.routerProfiles && captured.profiles==entry.profiles && config["external_entry_mode"] as? String=="wg")
                 check("ordinary external app cannot retain a Tor owner",config["tor_entry_bundle"]==nil && config["tor_entry_mode"]==nil)
+                let identity=model.activeSessionIdentity
+                check("external status binds complete captured predecessor",identity?.entryBundleData==config["external_entry_bundle"] as? Data && identity?.entryMode=="wg")
+                let proto=manager.protocolConfiguration as! NETunnelProviderProtocol
+                proto.providerConfiguration?["external_entry_bundle"]=Data("replacement-entry-owner".utf8)
+                await model.refreshTunnelStatus()
+                check("same-label external predecessor change invalidates measurement identity",model.activeSessionIdentity != identity)
+                proto.providerConfiguration?["tor_entry_bundle"]=Data("ambiguous-owner".utf8)
+                await model.refreshTunnelStatus()
+                check("mixed external predecessor status is unverified",model.activeSessionIdentity==nil && model.profileMutationBlocked)
             } else {check("changed external entry cannot start after preference save",session.starts==0 && !model.connected)}
         }
         for raw in IOSNativeMAXProfile.modeIDs.sorted() {

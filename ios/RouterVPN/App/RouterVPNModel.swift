@@ -531,7 +531,7 @@ final class RouterVPNModel: ObservableObject {
                 let engine = configuration["engine"] as? String ?? "wireguard"
                 let raw = configuration["rawProfileID"] as? String ?? configuration["mode"] as? String ?? "wg"
                 let identity = try IOSSessionIdentity(connectedAt: connectedAt, engine: engine, rawProfile: raw,
-                    bundleData: data, entryBundleData: configuration["entryBundle"] as? Data)
+                    bundleData: data, configuration: configuration)
                 activeEngine = engine; activeRawProfile = raw; activeSessionIdentity = identity
             }
         } catch {

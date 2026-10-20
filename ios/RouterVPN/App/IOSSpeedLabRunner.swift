@@ -105,6 +105,7 @@ final class IOSSpeedLabRunner: ObservableObject {
 
     private func runTemporary(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async throws -> IOSSpeedLabRunResult {
         await model.refreshTunnelStatus()
+        try Task.checkCancellation()
         guard !model.connected, !model.tunnelTransitioning else {
             throw error("Disconnect before a temporary Speed Lab configuration. Current-path testing remains available while connected.")
         }
@@ -121,6 +122,7 @@ final class IOSSpeedLabRunner: ObservableObject {
         var path = ""
         var startedTemporaryTunnel = false
         do {
+            try Task.checkCancellation()
             switch request.topology {
             case .systemDirect:
                 path = "Temporary system direct • Router VPN disconnected"
@@ -132,15 +134,22 @@ final class IOSSpeedLabRunner: ObservableObject {
                       selected.multihopEnabled == true, let saved = model.bundle else {
                     throw error("Save an entry/exit graph in Multihop before testing it temporarily.")
                 }
+                let external = selected.normalizedNodeKind == "external"
+                if external && !model.selectedExternalSupportedOnIOS {
+                    throw error("The saved external graph's transport is unavailable in this build.")
+                }
                 _ = try model.iosMultihopEntryBundle(for: saved)
                 progress = "Proving temporary entry and exit through the owned PacketTunnel…"
-                await model.connect()
+                try Task.checkCancellation()
+                if external { await model.connectSelectedExternal() }
+                else { await model.connect() }
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
-                guard model.connected, model.activeEngine == "multihop-libbox" else {
+                try Task.checkCancellation()
+                guard model.connected, model.activeEngine == (external ? "external-libbox" : "multihop-libbox") else {
                     throw error("Temporary multihop failed both-node path proof: \(model.message)")
                 }
                 startedTemporaryTunnel = true
-                path = "Temporary multihop • \(selected.multihopEntryID ?? "") → \(selected.id) • \(model.activeRawProfile)"
+                path = "Temporary multihop • \(selected.multihopEntryID ?? "") / \(selected.multihopEntryMode ?? "wg") → \(selected.id) • \(model.activeRawProfile)"
             case .router:
                 guard !request.nodeID.isEmpty else { throw error("Choose a Router VPN node for the temporary test.") }
                 model.selectNode(request.nodeID)
@@ -165,18 +174,23 @@ final class IOSSpeedLabRunner: ObservableObject {
                 guard let selected = model.selectedNodeProfile, selected.id == request.nodeID, selected.normalizedNodeKind == "external" else {
                     throw error("The requested temporary external node could not be selected.")
                 }
+                guard selected.multihopEnabled != true else {
+                    throw error("This external node has multihop enabled; choose Multihop to test its captured entry and exit.")
+                }
                 guard model.selectedExternalSupportedOnIOS else {
-                    throw error(model.selectedExternalProtocol == "openvpn" ? "OpenVPN temporary testing is unavailable on iOS until a pinned native Apple OpenVPN dataplane ships." : "That external transport is unavailable on iOS.")
+                    throw error("That external transport is unavailable in this build.")
                 }
                 progress = "Starting temporary external \(model.selectedExternalProtocol) exit…"
                 await model.connectSelectedExternal()
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+                try Task.checkCancellation()
                 guard model.connected else { throw error("Temporary external path failed selected exit proof: \(model.message)") }
                 startedTemporaryTunnel = true
                 path = "Temporary external direct • \(selected.name) • \(model.selectedExternalProtocol)"
             }
 
             await model.refreshTunnelStatus()
+            try Task.checkCancellation()
             let token = pathToken(model)
             if request.topology == .systemDirect {
                 guard !token.connected else { throw error("Router VPN connected while the system-direct test was being prepared.") }
@@ -207,8 +221,9 @@ final class IOSSpeedLabRunner: ObservableObject {
     }
 
     private func applyTemporaryAutoRequirements(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) throws {
-        guard var current = model.bundle,
-              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first else {
+        guard var current = model.bundle, current.selectedRouterID == request.nodeID,
+              current.routerProfiles.filter({ $0.id == current.selectedRouterID }).count == 1,
+              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) else {
             throw error("Temporary Speed Lab Router node has no mutable profile.")
         }
         guard current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {

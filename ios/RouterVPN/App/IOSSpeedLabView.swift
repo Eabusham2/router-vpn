@@ -18,8 +18,8 @@ struct IOSSpeedLabView: View {
     @State private var maxSeconds = 12.0
 
     private var routerNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" } }
-    private var multihopNodes: [RouterProfile] { routerNodes.filter { $0.multihopEnabled == true } }
-    private var externalNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "external" } }
+    private var multihopNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.multihopEnabled == true } }
+    private var externalNodes: [RouterProfile] { model.allNodeProfiles.filter { $0.normalizedNodeKind == "external" && $0.multihopEnabled != true } }
 
     var body: some View {
         NavigationStack {
@@ -116,7 +116,7 @@ struct IOSSpeedLabView: View {
                     }
                 } else if topology == .multihop {
                     nodePicker(nodes: multihopNodes, title: "Saved multihop exit")
-                    Text("Tests the saved native entry → encrypted exit graph. Both nodes must pass routed proof. The original selection is restored after teardown; Speed Lab will not substitute a direct path.")
+                    Text("Tests the complete saved entry → exit graph, including external and Tor exits. Each path must pass its native node or circuit proof. The original selection is restored after teardown.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
