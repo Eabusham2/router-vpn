@@ -39,6 +39,7 @@ final class IOSSpeedLabRunner: ObservableObject {
     @Published private(set) var progress = "Ready"
     @Published private(set) var lastResult: IOSSpeedLabRunResult?
     @Published private(set) var lastError = ""
+    private var activeTask: Task<IOSSpeedLabRunResult, Error>?
 
     private struct ModelSnapshot {
         let bundleData: Data?
@@ -62,17 +63,21 @@ final class IOSSpeedLabRunner: ObservableObject {
         running = true
         lastError = ""
         lastResult = nil
-        defer { running = false }
-
-        do {
-            let result: IOSSpeedLabRunResult = try await IOSMTUControl.withHold(model: model) {
+        defer { activeTask = nil; running = false }
+        let worker = Task { @MainActor in
             switch request.scope {
             case .current:
-                return try await runCurrent(request, model: model)
+                return try await IOSMTUControl.withHold(model: model) {
+                    try await self.runCurrent(request, model: model)
+                }
             case .temporary:
-                return try await runTemporary(request, model: model)
+                return try await self.runTemporary(request, model: model)
             }
-            }
+        }
+        activeTask = worker
+        do {
+            let result = try await withTaskCancellationHandler { try await worker.value } onCancel: { worker.cancel() }
+            try Task.checkCancellation()
             lastResult = result
             progress = "Complete"
         } catch is CancellationError {
@@ -82,6 +87,12 @@ final class IOSSpeedLabRunner: ObservableObject {
             lastError = error.localizedDescription
             progress = "Failed"
         }
+    }
+
+    func cancel() {
+        guard running else { return }
+        progress = "Cancelling measurements and restoring the captured path…"
+        activeTask?.cancel()
     }
 
     private func runCurrent(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async throws -> IOSSpeedLabRunResult {
@@ -106,22 +117,45 @@ final class IOSSpeedLabRunner: ObservableObject {
     private func runTemporary(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async throws -> IOSSpeedLabRunResult {
         await model.refreshTunnelStatus()
         try Task.checkCancellation()
-        guard !model.connected, !model.tunnelTransitioning else {
-            throw error("Disconnect before a temporary Speed Lab configuration. Current-path testing remains available while connected.")
+        guard !model.tunnelTransitioning else { throw error("Wait for the current VPN transition before a temporary Speed Lab test.") }
+        let owner = try model.iosSpeedLabOwnership.begin { [weak self, weak model] in
+            model?.iosConnectGeneration = UUID()
+            model?.iosStrategyTaskActive = false
+            self?.activeTask?.cancel()
         }
+        defer { model.iosSpeedLabOwnership.finish(owner) }
         let snapshot = ModelSnapshot(
-            bundleData: model.bundle.flatMap { try? JSONEncoder().encode($0) },
+            bundleData: try model.bundle.map { try JSONEncoder().encode($0) },
             selectedLogicalMode: model.selectedLogicalMode,
             selectedMode: model.selectedMode,
             auto: model.auto,
             message: model.message
         )
+        // Capture before MTU quiescence; a reconnected session with identical
+        // node/mode labels is a different owner and cannot be restored by this test.
+        return try await IOSSpeedLabContext.$owner.withValue(owner) {
+            let original = try await IOSSpeedLabTunnel.capture(model: model, owner: owner)
+            let originalToken = pathToken(model)
+            return try await IOSMTUControl.withHold(model: model) {
+                try model.iosSpeedLabOwnership.require(owner)
+                guard pathToken(model) == originalToken else { throw CancellationError() }
+                return try await runTemporaryHeld(request, model: model, owner: owner, snapshot: snapshot, original: original)
+            }
+        }
+    }
 
-        try IOSSpeedLabPersistenceJournal.begin()
-        var journalOwned = true
+    private func runTemporaryHeld(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel, owner: UUID,
+                                  snapshot: ModelSnapshot, original: IOSSpeedLabTunnel) async throws -> IOSSpeedLabRunResult {
+        try IOSSpeedLabPersistenceJournal.begin(owner: owner)
         var path = ""
-        var startedTemporaryTunnel = false
+        let outcome: Result<IOSSpeedLabRunResult, Error>
         do {
+            try Task.checkCancellation()
+            progress = "Pausing the exact original VPN path…"
+            // This stop must drain even when Cancel arrives during teardown.
+            // A newer user action is still checked inside every native boundary.
+            try await Task { @MainActor in try await original.stopOriginal(model: model, owner: owner) }.value
+            try model.iosSpeedLabOwnership.require(owner)
             try Task.checkCancellation()
             switch request.topology {
             case .systemDirect:
@@ -143,13 +177,13 @@ final class IOSSpeedLabRunner: ObservableObject {
                 try Task.checkCancellation()
                 if external { await model.connectSelectedExternal() }
                 else { await model.connect() }
+                try model.iosSpeedLabOwnership.require(owner)
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 try Task.checkCancellation()
                 guard model.connected, model.activeEngine == (external ? "external-libbox" : "multihop-libbox") else {
                     throw error("Temporary multihop failed both-node path proof: \(model.message)")
                 }
-                startedTemporaryTunnel = true
-                path = "Temporary multihop • \(selected.multihopEntryID ?? "") / \(selected.multihopEntryMode ?? "wg") → \(selected.id) • \(model.activeRawProfile)"
+                path = "Temporary multihop • \(selected.multihopEntryID ?? "") / \(selected.multihopEntryMode ?? "wg") → \(selected.id) • \(selected.multihopExecution ?? "local") • \(model.activeRawProfile)"
             case .router:
                 guard !request.nodeID.isEmpty else { throw error("Choose a Router VPN node for the temporary test.") }
                 model.selectNode(request.nodeID)
@@ -163,8 +197,8 @@ final class IOSSpeedLabRunner: ObservableObject {
                 }
                 progress = "Starting temporary Router VPN path…"
                 try await connectTemporaryRouter(request, model: model)
+                try model.iosSpeedLabOwnership.require(owner)
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
-                startedTemporaryTunnel = true
                 let filters = "encrypted=\(request.requireEncrypted ? "required" : "off") • obfuscation=\(request.requireObfuscation ? "required" : "off")"
                 path = "Temporary Router VPN • \(selected.name) • \(request.mode) • \(filters) • \(model.activeEngine) / \(model.activeRawProfile)"
             case .external:
@@ -182,14 +216,15 @@ final class IOSSpeedLabRunner: ObservableObject {
                 }
                 progress = "Starting temporary external \(model.selectedExternalProtocol) exit…"
                 await model.connectSelectedExternal()
+                try model.iosSpeedLabOwnership.require(owner)
                 try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
                 try Task.checkCancellation()
                 guard model.connected else { throw error("Temporary external path failed selected exit proof: \(model.message)") }
-                startedTemporaryTunnel = true
                 path = "Temporary external direct • \(selected.name) • \(model.selectedExternalProtocol)"
             }
 
             await model.refreshTunnelStatus()
+            try model.iosSpeedLabOwnership.require(owner)
             try Task.checkCancellation()
             let token = pathToken(model)
             if request.topology == .systemDirect {
@@ -201,23 +236,24 @@ final class IOSSpeedLabRunner: ObservableObject {
             }
             progress = "Running idle, download-loaded and upload-loaded measurements…"
             let measurement = try await guardedMeasurement(request.duration, model: model, token: token)
-            try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel)
-            try IOSSpeedLabPersistenceJournal.finish()
-            journalOwned = false
-            return IOSSpeedLabRunResult(path: path, temporary: true, measurement: measurement)
-        } catch let operationError {
-            var cleanupFailure: Error?
-            do { try await restore(snapshot, model: model, stopTunnel: startedTemporaryTunnel || model.connected) }
-            catch { cleanupFailure = error }
-            if journalOwned && cleanupFailure == nil {
-                do { try IOSSpeedLabPersistenceJournal.finish(); journalOwned = false }
-                catch { cleanupFailure = error }
-            }
-            if let cleanupFailure {
-                throw self.error("\(operationError.localizedDescription); temporary-path cleanup also failed: \(cleanupFailure.localizedDescription). Recovery journal retained for next launch.")
-            }
-            throw operationError
+            try Task.checkCancellation()
+            try model.iosSpeedLabOwnership.require(owner)
+            outcome = .success(IOSSpeedLabRunResult(path: path, temporary: true, measurement: measurement))
+        } catch { outcome = .failure(error) }
+        do {
+            // Cleanup has its own uncancelled task and is joined. The UI worker
+            // retains its MTU lease until HTTP work, native teardown and the
+            // original path's fresh proof have actually completed.
+            try await Task { @MainActor in
+                try await restore(snapshot, original: original, model: model, owner: owner)
+            }.value
+        } catch {
+            let failure = (try? outcome.get()).map { _ in "Measurement completed" } ?? "Measurement was cancelled or failed"
+            throw self.error("\(failure); temporary-path cleanup failed: \(error.localizedDescription). Recovery journal retained for next launch.")
         }
+        try Task.checkCancellation()
+        try model.iosSpeedLabOwnership.require(owner)
+        return try outcome.get()
     }
 
     private func applyTemporaryAutoRequirements(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) throws {
@@ -280,6 +316,7 @@ final class IOSSpeedLabRunner: ObservableObject {
             watcher.cancel()
             _ = await watcher.result
             await model.refreshTunnelStatus()
+            try Task.checkCancellation()
             guard pathToken(model) == token else { throw CancellationError() }
             return value
         } catch {
@@ -289,27 +326,63 @@ final class IOSSpeedLabRunner: ObservableObject {
         }
     }
 
-    private func restore(_ snapshot: ModelSnapshot, model: RouterVPNModel, stopTunnel: Bool) async throws {
-        if stopTunnel || model.connected || model.tunnelTransitioning {
-            if !model.tunnelTransitioning { model.disconnect() }
-            for _ in 0..<40 {
+    private func restore(_ snapshot: ModelSnapshot, original: IOSSpeedLabTunnel,
+                         model: RouterVPNModel, owner: UUID) async throws {
+        progress = "Draining the temporary path and restoring the original selection…"
+        while true {
+            if model.iosSpeedLabOwnership.userDisconnected(owner) {
                 await model.refreshTunnelStatus()
-                if !model.connected && !model.tunnelTransitioning { break }
-                try? await Task.sleep(for: .milliseconds(150))
+                if !model.connected && !model.tunnelTransitioning && !model.iosUserDisconnectInProgress { break }
+                // Disconnect can outlive the ordinary native stop timeout.
+                // This uncancelled cleanup task retains the lease until the
+                // actual captured stop finishes; Cancel is never fake drain.
+                progress = "Waiting for your Disconnect to finish before releasing the measurement hold…"
+            } else {
+                do {
+                    try await IOSSpeedLabTunnel.stopTemporary(model: model, owner: owner)
+                    break
+                } catch {
+                    if model.iosSpeedLabOwnership.userDisconnected(owner) { continue }
+                    guard IOSSpeedLabTunnel.retirementPending(error) else { throw error }
+                    progress = "Waiting for the captured temporary VPN to finish shutdown; Disconnect remains available…"
+                }
             }
-            await model.refreshTunnelStatus()
-            guard !model.connected, !model.tunnelTransitioning else { throw error("Temporary Speed Lab tunnel did not fully stop.") }
+            guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
+            try await Task.sleep(for: .milliseconds(150))
         }
-        if let data = snapshot.bundleData {
-            try model.importBundle(data)
+        guard model.iosSpeedLabOwnership.mayRestoreSelection(owner) else {
+            // Newer node/profile/connection intent owns persistence. The
+            // original journal must not overwrite that user's selected state.
+            try IOSSpeedLabPersistenceJournal.abandon()
+            return
         }
+        try IOSSpeedLabContext.$restoringSelection.withValue(true) {
+            try model.restoreIOSSpeedLabBundle(snapshot.bundleData)
+        }
+        try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+        var reconnect = model.iosSpeedLabOwnership.current(owner)
+        progress = reconnect && original.identity != nil ? "Re-proving the exact original VPN runtime…" : "Restoring the saved selection; staying disconnected…"
+        do { try await original.restore(model: model, owner: owner, reconnect: reconnect) }
+        catch {
+            guard model.iosSpeedLabOwnership.userDisconnected(owner) else { throw error }
+            // Disconnect may arrive during the original's fresh proof or
+            // reconnect-rule save. Join that stop, then confirm the captured
+            // original preferences with On Demand disabled.
+            while true {
+                await model.refreshTunnelStatus()
+                if !model.connected && !model.tunnelTransitioning && !model.iosUserDisconnectInProgress { break }
+                try await Task.sleep(for: .milliseconds(100))
+            }
+            guard model.iosSpeedLabOwnership.mayRestoreSelection(owner) else { throw CancellationError() }
+            reconnect = false
+            try await original.restore(model: model, owner: owner, reconnect: false)
+        }
+        guard model.iosSpeedLabOwnership.mayRestoreSelection(owner) else { throw CancellationError() }
         model.selectedLogicalMode = snapshot.selectedLogicalMode
         model.selectedMode = snapshot.selectedMode
         model.auto = snapshot.auto
-        model.message = snapshot.message
-        if IOSSpeedLabPersistenceJournal.active {
-            try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
-        }
+        model.message = reconnect ? snapshot.message : "Disconnected • original Speed Lab selection restored"
+        try IOSSpeedLabPersistenceJournal.finish()
     }
 
     private func pathToken(_ model: RouterVPNModel) -> PathToken {

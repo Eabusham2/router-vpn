@@ -46,6 +46,16 @@ SWIFT = r'''
   check("superseded test cannot overwrite idle or new connection",!owner.current(second) && !owner.mayRestoreSelection(second))
   _=owner.admit(.disconnect);check("later Disconnect does not erase newer-selection protection",!owner.mayRestoreSelection(second))
   owner.finish(second)
+  for newerDisconnect in [false,true] {
+   let third=try owner.begin{invalidations+=1};var returned=false
+   let waiting=Task{let accepted=await owner.admitConnection();returned=true;return accepted}
+   try await Task.sleep(for:.milliseconds(5))
+   check("new Home connection waits for actual retirement",!returned && !owner.current(third) && owner.owns(third))
+   if newerDisconnect {_=owner.admit(.disconnect)}
+   owner.finish(third)
+   let accepted=await waiting.value
+   check("waiting connection observes newer Disconnect",accepted == !newerDisconnect)
+  }
   print("Apple Speed Lab task/user ownership: PASS (\(checks) shipping Swift checks)")
  }
 }
@@ -77,7 +87,8 @@ def main():
         ('IOSStrategySupport.swift','func runIOSCustom(', 'connection'),
     ]:
         body=(APP/filename).read_text().split(signature,1)[1].split('{',1)[1]
-        assert body.lstrip().startswith('guard iosSpeedLabOwnership.admit(.'+action+')'),(filename,signature)
+        required='guard await iosSpeedLabOwnership.admitConnection()' if action=='connection' else 'guard iosSpeedLabOwnership.admit(.'+action+')'
+        assert body.lstrip().startswith(required),(filename,signature)
     external=(APP/'RouterVPNModelExternal.swift').read_text()
     assert 'let hold = IOSMTUMeasurementGate.current' in external
     assert '"routervpn_mtu_hold": hold as NSString' in external

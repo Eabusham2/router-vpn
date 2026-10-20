@@ -7,6 +7,7 @@ enum IOSSpeedLabPersistenceJournal {
         let createdAt: Date
         let originalBundle: Data?
         let originalLastRuntime: Data?
+        let transactionOwner: String?
     }
 
     private static let journalKey = "router-vpn.speed-lab-journal-v1"
@@ -15,7 +16,7 @@ enum IOSSpeedLabPersistenceJournal {
 
     static var active: Bool { UserDefaults.standard.data(forKey: journalKey) != nil }
 
-    static func begin() throws {
+    static func begin(owner: UUID? = nil) throws {
         let defaults = UserDefaults.standard
         guard defaults.data(forKey: journalKey) == nil else {
             throw NSError(domain: "RouterVPN.SpeedLab", code: 40, userInfo: [NSLocalizedDescriptionKey: "A previous iOS Speed Lab transaction still requires recovery."])
@@ -24,7 +25,8 @@ enum IOSSpeedLabPersistenceJournal {
             schema: 1,
             createdAt: Date(),
             originalBundle: defaults.data(forKey: bundleKey),
-            originalLastRuntime: defaults.data(forKey: lastRuntimeKey)
+            originalLastRuntime: defaults.data(forKey: lastRuntimeKey),
+            transactionOwner: owner?.uuidString
         )
         let body = try JSONEncoder().encode(journal)
         defaults.set(body, forKey: journalKey)
@@ -63,9 +65,22 @@ enum IOSSpeedLabPersistenceJournal {
         }
     }
 
+    /// A newer user profile/connection owns the current preferences. Clearing
+    /// the old receipt must not reapply the transaction's original bytes.
+    static func abandon() throws {
+        _ = try load()
+        let defaults = UserDefaults.standard
+        defaults.removeObject(forKey: journalKey)
+        guard defaults.synchronize(), defaults.data(forKey: journalKey) == nil else {
+            throw NSError(domain: "RouterVPN.SpeedLab", code: 50,
+                          userInfo: [NSLocalizedDescriptionKey: "Superseded Speed Lab recovery receipt could not be cleared."])
+        }
+    }
+
     static func recoverIfNeeded(model: RouterVPNModel) async {
         let defaults = UserDefaults.standard
         guard defaults.data(forKey: journalKey) != nil else { return }
+        guard !model.iosSpeedLabOwnership.active else { return }
 
         let journal: Journal
         do {
@@ -80,13 +95,16 @@ enum IOSSpeedLabPersistenceJournal {
 
         await model.refreshTunnelStatus()
         if model.connected || model.tunnelTransitioning {
-            if !model.tunnelTransitioning { model.disconnect() }
-            for _ in 0..<50 {
-                await model.refreshTunnelStatus()
-                if !model.connected && !model.tunnelTransitioning { break }
-                try? await Task.sleep(for: .milliseconds(150))
+            do {
+                guard let text = journal.transactionOwner, let owner = UUID(uuidString: text) else {
+                    throw NSError(domain: "RouterVPN.SpeedLab", code: 51,
+                        userInfo: [NSLocalizedDescriptionKey: "The legacy recovery journal cannot identify the active VPN owner; disconnect it before restoring saved state."])
+                }
+                try await IOSSpeedLabTunnel.recoverTemporary(model: model, owner: owner)
+            } catch {
+                model.message = "Speed Lab recovery is waiting for the temporary VPN tunnel to stop: \(error.localizedDescription)"
+                return
             }
-            await model.refreshTunnelStatus()
             guard !model.connected, !model.tunnelTransitioning else {
                 model.message = "Speed Lab recovery is waiting for the temporary VPN tunnel to stop before restoring your saved node."
                 return
@@ -103,6 +121,12 @@ enum IOSSpeedLabPersistenceJournal {
             if let bundle = journal.originalBundle {
                 try model.importBundle(bundle)
             }
+            restore(journal.originalBundle, key: bundleKey, defaults: defaults)
+            restore(journal.originalLastRuntime, key: lastRuntimeKey, defaults: defaults)
+            guard defaults.synchronize() else {
+                throw NSError(domain: "RouterVPN.SpeedLab", code: 45, userInfo: [NSLocalizedDescriptionKey: "Could not flush recovered Speed Lab preferences."])
+            }
+            try verify(journal, defaults: defaults)
             defaults.removeObject(forKey: journalKey)
             guard defaults.synchronize(), defaults.data(forKey: journalKey) == nil else {
                 throw NSError(domain: "RouterVPN.SpeedLab", code: 46, userInfo: [NSLocalizedDescriptionKey: "Recovered state is safe but the Speed Lab journal could not be cleared."])

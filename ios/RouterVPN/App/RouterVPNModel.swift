@@ -134,6 +134,16 @@ final class RouterVPNModel: ObservableObject {
         message = "Router bundle imported • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
     }
 
+    func restoreIOSSpeedLabBundle(_ data: Data?) throws {
+        guard let owner = IOSSpeedLabContext.owner,
+              iosSpeedLabOwnership.mayRestoreSelection(owner), !profileMutationBlocked else { throw CancellationError() }
+        if let data { try importBundle(data) }
+        else {
+            apply(ClientBundle.empty)
+            bundle = nil
+        }
+    }
+
     func importFromLAN() async {
         let raw = lanImportHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { message = "Enter the AI Board LAN IP or hostname"; return }
@@ -229,7 +239,7 @@ final class RouterVPNModel: ObservableObject {
     // rollback. Resolving them through the logical picker would silently turn
     // an AWG Fast attempt into the preferred WG variant of the same mode.
     func connect(rawProfileID: String?) async {
-        guard iosSpeedLabOwnership.admit(.connection) else { return }
+        guard await iosSpeedLabOwnership.admitConnection() else { return }
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         if selectedRouterProfile?.multihopEnabled != true {
             do {

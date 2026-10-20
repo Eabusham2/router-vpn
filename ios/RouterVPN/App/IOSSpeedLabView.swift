@@ -44,6 +44,7 @@ struct IOSSpeedLabView: View {
         .onChange(of: nodeID) { _ in loadAutoRequirementsFromNode() }
         .onChange(of: minSeconds) { value in if maxSeconds < value { maxSeconds = value } }
         .onChange(of: maxSeconds) { value in if minSeconds > value { minSeconds = value } }
+        .onDisappear { runner.cancel(); hopProbe.cancel() }
     }
 
     private var hero: some View {
@@ -120,7 +121,7 @@ struct IOSSpeedLabView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
 
-                Text("Temporary tests require Router VPN to be disconnected. The chosen path is proven, measured, torn fully down, and your previous node/mode selection is restored afterward. A recovery journal restores the original saved state after an interrupted test.")
+                Text("A temporary test pauses your current VPN, proves and measures the chosen path, then restores the exact original runtime with fresh path verification. Cancel waits for cleanup and restoration. Disconnect keeps you disconnected; a newer node or connection choice takes priority. A recovery journal preserves your original saved state if the app is interrupted.")
                     .font(.caption).foregroundStyle(.secondary)
             }
         }
@@ -241,6 +242,10 @@ struct IOSSpeedLabView: View {
             .buttonStyle(.borderedProminent)
             .controlSize(.large)
             .disabled(runDisabled || hopProbe.running)
+            if runner.running {
+                Button("Cancel and restore", role: .cancel) { runner.cancel() }
+                    .buttonStyle(.bordered)
+            }
             Text(runner.running ? runner.progress : "Uses real public test transfers. Mbps is never derived from RTT; loaded latency is sampled concurrently with each direction's traffic.")
                 .font(.caption).foregroundStyle(.secondary).multilineTextAlignment(.center)
         }
@@ -265,7 +270,7 @@ struct IOSSpeedLabView: View {
         if runner.running { return true }
         if durationMode == .custom && (minSeconds < 1 || maxSeconds > 60 || maxSeconds < minSeconds) { return true }
         if scope == .temporary {
-            if model.connected || model.tunnelTransitioning { return true }
+            if model.tunnelTransitioning { return true }
             if topology == .multihop && !multihopNodes.contains(where: { $0.id == nodeID }) { return true }
             if topology == .router && (nodeID.isEmpty || (mode == "custom" && customLayers.isEmpty)) { return true }
             if topology == .external && nodeID.isEmpty { return true }

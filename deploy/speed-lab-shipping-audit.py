@@ -424,7 +424,11 @@ need(
     'model.activeEngine == (external ? "external-libbox" : "multihop-libbox")',
     "Temporary multihop failed both-node path proof",
     "guardedMeasurement",
-    "Temporary Speed Lab tunnel did not fully stop",
+    "IOSSpeedLabTunnel.capture(model: model, owner: owner)",
+    "original.stopOriginal(model: model, owner: owner)",
+    "IOSSpeedLabTunnel.stopTemporary(model: model, owner: owner)",
+    "original.restore(model: model, owner: owner, reconnect: reconnect)",
+    "IOSSpeedLabTunnel.retirementPending(error)",
     "model.activeSessionIdentity",
     "transitioning: model.tunnelTransitioning",
     "withTaskCancellationHandler",
@@ -436,6 +440,16 @@ need(
     "requireObfuscation",
     "autoRequireEncrypted",
     "autoRequireObfuscation",
+)
+need(
+    "ios/RouterVPN/App/IOSSpeedLabTunnel.swift",
+    "Temporary Speed Lab tunnel did not fully stop",
+    "manager.connection.connectedDate == identity.connectedAt",
+    "Self.sameProtocol(manager.protocolConfiguration, expected)",
+    "IOSStrategyPlan(kind: .manual, candidates: candidates)",
+    "restored.rawProfile == identity.rawProfile",
+    "restored.entryBundleData == identity.entryBundleData",
+    '"routervpn_mtu_hold": hold as NSString',
 )
 need(
     "ios/RouterVPN/App/IOSSpeedLabView.swift",

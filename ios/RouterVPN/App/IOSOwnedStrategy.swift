@@ -144,7 +144,7 @@ import Libbox
 
     @discardableResult
     func runIOSOwnedStrategy(kind: IOSStrategyPlan.Kind, selections: [IOSRuntimeSelection], preferredRaw: String? = nil) async -> Bool {
-        guard iosSpeedLabOwnership.admit(.connection) else { return false }
+        guard await iosSpeedLabOwnership.admitConnection() else { return false }
         guard !iosStrategyTaskActive, !iosUserDisconnectInProgress else {
             message = "Another owned VPN operation is still running."; return false
         }

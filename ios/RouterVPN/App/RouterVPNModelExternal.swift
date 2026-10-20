@@ -81,7 +81,7 @@ extension RouterVPNModel {
     }
 
     func connectSelectedExternal() async {
-        guard iosSpeedLabOwnership.admit(.connection) else { return }
+        guard await iosSpeedLabOwnership.admitConnection() else { return }
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before starting another external connection."; return }
         guard let bundle, let profile = selectedNodeProfile, profile.normalizedNodeKind == "external" else {
             message = "Choose an external custom node first"; return
