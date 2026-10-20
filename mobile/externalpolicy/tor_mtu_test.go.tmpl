@@ -1,0 +1,211 @@
+package box_test
+
+import (
+	"context"
+	"encoding/json"
+	"net"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type torMTUFixtureOptions struct {
+	option.DialerOptions
+	Bridges       []string `json:"bridges"`
+	SessionID     string   `json:"session_id"`
+	ProfileSHA256 string   `json:"profile_sha256,omitempty"`
+}
+type torMTUFixtureOutbound struct {
+	outbound.Adapter
+	N.Dialer
+	ctx      context.Context
+	cancel   context.CancelFunc
+	session  string
+	canceled atomic.Bool
+}
+
+func (o *torMTUFixtureOutbound) TorSessionID() string { return o.session }
+func (o *torMTUFixtureOutbound) TorHealthy(session string) bool {
+	return session == o.session && o.ctx.Err() == nil && !o.canceled.Load()
+}
+func (o *torMTUFixtureOutbound) CancelTor(session string) {
+	if session == o.session {
+		o.canceled.Store(true)
+		o.cancel()
+	}
+}
+func (o *torMTUFixtureOutbound) TorProofWithPredecessor(ctx context.Context, session string, _ *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+	return mobiletor.Proof{SessionID: session, IsTor: o.TorHealthy(session) && ctx.Err() == nil, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
+}
+func (o *torMTUFixtureOutbound) TorMeasurementDial(context.Context, string, bool, string) (net.Conn, error) {
+	return nil, net.ErrClosed
+}
+func (o *torMTUFixtureOutbound) Close() error { o.cancel(); return nil }
+
+const torMTUFrozenProfile = `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","jumbo_tun":false}`
+
+func torMTUNativeFixture(t *testing.T) (*box.Box, string) {
+	t.Helper()
+	raw, err := mobiletor.CompileProfile(torMTUFrozenProfile, "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry := include.OutboundRegistry()
+	outbound.Register[torMTUFixtureOptions](registry, "routervpn-tor", func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options torMTUFixtureOptions) (adapter.Outbound, error) {
+		owned, cancel := context.WithCancel(ctx)
+		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, include.InboundRegistry(), registry, include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(raw))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = engine.Close() })
+	return engine, raw
+}
+
+func torMTUProved(t *testing.T, engine *box.Box) *box.RouterVPNTorProofRequest {
+	t.Helper()
+	proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := proof.Run(); err != nil || !proof.Healthy() {
+		t.Fatal("actual native capture rejected synthetic circuit fixture", err)
+	}
+	t.Cleanup(proof.Cancel)
+	return proof
+}
+
+func TestRouterTorMTUCapturesActualNativeGraphAndPolicy(t *testing.T) {
+	engine, config := torMTUNativeFixture(t)
+	proof := torMTUProved(t, engine)
+	for _, mutate := range []func(map[string]any){
+		func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1400 },
+		func(g map[string]any) { g["route"].(map[string]any)["rules"] = []any{} },
+		func(g map[string]any) {
+			g["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["server"] = "1.1.1.1"
+		},
+		func(g map[string]any) { g["outbounds"].([]any)[0].(map[string]any)["session_id"] = "other" },
+	} {
+		var graph map[string]any
+		_ = json.Unmarshal([]byte(config), &graph)
+		mutate(graph)
+		changed, _ := json.Marshal(graph)
+		if lease, err := engine.RouterVPNTorClaimMTU(proof, string(changed), torMTUFrozenProfile); err == nil || lease != nil {
+			t.Fatal("changed native graph acquired Tor TUN")
+		}
+	}
+	if lease, err := engine.RouterVPNTorClaimMTU(proof, config, strings.Replace(torMTUFrozenProfile, `"mtu_policy":"auto"`, `"mtu_policy":"default"`, 1)); err == nil || lease != nil {
+		t.Fatal("mutable UI policy replaced frozen automatic selection")
+	}
+	lease, err := engine.RouterVPNTorClaimMTU(proof, config, torMTUFrozenProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer lease.Close()
+	if !lease.Healthy() || lease.Config() != config || !strings.Contains(lease.Authority(), `"source_kind":"tor"`) || strings.Contains(lease.Authority(), "expected_public_ip") {
+		t.Fatal("native Tor authority lost dynamic identity")
+	}
+	if duplicate, err := engine.RouterVPNTorClaimMTU(proof, config, torMTUFrozenProfile); err == nil || duplicate != nil {
+		t.Fatal("duplicate optimizer gained same Tor proof")
+	}
+	inbound, err := lease.Inbound()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This is the actual native TUN, constructed but never started on the OS.
+	// A rejected replacement preserves both exact reader and proof ownership.
+	current, changeErr := lease.ChangeMTU(context.Background(), inbound, 1400)
+	if changeErr == nil || current != inbound || !proof.Healthy() || !lease.Healthy() {
+		t.Fatal("failed native reader transaction lost the captured session", changeErr)
+	}
+	other, _ := torMTUNativeFixture(t)
+	if foreign, err := other.RouterVPNTorClaimMTU(proof, config, torMTUFrozenProfile); err == nil || foreign != nil {
+		t.Fatal("proof adopted a different native Box")
+	}
+	lease.Close()
+	if replacement, err := engine.RouterVPNTorClaimMTU(proof, config, torMTUFrozenProfile); err != nil {
+		t.Fatal("completed lease did not release native claim", err)
+	} else {
+		replacement.Close()
+	}
+}
+
+func TestRouterTorMTUCancellationAndArbitraryReplacementRetireProof(t *testing.T) {
+	for _, kind := range []string{"cancel", "TUN", "DNS", "Tor"} {
+		t.Run(kind, func(t *testing.T) {
+			engine, config := torMTUNativeFixture(t)
+			proof := torMTUProved(t, engine)
+			lease, err := engine.RouterVPNTorClaimMTU(proof, config, torMTUFrozenProfile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer lease.Close()
+			owned, release, err := lease.Lifetime(context.Background())
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer release()
+			switch kind {
+			case "cancel":
+				proof.Cancel()
+			case "TUN":
+				inbound, err := lease.Inbound()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := engine.Inbound().Remove(inbound.Tag()); err != nil {
+					t.Fatal(err)
+				}
+			case "DNS":
+				final, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+				manager := service.FromContext[adapter.DNSTransportManager](final.(*torMTUFixtureOutbound).ctx)
+				if manager == nil {
+					t.Fatal("actual native DNS manager missing")
+				}
+				// The pinned manager can report a default-fallback error after
+				// removing the tag. Proof must retire even on partial teardown.
+				_ = manager.Remove("routervpn-tor-dns")
+				if _, exists := manager.Transport("routervpn-tor-dns"); exists {
+					t.Fatal("native DNS fixture did not remove the selected owner")
+				}
+			case "Tor":
+				if err := engine.Outbound().Remove(mobiletor.ProfileOutboundTag); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if proof.Healthy() || lease.Healthy() {
+				t.Fatal("retired native dependency stayed authoritative")
+			}
+			if _, err := lease.Inbound(); err == nil {
+				t.Fatal("retired dependency retained its TUN")
+			}
+			if kind == "cancel" {
+				select {
+				case <-owned.Done():
+				case <-time.After(time.Second):
+					t.Fatal("proof cancellation did not cancel owned sockets")
+				}
+			}
+		})
+	}
+}

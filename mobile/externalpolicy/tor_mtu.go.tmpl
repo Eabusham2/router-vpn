@@ -1,0 +1,242 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/json"
+)
+
+// The retained proof owns the complete graph, not merely the Tor final tag.
+// Only an authorized MTU transaction may replace its captured TUN pointer.
+type routerVPNTorCapturedOwner struct {
+	engine   *routerVPNExternalNativeEngine
+	mtu      atomic.Pointer[RouterVPNTorMTULease]
+	activity routerVPNExternalActivity
+}
+
+func (c *routerVPNTorCapturedOwner) Identity() string {
+	if c == nil {
+		return ""
+	}
+	return c.engine.Identity()
+}
+
+func init() {
+	routerVPNTorCaptureProof = func(s *Box) (routerVPNTorProofCapture, error) {
+		if s == nil || s.routerVPNTorOptions == "" {
+			return nil, nil
+		}
+		compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(s.routerVPNTorOptions))
+		if err != nil {
+			return nil, errors.New("native Tor construction snapshot is invalid")
+		}
+		// Preserve legacy proxy-only proof APIs, which cannot mint MTU authority.
+		if len(compiled.Inbounds) != 1 || compiled.Inbounds[0].Type != C.TypeTun {
+			return nil, nil
+		}
+		engine, err := s.routerVPNCapturedEngine("", compiled.Inbounds[0].Tag, mobiletor.ProfileOutboundTag, "routervpn-tor-dns", compiled)
+		if err != nil {
+			return nil, err
+		}
+		return &routerVPNTorCapturedOwner{engine: engine}, nil
+	}
+}
+
+type RouterVPNTorMTULease struct {
+	proof             *RouterVPNTorProofRequest
+	owner             *routerVPNTorCapturedOwner
+	box               *Box
+	ctx               context.Context
+	cancel            context.CancelFunc
+	closed            atomic.Bool
+	config, authority string
+}
+
+func (s *Box) RouterVPNTorClaimMTU(proof *RouterVPNTorProofRequest, config, profileJSON string) (*RouterVPNTorMTULease, error) {
+	if s == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("Tor MTU requires a successful native proof")
+	}
+	owner, ok := proof.capture.(*routerVPNTorCapturedOwner)
+	if !ok || owner == nil || owner.engine == nil || owner.engine.box != s || owner.Identity() == "" {
+		return nil, errors.New("Tor MTU proof does not own this native TUN")
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(config))
+	if err != nil || s.routerVPNTorOptions == "" || routerVPNTorOptionsSnapshot(s.ctx, compiled) != s.routerVPNTorOptions {
+		return nil, errors.New("Tor MTU source differs from its captured native graph")
+	}
+	authority, err := mobiletor.MTUAuthority(config, profileJSON, proof.sessionID)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(proof.ctx)
+	lease := &RouterVPNTorMTULease{proof: proof, owner: owner, box: s, ctx: ctx, cancel: cancel, config: config, authority: authority}
+	if !owner.mtu.CompareAndSwap(nil, lease) {
+		cancel()
+		return nil, errors.New("Tor proof already owns an MTU controller")
+	}
+	if !lease.Healthy() {
+		lease.Close()
+		return nil, errors.New("Tor MTU ownership changed during capture")
+	}
+	return lease, nil
+}
+
+func (l *RouterVPNTorMTULease) Config() string {
+	if l == nil {
+		return ""
+	}
+	return l.config
+}
+func (l *RouterVPNTorMTULease) Authority() string {
+	if l == nil {
+		return ""
+	}
+	return l.authority
+}
+func (l *RouterVPNTorMTULease) Healthy() bool {
+	return l != nil && l.ctx != nil && l.proof != nil && l.owner != nil && !l.closed.Load() && l.ctx.Err() == nil && l.owner.mtu.Load() == l && l.proof.Healthy()
+}
+func (l *RouterVPNTorMTULease) Close() {
+	if l != nil && !l.closed.Swap(true) {
+		if l.cancel != nil {
+			l.cancel()
+		}
+		if l.owner != nil {
+			l.owner.mtu.CompareAndSwap(l, nil)
+		}
+	}
+}
+func (l *RouterVPNTorMTULease) Lifetime(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent == nil || parent.Err() != nil || !l.Healthy() {
+		return nil, nil, errors.New("Tor MTU lease retired")
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(l.ctx, cancel)
+	release := func() { stop(); cancel() }
+	if !l.Healthy() {
+		release()
+		return nil, nil, errors.New("Tor MTU lease retired during capture")
+	}
+	return ctx, release, nil
+}
+func (l *RouterVPNTorMTULease) Inbound() (adapter.Inbound, error) {
+	if !l.Healthy() {
+		return nil, errors.New("Tor MTU proof retired")
+	}
+	e := l.owner.engine
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	if e.identityLocked() == "" || l.ctx.Err() != nil || l.closed.Load() {
+		return nil, errors.New("Tor MTU TUN retired")
+	}
+	return e.tun, nil
+}
+func (l *RouterVPNTorMTULease) ChangeMTU(parent context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	ctx, release, err := l.Lifetime(parent)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	end, err := l.owner.activity.beginMTU()
+	if err != nil {
+		return expected, err
+	}
+	defer end()
+	e := l.owner.engine
+	e.mu.Lock()
+	if ctx.Err() != nil || l.closed.Load() || l.owner.mtu.Load() != l || e.identityLocked() == "" || e.tun != expected {
+		e.mu.Unlock()
+		return nil, errors.New("Tor MTU captured reader changed")
+	}
+	current, changeErr := l.box.RouterVPNChangeMTU(ctx, expected, mtu)
+	if current == nil || current.Tag() != e.tunTag {
+		e.mu.Unlock()
+		l.proof.Cancel()
+		return nil, errors.New("Tor MTU lost its native reader")
+	}
+	e.tun = current
+	valid := e.identityLocked() != "" && !l.closed.Load() && l.owner.mtu.Load() == l
+	e.mu.Unlock()
+	if !valid {
+		l.proof.Cancel()
+		return nil, errors.New("Tor MTU changed another native owner")
+	}
+	if ctx.Err() != nil || !l.Healthy() {
+		return current, errors.New("Tor MTU transaction was canceled")
+	}
+	return current, changeErr
+}
+
+func (l *RouterVPNTorMTULease) VerificationTarget() (string, string) {
+	return mobiletor.ProfileOutboundTag, "check.torproject.org:443"
+}
+
+// Fresh Tor Project HTTPS proof traverses the OS TUN after each MTU change.
+// A legitimate circuit may choose a different public exit; only IsTor, the
+// captured session and actual native owners determine authority.
+func (l *RouterVPNTorMTULease) Verify(parent context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
+	ctx, release, err := l.Lifetime(parent)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if dial == nil {
+		return errors.New("Tor MTU has no bound system-TUN dialer")
+	}
+	retained, err := l.proof.owner.TorProofWithPredecessor(ctx, l.proof.sessionID, l.proof.predecessor)
+	if err != nil || retained.SessionID != l.proof.sessionID || !retained.IsTor || !l.Healthy() {
+		return errors.New("Tor MTU predecessor or native circuit proof failed")
+	}
+	if err := l.owner.engine.DNSProof(ctx, l.owner.engine.tunTag); err != nil {
+		return err
+	}
+	tag, target := l.VerificationTarget()
+	proof, err := mobiletor.Prove(ctx, l.proof.sessionID, func(call context.Context, network, address string) (net.Conn, error) {
+		if network != "tcp" || address != target {
+			return nil, errors.New("Tor MTU proof attempted another origin")
+		}
+		return dial(call, tag, address)
+	})
+	if err != nil || !proof.IsTor || proof.SessionID != l.proof.sessionID || ctx.Err() != nil || !l.Healthy() {
+		return errors.New("Tor MTU dynamic exit proof failed or became stale")
+	}
+	return nil
+}
+func (l *RouterVPNTorMTULease) Resolve(parent context.Context, host string) ([]netip.Addr, error) {
+	if host != hopmeasure.PublicHost && host != "check.torproject.org" {
+		return nil, errors.New("unowned Tor MTU DNS target")
+	}
+	owned, release, err := l.Lifetime(parent)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	ctx, cancel := context.WithTimeout(owned, 5*time.Second)
+	defer cancel()
+	e := l.owner.engine
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
+	addresses, err := l.box.dnsRouter.Lookup(ctx, host, adapter.DNSQueryOptions{})
+	if err != nil || ctx.Err() != nil || !l.Healthy() {
+		return nil, errors.New("captured Tor MTU DNS failed")
+	}
+	result := make([]netip.Addr, 0, len(addresses))
+	for _, ip := range addresses {
+		if routerVPNPublicMeasurementAddress(ip) {
+			result = append(result, ip)
+		}
+	}
+	if len(result) == 0 {
+		return nil, errors.New("Tor MTU selected resolver returned no public target")
+	}
+	return result, nil
+}

@@ -1,0 +1,26 @@
+package libbox
+
+import (
+	"context"
+	"testing"
+
+	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+func TestRouterTorMTURequiresSuccessfulCapturedProof(t *testing.T) {
+	for _, server := range []*CommandServer{nil, {}, {StartedService: &daemon.StartedService{}}} {
+		for _, proof := range []*RouterTorProofRequest{nil, {}} {
+			if result, err := NewRouterTorMTU(server, &mtuPlatformFixture{}, proof, "{}", "{}"); err == nil || result != nil {
+				t.Fatal("Tor MTU adopted an unproved native session")
+			}
+		}
+	}
+	owner := &routerMTUOwner{}
+	state := mobilemtu.State{Session: "captured", Path: "WiFi", Interface: "tun", MTU: 1380}
+	for _, target := range []string{"check.torproject.org:443", "speed.cloudflare.com:443", "9.9.9.9:443", "127.0.0.1:443"} {
+		if conn, err := owner.dialExternal(context.Background(), state, "tcp", target); err == nil || conn != nil {
+			t.Fatal("empty Tor MTU owner reached a proof destination")
+		}
+	}
+}

@@ -23,6 +23,15 @@ type routerMTUExternalLease interface {
 	Resolve(context.Context, string) ([]netip.Addr, error)
 }
 
+func (o *routerMTUOwner) externalVerificationTarget() (string, string) {
+	if o != nil && o.external != nil {
+		if tor, ok := o.external.(interface{ VerificationTarget() (string, string) }); ok {
+			return tor.VerificationTarget()
+		}
+	}
+	return "custom-exit", "1.1.1.1:443"
+}
+
 func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
 	if o == nil || o.external == nil {
 		return errors.New("external MTU has no retained proof")
@@ -31,8 +40,9 @@ func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.
 	if err != nil || state != expected || ctx.Err() != nil {
 		return errors.New("external MTU proof belongs to a stale TUN")
 	}
+	proofTag, proofAddress := o.externalVerificationTarget()
 	err = o.external.Verify(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
-		if tag != "custom-exit" || address != "1.1.1.1:443" {
+		if tag != proofTag || address != proofAddress {
 			return nil, errors.New("external MTU proof attempted another route")
 		}
 		return o.dialExternal(call, expected, "tcp", address)
@@ -45,7 +55,8 @@ func (o *routerMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.
 }
 
 func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
-	if o == nil || o.external == nil || network != "tcp" || (address != hopmeasure.PublicAddress && address != "1.1.1.1:443") {
+	_, proofAddress := o.externalVerificationTarget()
+	if o == nil || o.external == nil || network != "tcp" || (address != hopmeasure.PublicAddress && address != proofAddress) {
 		return nil, errors.New("unowned external MTU measurement target")
 	}
 	ctx, release, err := o.external.Lifetime(parent)
@@ -59,8 +70,9 @@ func (o *routerMTUOwner) dialExternal(parent context.Context, expected mobilemtu
 		}
 	}()
 	targets := []string{address}
-	if address == hopmeasure.PublicAddress {
-		addresses, err := o.external.Resolve(ctx, hopmeasure.PublicHost)
+	if address == hopmeasure.PublicAddress || address == "check.torproject.org:443" {
+		host, _, _ := net.SplitHostPort(address)
+		addresses, err := o.external.Resolve(ctx, host)
 		if err != nil {
 			return nil, err
 		}

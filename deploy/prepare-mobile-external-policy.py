@@ -32,6 +32,9 @@ def prepare(vendor):
         ('type Box struct {\n','type Box struct {\n\trouterVPNExternalOptions string\n'),
         ('func New(options Options) (*Box, error) {\n','func New(options Options) (*Box, error) {\n\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n'),
         ('\treturn &Box{\n','\treturn &Box{\n\t\trouterVPNExternalOptions: externalOptionsDigest,\n'),
+        ('\trouterVPNExternalOptions string\n', '\trouterVPNExternalOptions string\n\trouterVPNTorOptions string\n'),
+        ('\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n', '\texternalOptionsDigest := routerVPNExternalOptionsDigest(options.Context, options.Options)\n\ttorOptionsSnapshot := routerVPNTorOptionsSnapshot(options.Context, options.Options)\n'),
+        ('\t\trouterVPNExternalOptions: externalOptionsDigest,\n', '\t\trouterVPNExternalOptions: externalOptionsDigest,\n\t\trouterVPNTorOptions: torOptionsSnapshot,\n'),
     ):
         if after in source:continue
         if source.count(before)!=1:raise ValueError('native external configuration capture boundary changed')
@@ -40,7 +43,7 @@ def prepare(vendor):
     for name in ('box.go','box_test.go'):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
-    for name in ('external', 'external_test'):
+    for name in ('external', 'external_test', 'tor', 'tor_test'):
         (vendor/'experimental/libbox'/('routervpn_mtu_'+name+'.go')).write_bytes((ROOT/'mobile/mtu'/(name+'.go.tmpl')).read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
@@ -50,6 +53,8 @@ def prepare(vendor):
         ('tor_measurement.go', 'routervpn_tor_measurement.go'),
         ('mtu.go', 'routervpn_external_mtu.go'),
         ('mtu_test.go', 'routervpn_external_mtu_test.go'),
+        ('tor_mtu.go', 'routervpn_tor_mtu.go'),
+        ('tor_mtu_test.go', 'routervpn_tor_mtu_test.go'),
     ):
         (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
 

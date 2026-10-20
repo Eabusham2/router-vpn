@@ -3,7 +3,6 @@ package mobilemtu
 import (
 	"context"
 	"errors"
-	"time"
 )
 
 type operation struct {
@@ -30,7 +29,8 @@ func (c *Controller) begin(request string) (*operation, error) {
 	if c.status.Request == request {
 		return nil, errors.New("MTU request identifiers cannot be reused")
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+	budget, _, _ := c.measurementBudgets()
+	ctx, cancel := context.WithTimeout(context.Background(), budget)
 	op := &operation{ctx: ctx, cancel: cancel, done: make(chan struct{}), config: c.currentConfig}
 	c.cancel = cancel
 	c.done = op.done

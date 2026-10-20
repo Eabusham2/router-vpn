@@ -5,6 +5,7 @@ import (
 	"errors"
 	"math"
 	"net/netip"
+	"time"
 
 	"router-vpn/internal/hopmeasure"
 )
@@ -103,6 +104,15 @@ func (e *externalMeasurement) source() string {
 		return "measured-tor-system-tun-transfer"
 	}
 	return "measured-public-system-tun-transfer"
+}
+
+// Tor HTTPS round trips include a circuit and two fresh exit checks. Keep
+// their budget bounded without applying the private LAN probe deadline.
+func (c *Controller) measurementBudgets() (operation, candidate, reserve time.Duration) {
+	if c.external != nil && c.external.profile.SourceKind == "tor" {
+		return 4 * time.Minute, 30 * time.Second, 45 * time.Second
+	}
+	return 45 * time.Second, 8 * time.Second, 10 * time.Second
 }
 
 func (c *Controller) measureExternal(ctx context.Context, engine *probeEngine, mtu int) Candidate {

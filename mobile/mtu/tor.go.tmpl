@@ -1,0 +1,54 @@
+package libbox
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+// Adoption requires the exact successful proof, full native configuration and
+// profile frozen before connection. No host boolean or old MTU result grants
+// authority over a Tor session or its current TUN reader.
+func NewRouterTorMTU(server *CommandServer, platform RouterMTUPlatform, proof *RouterTorProofRequest, config, profileJSON string) (*RouterMTU, error) {
+	if server == nil || server.StartedService == nil || platform == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("Tor MTU requires its live native proof and interface")
+	}
+	instance := server.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("Tor MTU native service is not running")
+	}
+	state, err := routerMTUState(platform.CaptureMTU())
+	if err != nil {
+		return nil, err
+	}
+	lease, err := instance.Box().RouterVPNTorClaimMTU(proof.request, config, profileJSON)
+	if err != nil {
+		return nil, err
+	}
+	claimed := false
+	defer func() {
+		if !claimed {
+			lease.Close()
+		}
+	}()
+	plan, err := mobilemtu.NewPlan(lease.Config(), state.MTU)
+	if err != nil {
+		return nil, err
+	}
+	inbound, err := lease.Inbound()
+	if err != nil || inbound == nil || inbound.Type() != "tun" || inbound.Tag() != plan.TunTag {
+		return nil, errors.New("Tor MTU does not own the captured native TUN")
+	}
+	owner := &routerMTUOwner{platform: platform, server: server, instance: instance, inbound: inbound, session: state.Session, path: state.Path, external: lease, proofCurrent: proof.Healthy}
+	controller, err := mobilemtu.NewTor(owner, lease.Config(), lease.Authority(), mobilemtu.NewCache(routerMTUPreferences{platform}))
+	if err != nil {
+		return nil, err
+	}
+	current, err := owner.Capture()
+	if err != nil || current != state {
+		_ = controller.Close()
+		return nil, errors.New("Tor MTU native session changed during adoption")
+	}
+	claimed = true
+	return &RouterMTU{controller: controller, owner: owner}, nil
+}

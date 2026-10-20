@@ -69,6 +69,27 @@ func (e *routerVPNTorMeasurementEngine) Identity() string {
 	}
 	return fmt.Sprintf("%p:%s", e.box, e.proof.sessionID)
 }
+
+func (e *routerVPNTorMeasurementEngine) BeginMeasurement() (func(), error) {
+	if e.Identity() == "" {
+		return nil, errors.New("Tor measurement owner retired")
+	}
+	capture, ok := e.proof.capture.(*routerVPNTorCapturedOwner)
+	if !ok || capture == nil {
+		// Legacy proxy-only proofs cannot create an MTU controller, so they
+		// retain their original measurement behavior without a TUN transaction.
+		return func() {}, nil
+	}
+	release, err := capture.activity.beginMeasurement()
+	if err != nil {
+		return nil, err
+	}
+	if e.Identity() == "" {
+		release()
+		return nil, errors.New("Tor measurement owner changed during capture")
+	}
+	return release, nil
+}
 func (e *routerVPNTorMeasurementEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
 	if e.Identity() == "" || ctx.Err() != nil {
 		return nil, errors.New("Tor measurement owner retired")

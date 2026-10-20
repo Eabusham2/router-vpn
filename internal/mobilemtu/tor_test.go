@@ -106,3 +106,28 @@ func TestTorMTUCancelDrainsAndRollsBackExactInterface(t *testing.T) {
 		t.Fatal(status, state)
 	}
 }
+
+func TestTorMTUHasBoundedCircuitBudgetAndImmediateCancellation(t *testing.T) {
+	c, _, _ := publicFixtureController(t, true)
+	operation, candidate, reserve := c.measurementBudgets()
+	if operation != 4*time.Minute || candidate != 30*time.Second || reserve != 45*time.Second {
+		t.Fatal("Tor circuit budget changed", operation, candidate, reserve)
+	}
+	op, err := c.begin(strings.Repeat("a", 32))
+	if err != nil {
+		t.Fatal(err)
+	}
+	deadline, ok := op.ctx.Deadline()
+	if !ok || time.Until(deadline) > operation || time.Until(deadline) < operation-time.Second {
+		t.Fatal("Tor operation is not bounded")
+	}
+	c.Cancel(strings.Repeat("a", 32))
+	if op.ctx.Err() == nil {
+		t.Fatal("larger Tor budget delayed cancellation")
+	}
+	_ = c.execute(op, true)
+	external, _, _ := publicFixtureController(t, false)
+	if operation, candidate, reserve := external.measurementBudgets(); operation != 45*time.Second || candidate != 8*time.Second || reserve != 10*time.Second {
+		t.Fatal("Tor changed ordinary path deadlines")
+	}
+}

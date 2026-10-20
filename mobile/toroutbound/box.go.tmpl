@@ -18,10 +18,18 @@ type torProofOwner interface {
 	TorHealthy(string) bool
 }
 
+// Full mobile preparation installs this capture hook at package initialization.
+// Standalone Tor builds retain their original proof API without importing the
+// larger TUN/measurement runtime. Only that full capture can grant MTU access.
+type routerVPNTorProofCapture interface{ Identity() string }
+
+var routerVPNTorCaptureProof func(*Box) (routerVPNTorProofCapture, error)
+
 // RouterVPNTorProofRequest captures one Box, actual outbound and VPN session.
 // Cancel never consults a mutable host service or a replacement outbound.
 type RouterVPNTorProofRequest struct {
 	ctx         context.Context
+	cancel      context.CancelFunc
 	owner       torProofOwner
 	current     func() bool
 	sessionID   string
@@ -29,6 +37,7 @@ type RouterVPNTorProofRequest struct {
 	started     atomic.Bool
 	succeeded   atomic.Bool
 	canceled    atomic.Bool
+	capture     routerVPNTorProofCapture
 }
 
 func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON string) (*RouterVPNTorProofRequest, error) {
@@ -39,10 +48,23 @@ func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON st
 	if !found || owner == nil || owner.Type() != "routervpn-tor" {
 		return nil, errors.New("native Tor final outbound is unavailable")
 	}
-	return newRouterTorProofRequest(s.ctx, owner, sessionID, predecessorJSON, func() bool {
+	request, err := newRouterTorProofRequest(s.ctx, owner, sessionID, predecessorJSON, func() bool {
 		current, found := s.outbound.Outbound(outboundTag)
 		return found && current == owner && s.ctx.Err() == nil
 	})
+	if err != nil {
+		return nil, err
+	}
+	// Legacy direct proof APIs also serve non-TUN native fixtures. They remain
+	// usable, but only a full captured single-TUN graph can grant MTU ownership.
+	if routerVPNTorCaptureProof != nil {
+		request.capture, err = routerVPNTorCaptureProof(s)
+		if err != nil {
+			request.cancel()
+			return nil, err
+		}
+	}
+	return request, nil
 }
 
 func newRouterTorProofRequest(ctx context.Context, outbound adapter.Outbound, sessionID, predecessorJSON string, current func() bool) (*RouterVPNTorProofRequest, error) {
@@ -58,7 +80,8 @@ func newRouterTorProofRequest(ctx context.Context, outbound adapter.Outbound, se
 			return nil, err
 		}
 	}
-	return &RouterVPNTorProofRequest{ctx: ctx, owner: owner, current: current, sessionID: sessionID, predecessor: predecessor}, nil
+	owned, cancel := context.WithCancel(ctx)
+	return &RouterVPNTorProofRequest{ctx: owned, cancel: cancel, owner: owner, current: current, sessionID: sessionID, predecessor: predecessor}, nil
 }
 
 func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
@@ -70,7 +93,7 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 			r.Cancel()
 		}
 	}()
-	if r.canceled.Load() || r.ctx.Err() != nil || !r.current() {
+	if r.canceled.Load() || r.ctx.Err() != nil || !r.currentNative() {
 		return "", errors.New("native Tor proof belongs to a retired VPN session")
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
@@ -79,7 +102,7 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 	if err != nil {
 		return "", err
 	}
-	if r.canceled.Load() || ctx.Err() != nil || !r.current() || proof.SessionID != r.sessionID || !proof.IsTor {
+	if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() || proof.SessionID != r.sessionID || !proof.IsTor {
 		return "", errors.New("native Tor proof belongs to a retired outbound")
 	}
 	data, err := json.Marshal(proof)
@@ -97,12 +120,21 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 func (r *RouterVPNTorProofRequest) Cancel() {
 	if r != nil && r.canceled.CompareAndSwap(false, true) {
 		r.succeeded.Store(false)
-		r.owner.CancelTor(r.sessionID)
+		if r.cancel != nil {
+			r.cancel()
+		}
+		if r.owner != nil {
+			r.owner.CancelTor(r.sessionID)
+		}
 	}
 }
 
 func (r *RouterVPNTorProofRequest) Healthy() bool {
-	return r != nil && r.succeeded.Load() && !r.canceled.Load() && r.ctx.Err() == nil && r.current() && r.owner.TorHealthy(r.sessionID)
+	return r != nil && r.ctx != nil && r.owner != nil && r.succeeded.Load() && !r.canceled.Load() && r.ctx.Err() == nil && r.currentNative() && r.owner.TorHealthy(r.sessionID)
+}
+
+func (r *RouterVPNTorProofRequest) currentNative() bool {
+	return r != nil && r.current != nil && r.current() && (r.capture == nil || r.capture.Identity() != "")
 }
 
 // RouterVPNTorProof preserves the synchronous convenience API. Mobile hosts

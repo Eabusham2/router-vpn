@@ -223,8 +223,9 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		}
 	}
 	passed := []Candidate{}
+	_, candidateBudget, reserve := c.measurementBudgets()
 	for _, mtu := range plan.Candidates(cached) {
-		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < 10*time.Second && len(passed) > 0 {
+		if deadline, ok := ctx.Deadline(); ok && time.Until(deadline) < reserve && len(passed) > 0 {
 			break
 		}
 		if !c.live(ctx, expected) {
@@ -244,7 +245,7 @@ func (c *Controller) run(ctx context.Context, config string, force bool) (runErr
 		}
 		c.phase("measuring " + strconv.Itoa(mtu))
 		candidate := Candidate{MTU: mtu}
-		candidateCtx, stop := context.WithTimeout(ctx, 8*time.Second)
+		candidateCtx, stop := context.WithTimeout(ctx, candidateBudget)
 		if c.external != nil {
 			candidate = c.measureExternal(candidateCtx, engine, mtu)
 		} else {

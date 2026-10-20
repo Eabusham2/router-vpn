@@ -16,6 +16,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
 )
@@ -25,7 +26,23 @@ import (
 // Only logging and the daemon-owned OOM service are operational differences;
 // DNS, routes, packet policy, credentials, services and all detours remain bound.
 func routerVPNExternalOptionsDigest(ctx context.Context, options option.Options) string {
-	if options.Route == nil || options.Route.Final != mobilemultihop.ExternalFinalTag {
+	encoded := routerVPNCapturedOptions(ctx, options)
+	if encoded == "" {
+		return ""
+	}
+	sum := sha256.Sum256([]byte(encoded))
+	return hex.EncodeToString(sum[:])
+}
+
+func routerVPNTorOptionsSnapshot(ctx context.Context, options option.Options) string {
+	if options.Route == nil || options.Route.Final != mobiletor.ProfileOutboundTag {
+		return ""
+	}
+	return routerVPNCapturedOptions(ctx, options)
+}
+
+func routerVPNCapturedOptions(ctx context.Context, options option.Options) string {
+	if options.Route == nil || (options.Route.Final != mobilemultihop.ExternalFinalTag && options.Route.Final != mobiletor.ProfileOutboundTag) {
 		return ""
 	}
 	options.Log = nil
@@ -40,14 +57,13 @@ func routerVPNExternalOptionsDigest(ctx context.Context, options option.Options)
 	if err != nil {
 		return ""
 	}
-	sum := sha256.Sum256(encoded)
-	return hex.EncodeToString(sum[:])
+	return string(encoded)
 }
 
 type RouterVPNExternalProofRequest struct {
-	request *mobilemultihop.ExternalProofRequest
-	engine *routerVPNExternalNativeEngine
-	mtu atomic.Pointer[RouterVPNExternalMTULease]
+	request  *mobilemultihop.ExternalProofRequest
+	engine   *routerVPNExternalNativeEngine
+	mtu      atomic.Pointer[RouterVPNExternalMTULease]
 	activity routerVPNExternalActivity
 }
 
@@ -107,6 +123,10 @@ type routerVPNExternalNativeEngine struct {
 }
 
 func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
+	return s.routerVPNCapturedEngine(entryTag, tunTag, mobilemultihop.ExternalFinalTag, mobilemultihop.ExternalDNSTag, compiled)
+}
+
+func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {
 	if s.outbound == nil || s.dnsRouter == nil || s.dnsTransport == nil || s.inbound == nil || s.service == nil || tunTag == "" || compiled.DNS == nil {
 		return nil, errors.New("external native route owners missing")
 	}
@@ -134,7 +154,7 @@ func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.O
 		owners[tag] = owner
 	}
 	routes := map[string]adapter.Outbound{}
-	for _, tag := range []string{mobilemultihop.ExternalFinalTag, entryTag} {
+	for _, tag := range []string{finalTag, entryTag} {
 		if tag == "" {
 			continue
 		}
@@ -152,7 +172,7 @@ func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.O
 		}
 		dns[configured.Tag] = owner
 	}
-	if dns[mobilemultihop.ExternalDNSTag] == nil {
+	if dns[dnsTag] == nil {
 		return nil, errors.New("external selected DNS owner missing")
 	}
 	services := map[string]adapter.Service{}
@@ -169,7 +189,9 @@ func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.O
 	return &routerVPNExternalNativeEngine{box: s, tun: tun, tunTag: tunTag, dns: dns, owners: owners, routes: routes, services: services}, nil
 }
 func (e *routerVPNExternalNativeEngine) Identity() string {
-	if e == nil { return "" }
+	if e == nil {
+		return ""
+	}
 	e.mu.RLock()
 	defer e.mu.RUnlock()
 	return e.identityLocked()
