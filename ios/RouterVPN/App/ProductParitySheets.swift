@@ -69,13 +69,31 @@ extension RouterVPNModel {
 
     func productDNSProfile() -> RouterProfile? {
         guard let bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     func applyProductDNSPolicy(mode: String, protocolName: String, host: String, port: Int, serverName: String, path: String) throws {
         guard var current = bundle else { throw NSError(domain: "RouterVPN.DNS", code: 1, userInfo: [NSLocalizedDescriptionKey: "Import or pair a Router VPN node first."]) }
-        guard let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first else {
+        guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: current),
+              let index = current.routerProfiles.firstIndex(where: { $0.id == selected.id }) else {
             throw NSError(domain: "RouterVPN.DNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "No selected Router VPN profile."])
+        }
+        guard !profileMutationBlocked else {
+            throw NSError(domain: "RouterVPN.DNS", code: 4, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before changing DNS policy."])
+        }
+        if selected.normalizedNodeKind == "external", IOSExternalDNSPolicy.protocols.contains(selected.external?.protocolName ?? "") {
+            var profile = selected
+            profile.dnsMode = mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            profile.dnsProtocol = protocolName.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+            profile.dnsHost = host.trimmingCharacters(in: .whitespacesAndNewlines); profile.dnsPort = port
+            profile.dnsServerName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
+            profile.dnsPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+            current.routerProfiles[index] = profile
+            let entry = profile.multihopEnabled == true ? try iosMultihopEntryBundle(for: current) : nil
+            try IOSExternalDNSPolicy.validate(profile, entry: entry.flatMap { IOSDNSRuntimePolicy.selectedProfile(in: $0) })
+            try importBundle(JSONEncoder().encode(current))
+            message = "External DNS policy saved for the next connection."
+            return
         }
         guard current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
             throw NSError(domain: "RouterVPN.DNS", code: 3, userInfo: [NSLocalizedDescriptionKey: "External nodes own their DNS runtime; Router VPN DNS policy applies to home nodes only."])

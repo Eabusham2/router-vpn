@@ -183,9 +183,21 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try check("saving external policy never rewrites Router selection",UserDefaults.standard.string(forKey:iosConnectionModeKey)==mode && UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)==originalPreset)
   }
  }
+ static func hostnameBootstrapPersistence()throws {
+  var p=profile("socks5");p.dnsMode="doh";p.dnsProtocol="https";p.dnsHost="resolver.example.test";p.dnsServerName="resolver.example.test";p.dnsPort=443;p.dnsPath="/captured-query"
+  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"9.9.9.9",serverPort:5353))
+  bootstrap.query.timeout="2.5s";bootstrap.query.strategy="prefer_ipv6";bootstrap.query.disableCache=true;bootstrap.query.disableOptimisticCache=false;bootstrap.query.rewriteTTL=17;bootstrap.query.clientSubnet="2001:db8::/48"
+  p.dnsBootstrap=bootstrap
+  let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Explicit hostname lookup")
+  try check("whole profile retains exact bootstrap server and query",saved.preferences?.dnsBootstrap==bootstrap)
+  let all=IOSConnectionProfileStore.all();try check("bootstrap survives private store decode",all.count==1 && all[0].preferences?.dnsBootstrap==bootstrap)
+  var changed=bundle(p);changed.routerProfiles[0].dnsBootstrap=nil;IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed)
+  _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+  try check("whole-profile load restores exact hostname lookup choices",model.selectedNodeProfile?.dnsBootstrap==bootstrap && model.selectedNodeProfile?.dnsHost==p.dnsHost)
+ }
  static func main()throws {
   defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection()
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  }
 }

@@ -124,6 +124,43 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   }
   try reject("oversized native response"){try policy.validateProof(String(repeating:" ",count:8193),sessionID:session,began:began)}
  }
+ static func hostnameBootstrap()throws {
+  for kind in ["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"] {
+   for transport in ["tcp","udp","tls","https","h3"] {
+    var p=profile(kind);p["dns_mode"]="doh";p["dns_host"]="resolver.example.test";p["dns_server_name"]="resolver.example.test";p["dns_port"]=443;p["dns_path"]="/captured-query"
+    var server:[String:Any]=["type":transport,"tag":"external-dns-bootstrap","server":"9.9.9.9","server_port":5353,"detour":"custom-exit"]
+    if ["tls","https","h3"].contains(transport){server["tls"]=["enabled":true,"server_name":"bootstrap.example.test"]}
+    if ["https","h3"].contains(transport){server["path"]="/bootstrap-query"}
+    let query:[String:Any]=["server":"external-dns-bootstrap","strategy":"ipv4_only","timeout":"3.5s","disable_cache":true,"disable_optimistic_cache":false,"rewrite_ttl":13,"client_subnet":"192.0.2.0/24"]
+    let bootstrap:[String:Any]=["server":server,"query":query];p["dns_bootstrap"]=bootstrap
+    if ["http-connect","https-connect"].contains(kind) && ["udp","h3"].contains(transport){try reject("TCP-only path rejects UDP bootstrap"){_ = try RouterVPNExternalExitBuilder.build(profile:p)};continue}
+    let before=try json(p),runtime=try RouterVPNExternalExitBuilder.build(profile:p),policy=runtime.policy!
+    let capture=try object(Data(policy.capture.utf8)),graph=try object(Data(policy.config.utf8)),meta=try object(Data(policy.metadata.utf8))
+    let servers=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]],selected=servers.first{$0["tag"] as? String=="selected-dns"}!
+    try check("complete explicit bootstrap capture is exact",json(capture["dns_bootstrap"]!)==json(bootstrap) && (capture["profile"] as! [String:Any])["dns_bootstrap"]==nil)
+    try check("bootstrap transport retained by native compiler",json(servers.first{$0["tag"] as? String=="external-dns-bootstrap"}!)==json(server))
+    try check("query options keep exact native resolver owner",json(selected["domain_resolver"]!)==json(query))
+    try check("selected hostname and TLS identity survive",selected["server"] as? String=="resolver.example.test" && (selected["tls"] as? [String:Any])?["server_name"] as? String=="resolver.example.test")
+    try check("bootstrap identity is included in metadata",(meta["dns_bootstrap_sha256"] as? String)?.count==64)
+    try check("compiler capture does not mutate saved node",json(p)==before)
+    for mutation in ["detour","server","query","timeout","cache","extra"] {
+     var bad=p,wrong=bootstrap,s=server,q=query
+     switch mutation {
+     case "detour":s["detour"]="direct"
+     case "server":s["server"]="another-resolver.example.test"
+     case "query":q["server"]="selected-dns"
+     case "timeout":q["timeout"]="forever"
+     case "cache":q["disable_cache"]="true"
+     default:q["unowned"]=true
+     }
+     wrong["server"]=s;wrong["query"]=q;bad["dns_bootstrap"]=wrong
+     try reject("foreign bootstrap "+mutation){_ = try RouterVPNExternalExitBuilder.build(profile:bad)}
+    }
+    var literal=p;literal["dns_host"]="9.9.9.9"
+    try reject("literal DNS cannot retain unused bootstrap"){_ = try RouterVPNExternalExitBuilder.build(profile:literal)}
+   }
+  }
+ }
  static func entryGraphs()throws {
   let protocols=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
   for entryKind in protocols {for exitKind in protocols {
@@ -162,7 +199,7 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
  }
  static func main()throws {
   defer{RouterVPNTorTestClose()}
-  try policies();try negativeAdoption();try proofResults();try entryGraphs()
+  try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap()
   print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
  }
 }

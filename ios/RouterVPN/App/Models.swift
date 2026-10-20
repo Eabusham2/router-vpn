@@ -49,6 +49,93 @@ struct DNSBenchmarkResult: Codable, Hashable {
     }
 }
 
+/// An explicit resolver used only to look up a selected DNS hostname. Its
+/// literal transport and query options stay together in saved node policy.
+struct ExternalDNSBootstrap: Codable, Hashable {
+    var server: Server
+    var query: Query
+
+    struct Server: Codable, Hashable {
+        var type: String
+        var tag: String = "external-dns-bootstrap"
+        var server: String
+        var serverPort: Int
+        var detour: String = "custom-exit"
+        var tls: TLS? = nil
+        var path: String? = nil
+        enum CodingKeys: String, CodingKey {
+            case type, tag, server, detour, tls, path
+            case serverPort = "server_port"
+        }
+        init(type: String, server: String, serverPort: Int) {
+            self.type = type; self.server = server; self.serverPort = serverPort
+        }
+        init(from decoder: Decoder) throws {
+            try ExternalDNSBootstrap.only(decoder, ["type", "tag", "server", "server_port", "detour", "tls", "path"])
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            type = try c.decode(String.self, forKey: .type); tag = try c.decode(String.self, forKey: .tag)
+            server = try c.decode(String.self, forKey: .server); serverPort = try c.decode(Int.self, forKey: .serverPort)
+            detour = try c.decode(String.self, forKey: .detour)
+            tls = try c.decodeIfPresent(TLS.self, forKey: .tls); path = try c.decodeIfPresent(String.self, forKey: .path)
+        }
+    }
+    struct TLS: Codable, Hashable {
+        var enabled: Bool = true
+        var serverName: String
+        enum CodingKeys: String, CodingKey { case enabled; case serverName = "server_name" }
+        init(serverName: String) { self.serverName = serverName }
+        init(from decoder: Decoder) throws {
+            try ExternalDNSBootstrap.only(decoder, ["enabled", "server_name"])
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            enabled = try c.decode(Bool.self, forKey: .enabled); serverName = try c.decode(String.self, forKey: .serverName)
+        }
+    }
+    struct Query: Codable, Hashable {
+        var server: String = "external-dns-bootstrap"
+        var strategy: String? = nil
+        var timeout: String? = nil
+        var disableCache: Bool? = nil
+        var disableOptimisticCache: Bool? = nil
+        var rewriteTTL: UInt32? = nil
+        var clientSubnet: String? = nil
+        enum CodingKeys: String, CodingKey {
+            case server, strategy, timeout
+            case disableCache = "disable_cache", disableOptimisticCache = "disable_optimistic_cache"
+            case rewriteTTL = "rewrite_ttl", clientSubnet = "client_subnet"
+        }
+        init() {}
+        init(from decoder: Decoder) throws {
+            try ExternalDNSBootstrap.only(decoder, ["server", "strategy", "timeout", "disable_cache", "disable_optimistic_cache", "rewrite_ttl", "client_subnet"])
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            server = try c.decode(String.self, forKey: .server)
+            strategy = try c.decodeIfPresent(String.self, forKey: .strategy); timeout = try c.decodeIfPresent(String.self, forKey: .timeout)
+            disableCache = try c.decodeIfPresent(Bool.self, forKey: .disableCache)
+            disableOptimisticCache = try c.decodeIfPresent(Bool.self, forKey: .disableOptimisticCache)
+            rewriteTTL = try c.decodeIfPresent(UInt32.self, forKey: .rewriteTTL)
+            clientSubnet = try c.decodeIfPresent(String.self, forKey: .clientSubnet)
+        }
+    }
+    init(server: Server, query: Query = Query()) { self.server = server; self.query = query }
+    init(from decoder: Decoder) throws {
+        try Self.only(decoder, ["server", "query"])
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        server = try c.decode(Server.self, forKey: .server); query = try c.decode(Query.self, forKey: .query)
+    }
+    private enum CodingKeys: String, CodingKey { case server, query }
+    private struct Key: CodingKey {
+        var stringValue: String
+        var intValue: Int? { nil }
+        init?(stringValue: String) { self.stringValue = stringValue }
+        init?(intValue: Int) { return nil }
+    }
+    private static func only(_ decoder: Decoder, _ allowed: Set<String>) throws {
+        let keys = try decoder.container(keyedBy: Key.self).allKeys.map(\.stringValue)
+        guard Set(keys).isSubset(of: allowed) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "DNS bootstrap contains an unknown transport or query owner."))
+        }
+    }
+}
+
 struct ExternalWireGuardConfig: Codable, Hashable {
     var privateKey: String
     var addresses: [String]
@@ -224,6 +311,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
     var dnsPort: Int?
     var dnsServerName: String?
     var dnsPath: String?
+    var dnsBootstrap: ExternalDNSBootstrap?
     var fastestDNSHost: String?
     var fastestDNSName: String?
     var fastestDNSLatencyMs: Double?
@@ -305,6 +393,7 @@ struct RouterProfile: Identifiable, Codable, Hashable {
         case dnsPort = "dns_port"
         case dnsServerName = "dns_server_name"
         case dnsPath = "dns_path"
+        case dnsBootstrap = "dns_bootstrap"
         case fastestDNSHost = "fastest_dns_host"
         case fastestDNSName = "fastest_dns_name"
         case fastestDNSLatencyMs = "fastest_dns_latency_ms"

@@ -20,8 +20,14 @@ struct RouterVPNExternalPolicy: Sendable {
                         entryTag: String? = nil) throws -> RouterVPNExternalPolicy {
         guard let exitID = profile["id"] as? String, !exitID.isEmpty,
               (entry == nil) == (entryTag == nil) else { throw issue() }
+        var frozenProfile = profile
+        let bootstrap = frozenProfile.removeValue(forKey: "dns_bootstrap")
         var selected: [String: Any] = ["schema": 1, "exit_id": exitID, "protocol": protocolName,
-            "expected_public_ip": expectedPublicIP, "profile": profile]
+            "expected_public_ip": expectedPublicIP, "profile": frozenProfile]
+        if let bootstrap {
+            guard let owned = bootstrap as? [String: Any], Set(owned.keys) == ["server", "query"] else { throw issue() }
+            selected["dns_bootstrap"] = owned
+        }
         if let entry, let entryTag { selected["entry"] = entry; selected["entry_tag"] = entryTag }
         let capture = String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self)
         var failure: NSError?

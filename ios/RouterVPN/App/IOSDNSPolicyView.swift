@@ -18,6 +18,8 @@ struct IOSDNSPolicyView: View {
     @State private var port = "53"
     @State private var serverName = ""
     @State private var path = "/dns-query"
+    @State private var useHostnameBootstrap = false
+    @State private var bootstrap = ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
     @State private var results: [DNSBenchmarkResult] = []
     @State private var status = ""
     @State private var benchmarking = false
@@ -42,27 +44,41 @@ struct IOSDNSPolicyView: View {
         IOSDNSPreset(id: "q6b", name: "Quad9 IPv6 Secondary", address: "2620:fe::9", serverName: "dns.quad9.net")
     ]
 
+    private var ordinaryExternal: Bool {
+        guard let profile = selectedProfile() else { return false }
+        return profile.normalizedNodeKind == "external" && IOSExternalDNSPolicy.protocols.contains(profile.external?.protocolName ?? "")
+    }
+    private var encryptedDNS: Bool {
+        ["dot", "doh", "doh3"].contains(mode) || (ordinaryExternal && ["custom", "home"].contains(mode) && ["tls", "https", "h3"].contains(protocolName))
+    }
+    private var httpDNS: Bool {
+        ["doh", "doh3"].contains(mode) || (ordinaryExternal && ["custom", "home"].contains(mode) && ["https", "h3"].contains(protocolName))
+    }
+
     var body: some View {
         NavigationStack {
             Form {
                 Section("Selected DNS policy") {
                     Picker("DNS", selection: $mode) {
-                        ForEach(modeValues, id: \.1) { Text($0.0).tag($0.1) }
+                        ForEach(modeValues, id: \.1) { Text(ordinaryExternal && $0.1 == "custom" ? "Custom transport" : $0.0).tag($0.1) }
                     }
                     .onChange(of: mode) { value in applyModeDefaults(value) }
-                    if mode == "custom" {
-                        Picker("Transport", selection: $protocolName) { Text("UDP").tag("udp"); Text("TCP").tag("tcp") }
+                    if mode == "custom" || (ordinaryExternal && mode == "home") {
+                        Picker("Transport", selection: $protocolName) {
+                            Text("UDP").tag("udp"); Text("TCP").tag("tcp")
+                            if ordinaryExternal { Text("TLS").tag("tls"); Text("HTTPS").tag("https"); Text("HTTP/3").tag("h3") }
+                        }
                     }
-                    if ["custom", "dot", "doh", "doh3"].contains(mode) {
+                    if ["custom", "dot", "doh", "doh3"].contains(mode) || (ordinaryExternal && mode == "home") {
                         TextField("Resolver IP or hostname", text: $host)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
-                    if ["dot", "doh", "doh3"].contains(mode) {
+                    if encryptedDNS {
                         TextField("TLS server name", text: $serverName)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
-                    if ["doh", "doh3"].contains(mode) {
+                    if httpDNS {
                         TextField("DNS HTTP path", text: $path)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                     }
@@ -71,8 +87,43 @@ struct IOSDNSPolicyView: View {
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing the DNS policy.").font(.caption).foregroundStyle(.orange) }
                 }
 
+                if ordinaryExternal {
+                    Section("Hostname lookup") {
+                        Toggle("Use an explicit lookup resolver", isOn: $useHostnameBootstrap)
+                        Text("For a DNS hostname, choose an IP resolver that looks it up through the selected exit. An IP DNS server does not need this step.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if useHostnameBootstrap {
+                            Picker("Lookup transport", selection: $bootstrap.server.type) {
+                                Text("UDP").tag("udp"); Text("TCP").tag("tcp"); Text("TLS").tag("tls")
+                                Text("HTTPS").tag("https"); Text("HTTP/3").tag("h3")
+                            }.onChange(of: bootstrap.server.type) { value in
+                                bootstrap.server.serverPort = value == "tls" ? 853 : (["https", "h3"].contains(value) ? 443 : 53)
+                                if ["tls", "https", "h3"].contains(value) {
+                                    if bootstrap.server.tls == nil { bootstrap.server.tls = .init(serverName: "") }
+                                } else { bootstrap.server.tls = nil }
+                                if ["https", "h3"].contains(value) { if bootstrap.server.path == nil { bootstrap.server.path = "/dns-query" } }
+                                else { bootstrap.server.path = nil }
+                            }
+                            TextField("Lookup resolver IP", text: $bootstrap.server.server).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Lookup port", value: $bootstrap.server.serverPort, format: .number).keyboardType(.numberPad)
+                            if ["tls", "https", "h3"].contains(bootstrap.server.type) {
+                                TextField("Lookup TLS server name", text: Binding(get: { bootstrap.server.tls?.serverName ?? "" }, set: { value in
+                                    if bootstrap.server.tls == nil { bootstrap.server.tls = .init(serverName: value) }
+                                    else { bootstrap.server.tls?.serverName = value }
+                                })).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            }
+                            if ["https", "h3"].contains(bootstrap.server.type) {
+                                TextField("Lookup DNS HTTP path", text: Binding(get: { bootstrap.server.path ?? "/dns-query" }, set: { bootstrap.server.path = $0 }))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            }
+                        }
+                    }
+                }
+
                 Section("Runtime truth") {
-                    Text("WireGuardKit can enforce Home/Fastest/Custom UDP when the selected resolver is an IP. Explicit TCP, DoT, DoH and DoH3 require a self-contained Libbox mode. Mode readiness changes with the selected DNS policy instead of pretending WireGuard can provide an encrypted DNS transport it does not own.")
+                    Text(ordinaryExternal
+                         ? "The selected DNS transport runs inside the external VPN. Home AdGuard uses the paired Router VPN entry, whose identity is checked separately. Connection completes after the selected DNS and exit address pass their live checks."
+                         : "WireGuardKit can enforce Home/Fastest/Custom UDP when the selected resolver is an IP. Explicit TCP, DoT, DoH and DoH3 require a self-contained Libbox mode. Mode readiness changes with the selected DNS policy instead of pretending WireGuard can provide an encrypted DNS transport it does not own.")
                         .font(.caption).foregroundStyle(.secondary)
                     Text("Libbox receives the selected resolver as a typed sing-box DNS server, detoured through the selected non-direct outbound with DNS hijacking. A saved choice is still not counted as physical runtime proof until the live PacketTunnel test passes.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -132,36 +183,45 @@ struct IOSDNSPolicyView: View {
 
     private func selectedProfile() -> RouterProfile? {
         guard let bundle = model.bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     private func load() {
-        guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" else { status = "Pair/import a Router VPN node first."; return }
-        mode = (p.dnsMode ?? "home").lowercased()
+        guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" || ordinaryExternal else { status = "Select a linked node with native DNS policy."; return }
+        mode = (p.dnsMode ?? (ordinaryExternal ? "rescue" : "home")).lowercased()
         protocolName = (p.dnsProtocol ?? "udp").lowercased()
         host = p.dnsHost ?? ""
         port = String(p.dnsPort ?? defaultPort(mode))
         serverName = p.dnsServerName ?? ""
         path = p.dnsPath ?? "/dns-query"
+        useHostnameBootstrap = p.dnsBootstrap != nil
+        bootstrap = p.dnsBootstrap ?? ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
         results = sorted(p.dnsResults ?? [])
     }
 
     private func savePolicy() {
         guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing the DNS policy."; return }
         guard var bundle = model.bundle,
-              let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else {
+              let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle),
+              let index = bundle.routerProfiles.firstIndex(where: { $0.id == selected.id }) else {
             status = "Pair/import a Router VPN node first."; return
         }
         var p = bundle.routerProfiles[index]
-        guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their DNS/runtime policy."; return }
+        guard p.normalizedNodeKind == "router-vpn" || ordinaryExternal else { status = "This node uses its protocol-specific DNS settings."; return }
+        guard let selectedPort = Int(port), (0...65535).contains(selectedPort) else { status = "DNS port must be 1–65535, or 0 for the selected protocol default."; return }
         p.dnsMode = mode
         p.dnsProtocol = protocolName
         p.dnsHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        p.dnsPort = Int(port) ?? defaultPort(mode)
+        p.dnsPort = selectedPort
         p.dnsServerName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
         p.dnsPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
-            _ = try IOSDNSRuntimePolicy.resolve(p)
+            if ordinaryExternal {
+                p.dnsBootstrap = useHostnameBootstrap ? bootstrap : nil
+                var selectedBundle = bundle; selectedBundle.routerProfiles[index] = p
+                let entry = p.multihopEnabled == true ? try model.iosMultihopEntryBundle(for: selectedBundle) : nil
+                try IOSExternalDNSPolicy.validate(p, entry: entry.flatMap { IOSDNSRuntimePolicy.selectedProfile(in: $0) })
+            } else { _ = try IOSDNSRuntimePolicy.resolve(p) }
             bundle.routerProfiles[index] = p
             try model.importBundle(JSONEncoder().encode(bundle))
             status = "DNS policy saved and patched into compatible iOS runtimes for the next connection."
@@ -234,6 +294,7 @@ struct IOSDNSPolicyView: View {
 
     private func usePreset(_ preset: IOSDNSPreset) {
         host = preset.address
+        if ordinaryExternal { useHostnameBootstrap = false }
         serverName = preset.serverName
         if ["home", "fastest", "rescue"].contains(mode) { mode = "custom"; protocolName = "udp"; port = "53" }
     }
