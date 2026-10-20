@@ -45,6 +45,22 @@ def forbid(path: str, *markers: str) -> None:
             errors.append(f"{path}: forbidden Speed Lab marker {marker!r}")
 
 
+def need_ios_topology_routes(path: str) -> None:
+    body = re.sub(r'("(?:\\.|[^"\\])*")|//[^\n]*|/\*.*?\*/',
+                  lambda match: match.group(1) or "", read(path), flags=re.S)
+    multihop = body.partition('case .multihop:')[2].partition('case .router:')[0]
+    direct = body.partition('case .external:')[2].partition('\n            }')[0]
+    for marker in ('selected.multihopEnabled == true',
+                   'model.iosMultihopEntryBundle(for: saved)',
+                   'if external { await model.connectSelectedExternal() }',
+                   'else { await model.connect() }',
+                   'model.activeEngine == (external ? "external-libbox" : "multihop-libbox")'):
+        if marker not in multihop:
+            errors.append(f"{path}: saved native multihop route lost {marker!r}")
+    if 'selected.multihopEnabled != true' not in direct:
+        errors.append(f"{path}: direct external testing no longer rejects a saved multihop graph")
+
+
 # Shared desktop controller: current path is identity-bound, temporary paths are
 # transactional/non-persistent, and real Mbps + idle/loaded latency are distinct.
 need(
@@ -371,7 +387,7 @@ need("android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java", "A
 
 # iPhone/iPad use their native PacketTunnel model rather than the desktop HTTP
 # controller. Current/temporary path identity is watched continuously. The bounded
-# two-hop candidate is explicit; other desktop-equivalent graphs remain unfinished.
+# captured entry and the exact Router VPN/external/Tor exit remain mandatory.
 need(
     "ios/RouterVPN/App/IOSSpeedLab.swift",
     "Router VPN Speed Lab",
@@ -405,7 +421,7 @@ need(
     "case external",
     "case multihop",
     "model.iosMultihopEntryBundle(for: saved)",
-    'model.activeEngine == "multihop-libbox"',
+    'model.activeEngine == (external ? "external-libbox" : "multihop-libbox")',
     "Temporary multihop failed both-node path proof",
     "guardedMeasurement",
     "Temporary Speed Lab tunnel did not fully stop",
@@ -438,8 +454,10 @@ need(
     "Require encrypted AUTO candidates",
     "Require obfuscation for AUTO candidates",
     "Saved multihop graph",
-    "Speed Lab will not substitute a direct path",
+    "Tests the complete saved entry → exit graph, including external and Tor exits.",
+    "Each path must pass its native node or circuit proof.",
 )
+need_ios_topology_routes("ios/RouterVPN/App/IOSSpeedLabRunner.swift")
 need("ios/RouterVPN/App/ProductRootView.swift", "Open Router VPN Speed Lab", "IOSSpeedLabView()", "IOSSpeedLabPersistenceJournal.recoverIfNeeded")
 forbid("ios/RouterVPN/App/IOSSpeedLabRunner.swift", "fake multihop", "pretend multihop")
 

@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 AUDIT = runpy.run_path(str(Path(__file__).with_name("speed-lab-shipping-audit.py")))
 CHECK = AUDIT["need_go_map_entry"]
+IOS_CHECK = AUDIT["need_ios_topology_routes"]
 
 
 class SpeedLabResponseAuditTests(unittest.TestCase):
@@ -42,6 +43,34 @@ class SpeedLabResponseAuditTests(unittest.TestCase):
 
     def test_url_or_raw_string_elsewhere_does_not_hide_a_real_entry(self) -> None:
         self.assertEqual([], self.check_entry('"source": "https://example.invalid/",\n"hops": hops,\n"note": `not a hop`,\n'))
+
+
+class SpeedLabIOSTopologyAuditTests(unittest.TestCase):
+    source = (Path(__file__).resolve().parents[1]/"ios/RouterVPN/App/IOSSpeedLabRunner.swift").read_text()
+
+    def check_source(self, source: str) -> list[str]:
+        errors: list[str] = []
+        with patch.dict(IOS_CHECK.__globals__, {"read": lambda _: source, "errors": errors}):
+            IOS_CHECK("fixture.swift")
+        return errors
+
+    def test_current_router_external_and_tor_graphs_preserve_topology(self):
+        self.assertEqual([], self.check_source(self.source))
+
+    def test_entry_proof_wrong_engine_and_direct_substitution_are_rejected(self):
+        for marker in ('selected.multihopEnabled == true',
+                       'model.iosMultihopEntryBundle(for: saved)',
+                       'if external { await model.connectSelectedExternal() }',
+                       'else { await model.connect() }',
+                       'model.activeEngine == (external ? "external-libbox" : "multihop-libbox")',
+                       'selected.multihopEnabled != true'):
+            with self.subTest(marker=marker):
+                self.assertTrue(self.check_source(self.source.replace(marker, "removed")))
+
+    def test_comment_cannot_supply_a_missing_captured_entry(self):
+        marker = 'model.iosMultihopEntryBundle(for: saved)'
+        changed = self.source.replace(marker, 'removed') + '\n// '+marker+'\n'
+        self.assertTrue(self.check_source(changed))
 
 
 if __name__ == "__main__":
