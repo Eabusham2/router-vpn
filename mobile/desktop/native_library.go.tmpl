@@ -1,0 +1,63 @@
+//go:build with_purego && (windows || linux)
+
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+
+	cronet "github.com/sagernet/cronet-go"
+)
+
+// The source builder embeds the checksum of the actual same-target Cronet
+// library. Startup has no ambient PATH/LD_LIBRARY_PATH or current-directory
+// fallback, even if an incomplete package bypasses the application's verifier.
+var routerVPNCronetSHA string
+var routerVPNCronetBytes string
+
+func routerVPNLoadCronet() error {
+	size, err := strconv.ParseInt(routerVPNCronetBytes, 10, 64)
+	if err != nil || size <= 0 || size > 128<<20 || len(routerVPNCronetSHA) != 64 {
+		return errors.New("native Naive library lacks its build-owned seal")
+	}
+	executable, err := os.Executable()
+	if err != nil {
+		return err
+	}
+	name := "libcronet.so"
+	if runtime.GOOS == "windows" {
+		name = "libcronet.dll"
+	}
+	path := filepath.Join(filepath.Dir(executable), name)
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() != size {
+		return errors.New("native Naive library is absent or changed")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return errors.New("native Naive library changed during adoption")
+	}
+	digest := sha256.New()
+	n, err := io.Copy(digest, io.LimitReader(file, size+1))
+	if err != nil || n != size || hex.EncodeToString(digest.Sum(nil)) != routerVPNCronetSHA {
+		return errors.New("native Naive library does not match its compiled seal")
+	}
+	return cronet.LoadLibrary(path)
+}
+
+func init() {
+	if err := routerVPNLoadCronet(); err != nil {
+		panic(err)
+	}
+}
