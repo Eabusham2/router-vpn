@@ -77,6 +77,10 @@ S['android/os/ParcelFileDescriptor.java'] = r'''package android.os;public class 
 }'''
 S['android/net/VpnService.java'] = S['android/net/VpnService.java'].replace('public boolean protect(int fd){return true;}', 'public int protections;public boolean refuseProtect;public boolean protect(int fd){protections++;return !refuseProtect;}').replace('public android.os.ParcelFileDescriptor establish(){return null;}', r'''
  public android.os.ParcelFileDescriptor establish(){android.net.Network physical=connectivity.active;android.net.Network vpn=new android.net.Network(202);vpn.caps.vpn=true;connectivity.networks=new android.net.Network[]{physical,vpn};connectivity.active=vpn;return android.os.ParcelFileDescriptor.lastTun=new android.os.ParcelFileDescriptor();}''')
+S['android/net/VpnService.java'] = S['android/net/VpnService.java'].replace(
+    'public static android.content.Intent prepare(android.content.Context c){return null;}',
+    'public static boolean permissionMissing;public boolean lockdownMissing;public static android.content.Intent prepare(android.content.Context c){return permissionMissing?new android.content.Intent(c,VpnService.class):null;}').replace(
+    'public boolean isLockdownEnabled(){return true;}', 'public boolean isLockdownEnabled(){return !lockdownMissing;}')
 S['io/nekohasekai/libbox/RoutePrefix.java'] = '''package io.nekohasekai.libbox;public class RoutePrefix{public String address(){return "10.77.0.2";}public int prefix(){return 32;}}'''
 S['io/nekohasekai/libbox/TunOptions.java'] = r'''package io.nekohasekai.libbox;public class TunOptions{
  public int getMTU(){return 1280;}public boolean getAutoRoute(){return true;}
@@ -117,7 +121,18 @@ P.HARNESS += r'''
  static void start(LayeredVpnService service,Owned o){service.onStartCommand(new android.content.Intent(service,LayeredVpnService.class).setAction(LayeredVpnService.ACTION_START).putExtra(LayeredVpnService.EXTRA_SESSION_ID,o.session).putExtra(LayeredVpnService.EXTRA_MODE_ID,o.mode).putExtra(AndroidMAXProfilePreparation.EXTRA_OWNER,o.owner.identity),0,1);}
  static void stop(LayeredVpnService service){service.onStartCommand(new android.content.Intent(service,LayeredVpnService.class).setAction(LayeredVpnService.ACTION_STOP),0,2);}
  static void settle(LayeredVpnService service)throws Exception{((java.util.concurrent.ExecutorService)serviceField("executor").get(service)).submit(()->{}).get(3,java.util.concurrent.TimeUnit.SECONDS);}
- static void fresh(){reset();io.nekohasekai.libbox.CommandServer.created=0;io.nekohasekai.libbox.CommandServer.last=null;io.nekohasekai.libbox.Libbox.failClose=false;io.nekohasekai.libbox.Libbox.checkedCloses=0;io.nekohasekai.libbox.Libbox.performanceBoundary=null;io.nekohasekai.libbox.Libbox.afterCheck=null;}
+ static void fresh(){reset();android.net.VpnService.permissionMissing=false;io.nekohasekai.libbox.CommandServer.created=0;io.nekohasekai.libbox.CommandServer.last=null;io.nekohasekai.libbox.Libbox.failClose=false;io.nekohasekai.libbox.Libbox.checkedCloses=0;io.nekohasekai.libbox.Libbox.performanceBoundary=null;io.nekohasekai.libbox.Libbox.afterCheck=null;}
+ static void rejectedPreflight(Path root)throws Exception{
+  for(String fault:new String[]{"permission","lockdown"}){
+   fresh();Owned o=new Owned(root,"max-tls-awg","aes-256-gcm+xor-whitening");o.compile();o.stage();var nativeOwner=io.nekohasekai.libbox.RouterMAXProfileRequest.next;LayeredVpnService service=service(o);
+   if(fault.equals("permission"))android.net.VpnService.permissionMissing=true;else{Files.writeString(o.folder.toPath().resolve(AndroidKillSwitchPolicy.SESSION_MARKER),"1\n");service.lockdownMissing=true;}
+   start(service,o);settle(service);state(service,fault.equals("permission")?"REVOKED":"FAILED");
+   check(io.nekohasekai.libbox.CommandServer.created==0,"rejected preflight constructed a native VPN");
+   check(!AndroidMAXProfilePreparation.busy()&&nativeOwner.closes.get()==1,"rejected preflight did not drain its exact prepared MAX owner");
+   check(!o.folder.exists(),"rejected preflight retained its private MAX graph");o.unchanged();service.onDestroy();
+   fresh();Owned next=new Owned(root,"max-quic-wg","off");next.compile();next.owner.verify();next.owner.close();
+  }
+ }
  static void serviceSuccess(Path root)throws Exception{
   fresh();Owned o=new Owned(root,"max-quic-awg","aes-256-gcm+xor-whitening");o.compile();o.stage();LayeredVpnService service=service(o);android.net.Network physical=o.context.connectivity.active;
   start(service,o);state(service,"UP");check(io.nekohasekai.libbox.CommandServer.created==1&&physical.fdBinds==1,"native socket bypassed captured Network before TUN");
@@ -155,7 +170,7 @@ P.HARNESS += r'''
  }
  public static void main(String[]args)throws Exception{
   fixtures=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_MAX_PROFILE_FIXTURES"))));Path root=Path.of(args[0]);
-  try{serviceSuccess(root);cancelledClaim(root);startupMutation(root);afterBindMutation(root);noThreads();}finally{io.nekohasekai.libbox.Libbox.failClose=false;var owned=io.nekohasekai.libbox.RouterMAXProfileRequest.next;if(owned.closeRelease!=null)owned.closeRelease.countDown();AndroidMAXProfilePreparation.cancelActive();for(var service:services)service.onDestroy();}
+  try{rejectedPreflight(root);serviceSuccess(root);cancelledClaim(root);startupMutation(root);afterBindMutation(root);noThreads();}finally{android.net.VpnService.permissionMissing=false;io.nekohasekai.libbox.Libbox.failClose=false;var owned=io.nekohasekai.libbox.RouterMAXProfileRequest.next;if(owned.closeRelease!=null)owned.closeRelease.countDown();AndroidMAXProfilePreparation.cancelActive();for(var service:services)service.onDestroy();}
   System.out.println("Android MAX full service ownership: PASS "+checks+" checks; actual Java/Go preparation with OS/native runtime handles doubled");
  }
 }
