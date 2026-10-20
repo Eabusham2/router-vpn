@@ -1,0 +1,73 @@
+package libbox
+
+import (
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"testing"
+)
+
+// Both host gates supply graphs produced by the shipping Java/Swift builders
+// and shared Go compiler. CheckConfig constructs the real native adapters;
+// it does not start a device VPN or connect to a fixture provider.
+func TestRouterExternalGeneratedNativeGraphs(t *testing.T) {
+	root := os.Getenv("ROUTERVPN_NATIVE_EXTERNAL_GRAPHS")
+	if root == "" {
+		if os.Getenv("ROUTERVPN_REQUIRE_EXTERNAL_GRAPHS") == "1" {
+			t.Fatal("required external host graphs missing")
+		}
+		t.Skip("the Android and Apple package gates supply their exact emitted graph matrices")
+	}
+	expected, err := strconv.Atoi(os.Getenv("ROUTERVPN_NATIVE_EXTERNAL_GRAPH_COUNT"))
+	if err != nil || expected < 1 || expected > 1024 {
+		t.Fatal("invalid required external graph count")
+	}
+	info, err := os.Lstat(root)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("unsafe native graph directory")
+	}
+	files, err := os.ReadDir(root)
+	if err != nil || len(files) != expected {
+		t.Fatal("incomplete emitted external graph matrix", err)
+	}
+	for _, file := range files {
+		t.Run(file.Name(), func(t *testing.T) {
+			path := filepath.Join(root, file.Name())
+			info, err := os.Lstat(path)
+			if err != nil || !info.Mode().IsRegular() || !strings.HasSuffix(file.Name(), ".json") || info.Size() < 1 || info.Size() > 4<<20 {
+				t.Fatal("invalid external graph fixture")
+			}
+			raw, err := os.ReadFile(path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := CheckConfig(string(raw)); err != nil {
+				t.Fatal("native registry rejected the shipping external graph", err)
+			}
+			var graph map[string]any
+			if err := json.Unmarshal(raw, &graph); err != nil {
+				t.Fatal(err)
+			}
+			changed := false
+			for _, family := range []string{"outbounds", "endpoints"} {
+				rows, _ := graph[family].([]any)
+				for _, raw := range rows {
+					node, _ := raw.(map[string]any)
+					if node["tag"] == "custom-exit" {
+						node["type"] = "routervpn-missing-external-engine"
+						changed = true
+					}
+				}
+			}
+			if !changed {
+				t.Fatal("external graph lost its actual exit owner")
+			}
+			broken, err := json.Marshal(graph)
+			if err != nil || CheckConfig(string(broken)) == nil {
+				t.Fatal("native registry accepted a missing external engine", err)
+			}
+		})
+	}
+}

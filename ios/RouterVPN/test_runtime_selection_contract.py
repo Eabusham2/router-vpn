@@ -114,6 +114,9 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    for external_test in ('test_ios_external_policy.py', 'test_ios_external_entry_selection.py',
+                          'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py'):
+        subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_start_layer.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_entry_start_capture.py')], check=True, timeout=150)

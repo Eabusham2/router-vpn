@@ -3,13 +3,17 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
+_graphs_spec = importlib.util.spec_from_file_location('routervpn_external_graphs', ROOT/'deploy/test_mobile_external_graphs.py')
+GRAPHS = importlib.util.module_from_spec(_graphs_spec)
+_graphs_spec.loader.exec_module(GRAPHS)
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl'))
+    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_pinned.sh'] + sorted((ROOT/'mobile/externalpolicy').glob('*.tmpl')) + GRAPHS.inputs()
 
 def digest():
     value=hashlib.sha256()
@@ -37,6 +41,7 @@ def prepare(vendor):
         template=ROOT/'mobile/externalpolicy'/(name+'.tmpl')
         (vendor/('routervpn_external_policy'+('_test' if name.endswith('_test.go') else '')+'.go')).write_bytes(template.read_bytes())
     (vendor/'experimental/libbox/routervpn_external_policy_bridge_test.go').write_bytes((ROOT/'mobile/externalpolicy/bridge_test.go.tmpl').read_bytes())
+    (vendor/'experimental/libbox/routervpn_external_policy_graph_test.go').write_bytes((ROOT/'mobile/externalpolicy/graph_test.go.tmpl').read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

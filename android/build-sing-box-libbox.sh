@@ -305,6 +305,8 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     # Run the shipping Swift profile compiler against these same real engines.
     # Linux CI includes Swift; this must not use the unavailable macOS C stub.
     python3 "$ROOT/../deploy/test_ios_tor_pinned.py" --vendor "$VENDOR" --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)" --output "$TOR_GATE_PARENT/apple-graphs"
+    python3 "$ROOT/../deploy/test_mobile_external_graphs.py" --vendor "$VENDOR" --platform android --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
+    python3 "$ROOT/../deploy/test_mobile_external_graphs.py" --vendor "$VENDOR" --platform ios --native-package "$TOR_HOST_PACKAGE" --go "$(command -v go)"
   fi
   # Install only the verified C dependency into the existing Go module after
   # host graph gates, before the sole gomobile build of the combined runtime.
