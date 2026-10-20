@@ -159,7 +159,7 @@ func TestExternalFullPredecessorGeneratedFamiliesPreserveEveryOwner(t *testing.T
 						}
 						if cover {
 							service := result["services"].([]any)[0].(map[string]any)
-							if service["node_id"] != profile["node_proof_id"] || service["proof_tag"] != externalEntryTag || service["packet_tag"] != externalEntryTag || service["rate_kbps"] != float64(64) {
+							if service["tag"] != "routervpn-cover-entry" || service["node_id"] != profile["node_proof_id"] || service["proof_tag"] != externalEntryTag || service["packet_tag"] != externalEntryTag || service["rate_kbps"] != float64(64) {
 								t.Fatal("cover service left its captured entry owner")
 							}
 						}

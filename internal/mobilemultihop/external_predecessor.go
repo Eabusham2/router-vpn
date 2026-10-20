@@ -120,14 +120,14 @@ func newExternalPredecessor(selection externalPolicyCapture) (*externalPredecess
 		return nil, err
 	}
 	services, ok := p.graph["services"].([]any)
-	if p.graph["services"] != nil && !ok || len(services) > 4 {
+	if p.graph["services"] != nil && !ok || len(services) > 1 {
 		return nil, bad
 	}
 	seen := map[string]bool{}
 	for _, raw := range services {
 		service, ok := raw.(map[string]any)
 		tag := predecessorText(service, "tag")
-		if !ok || service["type"] != mobileperf.CoverType || !exactID.MatchString(tag) || seen[tag] ||
+		if !ok || service["type"] != mobileperf.CoverType || tag != "routervpn-cover-exit" || seen[tag] ||
 			!maxFields(service, "type", "tag", "node_id", "api", "sink", "rate_kbps", "proof_tag", "packet_tag") {
 			return nil, bad
 		}
@@ -446,7 +446,10 @@ func (p *externalPredecessor) merge(graph, tun, exit map[string]any) error {
 	if rows, ok := p.graph["services"].([]any); ok && len(rows) != 0 {
 		for _, raw := range rows {
 			service := raw.(map[string]any)
-			service["tag"] = predecessorNamespace("service", predecessorText(service, "tag"))
+			// A complete single-node predecessor has one exit-role cover owner.
+			// It becomes the entry role in the combined graph; retain the native
+			// service's strict role tag rather than inventing an unowned tag.
+			service["tag"] = "routervpn-cover-entry"
 			for _, field := range []string{"proof_tag", "packet_tag"} {
 				name := names[predecessorText(service, field)]
 				if name == "" {
