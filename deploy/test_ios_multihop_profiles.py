@@ -38,6 +38,13 @@ for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hys
     let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self,from:JSONEncoder().encode(candidate))
     try check("saved entry mode keeps exact engine variant",copy.multihopEntryMode == mode && copy == candidate)
 }
+for entry in ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"] {
+    for exit in ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"] {
+        var candidate = graph; candidate.multihopEntryMode = entry; candidate.multihopExitMode = exit; candidate.multihopExecution = "local"
+        let copy = try JSONDecoder().decode(IOSConnectionSafePreferences.self, from: JSONEncoder().encode(candidate))
+        try check("ordinary external graph keeps exact imported protocols", copy == candidate && copy.multihopEntryMode == entry && copy.multihopExitMode == exit)
+    }
+}
 for mode in ["ss-v2ray-unknown", "split-unknown", "max-unknown", "tor", "wg-pq-unknown", "awg2-pq-unknown", "unregistered", "reality-vision\n"] {
     var invalid = try JSONSerialization.jsonObject(with:JSONEncoder().encode(graph)) as! [String:Any]
     invalid["multihopExitMode"] = mode

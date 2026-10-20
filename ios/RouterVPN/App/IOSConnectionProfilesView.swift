@@ -15,6 +15,8 @@ private struct IOSConnectionCustomPresetMirror: Codable {
 }
 
 private struct IOSConnectionSafePreferences: Codable, Hashable {
+    static let routerHopModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"]
+    static let ordinaryExternalModes: Set<String> = ["wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
     var homeLANAccess: Bool
     var killSwitch: Bool
     var killSwitchPolicy: String
@@ -78,11 +80,11 @@ private extension IOSConnectionSafePreferences {
         multihopEnabled = try c.decodeIfPresent(Bool.self, forKey: .multihopEnabled) ?? false
         multihopEntryID = try c.decodeIfPresent(String.self, forKey: .multihopEntryID)
         multihopEntryMode = try c.decodeIfPresent(String.self, forKey: .multihopEntryMode)
-        guard ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","naive-h2","naive-h3","ss-v2ray","split","max"].contains(multihopEntryMode ?? "wg") else { throw DecodingError.dataCorruptedError(forKey: .multihopEntryMode, in: c, debugDescription:"Unknown multihop entry transport") }
+        guard Self.routerHopModes.union(Self.ordinaryExternalModes).contains(multihopEntryMode ?? "wg") else { throw DecodingError.dataCorruptedError(forKey: .multihopEntryMode, in: c, debugDescription:"Unknown multihop entry transport") }
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
         if let mode = multihopExitMode {
-            guard ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"].contains(mode) else {
+            guard Self.routerHopModes.union(Self.ordinaryExternalModes).contains(mode) else {
                 throw DecodingError.dataCorruptedError(forKey: .multihopExitMode, in: c, debugDescription: "Unknown multihop exit transport")
             }
         }
@@ -100,6 +102,10 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     var customLayers: [String]
     var preferences: IOSConnectionSafePreferences?
     var updatedAt: Date
+    // These public identifiers bind new external snapshots to the imported
+    // exit. Keys, passwords, private node files and tokens remain in its store.
+    var externalProtocol: String? = nil
+    var externalPublicIP: String? = nil
 
     var autoRequirementsSummary: String {
         guard let preferences else { return "AUTO n/a" }
@@ -172,8 +178,9 @@ private enum IOSConnectionProfileStore {
         guard let selected = model.selectedNodeProfile else { throw issue("Select a linked Router or Custom node first.") }
         let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
         let layers = try customLayers(for: mode)
+        let ordinaryExternal = selected.normalizedNodeKind == "external" && IOSConnectionSafePreferences.ordinaryExternalModes.contains(selected.external?.protocolName ?? "")
         let prefs: IOSConnectionSafePreferences?
-        if selected.normalizedNodeKind == "router-vpn" {
+        if selected.normalizedNodeKind == "router-vpn" || ordinaryExternal {
             if selected.multihopEnabled == true {
                 guard let bundle = model.bundle else { throw issue("The selected multihop bundle is missing.") }
                 _ = try model.iosMultihopEntryBundle(for: bundle)
@@ -181,7 +188,7 @@ private enum IOSConnectionProfileStore {
             prefs = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
                 killSwitch: selected.killSwitch ?? false,
-                killSwitchPolicy: (selected.killSwitchPolicy ?? "off").lowercased(),
+                killSwitchPolicy: (selected.killSwitchPolicy ?? (selected.killSwitch == true ? "always" : "off")).lowercased(),
                 ipv6Mode: (selected.ipv6Mode ?? "on").lowercased(),
                 baseTunnel: (selected.baseTunnel ?? "auto").lowercased(),
                 baseFallback: selected.baseFallback ?? false,
@@ -194,7 +201,7 @@ private enum IOSConnectionProfileStore {
                 jumboTUN: selected.jumboTUN ?? false,
                 startupMode: (selected.startupMode ?? "smart-auto").lowercased(),
                 autoConnect: selected.autoConnect ?? false,
-                dnsMode: (selected.dnsMode ?? "home").lowercased(),
+                dnsMode: (selected.dnsMode ?? (ordinaryExternal ? "rescue" : "home")).lowercased(),
                 dnsProtocol: (selected.dnsProtocol ?? "udp").lowercased(),
                 dnsHost: selected.dnsHost ?? "",
                 dnsPort: selected.dnsPort ?? 0,
@@ -210,9 +217,12 @@ private enum IOSConnectionProfileStore {
         } else {
             prefs = nil
         }
-        return IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
+        let record = IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
                                           nodeKind: selected.normalizedNodeKind, mode: selected.normalizedNodeKind == "external" ? "external" : mode,
-                                          customLayers: selected.normalizedNodeKind == "external" ? [] : layers, preferences: prefs, updatedAt: Date())
+                                          customLayers: selected.normalizedNodeKind == "external" ? [] : layers, preferences: prefs, updatedAt: Date(),
+                                          externalProtocol: ordinaryExternal ? selected.external?.protocolName : nil,
+                                          externalPublicIP: ordinaryExternal ? selected.external?.expectedPublicIP : nil)
+        return try validateStoredProfiles([record])[0]
     }
 
     static func add(model: RouterVPNModel, name: String) throws -> IOSConnectionProfileRecord {
@@ -233,14 +243,34 @@ private enum IOSConnectionProfileStore {
     static func load(model: RouterVPNModel, id: String) throws -> IOSConnectionProfileRecord {
         guard !model.profileMutationBlocked else { throw issue("Disconnect or let the active VPN transition finish before loading a connection profile.") }
         guard let saved = try loadAll().first(where: { $0.id == id }) else { throw issue("Connection profile was not found.") }
-        guard let linked = model.allNodeProfiles.first(where: { $0.id == saved.nodeID }), linked.normalizedNodeKind == saved.nodeKind else {
+        let linkedNodes = model.allNodeProfiles.filter { $0.id == saved.nodeID }
+        guard linkedNodes.count == 1, let linked = linkedNodes.first, linked.normalizedNodeKind == saved.nodeKind else {
             throw issue("The linked node referenced by this connection profile is missing or changed type.")
         }
         guard let nodeData = IOSNodeBundleStore.shared.bundleData(containing: saved.nodeID, current: model.bundle),
               var bundle = try? JSONDecoder().decode(ClientBundle.self, from: nodeData),
+              bundle.routerProfiles.filter({ $0.id == saved.nodeID }).count == 1,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == saved.nodeID }) else { throw issue("Linked node bundle could not be loaded.") }
 
         if saved.nodeKind == "external" {
+            guard bundle.routerProfiles[index].normalizedNodeKind == "external" else { throw issue("The saved external node changed type in its linked bundle.") }
+            if let prefs = saved.preferences {
+                var profile = bundle.routerProfiles[index]
+                guard let selected = profile.external, selected.protocolName == saved.externalProtocol,
+                      selected.expectedPublicIP == saved.externalPublicIP,
+                      linked.external?.protocolName == saved.externalProtocol,
+                      linked.external?.expectedPublicIP == saved.externalPublicIP else {
+                    throw issue("The saved external connection references a different imported exit protocol or public identity.")
+                }
+                profile = applying(prefs, to: profile)
+                bundle.routerProfiles[index] = profile
+                bundle.selectedRouterID = saved.nodeID
+                bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
+                bundle.endpoint = profile.endpoint
+                if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
+            }
+            // Old external records deliberately contain no preference snapshot.
+            // They retain selection-only behavior; new records restore policy.
             bundle.selectedRouterID = saved.nodeID
             do { try model.importBundle(JSONEncoder().encode(bundle)) }
             catch { throw issue("Could not select the saved Custom/external node: \(error.localizedDescription)") }
@@ -251,7 +281,29 @@ private enum IOSConnectionProfileStore {
         guard let prefs = saved.preferences else { throw issue("Router connection profile is missing its non-secret preference snapshot.") }
         let effectiveMode = try normalizeMode(saved.mode)
         let preparedPreset = try preparedCustomPresetData(mode: effectiveMode, layers: saved.customLayers)
-        var profile = bundle.routerProfiles[index]
+        let profile = applying(prefs, to: bundle.routerProfiles[index])
+        bundle.routerProfiles[index] = profile
+        bundle.selectedRouterID = saved.nodeID
+        bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
+        // Cross-node Load must switch the complete runtime bundle, not only its
+        // visible id while retaining another home's keys and generated profiles.
+        bundle.nodeProofID = profile.nodeProofID ?? bundle.nodeProofID
+        bundle.endpoint = profile.endpoint
+        bundle.apiToken = profile.apiToken
+        bundle.routerAPI = profile.routerAPI
+        bundle.adGuardIPv4 = profile.adGuardIPv4
+        bundle.adGuardIPv6 = profile.adGuardIPv6
+        if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
+
+        do { try model.importBundle(JSONEncoder().encode(bundle)) }
+        catch { throw issue("Could not apply saved connection preferences: \(error.localizedDescription)") }
+        UserDefaults.standard.set(effectiveMode, forKey: iosConnectionModeKey)
+        if let preparedPreset { UserDefaults.standard.set(preparedPreset, forKey: iosConnectionCustomPresetsKey) }
+        return saved
+    }
+
+    private static func applying(_ prefs: IOSConnectionSafePreferences, to source: RouterProfile) -> RouterProfile {
+        var profile = source
         profile.homeLANAccess = prefs.homeLANAccess
         profile.killSwitch = prefs.killSwitch
         profile.killSwitchPolicy = prefs.killSwitchPolicy
@@ -279,24 +331,7 @@ private enum IOSConnectionProfileStore {
         profile.multihopExitID = prefs.multihopExitID
         profile.multihopExitMode = prefs.multihopExitMode
         profile.multihopExecution = prefs.multihopExecution ?? "local"
-        bundle.routerProfiles[index] = profile
-        bundle.selectedRouterID = saved.nodeID
-        bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
-        // Cross-node Load must switch the complete runtime bundle, not only its
-        // visible id while retaining another home's keys and generated profiles.
-        bundle.nodeProofID = profile.nodeProofID ?? bundle.nodeProofID
-        bundle.endpoint = profile.endpoint
-        bundle.apiToken = profile.apiToken
-        bundle.routerAPI = profile.routerAPI
-        bundle.adGuardIPv4 = profile.adGuardIPv4
-        bundle.adGuardIPv6 = profile.adGuardIPv6
-        if prefs.multihopEnabled { _ = try model.iosMultihopEntryBundle(for: bundle) }
-
-        do { try model.importBundle(JSONEncoder().encode(bundle)) }
-        catch { throw issue("Could not apply saved connection preferences: \(error.localizedDescription)") }
-        UserDefaults.standard.set(effectiveMode, forKey: iosConnectionModeKey)
-        if let preparedPreset { UserDefaults.standard.set(preparedPreset, forKey: iosConnectionCustomPresetsKey) }
-        return saved
+        return profile
     }
 
     private static func persist(_ values: [IOSConnectionProfileRecord]) throws {
@@ -331,6 +366,7 @@ private enum IOSConnectionProfileStore {
             record.mode = try normalizeMode(value.mode)
             record.customLayers = try normalizeLayers(value.customLayers)
             if value.nodeKind == "router-vpn" {
+                guard record.externalProtocol == nil, record.externalPublicIP == nil else { throw issue("Router connection profile contains external identity fields.") }
                 guard let preferences = value.preferences else {
                     throw issue("Router connection profile is missing its non-secret preference snapshot.")
                 }
@@ -340,8 +376,25 @@ private enum IOSConnectionProfileStore {
                 }
                 if record.mode == "external" { throw issue("Router connection profile cannot use external mode.") }
             } else {
-                guard value.preferences == nil, record.customLayers.isEmpty, record.mode == "external" else {
+                guard record.customLayers.isEmpty, record.mode == "external" else {
                     throw issue("External connection profile contains Router-only saved policy.")
+                }
+                if let preferences = value.preferences {
+                    guard let protocolName = record.externalProtocol, IOSConnectionSafePreferences.ordinaryExternalModes.contains(protocolName),
+                          let address = record.externalPublicIP, address.count <= 64,
+                          address == address.trimmingCharacters(in: .whitespacesAndNewlines), !address.contains("%"),
+                          IPv4Address(address) != nil || IPv6Address(address) != nil else {
+                        throw issue("External connection profile has no exact imported protocol and public exit identity.")
+                    }
+                    record.preferences = try validatePreferences(preferences, external: true)
+                    if preferences.multihopEnabled {
+                        guard preferences.multihopExitID == record.nodeID, preferences.multihopExitMode == protocolName,
+                              preferences.multihopEntryMode != nil, (preferences.multihopExecution ?? "local") == "local" else {
+                            throw issue("Saved external multihop must retain this exact exit and its local execution owner.")
+                        }
+                    }
+                } else {
+                    guard record.externalProtocol == nil, record.externalPublicIP == nil else { throw issue("External identity cannot be detached from its saved policy.") }
                 }
             }
             validated.append(record)
@@ -349,10 +402,10 @@ private enum IOSConnectionProfileStore {
         return validated
     }
 
-    private static func validatePreferences(_ value: IOSConnectionSafePreferences) throws -> IOSConnectionSafePreferences {
+    private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false) throws -> IOSConnectionSafePreferences {
         var p = value
         p.killSwitchPolicy = p.killSwitchPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["off", "on-connect", "always"].contains(p.killSwitchPolicy) else { throw issue("Connection profile contains an invalid kill-switch policy.") }
+        guard ["off", "on-connect", "always"].contains(p.killSwitchPolicy) || (external && p.killSwitchPolicy == "strict") else { throw issue("Connection profile contains an invalid kill-switch policy.") }
         p.killSwitch = p.killSwitchPolicy != "off"
 
         p.ipv6Mode = p.ipv6Mode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
@@ -362,8 +415,8 @@ private enum IOSConnectionProfileStore {
         p.startLayer = p.startLayer.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(p.startLayer) else { throw issue("Connection profile contains an invalid Start Layer preference.") }
         p.mtuPolicy = p.mtuPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        guard ["auto", "manual", "default"].contains(p.mtuPolicy) else { throw issue("Connection profile contains an invalid MTU policy.") }
-        if p.mtuPolicy == "manual" {
+        guard ["auto", "manual", "fixed", "default"].contains(p.mtuPolicy) else { throw issue("Connection profile contains an invalid MTU policy.") }
+        if ["manual", "fixed"].contains(p.mtuPolicy) {
             guard (1280...9000).contains(p.manualMTU) else { throw issue("Connection profile manual MTU must be 1280–9000.") }
         } else {
             p.manualMTU = 0
@@ -371,7 +424,9 @@ private enum IOSConnectionProfileStore {
         if p.multihopEnabled {
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
-                  let mode = p.multihopExitMode, ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"].contains(mode) else {
+                  let mode = p.multihopExitMode,
+                  (external ? IOSConnectionSafePreferences.ordinaryExternalModes : IOSConnectionSafePreferences.routerHopModes).contains(mode),
+                  IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }
@@ -388,6 +443,20 @@ private enum IOSConnectionProfileStore {
         let invalidDNSScalar: (Unicode.Scalar) -> Bool = { $0.value < 0x21 || $0.value == 0x7f }
         guard !p.dnsHost.unicodeScalars.contains(where: invalidDNSScalar), !p.dnsServerName.unicodeScalars.contains(where: invalidDNSScalar) else {
             throw issue("Connection profile DNS host/server name contains invalid characters.")
+        }
+        if external {
+            guard p.startLayer == "off" else { throw issue("An external connection profile cannot replace the imported transport with a Router-only Start Layer.") }
+            guard ["", "udp", "tcp", "tls", "https", "h3", "dot", "doh", "doh3"].contains(p.dnsProtocol),
+                  (0...65535).contains(p.dnsPort),
+                  p.dnsPath.isEmpty || (p.dnsPath.hasPrefix("/") && !p.dnsPath.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f })) else {
+                throw issue("External connection profile contains an invalid captured DNS transport, port or path.")
+            }
+            if p.dnsMode == "home", !p.multihopEnabled { throw issue("Home AdGuard requires a captured Router VPN entry for an ordinary external exit.") }
+            if ["custom", "dot", "doh", "doh3"].contains(p.dnsMode), p.dnsHost.isEmpty { throw issue("External connection profile requires the selected resolver host.") }
+            if p.dnsMode == "custom", p.dnsProtocol.isEmpty { throw issue("External Custom DNS requires its explicit saved transport.") }
+            // The shared compiler owns preset defaults and actual DNS proof.
+            // Keep custom/Home transports, ports and TLS identities unchanged.
+            return p
         }
         switch p.dnsMode {
         case "home", "fastest", "rescue":
