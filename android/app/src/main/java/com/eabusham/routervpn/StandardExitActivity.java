@@ -162,7 +162,7 @@ public final class StandardExitActivity extends Activity {
                 else if("shadowsocks".equals(protocol)){e.method=extra.get(i++).getText().toString();e.secret=extra.get(i).getText().toString();}
                 else if("hysteria2".equals(protocol)){e.secret=extra.get(i++).getText().toString();e.tlsServerName=extra.get(i).getText().toString();}
                 else{e.wgAddresses.addAll(csv(extra.get(i++).getText().toString()));e.wgPrivateKey=extra.get(i++).getText().toString();e.wgPeerPublicKey=extra.get(i++).getText().toString();e.wgPreSharedKey=extra.get(i++).getText().toString();e.wgAllowedIps.addAll(csv(extra.get(i++).getText().toString()));String m=extra.get(i).getText().toString().trim();e.wgMtu=m.isEmpty()?0:Integer.parseInt(m);}
-                exitStore.save(e);toast("Saved "+e.name);refresh();
+                AndroidStandardExitStore.validate(e);e.policy=AndroidExternalPolicy.editorPolicy(null);showExternalPolicyForm(e);
             }catch(Exception e){toast("Save failed: "+safe(e));}
         }).setNegativeButton("Cancel",null).show();
     }
@@ -267,9 +267,63 @@ public final class StandardExitActivity extends Activity {
 
     private void showExitActions(AndroidStandardExitStore.Entry e) {
         boolean tor=AndroidTorProfile.isTor(e.protocol);
-        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
+        boolean ordinary=AndroidExternalPolicy.supports(e.protocol);
+        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Delete"}:ordinary?new String[]{"Connect direct","Connect through Router VPN entry","Edit DNS, network and MTU settings","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
         new AlertDialog.Builder(this).setCustomTitle(choiceHeader(e.name+" — "+e.protocol,exitSummary(e)+"\nCredentials and bridge blocks remain private."))
-                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else if(ordinary&&w==2)showExternalPolicyForm(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+    }
+
+    private void showExternalPolicyForm(AndroidStandardExitStore.Entry saved) {
+        if(activeOrTransitioning()){toast("Disconnect before editing external-node settings.");return;}
+        final AndroidStandardExitStore.Entry captured;
+        final JSONObject policy;
+        try{captured=AndroidStandardExitStore.copy(saved);policy=AndroidExternalPolicy.editorPolicy(captured);}
+        catch(Exception invalid){toast("The saved external policy could not be restored safely.");return;}
+        LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
+        Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Fastest (saved successful measurement)"});
+        String mode=policy.optString("dns_mode","rescue"),protocol="custom".equals(mode)?policy.optString("dns_protocol",""):mode;
+        int selected="home".equals(mode)?0:"rescue".equals(mode)?1:"fastest".equals(mode)?7:("dot".equals(protocol)||"tls".equals(protocol))?4:("doh".equals(protocol)||"https".equals(protocol))?5:("doh3".equals(protocol)||"h3".equals(protocol))?6:"tcp".equals(protocol)?3:2;
+        dns.setSelection(selected);form.addView(text("DNS for this external connection",14,true));form.addView(dns);
+        EditText host=field("Selected DNS IP or hostname",false),port=field("DNS port (blank keeps the protocol default)",false),name=field("Encrypted DNS certificate name",false),path=field("DoH / DoH3 path",false);
+        host.setText(policy.optString("dns_host",""));int savedPort=policy.optInt("dns_port",0);if(savedPort>0)port.setText(Integer.toString(savedPort));port.setInputType(InputType.TYPE_CLASS_NUMBER);
+        name.setText(policy.optString("dns_server_name",""));path.setText(policy.optString("dns_path",""));form.addView(host);form.addView(port);form.addView(name);form.addView(path);
+        dns.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){boolean custom=position>=2&&position<=6;host.setEnabled(custom);port.setEnabled(custom);name.setEnabled(position>=4&&position<=6);path.setEnabled(position==5||position==6);}});
+        CheckBox bootstrapEnabled=new CheckBox(this);bootstrapEnabled.setText("Use an explicit bootstrap resolver for the selected DNS hostname");bootstrapEnabled.setChecked(policy.has("dns_bootstrap"));form.addView(bootstrapEnabled);
+        Spinner bootstrapType=choice(new String[]{"UDP","TCP","DoT","DoH","DoH3"});form.addView(bootstrapType);
+        EditText bootstrapHost=field("Bootstrap resolver literal IP",false),bootstrapPort=field("Bootstrap port",false),bootstrapName=field("Bootstrap certificate name",false),bootstrapPath=field("Bootstrap DoH path",false);
+        bootstrapPort.setInputType(InputType.TYPE_CLASS_NUMBER);form.addView(bootstrapHost);form.addView(bootstrapPort);form.addView(bootstrapName);form.addView(bootstrapPath);
+        try{if(policy.has("dns_bootstrap")){JSONObject server=policy.getJSONObject("dns_bootstrap").getJSONObject("server");String t=server.getString("type");bootstrapType.setSelection("tcp".equals(t)?1:"tls".equals(t)?2:"https".equals(t)?3:"h3".equals(t)?4:0);bootstrapHost.setText(server.getString("server"));bootstrapPort.setText(Integer.toString(server.getInt("server_port")));JSONObject tls=server.optJSONObject("tls");if(tls!=null)bootstrapName.setText(tls.optString("server_name",""));bootstrapPath.setText(server.optString("path",""));}}
+        catch(Exception invalid){toast("The saved bootstrap resolver could not be restored; its settings were not changed.");return;}
+        Spinner ipv6=choice(new String[]{"IPv6 on","IPv6 automatic","IPv6 off"});String ip=policy.optString("ipv6_mode","on");ipv6.setSelection("off".equals(ip)?2:"auto".equals(ip)?1:0);form.addView(text("IPv6",14,true));form.addView(ipv6);
+        CheckBox blockLAN=new CheckBox(this);blockLAN.setText("Block private LAN ranges");blockLAN.setChecked(!policy.optBoolean("home_lan_access",true));form.addView(blockLAN);
+        EditText lan=field("Private LAN CIDRs, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
+        EditText mtu=field("Fixed MTU 1280–9000 (blank: Auto baseline)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if(!"auto".equals(policy.optString("mtu_policy","auto")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
+        form.addView(text("Home uses the selected Router VPN entry's private AdGuard and requires that entry's authenticated proof. Direct connections need an explicit reachable resolver. Resolver hostnames use only the bootstrap you save here, through this path. Auto MTU is an unmeasured baseline until this external exit provides an authenticated packet-probe owner; saved measurements are not reused. A TCP-only transport rejects unsupported UDP and DoH3 settings.",13,false));
+        TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
+        AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
+        dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
+            if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
+            try{
+                AndroidStandardExitStore.Entry next=AndroidStandardExitStore.copy(captured);JSONObject p=new JSONObject(policy.toString());int n=dns.getSelectedItemPosition();
+                for(String key:new String[]{"dns_protocol","dns_host","dns_port","dns_server_name","dns_path","dns_bootstrap","effective_mtu","manual_mtu"})p.remove(key);
+                p.put("dns_mode",n==0?"home":n==1?"rescue":n==7?"fastest":"custom");
+                if(n>=2&&n<=6){String transport=new String[]{"","","udp","tcp","tls","https","h3"}[n];String address=host.getText().toString().trim();if(address.isEmpty())throw new IllegalArgumentException("Enter the selected DNS address.");String number=port.getText().toString().trim();int value=number.isEmpty()?0:Integer.parseInt(number);if(value<0||value>65535)throw new IllegalArgumentException("DNS port must be 1–65535 or blank.");p.put("dns_protocol",transport).put("dns_host",address).put("dns_port",value);if(n>=4)p.put("dns_server_name",name.getText().toString().trim());if(n>=5)p.put("dns_path",path.getText().toString().trim());}
+                if(n==7&&(p.optString("fastest_dns_host","").isEmpty()||!p.has("dns_results")&&!p.has("fastest_dns_latency_ms")))throw new IllegalArgumentException("Run a successful DNS measurement before selecting its saved winner.");
+                if(bootstrapEnabled.isChecked()){
+                    if(n<2||n>6)throw new IllegalArgumentException("Bootstrap belongs to an explicitly selected DNS hostname.");
+                    String t=new String[]{"udp","tcp","tls","https","h3"}[bootstrapType.getSelectedItemPosition()];String address=bootstrapHost.getText().toString().trim();AndroidNumericAddress.parse(address);
+                    String number=bootstrapPort.getText().toString().trim();int value=number.isEmpty()?("tls".equals(t)?853:("https".equals(t)||"h3".equals(t))?443:53):Integer.parseInt(number);if(value<1||value>65535)throw new IllegalArgumentException("Bootstrap port must be 1–65535.");
+                    JSONObject server=new JSONObject().put("type",t).put("tag","external-dns-bootstrap").put("server",address).put("server_port",value).put("detour","custom-exit");
+                    if(bootstrapType.getSelectedItemPosition()>=2)server.put("tls",new JSONObject().put("enabled",true).put("server_name",bootstrapName.getText().toString().trim()));if(bootstrapType.getSelectedItemPosition()>=3){String route=bootstrapPath.getText().toString().trim();server.put("path",route.isEmpty()?"/dns-query":route);}
+                    JSONObject query=policy.has("dns_bootstrap")?new JSONObject(policy.getJSONObject("dns_bootstrap").getJSONObject("query").toString()):new JSONObject().put("server","external-dns-bootstrap");p.put("dns_bootstrap",new JSONObject().put("server",server).put("query",query));
+                }
+                p.put("ipv6_mode",new String[]{"on","auto","off"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
+                String fixed=mtu.getText().toString().trim();p.put("mtu_policy",fixed.isEmpty()?"auto":"fixed");if(!fixed.isEmpty())p.put("manual_mtu",Integer.parseInt(fixed));AndroidExternalPolicy.checkPolicy(p);next.policy=p;
+                // Home's exact AdGuard owner is captured when the entry is selected.
+                if(!"home".equals(p.getString("dns_mode")))AndroidExternalPolicy.compile(next,null,"external");
+                exitStore.save(next);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
+            }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}
+        }));dialog.show();
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {

@@ -93,7 +93,7 @@ final class AndroidStandardExitStore {
     static void validate(Entry entry){}
 }
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
-final class AndroidExternalPolicy {static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
+final class AndroidExternalPolicy {static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}static boolean supports(String protocol){return java.util.Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2").contains(protocol);}}
 final class AndroidStandardExitController {
     static volatile String lastEntryMode="",lastProtocol="";
     AndroidStandardExitController(Context c) {}
@@ -235,6 +235,7 @@ public final class RuntimeTeardownHarness {
     }
     static void tests(String kind) {
         if("tor".equals(kind))torTests();
+        if("external".equals(kind))externalTests();
         if ("multihop".equals(kind)) for (String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) for (String execution:new String[]{"local","server","auto"}) {
             test("multihop captured transport/execution "+entryMode+"/"+execution,()->{
                 try(Owner owner=new Owner(kind)) {
@@ -390,6 +391,13 @@ public final class RuntimeTeardownHarness {
                 check(owner.engine.starts.get()==0&&!cb.ok,"unknown engine state was treated as safe to replace");
             }
         });
+    }
+
+    static void externalTests(){
+        test("ordinary external requires its native DNS and entry proof",()->{try(Owner owner=new Owner("external")){LayeredVpnService.externalHealthy=false;Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();check(!cb.ok&&!AndroidHomeStateStore.current.connected&&owner.engine.stops.get()>0&&publicProofs.get()==0,"missing native proof fell back to a public-IP-only check");awaitIdle(owner);}});
+        test("ordinary external stale Home response cannot overwrite replacement",()->{try(Owner owner=new Owner("external")){Callback cb=new Callback(3);try{owner.connect(cb);cb.awaitEntered();AndroidHomeStateStore.Snapshot replacement=new AndroidHomeStateStore.Snapshot();replacement.sessionId="new-session";replacement.phase="new-owner";AndroidHomeStateStore.current=replacement;}finally{cb.release.countDown();cb.awaitDone();}check(!cb.ok&&AndroidHomeStateStore.current.sessionId.equals("new-session")&&AndroidHomeStateStore.current.phase.equals("new-owner"),"stale ordinary completion overwrote a replacement owner");}});
+        test("ordinary external freezes entry before queued work",()->{try(Owner owner=new Owner("external")){java.lang.reflect.Field f=owner.runtime().getClass().getDeclaredField("executor");f.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)f.get(owner.runtime());CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);executor.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});check(entered.await(3,TimeUnit.SECONDS),"queue did not block");AndroidExternalPolicy.entryVersion="original";Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),new AndroidStandardExitStore.Entry(),"wg",cb);AndroidExternalPolicy.entryVersion="replacement";release.countDown();cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0&&LayeredVpnService.externalReads.get()==0,"queued source replacement started a native graph");awaitIdle(owner);}});
+        test("OpenVPN keeps its separate public exit adapter",()->{try(Owner owner=new Owner("external")){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="openvpn";Callback cb=new Callback(0);owner.external.connectDirect(e,cb);cb.awaitDone();check(cb.ok&&publicProofs.get()>0&&LayeredVpnService.externalReads.get()==0,"ordinary compiler consumed the OpenVPN path");owner.disconnect();awaitIdle(owner);}});
     }
     static AndroidStandardExitStore.Entry torEntry(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="tor-bridge";e.expectedPublicIp="";return e;}
     static void torTests(){

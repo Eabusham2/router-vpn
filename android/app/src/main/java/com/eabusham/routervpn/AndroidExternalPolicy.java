@@ -51,6 +51,18 @@ final class AndroidExternalPolicy {
         for (int i = 0; keys != null && i < keys.length(); i++) {
             if (!POLICY.contains(keys.getString(i))) throw new IllegalArgumentException("External settings contain an unowned policy field.");
         }
+        for (String key : new String[]{"dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "fastest_dns_host", "ipv6_mode", "mtu_policy"}) {
+            if (policy.has(key) && (!(policy.get(key) instanceof String) || policy.getString(key).length() > 4096)) throw new IllegalArgumentException("External settings require a bounded text value for " + key + ".");
+        }
+        if (!Arrays.asList("", "home", "rescue", "custom", "fastest", "dot", "doh", "doh3").contains(policy.optString("dns_mode", ""))) throw new IllegalArgumentException("Choose the exact saved DNS policy.");
+        if (!Arrays.asList("", "on", "auto", "off").contains(policy.optString("ipv6_mode", ""))) throw new IllegalArgumentException("Choose On, Auto or Off for IPv6.");
+        if (policy.has("home_lan_access") && !(policy.get("home_lan_access") instanceof Boolean)) throw new IllegalArgumentException("LAN access must be explicitly On or Off.");
+        if (policy.has("home_lan_cidrs") && !(policy.get("home_lan_cidrs") instanceof JSONArray)) throw new IllegalArgumentException("LAN ranges must be a captured list.");
+        if (policy.has("dns_bootstrap") && !(policy.get("dns_bootstrap") instanceof JSONObject)) throw new IllegalArgumentException("DNS bootstrap must capture its server and query together.");
+        if (policy.has("dns_port")) {
+            Object raw = policy.get("dns_port");
+            if (!(raw instanceof Number) || ((Number) raw).doubleValue() != ((Number) raw).intValue() || ((Number) raw).intValue() < 0 || ((Number) raw).intValue() > 65535) throw new IllegalArgumentException("DNS port must be an integer from 1 through 65535, or zero for the protocol default.");
+        }
         String mtu = policy.optString("mtu_policy", "auto");
         if (!Arrays.asList("auto", "fixed", "manual").contains(mtu)) throw new IllegalArgumentException("Choose Auto or Fixed MTU.");
         if (!"auto".equals(mtu)) {
@@ -71,6 +83,10 @@ final class AndroidExternalPolicy {
         }
         policy.remove("dns_bootstrap");
         policy.remove("effective_mtu"); // Historical measurements never size this new path.
+        for (String field : new String[]{"dns_host", "fastest_dns_host"}) {
+            String address = policy.optString(field, "");
+            if (address.contains(":")) policy.put(field, AndroidNumericAddress.canonical(address));
+        }
         JSONObject ext = new JSONObject().put("protocol", protocol(exit.protocol)).put("expected_public_ip", exit.expectedPublicIp);
         JSONObject transport;
         switch (exit.protocol) {
@@ -207,6 +223,10 @@ final class AndroidExternalPolicy {
     }
 
     static String digest(String text) throws Exception { return AndroidTorProfile.digest(text.getBytes(StandardCharsets.UTF_8)); }
+    static String entryDigest(File file) throws Exception {
+        if (file == null) throw new IllegalArgumentException("Select the captured Router VPN entry.");
+        return AndroidTorProfile.digest(AndroidPrivateFileStore.read(file, AndroidNodeStore.MAX_BUNDLE));
+    }
     private static JSONObject copy(JSONObject value) throws Exception { return new JSONObject(value.toString()); }
     private static boolean bounded(String text, int max) { return text != null && !text.isEmpty() && text.getBytes(StandardCharsets.UTF_8).length <= max; }
     private static void removeSession(File file) { File[] children = file.listFiles(); if (children != null) for (File child : children) removeSession(child); file.delete(); }

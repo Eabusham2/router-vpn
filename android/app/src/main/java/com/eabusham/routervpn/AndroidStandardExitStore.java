@@ -128,8 +128,8 @@ final class AndroidStandardExitStore {
             e.server=compiled.getString("server");e.serverPort=compiled.getInt("server_port");
         }
         if(!Arrays.asList("wireguard","socks5","http","https","shadowsocks","hysteria2","openvpn").contains(e.protocol))throw new IllegalArgumentException("Unsupported custom exit protocol: "+e.protocol);
-        e.server=literalIp(e.server,"Custom exit server").getHostAddress(); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
-        InetAddress expected=literalIp(e.expectedPublicIp,"Expected public exit IP"); if(isPrivate(expected))throw new IllegalArgumentException("Expected public exit IP must be public.");e.expectedPublicIp=expected.getHostAddress();
+        e.server=AndroidNumericAddress.canonical(e.server); if(e.serverPort<1||e.serverPort>65535)throw new IllegalArgumentException("Custom exit port must be 1..65535.");
+        InetAddress expected=AndroidNumericAddress.parse(e.expectedPublicIp); if(isPrivate(expected))throw new IllegalArgumentException("Expected public exit IP must be public.");e.expectedPublicIp=AndroidNumericAddress.canonical(e.expectedPublicIp);
         if(!"openvpn".equals(e.protocol)){e.username=trimBound(e.username,"username");e.password=trimBound(e.password,"password");}e.secret=trimBound(e.secret,"secret");e.method=trimBound(e.method,"method").toLowerCase(Locale.ROOT);e.tlsServerName=trimBound(e.tlsServerName,"TLS server name");
         e.wgPrivateKey=trimBound(e.wgPrivateKey,"WireGuard private key");e.wgPeerPublicKey=trimBound(e.wgPeerPublicKey,"WireGuard public key");e.wgPreSharedKey=trimBound(e.wgPreSharedKey,"WireGuard preshared key");
         if(("socks5".equals(e.protocol)||"http".equals(e.protocol)||"https".equals(e.protocol))&&e.username.isEmpty()!=e.password.isEmpty())throw new IllegalArgumentException("Proxy username/password must both be set or both be empty.");

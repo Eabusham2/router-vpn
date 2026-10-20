@@ -284,7 +284,38 @@ public final class TorFormHarness {
   invoke(activity,"requestDirect",selected);activity.onActivityResult(2101,Activity.RESULT_OK,null);
   check(AndroidRuntimeRegistry.get(activity).standardExit.starts==1&&AndroidRuntimeRegistry.get(activity).standardExit.mode.equals("external"),"direct Tor permission path was lost");
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();newFormAndRejections();dialogAndPermission();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+
+ static AndroidStandardExitStore.Entry ordinary(String kind)throws Exception{
+  AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="ordinary-"+kind;e.name="Selected "+kind;e.protocol=kind;e.server="203.0.113.20";e.serverPort=443;e.expectedPublicIp="203.0.113.88";
+  byte[] bytes=new byte[32];Arrays.fill(bytes,(byte)'p');String key=Base64.getEncoder().encodeToString(bytes);
+  if(kind.equals("wireguard")){e.wgPrivateKey=key;e.wgPeerPublicKey=key;e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));e.wgMtu=1420;}
+  if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="private-user";e.password="private-password";}
+  if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="private-hy2-password";e.tlsServerName="exit.example.test";
+  return e;
+ }
+ static void ordinaryPolicies()throws Exception{
+  int ordinaryRoundtrips=0;
+  for(String kind:new String[]{"wireguard","socks5","http","https","shadowsocks","hysteria2"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
+   if(dns.equals("doh3")&&(kind.equals("http")||kind.equals("https")))continue;
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-form-"),null);AndroidStandardExitStore.Entry selected=ordinary(kind);
+   selected.policy=policy(dns.equals("tcp")?"custom":dns,dns.equals("rescue")?"tcp":dns);selected.policy.put("effective_mtu",8800);
+   store(activity).save(selected);String before=AndroidStandardExitStore.snapshot(selected);String compiled=AndroidExternalPolicy.compile(selected,null,"external").config;
+   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==4,"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
+   check(editor.showing&&editor.title.toString().contains("Connection settings"),"ordinary policy form was not opened");
+   editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"saved ordinary policy roundtrip rejected: "+kind+"/"+dns+" "+displayed(editor.view));
+   AndroidStandardExitStore.Entry after=store(activity).get(selected.id);check(compiled.equals(AndroidExternalPolicy.compile(after,null,"external").config),"ordinary form replaced selected DNS or interface policy");
+   check(before.equals(AndroidStandardExitStore.snapshot(selected)),"ordinary form aliased the saved credentials or policy");check(!after.policy.has("effective_mtu"),"ordinary form kept stale current-path MTU");ordinaryRoundtrips++;
+  }
+  StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-home-"),null);AndroidStandardExitStore.Entry selected=ordinary("socks5");selected.policy=AndroidExternalPolicy.editorPolicy(null);store(activity).save(selected);
+  invoke(activity,"showExternalPolicyForm",selected);AlertDialog home=AlertDialog.last;check(spinner(home,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0,"Home was silently replaced in editor");home.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!home.showing&&store(activity).get(selected.id).policy.getString("dns_mode").equals("home"),"Home failed private persistence");
+  boolean rejected=false;try{AndroidExternalPolicy.compile(store(activity).get(selected.id),null,"external");}catch(Exception expected){rejected=true;}check(rejected,"direct Home silently fell back to public DNS");
+  selected=store(activity).get(selected.id);String before=AndroidStandardExitStore.snapshot(selected);invoke(activity,"showExternalPolicyForm",selected);AlertDialog invalid=AlertDialog.last;field(invalid,"Fixed MTU 1280–9000 (blank: Auto baseline)").setText("9001");invalid.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(invalid.showing&&before.equals(AndroidStandardExitStore.snapshot(store(activity).get(selected.id))),"invalid ordinary MTU overwrote the saved policy");invalid.dismiss();
+  invoke(activity,"showExternalPolicyForm",selected);AlertDialog active=AlertDialog.last;AndroidVpnMutationGuard.busy=true;active.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AndroidVpnMutationGuard.busy=false;check(active.showing&&before.equals(AndroidStandardExitStore.snapshot(store(activity).get(selected.id))),"ordinary editor changed a live capture");active.dismiss();
+  for(String mutation:new String[]{"exit","denied"}){StandardExitActivity pending=activity(Files.createTempDirectory(root,"ordinary-permission-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");e.policy.put("dns_mode","rescue");store(pending).save(e);invoke(pending,"requestDirect",e);if(mutation.equals("exit")){e.policy.put("dns_mode","home");store(pending).save(e);}pending.onActivityResult(2101,mutation.equals("denied")?0:Activity.RESULT_OK,null);check(AndroidRuntimeRegistry.get(pending).standardExit.starts==0,"permission adopted changed external policy");}
+  System.out.println("Android ordinary external settings: "+ordinaryRoundtrips+" real Java/Go graph roundtrips plus Home, rejection and permission ownership checks passed");
+ }
+
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();newFormAndRejections();dialogAndPermission();ordinaryPolicies();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -295,7 +326,7 @@ def main():
         raise RuntimeError("Android JSON implementation required")
     with tempfile.TemporaryDirectory(prefix=".tor-form-policy-", dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix="android-tor-form-") as work:
         go_dir, work = Path(go_dir), Path(work)
-        (go_dir / "main.go").write_text(T.GO)
+        (go_dir / "main.go").write_text(T.GO.replace('case "tor-profile":', 'case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)\n case "tor-profile":', 1))
         native = work / "policy"
         subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")], cwd=ROOT, check=True, timeout=90)
         stubs = dict(T.P.M.STUBS)
@@ -322,12 +353,13 @@ def main():
                 text = text[:begin] + T.P.PIPE_CALL + text[end:]
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
+ public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static String routerCompilePQProfile(''', 1)
             target = src / path
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "StandardExitActivity"):
+        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalPolicy", "AndroidDirectStandardExitController", "StandardExitActivity"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         (app / "MultihopGraphHarness.java").write_text(T.P.M.HARNESS)
         constants = "\n".join(re.findall(r" static final String (?:OBFS|MEEK|SNOW|WEB)=.*;", T.HARNESS))

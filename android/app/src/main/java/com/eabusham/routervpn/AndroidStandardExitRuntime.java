@@ -54,15 +54,18 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         if(teardownInProgress||(active!=null&&!active.isDone())){cb.finished(false,"Another Android custom-exit attempt or teardown is running.");return;}
         String blocked=startBlockedReason();if(!blocked.isEmpty()){cb.finished(false,blocked);return;}
         final AndroidStandardExitStore.Entry captured;
-        try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured); }
+        final String capturedEntry;
+        try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured);
+            capturedEntry=!direct&&AndroidExternalPolicy.supports(captured.protocol)?AndroidExternalPolicy.entryDigest(entryBundle):"";
+        }
         catch(Exception invalid){cb.finished(false,"The saved custom-exit profile is invalid; review its settings before connecting.");return;}
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
         torNativeSession="";torHomeSession="";torExternalID="";
         externalNativeSession="";externalHomeSession="";externalID="";
-        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,cb));
+        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,capturedEntry,cb));
     }
 
-    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){
+    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String capturedEntry,Callback cb){
         boolean started=false,sessionStarted=false;
         boolean tor=AndroidTorProfile.isTor(exit.protocol);
         boolean policy=AndroidExternalPolicy.supports(exit.protocol);
@@ -73,6 +76,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             String blocked=startBlockedReason();if(!blocked.isEmpty())throw new IllegalStateException(blocked);
             String before=singBox.getState();
             if(!terminal(before))throw new IllegalStateException("Disconnect the current embedded VPN before custom exit.");
+            if(policy&&!direct&&!capturedEntry.equals(AndroidExternalPolicy.entryDigest(entry)))throw new IllegalStateException("The selected external entry changed while its request was queued.");
             if(tor) AndroidHomeStateStore.beginTorExternal(context,exit.id,exit.name,exit.protocol,direct?"":entryID(entry),entryMode);
             else if(policy) AndroidHomeStateStore.beginPolicyExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"":entryID(entry),entryMode);
             else AndroidHomeStateStore.beginExternal(context,exit.id,exit.name,exit.protocol,exit.expectedPublicIp,direct?"external":"wg");

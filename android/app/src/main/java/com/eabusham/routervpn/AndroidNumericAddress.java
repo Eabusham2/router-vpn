@@ -16,6 +16,29 @@ final class AndroidNumericAddress {
         return InetAddress.getByAddress(raw);
     }
 
+    /** Canonical literal identity, including RFC 5952's first longest zero run. */
+    static String canonical(String input) throws Exception {
+        InetAddress address = parse(input);
+        byte[] raw = address.getAddress();
+        if (raw.length == 4) return address.getHostAddress();
+        int[] groups = new int[8];
+        for (int i = 0; i < 8; i++) groups[i] = (raw[i * 2] & 255) * 256 + (raw[i * 2 + 1] & 255);
+        int start = -1, length = 0;
+        for (int i = 0; i < 8;) {
+            if (groups[i] != 0) { i++; continue; }
+            int end = i; while (end < 8 && groups[end] == 0) end++;
+            if (end - i > length && end - i >= 2) { start = i; length = end - i; }
+            i = end;
+        }
+        StringBuilder result = new StringBuilder();
+        for (int i = 0; i < 8;) {
+            if (i == start) { result.append("::"); i += length; continue; }
+            if (result.length() != 0 && result.charAt(result.length() - 1) != ':') result.append(':');
+            result.append(Integer.toHexString(groups[i++]));
+        }
+        return result.toString();
+    }
+
     private static byte[] parseIPv4(String value){
         String[] parts=value.split("\\.",-1);
         if(parts.length!=4)throw new IllegalArgumentException("invalid IPv4 literal");

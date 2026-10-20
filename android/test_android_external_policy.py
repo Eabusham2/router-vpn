@@ -91,6 +91,9 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
    AndroidExternalPolicy.Compiled x=AndroidExternalPolicy.compile(d,b,hopped?"wg":"external");check(x.metadata.getString("dns_mode").equals(dns),"DNS mode lost");if(dns.equals("home"))check(x.metadata.getString("dns_detour").equals("entry-wg"),"Home DNS left captured private entry");
   }
  }
+
+ for(String kind:kinds){AndroidStandardExitStore.Entry e=exit(kind);e.server="2001:DB8:0:0:0:0:0:20";e.expectedPublicIp="2606:4700:0:0:0:0:0:1111";e.policy.put("dns_host","2001:4860:4860:0:0:0:0:8888");AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(e,null,"external");check(c.metadata.getString("expected_public_ip").equals("2606:4700::1111"),"IPv6 public exit rejected or not canonical");check(c.metadata.getString("dns_server").equals("2001:4860:4860::8888"),"IPv6 selected DNS was replaced");}
+ for(String[] pair:new String[][]{{"0:0:0:0:0:0:0:0","::"},{"0:0:1:0:0:2:3:4","::1:0:0:2:3:4"},{"1:2:3:4:5:6:0:0","1:2:3:4:5:6::"},{"1:2:3:4:5:6:0:8","1:2:3:4:5:6:0:8"}})check(AndroidNumericAddress.canonical(pair[0]).equals(pair[1]),"IPv6 canonical compression changed identity");
  AndroidStandardExitStore store=new AndroidStandardExitStore(context);AndroidStandardExitStore.Entry saved=exit("socks5");store.save(saved);check(AndroidStandardExitStore.snapshot(saved).equals(AndroidStandardExitStore.snapshot(store.get(saved.id))),"private policy did not survive save/load");
  AndroidStandardExitStore.Entry clone=AndroidStandardExitStore.copy(saved);clone.policy.put("dns_host","8.8.8.8");check(!saved.policy.getString("dns_host").equals(clone.policy.getString("dns_host")),"policy copied by reference");check(!saved.summary().toString().contains("exact-password")&&!saved.summary().has("policy"),"private capture leaked to summary");
  JSONObject b=entry();Path node=root.resolve("entry.json");Files.writeString(node,b.toString());
@@ -127,7 +130,7 @@ def main():
             target.write_text(source)
         app = temp / "com/eabusham/routervpn"
         app.mkdir(parents=True, exist_ok=True)
-        for name in ("AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidDirectStandardExitController"):
+        for name in ("AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidNumericAddress"):
             shutil.copyfile(JAVA / f"{name}.java", app / f"{name}.java")
         (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n" + BOUNDARIES)
         (app / "ExternalPolicyTest.java").write_text(HARNESS)
