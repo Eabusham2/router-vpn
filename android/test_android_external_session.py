@@ -18,6 +18,10 @@ T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 SOURCES = dict(T.SOURCES)
 SOURCES.pop("com/eabusham/routervpn/AndroidExternalSession.java")
+SOURCES["io/nekohasekai/libbox/RouterMTU.java"] = "package io.nekohasekai.libbox;public class RouterMTU {}"
+SOURCES["io/nekohasekai/libbox/RouterMTUPlatform.java"] = "package io.nekohasekai.libbox;public interface RouterMTUPlatform {}"
+SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"] = SOURCES["com/eabusham/routervpn/AndroidMTUSession.java"].replace("public void activateExternal(AndroidExternalSession external){}", "public int externalStarts,closes,closeFailures;public AndroidExternalSession activatedExternal;public void activateExternal(AndroidExternalSession external){externalStarts++;activatedExternal=external;}").replace("public void close()throws Exception{}", 'public void close()throws Exception{closes++;if(closeFailures>0){closeFailures--;throw new IllegalStateException("unfinished MTU native cleanup");}}')
+SOURCES["com/eabusham/routervpn/AndroidHomeStateStore.java"] = SOURCES["com/eabusham/routervpn/AndroidHomeStateStore.java"].replace("s!=null&&s==value&&!emergency", "s!=null&&s.sessionId.equals(value.sessionId)&&s.activeExternalId.equals(value.activeExternalId)&&!emergency")
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}")
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
 SOURCES["android/net/VpnService.java"] = SOURCES["android/net/VpnService.java"].replace("public boolean isAlwaysOn(){return true;}public boolean isLockdownEnabled(){return true;}", "public static boolean lockdown=true;public boolean isAlwaysOn(){return lockdown;}public boolean isLockdownEnabled(){return lockdown;}")
@@ -42,6 +46,7 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  }
  public static void externalReset(){reset();externalNext=null;externalCreated=null;externalFactoryEntered=null;externalFactoryRelease=null;}
  public static RouterHopMeasurement routerExternalCreateHopMeasurement(CommandServer s,RouterExternalProofRequest proof,String source,String capture,String id)throws Exception{return new RouterHopMeasurement();}
+ public static RouterMTU newRouterExternalMTU(CommandServer s,RouterMTUPlatform platform,RouterExternalProofRequest proof,String source,String capture)throws Exception{return new RouterMTU();}
 }'''
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -125,7 +130,22 @@ public class ExternalSessionTest {
   Path link=root.resolve("link");Files.createSymbolicLink(link,outside);check(!LayeredVpnService.discardPreparedSession(s,"link")&&Files.exists(outside),"discard followed a foreign root symlink");Files.delete(link);
   Path stopped=root.resolve("late-start");Files.createDirectory(stopped);field("explicitStop").setBoolean(s,true);invoke(s,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},"late-start","standard-direct-socks5",0L,"","home-owned");check(!Files.exists(stopped),"retired queued launch leaked preparation");s.onDestroy();
  }
- public static void main(String[]args)throws Exception{success();rejection();cancellation();serviceOwner();homeCapture();failedHome();preparedFiles();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}
+ static void automaticMTU()throws Exception{
+  for(String changed:new String[]{"live","pending","session","exit","home","proof","generation","replaced"}){
+   Libbox.externalReset();Fixture f=new Fixture(false);f.session.prove();LayeredVpnService s=new LayeredVpnService();s.files=Files.createTempDirectory("external-mtu-adoption-").toFile();s.onCreate();
+   AndroidHomeStateStore.Snapshot captured=home(false);field("externalHomeOwner").set(s,captured);home(true);
+   AndroidMTUSession mtu=new AndroidMTUSession(s,owner->{});field("mtuSession").set(s,mtu);field("commandServer").set(s,f.server);field("externalSession").set(s,f.session);field("state").set(s,"UP");
+   java.util.concurrent.ExecutorService worker=(java.util.concurrent.ExecutorService)field("executor").get(s);CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);worker.submit(()->{entered.countDown();try{release.await();}catch(Exception e){throw new AssertionError(e);}});waitFor(entered);
+   if(changed.equals("pending"))home(false);if(changed.equals("proof"))Libbox.externalCreated.alive=false;
+   LayeredVpnService.startExternalAutomaticMTU(changed.equals("session")?"other":"session-owned",changed.equals("exit")?"other":"exit-owned",changed.equals("home")?"other":"home-owned");
+   if(changed.equals("generation"))((AtomicLong)field("lifecycle").get(s)).incrementAndGet();if(changed.equals("replaced"))field("externalSession").set(s,null);
+   release.countDown();drain(s);check(mtu.externalStarts==(changed.equals("live")?1:0),"MTU activation adopted a pending or replaced external path: "+changed);
+   if(changed.equals("live"))check(mtu.activatedExternal==f.session&&!captured.connected,"MTU did not follow retained proof and current immutable Home snapshot");s.onDestroy();
+  }
+  LayeredVpnService s=new LayeredVpnService();AndroidMTUSession mtu=new AndroidMTUSession(s,owner->{});mtu.closeFailures=1;android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();field("mtuSession").set(s,mtu);field("tunDescriptor").set(s,tun);AndroidHomeStateStore.Snapshot captured=home(true);field("externalHomeOwner").set(s,captured);field("externalOwner").setBoolean(s,true);field("commandServer").set(s,new CommandServer(s,s));
+  reject(()->close(s));check(field("mtuSession").get(s)==mtu&&!tun.closed&&mtu.closes==1&&field("externalHomeOwner").get(s)==captured,"unconfirmed MTU cleanup discarded the only native, Home or TUN owner");close(s);check(field("mtuSession").get(s)==null&&tun.closed&&mtu.closes==2&&field("externalHomeOwner").get(s)==null,"successful MTU cleanup retry did not release its owner");s.onDestroy();
+ }
+ public static void main(String[]args)throws Exception{try{success();rejection();cancellation();serviceOwner();homeCapture();failedHome();preparedFiles();automaticMTU();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -153,6 +173,9 @@ def main():
             ("LayeredVpnService.java", "capturedExternal.bindSocket(borrowed.getFileDescriptor());", "", "physical network binding"),
             ("LayeredVpnService.java", "AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?\"The captured external VPN is stopping; its path proof is no longer valid.\":error,false);", "", "Home invalidation before native drain"),
             ("LayeredVpnService.java", "discardPreparedSession(this,sessionId);\n        }\n    }", "\n        }\n    }", "preflight preparation cleanup"),
+            ("LayeredVpnService.java", "generation!=service.lifecycle.get()||", "", "queued external MTU generation"),
+            ("LayeredVpnService.java", 'if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', 'if(home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', "queued external MTU native owner"),
+            ("LayeredVpnService.java", 'catch(Exception error){publish("STOPPING",activeMode,"MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("MTU controller teardown has not drained.");}', "catch(Exception error){}", "retained failed MTU cleanup"),
         ]
         for name, old, new, label in mutations:
             target = app / name
@@ -165,7 +188,7 @@ def main():
             if result.returncode == 0:
                 raise AssertionError(f"Regression escaped: {label}")
             target.write_text(original)
-        print("Android external owner negative controls: 5 rejected")
+        print("Android external owner negative controls: 8 rejected")
 
 
 if __name__ == "__main__":

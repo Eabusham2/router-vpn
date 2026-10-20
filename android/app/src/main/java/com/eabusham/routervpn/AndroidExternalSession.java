@@ -4,6 +4,8 @@ import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterExternalProofRequest;
 import io.nekohasekai.libbox.RouterHopMeasurement;
+import io.nekohasekai.libbox.RouterMTU;
+import io.nekohasekai.libbox.RouterMTUPlatform;
 import org.json.JSONObject;
 
 import java.nio.charset.StandardCharsets;
@@ -89,6 +91,20 @@ final class AndroidExternalSession {
         synchronized (this) { owned = request == proof && healthy(); }
         if (!owned) { measurement.close(); throw unavailable(); }
         return measurement;
+    }
+
+    synchronized JSONObject mtuProfile() throws Exception {
+        if (!healthy()) throw unavailable();
+        return new JSONObject(capture).getJSONObject("profile");
+    }
+
+    // The MTU platform adopts the returned handle before rechecking healthy().
+    // Keeping that sole handle permits a failed native drain to be retried even
+    // when Disconnect or a replacement proof wins during native construction.
+    RouterMTU newMTU(RouterMTUPlatform platform) throws Exception {
+        final RouterExternalProofRequest proof;
+        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        return Libbox.newRouterExternalMTU(server, platform, proof, source, capture);
     }
 
     void cancel() {

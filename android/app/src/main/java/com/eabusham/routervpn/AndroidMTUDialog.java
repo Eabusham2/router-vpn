@@ -65,13 +65,18 @@ final class AndroidMTUDialog {
         if (!Double.isFinite(seconds) || seconds <= 0 || !Double.isFinite(mbps) || mbps <= 0) return Double.NaN;
         return Math.abs(262144.0 * 8 / seconds / 1000000 - mbps) <= Math.max(0.000001, mbps * 0.000001) ? mbps : Double.NaN;
     }
-    private static boolean verified(JSONObject row) {
+    private static boolean verified(JSONObject row, String source) {
         if (row == null) return false;
         int mtu = row.optInt("mtu", 0), bytes = row.optInt("datagram_bytes", 0);
         double rtt = row.optDouble("median_rtt_ms", Double.NaN);
-        return mtu >= 1280 && mtu <= 1500 && row.optBoolean("working", false)
+        boolean publicTransfer = "measured-public-system-tun-transfer".equals(source)
+                && "https-response".equals(row.optString("latency_kind", ""))
+                && row.optInt("packets_sent", 0) == 0 && row.optInt("packets_received", 0) == 0 && bytes == 0 && rtt > 0;
+        boolean privatePackets = "measured-private-system-tun".equals(source)
+                && !"https-response".equals(row.optString("latency_kind", ""))
                 && row.optInt("packets_sent", 0) == 6 && row.optInt("packets_received", 0) == 6
-                && (bytes == mtu - 28 || bytes == mtu - 48) && Double.isFinite(rtt) && rtt >= 0
+                && (bytes == mtu - 28 || bytes == mtu - 48) && rtt >= 0;
+        return mtu >= 1280 && mtu <= 1500 && row.optBoolean("working", false) && (publicTransfer || privatePackets) && Double.isFinite(rtt)
                 && Double.isFinite(rate(row.optJSONObject("download"))) && Double.isFinite(rate(row.optJSONObject("upload")));
     }
     private void render(JSONObject result) {
@@ -79,17 +84,20 @@ final class AndroidMTUDialog {
         String phase = result.optString("phase", "unavailable"), active = result.optString("request_id", "");
         if (!active.isEmpty()) request = active;
         int effective = result.optInt("effective_mtu", 0), original = result.optInt("original_mtu", 0);
+        String source = result.optString("source", "");
+        boolean publicTransfer = "measured-public-system-tun-transfer".equals(source);
         JSONArray rows = result.optJSONArray("candidates");
         if (rows != null && rows.length() > 5) { disable("Oversized MTU sample set was discarded."); return; }
         boolean verifiedWinner = false;
         if (rows != null) for (int i = 0; i < rows.length(); i++) {
             JSONObject row = rows.optJSONObject(i);
-            if (verified(row) && row.optInt("mtu", 0) == effective) verifiedWinner = true;
+            if (row != null && "https-response".equals(row.optString("latency_kind", ""))) publicTransfer = true;
+            if (verified(row, source) && row.optInt("mtu", 0) == effective) verifiedWinner = true;
         }
         StringBuilder message = new StringBuilder("Phase: ").append(phase);
         if (verifiedWinner && result.optBoolean("measured", false) && !running && result.optBoolean("complete", false)
-                && "measured-private-system-tun".equals(result.optString("source", "")) && effective >= 1280 && effective <= 1500)
-            message.append("\nVerified current MTU: ").append(effective);
+                && effective >= 1280 && effective <= 1500)
+            message.append("\nVerified current MTU: ").append(effective).append(publicTransfer ? " (public HTTPS transfer test)" : " (authenticated packet test)");
         else message.append("\nNo current verified measurement is claimed.");
         if (original >= 1280 && original <= 9000) message.append("\nPre-test MTU: ").append(original);
 
@@ -98,12 +106,15 @@ final class AndroidMTUDialog {
             message.append("\nMTU ").append(row.optInt("mtu", 0)).append(": ");
             double down = rate(row.optJSONObject("download")), up = rate(row.optJSONObject("upload"));
             double rtt = row.optDouble("median_rtt_ms", Double.NaN);
-            if (verified(row))
-                message.append(String.format(Locale.US, "%.1f↓ / %.1f↑ Mbps; %.2f ms", down, up, rtt));
+            boolean publicSample = "https-response".equals(row.optString("latency_kind", ""));
+            if (verified(row, publicSample ? "measured-public-system-tun-transfer" : "measured-private-system-tun"))
+                message.append(String.format(Locale.US, "%.1f↓ / %.1f↑ Mbps; %.2f ms%s", down, up, rtt, publicSample ? " HTTPS response" : " packet response"));
             else message.append("rejected — ").append(row.optString("failure", "no valid sample"));
         }
         String failure = result.optString("failure", ""); if (!failure.isEmpty()) message.append("\n").append(failure);
-        message.append("\n\nAuthenticated packets and private transfers use this OS VPN. Retest can interrupt existing connections while replacing its TUN reader. Cancel restores the pre-test MTU only while the same session and physical path remain valid. Cached sizes must be measured again.");
+        message.append(publicTransfer ? "\n\nPublic HTTPS response and transfer measurements use this OS VPN; they do not establish an unfragmented UDP packet limit."
+                : "\n\nAuthenticated packets and private transfers use this OS VPN.");
+        message.append(" Retest can interrupt existing connections while replacing its TUN reader. Cancel restores the pre-test MTU only while the same session and physical path remain valid. Cached sizes must be measured again.");
         text.setText(message.toString());
         boolean available = !"unavailable".equals(phase) && !"invalidated".equals(phase) && !"stopped".equals(phase);
         dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(!running && available && !result.optBoolean("measurement_hold", false));

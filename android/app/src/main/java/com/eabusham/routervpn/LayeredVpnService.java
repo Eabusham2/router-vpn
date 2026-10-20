@@ -79,10 +79,32 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private String mtuMetadata = "";
     static void startAutomaticMTU(){
         LayeredVpnService service=currentService.get();if(service==null)return;
-        CommandServer core=service.commandServer;AndroidMTUSession captured=service.mtuSession;
+        service.scheduleAutomaticMTU(service.externalSession);
+    }
+    static void startExternalAutomaticMTU(String session,String external,String home){
+        LayeredVpnService service=currentService.get();if(service==null)return;
+        synchronized(service.lock){
+            AndroidExternalSession owned=service.externalSession;
+            AndroidHomeStateStore.Snapshot capturedHome=service.externalHomeOwner;
+            if(owned==null||capturedHome==null||!owned.sessionID.equals(session)||!owned.externalID.equals(external)
+                    ||!capturedHome.sessionId.equals(home))return;
+            service.scheduleAutomaticMTU(owned);
+        }
+    }
+    private void scheduleAutomaticMTU(AndroidExternalSession external){
+        LayeredVpnService service=this;
+        CommandServer core=commandServer;AndroidMTUSession captured=mtuSession;
+        long generation=lifecycle.get();
         service.executor.execute(()->{
-            if(core==null||captured==null||service.commandServer!=core||service.mtuSession!=captured||service.explicitStop||!"UP".equals(service.state))return;
-            if(!service.mtuMetadata.isEmpty())captured.activate(core,service.activeConfig,service.mtuMetadata);
+            if(core==null||captured==null||service.commandServer!=core||service.mtuSession!=captured
+                    ||generation!=service.lifecycle.get()||service.explicitStop||!"UP".equals(service.state))return;
+            if(external!=null){
+                AndroidHomeStateStore.Snapshot home=service.externalHomeOwner;
+                AndroidHomeStateStore.Snapshot now=AndroidHomeStateStore.snapshot(service);
+                if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()
+                        ||!AndroidHomeStateStore.ownsPolicyExternal(service,home))return;
+                captured.activateExternal(external);
+            }else if(service.externalSession==null&&!service.mtuMetadata.isEmpty())captured.activate(core,service.activeConfig,service.mtuMetadata);
         });
     }
     static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> completion){
@@ -648,13 +670,13 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             externalSession = null;
             externalOwner = false;
             externalPhysicalNetwork = null;
-            externalHomeOwner = null;
             maxSession = null;
         }
         AndroidMTUSession oldMTU=mtuSession;
         if(oldMTU!=null){
             oldMTU.networkChanged();
-            try{oldMTU.close();}catch(Exception error){Log.w(TAG,"MTU controller drain failed before native teardown.");}
+            try{oldMTU.close();}
+            catch(Exception error){publish("STOPPING",activeMode,"MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("MTU controller teardown has not drained.");}
         }
         mtuSession=null;mtuMetadata="";
         performanceActive = false;
@@ -680,6 +702,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             if (tunDescriptor != null) {try { tunDescriptor.close(); } catch (Throwable ignored) { } tunDescriptor=null;}
         }
         unregisterInterfaceMonitorLocked();
+        externalHomeOwner = null;
     }
 
     private void publish(String newState, String mode, String error) {

@@ -107,6 +107,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 }else{
                     capturedExternalExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedPolicyExternal(context,capturedHome,observed))throw new IllegalStateException("The captured external session changed before Connected adoption.");
+                    LayeredVpnService.startExternalAutomaticMTU(externalNativeSession,externalID,capturedHome.sessionId);
                 }
             }
             cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
