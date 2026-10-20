@@ -21,7 +21,7 @@ for marker in ['AndroidStandardExitStore.validate(exit)', 'AndroidExternalPolicy
                'AndroidOpenVPN.endpoint(e, "")','"http".equals(e.protocol) || "https".equals(e.protocol)',
                'out.put("type", "http")','put("server_name", e.tlsServerName)']:
     assert marker in direct, marker
-for marker in ['"wireguard", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn"',
+for marker in ['"wireguard", "amneziawg", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn"',
                'Libbox.routerCompileExternalPolicy(source, capture)',
                '"openvpn".equals(exit.protocol)) endpoints.put(transport)',
                'put("openvpn", new JSONObject().put("config", exit.openVPNConfig)',
