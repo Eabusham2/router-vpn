@@ -568,16 +568,18 @@ final class CompletionState: @unchecked Sendable {
         do {
             torState.configure()
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
-            try owner.start(files:torFiles,strict:true)
+            let external=CommandLine.arguments.contains("--external-close")
+            if external {try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
+            else {try owner.start(files:torFiles,strict:true)}
             let retained=state.currentServer()!,before=state.counts()
             retained.configureStrategy(close:true)
             var failed=false
             do {try owner.stopCheckedForStrategy()}catch{failed=true}
-            check("unconfirmed Tor close retains native owner",failed && state.counts()==before && retained.strategyCalls()==["start","close"])
+            check("unconfirmed \(external ? "external" : "Tor") close retains native owner",failed && state.counts()==before && retained.strategyCalls()==["start","close"])
             var blocked=false
             let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             do{try replacement.start(files:files,strict:false)}catch{blocked=true}
-            check("quarantined Tor cannot overlap a replacement core",blocked && state.counts()==before)
+            check("quarantined \(external ? "external" : "Tor") cannot overlap a replacement core",blocked && state.counts()==before)
         }
         print("Swift 6 shipping Libbox delivery: PASS (\(checks) checks; native handles doubled, no network opened)")
     }
@@ -598,6 +600,7 @@ def main():
         args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp)]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],check=True,timeout=25)
+        subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'

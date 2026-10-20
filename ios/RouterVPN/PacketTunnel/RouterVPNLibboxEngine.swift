@@ -27,7 +27,8 @@ final class RouterVPNLibboxEngine {
     private var externalPolicy: RouterVPNExternalPolicy?
     private var externalProofDelivery: ExternalProofDelivery?
     private var externalHealth: DispatchSourceTimer?
-    private static let torRetirement = TorRuntimeRetirement()
+    private static let torRetirement = NativeRuntimeRetirement(label: "Tor")
+    private static let externalRetirement = NativeRuntimeRetirement(label: "External VPN")
 
     init(tunnel: PacketTunnelProvider, strategyEpoch: String? = nil) {
         self.tunnel = tunnel
@@ -51,6 +52,7 @@ final class RouterVPNLibboxEngine {
 
     func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil) throws {
         try Self.torRetirement.requireAvailable()
+        try Self.externalRetirement.requireAvailable()
         let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
         let capturedExit = try IOSMultihopStartLayer.requiredExitSource(metadata: multihopMetadata, source: exitStartLayerSource)
         try RouterVPNLibboxCompileProbe.verifyPinnedRuntime()
@@ -172,9 +174,11 @@ final class RouterVPNLibboxEngine {
                 // after an unconfirmed close. A new runtime in this extension
                 // process is rejected; an OS process restart releases it.
                 Self.torRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure)
+            } else if capturedExternal, let closeFailure {
+                Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure)
             } else { owned.close() }
         }
-        if !(capturedTor && closeFailure != nil) {
+        if !((capturedTor || capturedExternal) && closeFailure != nil) {
             platform.reset()
             if let directory { try? FileManager.default.removeItem(at: directory) }
         }
@@ -386,15 +390,17 @@ final class RouterVPNLibboxEngine {
         }
     }
 
-    private final class TorRuntimeRetirement: @unchecked Sendable {
+    private final class NativeRuntimeRetirement: @unchecked Sendable {
         private let lock = NSLock()
+        private let label: String
         private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?)] = []
+        init(label: String) { self.label = label }
         func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error) {
             lock.lock(); retired.append((server, platform, directory)); lock.unlock()
         }
         func requireAvailable() throws {
             lock.lock(); let blocked = !retired.isEmpty; lock.unlock()
-            if blocked { throw NSError(domain: "RouterVPN.Tor", code: 3, userInfo: [NSLocalizedDescriptionKey: "Tor shutdown was not confirmed. Restart the VPN extension before starting another connection."]) }
+            if blocked { throw NSError(domain: "RouterVPN.NativeRetirement", code: 3, userInfo: [NSLocalizedDescriptionKey: "\(label) shutdown was not confirmed. Restart the VPN extension before starting another connection."]) }
         }
     }
 
