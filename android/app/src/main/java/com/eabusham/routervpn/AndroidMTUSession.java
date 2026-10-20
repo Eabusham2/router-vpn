@@ -40,7 +40,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     private String path = "", name = "", tun = "";
     private int requestedMTU;
     private volatile boolean invalid, closed;
-    private boolean changing, activated;
+    private boolean changing, activated, automaticDeferred;
     private volatile RouterMTU controller;
     private volatile String notice = "Connect a proved Auto-MTU Router VPN path first.";
 
@@ -185,7 +185,8 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     // The service executor invokes this after final selection, not each SMART trial.
     void activate(CommandServer core, String config, String metadata) {
         synchronized (lifecycle) {
-            if (activated || closed || invalid) return;
+            if (closed || invalid) return;
+            if (activated) { resumeDeferredAutomatic(); return; }
             activated = true;
             try {
                 JSONObject profile = new JSONObject(metadata);
@@ -202,7 +203,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                 // neither miss an in-flight constructor nor lose a failed drain.
                 controller = created;
                 if (closed || invalid) { closeController(); return; }
-                if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
+                automaticDeferred = true; resumeDeferredAutomatic();
                 notice = "";
             } catch (Exception error) {
                 notice = closed || invalid ? "MTU session is stopped or stale."
@@ -213,7 +214,8 @@ final class AndroidMTUSession implements RouterMTUPlatform {
 
     void activateExternal(AndroidExternalSession external) {
         synchronized (lifecycle) {
-            if (activated || closed || invalid) return;
+            if (closed || invalid) return;
+            if (activated) { if(external.healthy())resumeDeferredAutomatic(); return; }
             activated = true;
             try {
                 JSONObject profile = external.mtuProfile();
@@ -228,7 +230,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                 if (created == null) throw new IllegalStateException("Native external MTU owner was not created.");
                 controller = created;
                 if (closed || invalid || !external.healthy()) { closeController(); return; }
-                if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
+                automaticDeferred = true; resumeDeferredAutomatic();
                 notice = "";
             } catch (Exception error) {
                 notice = closed || invalid ? "MTU session is stopped or stale."
@@ -238,7 +240,8 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     }
     void activateTor(AndroidTorSession tor) {
         synchronized (lifecycle) {
-            if (activated || closed || invalid) return;
+            if (closed || invalid) return;
+            if (activated) { if(tor.healthy())resumeDeferredAutomatic(); return; }
             activated = true;
             try {
                 JSONObject profile = tor.mtuProfile();
@@ -253,13 +256,21 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                 if (created == null) throw new IllegalStateException("Native Tor MTU owner was not created.");
                 controller = created;
                 if (closed || invalid || !tor.healthy()) { closeController(); return; }
-                if (!AndroidMTUMeasurementGate.held()) AndroidMTUMeasurementGate.startMTU(() -> created.start(UUID.randomUUID().toString().replace("-", ""), false));
+                automaticDeferred = true; resumeDeferredAutomatic();
                 notice = "";
             } catch (Exception error) {
                 notice = closed || invalid ? "MTU session is stopped or stale."
                         : "Auto-MTU has no verified Tor-path measurement; configured MTU is retained.";
             }
         }
+    }
+    // Only a never-started Auto policy is resumed. Retest/Cancel or an earlier
+    // measurement are not silently restarted when another dialog releases a hold.
+    private void resumeDeferredAutomatic() {
+        RouterMTU owned=controller;
+        if(!automaticDeferred||owned==null||closed||invalid||AndroidMTUMeasurementGate.held())return;
+        try{AndroidMTUMeasurementGate.startMTU(()->owned.start(UUID.randomUUID().toString().replace("-",""),false));automaticDeferred=false;}
+        catch(Exception unavailable){notice="Automatic MTU remains deferred until its captured path can be measured.";}
     }
     private static JSONObject status(RouterMTU owned) throws Exception {
         String raw = owned.statusJSON();
@@ -305,7 +316,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             RouterMTU owned = controller;
             if (!"status".equals(operation)) {
                 if (closed || invalid || !identity.equals(session) || owned == null || request == null || !request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU request is stale or unavailable.");
-                if ("start".equals(operation)) AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true));
+                if ("start".equals(operation)) { AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true)); automaticDeferred=false; }
                 else if ("cancel".equals(operation)) owned.cancel(request);
                 else throw new IllegalArgumentException("Unknown MTU request.");
             }
