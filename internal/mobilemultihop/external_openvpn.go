@@ -57,7 +57,7 @@ func externalOpenVPNRequiresUDP(endpoint map[string]any) bool {
 }
 
 func externalExitRequiresUDP(endpoint map[string]any, protocol string) bool {
-	return protocol == "wireguard" || protocol == "hysteria2" || protocol == "openvpn" && externalOpenVPNRequiresUDP(endpoint)
+	return protocol == "wireguard" || protocol == "amneziawg" || protocol == "hysteria2" || protocol == "openvpn" && externalOpenVPNRequiresUDP(endpoint)
 }
 
 func externalOpenVPNMTU(tun, endpoint map[string]any, mtu, entryMTU, fixed int) (int, error) {

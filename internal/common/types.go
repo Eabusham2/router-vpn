@@ -14,7 +14,8 @@ type Mode struct {
 type ModeStatus struct { Mode; Available bool `json:"available"`; Reason string `json:"reason,omitempty"` }
 type DNSBenchmarkResult struct { Name string `json:"name"`; Address string `json:"address"`; Family string `json:"family,omitempty"`; LatencyMs float64 `json:"latency_ms,omitempty"`; Working bool `json:"working"` }
 
-type ExternalWireGuardConfig struct { PrivateKey string `json:"private_key"`; Addresses []string `json:"addresses"`; PeerPublicKey string `json:"peer_public_key"`; PresharedKey string `json:"preshared_key,omitempty"`; Endpoint string `json:"endpoint"`; AllowedIPs []string `json:"allowed_ips"`; DNS []string `json:"dns,omitempty"`; MTU int `json:"mtu,omitempty"` }
+type ExternalWireGuardConfig struct { PrivateKey string `json:"private_key"`; Addresses []string `json:"addresses"`; PeerPublicKey string `json:"peer_public_key"`; PresharedKey string `json:"preshared_key,omitempty"`; Endpoint string `json:"endpoint"`; AllowedIPs []string `json:"allowed_ips"`; DNS []string `json:"dns,omitempty"`; MTU int `json:"mtu,omitempty"`; PersistentKeepalive int `json:"persistent_keepalive_interval,omitempty"` }
+type ExternalAmneziaWGConfig struct { ExternalWireGuardConfig; Parameters map[string]string `json:"parameters"` }
 type ExternalOpenVPNConfig struct { Config string `json:"config"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
 type ExternalShadowsocksConfig struct { Server string `json:"server"`; Port int `json:"port"`; Method string `json:"method"`; Password string `json:"password"` }
 type ExternalSOCKS5Config struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
@@ -26,6 +27,7 @@ type ExternalNodeConfig struct {
 	Protocol string `json:"protocol"`
 	ExpectedPublicIP string `json:"expected_public_ip"`
 	WireGuard *ExternalWireGuardConfig `json:"wireguard,omitempty"`
+	AmneziaWG *ExternalAmneziaWGConfig `json:"amneziawg,omitempty"`
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`
 	Shadowsocks *ExternalShadowsocksConfig `json:"shadowsocks,omitempty"`
 	SOCKS5 *ExternalSOCKS5Config `json:"socks5,omitempty"`

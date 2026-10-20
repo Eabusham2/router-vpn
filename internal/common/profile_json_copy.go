@@ -1,6 +1,9 @@
 package common
 
-import "slices"
+import (
+	"maps"
+	"slices"
+)
 
 func copyProfileJSONPointer[T any](source *T) *T {
 	if source == nil {
@@ -28,6 +31,13 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 		w.Addresses = slices.Clone(w.Addresses)
 		w.AllowedIPs = slices.Clone(w.AllowedIPs)
 		w.DNS = slices.Clone(w.DNS)
+	}
+	e.AmneziaWG = copyProfileJSONPointer(e.AmneziaWG)
+	if a := e.AmneziaWG; a != nil {
+		a.Addresses = slices.Clone(a.Addresses)
+		a.AllowedIPs = slices.Clone(a.AllowedIPs)
+		a.DNS = slices.Clone(a.DNS)
+		a.Parameters = maps.Clone(a.Parameters)
 	}
 	e.OpenVPN = copyProfileJSONPointer(e.OpenVPN)
 	e.Shadowsocks = copyProfileJSONPointer(e.Shadowsocks)

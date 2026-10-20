@@ -95,6 +95,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 
 	blocks := 0
 	if ext.WireGuard != nil { blocks++ }
+	if ext.AmneziaWG != nil { blocks++ }
 	if ext.OpenVPN != nil { blocks++ }
 	if ext.Shadowsocks != nil { blocks++ }
 	if ext.SOCKS5 != nil { blocks++ }
@@ -121,6 +122,10 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		if err := validExternalCIDRs(w.AllowedIPs, "external WireGuard allowed IPs", true); err != nil { return err }
 		for i := range w.DNS { w.DNS[i] = strings.TrimSpace(w.DNS[i]); if net.ParseIP(strings.Trim(w.DNS[i], "[]")) == nil { return fmt.Errorf("external WireGuard DNS entry %q is not a literal IP address", w.DNS[i]) } }
 		if w.MTU != 0 && (w.MTU < 1280 || w.MTU > 9000) { return fmt.Errorf("external WireGuard MTU %d is outside 1280..9000", w.MTU) }
+		if w.PersistentKeepalive < 0 || w.PersistentKeepalive > 65535 { return fmt.Errorf("external WireGuard keepalive is outside 0..65535") }
+	case "amneziawg":
+		if ext.AmneziaWG == nil { return fmt.Errorf("external AmneziaWG requires only its amneziawg block") }
+		if err := normalizeExternalAmnezia(ext.AmneziaWG, ext.ExpectedPublicIP); err != nil { return err }
 	case "openvpn":
 		if ext.OpenVPN == nil || ext.WireGuard != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external openvpn node requires only the openvpn block") }
 		o := ext.OpenVPN; o.Config = strings.TrimSpace(o.Config); o.Username = strings.TrimSpace(o.Username)
@@ -163,6 +168,8 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 	case "tor": return "tor"
 	case "wireguard":
 		if ext.WireGuard != nil { value := strings.TrimSpace(ext.WireGuard.Endpoint); if h, _, err := net.SplitHostPort(value); err == nil { return strings.Trim(h, "[]") }; if i := strings.LastIndex(value, ":"); i > 0 { return strings.Trim(strings.TrimSpace(value[:i]), "[]") }; return strings.Trim(value, "[]") }
+	case "amneziawg":
+		if ext.AmneziaWG != nil { return externalNodeEndpoint(&ExternalNodeConfig{Protocol:"wireguard", WireGuard:&ext.AmneziaWG.ExternalWireGuardConfig}) }
 	case "shadowsocks":
 		if ext.Shadowsocks != nil { return strings.TrimSpace(ext.Shadowsocks.Server) }
 	case "socks5":

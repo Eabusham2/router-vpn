@@ -100,6 +100,10 @@ func (e *ExternalNodeConfig) UnmarshalJSON(data []byte) error {
 		e.WireGuard.Endpoint, err = normalizeExternalJSONWireGuardEndpoint(e.WireGuard.Endpoint)
 		if err != nil { return err }
 	}
+	if e.AmneziaWG != nil {
+		e.AmneziaWG.Endpoint, err = normalizeExternalJSONWireGuardEndpoint(e.AmneziaWG.Endpoint)
+		if err != nil { return err }
+	}
 	if e.Shadowsocks != nil {
 		e.Shadowsocks.Server, err = normalizeExternalJSONHost(e.Shadowsocks.Server)
 		if err != nil { return fmt.Errorf("external Shadowsocks server: %w", err) }

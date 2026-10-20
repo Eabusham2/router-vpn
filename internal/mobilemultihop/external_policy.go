@@ -94,7 +94,7 @@ func CompileExternalPolicy(config, capture string) (string, error) {
 }
 
 // NewExternalPolicy applies the saved DNS, IPv6, LAN and MTU selections to a
-// transport-validated ordinary external graph. The six native ordinary exits
+// transport-validated ordinary external graph. Native ordinary exits
 // may connect directly, through an ordinary external entry, or through one
 // complete captured Router VPN predecessor. The latter preserves its native
 // layers, helper owners and bootstrap resolvers inside the same OS TUN.
@@ -113,6 +113,9 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	}
 	if selection.Protocol == "openvpn" && selection.Profile["node_kind"] != "external" {
 		return nil, errors.New("OpenVPN requires its exact captured external inline profile")
+	}
+	if selection.Protocol == "amneziawg" && selection.Profile["node_kind"] != "external" {
+		return nil, errors.New("imported AmneziaWG requires its exact captured external peer and parameters")
 	}
 	if !externalPublicIP(selection.ExpectedPublicIP) {
 		return nil, errors.New("external policy requires the selected public exit proof address")
@@ -307,7 +310,7 @@ func externalProfileIdentity(profile map[string]any) (string, error) {
 
 func externalOrdinaryProtocol(protocol string) bool {
 	switch protocol {
-	case "wireguard", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
+	case "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
 		return true
 	default:
 		return false
@@ -526,6 +529,17 @@ func externalTransport(out map[string]any, protocol, detour, family string, rout
 		// externalCapturedOpenVPN using the original selected inline profile.
 		return nil
 	}
+	if protocol == "amneziawg" {
+		if family != "endpoints" || out["type"] != AmneziaType {
+			return bad
+		}
+		encoded, err := json.Marshal(out)
+		if err != nil {
+			return bad
+		}
+		_, err = AmneziaRuntimeConfig(string(encoded))
+		return err
+	}
 	if protocol == "wireguard" {
 		if family != "endpoints" || out["type"] != "wireguard" {
 			return bad
@@ -684,7 +698,12 @@ func externalCapturedTransport(out, profile map[string]any) error {
 	switch protocol {
 	case "openvpn":
 		return externalCapturedOpenVPN(out, source)
-	case "wireguard":
+	case "wireguard", "amneziawg":
+		if protocol == "amneziawg" {
+			if err := externalCapturedAmnezia(out, source); err != nil {
+				return err
+			}
+		}
 		peers, ok := out["peers"].([]any)
 		if !ok || len(peers) != 1 {
 			return bad
@@ -905,7 +924,7 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 		}
 	}
 	if entry != nil {
-		if entry["type"] == "wireguard" || entry["type"] == externalOpenVPNType {
+		if entry["type"] == "wireguard" || entry["type"] == AmneziaType || entry["type"] == externalOpenVPNType {
 			entryMTU = 1280
 			if entry["type"] == externalOpenVPNType {
 				entryMTU = 1500
@@ -930,7 +949,7 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 	if fixed != 0 {
 		mtu, policy = fixed, "fixed"
 	}
-	if exit["type"] == "wireguard" {
+	if exit["type"] == "wireguard" || exit["type"] == AmneziaType {
 		exitMTU := 1280
 		if raw, exists := exit["mtu"]; exists {
 			exitMTU, err = mtuNumber(raw)
@@ -947,6 +966,14 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 			overhead := 60
 			if strings.Contains(host, ":") {
 				overhead = 80
+			}
+			if exit["type"] == AmneziaType {
+				encoded, _ := json.Marshal(exit)
+				runtime, failure := AmneziaRuntimeConfig(string(encoded))
+				if failure != nil {
+					return 0, 0, "", failure
+				}
+				overhead += runtime.TransportPadding
 			}
 			limit := (entryMTU - overhead) / 16 * 16
 			if limit < 1280 {
