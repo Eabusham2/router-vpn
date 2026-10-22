@@ -98,9 +98,9 @@ final class ProductConnectSurface extends Context {
  final View statusView=new View(),connectButton=new View(),multihopToggle=new View();String message="";
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
-  int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry exit;String mode;
+  int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry exit;String mode,execution;
   boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
-  void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;}
+  void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,String execution,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;this.execution=execution;}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}
   void connect(String mode,List<String> layers,Object callback){throw new AssertionError("external selection used unrelated active Router");}
  }final Connection connection=new Connection();
@@ -172,6 +172,16 @@ public final class ConnectionProfilesHarness {
   AndroidViaEntryLatencyProbe.active=true;int canceled=AndroidViaEntryLatencyProbe.cancellations;ProductConnectSurface recreated=new ProductConnectSurface(f);recreated.pressConnect();AndroidViaEntryLatencyProbe.active=false;check(recreated.connection.starts==0&&AndroidViaEntryLatencyProbe.cancellations==canceled+1,"recreated map cancels only the owned candidate operation before any connection dispatch");
   f.store.selectExternalPath(f.exits.get(exit),null,"wg");f.store.update(r.id,"Direct "+exit);check(f.store.list().size()==1&&f.store.list().get(0).name.equals("Direct "+exit),"Update preserves profile ID/count");f.otherSelection();f.store.load(r.id);check(f.store.currentExternalPath(exit).direct()&&!f.prefs.getBoolean("multihop_on",true),"direct Update/Load clears old hops");surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.direct&&surface.connection.entry==null&&surface.connection.exit.id.equals(exit),"shipping map Connect dispatches direct saved external path");f.store.delete(r.id);check(f.store.list().isEmpty(),"Delete external profile");
  }
+ static void externalExecution(Path root)throws Exception{
+  for(String execution:List.of("server","auto")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("paired-ss",false);exit.protocol="shadowsocks";exit.method="2022-blake3-aes-256-gcm";exit.secret=Base64.getEncoder().encodeToString(new byte[32]);exit.responseProbe=new JSONObject().put("url","https://198.51.100.8:8443/response").put("server_name","paired.example.test");f.exits.save(exit);
+   f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("paired execution");String secret=exit.secret;check(!text(f.rows).contains(secret)&&!text(f.rows).contains("response_probe"),"connection choices duplicated private node material");
+   f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);check(selected.execution.equals(execution)&&selected.entry.id.equals(f.first.id),"profile load discarded external execution choice");
+   ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution),"main Connect discarded external execution");
+   AndroidStandardExitStore.Entry copied=AndroidStandardExitStore.copy(exit);copied.responseProbe.put("url","https://198.51.100.8/changed");check(!copied.responseProbe.toString().equals(exit.responseProbe.toString()),"response endpoint aliases saved credentials");
+   State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg",execution),"direct path server owner");before.same(f,"direct execution rejection");
+  }
+ }
  static void routerRoundtrip(Path root)throws Exception{
   Fixture f=new Fixture(root);f.prefs.edit().putString("mode","custom:captured").putString("custom_presets","[{\"name\":\"captured\",\"layers\":[\"hysteria2\",\"shadowsocks\"]}]").putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","auto").putString("multihop_entry_mode","wg").commit();
   var r=f.store.add("Router graph");f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();f.store.load(r.id);
@@ -225,7 +235,7 @@ public final class ConnectionProfilesHarness {
   f.prefs.values.put("custom_presets",42);before=new State(f);rejected(()->f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg"),"wrong preference key type");before.same(f,"typed preference preflight");f.prefs.values.remove("custom_presets");
   var home=f.exits.get("external-a");home.policy.put("dns_mode","home");f.exits.save(home);before=new State(f);final var selectedHome=home;rejected(()->f.store.selectExternalPath(selectedHome,null,"wg"),"direct Home without entry");before.same(f,"Home rejection");f.store.selectExternalPath(home,f.first,"wg");check(!f.store.currentExternalPath(home.id).direct(),"Home keeps captured Router entry");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

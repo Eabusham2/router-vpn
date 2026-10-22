@@ -58,6 +58,7 @@ final class LayeredVpnService {
     static final AtomicInteger discarded=new AtomicInteger();
     static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
+    static String externalExecution(String session,String exit){return "local";}
     static String externalExitIP(String session,String exit){externalReads.incrementAndGet();if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external owner");return "1.1.1.1";}
     static final AtomicInteger torReads=new AtomicInteger();static volatile boolean torHealthy=true;
     static String torExitIP(String session,String exit){torReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor owner");return "8.8.4.4";}
@@ -106,6 +107,7 @@ final class AndroidStandardExitStore {
     }
     static Entry copy(Entry entry){Entry e=new Entry();e.id=entry.id;e.name=entry.name;e.protocol=entry.protocol;e.expectedPublicIp=entry.expectedPublicIp;return e;}
     static void validate(Entry entry){}
+    static void validateExecution(Entry entry,boolean hasEntry,String execution){if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("execution");}
 }
 final class AndroidTorProfile {static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}}
 final class AndroidExternalPolicy {static volatile String entryVersion="captured-entry";static String entryDigest(File file){return entryVersion;}
@@ -115,6 +117,7 @@ final class AndroidStandardExitController {
     static volatile String lastEntryMode="",lastProtocol="";
     AndroidStandardExitController(Context c) {}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e) { return new NativeSingBoxController.SessionInfo(); }
+    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode,String execution,String restored){return prepare(f,e,mode);}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode) {lastEntryMode=mode;lastProtocol=e.protocol;return prepare(f,e); }
 }
 final class AndroidDirectStandardExitController {
@@ -337,7 +340,7 @@ public final class RuntimeTeardownHarness {
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
                 check(LayeredVpnService.mtuStarts.get()==1,"MTU must start once, only after its captured path proof");
                 if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
-                if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==2,"ordinary external path bypassed captured entry/DNS/native proof");
+                if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==3,"ordinary external path bypassed captured entry/DNS/native proof or winner ownership");
                 if(kind.equals("external"))check(LayeredVpnService.discarded.get()==0,"successful native launch discarded its active session");
                 owner.disconnect();awaitIdle(owner);
             }
@@ -452,6 +455,15 @@ public final class RuntimeTeardownHarness {
     }
 
     static void externalTests(){
+        test("external startup deadline covers shared execution and final proof",()->{
+            check(AndroidStandardExitRuntime.startTimeoutMillis(false,"local")==90000L,"ordinary local startup budget changed");
+            long minimum=SHARED_EXECUTION_BUDGET_MS+SHARED_FINAL_PROOF_BUDGET_MS+30000L;
+            for(String execution:new String[]{"server","auto"}){
+                long budget=AndroidStandardExitRuntime.startTimeoutMillis(false,execution);
+                check(budget>=minimum&&budget<=200000L,"external execution can time out before its shared comparison and final proof finish");
+            }
+            check(AndroidStandardExitRuntime.startTimeoutMillis(true,"local")==200000L,"Tor startup budget changed");
+        });
         for(String kind:new String[]{"external","tor"})for(String changed:new String[]{"idle-disconnect","replacement","entry"})test(kind+" queued selection rejects "+changed,()->{
             try(Owner owner=new Owner(kind)){
                 java.lang.reflect.Field field=owner.runtime().getClass().getDeclaredField("executor");field.setAccessible(true);java.util.concurrent.ExecutorService executor=(java.util.concurrent.ExecutorService)field.get(owner.runtime());
@@ -535,6 +547,18 @@ composite_source = (JAVA / 'AndroidNativeCompositeProfile.java').read_text()
 composite_predicate = re.findall(r'(?ms)^    static boolean isMode\(String mode\) \{\n.*?^    \}', composite_source)
 assert len(composite_predicate) == 1, 'missing exact composite transport predicate'
 STUBS += '\nfinal class AndroidNativeCompositeProfile {\n' + composite_predicate[0] + '\n}\n'
+
+# Check the shipping budget against both sequential native phases. This stays
+# deterministic without shortening production timers or waiting three minutes.
+execution_source = (ROOT / 'internal/mobilemultihop/runtime.go').read_text()
+execution_timeout = re.search(r'context.WithTimeout\(parent,\s*(\d+)\s*\*\s*time.Second\)', execution_source)
+proof_source = (ROOT / 'internal/mobilemultihop/external_proof.go').read_text()
+proof_timeout = re.search(r'context.WithTimeout\(r.ctx,\s*(\d+)\s*\*\s*time.Second\)', proof_source)
+assert execution_timeout and proof_timeout, 'shared execution/final proof deadline contract changed'
+HARNESS = HARNESS.replace('SHARED_EXECUTION_BUDGET_MS', str(int(execution_timeout[1]) * 1000) + 'L')
+HARNESS = HARNESS.replace('SHARED_FINAL_PROOF_BUDGET_MS', str(int(proof_timeout[1]) * 1000) + 'L')
+runtime_source = (JAVA / 'AndroidStandardExitRuntime.java').read_text()
+assert 'long deadline=System.currentTimeMillis()+startTimeoutMillis(tor,execution);' in runtime_source, 'native startup must use the execution-specific deadline'
 
 with tempfile.TemporaryDirectory(prefix='routervpn-runtime-teardown-') as tmp:
     base=Path(tmp); pkg=base/'com/eabusham/routervpn';pkg.mkdir(parents=True)

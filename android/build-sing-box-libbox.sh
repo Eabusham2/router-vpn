@@ -106,7 +106,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerCompileExternalPolicy routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
+  for symbol in routerCompileExternalPolicy routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
   grep -Fq 'io.nekohasekai.libbox.RouterMTU newRouterExternalMTU(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterMTUPlatform, io.nekohasekai.libbox.RouterExternalProofRequest, java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
@@ -117,12 +117,12 @@ verify_aar() {
     echo 'combined libbox AAR measurement owner lacks synchronous request drain' >&2; return 1
   }
   javap -classpath "$classes" io.nekohasekai.libbox.RouterExternalProofRequest >"$tmp/router-external-proof.javap"
-  for signature in 'java.lang.String run() throws java.lang.Exception;' 'void cancel();' 'boolean healthy();'; do
+  for signature in 'java.lang.String run() throws java.lang.Exception;' 'java.lang.String execution();' 'void cancel();' 'void close() throws java.lang.Exception;' 'boolean healthy();'; do
     grep -Fq "$signature" "$tmp/router-external-proof.javap" || {
       echo 'combined libbox AAR external proof request has the wrong owned-lifecycle API' >&2; return 1
     }
   done
-  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
+  for symbol in routerTorNativeABI routerTorNativeVersion routerTorSourceNotices routerCompileTorProfile routerValidateTorProfile routerCompileTorProfileWithPredecessor routerTorSetStateDirectory routerTorCreateProof routerTorCreateProofWithPredecessor routerStrategyDNSProof routerStrategyCloseService; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing native Tor API $symbol" >&2; return 1; }
   done
   for symbol in routerCheckMAXProfile routerCreateMAXProfileRequest routerCompileMAXProfile; do

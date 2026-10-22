@@ -384,7 +384,8 @@ need(
     'o.put("tor_policy",e.torPolicy)', 'o.put("tor_bridge",new JSONObject()',
 )
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidTorProfile.java",
-     "Libbox.routerCompileTorProfile", "Libbox.routerCompileProxyEntry",
+     "Libbox.routerValidateTorProfile(captured)", "Libbox.routerCompileTorProfileWithPredecessor(",
+     "Libbox.routerCompileProxyEntry",
      "capturedExit.equals(AndroidStandardExitStore.snapshot(selected))",
      '"Tor requires one owned runtime and one VPN interface."')
 need("android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java",

@@ -35,6 +35,7 @@ public class RouterExternalProofRequest {
  public JSONObject valid()throws Exception {boolean entry=!capture.equals("{}");return new JSONObject().put("schema",1).put("session_id",session).put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("exit_id","exit-owned").put("entry_id",entry?"entry-owned":"").put("entry_node_id",entry?"c".repeat(64):"").put("ip","8.8.4.4").put("dns_proven",true).put("entry_proven",entry).put("checked_at",System.currentTimeMillis());}
  public String run()throws Exception {if(entered!=null){entered.countDown();release.await();}ran=true;if(!alive&&!ignoreCancellation)throw new IllegalStateException("cancelled");return response==null?valid().toString():response;}
  public void cancel(){cancels.incrementAndGet();if(!ignoreCancellation){alive=false;if(release!=null)release.countDown();}}
+ public int closes,closeFailures;public String selected="local";public String execution(){return selected;}public void close()throws Exception{closes++;if(closeFailures>0){closeFailures--;throw new IllegalStateException("lease cleanup pending");}cancel();}
  public boolean healthy(){return alive&&ran;}
 }'''
 SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Libbox.java"][:-1] + r'''
@@ -56,7 +57,8 @@ public class ExternalSessionTest {
  static void waitFor(CountDownLatch latch)throws Exception{check(latch.await(2,TimeUnit.SECONDS),"proof boundary not reached");}
  static class Fixture implements AndroidExternalSession.Owner {
   CommandServer server=new CommandServer(null,null);volatile CommandServer currentServer=server;volatile String network="wifi-1";volatile AndroidExternalSession session;final boolean entry;
-  Fixture(boolean entry)throws Exception{this.entry=entry;JSONObject p=new JSONObject().put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("expected_public_ip","8.8.4.4").put("exit_id","exit-owned");if(entry)p.put("entry_id","entry-owned").put("entry_node_id","c".repeat(64));JSONObject capture=new JSONObject();if(entry)capture.put("entry",new JSONObject().put("id","entry-owned"));
+  Fixture(boolean entry)throws Exception{this(entry,"");}
+  Fixture(boolean entry,String execution)throws Exception{this.entry=entry;JSONObject p=new JSONObject().put("source_sha256","a".repeat(64)).put("config_sha256","b".repeat(64)).put("expected_public_ip","8.8.4.4").put("exit_id","exit-owned");if(!execution.isEmpty())p.put("execution",execution);if(entry)p.put("entry_id","entry-owned").put("entry_node_id","c".repeat(64));JSONObject capture=new JSONObject();if(entry)capture.put("entry",new JSONObject().put("id","entry-owned"));
    session=new AndroidExternalSession(new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("source_config","exact-source").put("capture_json",capture.toString()).put("metadata_json",p.toString()),server,this);}
   public boolean current(AndroidExternalSession s,CommandServer c){return s==session&&c==currentServer;}public String network(){return network;}
   RouterExternalProofRequest request(){RouterExternalProofRequest r=new RouterExternalProofRequest(server,"exact-source",entry?"{\"entry\":{\"id\":\"entry-owned\"}}":"{}","session-owned");Libbox.externalNext=r;return r;}
@@ -67,6 +69,19 @@ public class ExternalSessionTest {
    check(Libbox.externalCreated.server==f.server&&Libbox.externalCreated.source.equals("exact-source"),"proof used another graph/server");check(new JSONObject(Libbox.externalCreated.capture).has("entry")==entry,"entry capture dropped");
    check(new JSONObject(f.session.result("session-owned","exit-owned")).getBoolean("dns_proven"),"DNS not required");reject(()->f.session.result("other","exit-owned"));reject(()->f.session.result("session-owned","other"));reject(f.session::prove);
    Libbox.externalCreated.alive=false;check(!f.session.healthy(),"native replacement kept result");}
+ }
+ static void execution()throws Exception{
+  for(String requested:new String[]{"local","server","auto"})for(String selected:new String[]{"local","server"}){
+   Libbox.externalReset();Fixture f=new Fixture(true,requested);RouterExternalProofRequest request=f.request();request.selected=selected;request.response=request.valid().put("execution",selected).toString();
+   if(!requested.equals("auto")&&!requested.equals(selected)){reject(f.session::prove);continue;}
+   f.session.prove();check(f.session.execution("session-owned","exit-owned").equals(selected),"external winner receipt lost");
+   f.network="new-network";reject(()->f.session.execution("session-owned","exit-owned"));
+  }
+  for(String changed:new String[]{"missing","unknown","native"}){
+   Libbox.externalReset();Fixture f=new Fixture(true,"auto");RouterExternalProofRequest request=f.request();JSONObject proof=request.valid();
+   if(!changed.equals("missing"))proof.put("execution",changed.equals("unknown")?"auto":"server");request.response=proof.toString();reject(f.session::prove);
+  }
+  Libbox.externalReset();Fixture local=new Fixture(false);RouterExternalProofRequest request=local.request();request.response=request.valid().put("execution","server").toString();reject(local.session::prove);
  }
  static void rejection()throws Exception{
   for(String field:new String[]{"schema","session_id","source_sha256","config_sha256","exit_id","entry_id","entry_node_id","ip","dns_proven","entry_proven","checked_at","future","extra","missing","typed","hostname","legacy","mapped","oversized"}){
@@ -95,6 +110,13 @@ public class ExternalSessionTest {
   LayeredVpnService p=new LayeredVpnService();android.net.Network physical=new android.net.Network();android.net.ConnectivityManager.networks=new android.net.Network[]{physical};field("connectivity").set(p,new android.net.ConnectivityManager());field("externalPhysicalNetwork").set(p,physical);field("externalOwner").setBoolean(p,true);Method identity=LayeredVpnService.class.getDeclaredMethod("executionNetworkIdentity");identity.setAccessible(true);field("executionNetwork").set(p,identity.invoke(p));
   p.autoDetectInterfaceControl(100);check(physical.fdBinds==1&&android.os.ParcelFileDescriptor.duplicate.closed,"external native FD escaped physical owner");p.protectRelaySocket(new java.net.Socket());p.protectRelaySocket((java.net.DatagramSocket)null);check(physical.tcpBinds==1&&physical.udpBinds==1,"relay sockets escaped physical owner");
   android.net.ConnectivityManager.networks=new android.net.Network[]{new android.net.Network()};reject(()->p.autoDetectInterfaceControl(101));check(physical.fdBinds==1,"changed network opened new traffic");p.onDestroy();
+ }
+ static void leaseCleanup()throws Exception{
+  Libbox.externalReset();Fixture owner=new Fixture(true,"server");RouterExternalProofRequest request=owner.request();request.selected="server";request.response=request.valid().put("execution","server").toString();owner.session.prove();
+  LayeredVpnService service=new LayeredVpnService();android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();AndroidStartLayerRelay relay=new AndroidStartLayerRelay();
+  field("externalOwner").setBoolean(service,true);field("externalSession").set(service,owner.session);field("commandServer").set(service,owner.server);field("tunDescriptor").set(service,tun);field("startLayerRelay").set(service,relay);
+  request.closeFailures=1;reject(()->close(service));check(request.closes==1&&owner.server.closes==0&&!tun.closed&&relay.closes==0,"unconfirmed lease cleanup released entry, native engine or TUN");check(field("externalSession").get(service)==owner.session,"failed lease cleanup lost retained request");
+  close(service);check(request.closes==2&&field("externalSession").get(service)==null&&owner.server.closes==1&&tun.closed,"lease cleanup retry failed to release its exact owner");service.onDestroy();
  }
  static Object invoke(LayeredVpnService service,String name,Class<?>[] types,Object...args)throws Exception{Method method=LayeredVpnService.class.getDeclaredMethod(name,types);method.setAccessible(true);try{return method.invoke(service,args);}catch(InvocationTargetException e){throw (Exception)e.getCause();}}
  static void drain(LayeredVpnService s)throws Exception{((java.util.concurrent.ExecutorService)field("executor").get(s)).submit(()->{}).get(2,TimeUnit.SECONDS);}
@@ -145,7 +167,7 @@ public class ExternalSessionTest {
   LayeredVpnService s=new LayeredVpnService();AndroidMTUSession mtu=new AndroidMTUSession(s,owner->{});mtu.closeFailures=1;android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();field("mtuSession").set(s,mtu);field("tunDescriptor").set(s,tun);AndroidHomeStateStore.Snapshot captured=home(true);field("externalHomeOwner").set(s,captured);field("externalOwner").setBoolean(s,true);field("commandServer").set(s,new CommandServer(s,s));
   reject(()->close(s));check(field("mtuSession").get(s)==mtu&&!tun.closed&&mtu.closes==1&&field("externalHomeOwner").get(s)==captured,"unconfirmed MTU cleanup discarded the only native, Home or TUN owner");close(s);check(field("mtuSession").get(s)==null&&tun.closed&&mtu.closes==2&&field("externalHomeOwner").get(s)==null,"successful MTU cleanup retry did not release its owner");s.onDestroy();
  }
- public static void main(String[]args)throws Exception{try{success();rejection();cancellation();serviceOwner();homeCapture();failedHome();preparedFiles();automaticMTU();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
+ public static void main(String[]args)throws Exception{try{success();execution();rejection();cancellation();serviceOwner();leaseCleanup();homeCapture();failedHome();preparedFiles();automaticMTU();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -168,6 +190,7 @@ def main():
         subprocess.run(compile_args, check=True, timeout=45)
         subprocess.run(run_args, check=True, timeout=20)
         mutations = [
+            ("LayeredVpnService.java", "try{capturedExternal.close();}", "try{capturedExternal.cancel();}", "acknowledged external relay cleanup"),
             ("AndroidExternalSession.java", "if (cancelled || !current() || !captured.healthy()) throw unavailable();", "", "final proof ownership"),
             ("LayeredVpnService.java", "Libbox.routerStrategyCloseService(commandServer);", "commandServer.closeService();", "checked native drain"),
             ("LayeredVpnService.java", "capturedExternal.bindSocket(borrowed.getFileDescriptor());", "", "physical network binding"),
@@ -188,7 +211,7 @@ def main():
             if result.returncode == 0:
                 raise AssertionError(f"Regression escaped: {label}")
             target.write_text(original)
-        print("Android external owner negative controls: 8 rejected")
+        print("Android external owner negative controls: 9 rejected")
 
 
 if __name__ == "__main__":

@@ -66,7 +66,7 @@ final class AndroidConnectionProfileStore {
         }
         if(multi){
             if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Saved multihop references a missing/invalid entry.");
-            if(external){if(!exit.equals(nodeId)||!multiMode.equals(originalExternal.protocol)||!"local".equals(execution))throw new IllegalStateException("Saved external multihop must retain its exact exit protocol and local execution owner.");}
+            if(external){if(!exit.equals(nodeId)||!multiMode.equals(originalExternal.protocol))throw new IllegalStateException("Saved external multihop must retain its exact exit protocol.");}
             else if(findNode(exit)==null)throw new IllegalStateException("Saved multihop references a missing Router exit.");
             requireEntryMode(findNode(entry),entryMode);
         }else{entry="";exit="";multiMode=external?originalExternal.protocol:"shadowsocks";}
@@ -74,7 +74,7 @@ final class AndroidConnectionProfileStore {
         Map<String,NodeUpdate> updates=new LinkedHashMap<>();
         if(!external)stageNode(updates,nodeId,row.optJSONObject("policy"),row.optString("node_profile_id",""));
         if(multi){stageNode(updates,entry,row.optJSONObject("entry_policy"),row.optString("entry_profile_id",""));if(!external)stageNode(updates,exit,row.optJSONObject("exit_policy"),row.optString("exit_profile_id",""));}
-        if(updatedExternal!=null)validateExternalGraph(updatedExternal,multi?findNode(entry):null,entryMode);
+        if(external)validateExternalGraph(updatedExternal!=null?updatedExternal:originalExternal,multi?findNode(entry):null,entryMode,execution);
         AndroidNodeStore.SelectionSnapshot originalSelection=nodes.snapshotSelection();
         Map<String,Object> originalPreferences=snapshotPreferences();
         // All validation above is complete before any selection, node-file, preset or preference mutation.
@@ -120,48 +120,50 @@ final class AndroidConnectionProfileStore {
         if(!external&&!"router-vpn".equals(kind))throw new IllegalStateException("Selected node kind is unsupported.");
         String mode=external?"external":normalizeMode(p.getString(MODE_KEY,"smart-auto"));List<String>layers=external?new ArrayList<>():customLayers(mode);boolean multi=p.getBoolean(MULTI_ON,false);String entry=p.getString(MULTI_ENTRY,""),exit=p.getString(MULTI_EXIT,"");String multiMode=external?custom.protocol:multi?normalizeMultiMode(p.getString(MULTI_MODE,"shadowsocks")):"shadowsocks";
         String execution=normalizeExecution(p.getString("multihop_execution","local")),entryMode=normalizeEntryMode(p.getString("multihop_entry_mode","wg"));
-        if(multi){if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Current multihop selection is incomplete or references a missing entry.");if(external){if(!exit.equals(nodeId)||!p.getString(MULTI_MODE,"").equals(custom.protocol)||!"local".equals(execution))throw new IllegalStateException("Choose this exact external exit and its local native path before saving.");}else if(findNode(exit)==null)throw new IllegalStateException("Current multihop exit is missing.");requireEntryMode(findNode(entry),entryMode);}
+        if(multi){if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Current multihop selection is incomplete or references a missing entry.");if(external){if(!exit.equals(nodeId)||!p.getString(MULTI_MODE,"").equals(custom.protocol))throw new IllegalStateException("Choose this exact external exit before saving.");}else if(findNode(exit)==null)throw new IllegalStateException("Current multihop exit is missing.");requireEntryMode(findNode(entry),entryMode);}
         else{entry="";exit="";multiMode=external?custom.protocol:"shadowsocks";}
         JSONObject row=new JSONObject().put("id",id).put("name",name).put("node_kind",kind).put("node_id",nodeId).put("mode",mode).put("custom_layers",new JSONArray(layers))
                 .put("multihop_enabled",multi).put("multihop_entry_id",entry).put("multihop_exit_id",exit).put("multihop_exit_mode",multiMode).put("multihop_execution",execution).put("multihop_entry_mode",entryMode);
         if(policy!=null)row.put("policy",policy.choices).put("node_profile_id",policy.profileId);
         if(multi){NodePolicy entryPolicy=routerPolicy(entry);row.put("entry_policy",entryPolicy.choices).put("entry_profile_id",entryPolicy.profileId);if(!external){NodePolicy exitPolicy=routerPolicy(exit);row.put("exit_policy",exitPolicy.choices).put("exit_profile_id",exitPolicy.profileId);}}
-        if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi?findNode(entry):null,entryMode);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol));}
+        if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi?findNode(entry):null,entryMode,execution);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol));}
         return row;
     }
 
     static final class ExternalSelection {
-        final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry exit;final String entryMode;
-        ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode){this.entry=entry;this.exit=exit;this.entryMode=entryMode;}
+        final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry exit;final String entryMode,execution;
+        ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode,String execution){this.entry=entry;this.exit=exit;this.entryMode=entryMode;this.execution=execution;}
         boolean direct(){return entry==null;}
     }
 
     /** Select a complete external path without starting a VPN or changing any node secret. */
-    synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode)throws Exception{
+    synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode)throws Exception{selectExternalPath(exit,entry,entryMode,"local");}
+
+    synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode,String execution)throws Exception{
         requireIdle("selecting an external path");
         AndroidStandardExitStore.Entry current=exits.get(exit.id);
         if(!AndroidStandardExitStore.snapshot(exit).equals(AndroidStandardExitStore.snapshot(current)))throw new IllegalStateException("The selected external node changed; select its path again.");
         if(entry!=null){AndroidNodeStore.Node currentEntry=findNode(entry.id);if(currentEntry==null||!java.util.Arrays.equals(readLimited(entry.file,AndroidNodeStore.MAX_BUNDLE),readLimited(currentEntry.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The selected entry changed.");requireEntryMode(currentEntry,entryMode);}
-        validateExternalGraph(current,entry,entryMode);
+        validateExternalGraph(current,entry,entryMode,execution);
         Map<String,Object> original=snapshotPreferences();
         try{
             requireIdle("selecting an external path");
             if(!prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,current.id).putString(MODE_KEY,"external")
                     .putBoolean(MULTI_ON,entry!=null).putString(MULTI_ENTRY,entry==null?"":entry.id).putString(MULTI_EXIT,entry==null?"":current.id)
-                    .putString(MULTI_MODE,current.protocol).putString("multihop_execution","local").putString("multihop_entry_mode",entry==null?"wg":entryMode).commit())throw new IllegalStateException("Could not persist the selected external path.");
+                    .putString(MULTI_MODE,current.protocol).putString("multihop_execution",execution).putString("multihop_entry_mode",entry==null?"wg":entryMode).commit())throw new IllegalStateException("Could not persist the selected external path.");
         }catch(Exception failure){try{restorePreferences(original);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("External path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
     }
 
     synchronized ExternalSelection currentExternalPath(String id)throws Exception{
         SharedPreferences p=prefs();
         if(!"external".equals(p.getString(SELECTED_KIND,""))||!id.equals(p.getString(SELECTED_ID,"")))throw new IllegalStateException("Select the exact external node first.");
-        AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(exits.get(id));AndroidNodeStore.Node entry=null;String mode="wg";
+        AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(exits.get(id));AndroidNodeStore.Node entry=null;String mode="wg",execution=normalizeExecution(p.getString("multihop_execution","local"));
         if(p.getBoolean(MULTI_ON,false)){
             String entryID=p.getString(MULTI_ENTRY,"");
-            if(!id.equals(p.getString(MULTI_EXIT,""))||!exit.protocol.equals(p.getString(MULTI_MODE,""))||!"local".equals(p.getString("multihop_execution","local")))throw new IllegalStateException("Choose this external node's exact local path in Edit hops.");
+            if(!id.equals(p.getString(MULTI_EXIT,""))||!exit.protocol.equals(p.getString(MULTI_MODE,"")))throw new IllegalStateException("Choose this external node's exact path in Edit hops.");
             entry=findNode(entryID);mode=normalizeEntryMode(p.getString("multihop_entry_mode","wg"));requireEntryMode(entry,mode);
         }
-        validateExternalGraph(exit,entry,mode);return new ExternalSelection(entry,exit,mode);
+        validateExternalGraph(exit,entry,mode,execution);return new ExternalSelection(entry,exit,mode,execution);
     }
 
     private static final class NodeUpdate {
@@ -212,8 +214,8 @@ final class AndroidConnectionProfileStore {
         if(!row.getString("external_protocol").equals(exit.protocol)||!row.getString("external_public_ip").equals(exit.expectedPublicIp))throw new IllegalStateException("The linked external node's protocol or public identity changed; update the saved connection profile.");
     }
 
-    private static void validateExternalGraph(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode)throws Exception{
-        AndroidStandardExitStore.validate(exit);
+    private static void validateExternalGraph(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode,String execution)throws Exception{
+        AndroidStandardExitStore.validate(exit);AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);
         JSONObject policy=AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy,exit.protocol);
         if(entry!=null)requireEntryMode(entry,mode);
         if(entry==null&&"home".equals(policy.optString("dns_mode","")))throw new IllegalArgumentException("Home AdGuard needs a selected Router VPN entry; choose it in Edit hops.");

@@ -20,4 +20,12 @@ final class AndroidStandardExitController {
         if(AndroidExternalPolicy.supports(exit.protocol))return AndroidExternalPolicy.prepare(context, entryBundle, exit, entryMode);
         throw new IllegalArgumentException("The selected external protocol has no captured native policy owner.");
     }
+    NativeSingBoxController.SessionInfo prepare(File entryBundle, AndroidStandardExitStore.Entry exit, String entryMode, String execution, String restoredExecution) throws Exception {
+        AndroidStandardExitStore.validate(exit);
+        AndroidStandardExitStore.validateExecution(exit,true,execution);
+        if("local".equals(execution)&&restoredExecution.isEmpty())return prepare(entryBundle,exit,entryMode);
+        if(AndroidTorProfile.isTor(exit.protocol))throw new IllegalArgumentException("Tor cannot adopt an ordinary external execution receipt.");
+        return AndroidExternalPolicy.prepare(context,entryBundle,exit,entryMode,execution,restoredExecution);
+    }
+
 }

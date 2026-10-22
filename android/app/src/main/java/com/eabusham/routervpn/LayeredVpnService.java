@@ -280,6 +280,11 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if (captured == null || !"UP".equals(service.state) || service.explicitStop) throw new IllegalStateException("The captured external VPN proof is unavailable.");
         return new JSONObject(captured.result(sessionID, externalID)).getString("ip");
     }
+    static String externalExecution(String sessionID,String externalID)throws Exception {
+        LayeredVpnService service=currentService.get();AndroidExternalSession captured=service==null?null:service.externalSession;
+        if(captured==null||!"UP".equals(service.state)||service.explicitStop)throw new IllegalStateException("The captured external execution receipt is unavailable.");
+        return captured.execution(sessionID,externalID);
+    }
     private void cancelMultihopComparison(){AndroidMAXProfilePreparation.Adopted max=maxSession;if(max!=null)max.cancel();AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidExternalSession external=externalSession;if(external!=null)external.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
@@ -704,7 +709,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         AndroidTorSession capturedTor = torSession;
         if(capturedTor!=null)capturedTor.cancel();
         AndroidExternalSession capturedExternal = externalSession;
-        if(capturedExternal!=null)capturedExternal.cancel();
+        if(capturedExternal!=null){
+            try{capturedExternal.close();}
+            catch(Exception pending){publish("STOPPING",activeMode,"External server lease cleanup remains pending; the captured native path is retained for retry.");throw new IllegalStateException("External execution cleanup has not been acknowledged.",pending);}
+        }
         if(hopMeasurement!=null)hopMeasurement.networkChanged();
         if(startLayerRelay!=null){
             try{startLayerRelay.close();}

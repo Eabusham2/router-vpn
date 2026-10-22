@@ -38,7 +38,7 @@ public final class StandardExitActivity extends Activity {
     private AndroidNodeStore.Node pendingEntry;
     private AndroidStandardExitStore.Entry pendingExit;
     private boolean pendingDirect;
-    private String pendingEntryMode="wg",pendingEntryDigest="",pendingExitDigest="";
+    private String pendingEntryMode="wg",pendingExecution="local",pendingEntryDigest="",pendingExitDigest="",pendingRequestDigest="";
     private boolean busy;
     private boolean requestedExitHandled;
 
@@ -63,6 +63,7 @@ public final class StandardExitActivity extends Activity {
         out.putBoolean(STATE_PENDING_DIRECT,pendingDirect);
         out.putBoolean(STATE_REQUESTED_HANDLED,requestedExitHandled);
         out.putString("pending_entry_mode",pendingEntryMode);
+        out.putString("pending_execution",pendingExecution);out.putString("pending_request_digest",pendingRequestDigest);
         out.putString("pending_entry_digest",pendingEntryDigest);
         out.putString("pending_exit_digest",pendingExitDigest);
     }
@@ -72,6 +73,7 @@ public final class StandardExitActivity extends Activity {
         pendingDirect=state.getBoolean(STATE_PENDING_DIRECT,false);
         requestedExitHandled=state.getBoolean(STATE_REQUESTED_HANDLED,false);
         pendingEntryMode=state.getString("pending_entry_mode","wg");
+        pendingExecution=state.getString("pending_execution","local");pendingRequestDigest=state.getString("pending_request_digest","");
         pendingEntryDigest=state.getString("pending_entry_digest","");
         pendingExitDigest=state.getString("pending_exit_digest","");
         String entryId=state.getString(STATE_PENDING_ENTRY,""),exitId=state.getString(STATE_PENDING_EXIT,"");
@@ -96,7 +98,7 @@ public final class StandardExitActivity extends Activity {
     private boolean selectionOnly(){return getIntent()!=null&&getIntent().getBooleanExtra(EXTRA_SELECT_PATH,false);}
 
     private void rememberExternalPath(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String mode)throws Exception{
-        new AndroidConnectionProfileStore(this,nodeStore,exitStore).selectExternalPath(exit,entry,mode);
+        new AndroidConnectionProfileStore(this,nodeStore,exitStore).selectExternalPath(exit,entry,mode,pendingExecution);
     }
 
     private View buildUi() {
@@ -196,24 +198,29 @@ public final class StandardExitActivity extends Activity {
             if(saved!=null){for(int i=0;i<AndroidTorProfile.TRANSPORTS.length;i++)if(AndroidTorProfile.TRANSPORTS[i].equals(saved.torTransport))transport.setSelection(i);bridges.setText(android.text.TextUtils.join("\n",saved.torBridges));}
             form.addView(text("Paste the complete supplied bridge block. Custom accepts supported bridge lines; it cannot run transport programs or scripts.",13,false));
         }
-        Spinner dns=choice(new String[]{"Rescue DoH (Cloudflare)","Custom TCP DNS","Custom DoT","Custom DoH"});
-        String protocolDNS=policy.optString("dns_protocol",policy.optString("dns_mode","rescue"));
-        dns.setSelection("tcp".equals(protocolDNS)?1:("dot".equals(protocolDNS)||"tls".equals(protocolDNS))?2:("doh".equals(protocolDNS)||"https".equals(protocolDNS))?3:0);
-        form.addView(text("DNS through the Tor circuit",14,true));form.addView(dns);
+        Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom TCP DNS","Custom DoT","Custom DoH"});
+        String dnsMode=policy.optString("dns_mode","home"),protocolDNS=policy.optString("dns_protocol",dnsMode);
+        dns.setSelection("home".equals(dnsMode)?0:"rescue".equals(dnsMode)?1:"tcp".equals(protocolDNS)?2:("dot".equals(protocolDNS)||"tls".equals(protocolDNS))?3:4);
+        form.addView(text("DNS policy",14,true));form.addView(dns);
+        Spinner homeDNS=choice(new String[]{"Home UDP","Home TCP","Home DoT","Home DoH","Home DoH3"});
+        homeDNS.setSelection("tcp".equals(protocolDNS)?1:"dot".equals(protocolDNS)?2:"doh".equals(protocolDNS)?3:"doh3".equals(protocolDNS)?4:0);
+        form.addView(text("Home AdGuard transport",14,true));form.addView(homeDNS);
         EditText dnsHost=field("Custom DNS literal IP",false),dnsPort=field("Custom DNS port (blank uses protocol default)",false),dnsName=field("DoT / DoH certificate server name",false),dnsPath=field("DoH path (default /dns-query)",false);
         dnsHost.setText(policy.optString("dns_host",""));int savedPort=policy.optInt("dns_port",0);if(savedPort!=0)dnsPort.setText(Integer.toString(savedPort));dnsPort.setInputType(InputType.TYPE_CLASS_NUMBER);
         dnsName.setText(policy.optString("dns_server_name",""));dnsPath.setText(policy.optString("dns_path",""));
         form.addView(dnsHost);form.addView(dnsPort);form.addView(dnsName);form.addView(dnsPath);
-        dns.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){dnsHost.setEnabled(position>0);dnsPort.setEnabled(position>0);dnsName.setEnabled(position>1);dnsPath.setEnabled(position==3);}});
+        Runnable dnsFields=()->{int selected=dns.getSelectedItemPosition(),home=homeDNS.getSelectedItemPosition();homeDNS.setEnabled(selected==0);dnsHost.setEnabled(selected!=1);dnsPort.setEnabled(selected!=1);dnsName.setEnabled(selected>=3||selected==0&&home>=2);dnsPath.setEnabled(selected==4||selected==0&&home>=3);};
+        android.widget.AdapterView.OnItemSelectedListener dnsListener=new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){dnsFields.run();}};
+        dns.setOnItemSelectedListener(dnsListener);homeDNS.setOnItemSelectedListener(dnsListener);
         Spinner ipv6=choice(new String[]{"IPv6 off","IPv6 automatic","IPv6 on"});String ipPolicy=policy.optString("ipv6_mode","off");ipv6.setSelection("auto".equals(ipPolicy)?1:"on".equals(ipPolicy)?2:0);
         form.addView(text("IPv6",14,true));form.addView(ipv6);
         CheckBox blockLAN=new CheckBox(this);blockLAN.setText("Block private LAN ranges");blockLAN.setChecked(!policy.optBoolean("home_lan_access",false));form.addView(blockLAN);
         EditText lan=field("Private LAN CIDRs to block, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Manual interface MTU, 1280–9000 (blank uses automatic)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if("manual".equals(policy.optString("mtu_policy"))||"fixed".equals(policy.optString("mtu_policy")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         final JSONObject initialEditor;
-        try{initialEditor=readTorEditorPolicy(dns,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);}
+        try{initialEditor=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);}
         catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
-        form.addView(text("Tor uses TCP. UDP, DoH3 and private Home DNS are unsupported and are never silently replaced. Bootstrap and bridge traffic use the captured protected network. Every Tor path requires Android Always-on VPN and Block connections without VPN.",13,false));
+        form.addView(text("Home AdGuard uses the paired Router VPN entry you select; leave its address blank to use that entry's saved AdGuard. Direct Tor needs an explicitly selected TCP, DoT, DoH or Rescue resolver. Application traffic stays on Tor. Every Tor path requires Android Always-on VPN and Block connections without VPN.",13,false));
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle(saved==null?"Add "+protocol:"Edit "+saved.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
@@ -221,7 +228,7 @@ public final class StandardExitActivity extends Activity {
             try{
                 AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();if(saved!=null)entry.id=saved.id;entry.name=name.getText().toString();entry.protocol=protocol;
                 if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
-                JSONObject edited=readTorEditorPolicy(dns,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);
+                JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);
                 entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);
                 exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
             }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges and MTU. The saved profile was not changed.");}
@@ -229,10 +236,10 @@ public final class StandardExitActivity extends Activity {
         dialog.setOnDismissListener(ignored->bridges.setText(""));dialog.show();
     }
 
-    private static JSONObject readTorEditorPolicy(Spinner dns,EditText host,EditText port,EditText name,EditText path,
+    private static JSONObject readTorEditorPolicy(Spinner dns,Spinner homeDNS,EditText host,EditText port,EditText name,EditText path,
             Spinner ipv6,CheckBox blockLAN,EditText lan,EditText mtu)throws Exception{
-        int selectedDNS=dns.getSelectedItemPosition();JSONObject p=new JSONObject().put("dns_mode",selectedDNS==0?"rescue":"custom");
-        if(selectedDNS!=0){p.put("dns_protocol",new String[]{"","tcp","dot","doh"}[selectedDNS]).put("dns_host",host.getText().toString().trim());String portText=port.getText().toString().trim();p.put("dns_port",portText.isEmpty()?0:Integer.parseInt(portText));if(selectedDNS>1)p.put("dns_server_name",name.getText().toString().trim());if(selectedDNS==3)p.put("dns_path",path.getText().toString().trim());}
+        int selectedDNS=dns.getSelectedItemPosition();JSONObject p=new JSONObject().put("dns_mode",selectedDNS==0?"home":selectedDNS==1?"rescue":"custom");
+        if(selectedDNS!=1){String protocol=selectedDNS==0?new String[]{"udp","tcp","dot","doh","doh3"}[homeDNS.getSelectedItemPosition()]:new String[]{"","","tcp","dot","doh"}[selectedDNS];p.put("dns_protocol",protocol).put("dns_host",host.getText().toString().trim());String portText=port.getText().toString().trim();p.put("dns_port",portText.isEmpty()?0:Integer.parseInt(portText));if("dot".equals(protocol)||"doh".equals(protocol)||"doh3".equals(protocol))p.put("dns_server_name",name.getText().toString().trim());if("doh".equals(protocol)||"doh3".equals(protocol))p.put("dns_path",path.getText().toString().trim());}
         p.put("ipv6_mode",new String[]{"off","auto","on"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
         String mtuText=mtu.getText().toString().trim();p.put("mtu_policy",mtuText.isEmpty()?"auto":"manual");if(!mtuText.isEmpty())p.put("manual_mtu",Integer.parseInt(mtuText));return p;
     }
@@ -346,6 +353,12 @@ public final class StandardExitActivity extends Activity {
         EditText lan=field("Private LAN CIDRs, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Fixed MTU 1280–9000 (blank: Auto baseline)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if(!"auto".equals(policy.optString("mtu_policy","auto")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         form.addView(text("Home uses the selected Router VPN entry's private AdGuard and requires that entry's authenticated proof. Direct connections need an explicit reachable resolver. Resolver hostnames use only the bootstrap you save here, through this path. Auto MTU is an unmeasured baseline until this external exit provides an authenticated packet-probe owner; saved measurements are not reused. A TCP-only transport rejects unsupported UDP and DoH3 settings.",13,false));
+        EditText responseURL=field("This server's HTTPS response URL (required for Server / Compare both)",false),responseName=field("Response TLS server name (optional)",false);
+        if("shadowsocks".equals(captured.protocol)){
+            responseURL.setText(captured.responseProbe.optString("url",""));responseName.setText(captured.responseProbe.optString("server_name",""));
+            form.addView(text("Server / Compare both",14,true));form.addView(responseURL);form.addView(responseName);
+            form.addView(text("Enter the HTTPS endpoint provided on this Shadowsocks server's own public address. Its certificate is verified. Server execution also needs this exit paired in the Router VPN entry's private registry; Compare both measures Local and Server before choosing a proved path.",13,false));
+        }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
@@ -369,6 +382,11 @@ public final class StandardExitActivity extends Activity {
                 }
                 p.put("ipv6_mode",new String[]{"on","auto","off"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
                 String fixed=mtu.getText().toString().trim();p.put("mtu_policy",fixed.isEmpty()?"auto":"fixed");if(!fixed.isEmpty())p.put("manual_mtu",Integer.parseInt(fixed));AndroidExternalPolicy.checkPolicy(p);next.policy=p;
+                if("shadowsocks".equals(next.protocol)){
+                    String url=responseURL.getText().toString().trim(),tls=responseName.getText().toString().trim();next.responseProbe=new JSONObject();
+                    if(!url.isEmpty())next.responseProbe.put("url",url);if(!tls.isEmpty())next.responseProbe.put("server_name",tls);AndroidStandardExitStore.validateResponseProbe(next);
+                    if(next.responseProbe.length()!=0)io.nekohasekai.libbox.Libbox.routerValidateExternalResponseProbe(next.server,next.responseProbe.toString());
+                }
                 // Home's exact AdGuard owner is captured when the entry is selected.
                 if(!"home".equals(p.getString("dns_mode")))AndroidExternalPolicy.compile(next,null,"external");
                 exitStore.save(next);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
@@ -397,37 +415,51 @@ public final class StandardExitActivity extends Activity {
             for(int i=0;i<modes.length();i++){JSONObject mode=modes.getJSONObject(i);String id=mode.optString("id");if(NativeSingBoxController.nativeMultihopEntry(id)&&profiles.optJSONObject(id)!=null&&!ids.contains(id)){ids.add(id);labels.add(mode.optString("name",id)+" ["+id+"]");}}
             if(ids.isEmpty())throw new IllegalStateException("This saved entry has no supported native encrypted mode.");
             new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof."))
-                    .setItems(labels.toArray(new String[0]),(d,w)->requestConnect(entry,exit,ids.get(w))).setNegativeButton("Cancel",null).show();
+                    .setItems(labels.toArray(new String[0]),(d,w)->chooseExecution(entry,exit,ids.get(w))).setNegativeButton("Cancel",null).show();
         }catch(Exception error){toast("The saved entry cannot provide a captured native external path.");}
     }
 
-    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode) {
+    private void chooseExecution(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String mode){
+        if(!"shadowsocks".equals(exit.protocol)){requestConnect(entry,exit,mode);return;}
+        new AlertDialog.Builder(this).setCustomTitle(choiceHeader("External path execution","Local runs the exit on this device. Server uses an isolated paired session on the entry. Compare both measures both paths and keeps the lower valid average response time."))
+                .setItems(new String[]{"Local","Server","Compare both"},(d,w)->requestConnect(entry,exit,mode,new String[]{"local","server","auto"}[w])).setNegativeButton("Cancel",null).show();
+    }
+
+    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode){requestConnect(entry,exit,entryMode,"local");}
+
+    private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode,String execution) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        try{capturePending(entry,exit,false,entryMode);rememberExternalPath(entry,exit,entryMode);}catch(Exception invalid){clearPending();toast(safe(invalid));return;}
+        try{capturePending(entry,exit,false,entryMode,execution);rememberExternalPath(entry,exit,entryMode);}catch(Exception invalid){clearPending();toast(safe(invalid));return;}
         if(selectionOnly()){clearPending();toast("External path selected. Press Connect when ready.");finish();return;}
         Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
 
-    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)throws Exception{
+    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode)throws Exception{capturePending(entry,exit,direct,entryMode,"local");}
+
+    private void capturePending(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution)throws Exception{
+        AndroidStandardExitStore.validateExecution(exit,!direct,execution);pendingExecution=execution;
         pendingEntry=entry;pendingExit=AndroidStandardExitStore.copy(exit);pendingDirect=direct;pendingEntryMode=entryMode;
         pendingExitDigest=AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(pendingExit).getBytes(StandardCharsets.UTF_8));
         pendingEntryDigest=entry==null?"":AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE));
+        pendingRequestDigest=requestDigest(direct,entryMode,execution,pendingEntryDigest,pendingExitDigest);
     }
+    private static String requestDigest(boolean direct,String mode,String execution,String entry,String exit)throws Exception{return AndroidTorProfile.digest(("external-request-v1\n"+direct+"\n"+mode+"\n"+execution+"\n"+entry+"\n"+exit).getBytes(StandardCharsets.UTF_8));}
 
-    private void clearPending(){pendingEntry=null;pendingExit=null;pendingDirect=false;pendingEntryMode="wg";pendingEntryDigest="";pendingExitDigest="";}
+    private void clearPending(){pendingEntry=null;pendingExit=null;pendingDirect=false;pendingEntryMode="wg";pendingExecution="local";pendingEntryDigest="";pendingExitDigest="";pendingRequestDigest="";}
 
     private void startPending() {
-        AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit;boolean direct=pendingDirect;String entryMode=pendingEntryMode,entryDigest=pendingEntryDigest,exitDigest=pendingExitDigest;
+        AndroidNodeStore.Node entry=pendingEntry;AndroidStandardExitStore.Entry exit=pendingExit;boolean direct=pendingDirect;String entryMode=pendingEntryMode,execution=pendingExecution,request=pendingRequestDigest,entryDigest=pendingEntryDigest,exitDigest=pendingExitDigest;
         clearPending();if(exit==null)return;if(!direct&&entry==null)return;
         if(activeOrTransitioning()){toast("VPN state changed while permission was open; disconnect before starting the custom exit.");refresh();return;}
         try{
-            if(!exitDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exitStore.get(exit.id)).getBytes(StandardCharsets.UTF_8)))
+            AndroidStandardExitStore.validateExecution(exit,!direct,execution);
+            if(!request.equals(requestDigest(direct,entryMode,execution,entryDigest,exitDigest))||!exitDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exitStore.get(exit.id)).getBytes(StandardCharsets.UTF_8)))
                     ||!exitDigest.equals(AndroidTorProfile.digest(AndroidStandardExitStore.snapshot(exit).getBytes(StandardCharsets.UTF_8)))
                     ||!direct&&!entryDigest.equals(AndroidTorProfile.digest(AndroidPrivateFileStore.read(entry.file,AndroidNodeStore.MAX_BUNDLE))))throw new IllegalStateException("Captured source changed.");
         }catch(Exception changed){toast("A captured node changed while Android permission was open. Select the path again.");refresh();return;}
         busy=true;statusView.setText(direct?"Preparing direct external exit…":"Preparing Router VPN entry → external exit…");
         AndroidStandardExitRuntime.Callback cb=new AndroidStandardExitRuntime.Callback(){public void progress(String m){runOnUiThread(()->{if(!isFinishing())statusView.setText(m);});}public void finished(boolean ok,String m){runOnUiThread(()->{busy=false;if(!isFinishing()){statusView.setText(m);if(!ok)toast(m);refresh();}});}};
-        if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,entryMode,cb);
+        if(direct)runtime.connectDirect(exit,cb);else runtime.connect(entry.file,exit,entryMode,execution,cb);
     }
 
     private boolean activeOrTransitioning(){return busy||AndroidVpnMutationGuard.isBusy(this);}

@@ -16,7 +16,7 @@ JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 GO = r'''package main
 import("encoding/json";"fmt";"io";"os";"github.com/Eabusham2/router-vpn/internal/mobilemultihop";nativeopenvpn "github.com/Eabusham2/router-vpn/mobile")
 func main(){ raw,_:=io.ReadAll(os.Stdin); var args []string; if err:=json.Unmarshal(raw,&args);err!=nil{panic(err)}; var out string;var err error
-switch args[0]{case "external":out,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case "wg":out,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case "awg":out,err=mobilemultihop.CompileAmneziaProfile(args[1],args[2]);case "openvpn":out,err=nativeopenvpn.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);default:panic("unknown operation")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(out)}'''
+switch args[0]{case "execution":out,err=mobilemultihop.PrepareExternalExecutionCapture(args[1],args[2],args[3]);case "external":out,err=mobilemultihop.CompileExternalPolicy(args[1],args[2]);case "wg":out,err=mobilemultihop.CompileWireGuardProfile(args[1],args[2]);case "awg":out,err=mobilemultihop.CompileAmneziaProfile(args[1],args[2]);case "openvpn":out,err=nativeopenvpn.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);default:panic("unknown operation")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(out)}'''
 
 STUBS = {
 "android/content/Context.java": '''package android.content; public class Context { final java.io.File root; public Context(java.io.File r){root=r;} public Context getApplicationContext(){return this;} public java.io.File getFilesDir(){return root;} }''',
@@ -25,6 +25,7 @@ STUBS = {
 import org.json.JSONArray;import java.nio.charset.StandardCharsets;
 public class Libbox { public static Runnable hook;public static String compiler;public static int checked;
 static String call(String...args)throws Exception{Process p=new ProcessBuilder(compiler).start();p.getOutputStream().write(new JSONArray(java.util.Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));p.getOutputStream().close();String out=new String(p.getInputStream().readAllBytes(),StandardCharsets.UTF_8),err=new String(p.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(p.waitFor()!=0)throw new IllegalStateException(err);return out;}
+public static String routerPrepareExternalExecutionCapture(String s,String c,String restored)throws Exception{return call("execution",s,c,restored);}
 public static String routerCompileExternalPolicy(String s,String c)throws Exception{String out=call("external",s,c);Runnable h=hook;hook=null;if(h!=null)h.run();return out;}
 public static String version(){return "1.14.1";}public static String routerOpenVPNEndpoint(String c,String u,String p,String t,String d)throws Exception{return call("openvpn",c,u,p,t,d);}
 public static String routerCompileWireGuardProfile(String s,String n)throws Exception{return call("wg",s,n);}public static String routerCompileAmneziaProfile(String s,String n)throws Exception{return call("awg",s,n);}public static void checkConfig(String c){checked++;}}
@@ -77,6 +78,7 @@ static JSONObject entry()throws Exception{String pub=key('p');String proof=Andro
  String wg="[Interface]\nPrivateKey = "+key('e')+"\nAddress = 10.77.0.2/32, fd77::2/128\nMTU = 1500\n[Peer]\nPublicKey = "+pub+"\nAllowedIPs = 0.0.0.0/0, ::/0\nEndpoint = 198.51.100.20:51820\n";
  JSONObject p=new JSONObject().put("id","entry").put("node_kind","router-vpn").put("node_proof_id",proof).put("router_api","http://10.77.0.1:8787").put("api_token","exact-entry-token").put("adguard_ipv4","10.77.0.1").put("adguard_ipv6","fd77::1").put("dns_mode","home").put("start_layer","off").put("mtu_policy","auto").put("effective_mtu",9000);
  return new JSONObject().put("selectedRouterID","entry").put("routerProfiles",new JSONArray().put(p)).put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString(wg.getBytes(StandardCharsets.UTF_8)))));}
+static void storeValidation(AndroidStandardExitStore.Entry e)throws Exception{AndroidStandardExitStore.validate(e);}
 static JSONObject copy(JSONObject p)throws Exception{return new JSONObject(p.toString());}
 static JSONObject find(JSONObject g,String tag)throws Exception{for(String f:List.of("outbounds","endpoints")){JSONArray a=g.optJSONArray(f);if(a!=null)for(int i=0;i<a.length();i++)if(tag.equals(a.getJSONObject(i).optString("tag")))return a.getJSONObject(i);}throw new AssertionError(tag);}
 public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libbox.compiler=args[0];Path root=Path.of(args[1]);android.content.Context context=new android.content.Context(root.toFile());
@@ -99,6 +101,31 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
    if(dns.equals("home")&&!hopped||dns.equals("doh3")&&(kind.equals("http")||kind.equals("https"))){reject(()->AndroidExternalPolicy.compile(d,b,hopped?"wg":"external"),"unsupported DNS changed silently");continue;}
    AndroidExternalPolicy.Compiled x=AndroidExternalPolicy.compile(d,b,hopped?"wg":"external");check(x.metadata.getString("dns_mode").equals(dns),"DNS mode lost");if(dns.equals("home"))check(x.metadata.getString("dns_detour").equals("entry-wg"),"Home DNS left captured private entry");
   }
+ }
+
+ AndroidStandardExitStore.Entry relay=exit("shadowsocks");relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
+ for(String execution:List.of("local","server","auto")){
+  JSONObject entry=entry();String saved=AndroidStandardExitStore.snapshot(relay);
+  AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,"");JSONObject graph=new JSONObject(c.config),capture=new JSONObject(c.capture);
+  check(saved.equals(AndroidStandardExitStore.snapshot(relay)),"execution changed saved private credentials");
+  check(capture.getJSONObject("profile").getString("multihop_execution").equals(execution),"execution choice was dropped");
+  if(execution.equals("local")){check(!c.metadata.has("execution"),"local unnecessarily obtained a server lease");continue;}
+  check(c.metadata.getString("execution").equals(execution)&&c.metadata.getString("last_node_measurement").equals("https-response-time"),"execution proof contract missing");
+  check(find(graph,"custom-exit").getString("type").equals("selector")&&find(graph,"routervpn-execution-server").getString("detour").equals("entry-wg"),"execution bypassed entry or lacks selector");
+  check(new AndroidExternalPolicy.Compiled(c.source,c.capture).config.equals(c.config),"captured lease proposal changed on recompile");
+  AndroidExternalPolicy.Compiled fresh=AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,"");check(!fresh.capture.equals(c.capture),"fresh session reused private relay credentials");
+  for(String winner:List.of("local","server")){
+   if(execution.equals("server")&&winner.equals("local")){reject(()->AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,winner),"restore replaced explicit Server selection");continue;}
+   AndroidExternalPolicy.Compiled restored=AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,winner);
+   check(restored.metadata.getString("execution").equals(winner)&&new JSONObject(restored.capture).getJSONObject("profile").getString("multihop_execution").equals(execution),"restoration reran Compare or changed saved choice");
+  }
+  JSONObject wrongCapture=new JSONObject(c.capture);wrongCapture.getJSONObject("execution").getJSONObject("request").put("password","foreign-private-password");
+  reject(()->new AndroidExternalPolicy.Compiled(c.source,wrongCapture.toString()),"substituted relay credentials accepted");
+ }
+ reject(()->AndroidExternalPolicy.compile(relay,null,"external",null,"server",""),"direct path gained an unowned server relay");
+ AndroidStandardExitStore.Entry missing=AndroidStandardExitStore.copy(relay);missing.responseProbe=new JSONObject();reject(()->AndroidExternalPolicy.compile(missing,entry(),"wg",null,"auto",""),"Compare used an invented response endpoint");
+ for(String url:List.of("http://203.0.113.20/", "https://203.0.113.21/", "https://203.0.113.20/?secret=hidden", "https://user:pass@203.0.113.20/", "https://203.0.113.20/#fragment")){
+  AndroidStandardExitStore.Entry bad=AndroidStandardExitStore.copy(relay);bad.responseProbe.put("url",url);reject(()->storeValidation(bad),"unowned response endpoint accepted");
  }
 
  for(String kind:kinds){AndroidStandardExitStore.Entry e=exit(kind);e.server="2001:DB8:0:0:0:0:0:20";e.expectedPublicIp="2606:4700:0:0:0:0:0:1111";e.policy.put("dns_host","2001:4860:4860:0:0:0:0:8888");AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(e,null,"external");check(c.metadata.getString("expected_public_ip").equals("2606:4700::1111"),"IPv6 public exit rejected or not canonical");check(c.metadata.getString("dns_server").equals("2001:4860:4860::8888"),"IPv6 selected DNS was replaced");}

@@ -30,6 +30,7 @@ final class AndroidStandardExitStore {
  static final Map<String,Entry> saved=new HashMap<>();
  static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";}
  AndroidStandardExitStore(Context c){}List<Entry> list()throws Exception{List<Entry> list=new ArrayList<>();for(Entry e:saved.values())list.add(copy(e));return list;}Entry get(String id)throws Exception{Entry e=saved.get(id);if(e==null)throw new IllegalArgumentException("missing exit");return copy(e);}
+ static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||!e.protocol.equals("shadowsocks")))throw new IllegalArgumentException("unowned execution");}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("missing saved exit");}
  static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;return x;}
  static String snapshot(Entry e)throws Exception{return new JSONObject().put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).toString();}
@@ -55,7 +56,10 @@ final class AndroidMultihopRuntime {
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- int starts;String mode;File entry;AndroidStandardExitStore.Entry exit;
+ int starts;String mode,execution="local",selected="local";File entry;AndroidStandardExitStore.Entry exit;
+ String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
+ void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){connect(f,e,mode,execution,cb);selected=winner;}
+ void connect(File f,AndroidStandardExitStore.Entry e,String m,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,m,cb);}
  String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}boolean disconnectAndDrainCaptured(String id){return true;}
  boolean isActiveOrTransitioning(){return false;}void disconnect(){}boolean disconnectCaptured(String id){return true;}
  void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){starts++;mode="external";exit=e;cb.finished(true,"owned direct");}
@@ -100,6 +104,14 @@ public class ExternalPermissionTest {
   Fixture f=new Fixture(root);f.request("max-quic-awg",false);String secret=f.exit.secret;f.exit.secret="new-caller-value";f.exit.protocol="http";f.allow();check(f.callback.ok&&f.runtime().exit.secret.equals(secret)&&f.runtime().exit.protocol.equals("openvpn"),"permission reused mutable caller credentials");
   Fixture modes=new Fixture(root);List<NativeSingBoxController.ModeInfo> values=modes.controller.supportedNativeEntryModes(modes.entry);check(values.size()==19,"native entry picker omitted or duplicated modes");for(int i=0;i<ALL.length;i++)check(values.get(i).id.equals(ALL[i])&&values.get(i).name.endsWith("["+ALL[i]+"]"),"native entry identity and displayed label diverged");
  }
+ static void execution(Path root)throws Exception{
+  for(String choice:List.of("local","server","auto"))for(boolean restore:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);f.exit.protocol="shadowsocks";f.save();f.controller.connectExternal(f.entry,f.exit,false,"max-quic-awg",choice,f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   check(f.runtime().starts==0,"execution launched before permission");if(restore)f.restore(state);f.allow();check(f.callback.ok&&f.runtime().execution.equals(choice),"permission lost external execution choice");
+  }
+  Fixture tampered=new Fixture(root);tampered.exit.protocol="shadowsocks";tampered.save();tampered.controller.connectExternal(tampered.entry,tampered.exit,false,"wg","auto",tampered.callback);Bundle state=new Bundle();tampered.controller.savePending(state);state.putString("multihop_execution_pending","server");tampered.restore(state);tampered.allow();check(!tampered.callback.ok&&tampered.runtime().starts==0,"restored permission substituted Server for Compare");
+  Fixture direct=new Fixture(root);direct.exit.protocol="shadowsocks";direct.save();direct.controller.connectExternal(null,direct.exit,true,"wg","server",direct.callback);check(!direct.callback.ok&&direct.runtime().starts==0,"direct path acquired a server execution owner");
+ }
  static void changes(Path root)throws Exception{
   for(String change:new String[]{"entry-file","exit-policy","exit-key","exit-removed","entry-removed","mode","direct","digest","legacy","permission-denied","busy","closed"})for(boolean restore:new boolean[]{false,true}){
    Fixture f=new Fixture(root);Bundle state=f.request("max-quic-awg",false);
@@ -112,7 +124,7 @@ public class ExternalPermissionTest {
   }
   Fixture pending=new Fixture(root);pending.request("wg",false);Callback rejected=new Callback();pending.controller.connectExternal(pending.entry,pending.exit,false,"max",rejected);check(rejected.completions==1&&!rejected.ok,"new request overwrote pending external permission");pending.allow();check(pending.callback.ok&&pending.runtime().mode.equals("wg"),"second request replaced the original permission owner");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);changes(root);System.out.println("Android external permission: "+checks+" checks; all19 entries, ten exit protocols, restored/cancelled/stale requests");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);allModes(root);directAndFrozen(root);execution(root);changes(root);System.out.println("Android external permission: "+checks+" checks; all19 entries, ten exit protocols, restored/cancelled/stale requests");}
 }
 '''
 

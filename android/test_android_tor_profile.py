@@ -167,7 +167,16 @@ HARNESS = prefix + r'''
   check(prepared.modeId.equals((source==null?"standard-direct-":"standard-")+selected.protocol),"Tor launch relabeled the captured selection");
   check(meta.getString("external_id").equals(selected.id)&&meta.getString("entry_mode").equals(source==null?"external":mode),"Tor metadata lost selected identities");
   check(meta.has("predecessor_profile")==(source!=null),"Tor metadata lost predecessor ownership");
-  check(meta.getJSONObject("tor_profile").toString().equals(AndroidTorProfile.profile(selected).toString()),"Tor metadata lost frozen selected policy");
+  JSONObject capturedPolicy=new JSONObject(meta.getJSONObject("tor_profile").toString());
+  check(capturedPolicy.getBoolean("multihop_enabled")== (source!=null),"Tor capture lost explicit entry selection");
+  capturedPolicy.remove("multihop_enabled");
+  if(source!=null){
+   check(capturedPolicy.getString("multihop_entry_id").equals(profile(source).getString("id"))&&capturedPolicy.getString("multihop_exit_id").equals(selected.id)
+    &&capturedPolicy.getString("multihop_entry_mode").equals(mode)&&capturedPolicy.getString("multihop_exit_mode").equals(selected.protocol)
+    &&capturedPolicy.getString("multihop_execution").equals("local"),"Tor capture substituted entry, exit, mode or execution");
+   for(String key:new String[]{"multihop_entry_id","multihop_exit_id","multihop_entry_mode","multihop_exit_mode","multihop_execution"})capturedPolicy.remove(key);
+  }
+  check(same(capturedPolicy,AndroidTorProfile.profile(selected)),"Tor metadata lost frozen selected policy");
   check(Files.readString(staged.resolve(AndroidKillSwitchPolicy.SESSION_MARKER)).equals("1\n"),"Tor did not stage strict lockdown");
   JSONObject tunnel=graph.getJSONArray("inbounds").getJSONObject(0),out=byTag(graph,AndroidTorProfile.OUTBOUND);
   check(graph.getJSONArray("inbounds").length()==1&&tunnel.getString("type").equals("tun")&&tunnel.getBoolean("auto_route")&&tunnel.getBoolean("strict_route"),"Tor created or weakened a second VPN");
@@ -198,6 +207,7 @@ HARNESS = prefix + r'''
   check(has(tunnel.getJSONArray("route_address"),"192.168.50.0/24")&&has(tunnel.getJSONArray("route_address"),"fd12:3456::/48"),"private traffic escaped OS capture");
   if(source!=null){
    check(same(meta.getJSONObject("predecessor_profile"),profile(source)),"Tor proof uses another captured profile");
+   check(out.getString("entry_sha256").matches("[0-9a-f]{64}"),"Tor graph was compiled without its captured entry proof");
    io.nekohasekai.libbox.Libbox.testTorPredecessor(meta.getJSONObject("predecessor_profile").toString());
    JSONObject previous=new JSONObject(io.nekohasekai.libbox.Libbox.lastTorPredecessor);
    capturedEntry(graph,previous,source,mode,layer,certificate);
@@ -218,6 +228,37 @@ HARNESS = prefix + r'''
  }
  interface ExitChange{void apply(AndroidStandardExitStore.Entry e)throws Exception;}
  interface NodeChange{void apply(JSONObject b)throws Exception;}
+ static void homePaths(Path dir,String certificate)throws Exception{
+  for(String missing:new String[]{"missing","","home"}){
+   AndroidStandardExitStore.Entry e=tor("obfs4","tcp");e.torPolicy=new JSONObject().put("ipv6_mode","on");
+   if(!missing.equals("missing"))e.torPolicy.put("dns_mode",missing);
+   Context c=new Context(Files.createTempDirectory(dir,"home-draft-").toFile());AndroidStandardExitStore store=new AndroidStandardExitStore(c);
+   store.save(e);String before=AndroidStandardExitStore.snapshot(store.get(e.id));
+   check(AndroidTorProfile.editorPolicy(e).getString("dns_mode").equals("home"),"unresolved Home draft changed its editor DNS");
+   reject(dir,"Home needs a captured entry",e,null,"direct");
+   check(before.equals(AndroidStandardExitStore.snapshot(store.get(e.id))),"Home draft was rewritten by validation");
+  }
+  int homeGraphs=0;
+  for(String mode:ALL)for(String protocol:new String[]{"udp","tcp","dot","doh","doh3"}){
+   JSONObject b=entry(mode,"off",certificate);profile(b).put("adguard_ipv4","10.77.0.53").put("adguard_ipv6","fd77::53");
+   AndroidStandardExitStore.Entry e=tor("obfs4","doh");e.torPolicy.put("dns_mode","home").put("dns_protocol",protocol).put("dns_host","");
+   Path app=Files.createTempDirectory(dir,"home-path-");Context c=new Context(app.toFile());File file=save(dir,b);
+   String saved=AndroidStandardExitStore.snapshot(e);NativeSingBoxController.SessionInfo info=AndroidTorProfile.prepare(c,file,e,mode);
+   Path folder=app.resolve("layered-sessions").resolve(info.sessionId);String config=Files.readString(folder.resolve("sing-box.json"));
+   JSONObject graph=new JSONObject(config),meta=AndroidTorProfile.session(config,Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE)),info.sessionId,info.modeId);
+   JSONObject dns=tagged(graph.getJSONObject("dns").getJSONArray("servers"),"routervpn-tor-dns"),bootstrap=tagged(graph.getJSONObject("dns").getJSONArray("servers"),"routervpn-tor-bootstrap");
+   String type=protocol.equals("dot")?"tls":protocol.equals("doh")?"https":protocol.equals("doh3")?"h3":protocol;
+   check(dns.getString("type").equals(type)&&dns.getString("server").equals("10.77.0.53")&&dns.getInt("server_port")==8443&&dns.getString("detour").equals("proxy"),"Home Tor substituted resolver, port, protocol or entry");
+   check(bootstrap.getString("server").equals("10.77.0.53")&&bootstrap.getString("detour").equals("proxy"),"Home Tor bootstrap escaped its captured entry");
+   check(graph.getJSONObject("route").getString("final").equals(AndroidTorProfile.OUTBOUND)&&byTag(graph,AndroidTorProfile.OUTBOUND).getString("entry_sha256").matches("[0-9a-f]{64}"),"Home DNS bypassed Tor or lost entry proof");
+   check(meta.getJSONObject("tor_profile").getString("multihop_entry_mode").equals(mode)&&saved.equals(AndroidStandardExitStore.snapshot(e)),"Home Tor changed its saved source or entry mode");
+   homeGraphs++;
+  }
+  check(homeGraphs==95,"Home Tor transport and entry matrix incomplete");
+  JSONObject b=entry("shadowsocks","off",certificate);profile(b).put("adguard_ipv4","10.77.0.53");
+  AndroidStandardExitStore.Entry e=tor("obfs4","tcp");e.torPolicy.put("dns_mode","home").put("dns_host","10.77.0.54");
+  reject(dir,"Home resolver belongs to another Router node",e,b,"shadowsocks");
+ }
  static void reject(Path dir,String label,AndroidStandardExitStore.Entry selected,JSONObject bundle,String mode)throws Exception{
   Path app=Files.createTempDirectory(dir,"reject-");File file=bundle==null?null:save(dir,bundle);
   String snapshot=AndroidStandardExitStore.snapshot(selected);byte[] before=file==null?null:Files.readAllBytes(file.toPath());
@@ -317,14 +358,18 @@ HARNESS = prefix + r'''
    for(String mode:ALL){check(NativeSingBoxController.nativeMultihopEntry(mode),"captured Tor entry absent from native catalog");for(int i=0;i<LAYERS.length;i++)verify(dir,mode,LAYERS[i],kind,new String[]{"tcp","dot","doh"}[i],certificate);}
   }
   check(graphs==348,"Tor entry/Start Layer/bridge matrix incomplete");
-  policyNegatives(dir);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);
+  homePaths(dir,certificate);policyNegatives(dir);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);
   System.out.println("Android Tor: PASS ("+graphs+" shipping Java/Go graphs; "+checks+" checks; OS/startup doubled, native Tor traffic separate)");
  }
 }
 '''
 
 GO = P.GO.replace('"router-vpn/internal/mobileperf"', '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor"', 1)
-GO = GO.replace('case "xray-policy":', '''case "tor-profile":
+GO = GO.replace('case "xray-policy":', '''case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="validated"
+ case "tor-profile-captured":
+  var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobiletor.CompileProfileWithPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
+ case "tor-profile":
   var input struct{Profile string;Session string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfile(input.Profile,input.Session,r.Policy)}
  case "tor-predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
@@ -377,6 +422,11 @@ def run():
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{
   torCalls++;lastTorPredecessor=predecessor;
   return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);
+ }
+ public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
+ public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
+  torCalls++;lastTorPredecessor=predecessor;
+  return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
  }
  public static String testTorPredecessor(String profile)throws Exception{return call("tor-predecessor",profile,"");}
  public static String routerCompilePQProfile(''', 1)

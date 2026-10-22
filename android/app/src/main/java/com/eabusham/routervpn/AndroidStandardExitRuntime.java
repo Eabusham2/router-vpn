@@ -14,6 +14,9 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     interface Callback{void progress(String message);void finished(boolean ok,String message);default void owned(String homeSession){}}
     private static final long TOR_START_TIMEOUT_MS=200000L;
     private static final long POLICY_START_TIMEOUT_MS=90000L;
+    // Shared execution may consume 100s before the separate 45s final proof.
+    // Retain 35s for native service startup and delivery without shortening either phase.
+    private static final long EXECUTION_START_TIMEOUT_MS=180000L;
     private static final long STOP_TIMEOUT_MS=8000L;
     private final Context context;
     private final NativeSingBoxController singBox;
@@ -28,6 +31,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     private boolean teardownInProgress;
     private String torNativeSession="",torHomeSession="",torExternalID="";
     private String externalNativeSession="",externalHomeSession="",externalID="";
+    private String requestedExecution="local";
 
     AndroidStandardExitRuntime(Context context,NativeSingBoxController singBox){
         this.context=context.getApplicationContext();
@@ -40,24 +44,32 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode,Callback cb){ submit(entryBundle,exit,false,entryMode,cb); }
     synchronized void connectDirect(AndroidStandardExitStore.Entry exit,Callback cb){ submit(null,exit,true,"external",cb); }
 
-    private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){
+    synchronized void connect(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode,String execution,Callback cb){submit(entryBundle,exit,false,entryMode,execution,"",cb);}
+    synchronized void restoreCaptured(File entryBundle,AndroidStandardExitStore.Entry exit,String entryMode,String execution,String selected,Callback cb){
+        if(entryBundle==null||!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(execution)&&!execution.equals(selected)){cb.finished(false,"The original external execution receipt is invalid.");return;}
+        submit(entryBundle,exit,false,entryMode,execution,"local".equals(execution)?"":selected,cb);
+    }
+
+    private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,Callback cb){submit(entryBundle,exit,direct,entryMode,"local","",cb);}
+
+    private void submit(File entryBundle,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution,String restoredExecution,Callback cb){
         if(closed.get()){cb.finished(false,"Android custom-exit runtime is closed.");return;}
         if(teardownInProgress||(active!=null&&!active.isDone())){cb.finished(false,"Another Android custom-exit attempt or teardown is running.");return;}
         String blocked=startBlockedReason();if(!blocked.isEmpty()){cb.finished(false,blocked);return;}
         final AndroidStandardExitStore.Entry captured;
         final String capturedEntry;
-        try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured);
+        try { captured=AndroidStandardExitStore.copy(exit); AndroidStandardExitStore.validate(captured); AndroidStandardExitStore.validateExecution(captured,!direct,execution);
             capturedEntry=!direct?AndroidExternalPolicy.entryDigest(entryBundle):"";
         }
         catch(Exception invalid){cb.finished(false,"The saved custom-exit profile is invalid; review its settings before connecting.");return;}
         disconnectRequested=false;revalidationTeardown=false;teardownInProgress=false;
         torNativeSession="";torHomeSession="";torExternalID="";
-        externalNativeSession="";externalHomeSession="";externalID="";
+        externalNativeSession="";externalHomeSession="";externalID="";requestedExecution=execution;
         AndroidHomeStateStore.Snapshot initialHome=AndroidHomeStateStore.snapshot(context);
-        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,capturedEntry,initialHome,cb));
+        active=executor.submit(()->run(entryBundle,captured,direct,entryMode,execution,restoredExecution,capturedEntry,initialHome,cb));
     }
 
-    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String capturedEntry,AndroidHomeStateStore.Snapshot initialHome,Callback cb){
+    private void run(File entry,AndroidStandardExitStore.Entry exit,boolean direct,String entryMode,String execution,String restoredExecution,String capturedEntry,AndroidHomeStateStore.Snapshot initialHome,Callback cb){
         boolean started=false,sessionStarted=false,releasePrepared=true;
         NativeSingBoxController.SessionInfo preparedSession=null;
         boolean tor=AndroidTorProfile.isTor(exit.protocol);
@@ -82,7 +94,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             }
             cb.owned(capturedHome.sessionId);
             cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
-            NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode);
+            NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode,execution,restoredExecution);
             preparedSession=session;
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
             cb.progress("Starting one Android VpnService custom-exit graph…");
@@ -94,7 +106,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 started=true;releasePrepared=false;
                 if(policy)singBox.startExternal(session,capturedHome.sessionId);else singBox.start(session);
             }
-            long deadline=System.currentTimeMillis()+(tor?TOR_START_TIMEOUT_MS:POLICY_START_TIMEOUT_MS);
+            long deadline=System.currentTimeMillis()+startTimeoutMillis(tor,execution);
             while(System.currentTimeMillis()<deadline){
                 if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");
                 String state=singBox.getState();
@@ -117,8 +129,9 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                     LayeredVpnService.startExternalAutomaticMTU(externalNativeSession,externalID,capturedHome.sessionId);
                 }
             }
+            String selectedExecution=tor?"local":capturedExternalExecution(capturedHome);
             cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
-                    :"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+". Captured entry, selected DNS and public exit proof passed: "+observed);
+                    :"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+(direct?"":" ["+selectedExecution+"]")+". Captured entry, selected DNS and public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
             releasePrepared=stopped;
@@ -166,6 +179,10 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         return captured!=null&&captured.sessionId.equals(AndroidHomeStateStore.snapshot(context).sessionId);
     }
 
+    static long startTimeoutMillis(boolean tor,String execution){
+        return tor?TOR_START_TIMEOUT_MS:"local".equals(execution)?POLICY_START_TIMEOUT_MS:EXECUTION_START_TIMEOUT_MS;
+    }
+
     synchronized String capturedTorExit(AndroidHomeStateStore.Snapshot owner)throws Exception{
         AndroidHomeStateStore.Snapshot current=AndroidHomeStateStore.snapshot(context);
         if(disconnectRequested||closed.get()||owner==null||!AndroidTorProfile.isTor(owner.activeExternalProtocol)
@@ -183,6 +200,17 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 ||!owner.activeEntryId.equals(current.activeEntryId)||!owner.activeEntryMode.equals(current.activeEntryMode)
                 ||!owner.expectedExternalIp.equals(current.expectedExternalIp)||!"UP".equals(singBox.getState())) throw new IllegalStateException("The captured external runtime is unavailable; reconnect to prove its path.");
         return LayeredVpnService.externalExitIP(externalNativeSession,externalID);
+    }
+
+    synchronized String capturedRequestedExecution(AndroidHomeStateStore.Snapshot owner)throws Exception {
+        capturedExternalExit(owner);return requestedExecution;
+    }
+
+    synchronized String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner)throws Exception {
+        capturedExternalExit(owner);
+        String selected=LayeredVpnService.externalExecution(externalNativeSession,externalID);
+        if(!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(requestedExecution)&&!requestedExecution.equals(selected))throw new IllegalStateException("The external execution receipt differs from its captured selection.");
+        return selected;
     }
 
     private static String entryID(File file){

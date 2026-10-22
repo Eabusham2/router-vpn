@@ -28,11 +28,22 @@ final class AndroidTorProfile {
 
     /** Restore the effective saved policy; opening an editor must not change it. */
     static JSONObject editorPolicy(AndroidStandardExitStore.Entry saved) throws Exception {
-        if (saved == null) return new JSONObject().put("dns_mode", "rescue")
-                .put("ipv6_mode", "off").put("home_lan_access", false);
+        if (saved == null) return new JSONObject().put("dns_mode", "home")
+                .put("ipv6_mode", "on").put("home_lan_access", true);
         JSONObject policy = saved.torPolicy == null ? new JSONObject() : new JSONObject(saved.torPolicy.toString());
         String mode = policy.optString("dns_mode", "");
-        if (mode.isEmpty() || "rescue".equals(mode)) {
+        if (mode.isEmpty() || "home".equals(mode)) {
+            policy.put("dns_mode", "home");
+            String protocol = policy.optString("dns_protocol", "udp");
+            if (protocol.isEmpty()) protocol = "udp";
+            if ("tls".equals(protocol)) protocol = "dot";
+            if ("https".equals(protocol)) protocol = "doh";
+            if ("h3".equals(protocol)) protocol = "doh3";
+            if (!Arrays.asList("udp", "tcp", "dot", "doh", "doh3").contains(protocol)) {
+                throw new IllegalArgumentException("The saved Home DNS transport is unsupported.");
+            }
+            policy.put("dns_protocol", protocol);
+        } else if ("rescue".equals(mode)) {
             policy.put("dns_mode", "rescue");
             policy.remove("dns_protocol");
         } else {
@@ -102,10 +113,10 @@ final class AndroidTorProfile {
         }
         String captured = profile(exit).toString();
         if (captured.getBytes(StandardCharsets.UTF_8).length > MAX_METADATA) throw new IllegalArgumentException("Tor profile is too large.");
-        // Shared validation preserves the exact saved DNS/interface policy and
-        // rejects unsupported UDP/DoH3 instead of silently replacing it.
-        String config = Libbox.routerCompileTorProfile(captured, "routervpn-tor-validation", "");
-        if (!bounded(config, MAX_CONFIG)) throw new IllegalArgumentException("The saved Tor profile did not compile.");
+        // A Home-default draft can be stored before an entry is selected.
+        // This validates its exact policy without inventing a runnable graph;
+        // prepare still requires the complete captured entry and live proof.
+        Libbox.routerValidateTorProfile(captured);
     }
 
     static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile,
@@ -113,7 +124,7 @@ final class AndroidTorProfile {
         AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selected);
         AndroidStandardExitStore.validate(exit);
         String capturedExit = AndroidStandardExitStore.snapshot(exit);
-        String capturedProfile = profile(exit).toString();
+        JSONObject capturedSelection = profile(exit);
         JSONObject entry = null, predecessorProfile = null;
         byte[] entryBytes = null;
         AndroidStartLayer.RelayPlan relay = null;
@@ -162,8 +173,16 @@ final class AndroidTorProfile {
                 graph = NativeSingBoxController.applyPerformance(entry, graph);
                 predecessor = graph.toString();
             }
+            capturedSelection.put("multihop_enabled", predecessorProfile != null);
+            if (predecessorProfile != null) {
+                capturedSelection.put("multihop_entry_id", predecessorProfile.getString("id"))
+                        .put("multihop_exit_id", exit.id).put("multihop_entry_mode", entryMode)
+                        .put("multihop_exit_mode", exit.protocol).put("multihop_execution", "local");
+            }
+            String capturedProfile = capturedSelection.toString();
             String sessionId = UUID.randomUUID().toString();
-            String config = Libbox.routerCompileTorProfile(capturedProfile, sessionId, predecessor);
+            String config = Libbox.routerCompileTorProfileWithPredecessor(capturedProfile, sessionId, predecessor,
+                    predecessorProfile == null ? "" : predecessorProfile.toString());
             if (!bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor did not compile the complete captured graph.");
             RouterPQNative.install();
             Libbox.checkConfig(config);

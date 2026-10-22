@@ -146,10 +146,14 @@ else:
         self.assertLess(shell.index(call),shell.index('go_retry run ./cmd/internal/build_libbox -target android'))
         self.assertLess(shell.index('ANDROID_TOR_GRAPH_SHA='),shell.index('if [[ -s "$AAR"'))
         self.assertIn('"$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA"',shell)
-        for symbol in ('routerCompileTorProfile','routerTorSetStateDirectory','routerTorCreateProof',
+        for symbol in ('routerCompileTorProfile','routerValidateTorProfile','routerCompileTorProfileWithPredecessor',
+                       'routerTorSetStateDirectory','routerTorCreateProof',
                        'routerTorCreateProofWithPredecessor','routerStrategyDNSProof','routerStrategyCloseService',
                        'RouterTorProofRequest','java.lang.String run() throws java.lang.Exception;',
                        'void cancel();','boolean healthy();'):
+            self.assertIn(symbol,shell)
+        for symbol in ('routerPrepareExternalExecutionCapture','routerValidateExternalResponseProbe',
+                       'java.lang.String execution();','void close() throws java.lang.Exception;'):
             self.assertIn(symbol,shell)
         gradle=(ROOT/'android/app/build.gradle').read_text()
         self.assertIn("rootProject.file('../deploy/test_android_tor_pinned.py')",gradle)

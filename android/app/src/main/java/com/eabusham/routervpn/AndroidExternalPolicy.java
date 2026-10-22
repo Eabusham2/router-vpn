@@ -89,6 +89,7 @@ final class AndroidExternalPolicy {
             if (address.contains(":")) policy.put(field, AndroidNumericAddress.canonical(address));
         }
         JSONObject ext = new JSONObject().put("protocol", protocol(exit.protocol)).put("expected_public_ip", exit.expectedPublicIp);
+        if(exit.responseProbe!=null&&exit.responseProbe.length()!=0)ext.put("response_probe",copy(exit.responseProbe));
         JSONObject transport;
         switch (exit.protocol) {
             case "wireguard": case "amneziawg":
@@ -144,6 +145,12 @@ final class AndroidExternalPolicy {
             if (!selected.getString("exit_id").equals(metadata.getString("exit_id"))
                     || !selected.getString("protocol").equals(metadata.getString("protocol"))
                     || !selected.getString("expected_public_ip").equals(metadata.getString("expected_public_ip"))) throw new IllegalStateException("External policy belongs to another saved exit.");
+            JSONObject plan=selected.optJSONObject("execution");
+            if(plan!=null){
+                String requested=plan.getString("selection");
+                if(!Arrays.asList("local","server","auto").contains(requested)||!requested.equals(metadata.optString("execution"))
+                        ||!"https-response-time".equals(metadata.optString("last_node_measurement"))||!"shadowsocks".equals(selected.getString("protocol"))||!selected.has("entry"))throw new IllegalStateException("External execution belongs to another captured path.");
+            }else if(selected.has("execution")||metadata.has("execution")||metadata.has("last_node_measurement"))throw new IllegalStateException("External execution has no captured native owner.");
         }
     }
 
@@ -153,7 +160,12 @@ final class AndroidExternalPolicy {
     }
 
     static Compiled compile(AndroidStandardExitStore.Entry exit, JSONObject entry, String entryMode, AndroidExternalEntry captured) throws Exception {
+        return compile(exit,entry,entryMode,captured,"local","");
+    }
+
+    static Compiled compile(AndroidStandardExitStore.Entry exit, JSONObject entry, String entryMode, AndroidExternalEntry captured, String execution, String restoredExecution) throws Exception {
         AndroidStandardExitStore.validate(exit);
+        AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);
         JSONArray endpoints = new JSONArray(), outbounds = new JSONArray();
         JSONObject predecessor = null;
         String entryTag = "";
@@ -192,20 +204,29 @@ final class AndroidExternalPolicy {
                 .put("route", new JSONObject().put("final", "custom-exit").put("auto_detect_interface", true));
         JSONObject capture = new JSONObject().put("schema", 1).put("exit_id", exit.id).put("protocol", protocol(exit.protocol))
                 .put("expected_public_ip", exit.expectedPublicIp).put("profile", profile(exit, predecessor));
-        if (predecessor != null) capture.put("entry", predecessor).put("entry_tag", entryTag);
+        if (predecessor != null) {
+            capture.put("entry", predecessor).put("entry_tag", entryTag);
+            capture.getJSONObject("profile").put("multihop_enabled",true).put("multihop_entry_id",predecessor.getString("id"))
+                    .put("multihop_exit_id",exit.id).put("multihop_exit_mode",protocol(exit.protocol)).put("multihop_execution",execution);
+        }
         if (captured != null) capture.put("predecessor_config",captured.config);
         JSONObject policy = exit.policy != null && exit.policy.length() != 0 ? exit.policy : predecessor;
         if (policy != null && policy.has("dns_bootstrap")) capture.put("dns_bootstrap", policy.getJSONObject("dns_bootstrap"));
-        return new Compiled(source.toString(), capture.toString());
+        String frozen=Libbox.routerPrepareExternalExecutionCapture(source.toString(),capture.toString(),restoredExecution);
+        return new Compiled(source.toString(), frozen);
     }
 
     static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile, AndroidStandardExitStore.Entry selected, String entryMode) throws Exception {
+        return prepare(context,entryFile,selected,entryMode,"local","");
+    }
+
+    static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile, AndroidStandardExitStore.Entry selected, String entryMode, String execution, String restoredExecution) throws Exception {
         AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selected);
         String exitSnapshot = AndroidStandardExitStore.snapshot(selected);
         byte[] entryBytes = entryFile == null ? null : AndroidPrivateFileStore.read(entryFile, AndroidNodeStore.MAX_BUNDLE);
         JSONObject entry = entryBytes == null ? null : new JSONObject(AndroidTorProfile.strictText(entryBytes));
         try(AndroidExternalEntry predecessor=entry==null?null:AndroidExternalEntry.prepare(context,entryFile,entry,entryMode)){
-        Compiled compiled = compile(exit, entry, entryMode,predecessor);
+        Compiled compiled = compile(exit, entry, entryMode,predecessor,execution,restoredExecution);
         RouterPQNative.install();
         Libbox.checkConfig(compiled.config);
         String sessionId = UUID.randomUUID().toString();

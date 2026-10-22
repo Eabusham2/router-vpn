@@ -154,9 +154,10 @@ APP = r'''
 // Selection persistence is exercised with the shipping stores by test_android_connection_profiles.py.
 // Here its API boundary records only public references so permission/UI behavior stays isolated.
 final class AndroidConnectionProfileStore {
- static final java.util.Map<String,String> selected=new java.util.HashMap<>();final android.content.Context context;
+ static final java.util.Map<String,String> selected=new java.util.HashMap<>(),executions=new java.util.HashMap<>();final android.content.Context context;
  AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore nodes,AndroidStandardExitStore exits){context=c;}
  void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode){selected.put(context.getFilesDir().toString(),exit.id+"|"+(entry==null?"":entry.id)+"|"+mode);}
+ void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode,String execution){selectExternalPath(exit,entry,mode);executions.put(context.getFilesDir().toString(),execution);}
 }
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidHomeStateStore {
@@ -165,9 +166,10 @@ final class AndroidHomeStateStore {
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String value);void finished(boolean success,String value);}
- int starts;String mode="";java.io.File entry;AndroidStandardExitStore.Entry exit;
+ int starts;String mode="",execution="local";java.io.File entry;AndroidStandardExitStore.Entry exit;
  void connectDirect(AndroidStandardExitStore.Entry value,Callback cb){starts++;exit=value;mode="external";}
  void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,Callback cb){starts++;entry=file;exit=value;mode=selected;}
+ void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,String execution,Callback cb){connect(file,value,selected,cb);this.execution=execution;}
  void disconnect(){}
 }
 final class AndroidRuntimeRegistry {
@@ -198,7 +200,15 @@ public final class TorFormHarness {
  static String displayed(View root){StringBuilder result=new StringBuilder();for(View view:views(root))if(view instanceof TextView)result.append(((TextView)view).getText()).append('\n');return result.toString();}
  static StandardExitActivity activity(Path directory,Bundle state)throws Exception{Context.nextFiles=directory.toFile();Files.createDirectories(directory);StandardExitActivity result=new StandardExitActivity();result.onCreate(state);return result;}
  static AndroidStandardExitStore store(StandardExitActivity activity)throws Exception{return (AndroidStandardExitStore)get(activity,"exitStore");}
- static String compiled(AndroidStandardExitStore.Entry entry)throws Exception{return io.nekohasekai.libbox.Libbox.routerCompileTorProfile(AndroidTorProfile.profile(entry).toString(),"form-roundtrip","");}
+ static String compiled(AndroidStandardExitStore.Entry entry)throws Exception{
+  JSONObject profile=AndroidTorProfile.profile(entry);io.nekohasekai.libbox.Libbox.routerValidateTorProfile(profile.toString());
+  String mode=profile.optString("dns_mode","");
+  if(mode.isEmpty()||mode.equals("home")){
+   boolean rejected=false;try{io.nekohasekai.libbox.Libbox.routerCompileTorProfile(profile.toString(),"form-roundtrip","");}catch(Exception expected){rejected=true;}
+   check(rejected,"unresolved Home draft silently compiled with another resolver");return profile.toString();
+  }
+  return io.nekohasekai.libbox.Libbox.routerCompileTorProfile(profile.toString(),"form-roundtrip","");
+ }
  static boolean same(String a,String b)throws Exception{return io.nekohasekai.libbox.Libbox.testSameJSON(a,b);}
  static AlertDialog form(StandardExitActivity activity,AndroidStandardExitStore.Entry entry)throws Exception{invoke(activity,"showTorForm",entry==null?"tor":entry.protocol,entry);return AlertDialog.last;}
  static JSONObject policy(String mode,String protocol)throws Exception{
@@ -208,7 +218,8 @@ public final class TorFormHarness {
    .put("mtu_policy","fixed").put("manual_mtu",1360);return result;
  }
  static void roundtrips()throws Exception{
-  List<JSONObject> policies=new ArrayList<>();policies.add(new JSONObject());policies.add(policy("rescue","tcp"));policies.add(policy("","dot"));
+  List<JSONObject> policies=new ArrayList<>();policies.add(new JSONObject());policies.add(policy("rescue","tcp"));policies.add(policy("","dot").put("dns_host","10.77.0.53"));
+  for(String protocol:new String[]{"udp","tcp","dot","doh","doh3","tls","https","h3"})policies.add(policy("home",protocol).put("dns_host","10.77.0.53"));
   policies.add(policy("dot","tcp"));policies.add(policy("doh","tcp"));
   for(String protocol:new String[]{"tcp","dot","tls","doh","https"})policies.add(policy("custom",protocol));
   for(String ipv6:new String[]{"","off","auto","on"})for(boolean allow:new boolean[]{true,false})policies.add(policy("custom","doh").put("ipv6_mode",ipv6).put("home_lan_access",allow));
@@ -223,8 +234,9 @@ public final class TorFormHarness {
    check(spinner(dialog,"IPv6 off").getSelectedItemPosition()==ipIndex,"Tor editor displayed another saved IPv6 policy");
    check(lan(dialog).isChecked()==!policy.optBoolean("home_lan_access",true),"Tor editor displayed another saved LAN policy");
    String expectedDNS=policy.optString("dns_mode","");String expectedProtocol=expectedDNS.equals("custom")?policy.optString("dns_protocol",""):expectedDNS;
-   int dnsIndex=expectedProtocol.equals("tcp")?1:(expectedProtocol.equals("dot")||expectedProtocol.equals("tls"))?2:(expectedProtocol.equals("doh")||expectedProtocol.equals("https"))?3:0;
-   check(spinner(dialog,"Rescue DoH (Cloudflare)").getSelectedItemPosition()==dnsIndex,"Tor editor displayed another saved DNS policy");
+   int dnsIndex=(expectedDNS.isEmpty()||expectedDNS.equals("home"))?0:expectedDNS.equals("rescue")?1:expectedProtocol.equals("tcp")?2:(expectedProtocol.equals("dot")||expectedProtocol.equals("tls"))?3:4;
+   check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==dnsIndex,"Tor editor displayed another saved DNS policy");
+   if(dnsIndex==0){String home=policy.optString("dns_protocol","");int transport=home.equals("tcp")?1:(home.equals("dot")||home.equals("tls"))?2:(home.equals("doh")||home.equals("https"))?3:(home.equals("doh3")||home.equals("h3"))?4:0;check(spinner(dialog,"Home UDP").getSelectedItemPosition()==transport,"Tor Home editor changed the saved DNS transport");}
    EditText bridge=null;if(!kind.equals("tor")){bridge=field(dialog,"Paste bridge lines, one per line");check(!bridge.isSaveEnabled()&&bridge.getImportantForAutofill()==View.IMPORTANT_FOR_AUTOFILL_NO,"bridge credentials entered Android saved/autofill state");check(bridge.getText().toString().equals(String.join("\n",selected.torBridges)),"bridge order/credentials changed on edit");}
    field(dialog,"Display name").setText("Renamed private Tor node");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
    check(!dialog.showing,"valid name-only edit was rejected");AndroidStandardExitStore.Entry after=store(activity).get(selected.id);
@@ -234,7 +246,7 @@ public final class TorFormHarness {
    check(before.equals(AndroidStandardExitStore.snapshot(selected)),"saving aliased its captured source");
    if(bridge!=null)check(bridge.getText().length()==0,"dismissed form retained bridge credentials");roundtrips++;
   }
-  check(roundtrips==114,"Tor editor policy matrix incomplete");
+  check(roundtrips==162,"Tor editor policy matrix incomplete");
  }
  static void independentPolicyEdits()throws Exception{
   for(String initial:new String[]{"default","auto","fixed"}){
@@ -254,11 +266,13 @@ public final class TorFormHarness {
  }
  static void newFormAndRejections()throws Exception{
   StandardExitActivity activity=activity(Files.createTempDirectory(root,"create-"),null);AlertDialog dialog=form(activity,null);
-  check(spinner(dialog,"Rescue DoH (Cloudflare)").getSelectedItemPosition()==0&&spinner(dialog,"IPv6 off").getSelectedItemPosition()==0&&lan(dialog).isChecked(),"new Tor defaults changed");
+  check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0&&spinner(dialog,"IPv6 off").getSelectedItemPosition()==2&&!lan(dialog).isChecked(),"new Tor defaults changed");
   EditText host=field(dialog,"Custom DNS literal IP"),port=field(dialog,"Custom DNS port (blank uses protocol default)"),name=field(dialog,"DoT / DoH certificate server name"),path=field(dialog,"DoH path (default /dns-query)");
-  check(!host.isEnabled()&&!port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"rescue editor enables ignored custom fields");
-  Spinner dns=spinner(dialog,"Rescue DoH (Cloudflare)");dns.setSelection(1);check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"TCP DNS widget dependencies wrong");
-  dns.setSelection(2);check(name.isEnabled()&&!path.isEnabled(),"DoT widget dependencies wrong");dns.setSelection(3);check(path.isEnabled(),"DoH path cannot be set");
+  check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"Home UDP editor cannot retain its captured endpoint");
+  Spinner dns=spinner(dialog,"Home AdGuard through captured Router VPN entry"),home=spinner(dialog,"Home UDP");home.setSelection(4);check(name.isEnabled()&&path.isEnabled(),"Home DoH3 endpoint cannot be edited");
+  dns.setSelection(1);check(!host.isEnabled()&&!port.isEnabled()&&!name.isEnabled()&&!path.isEnabled()&&!home.isEnabled(),"rescue editor enables ignored custom fields");
+  dns.setSelection(2);check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"TCP DNS widget dependencies wrong");
+  dns.setSelection(3);check(name.isEnabled()&&!path.isEnabled(),"DoT widget dependencies wrong");dns.setSelection(4);check(path.isEnabled(),"DoH path cannot be set");
   field(dialog,"Display name").setText("New exact Tor policy");host.setText("149.112.112.112");port.setText("8443");name.setText("dns.example.test");path.setText("/private-query");
   spinner(dialog,"IPv6 off").setSelection(2);lan(dialog).setChecked(false);field(dialog,"Manual interface MTU, 1280–9000 (blank uses automatic)").setText("1500");
   dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!dialog.showing&&store(activity).list().size()==1,"new valid Tor policy was not saved");
@@ -332,6 +346,27 @@ public final class TorFormHarness {
   if(kind.equals("openvpn")){e.username=" private OpenVPN user ";e.password=" private OpenVPN password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nauth-user-pass\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
   return e;
  }
+ static void externalExecutionForm()throws Exception{
+  String urlHint="This server's HTTPS response URL (required for Server / Compare both)",nameHint="Response TLS server name (optional)";
+  StandardExitActivity editor=activity(Files.createTempDirectory(root,"external-response-"),null);AndroidStandardExitStore.Entry selected=ordinary("shadowsocks");selected.policy=AndroidExternalPolicy.editorPolicy(null);store(editor).save(selected);
+  invoke(editor,"showExternalPolicyForm",selected);AlertDialog form=AlertDialog.last;field(form,urlHint).setText("https://203.0.113.20:8443/response");field(form,nameHint).setText("external.example.test");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+  check(!form.showing,"valid same-node response endpoint was not saved");selected=store(editor).get(selected.id);String saved=AndroidStandardExitStore.snapshot(selected);
+  check(selected.responseProbe.getString("url").equals("https://203.0.113.20:8443/response")&&selected.responseProbe.getString("server_name").equals("external.example.test"),"response identity changed during save");
+  invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;check(field(form,urlHint).getText().toString().equals(selected.responseProbe.getString("url")),"response endpoint missing after reopen");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"response roundtrip changed saved policy or credentials");
+  for(String[] invalid:new String[][]{{urlHint,"https://203.0.113.21:8443/response"},{urlHint,"http://203.0.113.20/response"},{urlHint,"https://203.0.113.20/response?owner=other"},{nameHint,"localhost"},{nameHint,"8.8.8.8"}}){
+   invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;field(form,invalid[0]).setText(invalid[1]);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"invalid response identity changed private profile: "+invalid[1]);form.dismiss();
+  }
+  String[] executions={"local","server","auto"};for(int choice=0;choice<executions.length;choice++)for(String scenario:new String[]{"current","recreated","altered"}){
+   Path directory=Files.createTempDirectory(root,"external-execution-permission-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node entry=node(directory);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);
+   invoke(picker,"chooseExecution",entry,exit,"wg");AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"supported external execution choices are not visible");execution.clickItem(choice);
+   Bundle pending=new Bundle();picker.onSaveInstanceState(pending);check(pending.getString("pending_execution","").equals(executions[choice]),"Android permission omitted captured execution");
+   if(scenario.equals("altered"))pending.putString("pending_execution",executions[(choice+1)%executions.length]);if(!scenario.equals("current"))picker=activity(directory,pending);picker.onActivityResult(2101,Activity.RESULT_OK,null);
+   AndroidStandardExitRuntime run=AndroidRuntimeRegistry.get(picker).standardExit;if(scenario.equals("altered")){check(run.starts==0,"restored permission borrowed a different execution");continue;}
+   check(run.starts==1&&run.execution.equals(executions[choice])&&run.mode.equals("wg")&&run.entry.equals(entry.file),"permission launch replaced chosen external execution");check(AndroidConnectionProfileStore.executions.get(directory.toString()).equals(executions[choice]),"saved path omitted execution");
+  }
+  Path directory=Files.createTempDirectory(root,"external-execution-select-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node entry=node(directory);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);picker.intent.putExtra(StandardExitActivity.EXTRA_SELECT_PATH,true);invoke(picker,"chooseExecution",entry,exit,"wg");AlertDialog.last.clickItem(2);
+  check(picker.finished&&AndroidRuntimeRegistry.get(picker).standardExit.starts==0&&"auto".equals(AndroidConnectionProfileStore.executions.get(directory.toString())),"selection-only Compare did not persist without starting VPN");
+ }
  static void ordinaryPolicies()throws Exception{
   int ordinaryRoundtrips=0;
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
@@ -359,7 +394,9 @@ public final class TorFormHarness {
   for(String mutation:new String[]{"exit","denied"}){StandardExitActivity pending=activity(Files.createTempDirectory(root,"ordinary-permission-"),null);AndroidStandardExitStore.Entry e=ordinary("socks5");e.policy.put("dns_mode","rescue");store(pending).save(e);invoke(pending,"requestDirect",e);if(mutation.equals("exit")){e.policy.put("dns_mode","home");store(pending).save(e);}pending.onActivityResult(2101,mutation.equals("denied")?0:Activity.RESULT_OK,null);check(AndroidRuntimeRegistry.get(pending).standardExit.starts==0,"permission adopted changed external policy");}
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"ordinary-mode-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node owned=node(directory);AndroidStandardExitStore.Entry e=ordinary(kind);e.policy.put("dns_mode","rescue");store(picker).save(e);
-   invoke(picker,"chooseEntry",e);AlertDialog.last.clickItem(0);AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"ordinary external mode picker omitted a captured entry");int index=-1;for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"ordinary entry mode unavailable: "+mode);modes.clickItem(index);picker.onActivityResult(2101,Activity.RESULT_OK,null);
+   invoke(picker,"chooseEntry",e);AlertDialog.last.clickItem(0);AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"ordinary external mode picker omitted a captured entry");int index=-1;for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"ordinary entry mode unavailable: "+mode);modes.clickItem(index);
+   if(kind.equals("shadowsocks")){AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"external execution choices disappeared");execution.clickItem(0);}
+   picker.onActivityResult(2101,Activity.RESULT_OK,null);
    AndroidStandardExitRuntime run=AndroidRuntimeRegistry.get(picker).standardExit;check(run.starts==1&&run.mode.equals(mode)&&run.entry.equals(owned.file)&&run.exit.protocol.equals(kind),"ordinary permission handoff changed selected mode or exit");
   }
   System.out.println("Android ordinary external settings: "+ordinaryRoundtrips+" real Java/Go graph roundtrips plus Home, rejection and permission ownership checks passed");
@@ -387,7 +424,7 @@ public final class TorFormHarness {
   add.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog settings=AlertDialog.last;check(!add.showing&&settings.showing&&config.getText().length()==0&&store(activity).list().isEmpty(),"AmneziaWG skipped private policy capture or retained pasted keys");check(spinner(settings,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==2&&field(settings,"Selected DNS IP or hostname").getText().toString().equals("9.9.9.9"),"AmneziaWG silently replaced imported DNS selection");settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!settings.showing&&store(activity).list().size()==1,"AmneziaWG full profile not saved");
   AndroidStandardExitStore.Entry saved=store(activity).list().get(0);check(saved.protocol.equals("amneziawg")&&sameParams(saved.awgParameters,example.awgParameters)&&saved.wgKeepalive==17&&saved.wgDns.equals(List.of("9.9.9.9","2620:fe::fe")),"AmneziaWG form dropped parameters, keepalive or secondary DNS capture");check(new JSONObject(AndroidExternalPolicy.compile(saved,null,"external").config).getJSONArray("endpoints").getJSONObject(0).getString("type").equals("routervpn-amneziawg"),"saved AmneziaWG did not compile native protocol");
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();externalExecutionForm();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -400,7 +437,9 @@ def main():
         go_dir, work = Path(go_dir), Path(work)
         code = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mobiletor";nativeopenvpn "router-vpn/mobile"', 1)
         code = code.replace('case "tor-profile":', '''case "external-openvpn":var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
+ case "external-execution":var p struct{Config,Capture,Restored string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(p.Config,p.Capture,p.Restored)}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
  case "tor-profile":''', 1)
         (go_dir / "main.go").write_text(code)
         native = work / "policy"
@@ -429,7 +468,11 @@ def main():
                 text = text[:begin] + T.P.PIPE_CALL + text[end:]
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
+ public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
+ public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
+ public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
+ public static String routerPrepareExternalExecutionCapture(String config,String capture,String restored)throws Exception{return call("external-execution",new JSONObject().put("Config",config).put("Capture",capture).put("Restored",restored).toString(),"");}
  public static String version(){return "1.14.1";}public static String routerOpenVPNEndpoint(String config,String username,String password,String tag,String detour)throws Exception{return call("external-openvpn",new JSONObject().put("config",config).put("username",username).put("password",password).put("tag",tag).put("detour",detour).toString(),"");}
  public static String routerCompilePQProfile(''', 1)
             target = src / path

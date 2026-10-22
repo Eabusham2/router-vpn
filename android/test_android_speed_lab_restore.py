@@ -55,6 +55,10 @@ final class AndroidMultihopRuntime {
  List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
+ String execution="local",selected="local";
+ String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
+ void connect(File f,AndroidStandardExitStore.Entry e,String mode,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,mode,cb);}
+ void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;this.execution=execution;selected=winner;connect(f,e,mode,cb);}
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  boolean isActiveOrTransitioning(){return AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.logicalMode.equals("external");}
  String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}
@@ -112,6 +116,13 @@ public final class SpeedLabRestoreTest {
   for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
    Fixture f=new Fixture(root,"multihop",topology);f.originalWinner=selected;AndroidRuntimeRegistry.instance.multihop.selected=selected;f.start();f.quiesce();f.measured();f.complete();
    check(f.result.error==null,"exact prior winner restore failed");f.originalRestored();check(RuntimeBoundary.proofs>=(topology.equals("system-direct")?2:3),"winner restore reused an old proof");
+  }
+ }
+ static void exactExternalWinner(Path root)throws Exception{
+  for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
+   Fixture f=new Fixture(root,"external-shadowsocks",topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;
+   f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"external winner restoration failed");f.originalRestored();
+   check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected),"external Compare was rerun instead of restoring its proved winner");
   }
  }
  static void cancellation(Path root)throws Exception{
@@ -174,7 +185,7 @@ public final class SpeedLabRestoreTest {
    AndroidSpeedLab.drained(true);waitFor(()->!f.controller.isRunning(),"UI cancellation never finalized");check(!AndroidMTUMeasurementGate.held()&&run.isEnabled()&&!cancel.isEnabled(),"UI completion failed to restore action buttons");check(AndroidHomeStateStore.current.sessionId.equals(f.originalSession),"current-path cancel replaced the existing connection");
   }
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);exactMultihopWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,8 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,8 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
 }
 '''
 
