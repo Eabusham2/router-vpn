@@ -4,8 +4,9 @@
 Detailed platform behavior is delegated to the existing shipping/session/
 durability audits. This gate prevents later work from reviving requirements the
 user superseded: branch/PR patch flows, tab-first daily UI, immediate successful
-download deletion, fake cross-platform parity, moving-main artifacts, or custom
-XOR-style packet ciphers.
+download deletion, fake cross-platform parity, moving-main artifacts, or XOR
+used instead of authenticated encryption. The later Start Layer whitening
+choice is an explicit obfuscation option and must remain available.
 """
 from __future__ import annotations
 
@@ -46,11 +47,35 @@ need(
     "Development changes land directly on `main`",
     "map-first",
     "30 minutes from READY",
-    "Do not invent XOR",
+    "AES-256-GCM + XOR whitening",
+    "never a replacement cipher",
+    "Capture entry and exit Start Layers separately",
     "Unsupported platform functionality remains disabled/unavailable",
     "immutable exact-SHA GitHub Release asset",
     "ASUS household safety",
 )
+try:
+    requirements = json.loads(read("configs/current-requirements.json"))
+except json.JSONDecodeError as exc:
+    errors.append(f"configs/current-requirements.json: invalid JSON: {exc}")
+    requirements = {}
+expected_start_layer = {
+    "modes": ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"],
+    "aes_transport": "shadowsocks-2022-blake3-aes-256-gcm",
+    "authenticated_aead_required": True,
+    "xor_role": "obfuscation-only",
+    "xor_counts_as_encryption": False,
+    "xor_without_aead_allowed": False,
+}
+if requirements.get("start_layer") != expected_start_layer:
+    errors.append("configs/current-requirements.json: Start Layers must preserve Off, AES-256-GCM, and authenticated AES plus optional XOR whitening")
+if requirements.get("defaults", {}).get("start_layer") != "off":
+    errors.append("configs/current-requirements.json: Start Layer must default to Off")
+truth = requirements.get("truth", {})
+if (truth.get("custom_xor_cipher") is not False or
+        truth.get("xor_whitening_obfuscation_only") is not True or
+        truth.get("authenticated_standard_cryptography_only") is not True):
+    errors.append("configs/current-requirements.json: XOR whitening cannot replace vetted authenticated encryption")
 contract_text = read("client/unified-control-center-v2.json")
 try:
     contract = json.loads(contract_text)
