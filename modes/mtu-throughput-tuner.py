@@ -461,19 +461,36 @@ def main() -> int:
         ]
         assert pick_winner(sample)["mtu"] == 1380
         assert candidate_mtus(1380)[0] == 1380
-        old = os.environ.get("HOMEVPN_NETWORK_CONTEXT")
+        fixture_environment = {
+            "HOMEVPN_ROOT": "", "HOMEVPN_MODE": "wg",
+            "HOMEVPN_LOGICAL_MODE": "wg", "HOMEVPN_BASE": "wg",
+            "HOMEVPN_IP_FAMILY": "4", "HOMEVPN_NETWORK_CONTEXT": "wifi-a",
+        }
+        old = {key: os.environ.get(key) for key in fixture_environment}
         try:
-            os.environ["HOMEVPN_NETWORK_CONTEXT"] = "wifi-a"
-            p = {"id": "node", "endpoint": "203.0.113.10"}
-            first = path_context_key(p)
-            os.environ["HOMEVPN_NETWORK_CONTEXT"] = "cellular-b"
-            second = path_context_key(p)
-            assert first != second
+            # Exercise the real private-root and generated-source path without
+            # depending on an installed node, caller environment, or network.
+            with tempfile.TemporaryDirectory(prefix="router-vpn-mtu-self-test-") as directory:
+                root = Path(directory).resolve()
+                fixture_environment["HOMEVPN_ROOT"] = str(root)
+                os.environ.update(fixture_environment)
+                source = root / "generated" / "node" / "wg" / "wg.conf"
+                source.parent.mkdir(parents=True)
+                source.write_text("[Peer]\nEndpoint = 203.0.113.10:51820\n", encoding="utf-8")
+                p = {"id": "node", "endpoint": "203.0.113.10"}
+                first = path_context_key(p)
+                assert first == path_context_key(p)
+                os.environ["HOMEVPN_NETWORK_CONTEXT"] = "cellular-b"
+                second = path_context_key(p)
+                assert first != second
+                source.write_text("[Peer]\nEndpoint = 203.0.113.10:51822\n", encoding="utf-8")
+                assert second != path_context_key(p)
         finally:
-            if old is None:
-                os.environ.pop("HOMEVPN_NETWORK_CONTEXT", None)
-            else:
-                os.environ["HOMEVPN_NETWORK_CONTEXT"] = old
+            for key, value in old.items():
+                if value is None:
+                    os.environ.pop(key, None)
+                else:
+                    os.environ[key] = value
         print("MTU throughput optimizer self-test OK")
         return 0
     if len(sys.argv) != 2 or sys.argv[1] not in {"optimize", "measure", "apply", "restore"}:

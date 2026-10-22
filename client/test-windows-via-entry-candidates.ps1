@@ -43,7 +43,11 @@ Check ($S.Client.Jobs[0].Body.samples-eq5 -and $S.Client.Jobs[0].Body.base-eq'wg
 Check ($S.Rows.Count-eq3 -and $S.Eligible.Count-eq2) 'Partial failures dropped or eligible candidates lost'
 $Failed=@($S.Rows|Where-Object id -eq 'failed')[0]
 Check (-not$Failed.eligible -and $null-eq$Failed.median_ms -and $Failed.response-like'*unavailable*candidate TCP timeout*') 'Failure was displayed as a numeric routed RTT'
-Check ($S.Rows[1].response-like'*via Selected entry · TCP response 7*' -and $MultihopExitCombo.SelectedValue-eq'slow') 'Measurement selected an exit or lost its via-entry label'
+# This fixture is executed directly by Windows PowerShell 5.1, which reads a
+# BOM-less file as the system code page. The product source is explicitly UTF-8.
+# Construct the exact Unicode expectations without code-page-dependent bytes.
+$ViaLabel='*via Selected entry '+[char]0x00B7+' TCP response 7*'
+Check ($S.Rows[1].response-like$ViaLabel -and $MultihopExitCombo.SelectedValue-eq'slow') 'Measurement selected an exit or lost its via-entry label'
 SelectUnifiedCandidate $S 'best'
 Check ($S.Client.Jobs[1].Path-eq'/api/multihop/candidates/validate' -and $MultihopExitCombo.SelectedValue-eq'slow') 'Selection skipped validation'
 Complete $S.Client.Jobs[1] @{ok=$true;measured=$true;request_id=$S.RequestID;entry_id='entry';exit_id='best';entry_base='wg';entry_mode='wg'};PollUnifiedCandidates $S
@@ -148,5 +152,5 @@ Check ($script:PickerOpens-eq1) 'Programmatic refresh was treated as an entry-pi
 $script:TestBusy=$true;BeginUnifiedCandidateEntryChoice;$MultihopEntryCombo.SelectedValue='busy-entry';MarkUnifiedCandidateEntryChoice;CommitUnifiedCandidateEntryChoice
 Check ($script:PickerOpens-eq1) 'Entry picker opened a competing operation'
 
-foreach($Marker in @('UnifiedCandidatesButton','ShowUnifiedCandidates','UseProxy=$false','AllowAutoRedirect=$false','MaxResponseContentBufferSize=2097152',"StopUnifiedCandidates `$script:UnifiedCandidates 'close'",'Measure exits via entry…')){Check ($ProductSource.Contains($Marker)) ("Candidate shipping UI or lifecycle seam missing: $Marker")}
+foreach($Marker in @('UnifiedCandidatesButton','ShowUnifiedCandidates','UseProxy=$false','AllowAutoRedirect=$false','MaxResponseContentBufferSize=2097152',"StopUnifiedCandidates `$script:UnifiedCandidates 'close'",('Measure exits via entry'+[char]0x2026))){Check ($ProductSource.Contains($Marker)) ("Candidate shipping UI or lifecycle seam missing: $Marker")}
 Write-Host "Windows routed candidate UI/receipt/cancellation tests: PASS ($script:Checks checks; stale-selection mutation rejected)"
