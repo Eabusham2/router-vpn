@@ -56,7 +56,9 @@ extension RouterVPNModel {
         torTransport: String = "custom",
         torBridges: [String] = [],
         wgKeepalive: Int? = nil,
-        awgParameters: [String: String] = [:]
+        awgParameters: [String: String] = [:],
+        responseProbeURL: String = "",
+        responseProbeServerName: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -174,6 +176,9 @@ extension RouterVPNModel {
                 throw NSError(domain: "RouterVPN.ExternalNode", code: 11, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Shadowsocks method and password/PSK."])
             }
             external["shadowsocks"] = ["server": server, "port": port, "method": normalizedMethod, "password": secret]
+            if let probe = try IOSExternalExecution.responseProbe(host: server, url: responseProbeURL, serverName: responseProbeServerName) {
+                external["response_probe"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(probe))
+            }
         case "hysteria2":
             let sni = tlsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !secret.isEmpty, iosExternalSafeHostname(sni) else {
@@ -182,6 +187,7 @@ extension RouterVPNModel {
             external["hysteria2"] = ["server": server, "port": port, "password": secret, "tls_server_name": sni]
         default: fatalError("guarded protocol")
         }
+        guard protocolName == "shadowsocks" || (responseProbeURL.isEmpty && responseProbeServerName.isEmpty) else { throw IOSExternalExecution.issue() }
 
         let profileID = "ios-ext-" + UUID().uuidString.lowercased()
         let endpoint = tor ? "tor" : iosExternalEndpoint(server: server, port: port)
@@ -304,6 +310,8 @@ struct IOSExternalNodeBuilderView: View {
     @State private var method = "2022-blake3-aes-256-gcm"
     @State private var secret = ""
     @State private var tlsName = ""
+    @State private var responseProbeURL = ""
+    @State private var responseProbeServerName = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -370,6 +378,12 @@ struct IOSExternalNodeBuilderView: View {
                 }
                 if selected == .shadowsocks {
                     Section("Shadowsocks") { TextField("Method", text: $method).textInputAutocapitalization(.never); SecureField("Password / PSK", text: $secret) }
+                    Section("Server / Compare response measurement") {
+                        TextField("HTTPS URL on this server IP (optional)", text: $responseProbeURL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("Certificate server name (optional)", text: $responseProbeServerName).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("Use an HTTPS response endpoint hosted on the exact server IP above. Its certificate must verify against this name or the IP. Server and Compare also require this exit to be paired in the Router VPN entry's private relay settings. Local remains available without this endpoint.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if selected == .hysteria2 {
                     Section("Hysteria2") { SecureField("Password", text: $secret); TextField("TLS server name / SNI", text: $tlsName).textInputAutocapitalization(.never).autocorrectionDisabled() }
@@ -440,7 +454,9 @@ struct IOSExternalNodeBuilderView: View {
                 wgPrivateKey: wgPrivate, wgPeerPublicKey: wgPeer, wgPresharedKey: wgPSK,
                 wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig,
                 torTransport: torTransport, torBridges: selected == .torBridge ? torBridges.split(whereSeparator: \.isNewline).map { String($0) } : [],
-                wgKeepalive: selected.isWireGuardFamily ? keepalive : nil, awgParameters: selected == .amneziawg ? awgParameters : [:]
+                wgKeepalive: selected.isWireGuardFamily ? keepalive : nil, awgParameters: selected == .amneziawg ? awgParameters : [:],
+                responseProbeURL: selected == .shadowsocks ? responseProbeURL : "",
+                responseProbeServerName: selected == .shadowsocks ? responseProbeServerName : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

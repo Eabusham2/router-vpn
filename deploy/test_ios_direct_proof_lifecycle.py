@@ -14,6 +14,13 @@ PROVIDER=ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift'
 PRELUDE=r'''
 import Foundation
 
+// Receipt identity and policy compilation are exercised by their shipping
+// gates; this fixture isolates the provider's post-proof ownership callback.
+enum IOSMultihopExecution {
+ struct Source {}
+ static func issue()->NSError{NSError(domain:"ReceiptBoundary",code:1)}
+}
+struct RouterVPNExternalPolicy {let executionRequested:String?}
 @MainActor final class WireGuardAdapter {
  enum Level {case error}
  var startCallback: ((Error?)->Void)?
@@ -33,24 +40,26 @@ import Foundation
  var measurements:[String]=[]
  var externalMTU=0
  var torMTU=0
+ var executionBindings=0
  var held=""
  init(tunnel:PacketTunnelProvider){owner=tunnel}
  func prepareMTUHold(_ value:String)throws{held=value}
  func start(files:[String:Data],strict:Bool)throws{started=true}
- func start(files:[String:Data],strict:Bool,externalPolicy:String)throws{started=true;externalStarted=true}
+ func start(files:[String:Data],strict:Bool,externalPolicy:RouterVPNExternalPolicy)throws{started=true;externalStarted=true}
  func stop(){stops += 1;started=false}
  func proveTor(sessionID:String,profile:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.torProfile=profile;owner.proofCallback=completion}
  func proveExternal(completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil && externalStarted);owner.nativeExternalProof=true;owner.proofCallback=completion}
  func enableExternalHopMeasurement(exitID:String)throws{precondition(owner.pathProofGuard != nil);measurements.append(exitID);owner.duringMeasurement?();if owner.measurementFails{throw NSError(domain:"MeasurementFixture",code:1)}}
  func activateExternalMTU()throws{precondition(owner.pathProofGuard != nil && externalStarted && !measurements.isEmpty);externalMTU += 1;owner.duringMTU?();if owner.mtuFails{throw NSError(domain:"MTUFixture",code:1)}}
  func activateTorMTU()throws{precondition(owner.pathProofGuard != nil && owner.torSession != nil && !externalStarted && !measurements.isEmpty);torMTU += 1;owner.duringMTU?();if owner.mtuFails{throw NSError(domain:"MTUFixture",code:2)}}
+ func bindExternalExecutionSource(_ source:IOSMultihopExecution.Source)throws{precondition(owner.nativeExternalProof && externalMTU==1 && !measurements.isEmpty);executionBindings += 1;owner.duringExecution?();if owner.executionFails{throw IOSMultihopExecution.issue()}}
 }
 enum IOSStartLayer {static func validateExternal(profile:[String:Any])throws{};static func selectedMode(profile:[String:Any])throws->String{"off"}}
 enum RouterVPNExternalExitBuilder {
  static let torEntryModes:Set<String>=["wg"]
  static let ordinaryProtocols:Set<String>=["wireguard","socks5","http-connect","https-connect","shadowsocks","hysteria2"]
- struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?;var torProfileJSON:String?;var policy:String?}
- static func build(profile:[String:Any],predecessorFiles:[String:Data],predecessorProfile:[String:Any]?)throws->Runtime{Runtime(torSessionID:profile["tor"] as? Bool == true ? "captured-tor-session":nil,torProfileJSON:profile["tor"] as? Bool == true ? "exact compiled Tor profile":nil,policy:profile["native"] as? Bool == true ? "captured-policy":nil)}
+ struct Runtime {let expectedPublicIP="203.0.113.1";let files:[String:Data]=["sing-box.json":Data("{}".utf8)];var torSessionID:String?;var torPredecessorProfile:String?;var torProfileJSON:String?;var policy:RouterVPNExternalPolicy?}
+ static func build(profile:[String:Any],predecessorFiles:[String:Data],predecessorProfile:[String:Any]?,restoredExecution:String?)throws->Runtime{Runtime(torSessionID:profile["tor"] as? Bool == true ? "captured-tor-session":nil,torProfileJSON:profile["tor"] as? Bool == true ? "exact compiled Tor profile":nil,policy:profile["native"] as? Bool == true ? RouterVPNExternalPolicy(executionRequested:profile["execution"] as? Bool == true ? "auto":nil):nil)}
 }
 enum RouterVPNMTUPolicy {static func libbox(_ files:[String:Data],profile:[String:Any])throws->[String:Data]{files}}
 final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRoutes=true;var excludeLocalNetworks=true}
@@ -65,12 +74,14 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var pathMonitor:Monitor?
  var pathProofOwnerLock=NSLock()
  var initialMTUHold="test-comparison-lease"
+ var restoredMultihopExecution:String?,multihopExecutionSource:IOSMultihopExecution.Source?
  var proofCallback:((Error?)->Void)?
  var torSession:String?
  var torProfile:String?
  var nativeExternalProof=false
  var duringMeasurement:(()->Void)?,measurementFails=false
  var duringMTU:(()->Void)?,mtuFails=false
+ var duringExecution:(()->Void)?,executionFails=false
  var arms=0
  var forwarded=0
  var duringForwarding:(()->Void)?
@@ -80,7 +91,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  func enableForwarding(profileData:Data,proofID:String){forwarded += 1;duringForwarding?()}
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
  func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
- func beginExternal(tor:Bool=false,native:Bool=false,_ done:@escaping(Error?)->Void)throws{try startExternalLibbox(provider:[:],selectedProfile:["id":"saved-exit","tor":tor,"native":native,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
+ func beginExternal(tor:Bool=false,native:Bool=false,execution:Bool=false,_ done:@escaping(Error?)->Void)throws{multihopExecutionSource=execution ? IOSMultihopExecution.Source():nil;try startExternalLibbox(provider:[:],selectedProfile:["id":"saved-exit","tor":tor,"native":native,"execution":execution,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
  func strictKillSwitchRequested(_ profile:[String:Any])->Bool{profile["strict"] as? Bool == true}
  func selectedRouterProfile(_ root:[String:Any])throws->[String:Any]{root}
  func suppliedNodeProof(root:[String:Any],selectedProfile:[String:Any])throws->String{String(repeating:"a",count:64)}
@@ -100,19 +111,20 @@ TEST=r'''
   var checks=0
   func check(_ name:String,_ test:Bool){if !test{fatalError(name)};checks += 1}
   let failure=NSError(domain:"Fixture",code:1)
-  for kind in ["raw","external","native-external","tor"] {
-   for event in ["stable","network","proof-error","replacement","stop","forwarding-change","measurement-change","measurement-error","mtu-change","mtu-error"] {
+  for kind in ["raw","external","native-external","server-external","tor"] {
+   for event in ["stable","network","proof-error","replacement","stop","forwarding-change","measurement-change","measurement-error","mtu-change","mtu-error","execution-change","execution-error"] {
     if kind != "raw" && event=="forwarding-change"{continue}
-    if ["measurement-change","measurement-error"].contains(event) && !["native-external","tor"].contains(kind){continue}
-    if ["mtu-change","mtu-error"].contains(event) && !["native-external","tor"].contains(kind){continue}
+    if ["measurement-change","measurement-error"].contains(event) && !["native-external","server-external","tor"].contains(kind){continue}
+    if ["mtu-change","mtu-error"].contains(event) && !["native-external","server-external","tor"].contains(kind){continue}
+    if ["execution-change","execution-error"].contains(event) && kind != "server-external"{continue}
     let p=PacketTunnelProvider();var replies:[Error?]=[]
     if kind=="raw"{p.beginRaw{replies.append($0)};p.wireGuardAdapter!.startCallback!(nil)}
-    else {try p.beginExternal(tor:kind=="tor",native:kind=="native-external"){replies.append($0)}}
+    else {try p.beginExternal(tor:kind=="tor",native:["native-external","server-external"].contains(kind),execution:kind=="server-external"){replies.append($0)}}
     let adapter=p.wireGuardAdapter,engine=p.libboxEngine,guardState=p.pathProofGuard,monitor=p.pathMonitor
     check("guard already armed before proof",p.arms==1 && guardState != nil && p.proofCallback != nil && replies.isEmpty)
     if kind != "raw"{check("MTU comparison owner held before proof",engine!.held==p.initialMTUHold && engine!.started)}
     if kind=="tor"{check("Tor uses the captured dynamic proof request and exact profile",p.torSession=="captured-tor-session" && p.torProfile=="exact compiled Tor profile")}
-    if kind=="native-external"{check("ordinary node requires native DNS/node proof",p.nativeExternalProof && engine!.externalStarted)}
+    if ["native-external","server-external"].contains(kind){check("ordinary node requires native DNS/node proof",p.nativeExternalProof && engine!.externalStarted)}
     if event=="network" || event=="stop"{p.pathProofGuard=nil}
     if event=="stop"{p.wireGuardAdapter=nil;p.libboxEngine=nil}
     if event=="replacement"{
@@ -125,6 +137,8 @@ TEST=r'''
     if event=="measurement-error"{p.measurementFails=true}
     if event=="mtu-change"{p.duringMTU={p.pathProofGuard=nil}}
     if event=="mtu-error"{p.mtuFails=true}
+    if event=="execution-change"{p.duringExecution={p.pathProofGuard=nil}}
+    if event=="execution-error"{p.executionFails=true}
     let nextGuard=p.pathProofGuard,nextMonitor=p.pathMonitor,nextEngine=p.libboxEngine,nextAdapter=p.wireGuardAdapter
     p.proofCallback!(event=="proof-error" ? failure:nil)
     check("one terminal proof result",replies.count==1)
@@ -133,9 +147,10 @@ TEST=r'''
      check("success retains the original guard",p.pathProofGuard===guardState && p.arms==1 && monitor?.cancelled==false)
      check("successful engine retained",kind=="raw" ? adapter?.stops==0 : engine?.stops==0)
      check("forwarding only for verified owned home",p.forwarded==(kind=="raw" ? 1:0))
-     if ["native-external","tor"].contains(kind){check("measurement activation follows native proof and frozen exit",engine?.measurements==["saved-exit"])}
-     if kind != "raw"{check("ordinary external MTU activates under final network guard",engine?.externalMTU==(kind=="native-external" ? 1:0))}
+     if ["native-external","server-external","tor"].contains(kind){check("measurement activation follows native proof and frozen exit",engine?.measurements==["saved-exit"])}
+     if kind != "raw"{check("ordinary external MTU activates under final network guard",engine?.externalMTU==(["native-external","server-external"].contains(kind) ? 1:0))}
      if kind != "raw"{check("Tor MTU activates under its distinct final network guard",engine?.torMTU==(kind=="tor" ? 1:0))}
+     if kind != "raw"{check("only proved execution binds a winner after MTU adoption",engine?.executionBindings==(kind=="server-external" ? 1:0))}
     }else{
      check("stale proof never becomes Connected",replies[0] != nil)
      check("only original engine stopped",kind=="raw" ? adapter?.stops==1 : engine?.stops==1)

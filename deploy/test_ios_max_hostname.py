@@ -322,6 +322,12 @@ __PRODUCTION__
  for engine in ["libbox","external-libbox"]{for selected in ["empty","missing"]{
   var config=good,root=try object(good["bundle"] as! Data),profiles=try object(good["bundle"] as! Data)["profiles"] as! [String:[String:String]]
   profiles["wg"]=["wg.conf":profiles["max-tls-wg"]!["wg.conf"]!];root["profiles"]=profiles
+  if engine=="external-libbox" {
+   var nodes=root["routerProfiles"] as! [[String:Any]]
+   nodes[0]["node_kind"]="external";nodes[0]["start_layer"]="off"
+   nodes[0]["external"]=["protocol":"shadowsocks","expected_public_ip":"203.0.113.88","shadowsocks":["server":"198.51.100.8","port":8388,"method":"aes-256-gcm","password":"captured external fixture secret"]]
+   root["routerProfiles"]=nodes;config["mode"]="external-shadowsocks"
+  }
   if selected=="empty"{root["selectedRouterID"]=""}else{root.removeValue(forKey:"selectedRouterID")}
   config["bundle"]=try json(root);config["rawProfileID"]="wg";config["engine"]=engine;config.removeValue(forKey:"max_source_sha256")
   let queries=DNSSDTest.shared.counts().0,captures=NetworkTest.shared.counts().0

@@ -53,7 +53,7 @@ import Foundation
                 guard idle(manager), !model.connected, !manager.isOnDemandEnabled else { throw CancellationError() }
             }
             var execution: IOSMultihopExecution.Capture?
-            if let identity, identity.engine == "multihop-libbox" {
+            if let identity, try IOSMultihopExecution.requiresCapture(configuration: proto.providerConfiguration ?? [:]) {
                 execution = try await readExecution(manager, model: model, identity: identity, owner: owner)
             }
             return try IOSSpeedLabTunnel(identity: identity, proto: proto, manager: manager, execution: execution)
@@ -252,11 +252,12 @@ import Foundation
     private static func readExecution(_ manager: NETunnelProviderManager, model: RouterVPNModel,
                                       identity: IOSSessionIdentity, owner: UUID) async throws -> IOSMultihopExecution.Capture {
         try model.iosSpeedLabOwnership.require(owner)
+        let entryKey = identity.engine == "external-libbox" ? "external_entry_bundle" : "entryBundle"
         guard model.activeSessionIdentity == identity, model.connected,
               let connection = manager.connection as? NETunnelProviderSession,
               connection.status == .connected, connection.connectedDate == identity.connectedAt,
               let config = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-              config["bundle"] as? Data == identity.bundleData, config["entryBundle"] as? Data == identity.entryBundleData else { throw CancellationError() }
+              config["bundle"] as? Data == identity.bundleData, config[entryKey] as? Data == identity.entryBundleData else { throw CancellationError() }
         let source = try IOSMultihopExecution.Source(configuration: config, digest: RouterVPNModel.iosStrategyDigest)
         let request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         let data = try await IOSMTUControl.send(connection, operation: "speed-lab-execution", request: request, session: "")
@@ -264,7 +265,7 @@ import Foundation
         guard model.activeSessionIdentity == identity, model.connected,
               connection.status == .connected, connection.connectedDate == identity.connectedAt,
               let after = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-              after["bundle"] as? Data == identity.bundleData, after["entryBundle"] as? Data == identity.entryBundleData else { throw CancellationError() }
+              after["bundle"] as? Data == identity.bundleData, after[entryKey] as? Data == identity.entryBundleData else { throw CancellationError() }
         guard try IOSMultihopExecution.Source(configuration: after, digest: RouterVPNModel.iosStrategyDigest) == source else { throw CancellationError() }
         return try IOSMultihopExecution.Capture.decode(data, source: source, request: request)
     }

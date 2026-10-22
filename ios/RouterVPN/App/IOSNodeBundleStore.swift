@@ -114,7 +114,9 @@ final class IOSNodeBundleStore {
         name: String,
         location: String?,
         latitude: Double?,
-        longitude: Double?
+        longitude: Double?,
+        expectedExternal: ExternalNodeConfig? = nil,
+        responseProbe: ExternalResponseProbe? = nil
     ) throws -> Data {
         try ensureStorageReady()
         if let current { _ = try store(current, replaceExistingRecord: true) }
@@ -123,6 +125,18 @@ final class IOSNodeBundleStore {
             guard let data = records[key],
                   var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == wanted }) else { continue }
+            if let expectedExternal {
+                guard bundle.routerProfiles[index].normalizedNodeKind == "external",
+                      expectedExternal.protocolName == "shadowsocks",
+                      bundle.routerProfiles[index].external == expectedExternal else {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "The external node changed while its editor was open. Reopen Edit Node before saving."])
+                }
+                if responseProbe == nil, bundle.routerProfiles[index].multihopEnabled == true,
+                   ["server", "auto"].contains(bundle.routerProfiles[index].multihopExecution ?? "local") {
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 7, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the response endpoint used by Server or Compare."])
+                }
+                bundle.routerProfiles[index].external?.responseProbe = responseProbe
+            }
             bundle.routerProfiles[index].name = name
             bundle.routerProfiles[index].location = location
             bundle.routerProfiles[index].latitude = latitude

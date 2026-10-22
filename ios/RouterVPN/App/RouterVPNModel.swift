@@ -128,6 +128,7 @@ final class RouterVPNModel: ObservableObject {
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
+        try IOSExternalExecution.validateImported(decoded)
         let prepared = try IOSDNSRuntimePolicy.patch(decoded)
         apply(prepared)
         guard saveRouter() else { throw NSError(domain: "RouterVPN.ProfileSave", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }

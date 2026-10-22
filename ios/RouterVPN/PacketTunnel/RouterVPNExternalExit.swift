@@ -15,9 +15,14 @@ struct RouterVPNExternalPolicy: Sendable {
     let metadata: String
     let sourceSHA256: String
 
+    var executionRequested: String? {
+        (try? JSONSerialization.jsonObject(with: Data(metadata.utf8)) as? [String: Any])?["execution"] as? String
+    }
+
     static func compile(config: String, profile: [String: Any], protocolName: String,
                         expectedPublicIP: String, entry: [String: Any]? = nil,
-                        entryTag: String? = nil, predecessorConfig: String? = nil) throws -> RouterVPNExternalPolicy {
+                        entryTag: String? = nil, predecessorConfig: String? = nil,
+                        restoredExecution: String? = nil) throws -> RouterVPNExternalPolicy {
         guard let exitID = profile["id"] as? String, !exitID.isEmpty,
               (entry == nil) == (entryTag == nil) else { throw issue() }
         var frozenProfile = profile
@@ -34,8 +39,13 @@ struct RouterVPNExternalPolicy: Sendable {
                   predecessorConfig.utf8.count <= 4 * 1024 * 1024 else { throw issue() }
             selected["predecessor_config"] = predecessorConfig
         }
-        let capture = String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self)
+        let selection = String(decoding: try JSONSerialization.data(withJSONObject: selected, options: [.sortedKeys]), as: UTF8.self)
         var failure: NSError?
+        // Freeze the one lease proposal before graph compilation. Every proof,
+        // measurement and MTU operation reuses these exact captured bytes.
+        let capture = LibboxRouterPrepareExternalExecutionCapture(config, selection, restoredExecution ?? "", &failure)
+        if let failure { throw failure }
+        guard !capture.isEmpty, capture.utf8.count <= 8 * 1024 * 1024 else { throw issue() }
         let encoded = LibboxRouterCompileExternalPolicy(config, capture, &failure)
         if let failure { throw failure }
         return try adopt(encoded, source: config, capture: capture, exitID: exitID,
@@ -68,6 +78,14 @@ struct RouterVPNExternalPolicy: Sendable {
         if let predecessor = selected?["predecessor_config"] as? String {
             guard values["predecessor_sha256"] as? String == digest(Data(predecessor.utf8)) else { throw issue() }
         } else { guard values["predecessor_sha256"] == nil else { throw issue() } }
+        if let execution = selected?["execution"] as? [String: Any] {
+            guard let requested = execution["selection"] as? String, ["local", "server", "auto"].contains(requested),
+                  values["execution"] as? String == requested,
+                  values["last_node_measurement"] as? String == "https-response-time",
+                  protocolName == "shadowsocks", entryID != nil else { throw issue() }
+        } else {
+            guard selected?["execution"] == nil, values["execution"] == nil, values["last_node_measurement"] == nil else { throw issue() }
+        }
         return RouterVPNExternalPolicy(sourceConfig: source, capture: capture, config: config,
                                        metadata: metadata, sourceSHA256: sourceHash)
     }
@@ -91,6 +109,10 @@ struct RouterVPNExternalPolicy: Sendable {
         guard entryProven.boolValue == (entry != nil),
               (value["entry_id"] as? String ?? "") == (entry?["id"] as? String ?? ""),
               (value["entry_node_id"] as? String ?? "") == (entry?["node_proof_id"] as? String ?? "") else { throw Self.issue() }
+        if let requested = executionRequested {
+            guard let execution = value["execution"] as? String, ["local", "server"].contains(execution),
+                  requested == "auto" || requested == execution else { throw Self.issue() }
+        } else { guard value["execution"] == nil else { throw Self.issue() } }
         let checked = Date(timeIntervalSince1970: timestamp.doubleValue / 1000)
         guard checked >= began.addingTimeInterval(-2), checked <= Date().addingTimeInterval(5) else { throw Self.issue() }
     }
@@ -131,13 +153,15 @@ struct RouterVPNExternalExitRuntime {
 enum RouterVPNExternalExitBuilder {
     static let ordinaryProtocols: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
     static let torEntryModes: Set<String> = Set(RouterVPNMultihopGraph.supportedExitModes).union(IOSNativeMAXProfile.modeIDs)
-    static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil) throws -> RouterVPNExternalExitRuntime {
+    static func build(profile: [String: Any], predecessorFiles: [String: Data] = [:], predecessorProfile: [String: Any]? = nil,
+                      restoredExecution: String? = nil) throws -> RouterVPNExternalExitRuntime {
         let kind = string(profile["node_kind"]).lowercased()
         guard kind == "external", let external = profile["external"] as? [String: Any] else {
             throw error("Selected profile is not an external custom node.")
         }
         let protocolName = string(external["protocol"]).lowercased()
         if protocolName == "tor" || protocolName == "tor-bridge" {
+            guard restoredExecution == nil else { throw error("Tor cannot adopt an external execution receipt.") }
             let throughEntry = profile["multihop_enabled"] as? Bool ?? false
             guard throughEntry == (predecessorProfile != nil), throughEntry == !predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
             var predecessor = ""
@@ -204,12 +228,13 @@ enum RouterVPNExternalExitBuilder {
                   predecessorProfile["id"] as? String != profile["id"] as? String,
                   profile["multihop_exit_id"] as? String == profile["id"] as? String,
                   profile["multihop_exit_mode"] as? String == protocolName,
-                  ["", "local"].contains(string(profile["multihop_execution"])) else {
+                  ["", "local", "server", "auto"].contains(string(profile["multihop_execution"])) else {
                 throw error("The external graph belongs to another entry, exit or execution selection.")
             }
             let tag = "external-entry"
             if predecessorProfile["node_kind"] as? String == "external" {
                 guard predecessorFiles.isEmpty, let imported = predecessorProfile["external"] as? [String: Any],
+                      ["", "local"].contains(string(profile["multihop_execution"])), restoredExecution == nil,
                       let kind = imported["protocol"] as? String, ordinaryProtocols.contains(kind),
                       profile["multihop_entry_mode"] as? String == kind,
                       ["", "off"].contains(string(predecessorProfile["start_layer"])) else {
@@ -257,7 +282,8 @@ enum RouterVPNExternalExitBuilder {
         guard !data.isEmpty, data.count <= 4 * 1024 * 1024 else { throw error("iOS external Libbox config exceeds safety limit.") }
         let policy = try RouterVPNExternalPolicy.compile(config: String(decoding: data, as: UTF8.self), profile: profile,
                                                         protocolName: protocolName, expectedPublicIP: expected,
-                                                        entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig)
+                                                        entry: predecessorProfile, entryTag: entryTag, predecessorConfig: predecessorConfig,
+                                                        restoredExecution: restoredExecution)
         var files = predecessorFiles; files["sing-box.json"] = Data(policy.config.utf8)
         return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: expected,
                                             files: files, policy: policy)

@@ -431,7 +431,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
             multihopExecutionSource = nil; restoredMultihopExecution = nil
-            if engine == "multihop-libbox" {
+            if try IOSMultihopExecution.requiresCapture(configuration: provider) {
                 let source = try IOSMultihopExecution.Source(configuration: provider) {
                     SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
                 }
@@ -1137,7 +1137,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         } else if provider["tor_entry_mode"] != nil || provider["external_entry_mode"] != nil || selectedProfile["multihop_enabled"] as? Bool == true {
             throw tunnelError(58, "Saved external multihop cannot start without its captured entry.")
         }
-        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)
+        let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile,
+                                                            restoredExecution: restoredMultihopExecution)
+        guard (runtime.policy?.executionRequested != nil) == (multihopExecutionSource != nil) else {
+            throw IOSMultihopExecution.issue()
+        }
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
         try engine.prepareMTUHold(initialMTUHold)
         let files = runtime.torSessionID == nil && runtime.policy == nil ? try RouterVPNMTUPolicy.libbox(runtime.files, profile: selectedProfile) : runtime.files
@@ -1184,6 +1188,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     try engine.activateExternalMTU()
                     guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
                         throw self.tunnelError(57, "External path changed during MTU owner activation.")
+                    }
+                    if runtime.policy?.executionRequested != nil {
+                        guard let source = self.multihopExecutionSource else { throw IOSMultihopExecution.issue() }
+                        try engine.bindExternalExecutionSource(source)
+                        guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
+                            throw self.tunnelError(57, "External path changed during execution receipt activation.")
+                        }
                     }
                 } else if runtime.torSessionID != nil {
                     try engine.activateTorMTU()

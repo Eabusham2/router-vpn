@@ -192,6 +192,18 @@ struct ExternalShadowsocksConfig: Codable, Hashable {
     var password: String
 }
 
+/// A node-owned HTTPS response target. The literal destination remains the
+/// imported Shadowsocks server; the optional name only verifies its TLS cert.
+struct ExternalResponseProbe: Codable, Hashable {
+    var url: String
+    var serverName: String?
+
+    enum CodingKeys: String, CodingKey {
+        case url
+        case serverName = "server_name"
+    }
+}
+
 struct ExternalSOCKS5Config: Codable, Hashable {
     var host: String
     var port: Int
@@ -246,6 +258,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var httpsConnect: ExternalHTTPConnectConfig?
     var hysteria2: ExternalHysteria2Config?
     var torBridge: ExternalTorBridgeConfig?
+    var responseProbe: ExternalResponseProbe?
 
     enum CodingKeys: String, CodingKey {
         case wireGuard = "wireguard"
@@ -255,6 +268,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case httpsConnect = "https_connect"
         case shadowsocks, socks5, hysteria2
         case torBridge = "tor_bridge"
+        case responseProbe = "response_probe"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

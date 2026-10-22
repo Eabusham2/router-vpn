@@ -6,6 +6,16 @@ import Foundation
 enum IOSMultihopExecution {
     static let launchKey = "routervpn_speed_lab_execution"
 
+    /// Plain external Local has no selector/lease owner. Only the saved
+    /// Server/Compare family needs a proved runtime receipt for restoration.
+    static func requiresCapture(configuration: [String: Any]) throws -> Bool {
+        if configuration["engine"] as? String == "multihop-libbox" { return true }
+        guard configuration["engine"] as? String == "external-libbox" else { return false }
+        guard let data = configuration["bundle"] as? Data else { throw issue() }
+        let selected = try Source.profile(data, kind: "external")
+        return ["server", "auto"].contains(selected["multihop_execution"] as? String ?? "local")
+    }
+
     struct Source: Codable, Equatable, Sendable {
         let bundleSHA256: String
         let entrySHA256: String
@@ -21,16 +31,28 @@ enum IOSMultihopExecution {
         }
 
         init(configuration: [String: Any], digest: (Data) -> String) throws {
-            guard configuration["engine"] as? String == "multihop-libbox",
+            let external = configuration["engine"] as? String == "external-libbox"
+            let entryKey = external ? "external_entry_bundle" : "entryBundle"
+            guard (external || configuration["engine"] as? String == "multihop-libbox"),
                   let bundle = configuration["bundle"] as? Data,
-                  let entry = configuration["entryBundle"] as? Data,
-                  let raw = configuration["rawProfileID"] as? String ?? configuration["mode"] as? String else { throw issue() }
-            let exitProfile = try Self.profile(bundle), entryProfile = try Self.profile(entry)
+                  let entry = configuration[entryKey] as? Data,
+                  let raw = external ? configuration["mode"] as? String : (configuration["rawProfileID"] as? String ?? configuration["mode"] as? String) else { throw issue() }
+            let exitProfile = try Self.profile(bundle, kind: external ? "external" : "router-vpn")
+            let entryProfile = try Self.profile(entry, kind: "router-vpn")
             guard exitProfile["multihop_enabled"] as? Bool == true,
                   let exitID = exitProfile["id"] as? String, let entryID = entryProfile["id"] as? String,
                   exitID != entryID, exitProfile["multihop_exit_id"] as? String == exitID,
                   exitProfile["multihop_entry_id"] as? String == entryID,
-                  let exitMode = exitProfile["multihop_exit_mode"] as? String, exitMode == raw else { throw issue() }
+                  let exitMode = exitProfile["multihop_exit_mode"] as? String,
+                  (external ? "external-" + exitMode : exitMode) == raw else { throw issue() }
+            if external {
+                guard configuration["rawProfileID"] == nil, configuration["entryBundle"] == nil, configuration["tor_entry_bundle"] == nil,
+                      configuration["tor_entry_mode"] == nil,
+                      configuration["external_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
+                      ["server", "auto"].contains(exitProfile["multihop_execution"] as? String ?? ""),
+                      exitMode == "shadowsocks", let selected = exitProfile["external"] as? [String: Any],
+                      selected["protocol"] as? String == exitMode, selected["response_probe"] is [String: Any] else { throw issue() }
+            }
             self.bundleSHA256 = digest(bundle); self.entrySHA256 = digest(entry)
             self.entryID = entryID; self.exitID = exitID
             self.entryMode = exitProfile["multihop_entry_mode"] as? String ?? "wg"
@@ -45,7 +67,7 @@ enum IOSMultihopExecution {
             ["local", "server", "auto"].contains(requested)
         }
 
-        private static func profile(_ data: Data) throws -> [String: Any] {
+        fileprivate static func profile(_ data: Data, kind expected: String) throws -> [String: Any] {
             guard !data.isEmpty, data.count <= 32 * 1024 * 1024,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let profiles = object["routerProfiles"] as? [[String: Any]], !profiles.isEmpty else { throw issue() }
@@ -53,7 +75,7 @@ enum IOSMultihopExecution {
             let matches = selected.isEmpty && profiles.count == 1 ? profiles : profiles.filter { $0["id"] as? String == selected }
             guard matches.count == 1 else { throw issue() }
             let kind = (matches[0]["node_kind"] as? String ?? "router-vpn").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-            guard kind.isEmpty || kind == "router-vpn" else { throw issue() }
+            guard kind == expected || (kind.isEmpty && expected == "router-vpn") else { throw issue() }
             return matches[0]
         }
     }

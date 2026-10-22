@@ -69,7 +69,7 @@ extension RouterVPNModel {
         guard let exit = IOSDNSRuntimePolicy.selectedProfile(in: exitBundle), exit.normalizedNodeKind == "external",
               let exitMode = exit.external?.protocolName, Self.ordinaryExternalHopProtocols.contains(exitMode),
               exit.multihopEnabled == true, exit.multihopExitID == exit.id, exit.multihopExitMode == exitMode,
-              (exit.multihopExecution ?? "local") == "local", exit.external?.expectedPublicIP.isEmpty == false,
+              ["local", "server", "auto"].contains(exit.multihopExecution ?? "local"), exit.external?.expectedPublicIP.isEmpty == false,
               let entryID = exit.multihopEntryID, entryID != exit.id, let mode = exit.multihopEntryMode,
               let data = IOSNodeBundleStore.shared.bundleData(containing: entryID, current: bundle),
               data.count <= 32 * 1024 * 1024 else {
@@ -80,6 +80,7 @@ extension RouterVPNModel {
               let profile = entry.routerProfiles.first(where: { $0.id == entryID }) else {
             throw iosMultihopError("The captured entry bundle no longer selects exactly one linked node.")
         }
+        try IOSExternalExecution.require(selection: exit.multihopExecution ?? "local", entry: profile, exit: exit)
         let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
         let capturedEntry = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
         guard try IOSMultihopStartLayer.selected(capturedExit) == "off" else {
@@ -201,6 +202,11 @@ struct IOSMultihopView: View {
         guard let node = nodes.first(where: { $0.id == entryID }), node.normalizedNodeKind == "external" else { return nil }
         return node.external?.protocolName
     }
+    private var externalExecutionEligible: Bool {
+        guard let entry = nodes.first(where: { $0.id == entryID }),
+              let exit = exitNodes.first(where: { $0.id == exitID }) else { return false }
+        return IOSExternalExecution.eligible(entry: entry, exit: exit)
+    }
 
     var body: some View {
         NavigationStack {
@@ -246,7 +252,22 @@ struct IOSMultihopView: View {
                             .font(.caption).foregroundStyle(.secondary)
                     } else if let ordinaryExitProtocol {
                         LabeledContent("Exit transport", value: ordinaryExitProtocol)
-                        LabeledContent("Execution", value: "Local — one VPN interface")
+                        Picker("Execution", selection: $execution) {
+                            Text("Local — exit on this device").tag("local")
+                            if externalExecutionEligible {
+                                Text("Server — exit on entry node").tag("server")
+                                Text("Compare both — lower valid average").tag("auto")
+                            } else if execution != "local" {
+                                Text("Saved choice needs a compatible paired exit").tag(execution)
+                            }
+                        }
+                        if externalExecutionEligible {
+                            Text("Compare measures routed HTTPS responses from this node and the same random external endpoint through each candidate: (node response + external response) / 2. Both probes repeat before keeping the lowest valid result. Server uses a private expiring relay on the entry; this Shadowsocks exit must already be paired there.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        } else {
+                            Text("Server and Compare currently require a Router VPN entry and a paired Shadowsocks exit with an HTTPS response endpoint. Add that endpoint in Edit Node. Other external paths use Local.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                         Text("The imported exit connects through the selected entry. The native tunnel proves both nodes and the selected DNS before Connected. Home AdGuard requires a paired Router VPN entry; HTTP CONNECT paths require TCP, DoT or DoH DNS.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else {
@@ -288,7 +309,7 @@ struct IOSMultihopView: View {
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: torExitProtocol == nil && ordinaryExitProtocol == nil ? execution : "local", entryMode: externalEntryProtocol ?? entryMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: torExitProtocol == nil ? execution : "local", entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }

@@ -400,8 +400,10 @@ private enum IOSConnectionProfileStore {
                     record.preferences = try validatePreferences(preferences, external: true)
                     if preferences.multihopEnabled {
                         guard preferences.multihopExitID == record.nodeID, preferences.multihopExitMode == protocolName,
-                              preferences.multihopEntryMode != nil, (preferences.multihopExecution ?? "local") == "local" else {
-                            throw issue("Saved external multihop must retain this exact exit and its local execution owner.")
+                              preferences.multihopEntryMode != nil,
+                              ["local", "server", "auto"].contains(preferences.multihopExecution ?? "local"),
+                              (preferences.multihopExecution ?? "local") == "local" || protocolName == "shadowsocks" else {
+                            throw issue("Saved external multihop must retain this exact exit and a compatible execution choice.")
                         }
                     }
                 } else {

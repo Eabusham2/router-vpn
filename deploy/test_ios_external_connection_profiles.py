@@ -197,9 +197,40 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
   try check("whole-profile load restores exact hostname lookup choices",model.selectedNodeProfile?.dnsBootstrap==bootstrap && model.selectedNodeProfile?.dnsHost==p.dnsHost)
  }
+ static func externalExecutionPersistence()throws {
+  for execution in ["server","auto"] {
+   var p=profile("shadowsocks")
+   p.external?.responseProbe=ExternalResponseProbe(url:"https://198.51.100.1:9443/response",serverName:"paired.example.test")
+   p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="max-tls-awg";p.multihopExitID=p.id;p.multihopExitMode="shadowsocks";p.multihopExecution=execution
+   let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Saved external execution")
+   let record=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
+   try check("snapshot retains exact Server/Compare choice and native entry",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopEntryMode=="max-tls-awg")
+   try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe"))
+   var current=bundle(p);current.routerProfiles[0].multihopExecution="local";current.routerProfiles[0].external?.shadowsocks?.password="replacement private credential"
+   current.routerProfiles[0].external?.responseProbe?.url="https://198.51.100.1:9443/new-response"
+   IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(current)
+   model.bundle=bundle(profile("socks5","unrelated"));let original=try encoded(model.bundle!)
+   model.failGraph=true
+   try reject("load requires actual graph validation before restoring execution"){_ = try IOSConnectionProfileStore.load(model:model,id:saved.id)}
+   try check("unusable saved execution cannot replace unrelated selection",model.imports==0 && encoded(model.bundle!)==original)
+   model.failGraph=false
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   try check("load restores selection while retaining current node credentials",model.selectedNodeProfile?.multihopExecution==execution && model.selectedNodeProfile?.external==current.routerProfiles[0].external && model.imports==1)
+   let updated=try IOSConnectionProfileStore.update(model:model,id:saved.id,name:"Updated external execution")
+   try check("Update retains saved execution record identity",updated.id==saved.id && updated.preferences?.multihopExecution==execution)
+   try IOSConnectionProfileStore.delete(model:model,id:saved.id)
+   try check("Delete removes only its connection record",IOSConnectionProfileStore.all().isEmpty && model.selectedNodeProfile?.external==current.routerProfiles[0].external)
+  }
+  for kind in IOSConnectionSafePreferences.ordinaryExternalModes.sorted() where kind != "shadowsocks" {
+   var p=profile(kind);p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="wg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution="auto"
+   let model=try reset(p)
+   try reject("unsupported external execution cannot be saved as complete "+kind){_ = try IOSConnectionProfileStore.add(model:model,name:"Unowned execution")}
+   try check("rejected execution creates no saved record",IOSPrivateJSONStore.writes==0 && model.imports==0)
+  }
+ }
  static func main()throws {
   defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence()
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try externalExecutionPersistence()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  }
 }

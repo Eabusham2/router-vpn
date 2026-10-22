@@ -237,8 +237,13 @@ public final class LibboxRouterExternalProofRequest {
         return String(decoding:try JSONSerialization.data(withJSONObject:["session_id":session,"valid": !invalid]),as:UTF8.self)
     }
     public func cancel(){lock.lock();cancels+=1;lock.unlock();release.signal()}
+    public func close()throws{cancel()}
     public func cancelCount()->Int{lock.lock();defer{lock.unlock()};return cancels}
     public func healthy()->Bool{lock.lock();defer{lock.unlock()};return cancels==0 && proved}
+    // This existing fixture covers plain Local external policy. The separate
+    // execution-owner gate supplies real healthy winner/lease boundary states.
+    public func progressJSON()->String{"{}"}
+    public func execution()->String{""}
 }
 public func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterExternalProofRequest? { LibboxExternalTestState.shared.make(source,capture,session) }
 public func LibboxRouterExternalCreateHopMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterHopMeasurement? {
@@ -258,6 +263,7 @@ import Libbox
 // boundary isolates foreign-handle delivery, cancellation and exact config use.
 struct RouterVPNExternalPolicy: Sendable {
     let sourceConfig: String, capture: String, config: String
+    var executionRequested:String?{nil}
     func validateProof(_ result:String,sessionID:String,began:Date)throws {
         guard let value=try JSONSerialization.jsonObject(with:Data(result.utf8)) as? [String:Any],
               value["session_id"] as? String==sessionID,value["valid"] as? Bool==true else {throw NSError(domain:"ExternalPolicyFixture",code:1)}

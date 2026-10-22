@@ -22,6 +22,12 @@ SWIFT = r'''
   let predecessor=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]],"profiles":["private":"exact entry credential bytes"]])
   return ["engine":"multihop-libbox","rawProfileID":exit,"bundle":bundle,"entryBundle":predecessor]
  }
+ static func external(_ requested:String="auto")throws->[String:Any]{
+  let profile:[String:Any]=["id":"external-exit","node_kind":"external","external":["protocol":"shadowsocks","shadowsocks":["server":"198.51.100.8","password":"exact captured external credential"],"response_probe":["url":"https://198.51.100.8/response","server_name":"node.example.test"]],"multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"external-exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":"shadowsocks","multihop_execution":requested]
+  let root:[String:Any]=["selectedRouterID":"external-exit","routerProfiles":[profile]]
+  let predecessor=try source()["entryBundle"] as! Data
+  return ["engine":"external-libbox","mode":"external-shadowsocks","bundle":try JSONSerialization.data(withJSONObject:root),"external_entry_bundle":predecessor,"external_entry_mode":"max-tls-awg"]
+ }
  static func main()throws{
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)
   for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {for requested in ["local","server","auto"]{
@@ -91,6 +97,33 @@ SWIFT = r'''
    }
    reject("invalid frozen predecessor roles "+changed){_ = try IOSMultihopExecution.Source(configuration:value,digest:digest)}
   }
+  for requested in ["server","auto"] {
+   let original=try external(requested),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
+   let needsReceipt=try IOSMultihopExecution.requiresCapture(configuration:original)
+   check("external execution requires captured runtime receipt",needsReceipt)
+   for winner in ["local","server"] where requested=="auto" || requested==winner {
+    let receipt=try IOSMultihopExecution.Capture(source:source,execution:winner,session:session,request:request)
+    let bytes=try receipt.encoded(),parsed=try IOSMultihopExecution.Capture.decode(bytes,source:source,request:request)
+    let override=try IOSMultihopExecution.restoredExecution(option:String(decoding:bytes,as:UTF8.self) as NSString,source:source,mtuHold:hold)
+    check("external restore retains requested Compare and proved choice",parsed==receipt && override==winner && source.requested==requested)
+    check("receipt never copies external credentials or relay endpoints",!String(decoding:bytes,as:UTF8.self).contains("credential") && !String(decoding:bytes,as:UTF8.self).contains("response_probe"))
+    for field in ["bundle","external_entry_bundle"] {
+     var changed=original,root=try JSONSerialization.jsonObject(with:original[field] as! Data) as! [String:Any]
+     root["profiles"]=["private":"changed private transport"]
+     changed[field]=try JSONSerialization.data(withJSONObject:root)
+     let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
+     reject("external labels cannot restore replaced credential source "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement)}
+    }
+   }
+   for mutation in ["entryBundle","tor_entry_bundle","tor_entry_mode","external_entry_mode","mode","rawProfileID"] {
+    var changed=original
+    changed[mutation]=mutation.hasSuffix("bundle") || mutation=="entryBundle" ? original["external_entry_bundle"] : "foreign"
+    reject("external receipt rejects mixed engine/source "+mutation){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
+   }
+  }
+  let local=try external("local"),needsLocal=try IOSMultihopExecution.requiresCapture(configuration:local)
+  check("plain external Local does not invent lease ownership",!needsLocal)
+  reject("plain external Local cannot adopt an unrelated execution receipt"){_ = try IOSMultihopExecution.Source(configuration:local,digest:digest)}
   print("Apple exact multihop winner receipt: PASS (\(checks) shipping Swift checks)")
  }
 }

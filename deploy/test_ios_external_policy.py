@@ -258,10 +258,65 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
    try check("every valid keepalive stays exact",(endpoint["peers"] as! [[String:Any]])[0]["persistent_keepalive_interval"] as? Int==value)
   }
  }
+ static func executionGraphs()throws {
+  let node=SHA256.hash(data:Data(("router-vpn-node-proof-v1\n"+key(4)).utf8)).map{String(format:"%02x",$0)}.joined()
+  let router:[String:Any]=["id":"paired-home","node_kind":"router-vpn","node_proof_id":node,"router_api":"http://10.8.0.1:8787","api_token":"private-entry-token","adguard_ipv4":"192.168.50.133","mtu_policy":"fixed","manual_mtu":1500,"home_lan_access":false,"ipv6_mode":"off","start_layer":"off"]
+  var input=profile("wireguard");input["manual_mtu"]=1500
+  let predecessor=try RouterVPNExternalExitBuilder.build(profile:input).policy!.config.replacingOccurrences(of:"custom-exit",with:"proxy")
+  let files=["sing-box.json":Data(predecessor.utf8)]
+  var profile=profile("shadowsocks"),external=profile["external"] as! [String:Any]
+  external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"node.example.test"];profile["external"]=external
+  profile["multihop_enabled"]=true;profile["multihop_entry_id"]="paired-home";profile["multihop_entry_mode"]="wg";profile["multihop_exit_id"]="saved-exit";profile["multihop_exit_mode"]="shadowsocks"
+  for requested in ["local","server","auto"] {
+   profile["multihop_execution"]=requested
+   let before=try json(profile),runtime=try RouterVPNExternalExitBuilder.build(profile:profile,predecessorFiles:files,predecessorProfile:router),policy=runtime.policy!
+   let captured=try object(Data(policy.capture.utf8)),graph=try object(Data(policy.config.utf8)),metadata=try object(Data(policy.metadata.utf8))
+   try check("external policy leaves all saved choices and secrets untouched",json(profile)==before && json(captured["profile"]!)==before)
+   let recompiled=try bridge(["Op":"external-policy","Config":policy.sourceConfig,"Policy":policy.capture]),envelope=try object(Data(recompiled.utf8))
+   try check("frozen proposal deterministically owns compile and proof graph",envelope["config_json"] as? String==policy.config && envelope["source_sha256"] as? String==policy.sourceSHA256)
+   let all=graph["outbounds"] as! [[String:Any]],final=all.first{$0["tag"] as? String=="custom-exit"}!
+   if requested=="local" {
+    try check("ordinary Local has no relay/selector owner",captured["execution"]==nil && policy.executionRequested==nil && final["type"] as? String=="shadowsocks")
+    continue
+   }
+   try check("execution has a real native selector and exact transport",final["type"] as? String=="selector" && all.first{$0["tag"] as? String=="routervpn-execution-local"}?["type"] as? String=="shadowsocks")
+   let server=all.first{$0["tag"] as? String=="routervpn-execution-server"}!,proposal=(captured["execution"] as! [String:Any])["request"] as! [String:Any]
+   try check("server leg uses captured entry and its private per-session listener",server["type"] as? String=="socks" && server["detour"] as? String=="external-entry" && server["server"] as? String=="10.8.0.1" && server["username"] as? String==proposal["listener_username"] as? String && server["password"] as? String==proposal["listener_password"] as? String)
+   try check("DNS and node proofs remain independent requirements",metadata["dns_proof"] as? String=="required" && metadata["public_exit_proof"] as? String=="required" && metadata["entry_proof"] as? String=="required" && metadata["dns_detour"] as? String=="custom-exit")
+   try check("measurements are labeled as routed HTTPS response times",policy.executionRequested==requested && metadata["last_node_measurement"] as? String=="https-response-time")
+   let session="owned-proof",began=Date()
+   let result:[String:Any]=["schema":1,"session_id":session,"source_sha256":policy.sourceSHA256,"config_sha256":metadata["config_sha256"]!,"exit_id":"saved-exit","ip":"203.0.113.88","entry_id":"paired-home","entry_node_id":node,"entry_proven":true,"dns_proven":true,"checked_at":Int64(began.timeIntervalSince1970*1000),"execution":"server"]
+   try policy.validateProof(text(result),sessionID:session,began:began);checks+=1
+   for fault in ["missing","unknown","dns","entry","public","source"] {
+    var wrong=result
+    switch fault {case "missing":wrong.removeValue(forKey:"execution");case "unknown":wrong["execution"]="auto";case "dns":wrong["dns_proven"]=false;case "entry":wrong["entry_node_id"]="unpaired";case "public":wrong["ip"]="203.0.113.9";default:wrong["source_sha256"]="retired"}
+    try reject("selected graph is not connected with invalid "+fault+" proof"){try policy.validateProof(text(wrong),sessionID:session,began:began)}
+   }
+   for winner in ["local","server"] {
+    if requested != "auto" && winner != requested {
+     try reject("fixed execution cannot adopt a different restoration choice"){_ = try RouterVPNExternalExitBuilder.build(profile:profile,predecessorFiles:files,predecessorProfile:router,restoredExecution:winner)}
+     continue
+    }
+    let restored=try RouterVPNExternalExitBuilder.build(profile:profile,predecessorFiles:files,predecessorProfile:router,restoredExecution:winner).policy!
+    let restoredCapture=try object(Data(restored.capture.utf8))
+    try check("restore forces proved runtime without rerunning Compare selection",restored.executionRequested==winner && (restoredCapture["profile"] as! [String:Any])["multihop_execution"] as? String==requested)
+    try check("restore creates a fresh lease without mutating saved credentials",json(restoredCapture["execution"]!) != json(captured["execution"]!) && json(profile)==before)
+   }
+   for fault in ["host","http","missing","protocol","entry","layer","unpaired"] {
+    var wrong=profile,e=external,predecessor=router
+    switch fault {case "host":e["response_probe"]=["url":"https://203.0.113.7/response"];case "http":e["response_probe"]=["url":"http://198.51.100.8/response"];case "missing":e.removeValue(forKey:"response_probe");case "protocol":e["protocol"]="socks5";case "entry":predecessor["node_kind"]="external";case "layer":wrong["start_layer"]="aes-256-gcm";default:predecessor["node_proof_id"]="wrong"}
+    wrong["external"]=e
+    // The provider validates the external Start Layer before invoking this
+    // builder. Exercise that actual validator rather than expecting a lower
+    // graph compiler to repeat a check owned by the native startup path.
+    try reject("unowned server graph is rejected before startup "+fault){try IOSStartLayer.validateExternal(profile:wrong);_ = try RouterVPNExternalExitBuilder.build(profile:wrong,predecessorFiles:files,predecessorProfile:predecessor)}
+   }
+  }
+ }
  static func main() {
   defer{RouterVPNTorTestClose()}
   do {
-   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap();try openVPNPaths();try importedAmnezia()
+   try policies();try negativeAdoption();try proofResults();try entryGraphs();try hostnameBootstrap();try openVPNPaths();try importedAmnezia();try executionGraphs()
    print("Apple ordinary external policy: PASS (\(checks) shipping Swift/real Go checks; OS/FFI boundaries substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
@@ -287,7 +342,7 @@ def main():
         command = ['swiftc', '-swift-version', '6', '-module-cache-path', str(work / 'module-cache'), '-I', str(work), '-L', str(work), '-lWireGuardKit', '-lLibbox']
         if platform.system() != 'Darwin':
             command += ['-lNetwork']
-        command += ['-Xlinker', '-rpath', '-Xlinker', str(work), str(ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'), str(code), '-o', str(work / 'tests')]
+        command += ['-Xlinker', '-rpath', '-Xlinker', str(work), str(ROOT / 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'), str(ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift'), str(code), '-o', str(work / 'tests')]
         subprocess.run(command, check=True, timeout=120)
         subprocess.run([str(work / 'tests'), str(compiler)], check=True, timeout=90)
 

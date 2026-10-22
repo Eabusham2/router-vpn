@@ -32,6 +32,8 @@ extension RouterVPNModel {
                       self.selectedNodeProfile?.id == nodeID, self.connected || self.tunnelTransitioning,
                       let value = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
                 var lines = ["Multihop: \(value["stage"] as? String ?? "pending") • \(value["execution"] as? String ?? "comparing")"]
+                let lastLabel = value["last_node_measurement"] as? String == "https-response-time" ? "node HTTPS response" : "last-node response"
+                let externalLabel = value["external_measurement"] as? String == "https-response-time" ? "external HTTPS response" : "external response"
                 for item in value["measurements"] as? [[String: Any]] ?? [] {
                     let candidate = item["candidate"] as? [String: Any] ?? [:]
                     let name = candidate["execution"] as? String ?? "candidate"
@@ -39,7 +41,7 @@ extension RouterVPNModel {
                        let last = item["last_node_ms"] as? Double, let external = item["external_ms"] as? Double,
                        let score = item["score_ms"] as? Double, last.isFinite, external.isFinite, score.isFinite,
                        last > 0, external > 0, score > 0 {
-                        lines.append(String(format: "%@: (%.1f + %.1f) / 2 = %.1f ms", name, last, external, score))
+                        lines.append(String(format: "%@: (%@ %.1f + %@ %.1f) / 2 = %.1f ms", name, lastLabel, last, externalLabel, external, score))
                     } else { lines.append("\(name): rejected — \(item["failure"] as? String ?? "probe failed")") }
                 }
                 self.multihopProgressText = lines.joined(separator: "\n")

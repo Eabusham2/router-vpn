@@ -170,16 +170,20 @@ final class RouterVPNLibboxEngine {
         if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
         var measurementCloseFailure: Error?
         do { try probe?.close() } catch { measurementCloseFailure = error }
+        // A server-executed external graph owns a private relay lease. Release
+        // it through this captured proof before tearing down its native Box.
+        var externalCloseFailure: Error?
+        do { try externalDelivery?.close() } catch { externalCloseFailure = error }
         if let plan {
             do { try plan.close() }
             catch { tunnel?.writeLibboxLog("Server multihop cleanup was not confirmed; its bounded lease expiry remains in force.") }
         }
-        var closeFailure: Error?
+        var closeFailure: Error? = externalCloseFailure
         if let owned {
             if strategyOwned || capturedTor || capturedExternal || probe != nil || mtuOwned {
                 var failure: NSError?
                 let closed = LibboxRouterStrategyCloseService(owned, &failure)
-                if !closed || failure != nil { closeFailure = failure ?? error("Native strategy teardown was not verified") }
+                if (!closed || failure != nil) && closeFailure == nil { closeFailure = failure ?? error("Native strategy teardown was not verified") }
             } else { try? owned.closeService() }
             if probe != nil {
                 do { try probe?.close(); measurementCloseFailure = nil }
@@ -199,7 +203,7 @@ final class RouterVPNLibboxEngine {
                 // process is rejected; an OS process restart releases it.
                 Self.torRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else if capturedExternal, let closeFailure {
-                Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
+                Self.externalRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe, externalProof: externalDelivery)
             } else if probe != nil || mtuOwned, let closeFailure {
                 Self.measurementRetirement.retain(server: owned, platform: platform, directory: directory, failure: closeFailure, measurement: probe)
             } else { owned.close() }
@@ -263,6 +267,23 @@ final class RouterVPNLibboxEngine {
             lock.lock(); cancelled = true; lock.unlock()
             request.cancel()
             finish(retired())
+        }
+        func close() throws {
+            cancel()
+            try request.close()
+        }
+        func progress() -> Data? {
+            guard let owner, current(owner), policy.executionRequested != nil else { return nil }
+            let data = Data(request.progressJSON().utf8)
+            guard !data.isEmpty, data.count <= 16384, current(owner) else { return nil }
+            return data
+        }
+        func provedExecution() -> String? {
+            guard let owner, current(owner), let selected = policy.executionRequested, request.healthy() else { return nil }
+            let execution = request.execution()
+            guard ["local", "server"].contains(execution), selected == "auto" || selected == execution,
+                  current(owner), request.healthy() else { return nil }
+            return execution
         }
         func run() {
             lock.lock()
@@ -455,10 +476,10 @@ final class RouterVPNLibboxEngine {
     private final class NativeRuntimeRetirement: @unchecked Sendable {
         private let lock = NSLock()
         private let label: String
-        private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?, LibboxRouterHopMeasurement?)] = []
+        private var retired: [(LibboxCommandServer, RouterVPNLibboxPlatform, URL?, LibboxRouterHopMeasurement?, ExternalProofDelivery?)] = []
         init(label: String) { self.label = label }
-        func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error, measurement: LibboxRouterHopMeasurement? = nil) {
-            lock.lock(); retired.append((server, platform, directory, measurement)); lock.unlock()
+        func retain(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, failure: Error, measurement: LibboxRouterHopMeasurement? = nil, externalProof: ExternalProofDelivery? = nil) {
+            lock.lock(); retired.append((server, platform, directory, measurement, externalProof)); lock.unlock()
         }
         func requireAvailable() throws {
             lock.lock(); let blocked = !retired.isEmpty; lock.unlock()
@@ -771,8 +792,8 @@ final class RouterVPNLibboxEngine {
         }
     }
     func multihopProgress() -> Data? {
-        ownershipLock.lock(); let plan = multihop; ownershipLock.unlock()
-        guard let plan else { return nil }
+        ownershipLock.lock(); let plan = multihop, external = externalProofDelivery; ownershipLock.unlock()
+        guard let plan else { return external?.progress() }
         let data = Data(plan.progressJSON().utf8)
         return data.count <= 16384 ? data : nil
     }
@@ -792,12 +813,46 @@ final class RouterVPNLibboxEngine {
         multihopExecutionSource = source
     }
 
+    /// An external winner is bound only after its independent DNS/public-exit
+    /// proof and its exact hop/MTU owners have been activated by PacketTunnel.
+    func bindExternalExecutionSource(_ source: IOSMultihopExecution.Source) throws {
+        ownershipLock.lock()
+        let policy = externalPolicy, delivery = externalProofDelivery, owned = server, generation = ownershipGeneration
+        let available = !permanentlyStopped && !starting && multihop == nil && hopMeasurement != nil && platform.mtu.hasOwner && multihopExecutionSource == nil
+        ownershipLock.unlock()
+        guard available, let policy, let delivery, let owned,
+              policy.executionRequested != nil, delivery.provedExecution() != nil,
+              let capture = try JSONSerialization.jsonObject(with: Data(policy.capture.utf8)) as? [String: Any],
+              let profile = capture["profile"] as? [String: Any], let entry = capture["entry"] as? [String: Any],
+              capture["exit_id"] as? String == source.exitID, entry["id"] as? String == source.entryID,
+              profile["multihop_entry_id"] as? String == source.entryID,
+              profile["multihop_exit_id"] as? String == source.exitID,
+              profile["multihop_entry_mode"] as? String == source.entryMode,
+              profile["multihop_exit_mode"] as? String == source.exitMode,
+              profile["multihop_execution"] as? String == source.requested else { throw IOSMultihopExecution.issue() }
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        guard generation == ownershipGeneration, server === owned, externalProofDelivery === delivery,
+              !permanentlyStopped, hopMeasurement != nil, multihopExecutionSource == nil else { throw IOSMultihopExecution.issue() }
+        multihopExecutionSource = source
+    }
+
     func multihopExecutionSnapshot(request: String) -> Data? {
         ownershipLock.lock()
-        let source = multihopExecutionSource, plan = multihop, owned = server, generation = ownershipGeneration
+        let source = multihopExecutionSource, plan = multihop, external = externalProofDelivery, owned = server, generation = ownershipGeneration
         let available = !permanentlyStopped && !starting && hopMeasurement != nil
         ownershipLock.unlock()
-        guard available, let source, let plan, let owned, plan.healthy() else { return nil }
+        guard available, let source, let owned else { return nil }
+        if let external {
+            guard plan == nil, let execution = external.provedExecution(),
+                  let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request) else { return nil }
+            ownershipLock.lock()
+            let current = ownershipGeneration == generation && server === owned && externalProofDelivery === external &&
+                multihopExecutionSource == source && !permanentlyStopped
+            ownershipLock.unlock()
+            guard current, external.provedExecution() == execution else { return nil }
+            return try? capture.encoded()
+        }
+        guard let plan, plan.healthy() else { return nil }
         let progress = Data(plan.progressJSON().utf8)
         guard progress.count <= 16384,
               let value = try? JSONSerialization.jsonObject(with: progress) as? [String: Any],

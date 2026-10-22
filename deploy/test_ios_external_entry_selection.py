@@ -5,13 +5,19 @@ The node-store and native-mode readiness boundaries are deterministic doubles;
 the separate Swift/Go policy gate validates compiled native configurations.
 """
 from pathlib import Path
+import importlib.util
+import platform
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
+spec = importlib.util.spec_from_file_location('external_entry_native_boundary', ROOT / 'deploy/test_ios_tor_profile.py')
+T = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(T)
 STUBS = r'''
 import Foundation
+import Libbox
 enum IOSRuntimeSelector {
  static let multihopModeIDs:Set<String>=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]
  static func selectRaw(bundle:ClientBundle,rawProfileID:String)throws->Int {
@@ -26,6 +32,15 @@ enum IOSDNSRuntimePolicy {
 }
 @MainActor final class IOSNodeBundleStore {
  static let shared=IOSNodeBundleStore();var nodes:[String:Data]=[:]
+ var failWrite=false
+ private var records:[String:Data]{get{nodes}set{nodes=newValue}}
+ private func ensureStorageReady()throws{}
+ private func canonicalProfileID(_ id:String,current:ClientBundle?)->String{id}
+ private func store(_ source:ClientBundle,replaceExistingRecord:Bool)throws->Data {
+  let data=try JSONEncoder().encode(source);var next=nodes;next[source.selectedRouterID]=data;try commitRecords(next);return data
+ }
+ private func commitRecords(_ value:[String:Data])throws{if failWrite{throw NSError(domain:"StoreWriteBoundary",code:1)};nodes=value}
+ // SHIPPING_METADATA_EDIT
  func bundleData(containing id:String,current:ClientBundle?)->Data? {
   if let current,current.routerProfiles.contains(where:{$0.id==id}){return try? JSONEncoder().encode(current)}
   return nodes[id]
@@ -37,6 +52,7 @@ enum IOSDNSRuntimePolicy {
  func linkNodeBundle(_ data:Data)throws{try importBundle(data)}
 }
 func encoded(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
+func encoded(_ value:ClientBundle)throws->Data{let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(value)}
 func profile(_ id:String,_ kind:String,_ protocolName:String="socks5")throws->RouterProfile {
  let value:[String:Any]=["id":id,"name":id,"node_kind":kind,"node_proof_id":kind=="router-vpn" ? String(repeating:"a",count:64):"",
   "endpoint":"198.51.100.8","router_api":kind=="router-vpn" ? "http://10.8.0.1:8787":"","api_token":"private-node-token",
@@ -51,6 +67,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
  static func check(_ name:String,_ result:@autoclosure ()throws->Bool)throws{guard try result()else{throw NSError(domain:"ExternalSelection",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
  static func reject(_ name:String,_ operation:()throws->Void)throws{do{try operation()}catch{checks+=1;return};throw NSError(domain:"ExternalRejection",code:1,userInfo:[NSLocalizedDescriptionKey:name])}
  static func main()throws {
+  defer { RouterVPNTorTestClose() }
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
    let entry=bundle(try profile("entry","external",entryProtocol)),model=RouterVPNModel()
@@ -96,6 +113,62 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   }
   IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry)]
   for execution in ["server","auto","unknown"]{var changed=model.bundle!;changed.routerProfiles[0].multihopExecution=execution;try reject("unowned external server execution"){_ = try model.iosMultihopEntryBundle(for:changed)}}
+  var ss=try profile("paired-ss","external","shadowsocks")
+  ss.external?.shadowsocks=ExternalShadowsocksConfig(server:"198.51.100.8",port:8388,method:"aes-256-gcm",password:" exact exit secret ")
+  ss.external?.responseProbe=ExternalResponseProbe(url:"https://198.51.100.8:9443/response",serverName:"node.example.test")
+  ss.multihopEnabled=true;ss.multihopEntryID="entry";ss.multihopEntryMode="wg";ss.multihopExitID=ss.id;ss.multihopExitMode="shadowsocks"
+  for execution in ["local","server","auto"] {
+   ss.multihopExecution=execution;let source=bundle(ss);model.bundle=source;IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(entry),ss.id:try JSONEncoder().encode(source)]
+   let captured=try model.iosMultihopEntryBundle(for:source)
+   try check("external execution captures the exact paired entry credentials",captured.profiles==entry.profiles && captured.apiToken==entry.routerProfiles[0].apiToken)
+   try model.saveIOSMultihop(enabled:true,entryID:"entry",exitID:ss.id,exitMode:"shadowsocks",execution:execution,entryMode:"wg")
+   try check("eligible external save never coerces execution to Local",model.bundle?.routerProfiles[0].multihopExecution==execution && model.bundle?.routerProfiles[0].external==ss.external)
+  }
+  for invalid in ["host","http","private","query","escaped","sni","missing","external-entry","unpaired"] {
+   var bad=ss,predecessor=entry
+   switch invalid {
+   case "host":bad.external?.responseProbe?.url="https://203.0.113.8/response"
+   case "http":bad.external?.responseProbe?.url="http://198.51.100.8/response"
+   case "private":bad.external?.shadowsocks?.server="192.168.50.1";bad.external?.responseProbe?.url="https://192.168.50.1/response"
+   case "query":bad.external?.responseProbe?.url="https://198.51.100.8/response?secret=unowned"
+   case "escaped":bad.external?.responseProbe?.url="https://198.51.100.8/%2fresponse"
+   case "sni":bad.external?.responseProbe?.serverName="localhost"
+   case "missing":bad.external?.responseProbe=nil
+   case "external-entry":predecessor.routerProfiles[0].nodeKind="external"
+   default:predecessor.routerProfiles[0].nodeProofID=nil
+   }
+   model.bundle=bundle(bad);IOSNodeBundleStore.shared.nodes=["entry":try JSONEncoder().encode(predecessor)]
+   try reject("external comparison refuses "+invalid){_ = try model.iosMultihopEntryBundle(for:model.bundle!)}
+  }
+  let edit=RouterVPNModel();ss.multihopExecution="local";edit.bundle=bundle(ss)
+  IOSNodeBundleStore.shared.nodes=[ss.id:try JSONEncoder().encode(edit.bundle!),"other-node":Data("unrelated private node bytes".utf8)]
+  let savedExternal=ss.external!,savedAssets=edit.bundle!.profiles
+  try check("idle editor validates and saves exact response URL",edit.updateNodeMetadata(id:ss.id,name:"Edited",location:"",latitudeText:"",longitudeText:"",expectedExternal:savedExternal,responseProbeURL:"https://198.51.100.8:9443/new-response",responseProbeServerName:"new.example.test"))
+  let edited=edit.bundle!.routerProfiles[0]
+  try check("response edit never replaces transport credentials or private assets",edited.external?.shadowsocks==savedExternal.shadowsocks && edit.bundle!.profiles==savedAssets && IOSNodeBundleStore.shared.nodes["other-node"]==Data("unrelated private node bytes".utf8))
+  try check("response edit is retained in the private linked node",(try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.nodes[ss.id]!)).routerProfiles[0].external?.responseProbe?.url=="https://198.51.100.8:9443/new-response")
+  try reject("imported response cannot move to another protocol"){var imported=edit.bundle!;imported.routerProfiles[0].external?.protocolName="socks5";try IOSExternalExecution.validateImported(imported)}
+  try IOSExternalExecution.validateImported(edit.bundle!);checks+=1
+  let current=edit.bundle!.routerProfiles[0].external!
+  let before=try encoded(edit.bundle!),store=IOSNodeBundleStore.shared.nodes
+  try check("invalid response cannot mutate linked node",!edit.updateNodeMetadata(id:ss.id,name:"Invalid",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,responseProbeURL:"https://203.0.113.8/response",responseProbeServerName:"node.example.test"))
+  try check("rejected editor retains private nodes and selection",encoded(edit.bundle!)==before && IOSNodeBundleStore.shared.nodes==store)
+  try check("stale editor cannot overwrite changed response or credentials",!edit.updateNodeMetadata(id:ss.id,name:"Stale",location:"",latitudeText:"",longitudeText:"",expectedExternal:savedExternal,responseProbeURL:"https://198.51.100.8/response"))
+  try check("stale edit leaves newer source intact",encoded(edit.bundle!)==before)
+  for execution in ["server","auto"] {
+   edit.bundle!.routerProfiles[0].multihopExecution=execution
+   try check("live graph preference cannot lose its response endpoint",!edit.updateNodeMetadata(id:ss.id,name:"Clear",location:"",latitudeText:"",longitudeText:"",expectedExternal:current))
+   try check("rejected clear keeps the saved execution choice",edit.bundle!.routerProfiles[0].multihopExecution==execution && edit.bundle!.routerProfiles[0].external==current)
+  }
+  edit.bundle!.routerProfiles[0].multihopExecution="local"
+  IOSNodeBundleStore.shared.failWrite=true
+  try check("private write failure is surfaced",!edit.updateNodeMetadata(id:ss.id,name:"Unwritten",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,responseProbeURL:"https://198.51.100.8/final"))
+  try check("write failure keeps active credentials and response",edit.bundle!.routerProfiles[0].external==current)
+  IOSNodeBundleStore.shared.failWrite=false
+  try check("Local can explicitly clear its optional response endpoint",edit.updateNodeMetadata(id:ss.id,name:"Local",location:"",latitudeText:"",longitudeText:"",expectedExternal:current))
+  try check("clearing response retains its private SS credentials",edit.bundle!.routerProfiles[0].external?.responseProbe==nil && edit.bundle!.routerProfiles[0].external?.shadowsocks==current.shadowsocks)
+  edit.profileMutationBlocked=true
+  try check("active session editor is idle-only",!edit.updateNodeMetadata(id:ss.id,name:"Active",location:"",latitudeText:"",longitudeText:"",expectedExternal:edit.bundle!.routerProfiles[0].external))
   model.profileMutationBlocked=true
   try reject("active graph cannot be edited"){try model.saveIOSMultihop(enabled:true,entryID:"entry",exitID:"exit",exitMode:"socks5",entryMode:"wg")}
   print("Apple external entry selection: PASS (\(checks) shipping Swift checks; storage/native-readiness boundaries doubled)")
@@ -109,11 +182,22 @@ def main():
     capture = view[view.index('@MainActor\nextension RouterVPNModel {'):view.index('struct IOSMultihopView: View')]
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
-    body = STUBS.replace(' // SHIPPING_SELECTED_PROFILE', selected) + '\n' + capture
-    with tempfile.TemporaryDirectory(prefix='ios-external-selection-') as directory:
+    store = (APP / 'IOSNodeBundleStore.swift').read_text()
+    editing = store[store.index('    func updateMetadata('):store.index('    private func store(')]
+    model = (APP / 'RouterVPNModelNodeManagement.swift').read_text()
+    model_edit = model[model.index('    @discardableResult'):model.rfind('}')]
+    body = STUBS.replace(' // SHIPPING_SELECTED_PROFILE', selected).replace(' // SHIPPING_METADATA_EDIT', editing)
+    body += '\n' + capture + '\nextension RouterVPNModel {\n' + model_edit + '\n}\n'
+    with tempfile.TemporaryDirectory(prefix='.ios-external-selection-', dir=ROOT) as helper, tempfile.TemporaryDirectory(prefix='ios-external-selection-') as directory:
         work = Path(directory); source = work / 'Test.swift'; source.write_text(body)
-        subprocess.run(['swiftc', '-swift-version', '6', str(APP / 'Models.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
-        subprocess.run([str(work / 'test')], check=True, timeout=20)
+        helper = Path(helper) / 'main.go'; helper.write_text(T.GO)
+        compiler = work / 'compiler'
+        subprocess.run(['go', 'build', '-o', str(compiler), str(helper)], cwd=ROOT, check=True, timeout=180)
+        library = work / 'Libbox.swift'; library.write_text(T.LIBBOX)
+        suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
+        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
+        subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
+        subprocess.run([str(work / 'test'), str(compiler)], check=True, timeout=30)
 
 
 if __name__ == '__main__':

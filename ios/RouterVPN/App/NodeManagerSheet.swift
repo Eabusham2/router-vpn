@@ -242,6 +242,9 @@ private struct RouterVPNNodeMetadataEditor: View {
     @State private var location: String
     @State private var latitude: String
     @State private var longitude: String
+    @State private var responseProbeURL: String
+    @State private var responseProbeServerName: String
+    @State private var errorText = ""
 
     init(profile: RouterProfile) {
         self.profile = profile
@@ -249,6 +252,8 @@ private struct RouterVPNNodeMetadataEditor: View {
         _location = State(initialValue: profile.location ?? "")
         _latitude = State(initialValue: profile.latitude.map { String(format: "%.8f", $0) } ?? "")
         _longitude = State(initialValue: profile.longitude.map { String(format: "%.8f", $0) } ?? "")
+        _responseProbeURL = State(initialValue: profile.external?.responseProbe?.url ?? "")
+        _responseProbeServerName = State(initialValue: profile.external?.responseProbe?.serverName ?? "")
     }
 
     var body: some View {
@@ -274,6 +279,15 @@ private struct RouterVPNNodeMetadataEditor: View {
                     Text("Protocol credentials, private keys and expected-exit identity are not edited in this metadata sheet. Re-import a validated profile to change security-critical fields.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                if profile.normalizedNodeKind == "external", profile.external?.protocolName == "shadowsocks" {
+                    Section("Server / Compare response measurement") {
+                        TextField("HTTPS URL on the saved server IP", text: $responseProbeURL).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        TextField("Certificate server name (optional)", text: $responseProbeServerName).textInputAutocapitalization(.never).autocorrectionDisabled()
+                        Text("The HTTPS URL must use this node's exact Shadowsocks server IP. The optional name verifies its TLS certificate. Leave both blank for Local only; switch the saved graph to Local before removing its response endpoint.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if !errorText.isEmpty { Text(errorText).font(.caption).foregroundStyle(.orange) }
             }
             .navigationTitle("Edit Node")
             .toolbar {
@@ -281,8 +295,11 @@ private struct RouterVPNNodeMetadataEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before editing node metadata."; return }
-                        model.updateNodeMetadata(id: profile.id, name: name, location: location, latitudeText: latitude, longitudeText: longitude)
-                        dismiss()
+                        let external = profile.normalizedNodeKind == "external" && profile.external?.protocolName == "shadowsocks" ? profile.external : nil
+                        if model.updateNodeMetadata(id: profile.id, name: name, location: location, latitudeText: latitude, longitudeText: longitude,
+                            expectedExternal: external, responseProbeURL: external == nil ? "" : responseProbeURL,
+                            responseProbeServerName: external == nil ? "" : responseProbeServerName) { dismiss() }
+                        else { errorText = model.message }
                     }
                     .disabled(model.profileMutationBlocked)
                 }

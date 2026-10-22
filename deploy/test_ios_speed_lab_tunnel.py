@@ -44,7 +44,7 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
  var execution="server",epoch=UUID().uuidString
  func startVPNTunnel(options:[String:NSObject]?=nil)throws{
   if let config=(NETunnelProviderManager.stored.first?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
-     config["engine"] as? String=="multihop-libbox" {
+     try IOSMultihopExecution.requiresCapture(configuration:config) {
    let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
    execution=try IOSMultihopExecution.restoredExecution(option:options?[IOSMultihopExecution.launchKey],source:source,mtuHold:options?["routervpn_mtu_hold"] as? String ?? "") ?? "local"
   }
@@ -98,10 +98,17 @@ typealias NETunnelProviderSession=Connection
   rule.ssidMatch=["original-network"];m.onDemandRules=[rule];m.localizedDescription="Original selected router"
   p.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";p.serverAddress="original-endpoint"
   p.includeAllNetworks=true;p.enforceRoutes=true;p.excludeLocalNetworks=false;p.excludeAPNs=false;p.excludeCellularServices=false
-  let source=engine=="multihop-libbox" ? try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","node_kind":"router-vpn","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"awg2-strong","multihop_exit_mode":raw,"multihop_execution":"auto"]],"profiles":["private-credential":"captured encrypted assets"]]) : Data("exact private profiles; DNS DoH; MTU Auto; execution Compare both".utf8)
+  let source:Data
+  if engine=="external-libbox" {
+   let kind=String(raw.dropFirst("external-".count))
+   let selected:[String:Any]=["id":"exit","node_kind":"external","external":["protocol":kind,"shadowsocks":["server":"198.51.100.8","password":"exact external credentials"],"response_probe":["url":"https://198.51.100.8/response","server_name":"node.example.test"]],"multihop_enabled":entry,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":kind,"multihop_execution":kind=="shadowsocks" ? "auto":"local"]
+   source=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[selected]])
+  }else{
+   source=engine=="multihop-libbox" ? try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","node_kind":"router-vpn","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"awg2-strong","multihop_exit_mode":raw,"multihop_execution":"auto"]],"profiles":["private-credential":"captured encrypted assets"]]) : Data("exact private profiles; DNS DoH; MTU Auto; execution Compare both".utf8)
+  }
   var c:[String:Any]=["engine":engine,"mode":raw,"bundle":source,"max_source_sha256":["entry":"full-start-layer-pq-owner"]]
   if entry {
-   if engine=="external-libbox" {let prefix=raw.hasPrefix("external-tor") ? "tor_entry":"external_entry";c[prefix+"_bundle"]=Data("exact MAX entry private assets".utf8);c[prefix+"_mode"]="max-tls-awg"}
+   if engine=="external-libbox" {let prefix=raw.hasPrefix("external-tor") ? "tor_entry":"external_entry";c[prefix+"_bundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry","node_kind":"router-vpn"]],"profiles":["max":"exact MAX entry private assets"]]);c[prefix+"_mode"]="max-tls-awg"}
    else{c["entryBundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry","node_kind":"router-vpn"]],"profiles":["awg":"exact AWG private assets"]])}
   }
   if strategy {
@@ -114,14 +121,14 @@ typealias NETunnelProviderSession=Connection
   return(model,m,owner)
  }
  static func main()async throws {
-  for (engine,raw,strategy,entry) in [("libbox","awg2-fast",true,false),("wireguard","wg",false,false),("multihop-libbox","max-tls-awg",false,true),("external-libbox","external-amneziawg",false,true),("external-libbox","external-tor",false,true)]{
+  for (engine,raw,strategy,entry) in [("libbox","awg2-fast",true,false),("wireguard","wg",false,false),("multihop-libbox","max-tls-awg",false,true),("external-libbox","external-amneziawg",false,true),("external-libbox","external-tor",false,true),("external-libbox","external-shadowsocks",false,true)]{
    let (model,m,owner)=try fresh(engine,raw,strategy,entry),before=model.activeSessionIdentity!
    try await IOSSpeedLabContext.$owner.withValue(owner){
     let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
     try await captured.stopOriginal(model:model,owner:owner)
     check("original native owner fully stops before temporary changes",!model.connected && !model.tunnelTransitioning && m.connection.stops==1 && !m.isOnDemandEnabled)
     let temporary=(m.protocolConfiguration as! NETunnelProviderProtocol).copy() as! NETunnelProviderProtocol
-    temporary.providerConfiguration=["engine":"external-libbox","mode":"external-tor","bundle":Data("temporary source".utf8),IOSSpeedLabContext.ownerKey:owner.uuidString]
+    temporary.providerConfiguration=["engine":"external-libbox","mode":"external-tor","bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"temporary","routerProfiles":[["id":"temporary","node_kind":"external","external":["protocol":"tor"]]]]),IOSSpeedLabContext.ownerKey:owner.uuidString]
     m.protocolConfiguration=temporary;try m.connection.startVPNTunnel();await model.refreshTunnelStatus()
     try await IOSSpeedLabTunnel.stopTemporary(model:model,owner:owner)
     check("temporary native owner stops before original restore",m.connection.stops==2 && !model.connected)
@@ -136,7 +143,7 @@ typealias NETunnelProviderSession=Connection
      let plan=restored.providerConfiguration!["strategy"] as! [String:Any]
      check("SMART/AUTO restoration cannot reselect a different raw mode",plan["kind"] as? String=="manual" && (plan["candidates"] as? [[String:Any]])?.count==1 && ((plan["candidates"] as? [[String:Any]])?.first?["raw"] as? String)==raw)
     }
-    if engine=="multihop-libbox" {
+    if engine=="multihop-libbox" || raw=="external-shadowsocks" {
      let source=try IOSMultihopExecution.Source(configuration:restored.providerConfiguration!,digest:RouterVPNModel.iosStrategyDigest)
      check("restoration keeps actual server winner without changing Compare preference",m.connection.execution=="server" && source.requested=="auto" && restored.providerConfiguration?[IOSMultihopExecution.launchKey]==nil)
     }
@@ -151,15 +158,15 @@ typealias NETunnelProviderSession=Connection
    await rejected("changed native owner cannot be stopped "+mutation){try await snapshot.stopOriginal(model:model,owner:owner)}
    check("replacement was not stopped "+mutation,m.connection.stops==0)
   }
-  for invalid in ["winner","health","epoch"]{
-   let(model,m,owner)=try fresh("multihop-libbox","hysteria2",false,true)
+  for (engine,raw) in [("multihop-libbox","hysteria2"),("external-libbox","external-shadowsocks")] { for invalid in ["winner","health","epoch"]{
+   let(model,m,owner)=try fresh(engine,raw,false,true)
    let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
    if invalid=="winner"{m.connection.execution="local"}
    if invalid=="health"{IOSMTUControl.healthy=false}
    if invalid=="epoch"{m.connection.epoch=UUID().uuidString}
    await rejected("changed actual multihop owner prevents pause "+invalid){try await captured.stopOriginal(model:model,owner:owner)}
    check("changed multihop owner is not stopped "+invalid,m.connection.stops==0)
-  }
+  }}
   do{
    let(model,m,owner)=try fresh();let snapshot=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
    NETunnelProviderManager.hook={_ = model.iosSpeedLabOwnership.admit(.disconnect)}

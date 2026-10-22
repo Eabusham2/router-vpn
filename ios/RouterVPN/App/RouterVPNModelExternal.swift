@@ -75,6 +75,7 @@ extension RouterVPNModel {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.NodeMutation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before linking node data."])
         }
+        try IOSExternalExecution.validateImported(JSONDecoder().decode(ClientBundle.self, from: data))
         let normalized = try IOSNodeBundleStore.shared.link(data, preserving: bundle)
         try importBundle(normalized)
         message = "Linked node bundle • \(allNodeProfiles.count) node(s) available without reinstalling Router VPN"
@@ -187,7 +188,8 @@ extension RouterVPNModel {
             let hold = IOSMTUMeasurementGate.current
             let options: [String: NSObject]? = hold.isEmpty ? nil : ["routervpn_mtu_hold": hold as NSString]
             try manager.connection.startVPNTunnel(options: options)
-            let ok = await waitExternalConnection(manager, attempts: tor ? 720 : 48, generation: generation)
+            let selectingExecution = ordinary && profile.multihopEnabled == true && ["server", "auto"].contains(profile.multihopExecution ?? "local")
+            let ok = await waitExternalConnection(manager, attempts: tor ? 720 : (selectingExecution ? 480 : 48), generation: generation)
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard ok else {
                 await refreshTunnelStatus()
