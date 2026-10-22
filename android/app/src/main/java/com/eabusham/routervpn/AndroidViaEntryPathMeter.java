@@ -3,6 +3,7 @@ package com.eabusham.routervpn;
 import com.wireguard.android.backend.Tunnel;
 
 import java.net.InetSocketAddress;
+import java.net.InetAddress;
 import java.net.Socket;
 import java.net.URI;
 import java.util.ArrayList;
@@ -26,27 +27,31 @@ final class AndroidViaEntryPathMeter {
             AndroidNodeStore.Node entry,
             NativeWireGuardController wireGuard,
             List<AndroidNodeStore.Node> candidates,
-            int samples) throws Exception {
+            int samples, AndroidPathProbe.Route route) throws Exception {
+        if (route == null) throw new IllegalArgumentException("Via-entry measurements require a captured VPN socket owner.");
+        route.check();
         if (entry == null || entry.file == null || !entry.file.isFile()) {
             throw new IllegalArgumentException("Temporary via-entry measurement requires a stored Router VPN entry node.");
         }
         if (wireGuard == null || wireGuard.getState() != Tunnel.State.UP) {
             throw new IllegalStateException("Temporary WireGuard entry is not UP; refusing via-entry latency labels.");
         }
-        if (!AndroidPathProbe.prove(entry.file, 8000)) {
+        if (!AndroidPathProbe.prove(entry.file, 8000, route)) {
             throw new IllegalStateException("Temporary WireGuard entry failed selected-entry private path proof before candidate RTT measurement.");
         }
 
         int count = Math.max(3, Math.min(10, samples));
         List<AndroidTelemetry.Result> out = new ArrayList<>();
         for (AndroidNodeStore.Node node : candidates) {
+            route.check();
             if (node == null || entry.id.equals(node.id)) continue;
             if (wireGuard.getState() != Tunnel.State.UP) {
                 throw new IllegalStateException("Temporary WireGuard entry stopped while measuring candidate latency; all results discarded.");
             }
             try {
-                out.add(probeNode(node, count));
-            } catch (Throwable ignored) {
+                out.add(probeNode(node, count, route));
+            } catch (Exception ignored) {
+                route.check();
                 // One unreachable candidate does not invalidate the real routed
                 // measurements from the other candidates. Zero successes does.
             }
@@ -55,32 +60,38 @@ final class AndroidViaEntryPathMeter {
         if (wireGuard.getState() != Tunnel.State.UP) {
             throw new IllegalStateException("Temporary WireGuard entry stopped before candidate latency completed; all results discarded.");
         }
-        if (!AndroidPathProbe.prove(entry.file, 8000)) {
+        if (!AndroidPathProbe.prove(entry.file, 8000, route)) {
             throw new IllegalStateException("Temporary WireGuard entry failed selected-entry private path proof after candidate RTT measurement; all results discarded.");
         }
         if (out.isEmpty()) {
             throw new IllegalStateException("No candidate node returned a live RTT through the selected temporary entry tunnel.");
         }
         Collections.sort(out, Comparator.comparingDouble(value -> value.medianMs));
+        route.check();
         return out;
     }
 
-    private static AndroidTelemetry.Result probeNode(AndroidNodeStore.Node node, int samples) throws Exception {
+    private static AndroidTelemetry.Result probeNode(AndroidNodeStore.Node node, int samples, AndroidPathProbe.Route route) throws Exception {
         if (node.endpoint == null || node.endpoint.trim().isEmpty()) {
             throw new IllegalArgumentException("Candidate node has no public endpoint.");
         }
         String host = endpointHost(node.endpoint);
-        int port = discoverPort(host);
+        InetAddress[] addresses = route.resolve(host);
+        InetSocketAddress target = discoverPort(addresses, route);
         List<Double> values = new ArrayList<>();
         int failed = 0;
         for (int i = 0; i < samples; i++) {
+            route.check();
             long start = System.nanoTime();
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(host, port), 900);
+            Socket owned = route.open();
+            try (Socket socket = owned) {
+                socket.connect(target, 900);
+                route.check();
                 values.add((System.nanoTime() - start) / 1_000_000d);
             } catch (Exception error) {
+                route.check();
                 failed++;
-            }
+            } finally { route.release(owned); }
             if (i + 1 < samples) {
                 try { Thread.sleep(20L); }
                 catch (InterruptedException interrupted) {
@@ -103,17 +114,22 @@ final class AndroidViaEntryPathMeter {
                 failed);
     }
 
-    private static int discoverPort(String host) throws Exception {
+    private static InetSocketAddress discoverPort(InetAddress[] addresses, AndroidPathProbe.Route route) throws Exception {
         Exception last = null;
-        for (int port : PORTS) {
-            try (Socket socket = new Socket()) {
-                socket.connect(new InetSocketAddress(host, port), 450);
-                return port;
+        for (int port : PORTS) for (InetAddress address : addresses) {
+            route.check();
+            Socket owned = route.open();
+            try (Socket socket = owned) {
+                InetSocketAddress target = new InetSocketAddress(address, port);
+                socket.connect(target, 450);
+                route.check();
+                return target;
             } catch (Exception error) {
+                route.check();
                 last = error;
-            }
+            } finally { route.release(owned); }
         }
-        throw new IllegalStateException("No safe live probe port answered for via-entry candidate " + host, last);
+        throw new IllegalStateException("No live probe port answered for the candidate through the captured entry.", last);
     }
 
     private static String endpointHost(String endpoint) throws Exception {

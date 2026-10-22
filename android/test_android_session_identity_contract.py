@@ -206,12 +206,13 @@ for name, source in (("WireGuard", wireguard), ("AmneziaWG", amnezia)):
         "void disconnectManaged(Callback callback)",
         "disconnectInternal(false, callback)",
         "boolean emergency = publishHomeState && AndroidHomeStateStore.emergencyDisconnectPending(appContext);",
-        "if (publishHomeState && !emergency) AndroidHomeStateStore.disconnected",
         "AndroidHomeStateStore.beginPathRevalidation",
         "AndroidHomeStateStore.completePathRevalidation",
         "stale Android session/generation",
     ):
         assert marker in source, f"{name} managed/session ownership missing {marker!r}"
+    completion = "if (publishHomeState && !emergency" + (" && sessionGeneration.get()==owner" if name=="WireGuard" else "") + ") AndroidHomeStateStore.disconnected"
+    assert completion in source, f"{name} must preserve its shared-session disconnect owner"
 
 for marker in (
     "wg.connectManaged(bundle",
@@ -241,21 +242,24 @@ for marker in (
 # remain UP, never touch Home state/direct cache, and be fully DOWN before the
 # picker can receive any values.
 for marker in (
-    "wireGuard.connectManaged(entry.file",
-    "state != Tunnel.State.UP",
-    "AndroidViaEntryPathMeter.measure(entry, wireGuard",
-    "wireGuard.disconnectManaged",
+    "wireGuard.connectManagedCaptured(entry.file",
+    "state!=Tunnel.State.UP",
+    "AndroidViaEntryPathMeter.measure(job.entry,wireGuard",
+    "job.session.disconnect",
+    "job.session.retained()",
+    "job.session.generation()",
+    "network::getAllByName,network.getSocketFactory()",
     "Temporary entry did not fully disconnect; candidate results discarded.",
     "AtomicBoolean",
 ):
     assert marker in via_entry, f"via-entry probe missing: {marker}"
 for marker in (
-    "AndroidPathProbe.prove(entry.file, 8000)",
+    "AndroidPathProbe.prove(entry.file, 8000, route)",
     "wireGuard.getState() != Tunnel.State.UP",
     "before candidate RTT measurement",
     "after candidate RTT measurement",
     "all results discarded",
-    "probeNode(node, count)",
+    "probeNode(node, count, route)",
 ):
     assert marker in via_meter, f"via-entry path meter proof missing: {marker}"
 assert "AndroidHomeStateStore" not in via_meter

@@ -21,7 +21,7 @@ spec.loader.exec_module(W)
 SIGNATURES = (
     "void showFastConnectMenu(", "void showPerformance(", "void showNodes(",
     "void showProfileManager(",
-    "void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode)",
+    "void chooseMultihopExecution(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String entryMode,AndroidViaEntryLatencyProbe.Result selection)",
     "void configureMultihop(", "void showViaEntryExitPicker(",
 )
 
@@ -75,6 +75,16 @@ final class AndroidTelemetry {
  void speedTest(int bytes,One callback){speedBytes=bytes;callback.result(results.get(0),null);}
 }
 final class Connection {boolean connected=true;boolean isConnected(){return connected;}}
+final class AndroidViaEntryLatencyProbe {
+ static final class Result {
+  final AndroidNodeStore.Node entry;final List<AndroidNodeStore.Node> candidates;final List<AndroidTelemetry.Result> values;
+  boolean stale;
+  Result(AndroidNodeStore.Node entry,List<AndroidNodeStore.Node> candidates,List<AndroidTelemetry.Result> values){this.entry=entry;this.candidates=candidates;this.values=values;}
+  void requireCurrent(){if(stale)throw new IllegalStateException("Captured decision changed; Retest.");}
+  AndroidTelemetry.Result measurement(String id){for(var value:values)if(value.id.equals(id))return value;return null;}
+  AndroidNodeStore.Node fastest(){AndroidNodeStore.Node best=null;double ms=Double.POSITIVE_INFINITY;for(var node:candidates){var value=measurement(node.id);if(value!=null&&value.medianMs>0&&value.medianMs<ms){best=node;ms=value.medianMs;}}return best;}
+ }
+}
 '''
 
 HARNESS_PREFIX = r'''package com.eabusham.routervpn;
@@ -95,7 +105,8 @@ public final class ProductDialogHarness extends android.app.Activity {
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
  JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
- void chooseMultihopMode(AndroidNodeStore.Node first,AndroidNodeStore.Node last){entry=first.id;exit=last.id;}
+ void chooseMultihopMode(AndroidNodeStore.Node first,AndroidNodeStore.Node last,AndroidViaEntryLatencyProbe.Result result){entry=first.id;exit=last.id;}
+ AndroidViaEntryLatencyProbe.Result capture(){return new AndroidViaEntryLatencyProbe.Result(nodeById("a"),Arrays.asList(nodeById("b"),nodeById("c")),Collections.emptyList());}
  static String safe(Throwable error){return error==null?"error":error.getMessage();}
 '''
 
@@ -139,19 +150,25 @@ HARNESS_SUFFIX = r'''
  static void execution(){
   String[] policies={"local","server","auto"};
   for(int i=0;i<3;i++){
-   ProductDialogHarness h=new ProductDialogHarness();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"hysteria2","max-quic-awg");shown(3,"Multihop execution").clickItem(i);
+   ProductDialogHarness h=new ProductDialogHarness();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"hysteria2","max-quic-awg",h.capture());shown(3,"Multihop execution").clickItem(i);
    check(h.saved.writes==1&&h.saved.getString("multihop_execution","").equals(policies[i]),"exact saved execution preference");
    check(h.saved.getString(MULTI_ENTRY,"").equals("a")&&h.saved.getString(MULTI_EXIT,"").equals("b")&&h.saved.getString(MULTI_MODE,"").equals("hysteria2")&&h.saved.getString("multihop_entry_mode","").equals("max-quic-awg"),"frozen entry/exit/mode choices preserved");
    check(h.multihopToggle.isChecked()&&Boolean.TRUE.equals(h.saved.values.get(MULTI_ON)),"multihop enabled only by actual choice");
   }
-  ProductDialogHarness h=new ProductDialogHarness();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg");h.busy=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&!h.multihopToggle.isChecked(),"late busy refuses saved multihop mutation");
+  ProductDialogHarness h=new ProductDialogHarness();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg",h.capture());h.busy=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&!h.multihopToggle.isChecked(),"late busy refuses saved multihop mutation");
+  h=new ProductDialogHarness();var captured=h.capture();h.chooseMultihopExecution(h.nodeById("a"),h.nodeById("b"),"wg","wg",captured);captured.stale=true;shown(3,"Multihop execution").clickItem(2);check(h.saved.writes==0&&h.message.contains("Retest"),"late changed capture cannot save an old measured choice");
  }
  static void entry(){ProductDialogHarness h=new ProductDialogHarness();h.configureMultihop();shown(3,"Multihop entry").clickItem(2);check(h.entry.equals("c")&&h.exit.equals("3"),"chosen entry and complete candidate list passed to measurement");h=new ProductDialogHarness();h.busy=true;h.configureMultihop();check(h.entry.isEmpty(),"busy multihop setup cannot create temporary tunnel");}
  static void exits(){
   ProductDialogHarness h=new ProductDialogHarness();List<AndroidNodeStore.Node> exits=Arrays.asList(h.nodeById("b"),h.nodeById("c"));
-  h.showViaEntryExitPicker(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)),null);
-  AlertDialog d=shown(2,"Multihop hop 2");check(d.items[0].contains("4.2 ms")&&d.items[1].contains("unavailable"),"only measured via-entry result gets RTT");d.clickItem(1);check(h.entry.equals("a")&&h.exit.equals("c"),"exact second-hop callback");
-  h.showViaEntryExitPicker(h.nodeById("a"),exits,null,new IllegalStateException("no route proof"));d=shown(2,"Multihop hop 2");check(d.items[0].contains("unavailable")&&((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString().contains("no route proof"),"failed proof remains visible without invented latency");
+  var captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));
+  h.showViaEntryExitPicker(captured,null);
+  AlertDialog d=shown(3,"Multihop hop 2");check(d.items[0].contains("Fastest")&&d.items[1].contains("4.2 ms")&&d.items[2].contains("unavailable"),"only measured via-entry result gets a response time");d.clickItem(2);check(h.entry.equals("a")&&h.exit.equals("c"),"exact manual second-hop callback");
+  captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Arrays.asList(new AndroidTelemetry.Result("b",40),new AndroidTelemetry.Result("c",7)));
+  h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");check(d.items[0].contains("Node c")&&d.items[1].contains("Node c"),"measured Fastest and sorting use the lowest candidate response");d.clickItem(0);check(h.exit.equals("c"),"Fastest routes to the measured exit");
+  h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.emptyList());
+  h.showViaEntryExitPicker(captured,new IllegalStateException("no route proof"));d=shown(3,"Multihop hop 2");check(d.items[0].contains("unavailable")&&((TextView)((LinearLayout)d.customTitle).children.get(1)).getText().toString().contains("no route proof"),"failed proof remains visible without invented latency");d.clickItem(0);check(h.exit.equals("2"),"unavailable Fastest retries measurements instead of guessing a winner");
+  h=new ProductDialogHarness();captured=new AndroidViaEntryLatencyProbe.Result(h.nodeById("a"),exits,Collections.singletonList(new AndroidTelemetry.Result("b",4.2)));h.showViaEntryExitPicker(captured,null);d=shown(3,"Multihop hop 2");captured.stale=true;d.clickItem(0);check(h.exit.isEmpty()&&h.message.contains("Retest"),"a delayed Fastest callback cannot reuse an old capture");
  }
  public static void main(String[] args){
   if(args.length>0){switch(args[0]){case "0":fastest();break;case "1":performance();break;case "2":nodes();break;case "3":profiles();break;case "4":execution();break;case "5":entry();break;case "6":exits();break;default:throw new AssertionError("unknown negative");}return;}

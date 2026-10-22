@@ -184,7 +184,7 @@ final class AndroidHomeSummary {
     }
 
     private static Network ownedVpnNetwork(Context context) {
-        ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE); if(cm==null)return null;Network network=cm.getActiveNetwork();if(network==null)return null;NetworkCapabilities caps=cm.getNetworkCapabilities(network);if(caps==null||!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return null;if(Build.VERSION.SDK_INT<Build.VERSION_CODES.Q)return null;return caps.getOwnerUid()==Process.myUid()?network:null;
+        ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE); if(cm==null)return null;Network network=cm.getActiveNetwork();if(network==null)return null;NetworkCapabilities caps=cm.getNetworkCapabilities(network);if(caps==null||!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))return null;if(Build.VERSION.SDK_INT<Build.VERSION_CODES.R)return null;return caps.getOwnerUid()==Process.myUid()?network:null;
     }
 
     private static RuntimeState runtimeState(Context context){

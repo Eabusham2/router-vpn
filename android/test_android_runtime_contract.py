@@ -315,6 +315,7 @@ for executable_contract in (
     "test_android_start_layer_relay_lifecycle.py",
     "test_android_custom_preset_commit.py",
     "test_android_product_dialogs.py",
+    "test_android_via_entry_measurement.py",
     "test_android_profile_selection_consumers.py",
     "test_android_connection_profiles.py",
     "test_android_mode_orchestrator.py",

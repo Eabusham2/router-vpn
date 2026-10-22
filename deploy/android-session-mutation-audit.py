@@ -150,14 +150,16 @@ for path in (
 # picker sees any routed values.
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryLatencyProbe.java",
-    "wireGuard.connectManaged(entry.file",
-    "AndroidViaEntryPathMeter.measure(entry, wireGuard",
-    "wireGuard.disconnectManaged",
+    "wireGuard.connectManagedCaptured(entry.file",
+    "AndroidViaEntryPathMeter.measure(job.entry,wireGuard",
+    "job.session.disconnect",
+    "job.session.retained()",
+    "network::getAllByName,network.getSocketFactory()",
     "Temporary entry did not fully disconnect; candidate results discarded.",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidViaEntryPathMeter.java",
-    "AndroidPathProbe.prove(entry.file, 8000)",
+    "AndroidPathProbe.prove(entry.file, 8000, route)",
     "wireGuard.getState() != Tunnel.State.UP",
     "before candidate RTT measurement",
     "after candidate RTT measurement",

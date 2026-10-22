@@ -16,10 +16,29 @@ import java.io.FileInputStream;
 import java.nio.charset.StandardCharsets;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Native Android WireGuard runtime using WireGuard's official userspace GoBackend. */
 final class NativeWireGuardController implements Tunnel {
     interface Callback { void done(State state, String message, Throwable error); }
+    interface CapturedCallback { void done(CapturedSession session, State state, String message, Throwable error); }
+    static final class SessionReplaced extends IllegalStateException {
+        SessionReplaced() { super("The captured WireGuard session was replaced; its replacement was not stopped."); }
+    }
+    static final class CapturedSession {
+        private final NativeWireGuardController controller;
+        private final long owner, path;
+        CapturedSession(NativeWireGuardController controller, long owner, long path) {
+            this.controller=controller; this.owner=owner; this.path=path;
+        }
+        boolean current() {
+            return controller.sessionGeneration.get()==owner && controller.pathGeneration.get()==path
+                    && controller.state==State.UP && !controller.homeStateOwner;
+        }
+        long generation() { return owner; }
+        boolean retained() { return controller.sessionGeneration.get()==owner; }
+        void disconnect(Callback callback) { controller.disconnectCaptured(owner, callback); }
+    }
     private final Context appContext;
     private final GoBackend backend;
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -29,6 +48,8 @@ final class NativeWireGuardController implements Tunnel {
     private volatile File activeBundle;
     private volatile String lastError = "";
     private volatile boolean homeStateOwner;
+    private final AtomicLong sessionGeneration = new AtomicLong();
+    private final AtomicLong pathGeneration = new AtomicLong();
 
     NativeWireGuardController(Context context) {
         appContext = context.getApplicationContext();
@@ -36,7 +57,7 @@ final class NativeWireGuardController implements Tunnel {
         networkMonitor = new AndroidUnderlyingNetworkMonitor(appContext);
     }
     @Override public String getName() { return "routervpn"; }
-    @Override public void onStateChange(State newState) { state = newState; }
+    @Override public void onStateChange(State newState) { if (newState != state) pathGeneration.incrementAndGet(); state = newState; }
     State getState() { return state; }
     String getError() { return lastError; }
 
@@ -46,12 +67,28 @@ final class NativeWireGuardController implements Tunnel {
     /** AUTO/SMART/CUSTOM child transport: the outer orchestrator owns Home/session state. */
     void connectManaged(File privateBundle, Callback callback) { connectInternal(privateBundle, false, callback); }
 
+    /** Temporary measurements retain this exact child, never whichever child is current later. */
+    void connectManagedCaptured(File privateBundle, CapturedCallback callback) {
+        long owner=beginGeneration();
+        connectInternal(privateBundle, false, owner, (state,message,error) ->
+                callback.done(new CapturedSession(this,owner,pathGeneration.get()),state,message,error));
+    }
+
+    long generation() { return sessionGeneration.get(); }
+
+    private long beginGeneration() { pathGeneration.incrementAndGet(); return sessionGeneration.incrementAndGet(); }
+
     private void connectInternal(File privateBundle, boolean publishHomeState, Callback callback) {
+        connectInternal(privateBundle,publishHomeState,beginGeneration(),callback);
+    }
+
+    private void connectInternal(File privateBundle, boolean publishHomeState, long owner, Callback callback) {
         String activeNodeId = AndroidHomeStateStore.nodeIdFromBundleFile(privateBundle);
-        homeStateOwner = publishHomeState;
         if (publishHomeState) AndroidHomeStateStore.begin(appContext, "raw-tunnel", "wg", "wg", activeNodeId);
         executor.execute(() -> {
+            if (sessionGeneration.get()!=owner) { callback.done(state,"WireGuard startup was replaced.",new SessionReplaced()); return; }
             try {
+                homeStateOwner = publishHomeState;
                 networkMonitor.stop();
                 clearActive();
                 if (AndroidKillSwitchPolicy.strictRequested(privateBundle)) throw new IllegalStateException(AndroidKillSwitchPolicy.requirementMessage());
@@ -65,14 +102,19 @@ final class NativeWireGuardController implements Tunnel {
                     if (down != State.DOWN) throw new IllegalStateException("WireGuard path proof failed and teardown did not prove DOWN.");
                     throw new IllegalStateException("Native WireGuard failed selected-node private path proof.");
                 }
+                if (sessionGeneration.get()!=owner) throw new SessionReplaced();
                 activeConfig = config;
                 activeBundle = privateBundle;
                 lastError = "";
                 if (publishHomeState) AndroidHomeStateStore.connected(appContext, "raw-tunnel", "wg", "wg", "", activeNodeId);
-                networkMonitor.start(() -> executor.execute(this::recoverAfterNetworkChange));
+                networkMonitor.start(() -> {
+                    if (sessionGeneration.get()!=owner) return;
+                    pathGeneration.incrementAndGet();
+                    executor.execute(() -> { if(sessionGeneration.get()==owner)recoverAfterNetworkChange(); });
+                });
                 callback.done(State.UP, "Native Android WireGuard is active with selected DNS/MTU and selected-node private path proof.", null);
             } catch (Throwable error) {
-                failClosed(error, publishHomeState);
+                failClosed(error, publishHomeState && sessionGeneration.get()==owner);
                 callback.done(state, "Native WireGuard failed: " + lastError, error);
             }
         });
@@ -110,8 +152,23 @@ final class NativeWireGuardController implements Tunnel {
     /** Orchestrator candidate teardown must not clear the outer logical session. */
     void disconnectManaged(Callback callback) { disconnectInternal(false, callback); }
 
-    private void disconnectInternal(boolean publishHomeState, Callback callback) {
+    private void disconnectCaptured(long owner, Callback callback) {
         executor.execute(() -> {
+            if (sessionGeneration.get()!=owner) { callback.done(state,"Captured entry was replaced.",new SessionReplaced()); return; }
+            pathGeneration.incrementAndGet();
+            disconnectOwned(false,owner,callback);
+        });
+    }
+
+    private void disconnectInternal(boolean publishHomeState, Callback callback) {
+        long owner=beginGeneration();
+        executor.execute(() -> {
+            if (sessionGeneration.get()!=owner) { callback.done(state,"WireGuard stop was replaced.",new SessionReplaced()); return; }
+            disconnectOwned(publishHomeState,owner,callback);
+        });
+    }
+
+    private void disconnectOwned(boolean publishHomeState, long owner, Callback callback) {
             networkMonitor.stop();
             boolean emergency = publishHomeState && AndroidHomeStateStore.emergencyDisconnectPending(appContext);
             if (publishHomeState && !emergency) {
@@ -123,12 +180,12 @@ final class NativeWireGuardController implements Tunnel {
                 if (result != State.DOWN) throw new IllegalStateException("WireGuard teardown did not prove DOWN.");
                 clearActive();
                 lastError = "";
-                if (publishHomeState && !emergency) AndroidHomeStateStore.disconnected(appContext);
+                if (publishHomeState && !emergency && sessionGeneration.get()==owner) AndroidHomeStateStore.disconnected(appContext);
                 homeStateOwner = false;
                 callback.done(State.DOWN, "Native Android WireGuard disconnected.", null);
             } catch (Throwable error) {
                 lastError = safeMessage(error);
-                if (publishHomeState) {
+                if (publishHomeState && sessionGeneration.get()==owner) {
                     if (emergency) {
                         AndroidHomeStateStore.warning(appContext, "Emergency Disconnect requested; WireGuard disconnect incomplete: " + lastError);
                     } else {
@@ -137,10 +194,10 @@ final class NativeWireGuardController implements Tunnel {
                 }
                 callback.done(state, "WireGuard disconnect incomplete: " + lastError, error);
             }
-        });
     }
 
     void close() {
+        beginGeneration();
         networkMonitor.stop();
         clearActive();
         homeStateOwner = false;

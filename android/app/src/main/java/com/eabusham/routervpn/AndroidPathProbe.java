@@ -15,11 +15,23 @@ import java.nio.charset.StandardCharsets;
 
 /** Proves traffic reached the selected private Router VPN node; a TUN UP state alone is not success. */
 final class AndroidPathProbe {
+    interface Route {
+        void check() throws Exception;
+        InetAddress[] resolve(String host) throws Exception;
+        Socket open() throws Exception;
+        void release(Socket socket);
+    }
     private static final int MAX_BUNDLE = 64 * 1024 * 1024;
     private static final int MAX_RESPONSE = 16 * 1024;
     private static final String PROOF_KIND = "router-vpn-private-agent-v1";
 
     static boolean prove(File privateBundle, int timeoutMillis) throws Exception {
+        return prove(privateBundle, timeoutMillis, null);
+    }
+
+    /** A temporary measurement supplies its retained VPN network and socket owner. */
+    static boolean prove(File privateBundle, int timeoutMillis, Route route) throws Exception {
+        if (route != null) route.check();
         JSONObject bundle = load(privateBundle);
         AndroidNodeStore.validateBundle(bundle);
         JSONObject profile = AndroidProfileSelection.selectedRouterProfile(bundle);
@@ -31,12 +43,16 @@ final class AndroidPathProbe {
         if (!"http".equalsIgnoreCase(uri.getScheme())) throw new IllegalStateException("Android selected-node proof currently requires the private HTTP health endpoint.");
         String host = uri.getHost();
         if (host == null || host.trim().isEmpty()) throw new IllegalStateException("Selected-node proof URL has no host.");
-        InetAddress address = InetAddress.getByName(host);
+        InetAddress[] addresses = route == null ? InetAddress.getAllByName(host) : route.resolve(host);
+        if (addresses == null || addresses.length == 0) throw new IllegalStateException("Selected-node proof host did not resolve on its captured path.");
+        InetAddress address = addresses[0];
         if (!isPrivate(address)) throw new IllegalStateException("Selected-node proof host must resolve to a private/link-local/loopback address.");
         int port = uri.getPort() > 0 ? uri.getPort() : 80;
         String path = uri.getRawPath(); if (path == null || path.isEmpty()) path = "/";
         if (uri.getRawQuery() != null && !uri.getRawQuery().isEmpty()) path += "?" + uri.getRawQuery();
-        try (Socket socket = new Socket()) {
+        Socket owned = route == null ? new Socket() : route.open();
+        try (Socket socket = owned) {
+            if (route != null) route.check();
             socket.connect(new InetSocketAddress(address, port), timeoutMillis);
             socket.setSoTimeout(timeoutMillis);
             OutputStream out = socket.getOutputStream();
@@ -49,10 +65,11 @@ final class AndroidPathProbe {
             String headers = text.substring(0, split);
             if (!(headers.startsWith("HTTP/1.1 200 ") || headers.startsWith("HTTP/1.0 200 "))) return false;
             JSONObject body = new JSONObject(text.substring(split + 4).trim());
+            if (route != null) route.check();
             return body.optBoolean("ok", false)
                     && expectedNode.equals(body.optString("node_id", "").trim())
                     && PROOF_KIND.equals(body.optString("proof", "").trim());
-        }
+        } finally { if (route != null) route.release(owned); }
     }
 
     private static boolean isPrivate(InetAddress value) {

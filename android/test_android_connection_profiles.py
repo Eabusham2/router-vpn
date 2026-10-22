@@ -110,11 +110,12 @@ final class ProductConnectSurface extends Context {
  SharedPreferences prefs(){return fixture.prefs;}void toast(String text){message=text;}void showNodes(){throw new AssertionError("selected external disappeared");}
  AndroidUnifiedNodeCatalog.Item selectedCatalogItem(){return new AndroidUnifiedNodeCatalog.Item(fixture.prefs.getString("selected_id",""));}
  AndroidNodeStore.Node nodeById(String id)throws Exception{for(var n:nodeStore.list())if(n.id.equals(id))return n;return null;}
- Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
+ Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}void refreshConnectionLater(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
  static String safe(Exception error){return error.getMessage();}void pressConnect(){connectOrDisconnect();}
  PRODUCT_CONNECT
 }
 final class AndroidUnifiedNodeCatalog {static final class Item{final String id;Item(String id){this.id=id;}boolean isRouterVpn(){return false;}}}
+final class AndroidViaEntryLatencyProbe {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
 '''
 
 HARNESS = r'''package com.eabusham.routervpn;
@@ -168,6 +169,7 @@ public final class ConnectionProfilesHarness {
   check(f.nodes.activeId().equals(f.second.id)&&text(new File(f.context.getFilesDir(),AndroidNodeStore.ACTIVE_BUNDLE)).equals(text(f.second.file)),"external selection preserves prior active Router and its bytes");
   var path=f.store.currentExternalPath(exit);check(!path.direct()&&path.entry.id.equals(f.first.id)&&path.entryMode.equals("hysteria2")&&path.exit.id.equals(exit),"main Connect resolves exact loaded external path");
   ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&!surface.connection.direct&&surface.connection.entry.id.equals(f.first.id)&&surface.connection.exit.id.equals(exit)&&surface.connection.mode.equals("hysteria2"),"shipping map Connect dispatches saved graph and exact credentials");
+  AndroidViaEntryLatencyProbe.active=true;int canceled=AndroidViaEntryLatencyProbe.cancellations;ProductConnectSurface recreated=new ProductConnectSurface(f);recreated.pressConnect();AndroidViaEntryLatencyProbe.active=false;check(recreated.connection.starts==0&&AndroidViaEntryLatencyProbe.cancellations==canceled+1,"recreated map cancels only the owned candidate operation before any connection dispatch");
   f.store.selectExternalPath(f.exits.get(exit),null,"wg");f.store.update(r.id,"Direct "+exit);check(f.store.list().size()==1&&f.store.list().get(0).name.equals("Direct "+exit),"Update preserves profile ID/count");f.otherSelection();f.store.load(r.id);check(f.store.currentExternalPath(exit).direct()&&!f.prefs.getBoolean("multihop_on",true),"direct Update/Load clears old hops");surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.direct&&surface.connection.entry==null&&surface.connection.exit.id.equals(exit),"shipping map Connect dispatches direct saved external path");f.store.delete(r.id);check(f.store.list().isEmpty(),"Delete external profile");
  }
  static void routerRoundtrip(Path root)throws Exception{
