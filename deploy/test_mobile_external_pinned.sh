@@ -13,6 +13,7 @@ export GOTOOLCHAIN=go1.26.3
 unset GOOS GOARCH CC CXX CGO_CFLAGS CGO_CPPFLAGS CGO_CXXFLAGS CGO_LDFLAGS
 python3 "$ROOT/deploy/prepare-mobile-external-policy.py" "$VENDOR"
 cd "$VENDOR"
-go test -race -count=1 -timeout=90s -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor . -run '^TestRouter(Tor|VPNExternal)'
+go test -race -count=1 -timeout=90s -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor . -run '^TestRouter(Tor|VPNExternal|VPNDNS)'
+go test -race -count=1 -timeout=90s ./experimental/libbox/routervpn/dnsmeasure
 go test -race -count=1 -timeout=90s ./experimental/libbox/routervpn/mobilemultihop -run '^TestExternal'
 go test -count=1 -ldflags=-checklinkname=0 -tags with_wireguard,with_quic,with_gvisor ./experimental/libbox -run '^TestRouter(External|TorMTU)'

@@ -1,0 +1,29 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// DNSMeasurementDial uses the exact selected final owner captured by the native
+// proof. A non-nil error-path socket is returned to the DNS service, which keeps
+// its proof activity until retrying the actual native Close succeeds.
+func (e *routerVPNExternalNativeEngine) DNSMeasurementDial(ctx context.Context, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" || !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("DNS native destination or owner is unavailable")
+	}
+	owner := e.routes[mobilemultihop.ExternalFinalTag]
+	if owner == nil {
+		return nil, errors.New("DNS measurement has no captured final route")
+	}
+	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if err != nil || connection == nil || ctx.Err() != nil || e.Identity() == "" {
+		return connection, errors.New("DNS native dial failed or became stale")
+	}
+	return connection, nil
+}

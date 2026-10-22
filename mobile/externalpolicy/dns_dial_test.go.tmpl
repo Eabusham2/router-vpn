@@ -1,0 +1,354 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNDNSDialOptions struct {
+	dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
+}
+type routerVPNDNSDialOutbound struct {
+	outbound.Adapter
+	dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
+}
+
+func (o *routerVPNDNSDialOutbound) DialContext(ctx context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+	return o.dial(ctx, network, address)
+}
+func (*routerVPNDNSDialOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("DNS fixture has no packet route")
+}
+
+type routerVPNDNSDialInbound struct{ inbound.Adapter }
+
+func (*routerVPNDNSDialInbound) Start(adapter.StartStage) error { return nil }
+func (*routerVPNDNSDialInbound) Close() error                   { return nil }
+
+// Use the real pinned manager registries and shipping native engine identity
+// checks. Only the final network operation and unused TUN device are fixtures.
+func newRouterVPNDNSDialFixture(t *testing.T, dial func(context.Context, string, M.Socksaddr) (net.Conn, error)) (*routerVPNExternalNativeEngine, func(), *atomic.Int32) {
+	t.Helper()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	logger := log.NewNOPFactory().NewLogger("dns-native-test")
+	endpoints := endpoint.NewManager(logger, endpoint.NewRegistry())
+	inbounds := inbound.NewRegistry()
+	inbound.Register[struct{}](inbounds, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ struct{}) (adapter.Inbound, error) {
+		return &routerVPNDNSDialInbound{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	inboundManager := inbound.NewManager(logger, inbounds, endpoints)
+	if err := inboundManager.Create(ctx, nil, logger, "dns-test-tun", C.TypeTun, nil); err != nil {
+		t.Fatal(err)
+	}
+	tun, _ := inboundManager.Get("dns-test-tun")
+	outbounds := outbound.NewRegistry()
+	outbound.Register[routerVPNDNSDialOptions](outbounds, "dns-test-outbound", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options routerVPNDNSDialOptions) (adapter.Outbound, error) {
+		return &routerVPNDNSDialOutbound{outbound.NewAdapter("dns-test-outbound", tag, []string{"tcp"}, nil), options.dial}, nil
+	})
+	outboundManager := outbound.NewManager(logger, outbounds, endpoints, mobilemultihop.ExternalFinalTag)
+	create := func(tag string, action func(context.Context, string, M.Socksaddr) (net.Conn, error)) {
+		t.Helper()
+		if err := outboundManager.Create(ctx, nil, logger, tag, "dns-test-outbound", &routerVPNDNSDialOptions{dial: action}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	create(mobilemultihop.ExternalFinalTag, dial)
+	entryDials := &atomic.Int32{}
+	create("captured-entry", func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		entryDials.Add(1)
+		return nil, errors.New("unexpected entry or direct fallback")
+	})
+	final, _ := outboundManager.Outbound(mobilemultihop.ExternalFinalTag)
+	entry, _ := outboundManager.Outbound("captured-entry")
+	native := &Box{ctx: ctx, done: make(chan struct{}), outbound: outboundManager, inbound: inboundManager}
+	engine := &routerVPNExternalNativeEngine{box: native, tun: tun, tunTag: "dns-test-tun", owners: map[string]adapter.Outbound{mobilemultihop.ExternalFinalTag: final, "captured-entry": entry}, routes: map[string]adapter.Outbound{mobilemultihop.ExternalFinalTag: final, "captured-entry": entry}}
+	if engine.Identity() == "" {
+		t.Fatal("native DNS fixture lost its real manager identity")
+	}
+	return engine, func() { create(mobilemultihop.ExternalFinalTag, dial) }, entryDials
+}
+
+type routerVPNDNSDialConnection struct {
+	net.Conn
+	allowClose atomic.Bool
+	closes     atomic.Int32
+	firstClose chan struct{}
+	closeOnce  sync.Once
+}
+
+func (c *routerVPNDNSDialConnection) Close() error {
+	c.closes.Add(1)
+	c.closeOnce.Do(func() {
+		if c.firstClose != nil {
+			close(c.firstClose)
+		}
+	})
+	if !c.allowClose.Load() {
+		return errors.New("private-native-DNS-close-detail")
+	}
+	return c.Conn.Close()
+}
+
+func TestRouterVPNDNSNativeDialRetainsLateSocketOnCancellationReplacementAndError(t *testing.T) {
+	for _, retire := range []string{"caller", "owner", "native-error"} {
+		t.Run(retire, func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			raw := &routerVPNDNSDialConnection{Conn: client}
+			defer func() { raw.allowClose.Store(true); _ = raw.Close() }()
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			engine, replace, entryDials := newRouterVPNDNSDialFixture(t, func(_ context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+				if network != "tcp" || address.String() != "1.1.1.1:53" {
+					t.Error("captured final destination changed")
+				}
+				close(entered)
+				<-release
+				if retire == "native-error" {
+					return raw, errors.New("private-native-DNS-dial-detail")
+				}
+				return raw, nil
+			})
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			type dialResult struct {
+				connection net.Conn
+				err        error
+			}
+			done := make(chan dialResult, 1)
+			go func() { c, err := engine.DNSMeasurementDial(ctx, "1.1.1.1:53"); done <- dialResult{c, err} }()
+			<-entered
+			if retire == "caller" {
+				cancel()
+			} else if retire == "owner" {
+				replace()
+			}
+			releaseOnce.Do(func() { close(release) })
+			result := <-done
+			if result.connection != raw || result.err == nil || strings.Contains(result.err.Error(), "private-") {
+				t.Fatal("native adapter discarded a late socket or exposed native details", result.err)
+			}
+			if raw.closes.Load() != 0 || entryDials.Load() != 0 {
+				t.Fatal("native adapter discarded socket-close authority or used an entry fallback")
+			}
+			if result.connection.Close() == nil {
+				t.Fatal("fixture failed to retain its unsuccessful native close")
+			}
+			raw.allowClose.Store(true)
+			if err := result.connection.Close(); err != nil {
+				t.Fatal(err)
+			}
+			var b [1]byte
+			if _, err := peer.Read(b[:]); err != io.EOF {
+				t.Fatal("retained native socket stayed open", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDNSNativeDialEnforcesFixedCatalogBeforeNativeRoute(t *testing.T) {
+	var calls atomic.Int32
+	engine, replace, entryDials := newRouterVPNDNSDialFixture(t, func(_ context.Context, network string, address M.Socksaddr) (net.Conn, error) {
+		calls.Add(1)
+		if network != "tcp" || address.String() != "[2606:4700:4700::1111]:853" {
+			t.Error("catalog destination changed")
+		}
+		client, peer := net.Pipe()
+		peer.Close()
+		return client, nil
+	})
+	for _, address := range []string{"dns.google:443", "10.77.0.1:53", "127.0.0.1:53", "1.1.1.1:8787", "1.1.1.1:053", "[::ffff:1.1.1.1]:53", "[2606:4700:4700::1111%eth0]:853"} {
+		if c, err := engine.DNSMeasurementDial(context.Background(), address); c != nil || err == nil {
+			t.Fatal("non-catalog destination reached native DNS dial", address)
+		}
+	}
+	if c, err := engine.DNSMeasurementDial(nil, "1.1.1.1:53"); c != nil || err == nil {
+		t.Fatal("nil context reached native DNS dial")
+	}
+	connection, err := engine.DNSMeasurementDial(context.Background(), "[2606:4700:4700::1111]:853")
+	if err != nil || connection == nil {
+		t.Fatal("captured final route rejected canonical catalog destination", err)
+	}
+	connection.Close()
+	replace()
+	if c, err := engine.DNSMeasurementDial(context.Background(), "[2606:4700:4700::1111]:853"); c != nil || err == nil {
+		t.Fatal("changed native manager identity gained DNS dial authority")
+	}
+	if calls.Load() != 1 || entryDials.Load() != 0 {
+		t.Fatal("invalid or stale native DNS request dialed an unowned route")
+	}
+}
+
+type routerVPNDNSRetainedActivity struct {
+	core              *routerVPNExternalNativeEngine
+	started, released atomic.Int32
+}
+
+func (e *routerVPNDNSRetainedActivity) Identity() string { return e.core.Identity() }
+func (e *routerVPNDNSRetainedActivity) BeginMeasurement(ctx context.Context) (context.Context, func(), error) {
+	e.started.Add(1)
+	return ctx, func() { e.released.Add(1) }, nil
+}
+func (e *routerVPNDNSRetainedActivity) Dial(ctx context.Context, address string) (net.Conn, error) {
+	return e.core.DNSMeasurementDial(ctx, address)
+}
+func (*routerVPNDNSRetainedActivity) SelectedDNS(context.Context) error {
+	return errors.New("no selected DNS answer in socket-ownership fixture")
+}
+
+func TestRouterVPNDNSServiceRetainsActualNativeAdapterSocketAndActivityUntilCloseRetry(t *testing.T) {
+	client, peer := net.Pipe()
+	defer peer.Close()
+	raw := &routerVPNDNSDialConnection{Conn: client, firstClose: make(chan struct{})}
+	defer func() { raw.allowClose.Store(true); _ = raw.Close() }()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	var calls atomic.Int32
+	core, _, entryDials := newRouterVPNDNSDialFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		if calls.Add(1) != 1 {
+			return nil, errors.New("fixture has one retained native socket")
+		}
+		close(entered)
+		<-release
+		return raw, nil
+	})
+	activity := &routerVPNDNSRetainedActivity{core: core}
+	service, err := dnsmeasure.New(activity, dnsmeasure.Description{NodeID: "exit", SessionID: "session", RouteLabel: "Captured exit", Selected: dnsmeasure.Endpoint{ID: "selected", Kind: "selected", Name: "Selected DNS", Address: "1.1.1.1", Port: 53, Transport: "udp", Route: mobilemultihop.ExternalFinalTag, RouteLabel: "Selected final DNS"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	const nonce = "1234567890abcdef1234567890abcdef"
+	if err := service.Start(nonce, "tcp"); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	service.Cancel(nonce)
+	releaseOnce.Do(func() { close(release) })
+	<-raw.firstClose
+	var status dnsmeasure.Status
+	if json.Unmarshal([]byte(service.StatusJSON()), &status) != nil || status.Drained || activity.released.Load() != 0 {
+		t.Fatal("shared service released the actual late native socket/proof early")
+	}
+	if err := service.Start("abcdef1234567890abcdef1234567890", "tcp"); err == nil {
+		t.Fatal("new measurement replaced a native socket that had not drained")
+	}
+	drained := make(chan error, 1)
+	go func() { drained <- service.Drain(nonce) }()
+	select {
+	case err := <-drained:
+		t.Fatal("drain completed before successful native close", err)
+	case <-time.After(20 * time.Millisecond):
+	}
+	raw.allowClose.Store(true)
+	select {
+	case err := <-drained:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("successful native close retry did not finish shared drain")
+	}
+	if json.Unmarshal([]byte(service.StatusJSON()), &status) != nil || !status.Drained || len(status.Results) != 0 || activity.started.Load() != 1 || activity.released.Load() != 1 || entryDials.Load() != 0 {
+		t.Fatal("native cleanup receipt or activity ownership is inconsistent")
+	}
+	var b [1]byte
+	if _, err := peer.Read(b[:]); err != io.EOF {
+		t.Fatal("actual native pipe remained open after drain", err)
+	}
+	if err := service.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type routerVPNDNSTerminalConnection struct {
+	net.Conn
+	terminal error
+}
+
+func (c *routerVPNDNSTerminalConnection) Close() error {
+	_ = c.Conn.Close()
+	return c.terminal
+}
+
+func TestRouterVPNDNSServiceRetiresAlreadyClosedActualNativeAdapterSocket(t *testing.T) {
+	for _, terminal := range []error{net.ErrClosed, io.ErrClosedPipe} {
+		t.Run(terminal.Error(), func(t *testing.T) {
+			client, peer := net.Pipe()
+			defer peer.Close()
+			defer client.Close()
+			raw := &routerVPNDNSTerminalConnection{Conn: client, terminal: terminal}
+			entered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			var calls atomic.Int32
+			core, _, entryDials := newRouterVPNDNSDialFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+				if calls.Add(1) != 1 {
+					return nil, net.ErrClosed
+				}
+				close(entered)
+				<-release
+				return raw, nil
+			})
+			activity := &routerVPNDNSRetainedActivity{core: core}
+			service, err := dnsmeasure.New(activity, dnsmeasure.Description{NodeID: "exit", SessionID: "session", RouteLabel: "Captured exit", Selected: dnsmeasure.Endpoint{ID: "selected", Kind: "selected", Name: "Selected DNS", Address: "1.1.1.1", Port: 53, Transport: "udp", Route: mobilemultihop.ExternalFinalTag, RouteLabel: "Selected final DNS"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			const nonce = "fedcba0987654321fedcba0987654321"
+			if err := service.Start(nonce, "tcp"); err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			// The native outbound closes its real socket before the cancelled
+			// measurement can adopt the late result. Its Close now reports the
+			// documented terminal sentinel, not a retryable failure.
+			if err := client.Close(); err != nil {
+				t.Fatal(err)
+			}
+			service.Cancel(nonce)
+			releaseOnce.Do(func() { close(release) })
+			drained := make(chan error, 1)
+			go func() { drained <- service.Drain(nonce) }()
+			select {
+			case err := <-drained:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("already-closed native socket permanently retained its proof")
+			}
+			var status dnsmeasure.Status
+			if json.Unmarshal([]byte(service.StatusJSON()), &status) != nil || !status.Drained || len(status.Results) != 0 || activity.released.Load() != 1 || entryDials.Load() != 0 {
+				t.Fatal("closed native socket received an invalid retirement receipt")
+			}
+			var b [1]byte
+			if _, err := peer.Read(b[:]); err != io.EOF {
+				t.Fatal("native socket was not actually closed", err)
+			}
+			if err := service.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
+}

@@ -41,6 +41,8 @@ public final class StandardExitActivity extends Activity {
     private String pendingEntryMode="wg",pendingExecution="local",pendingEntryDigest="",pendingExitDigest="",pendingRequestDigest="";
     private boolean busy;
     private boolean requestedExitHandled;
+    private AndroidDNSMeasurementDialog dnsComparison;
+    private volatile boolean destroyed;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -55,7 +57,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     @Override protected void onResume() { super.onResume(); refresh(); openRequestedExitOnce(); }
-    @Override protected void onDestroy() { super.onDestroy(); }
+    @Override protected void onDestroy() { destroyed=true;if(dnsComparison!=null)dnsComparison.close();super.onDestroy(); }
     @Override protected void onSaveInstanceState(Bundle out){
         super.onSaveInstanceState(out);
         if(pendingEntry!=null)out.putString(STATE_PENDING_ENTRY,pendingEntry.id);
@@ -111,6 +113,7 @@ public final class StandardExitActivity extends Activity {
         Button manage=button("Manage saved exits"); manage.setOnClickListener(v->showSavedExits(false,false)); root.addView(manage,margins(0,dp(8),0,0));
         directButton=button(selectionOnly()?"Select direct external path":"Connect direct external exit"); directButton.setOnClickListener(v->showSavedExits(true,true)); root.addView(directButton,margins(0,dp(8),0,0));
         hoppedButton=button(selectionOnly()?"Select Router VPN entry → external exit":"Connect via Router VPN entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
+        Button compareDNS=button("Compare DNS on connected external path");compareDNS.setOnClickListener(v->showDNSComparison(AndroidHomeStateStore.snapshot(this).activeExternalId));root.addView(compareDNS,margins(0,dp(8),0,0));
         Button disconnect=button("Disconnect custom exit"); disconnect.setOnClickListener(v->{
             clearPending();statusView.setText("Disconnecting; waiting for the captured runtime to stop…");disconnect.setEnabled(false);
             new Thread(()->{String failure="";try{runtime.disconnect();}catch(Exception error){failure="Teardown is not confirmed. Runtime ownership is retained; retry Disconnect.";}String result=failure;
@@ -184,9 +187,14 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void showTorForm(String protocol, AndroidStandardExitStore.Entry saved) {
+        showTorDNSDraft(protocol,saved,null);
+    }
+
+    private void showTorDNSDraft(String protocol,AndroidStandardExitStore.Entry original,AndroidDNSSelectionDraft draft) {
         if(activeOrTransitioning()){toast("Disconnect before changing a Tor node.");return;}
+        final AndroidStandardExitStore.Entry saved;
         final JSONObject policy;
-        try{policy=AndroidTorProfile.editorPolicy(saved);}catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
+        try{saved=draft==null?original:draft.apply(original);policy=AndroidTorProfile.editorPolicy(saved);}catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
         EditText name=field("Display name",false);if(saved!=null)name.setText(saved.name);form.addView(name);
         Spinner transport=choice(new String[]{"obfs4","meek","Snowflake","WebTunnel","Custom bridge block"});
@@ -226,6 +234,7 @@ public final class StandardExitActivity extends Activity {
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
             try{
+                if(draft!=null)draft.requireSource(exitStore.get(draft.nodeID));
                 AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();if(saved!=null)entry.id=saved.id;entry.name=name.getText().toString();entry.protocol=protocol;
                 if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
                 JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);
@@ -322,19 +331,59 @@ public final class StandardExitActivity extends Activity {
     private void showExitActions(AndroidStandardExitStore.Entry e) {
         boolean tor=AndroidTorProfile.isTor(e.protocol);
         boolean ordinary=AndroidExternalPolicy.supports(e.protocol);
-        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Delete"}:ordinary?new String[]{"Connect direct","Connect through Router VPN entry","Edit DNS, network and MTU settings","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
+        String[] actions=tor?new String[]{"Connect direct","Connect through Router VPN entry","Edit saved Tor settings","Compare DNS on this connected path","Delete"}:ordinary?new String[]{"Connect direct","Connect through Router VPN entry","Edit DNS, network and MTU settings","Compare DNS on this connected path","Delete"}:new String[]{"Connect direct","Connect through Router VPN entry","Delete"};
         new AlertDialog.Builder(this).setCustomTitle(choiceHeader(e.name+" — "+e.protocol,exitSummary(e)+"\nCredentials and bridge blocks remain private."))
-                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else if(ordinary&&w==2)showExternalPolicyForm(e);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+                .setItems(actions,(d,w)->{if(w==0)requestDirect(e);else if(w==1)chooseEntry(e);else if(tor&&w==2)showTorForm(e.protocol,e);else if(ordinary&&w==2)showExternalPolicyForm(e);else if((tor||ordinary)&&w==3)showDNSComparison(e.id);else new AlertDialog.Builder(this).setTitle("Delete "+e.name+"?").setMessage("Only this app-private custom exit will be removed.").setPositiveButton("Delete",(x,y)->{if(activeOrTransitioning()){toast("VPN state changed; disconnect/finish before deleting a custom exit.");return;}try{exitStore.remove(e.id);refresh();toast("Deleted "+e.name);}catch(Exception err){toast(safe(err));}}).setNegativeButton("Cancel",null).show();}).setNegativeButton("Close",null).show();
+    }
+
+    private void showDNSComparison(String nodeID){
+        AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);
+        if(nodeID==null||nodeID.isEmpty()||!home.connected||!"passed".equals(home.pathProof)||!nodeID.equals(home.activeExternalId)){
+            toast("Connect and prove this external path before comparing its DNS resolvers.");return;
+        }
+        if(dnsComparison!=null)dnsComparison.close();
+        try{
+            AndroidStandardExitStore.Entry saved=AndroidStandardExitStore.copy(exitStore.get(nodeID));String homeSession=home.sessionId;AndroidDNSSelectionDraft.Path path=AndroidDNSSelectionDraft.Path.capture(nodeStore,home);
+            dnsComparison=new AndroidDNSMeasurementDialog(this,nodeID,(measurement,rowID)->chooseMeasuredDNS(saved,path,homeSession,measurement,rowID));dnsComparison.show();
+        }catch(Exception invalid){toast("The saved external node could not be captured for DNS comparison.");}
+    }
+
+    private void chooseMeasuredDNS(AndroidStandardExitStore.Entry source,AndroidDNSSelectionDraft.Path path,String homeSession,AndroidNativeDNSMeasurement measurement,String rowID)throws Exception{
+        if(destroyed||isFinishing())throw new IllegalStateException("The DNS comparison screen was closed.");
+        path.requireActive(AndroidHomeStateStore.snapshot(this));
+        AndroidDNSSelectionDraft draft=AndroidDNSSelectionDraft.create(source,path,measurement.currentReceipt(),rowID);
+        draft.requireSource(exitStore.get(draft.nodeID));
+        new AlertDialog.Builder(this).setTitle("Use this DNS for the next connection?")
+                .setMessage(draft.description()+"\n\nDisconnect this exact external session, then review its DNS fields and press Save. The next connection will use those explicit settings.")
+                .setPositiveButton("Disconnect and edit",(d,w)->{
+                    if(destroyed||isFinishing())return;
+                    try{
+                        path.requireActive(AndroidHomeStateStore.snapshot(this));
+                        draft.requireReceipt(measurement.currentReceipt());draft.requireSource(exitStore.get(draft.nodeID));
+                        if(!homeSession.equals(AndroidHomeStateStore.snapshot(this).sessionId))throw new IllegalStateException("The external session changed.");
+                    }catch(Exception stale){toast("DNS draft discarded: "+safe(stale));return;}
+                    if(dnsComparison!=null)dnsComparison.close();clearPending();busy=true;statusView.setText("Disconnecting the measured session before opening its DNS draft…");
+                    new Thread(()->{String failure="";try{if(!runtime.disconnectAndDrainCaptured(homeSession))failure="The measured session changed; its DNS draft was discarded.";}catch(Exception pending){failure="Teardown is not confirmed. Retry Disconnect before editing DNS.";}final String result=failure;
+                        runOnUiThread(()->{if(destroyed||isFinishing())return;busy=false;refresh();if(!result.isEmpty()){toast(result);return;}
+                            try{if(activeOrTransitioning())throw new IllegalStateException("Another VPN session is active.");AndroidStandardExitStore.Entry current=exitStore.get(draft.nodeID);draft.requireSource(current);
+                                if(AndroidTorProfile.isTor(current.protocol))showTorDNSDraft(current.protocol,current,draft);else showExternalDNSDraft(current,draft);
+                            }catch(Exception stale){toast("DNS draft discarded: "+safe(stale));}
+                        });},"routervpn-dns-next-connection").start();
+                }).setNegativeButton("Keep current connection",null).show();
     }
 
     private void showExternalPolicyForm(AndroidStandardExitStore.Entry saved) {
+        showExternalDNSDraft(saved,null);
+    }
+
+    private void showExternalDNSDraft(AndroidStandardExitStore.Entry saved,AndroidDNSSelectionDraft draft) {
         if(activeOrTransitioning()){toast("Disconnect before editing external-node settings.");return;}
         final AndroidStandardExitStore.Entry captured;
         final JSONObject policy;
-        try{captured=AndroidStandardExitStore.copy(saved);policy=AndroidExternalPolicy.editorPolicy(captured);}
+        try{captured=draft==null?AndroidStandardExitStore.copy(saved):draft.apply(saved);policy=AndroidExternalPolicy.editorPolicy(captured);}
         catch(Exception invalid){toast("The saved external policy could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
-        Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Fastest (saved successful measurement)"});
+        Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Previously saved legacy Fastest setting"});
         String mode=policy.optString("dns_mode","home"),protocol="custom".equals(mode)?policy.optString("dns_protocol",""):mode;
         int selected="home".equals(mode)?0:"rescue".equals(mode)?1:"fastest".equals(mode)?7:("dot".equals(protocol)||"tls".equals(protocol))?4:("doh".equals(protocol)||"https".equals(protocol))?5:("doh3".equals(protocol)||"h3".equals(protocol))?6:"tcp".equals(protocol)?3:2;
         dns.setSelection(selected);form.addView(text("DNS for this external connection",14,true));form.addView(dns);
@@ -364,6 +413,7 @@ public final class StandardExitActivity extends Activity {
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
             try{
+                if(draft!=null)draft.requireSource(exitStore.get(draft.nodeID));
                 AndroidStandardExitStore.Entry next=AndroidStandardExitStore.copy(captured);JSONObject p=new JSONObject(policy.toString());int n=dns.getSelectedItemPosition();
                 // An unrelated settings edit must retain the exact Home/Fastest
                 // resolver, transport and port already selected for this node.
@@ -372,7 +422,7 @@ public final class StandardExitActivity extends Activity {
                 p.put("dns_mode",n==0?"home":n==1?"rescue":n==7?"fastest":"custom");
                 if(n==selected&&n==0){if(!captured.policy.has("dns_mode"))p.remove("dns_mode");else if(captured.policy.optString("dns_mode","").isEmpty())p.put("dns_mode","");}
                 if(n>=2&&n<=6){String transport=new String[]{"","","udp","tcp","tls","https","h3"}[n];String address=host.getText().toString().trim();if(address.isEmpty())throw new IllegalArgumentException("Enter the selected DNS address.");String number=port.getText().toString().trim();int value=number.isEmpty()?0:Integer.parseInt(number);if(value<0||value>65535)throw new IllegalArgumentException("DNS port must be 1–65535 or blank.");p.put("dns_protocol",transport).put("dns_host",address).put("dns_port",value);if(n>=4)p.put("dns_server_name",name.getText().toString().trim());if(n>=5)p.put("dns_path",path.getText().toString().trim());}
-                if(n==7&&(p.optString("fastest_dns_host","").isEmpty()||!p.has("dns_results")&&!p.has("fastest_dns_latency_ms")))throw new IllegalArgumentException("Run a successful DNS measurement before selecting its saved winner.");
+                if(n==7&&(p.optString("fastest_dns_host","").isEmpty()||!p.has("dns_results")&&!p.has("fastest_dns_latency_ms")))throw new IllegalArgumentException("This node has no legacy Fastest setting. Use a completed comparison to choose an explicit resolver for the next connection.");
                 if(bootstrapEnabled.isChecked()){
                     if(n<2||n>6)throw new IllegalArgumentException("Bootstrap belongs to an explicitly selected DNS hostname.");
                     String t=new String[]{"udp","tcp","tls","https","h3"}[bootstrapType.getSelectedItemPosition()];String address=bootstrapHost.getText().toString().trim();AndroidNumericAddress.parse(address);

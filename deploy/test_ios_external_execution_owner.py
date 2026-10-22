@@ -7,12 +7,15 @@ builder/validator and Go compiler; shared Go tests exercise routed TLS/leases.
 This gate tests cancellation, stale completion, health expiry and teardown order.
 """
 from pathlib import Path
+import importlib.util
 import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 ENGINE = ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
+spec = importlib.util.spec_from_file_location('apple_dns_boundary', ROOT / 'deploy/test_ios_dns_measurement.py')
+DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
 
 BOUNDARIES = r'''
 import Foundation
@@ -64,6 +67,10 @@ func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:Strin
 func LibboxRouterExternalCreateHopMeasurement(_ server:LibboxCommandServer,_ request:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterHopMeasurement? {
  guard request.healthy(),request.source==source,request.capture==capture,request.session==session else{error=FixtureFailure.error;return nil}
  Trace.shared.add("hop-adopt");return LibboxRouterHopMeasurement()
+}
+func LibboxRouterExternalCreateDNSMeasurement(_ server:LibboxCommandServer,_ request:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterDNSMeasurement? {
+ guard request.healthy(),request.source==source,request.capture==capture,request.session==session else{error=FixtureFailure.error;return nil}
+ return LibboxRouterDNSMeasurement(node:"exit",session:session)
 }
 func LibboxRouterInvalidatePerformance(_ server:LibboxCommandServer){Trace.shared.add("invalidate")}
 func LibboxRouterStrategyCloseService(_ server:LibboxCommandServer,_ error:inout NSError?)->Bool {
@@ -217,7 +224,8 @@ def shipping():
 def main():
     with tempfile.TemporaryDirectory(prefix='ios-external-owner-') as directory:
         work = Path(directory); code = work / 'Owner.swift'
-        code.write_text(BOUNDARIES + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
+        dns_session = (ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift').read_text().replace('import Libbox\n', '')
+        code.write_text(BOUNDARIES + DNS.NATIVE + DNS.STORAGE + dns_session + (APP / 'IOSMultihopExecution.swift').read_text() + shipping())
         binary = work / 'test'
         subprocess.run(['swiftc', '-swift-version', '6', '-parse-as-library', '-module-cache-path', str(work / 'module-cache'), str(code), '-o', str(binary)], check=True, timeout=90)
         subprocess.run([str(binary)], check=True, timeout=30)

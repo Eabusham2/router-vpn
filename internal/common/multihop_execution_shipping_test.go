@@ -106,7 +106,6 @@ func TestEntryStartLayerHasAnUnbrokenNativeStartupOwner(t *testing.T) {
 		"ios/RouterVPN/test_runtime_selection_contract.py":       {"test_ios_entry_start_capture.py"},
 		"ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift":  {"entryStartLayerSource: entryLayer.source, exitStartLayerSource: exitLayer.source", "entryLayer.graphProfile", "exitLayer.graphProfile", "entry_start_layer", "exit_start_layer"},
 		"ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift": {"IOSMultihopStartLayer.requiredSource", "IOSMultihopStartLayer.requiredExitSource", "LibboxNewRouterMultihopWithEntryStartLayer", "LibboxNewRouterMultihopWithStartLayers"},
-		"ios/RouterVPN/project.yml":                              {"sources: [PacketTunnel, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift, App/IOSMultihopExecution.swift]"},
 		"mobile/routervpn_multihop_bridge.go.tmpl":               {"NewRouterMultihopWithEntryStartLayer", "mobilemultihop.NewWithEntryStartLayer"},
 	} {
 		content, err := os.ReadFile(filepath.Join("../..", file))
@@ -119,4 +118,5 @@ func TestEntryStartLayerHasAnUnbrokenNativeStartupOwner(t *testing.T) {
 			}
 		}
 	}
+	requireApplePacketTunnelSources(t, "PacketTunnel", "App/IOSMultihopStartLayer.swift", "App/IOSNativePQProfile.swift", "App/IOSMultihopExecution.swift")
 }

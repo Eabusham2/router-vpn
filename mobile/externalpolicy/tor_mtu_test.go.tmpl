@@ -35,17 +35,18 @@ type torMTUFixtureOptions struct {
 type torMTUFixtureOutbound struct {
 	outbound.Adapter
 	N.Dialer
-	ctx       context.Context
-	cancel    context.CancelFunc
-	session   string
-	entrySHA  string
-	dnsTarget string
-	canceled  atomic.Bool
-	dnsCalls  atomic.Int32
-	dnsReply  atomic.Int32
-	workers   sync.WaitGroup
-	mu        sync.Mutex
-	closed    bool
+	ctx                 context.Context
+	cancel              context.CancelFunc
+	session             string
+	entrySHA            string
+	dnsTarget           string
+	canceled            atomic.Bool
+	dnsCalls            atomic.Int32
+	dnsReply            atomic.Int32
+	dnsMeasurementCalls atomic.Int32
+	workers             sync.WaitGroup
+	mu                  sync.Mutex
+	closed              bool
 }
 
 // Keep the real Box DNS router and compiled TCP transport. Only the final Tor

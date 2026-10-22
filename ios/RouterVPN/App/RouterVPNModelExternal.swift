@@ -223,7 +223,7 @@ extension RouterVPNModel {
         }
     }
 
-    private func externalTorEntryData(source: ClientBundle) throws -> Data? {
+    func externalTorEntryData(source: ClientBundle) throws -> Data? {
         guard let selected = IOSDNSRuntimePolicy.selectedProfile(in: source) else { throw CancellationError() }
         guard selected.multihopEnabled == true else { return nil }
         guard selected.normalizedNodeKind == "external", ["tor", "tor-bridge", "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(selected.external?.protocolName ?? "") else {
@@ -236,7 +236,7 @@ extension RouterVPNModel {
         return data
     }
 
-    private func externalRuntimeBundleData(source: ClientBundle, profile: RouterProfile) throws -> Data {
+    func externalRuntimeBundleData(source: ClientBundle, profile: RouterProfile) throws -> Data {
         var runtimeProfile = profile
         guard runtimeProfile.normalizedNodeKind == "external" else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 40, userInfo: [NSLocalizedDescriptionKey: "External runtime handoff requires an external profile"])

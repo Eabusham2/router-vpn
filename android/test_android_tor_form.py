@@ -21,6 +21,18 @@ spec = importlib.util.spec_from_file_location("tor_form_profile", ROOT / "androi
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 
+DNS_BOUNDARY = r'''package com.eabusham.routervpn;
+final class AndroidNativeDNSMeasurement {
+ interface Callback{void progress(String stage);void finished(String result,Throwable error);}
+ static AndroidNativeDNSMeasurement last;static String receipt;static boolean stale,autoFinish;static int runs,cancels;
+ boolean active,cancelled;Callback callback;String mode,node;
+ boolean isRunning(){return active;}
+ void run(String node,String mode,Callback callback){last=this;runs++;this.node=node;this.mode=mode;this.callback=callback;active=true;if(autoFinish)finish();}
+ void finish(){active=false;callback.finished(receipt,null);}
+ void cancel(){cancels++;active=false;cancelled=true;}
+ org.json.JSONObject currentReceipt()throws Exception{if(stale||cancelled||active||receipt==null)throw new IllegalStateException("measurement owner changed");return new org.json.JSONObject(receipt);}
+}'''
+
 UI = {
 "android/content/Context.java": r'''package android.content;
 public class Context {public static final String CONNECTIVITY_SERVICE="connectivity";public Object getSystemService(String name){return null;}
@@ -161,8 +173,8 @@ final class AndroidConnectionProfileStore {
 }
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidHomeStateStore {
- static final class Snapshot{boolean connected;String sessionId="form-session",phase="idle",logicalMode="",activeExternalName="",activeExternalProtocol="";}
- static boolean emergencyDisconnectPending(android.content.Context c){return false;}static Snapshot snapshot(android.content.Context c){return new Snapshot();}static String actualExitForCurrentSession(android.content.Context c){return "";}
+ static final class Snapshot{boolean connected;String sessionId="form-session",phase="idle",logicalMode="",activeExternalName="",activeExternalProtocol="",activeExternalId="",pathProof="",activeEntryId="",activeEntryMode="";}
+ static Snapshot current;static boolean emergencyDisconnectPending(android.content.Context c){return false;}static Snapshot snapshot(android.content.Context c){return current==null?new Snapshot():current;}static String actualExitForCurrentSession(android.content.Context c){return "";}
 }
 final class AndroidStandardExitRuntime {
  interface Callback{void progress(String value);void finished(boolean success,String value);}
@@ -170,7 +182,9 @@ final class AndroidStandardExitRuntime {
  void connectDirect(AndroidStandardExitStore.Entry value,Callback cb){starts++;exit=value;mode="external";}
  void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,Callback cb){starts++;entry=file;exit=value;mode=selected;}
  void connect(java.io.File file,AndroidStandardExitStore.Entry value,String selected,String execution,Callback cb){connect(file,value,selected,cb);this.execution=execution;}
+ volatile int disconnects;String disconnectedSession="";boolean disconnectFails,disconnectReplaced;volatile Thread disconnectThread;java.util.concurrent.CountDownLatch disconnectEntered,disconnectRelease;
  void disconnect(){}
+ boolean disconnectAndDrainCaptured(String session){disconnectThread=Thread.currentThread();disconnects++;disconnectedSession=session;if(disconnectEntered!=null){disconnectEntered.countDown();try{disconnectRelease.await();}catch(InterruptedException error){throw new IllegalStateException(error);}}if(disconnectFails)throw new IllegalStateException("native teardown pending");if(disconnectReplaced)return false;AndroidHomeStateStore.current.connected=false;AndroidHomeStateStore.current.phase="off";AndroidVpnMutationGuard.busy=false;return true;}
 }
 final class AndroidRuntimeRegistry {
  static final class Engine{String getState(){return "STOPPED";}boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}}
@@ -304,7 +318,7 @@ public final class TorFormHarness {
   check(!negative.itemsVisible(),"dialog double ignores Android message/list exclusivity");boolean hidden=false;try{negative.clickItem(0);}catch(IllegalStateException expected){hidden=true;}check(hidden,"hidden-list negative control cannot reject an item");negative.dismiss();
   for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"permission-");StandardExitActivity activity=activity(directory,null);AndroidNodeStore.Node node=node(directory);AndroidStandardExitStore.Entry selected=tor("custom","doh");store(activity).save(selected);
-   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==4,"saved Tor actions are hidden");
+   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[3].equals("Compare DNS on this connected path"),"saved Tor actions are hidden");
    check(!displayed(actions.customTitle).contains("cert=Y2VydA"),"actions header exposed bridge credentials");actions.clickItem(1);
    AlertDialog entries=AlertDialog.last;check(entries.itemsVisible()&&entries.items.length==1,"entry choices are hidden");entries.clickItem(0);
    AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"exact native mode choices missing or duplicated");int index=-1;
@@ -387,7 +401,7 @@ public final class TorFormHarness {
    StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-form-"),null);AndroidStandardExitStore.Entry selected=ordinary(kind);
    selected.policy=policy(dns.equals("tcp")?"custom":dns,dns.equals("rescue")?"tcp":dns);selected.policy.put("effective_mtu",8800);
    store(activity).save(selected);String before=AndroidStandardExitStore.snapshot(selected);String compiled=AndroidExternalPolicy.compile(selected,null,"external").config;
-   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==4,"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
+   invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[2].contains("DNS")&&actions.items[3].equals("Compare DNS on this connected path"),"ordinary policy settings are unreachable");actions.clickItem(2);AlertDialog editor=AlertDialog.last;
    check(editor.showing&&editor.title.toString().contains("Connection settings"),"ordinary policy form was not opened");
    editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"saved ordinary policy roundtrip rejected: "+kind+"/"+dns+" "+displayed(editor.view));
    AndroidStandardExitStore.Entry after=store(activity).get(selected.id);check(compiled.equals(AndroidExternalPolicy.compile(after,null,"external").config),"ordinary form replaced selected DNS or interface policy");
@@ -437,7 +451,79 @@ public final class TorFormHarness {
   add.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog settings=AlertDialog.last;check(!add.showing&&settings.showing&&config.getText().length()==0&&store(activity).list().isEmpty(),"AmneziaWG skipped private policy capture or retained pasted keys");check(spinner(settings,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==2&&field(settings,"Selected DNS IP or hostname").getText().toString().equals("9.9.9.9"),"AmneziaWG silently replaced imported DNS selection");settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!settings.showing&&store(activity).list().size()==1,"AmneziaWG full profile not saved");
   AndroidStandardExitStore.Entry saved=store(activity).list().get(0);check(saved.protocol.equals("amneziawg")&&sameParams(saved.awgParameters,example.awgParameters)&&saved.wgKeepalive==17&&saved.wgDns.equals(List.of("9.9.9.9","2620:fe::fe")),"AmneziaWG form dropped parameters, keepalive or secondary DNS capture");check(new JSONObject(AndroidExternalPolicy.compile(saved,null,"external").config).getJSONArray("endpoints").getJSONObject(0).getString("type").equals("routervpn-amneziawg"),"saved AmneziaWG did not compile native protocol");
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ interface DNSAttempt{void run()throws Exception;}
+ static void dnsReject(DNSAttempt action,String reason)throws Exception{boolean rejected=false;try{action.run();}catch(Exception expected){rejected=true;}check(rejected,reason);}
+ static Button button(AlertDialog dialog,String text){for(View view:views(dialog.view))if(view instanceof Button&&text.equals(((Button)view).getText().toString()))return (Button)view;throw new AssertionError("Missing DNS button: "+text);}
+ static JSONObject dnsReceipt(String node,String mode)throws Exception{
+  String[] ids={"cf4a","cf4b","cf6a","cf6b","g4a","g4b","g6a","g6b","q4a","q4b","q6a","q6b"},addresses={"1.1.1.1","1.0.0.1","2606:4700:4700::1111","2606:4700:4700::1001","8.8.8.8","8.8.4.4","2001:4860:4860::8888","2001:4860:4860::8844","9.9.9.9","149.112.112.112","2620:fe::fe","2620:fe::9"},names={"cloudflare-dns.com","dns.google","dns.quad9.net"};
+  JSONArray rows=new JSONArray().put(new JSONObject().put("id","selected").put("name","Selected DNS").put("kind","selected").put("address","10.77.0.53").put("port",5353).put("transport","udp").put("route","entry-wg").put("route_label","Selected DNS via entry-wg").put("samples",3).put("failed",0).put("ready",true).put("median_ms",0.1));
+  for(int i=0;i<12;i++){JSONObject row=new JSONObject().put("id",ids[i]).put("name",ids[i]).put("kind","public").put("address",addresses[i]).put("port",mode.equals("tcp")?53:mode.equals("tls")?853:443).put("transport",mode).put("route","exit").put("route_label","Current Tor connection").put("samples",3).put("failed",0).put("ready",true).put("median_ms",i==8?2.5:10.0+i);if(!mode.equals("tcp"))row.put("server_name",names[i/4]);if(mode.equals("https"))row.put("path","/dns-query");rows.put(row);}
+  JSONObject failed=rows.getJSONObject(5);failed.put("samples",2).put("failed",1).put("ready",false).put("failure","No complete DNS answers");failed.remove("median_ms");
+  return new JSONObject().put("schema",1).put("request_id","a".repeat(32)).put("node_id",node).put("session_id","native-dns-session").put("public_transport",mode).put("stage","complete").put("complete",true).put("drained",true).put("results",rows);
+ }
+ static void dnsDrafts()throws Exception{
+  for(String kind:new String[]{"tor","obfs4","socks5"})for(String mode:new String[]{"tcp","tls","https"}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"dns-draft-"),null);AndroidStandardExitStore.Entry saved=kind.equals("socks5")?ordinary(kind):tor(kind,"doh");store(activity).save(saved);String before=AndroidStandardExitStore.snapshot(saved);
+   JSONObject receipt=dnsReceipt(saved.id,mode);AndroidDNSSelectionDraft draft=AndroidDNSSelectionDraft.create(saved,AndroidDNSSelectionDraft.Path.direct(),receipt,null);check(draft.rowID.equals("q4a"),"fastest chose Home or an unavailable public row");
+   dnsReject(()->AndroidDNSSelectionDraft.create(saved,AndroidDNSSelectionDraft.Path.direct(),receipt,"selected"),"selected DNS became a public choice");dnsReject(()->AndroidDNSSelectionDraft.create(saved,AndroidDNSSelectionDraft.Path.direct(),receipt,"g4a"),"failed resolver became a draft");
+   JSONObject stale=new JSONObject(receipt.toString()).put("request_id","b".repeat(32));dnsReject(()->draft.requireReceipt(stale),"superseded DNS receipt accepted");
+   AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(saved);changed.name+=" changed";dnsReject(()->draft.apply(changed),"changed saved source accepted by DNS draft");
+   AndroidStandardExitStore.Entry exact=draft.apply(saved);JSONObject policy=kind.equals("socks5")?exact.policy:exact.torPolicy;String selected=kind.equals("socks5")?mode:mode.equals("tls")?"dot":mode.equals("https")?"doh":mode;
+   check(policy.getString("dns_mode").equals("custom")&&policy.getString("dns_protocol").equals(selected)&&policy.getString("dns_host").equals("9.9.9.9")&&policy.getInt("dns_port")==(mode.equals("tcp")?53:mode.equals("tls")?853:443),"DNS draft did not keep exact measured endpoint");
+   check(!policy.has("dns_results")&&!policy.has("fastest_dns_host")&&!policy.has("fastest_dns_latency_ms")&&AndroidStandardExitStore.snapshot(saved).equals(before),"DNS draft persisted legacy metrics or changed source");
+   if(kind.equals("socks5"))invoke(activity,"showExternalDNSDraft",saved,draft);else invoke(activity,"showTorDNSDraft",saved.protocol,saved,draft);AlertDialog editor=AlertDialog.last;
+   String host=kind.equals("socks5")?"Selected DNS IP or hostname":"Custom DNS literal IP",port=kind.equals("socks5")?"DNS port (blank keeps the protocol default)":"Custom DNS port (blank uses protocol default)",name=kind.equals("socks5")?"Encrypted DNS certificate name":"DoT / DoH certificate server name",path=kind.equals("socks5")?"DoH / DoH3 path":"DoH path (default /dns-query)";
+   check(field(editor,host).getText().toString().equals("9.9.9.9")&&field(editor,port).getText().toString().equals(Integer.toString(mode.equals("tcp")?53:mode.equals("tls")?853:443)),"measured DNS fields were not editable");
+   if(!mode.equals("tcp"))check(field(editor,name).getText().toString().equals("dns.quad9.net"),"measured DNS certificate name dropped");if(mode.equals("https"))check(field(editor,path).getText().toString().equals("/dns-query"),"measured DoH path dropped");
+   check(AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before)&&AndroidRuntimeRegistry.get(activity).standardExit.starts==0,"opening DNS draft saved or connected");
+   store(activity).save(changed);editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(editor.showing&&store(activity).get(saved.id).name.equals(changed.name),"DNS Save overwrote a changed captured source");store(activity).save(saved);
+   editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"valid measured DNS draft did not save");AndroidStandardExitStore.Entry result=store(activity).get(saved.id);JSONObject resultPolicy=kind.equals("socks5")?result.policy:result.torPolicy;
+   check(resultPolicy.getString("dns_mode").equals("custom")&&resultPolicy.getString("dns_protocol").equals(selected)&&resultPolicy.getString("dns_host").equals("9.9.9.9")&&result.torBridges.equals(saved.torBridges)&&result.secret.equals(saved.secret)&&result.password.equals(saved.password),"explicit Save lost DNS, bridge or credentials");
+   if(kind.equals("socks5"))AndroidExternalPolicy.compile(result,null,"external");else compiled(result);
+  }
+ }
+ static void dnsDialog()throws Exception{
+  for(String action:new String[]{"fastest","manual","expired-chooser","owner","session","pending-close","replaced-close","destroyed-handoff","dismiss","cancel"}){
+   AndroidHomeStateStore.current=null;AndroidVpnMutationGuard.busy=false;AndroidNativeDNSMeasurement.runs=0;AndroidNativeDNSMeasurement.cancels=0;AndroidNativeDNSMeasurement.stale=false;AndroidNativeDNSMeasurement.autoFinish=!action.equals("dismiss")&&!action.equals("cancel");
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"dns-dialog-"),null);AndroidStandardExitStore.Entry saved=ordinary("socks5");store(activity).save(saved);String before=AndroidStandardExitStore.snapshot(saved);AndroidNativeDNSMeasurement.receipt=dnsReceipt(saved.id,"https").toString();
+   AndroidHomeStateStore.Snapshot home=new AndroidHomeStateStore.Snapshot();home.connected=true;home.activeExternalId=saved.id;home.sessionId="captured-home-session";home.pathProof="passed";AndroidHomeStateStore.current=home;AndroidVpnMutationGuard.busy=true;
+   invoke(activity,"showDNSComparison",saved.id);AlertDialog dialog=AlertDialog.last;Button measure=button(dialog,"Measure DNS"),fastest=button(dialog,"Use fastest measured public DNS next time"),choose=button(dialog,"Choose measured public resolver…");
+   check(AndroidNativeDNSMeasurement.runs==0&&!fastest.isEnabled()&&!choose.isEnabled(),"opening DNS dialog started traffic or allowed unmeasured choice");measure.performClick();
+   if(action.equals("dismiss")||action.equals("cancel")){check(AndroidNativeDNSMeasurement.runs==1&&!fastest.isEnabled()&&!spinner(dialog,"TCP DNS").isEnabled(),"active DNS measurement allowed selection or transport mutation");if(action.equals("dismiss"))activity.onDestroy();else button(dialog,"Cancel measurement").performClick();check(AndroidNativeDNSMeasurement.cancels>0,"DNS cancellation lost exact UI owner");AndroidNativeDNSMeasurement.last.finish();check(!fastest.isEnabled(),"cancelled DNS result became selectable");AndroidHomeStateStore.current=null;AndroidVpnMutationGuard.busy=false;continue;}
+   check(fastest.isEnabled()&&choose.isEnabled()&&displayed(dialog.view).contains("Complete DNS query time")&&displayed(dialog.view).contains("Selected DNS via entry-wg")&&displayed(dialog.view).contains("Unavailable"),"valid DNS results lost selected route or usable choices");
+   if(action.equals("manual")||action.equals("expired-chooser")){choose.performClick();AlertDialog list=AlertDialog.last;check(list.itemsVisible()&&list.items.length==11,"measured resolver picker included failed or selected DNS row");if(action.equals("expired-chooser"))AndroidNativeDNSMeasurement.stale=true;list.clickItem(1);}else fastest.performClick();
+   if(action.equals("expired-chooser")){check(!fastest.isEnabled()&&AndroidRuntimeRegistry.get(activity).standardExit.disconnects==0&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"expired chooser result disconnected or saved a resolver");activity.onDestroy();AndroidHomeStateStore.current=null;AndroidVpnMutationGuard.busy=false;continue;}
+   AlertDialog confirmation=AlertDialog.last;AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(activity).standardExit;check(confirmation.message!=null&&confirmation.message.toString().contains(action.equals("manual")?"1.0.0.1:443":"9.9.9.9:443")&&runtime.disconnects==0&&runtime.starts==0&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"choosing measured DNS saved, disconnected, connected or lost endpoint before confirmation");
+   if(action.equals("owner"))AndroidNativeDNSMeasurement.stale=true;if(action.equals("session"))home.sessionId="replacement-home-session";runtime.disconnectFails=action.equals("pending-close");runtime.disconnectReplaced=action.equals("replaced-close");
+   if(action.equals("destroyed-handoff")){runtime.disconnectEntered=new java.util.concurrent.CountDownLatch(1);runtime.disconnectRelease=new java.util.concurrent.CountDownLatch(1);}
+   confirmation.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   if(action.equals("destroyed-handoff")){check(runtime.disconnectEntered.await(2,java.util.concurrent.TimeUnit.SECONDS),"captured DNS disconnect did not start");activity.onDestroy();runtime.disconnectRelease.countDown();runtime.disconnectThread.join(2000);check(!runtime.disconnectThread.isAlive()&&AlertDialog.last==confirmation&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"destroyed Activity opened or saved a DNS editor");AndroidHomeStateStore.current=null;AndroidVpnMutationGuard.busy=false;continue;}
+   if(action.equals("owner")||action.equals("session")){check(!(Boolean)get(activity,"busy")&&runtime.disconnects==0&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"stale DNS choice disconnected or saved another session");activity.onDestroy();}
+   else{
+    long deadline=System.nanoTime()+3_000_000_000L;while(((Boolean)get(activity,"busy")||!action.endsWith("close")&&AlertDialog.last==confirmation)&&System.nanoTime()<deadline)Thread.sleep(2);check(!(Boolean)get(activity,"busy")&&runtime.disconnects==1&&runtime.disconnectedSession.equals("captured-home-session"),"DNS draft did not wait for exact captured disconnect");
+    if(action.endsWith("close"))check(AlertDialog.last==confirmation&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"unconfirmed disconnect opened or saved DNS draft");
+    else{AlertDialog editor=AlertDialog.last;check(editor!=confirmation&&editor.showing&&field(editor,"Selected DNS IP or hostname").getText().toString().equals(action.equals("manual")?"1.0.0.1":"9.9.9.9")&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"DNS editor lost exact draft or saved before explicit Save");editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing&&store(activity).get(saved.id).policy.getString("dns_mode").equals("custom")&&runtime.starts==0,"DNS handoff did not remain explicit Save without Connect");}
+   }
+   AndroidHomeStateStore.current=null;AndroidVpnMutationGuard.busy=false;
+  }
+ }
+ static void dnsLinkedEntries()throws Exception{
+  for(String kind:new String[]{"tor","socks5"})for(String mutation:new String[]{"bundle","mapping","removed"}){
+   Path directory=Files.createTempDirectory(root,"dns-entry-");StandardExitActivity activity=activity(directory,null);AndroidStandardExitStore.Entry saved=kind.equals("tor")?tor("tor","doh"):ordinary("socks5");store(activity).save(saved);String before=AndroidStandardExitStore.snapshot(saved);
+   AndroidNodeStore.Node entry=node(directory);byte[] bytes=Files.readAllBytes(entry.file.toPath());AndroidHomeStateStore.Snapshot home=new AndroidHomeStateStore.Snapshot();home.activeEntryId=entry.id;home.activeEntryMode="wg";AndroidNodeStore nodes=(AndroidNodeStore)get(activity,"nodeStore");
+   AndroidDNSSelectionDraft.Path path=AndroidDNSSelectionDraft.Path.capture(nodes,home);path.requireActive(home);home.activeEntryMode="max";dnsReject(()->path.requireActive(home),"captured DNS entry mode changed");home.activeEntryMode="wg";
+   AndroidDNSSelectionDraft draft=AndroidDNSSelectionDraft.create(saved,path,dnsReceipt(saved.id,"https"),null);
+   if(kind.equals("tor"))invoke(activity,"showTorDNSDraft",saved.protocol,saved,draft);else invoke(activity,"showExternalDNSDraft",saved,draft);AlertDialog editor=AlertDialog.last;
+   if(mutation.equals("bundle"))Files.writeString(entry.file.toPath(),new String(bytes,StandardCharsets.UTF_8)+"\n");
+   if(mutation.equals("mapping")){Path other=directory.resolve("another-private-entry.json");Files.write(other,bytes);AndroidNodeStore.nodes.clear();AndroidNodeStore.nodes.add(new AndroidNodeStore.Node(entry.id,entry.name,entry.endpoint,other.toFile()));}
+   if(mutation.equals("removed"))AndroidNodeStore.nodes.clear();
+   dnsReject(()->path.requireCurrent(),"changed or removed entry remained a measurement source");dnsReject(()->draft.requireSource(store(activity).get(saved.id)),"DNS draft accepted a changed predecessor");
+   editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(editor.showing&&AndroidStandardExitStore.snapshot(store(activity).get(saved.id)).equals(before),"DNS Save accepted a changed predecessor");
+   Files.write(entry.file.toPath(),bytes);AndroidNodeStore.nodes.clear();AndroidNodeStore.nodes.add(entry);editor.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!editor.showing,"unchanged captured predecessor prevented explicit DNS Save");
+  }
+  AndroidHomeStateStore.Snapshot direct=new AndroidHomeStateStore.Snapshot();AndroidDNSSelectionDraft.Path path=AndroidDNSSelectionDraft.Path.capture(null,direct);check(path.entryID.isEmpty()&&path.entryMode.isEmpty(),"direct DNS draft borrowed ambient Router node");direct.activeEntryMode="wg";dnsReject(()->AndroidDNSSelectionDraft.Path.capture(null,direct),"direct DNS capture accepted an unexplained entry mode");
+ }
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -461,6 +547,7 @@ def main():
         subprocess.run(["go", "build", "-o", str(native), str(go_dir / "main.go")], cwd=ROOT, check=True, timeout=90)
         stubs = dict(T.P.M.STUBS)
         stubs.update(UI)
+        stubs["com/eabusham/routervpn/AndroidNativeDNSMeasurement.java"] = DNS_BOUNDARY
         stubs.pop("com/eabusham/routervpn/AndroidHomeStateStore.java", None)
         src = work / "src"
         for path, text in stubs.items():
@@ -471,7 +558,7 @@ def main():
                 methods += next(line for line in source.splitlines() if "private static String hex(byte[] data)" in line)
                 constants = "\n".join(line for line in source.splitlines() if any(part in line for part in ("private static final String NODE_PROOF_DOMAIN =", "static final int MAX_PROFILE_SCHEMA =", "static final int MAX_BUNDLE =")))
                 node = r'''static final class Node {final String id,name,endpoint;final java.io.File file;Node(String id,String name,String endpoint,java.io.File file){this.id=id;this.name=name;this.endpoint=endpoint;this.file=file;}}
- static final java.util.List<Node> nodes=new java.util.ArrayList<>();AndroidNodeStore(android.content.Context c){}java.util.List<Node> list(){return new java.util.ArrayList<>(nodes);}
+ static final java.util.List<Node> nodes=new java.util.ArrayList<>();AndroidNodeStore(android.content.Context c){}java.util.List<Node> list(){return new java.util.ArrayList<>(nodes);}java.io.File file(String id){for(Node node:nodes)if(node.id.equals(id))return node.file;throw new IllegalStateException("entry was removed");}
 '''
                 start, end = text.index("final class AndroidNodeStore {"), text.index("final class AndroidKillSwitchPolicy {")
                 private_files = T.TOR_BOUNDARIES[:T.TOR_BOUNDARIES.index("final class AndroidVpnMutationGuard")]
@@ -495,8 +582,12 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity"):
+        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
+        dialog_api=src/"android/app/AlertDialog.java"
+        dialog_api.write_text(dialog_api.read_text().replace("public void show(){","public boolean isShowing(){return showing;}public void show(){").replace("public static AlertDialog last;","public static volatile AlertDialog last;"))
+        text_api=src/"android/widget/TextView.java"
+        text_api.write_text(text_api.read_text()[:-1]+"public void setTextIsSelectable(boolean value){} }")
         (app / "MultihopGraphHarness.java").write_text(T.P.M.HARNESS)
         constants = "\n".join(re.findall(r" static final String (?:OBFS|MEEK|SNOW|WEB)=.*;", T.HARNESS))
         constants += '\n' + next(line for line in T.HARNESS.splitlines() if 'static final String[] KINDS=' in line)
@@ -536,6 +627,22 @@ def main():
              'AndroidExternalPolicy.validateDraft(next);',
              '// omitted idle native validation',
              "Home draft bypassed native transport validation"),
+            ("dns-source-draft", "AndroidDNSSelectionDraft.java",
+             'if(!nodeID.equals(current.id)||!source.equals(AndroidStandardExitStore.snapshot(current)))',
+             'if(false)',
+             "changed saved source accepted by DNS draft"),
+            ("dns-confirmation", "StandardExitActivity.java",
+             'draft.requireReceipt(measurement.currentReceipt());draft.requireSource(exitStore.get(draft.nodeID));',
+             'draft.requireSource(exitStore.get(draft.nodeID));',
+             "stale DNS choice disconnected or saved another session"),
+            ("dns-disconnect-session", "StandardExitActivity.java",
+             'runtime.disconnectAndDrainCaptured(homeSession)',
+             'runtime.disconnectAndDrainCaptured("")',
+             "DNS draft did not wait for exact captured disconnect"),
+            ("dns-entry-draft", "AndroidDNSSelectionDraft.java",
+             '\n        path.requireCurrent();\n',
+             '\n',
+             "DNS draft accepted a changed predecessor"),
         )
         for label, filename, before, after, failure in controls:
             source = (app / filename).read_text()
@@ -551,7 +658,7 @@ def main():
             rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, capture_output=True, text=True, timeout=120)
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
-        print("Android Tor form: all six original-source negative controls rejected")
+        print(f"Android Tor form: all {len(controls)} original-source negative controls rejected")
 
 
 if __name__ == "__main__":

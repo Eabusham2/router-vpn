@@ -69,7 +69,7 @@ open RouterVPN.xcodeproj
 Then:
 
 1. Select the intended Apple Developer Team for the app and PacketTunnel targets.
-2. Enable/verify the required Network Extension Packet Tunnel entitlement and matching provisioning.
+2. Enable/verify the required Network Extension Packet Tunnel entitlement and matching provisioning. Both targets also require the `group.com.eabusham.routervpn` App Group in their signing profiles.
 3. Build/archive the existing pinned WireGuardKit + Libbox implementation; do not replace it with the retired fail-closed preview stub.
 4. Install to a real device and perform the physical validation matrix before treating the build as release-ready.
 
@@ -79,6 +79,17 @@ Bundle identifiers:
 com.eabusham.routervpn
 com.eabusham.routervpn.PacketTunnel
 ```
+
+The shared App Group stores only bounded DNS cleanup acknowledgements. The
+PacketTunnel writes a receipt after the exact request's native workers and
+sockets have drained. If a system disconnect removes provider messaging before
+the app receives that acknowledgement, the app can validate the provider epoch,
+native proof session, request nonce and selected node against the receipt and
+release its measurement hold. Receipts contain no resolver timing results,
+private node bundle or credentials; reading one cannot select DNS or mark a new
+connection ready. Missing or mismatched evidence keeps cleanup pending. This
+channel requires the same legitimate App Group entitlement on both targets;
+the unsigned CI artifact does not establish that device provisioning.
 
 ## Required physical validation
 
@@ -90,6 +101,7 @@ Before final release on iPhone/iPad, prove on real hardware:
 - tunneled DNS and IPv4/IPv6 behavior as applicable
 - strict route-lockdown / leak-negative behavior
 - disconnect/reconnect and network-change/on-demand behavior
+- system disconnect during DNS comparison, with checked cleanup after provider messaging ends
 - supported Libbox layered traffic
 - supported external-exit traffic and exact expected-public-exit proof
 - fail-closed behavior for unsupported/invalid paths

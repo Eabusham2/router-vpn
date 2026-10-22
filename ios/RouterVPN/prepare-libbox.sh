@@ -75,11 +75,18 @@ for header in headers:
     for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterValidateExternalTransport', 'LibboxRouterValidateExternalDNS',
                    'LibboxRouterPrepareExternalExecutionCapture', 'LibboxRouterValidateExternalResponseProbe',
                    'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest',
-                   'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement', 'LibboxNewRouterExternalMTU'):
+                   'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement',
+                   'LibboxRouterExternalCreateDNSMeasurement', 'LibboxRouterTorCreateDNSMeasurement', 'LibboxNewRouterExternalMTU'):
         assert symbol in content, 'Missing external policy/proof API: '+symbol
     assert 'FOUNDATION_EXPORT LibboxRouterMTU* _Nullable LibboxNewRouterExternalMTU(LibboxCommandServer* _Nullable server, id<LibboxRouterMTUPlatform> _Nullable platform, LibboxRouterExternalProofRequest* _Nullable proof, NSString* _Nullable source, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);' in content, 'External MTU retained-proof factory signature changed'
     measurement=re.search(r'@interface LibboxRouterHopMeasurement : NSObject .*?\n(.*?)@end',content,re.S)
     assert measurement and 'drain:' in measurement.group(1), 'Missing native measurement request drain'
+    dns_measurement=re.search(r'@interface LibboxRouterDNSMeasurement : NSObject .*?\n(.*?)@end',content,re.S)
+    assert dns_measurement, 'Missing native DNS measurement owner'
+    for signature in ('- (BOOL)start:(NSString* _Nullable)request transport:(NSString* _Nullable)transport error:(NSError* _Nullable* _Nullable)error;',
+                      '- (void)cancel:(NSString* _Nullable)request;', '- (BOOL)drain:(NSString* _Nullable)request error:(NSError* _Nullable* _Nullable)error;',
+                      '- (NSString* _Nonnull)statusJSON;', '- (BOOL)close:(NSError* _Nullable* _Nullable)error;', '- (void)networkChanged;'):
+        assert signature in dns_measurement.group(1), 'DNS ownership API changed: '+signature
     external_request=re.search(r'@interface LibboxRouterExternalProofRequest : NSObject .*?\n(.*?)@end',content,re.S)
     assert external_request, 'Missing native external proof owner'
     for signature in ('- (void)cancel;', '- (BOOL)healthy;', '- (NSString* _Nonnull)run:(NSError* _Nullable* _Nullable)error;'):

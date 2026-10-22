@@ -1,0 +1,81 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+
+	"github.com/sagernet/sing-box/routervpn/dnsmeasure"
+)
+
+// TorDNSMeasurementDial carries only the fixed public DNS catalog through this
+// proved circuit's authenticated application SOCKS owner. It has no predecessor
+// or physical-network measurement branch.
+func (h *Outbound) TorDNSMeasurementDial(parent context.Context, session, address string) (net.Conn, error) {
+	if h == nil || parent == nil || parent.Err() != nil || !dnsmeasure.AllowedPublicAddress(address) || !h.TorHealthy(session) {
+		return nil, errors.New("Tor DNS measurement has no healthy captured circuit or destination")
+	}
+	return h.dialDNSMeasurement(parent, session, address)
+}
+
+// Keep the post-proof ownership path separate so late native dials and close
+// failures can be tested without manufacturing a successful live Tor proof.
+func (h *Outbound) dialDNSMeasurement(parent context.Context, session, address string) (net.Conn, error) {
+	h.mu.Lock()
+	application := h.application
+	if h.closing || h.ctx.Err() != nil || session != h.sessionID || application == nil {
+		h.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	h.proofWorkers.Add(1)
+	h.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	stopOwner := context.AfterFunc(h.ctx, cancel)
+	release := func() { stopOwner(); cancel(); h.proofWorkers.Done() }
+	connection, err := application.DialRetainedContext(ctx, "tcp", address)
+	if connection == nil {
+		release()
+		return nil, errors.New("Tor DNS measurement native dial returned no socket")
+	}
+	owned := &torDNSMeasurementConnection{Conn: connection, release: release}
+	owned.mu.Lock()
+	owned.stop = context.AfterFunc(ctx, func() { _ = owned.Close() })
+	owned.mu.Unlock()
+	h.mu.Lock()
+	sameApplication := h.application == application
+	h.mu.Unlock()
+	if err != nil || ctx.Err() != nil || !sameApplication || !h.TorHealthy(session) {
+		// The shared service owns this error-path socket too. Discarding it here
+		// would lose retry authority if the native first Close fails.
+		return owned, errors.New("Tor DNS measurement native dial failed or retired")
+	}
+	return owned, nil
+}
+
+type torDNSMeasurementConnection struct {
+	net.Conn
+	mu      sync.Mutex
+	stop    func() bool
+	release func()
+	closed  bool
+}
+
+func (c *torDNSMeasurementConnection) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	err := c.Conn.Close()
+	if err != nil && !errors.Is(err, net.ErrClosed) && !errors.Is(err, io.ErrClosedPipe) {
+		return errors.New("Tor DNS measurement native socket close is pending")
+	}
+	c.closed = true
+	if c.stop != nil {
+		c.stop()
+	}
+	c.release()
+	return nil
+}

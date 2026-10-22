@@ -6,7 +6,7 @@ import importlib.util
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
-PACKAGES = ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'nativesip003', 'nativecomposite', 'nativeopenvpn', 'hopmeasure', 'mobileperf')
+PACKAGES = ('awgpolicy', 'routechoice', 'multihoprelay', 'mobilemultihop', 'mobilepq', 'applexray', 'nativesip003', 'nativecomposite', 'nativeopenvpn', 'hopmeasure', 'dnsmeasure', 'mobileperf')
 _whitening_spec = importlib.util.spec_from_file_location('routervpn_whitening', ROOT/'deploy/prepare-mobile-whitening.py')
 WHITENING = importlib.util.module_from_spec(_whitening_spec)
 _whitening_spec.loader.exec_module(WHITENING)
@@ -40,6 +40,7 @@ _pq_spec.loader.exec_module(PQ)
 def inputs():
     paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
+    paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
     return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
@@ -75,6 +76,7 @@ def prepare(vendor):
     (root/'routervpn_external_policy_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_measurement_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl').read_bytes())
     (root/'routervpn_hop_measurement.go').write_bytes((ROOT/'mobile/routervpn_hop_measurement.go.tmpl').read_bytes())
+    (root/'routervpn_dns_measurement.go').write_bytes((ROOT/'mobile/routervpn_dns_measurement.go.tmpl').read_bytes())
     (root/'routervpn_multihop_native_test.go').write_bytes((ROOT/'mobile/routervpn_multihop_native_test.go.tmpl').read_bytes())
     (root/'routervpn_sip003_bridge.go').write_bytes((ROOT/'mobile/routervpn_sip003_bridge.go.tmpl').read_bytes())
     tests = vendor/'protocol/routervpnsip003test'

@@ -1,0 +1,231 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+)
+
+func (s *Box) RouterVPNExternalDNSMeasurement(proof *RouterVPNExternalProofRequest, source, capture, session string, current func() bool) (*dnsmeasure.Service, error) {
+	if s == nil || proof == nil || proof.request == nil || proof.engine == nil || proof.engine.box != s || !proof.Healthy() || current == nil || !current() {
+		return nil, errors.New("DNS measurement native external proof is unavailable")
+	}
+	config, metadata, err := proof.request.DNSMeasurementAuthority(source, capture, session)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(config))
+	if err != nil || routerVPNExternalOptionsDigest(s.ctx, compiled) != s.routerVPNExternalOptions {
+		return nil, errors.New("DNS measurement is not the running external graph")
+	}
+	var meta struct {
+		ExitID        string `json:"exit_id"`
+		TUNTag        string `json:"tun_tag"`
+		DNSProtocol   string `json:"dns_protocol"`
+		DNSServer     string `json:"dns_server"`
+		DNSPort       int    `json:"dns_port"`
+		DNSServerName string `json:"dns_server_name"`
+		DNSPath       string `json:"dns_path"`
+		DNSDetour     string `json:"dns_detour"`
+		IPv6Mode      string `json:"ipv6_mode"`
+	}
+	if json.Unmarshal([]byte(metadata), &meta) != nil || proof.engine.tunTag != meta.TUNTag || proof.engine.Identity() == "" {
+		return nil, errors.New("DNS measurement lost its captured native TUN")
+	}
+	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNSServer, Port: meta.DNSPort, Transport: meta.DNSProtocol, ServerName: meta.DNSServerName, Path: meta.DNSPath, Route: meta.DNSDetour, RouteLabel: "Selected DNS via " + meta.DNSDetour}
+	ipv6 := meta.IPv6Mode == "on" || meta.IPv6Mode == "auto"
+	engine := &routerVPNDNSMeasurementEngine{core: proof.engine, external: proof, current: current, session: session, ipv6: ipv6}
+	return dnsmeasure.New(engine, dnsmeasure.Description{NodeID: meta.ExitID, SessionID: session, RouteLabel: "Current external exit", Selected: selected, IPv6Enabled: ipv6})
+}
+
+func (s *Box) RouterVPNTorDNSMeasurement(proof *RouterVPNTorProofRequest, exitID string, current func() bool) (*dnsmeasure.Service, error) {
+	if s == nil || proof == nil || !proof.Healthy() || current == nil || !current() || !routerVPNTorMeasurementID.MatchString(exitID) {
+		return nil, errors.New("DNS measurement requires its successful native Tor proof")
+	}
+	capture, captured := proof.capture.(*routerVPNTorCapturedOwner)
+	owner, measurable := proof.owner.(routerVPNTorDNSMeasurementOwner)
+	if !captured || capture == nil || capture.engine == nil || capture.engine.box != s || capture.engine.Identity() == "" || !measurable {
+		return nil, errors.New("Tor DNS measurement requires its exact full-device TUN and DNS owners")
+	}
+	// This snapshot was captured before the actual Box was constructed and is
+	// protected by the successful proof's complete transport/DNS/TUN witnesses.
+	var config struct {
+		DNS struct {
+			Final   string `json:"final"`
+			Servers []struct {
+				Tag    string `json:"tag"`
+				Type   string `json:"type"`
+				Server string `json:"server"`
+				Port   int    `json:"server_port"`
+				Path   string `json:"path"`
+				Detour string `json:"detour"`
+				TLS    struct {
+					ServerName string `json:"server_name"`
+				} `json:"tls"`
+			} `json:"servers"`
+		} `json:"dns"`
+	}
+	if json.Unmarshal([]byte(s.routerVPNTorOptions), &config) != nil || config.DNS.Final != "routervpn-tor-dns" {
+		return nil, errors.New("Tor selected DNS configuration is unavailable")
+	}
+	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected"}
+	matched := false
+	for _, server := range config.DNS.Servers {
+		if server.Tag != config.DNS.Final {
+			continue
+		}
+		if matched {
+			return nil, errors.New("Tor selected DNS identity is ambiguous")
+		}
+		matched = true
+		selected.Address, selected.Port, selected.Transport, selected.ServerName, selected.Path, selected.Route = server.Server, server.Port, server.Type, server.TLS.ServerName, server.Path, server.Detour
+		if selected.Port == 0 {
+			switch selected.Transport {
+			case "udp", "tcp":
+				selected.Port = 53
+			case "tls":
+				selected.Port = 853
+			case "https", "h3":
+				selected.Port = 443
+			}
+		}
+		if (selected.Transport == "https" || selected.Transport == "h3") && selected.Path == "" {
+			selected.Path = "/dns-query"
+		}
+		selected.RouteLabel = "Selected DNS via " + selected.Route
+	}
+	ipv6 := routerVPNDNSIPv6Allowed(s.routerVPNTorOptions, capture.engine.tunTag)
+	engine := &routerVPNDNSMeasurementEngine{core: capture.engine, tor: proof, torOwner: owner, torCapture: capture, current: current, session: proof.sessionID, ipv6: ipv6}
+	return dnsmeasure.New(engine, dnsmeasure.Description{NodeID: exitID, SessionID: proof.sessionID, RouteLabel: "Current Tor connection", Selected: selected, IPv6Enabled: ipv6})
+}
+
+type routerVPNTorDNSMeasurementOwner interface {
+	TorDNSMeasurementDial(context.Context, string, string) (net.Conn, error)
+}
+
+// Internal outbound dials bypass packet-route matching. Preserve the exact
+// compiler-owned IPv6-Off reject rule for this captured TUN at this boundary.
+func routerVPNDNSIPv6Allowed(config, tunTag string) bool {
+	var graph map[string]any
+	if json.Unmarshal([]byte(config), &graph) != nil || tunTag == "" {
+		return false
+	}
+	route, ok := graph["route"].(map[string]any)
+	if !ok {
+		return false
+	}
+	rules, _ := route["rules"].([]any)
+	for _, raw := range rules {
+		rule, ok := raw.(map[string]any)
+		if !ok || rule["action"] != "reject" || rule["ip_version"] != float64(6) {
+			continue
+		}
+		if rule["inbound"] == nil || rule["inbound"] == tunTag {
+			return false
+		}
+		if tags, ok := rule["inbound"].([]any); ok {
+			for _, tag := range tags {
+				if tag == tunTag {
+					return false
+				}
+			}
+		}
+	}
+	return true
+}
+
+type routerVPNDNSMeasurementEngine struct {
+	core       *routerVPNExternalNativeEngine
+	external   *RouterVPNExternalProofRequest
+	tor        *RouterVPNTorProofRequest
+	torOwner   routerVPNTorDNSMeasurementOwner
+	torCapture *routerVPNTorCapturedOwner
+	current    func() bool
+	session    string
+	ipv6       bool
+}
+
+func (e *routerVPNDNSMeasurementEngine) Identity() string {
+	if e == nil || e.current == nil || !e.current() || e.core == nil || e.external != nil && !e.external.Healthy() || e.tor != nil && !e.tor.Healthy() {
+		return ""
+	}
+	identity := e.core.Identity()
+	if identity == "" {
+		return ""
+	}
+	return identity + ":dns:" + e.session
+}
+func (e *routerVPNDNSMeasurementEngine) BeginMeasurement(parent context.Context) (context.Context, func(), error) {
+	if parent == nil || parent.Err() != nil || e.Identity() == "" {
+		return nil, nil, errors.New("DNS native owner retired")
+	}
+	var activity *routerVPNExternalActivity
+	if e.external != nil {
+		activity = &e.external.activity
+	} else if e.torCapture != nil {
+		activity = &e.torCapture.activity
+	} else {
+		return nil, nil, errors.New("DNS measurement has no captured activity owner")
+	}
+	release, err := activity.beginMeasurement()
+	if err != nil {
+		return nil, nil, err
+	}
+	var ctx context.Context
+	var cancel context.CancelFunc
+	if e.external != nil {
+		ctx, cancel, err = e.external.request.MTULifetime(parent)
+	} else {
+		ctx, cancel = context.WithCancel(parent)
+		stop := context.AfterFunc(e.tor.ctx, cancel)
+		base := cancel
+		cancel = func() { stop(); base() }
+	}
+	if err != nil || ctx == nil || ctx.Err() != nil || e.Identity() == "" {
+		if cancel != nil {
+			cancel()
+		}
+		release()
+		return nil, nil, errors.New("DNS native proof retired during capture")
+	}
+	var once sync.Once
+	return ctx, func() { once.Do(func() { cancel(); release() }) }, nil
+}
+func (e *routerVPNDNSMeasurementEngine) Dial(ctx context.Context, address string) (net.Conn, error) {
+	if e.Identity() == "" || ctx.Err() != nil || !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("DNS destination or owner is unavailable")
+	}
+	host, _, _ := net.SplitHostPort(address)
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Is6() && !e.ipv6 {
+		return nil, errors.New("DNS destination is disabled by the captured IPv6 policy")
+	}
+	var connection net.Conn
+	if e.external != nil {
+		connection, err = e.core.DNSMeasurementDial(ctx, address)
+	} else {
+		connection, err = e.torOwner.TorDNSMeasurementDial(ctx, e.tor.sessionID, address)
+	}
+	// Return a late socket with the error so the shared retained owner, not a
+	// discarded adapter-local Close result, remains responsible for its drain.
+	if err != nil || ctx.Err() != nil || e.Identity() == "" {
+		return connection, errors.New("DNS native dial failed or became stale")
+	}
+	return connection, nil
+}
+func (e *routerVPNDNSMeasurementEngine) SelectedDNS(ctx context.Context) error {
+	if e.Identity() == "" || ctx.Err() != nil {
+		return errors.New("selected DNS owner retired")
+	}
+	err := e.core.DNSProof(ctx, e.core.tunTag)
+	if err != nil || ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("selected native DNS did not answer its live uncached question")
+	}
+	return nil
+}

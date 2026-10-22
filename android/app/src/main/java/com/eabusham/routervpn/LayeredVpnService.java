@@ -151,6 +151,10 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 JSONObject progress=new JSONObject(service.hopMeasurement.statusJSON());
                 if(!progress.optBoolean("drained",false)&&!progress.optString("request_id","").isEmpty())throw new IllegalStateException("Finish hop measurement and its native cleanup before MTU Retest.");
             }
+            if("start".equals(operation)&&service.dnsMeasurement!=null){
+                JSONObject progress=new JSONObject(service.dnsMeasurement.statusJSON());
+                if(!progress.optBoolean("drained",false)&&!progress.optString("request_id","").isEmpty())throw new IllegalStateException("Finish DNS comparison and its native cleanup before MTU Retest.");
+            }
             return owned.request(operation,session,request);
         }
     }
@@ -168,6 +172,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }};
     private volatile io.nekohasekai.libbox.RouterMultihop executionController;
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
+    private volatile io.nekohasekai.libbox.RouterDNSMeasurement dnsMeasurement;
     private volatile AndroidTorSession torSession;
     private volatile AndroidHomeStateStore.Snapshot torHomeOwner;
     private volatile AndroidExternalSession externalSession;
@@ -265,6 +270,51 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         LayeredVpnService service=currentService.get();if(service==null||request==null||!request.matches("[0-9a-f]{32}"))throw new IllegalStateException("No captured path measurement session.");
         synchronized(service.lock){HopMeasurementOwner owner=new HopMeasurementOwner(service,request);owner.requireCurrent();return owner;}
     }
+
+    /** The request retains its exact old DNS handle after network/Box replacement.
+     * Status/start require the live owner; cancel/drain always reach that handle. */
+    static final class DNSMeasurementOwner {
+        private final LayeredVpnService service;
+        private final io.nekohasekai.libbox.RouterDNSMeasurement probe;
+        private final CommandServer server;
+        private final AndroidTorSession tor;
+        private final AndroidExternalSession external;
+        private final long generation;
+        final String request,nodeID,sessionID;
+        private final String network;
+        private volatile boolean attempted;
+        private DNSMeasurementOwner(LayeredVpnService service,String request,String nodeID){
+            this.service=service;this.request=request;this.nodeID=nodeID;
+            probe=service.dnsMeasurement;server=service.commandServer;generation=service.lifecycle.get();network=service.executionNetwork;
+            tor=service.torSession;external=service.externalSession;
+            sessionID=tor!=null?tor.sessionID:external!=null?external.sessionID:"";
+        }
+        private void requireCurrent(){
+            if(probe==null||server==null||service.dnsMeasurement!=probe||service.commandServer!=server||generation!=service.lifecycle.get()
+                    ||service.explicitStop||!"UP".equals(service.state)||network.isEmpty()||"[]".equals(network)||!network.equals(service.executionNetworkIdentity())
+                    ||(tor==null)==(external==null)||tor!=service.torSession||external!=service.externalSession
+                    ||tor!=null&&(!nodeID.equals(tor.externalID)||!tor.healthy())||external!=null&&(!nodeID.equals(external.externalID)||!external.healthy()))
+                throw new IllegalStateException("Connect and prove this external DNS path before comparing resolvers.");
+        }
+        void start(String transport)throws Exception{
+            synchronized(service.lock){
+                requireCurrent();
+                if(service.mtuSession!=null&&service.mtuSession.running())throw new IllegalStateException("MTU Retest has not drained.");
+                attempted=true;probe.start(request,transport);requireCurrent();
+            }
+        }
+        boolean attempted(){return attempted;}
+        String status()throws Exception{
+            synchronized(service.lock){requireCurrent();String response=probe.statusJSON();requireCurrent();if(response==null||response.length()>65536)throw new IllegalStateException("Oversized native DNS measurement status.");return response;}
+        }
+        void cancel(){probe.cancel(request);}
+        void drain()throws Exception{probe.drain(request);}
+    }
+    static DNSMeasurementOwner captureDNSMeasurement(String request,String nodeID)throws Exception{
+        LayeredVpnService service=currentService.get();
+        if(service==null||request==null||!request.matches("[0-9a-f]{32}")||nodeID==null||nodeID.isEmpty())throw new IllegalStateException("No captured external DNS measurement session.");
+        synchronized(service.lock){DNSMeasurementOwner owner=new DNSMeasurementOwner(service,request,nodeID);owner.requireCurrent();return owner;}
+    }
     static String torProofJSON(String sessionID, String externalID) throws Exception {
         LayeredVpnService service = currentService.get();
         AndroidTorSession captured = service == null ? null : service.torSession;
@@ -285,7 +335,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         if(captured==null||!"UP".equals(service.state)||service.explicitStop)throw new IllegalStateException("The captured external execution receipt is unavailable.");
         return captured.execution(sessionID,externalID);
     }
-    private void cancelMultihopComparison(){AndroidMAXProfilePreparation.Adopted max=maxSession;if(max!=null)max.cancel();AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidExternalSession external=externalSession;if(external!=null)external.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
+    private void cancelMultihopComparison(){AndroidMAXProfilePreparation.Adopted max=maxSession;if(max!=null)max.cancel();AndroidTorSession tor=torSession;if(tor!=null)tor.cancel();AndroidExternalSession external=externalSession;if(external!=null)external.cancel();AndroidMTUSession mtu=mtuSession;if(mtu!=null)mtu.networkChanged();CommandServer owned=commandServer;if(owned!=null)Libbox.routerInvalidatePerformance(owned);io.nekohasekai.libbox.RouterHopMeasurement probe=hopMeasurement;if(probe!=null)probe.networkChanged();io.nekohasekai.libbox.RouterDNSMeasurement dns=dnsMeasurement;if(dns!=null)dns.networkChanged();io.nekohasekai.libbox.RouterMultihop plan=executionController;if(plan!=null)plan.networkChanged();}
     private String executionNetworkIdentity(){
         java.util.ArrayList<String> values=new java.util.ArrayList<>();
         try{for(Network network:connectivity.getAllNetworks()){
@@ -297,7 +347,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         java.util.Collections.sort(values);return values.toString();
     }
     private final Runnable executionWatch=new Runnable(){public void run(){
-        io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;AndroidExternalSession external=externalSession;AndroidMAXProfilePreparation.Adopted max=maxSession;if(plan==null&&hopMeasurement==null&&tor==null&&external==null&&max==null)return;
+        io.nekohasekai.libbox.RouterMultihop plan=executionController;AndroidTorSession tor=torSession;AndroidExternalSession external=externalSession;AndroidMAXProfilePreparation.Adopted max=maxSession;if(plan==null&&hopMeasurement==null&&dnsMeasurement==null&&tor==null&&external==null&&max==null)return;
         if(max!=null&&!max.current(false)||!executionNetwork.equals(executionNetworkIdentity())||(executionProved&&plan!=null&&!plan.healthy())||(executionProved&&tor!=null&&!tor.healthy())||(executionProved&&external!=null&&!external.healthy())){
             if(external!=null)AndroidHomeStateStore.failedPolicyExternal(LayeredVpnService.this,externalHomeOwner,"The captured external exit, entry, DNS or network changed; reconnect to prove the path.",false);
             cancelMultihopComparison();executor.execute(()->{if(tor!=null&&torSession!=tor||external!=null&&externalSession!=external||max!=null&&maxSession!=max)return;shutdown("FAILED",max!=null?"The captured MAX source or physical network changed; reconnect to prove the path.":tor!=null?"The captured Tor network or circuit changed; reconnect to prove the path.":external!=null?"The captured external exit, entry, DNS or network changed; reconnect to prove the path.":"Multihop network or server lease changed; reconnect to compare again.");});return;
@@ -534,6 +584,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 updateForeground("Proving Tor circuit and selected DNS…");
                 capturedTor.prove();
                 adoptHopMeasurement(capturedTor.newHopMeasurement(), ownedServer, generation);
+                adoptDNSMeasurement(capturedTor.newDNSMeasurement(), ownedServer, generation);
             }
             if (externalMetadata != null) {
                 final AndroidExternalSession capturedExternal = new AndroidExternalSession(externalMetadata, ownedServer, new AndroidExternalSession.Owner() {
@@ -555,6 +606,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 updateForeground("Proving captured entry, selected DNS and public exit…");
                 capturedExternal.prove();
                 adoptHopMeasurement(capturedExternal.newHopMeasurement(), ownedServer, generation);
+                adoptDNSMeasurement(capturedExternal.newDNSMeasurement(), ownedServer, generation);
             }
             if(hopMetadata!=null){
                 executionNetwork=executionNetworkIdentity();
@@ -600,6 +652,25 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         measurement.close();
         throw new IllegalStateException("VPN ownership changed before path measurement adoption.");
+    }
+
+    private void adoptDNSMeasurement(io.nekohasekai.libbox.RouterDNSMeasurement measurement, CommandServer server, long generation) throws Exception {
+        if(measurement==null)throw new IllegalStateException("The captured DNS measurement owner is unavailable.");
+        synchronized(lock){
+            if(!explicitStop&&generation==lifecycle.get()&&commandServer==server&&dnsMeasurement==null
+                    &&executionNetwork.equals(executionNetworkIdentity())&&(torSession==null)!=(externalSession==null)
+                    &&(torSession==null||torSession.healthy())&&(externalSession==null||externalSession.healthy())){
+                dnsMeasurement=measurement;return;
+            }
+        }
+        measurement.close();
+        throw new IllegalStateException("VPN ownership changed before DNS measurement adoption.");
+    }
+    private void closeDNSMeasurementLocked(){
+        if(dnsMeasurement==null)return;
+        try{dnsMeasurement.close();}
+        catch(Exception pending){publish("STOPPING",activeMode,"DNS measurement cleanup is still pending; its native owner is retained.");throw new IllegalStateException("DNS measurement teardown has not drained.",pending);}
+        dnsMeasurement=null;
     }
 
     static boolean discardPreparedSession(android.content.Context context, String sessionId) {
@@ -714,6 +785,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
             catch(Exception pending){publish("STOPPING",activeMode,"External server lease cleanup remains pending; the captured native path is retained for retry.");throw new IllegalStateException("External execution cleanup has not been acknowledged.",pending);}
         }
         if(hopMeasurement!=null)hopMeasurement.networkChanged();
+        if(dnsMeasurement!=null)dnsMeasurement.networkChanged();
         if(startLayerRelay!=null){
             try{startLayerRelay.close();}
             catch(RuntimeException pending){
@@ -733,6 +805,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 publish("STOPPING", activeMode, "Native captured-path teardown remains unconfirmed; runtime ownership is retained.");
                 throw new IllegalStateException("Native captured-path teardown has not completed.");
             }
+            closeDNSMeasurementLocked();
             commandServer = null;
             torSession = null;
             torOwner = false;
@@ -753,6 +826,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executionHandler.removeCallbacks(performanceWatch);
         if (commandServer != null) Libbox.routerInvalidatePerformance(commandServer);
         executionHandler.removeCallbacks(executionWatch);
+        closeDNSMeasurementLocked();
         if(hopMeasurement!=null){
             try{hopMeasurement.close();}
             catch(Exception error){publish("STOPPING",activeMode,"Hop measurement cleanup is still pending; its native owner is retained.");throw new IllegalStateException("Hop measurement teardown has not drained.");}
@@ -1075,7 +1149,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         executor.execute(() -> {
             synchronized (lock) {
                 if (commandServer == null || activeConfig.isEmpty()) return;
-                if(torOwner||executionController!=null||hopMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
+                if(torOwner||executionController!=null||hopMeasurement!=null||dnsMeasurement!=null||mtuSession!=null){cancelMultihopComparison();shutdown("FAILED","Native reload needs fresh path and MTU ownership.");return;}
                 try {
                     commandServer.startOrReloadService(activeConfig, new OverrideOptions());
                 } catch (Throwable error) {

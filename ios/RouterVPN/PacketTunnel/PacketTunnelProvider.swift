@@ -90,11 +90,26 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
            request.count == 3, let operation = request["operation"],
-           ["hop-measure-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
+           ["hop-measure-info", "hop-measure-start", "hop-measure-status", "hop-measure-cancel"].contains(operation),
            let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
-           let session = request["session_id"], UUID(uuidString: session) != nil {
+           let session = request["session_id"], (operation == "hop-measure-info" && session.isEmpty) || UUID(uuidString: session) != nil {
             completionHandler(libboxEngine?.hopMeasurementRequest(operation: operation, request: id, session: session) ??
                 RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation: operation, request: id, session: session)); return
+        }
+        if messageData.count <= 512,
+           let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
+           Set(request.keys) == Set(["operation", "request_id", "session_id", "native_session_id", "transport"]),
+           let operation = request["operation"],
+           ["dns-measure-info", "dns-measure-start", "dns-measure-status", "dns-measure-cancel", "dns-measure-drain"].contains(operation),
+           let id = request["request_id"], id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
+           let session = request["session_id"], let nativeSession = request["native_session_id"], let transport = request["transport"],
+           (operation == "dns-measure-info" && session.isEmpty && nativeSession.isEmpty && transport.isEmpty) ||
+             (UUID(uuidString: session) != nil && UUID(uuidString: nativeSession) != nil &&
+              (operation == "dns-measure-start" ? ["tcp", "tls", "https"].contains(transport) : transport.isEmpty)) {
+            completionHandler(libboxEngine?.dnsMeasurementRequest(operation: operation, request: id,
+                session: session, nativeSession: nativeSession, transport: transport) ??
+                RouterVPNDNSMeasurementRegistry.shared.reply(operation: operation, request: id,
+                    session: session, nativeSession: nativeSession, transport: transport)); return
         }
         if messageData.count <= 256,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: String],
@@ -1180,6 +1195,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 if runtime.policy != nil || runtime.torSessionID != nil {
                     guard let exitID = selectedProfile["id"] as? String else { throw self.tunnelError(58, "External measurement lost its captured exit identity.") }
                     try engine.enableExternalHopMeasurement(exitID: exitID)
+                    try engine.enableExternalDNSMeasurement(exitID: exitID)
                     guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
                         throw self.tunnelError(57, "External path changed during measurement activation.")
                     }

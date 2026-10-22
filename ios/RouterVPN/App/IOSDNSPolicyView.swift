@@ -25,6 +25,14 @@ struct IOSDNSPolicyView: View {
     @State private var status = ""
     @State private var benchmarking = false
     @State private var benchmarkSessionInvalidated = false
+    @State private var legacyTask: Task<Void, Never>?
+    @State private var legacyGeneration = UUID()
+    @State private var legacyCapture: IOSDNSMeasurementCapture?
+    @State private var legacyMeasuredAt: TimeInterval = 0
+    @StateObject private var nativeMeasurement = IOSDNSMeasurementClient.shared
+    @State private var comparisonTransport = "tls"
+    @State private var measuredDraft = false
+    @State private var measuredSource: IOSDNSMeasurementCapture?
     @State private var loadedExternalDNS: [String]?
     @State private var loadedExternalProfile: RouterProfile?
 
@@ -99,6 +107,10 @@ struct IOSDNSPolicyView: View {
                     }
                     Button("Save DNS for next connection") { savePolicy() }
                         .disabled(model.profileMutationBlocked)
+                    if measuredDraft && model.connected && !nativeMeasurement.running && !benchmarking {
+                        Button("Disconnect to save this DNS choice") { model.disconnect() }
+                            .disabled(model.tunnelTransitioning)
+                    }
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing the DNS policy.").font(.caption).foregroundStyle(.orange) }
                 }
 
@@ -164,27 +176,60 @@ struct IOSDNSPolicyView: View {
                     }
                 }
 
-                Section("Measured DNS RTT") {
-                    Button(benchmarking ? "Testing real DNS queries…" : "Retest over active VPN path") {
-                        Task { await retest() }
-                    }
-                    .disabled(!model.connected || benchmarking || torExternal)
-                    Text(torExternal
-                         ? "This resolver comparison uses UDP queries and cannot compare public resolvers through Tor. The selected Home or Tor DNS policy is checked during connection."
-                         : model.connected
-                         ? "Retest sends real DNS A queries to each resolver over the device's current route. While Router VPN is connected, that route is the selected VPN path; this is DNS-query RTT, not ICMP ping."
-                         : "Connect first so Retest measures from the selected VPN path instead of your unrelated direct network.")
-                        .font(.caption).foregroundStyle(.secondary)
-                    ForEach(Array(results.enumerated()), id: \.offset) { _, item in
-                        HStack {
-                            VStack(alignment: .leading) {
-                                Text(item.name)
-                                Text("\(item.address) • \(item.family ?? (item.address.contains(":") ? "IPv6" : "IPv4"))")
-                                    .font(.caption2).foregroundStyle(.secondary)
+                if nativeExternal {
+                    Section("DNS query time through this connection") {
+                        Picker("Public comparison transport", selection: $comparisonTransport) {
+                            Text("TCP").tag("tcp"); Text("DoT").tag("tls"); Text("DoH").tag("https")
+                        }.disabled(nativeMeasurement.running)
+                        Button(nativeMeasurement.running ? "Cancel DNS comparison" : "Retest over active VPN path") {
+                            if nativeMeasurement.running { nativeMeasurement.cancel() }
+                            else { nativeMeasurement.start(model: model, transport: comparisonTransport) }
+                        }.disabled(!nativeMeasurement.running && (!IOSDNSMeasurementClient.supported(model) || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held))
+                        Text("Public rows use the selected TCP, DoT or DoH transport through the captured native exit. Times include a new connection, TLS setup where applicable, and a matching DNS answer; the median requires three successful queries. The Selected DNS row uses its actual saved transport and route, including exact Home AdGuard through its paired entry. No public UDP fallback is used.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Results stay in this editor. A measured row fills the DNS fields; Disconnect and Save applies your explicit choice to the next connection.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let fastest = nativeMeasurement.results.first(where: { $0.kind == "public" && $0.ready }) {
+                            Button("Use fastest \(fastest.transportLabel) in editor") { useMeasured(fastest) }
+                        }
+                        ForEach(nativeMeasurement.results) { item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack { Text(item.name); Spacer(); Text(item.timing).monospacedDigit() }
+                                Text(item.detail).font(.caption2).foregroundStyle(.secondary)
+                                if let failure = item.failure { Text(failure).font(.caption2).foregroundStyle(.secondary) }
+                                if item.kind == "public" && item.ready {
+                                    Button("Use \(item.transportLabel) in editor") { useMeasured(item) }
+                                }
                             }
-                            Spacer()
-                            if item.working, let value = item.latencyMs { Text(String(format: "%.2f ms", value)).monospacedDigit() }
-                            else { Text("No reply").foregroundStyle(.secondary) }
+                        }
+                        if !nativeMeasurement.progress.isEmpty { Text(nativeMeasurement.progress).font(.caption).foregroundStyle(nativeMeasurement.cleanupPending ? Color.orange : Color.secondary) }
+                        if !nativeMeasurement.error.isEmpty { Text(nativeMeasurement.error).font(.caption).foregroundStyle(.orange) }
+                    }
+                } else {
+                    Section("Router VPN UDP response time") {
+                        Button(benchmarking ? "Cancel UDP comparison" : "Retest over active VPN path") {
+                            if benchmarking { cancelMeasurements() }
+                            else {
+                                legacyGeneration = UUID(); let generation = legacyGeneration
+                                benchmarking = true; benchmarkSessionInvalidated = false
+                                legacyTask = Task { await retest(generation: generation) }
+                            }
+                        }.disabled(!benchmarking && (!model.connected || model.iosSpeedLabOwnership.active || IOSMTUMeasurementGate.held))
+                        Text("These real DNS A queries originate in the app and follow the device's UDP route while the captured Router VPN session stays active. Local-network and endpoint exclusions still apply. Samples do not describe DoT or DoH and are never saved as an unlabelled fastest resolver.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        if let fastest = results.first(where: { $0.working && ($0.latencyMs ?? 0) > 0 }) {
+                            Button("Use fastest UDP in editor") { useMeasuredUDP(fastest) }
+                        }
+                        ForEach(Array(results.enumerated()), id: \.offset) { _, item in
+                            VStack(alignment: .leading, spacing: 4) {
+                                HStack {
+                                    Text(item.name); Spacer()
+                                    if item.working, let value = item.latencyMs { Text(String(format: "%.2f ms", value)).monospacedDigit() }
+                                    else { Text("No reply").foregroundStyle(.secondary) }
+                                }
+                                Text("\(item.address) • UDP • device route with captured Router VPN active").font(.caption2).foregroundStyle(.secondary)
+                                if item.working { Button("Use UDP in editor") { useMeasuredUDP(item) } }
+                            }
                         }
                     }
                 }
@@ -193,10 +238,21 @@ struct IOSDNSPolicyView: View {
             }
             .navigationTitle("DNS")
             .onAppear { load() }
-            .onChange(of: model.connected) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
-            .onChange(of: model.tunnelTransitioning) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
-            .onChange(of: model.activeEngine) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
-            .onChange(of: model.activeRawProfile) { _ in if benchmarking { benchmarkSessionInvalidated = true } }
+            .onChange(of: model.connected) { _ in cancelMeasurements() }
+            .onChange(of: model.tunnelTransitioning) { _ in cancelMeasurements() }
+            .onChange(of: model.activeEngine) { _ in cancelMeasurements() }
+            .onChange(of: model.activeRawProfile) { _ in cancelMeasurements() }
+            .onDisappear { cancelMeasurements() }
+            .task {
+                while !Task.isCancelled {
+                    nativeMeasurement.invalidateIfStale(model: model)
+                    if !benchmarking, let legacyCapture {
+                        do { try legacyCapture.requireCurrent(model: model) }
+                        catch { results = []; self.legacyCapture = nil }
+                    }
+                    try? await Task.sleep(for: .seconds(1))
+                }
+            }
         }
     }
 
@@ -218,7 +274,6 @@ struct IOSDNSPolicyView: View {
         path = p.dnsPath ?? "/dns-query"
         useHostnameBootstrap = p.dnsBootstrap != nil
         bootstrap = p.dnsBootstrap ?? ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
-        results = sorted(p.dnsResults ?? [])
         loadedExternalDNS = nativeExternal ? externalDNSFields : nil
         loadedExternalProfile = nativeExternal ? p : nil
     }
@@ -233,6 +288,8 @@ struct IOSDNSPolicyView: View {
         var p = bundle.routerProfiles[index]
         guard p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "This node uses its protocol-specific DNS settings."; return }
         guard !nativeExternal || loadedExternalProfile == p else { status = "The selected external node changed while DNS settings were open. Reopen DNS settings before saving."; return }
+        do { try measuredSource?.requireSources(model: model) }
+        catch { status = "The selected node or paired entry changed after this DNS choice was measured. Retest before saving it."; return }
         guard let selectedPort = Int(port), (0...65535).contains(selectedPort) else { status = "DNS port must be 1–65535, or 0 for the selected protocol default."; return }
         // A displayed Home default must not migrate an untouched saved blank
         // policy. Explicit edits retain all six captured DNS selection fields.
@@ -258,73 +315,83 @@ struct IOSDNSPolicyView: View {
             } else { _ = try IOSDNSRuntimePolicy.resolve(p) }
             bundle.routerProfiles[index] = p
             try model.importBundle(JSONEncoder().encode(bundle))
+            measuredSource = nil; measuredDraft = false
             status = torExternal ? "DNS policy saved for the next connection. Home AdGuard requires its paired Router VPN entry." : "DNS policy saved and patched into compatible iOS runtimes for the next connection."
             load()
         } catch { status = "DNS policy rejected: \(error.localizedDescription)" }
     }
 
-    private func retest() async {
-        guard !torExternal else { status = "The UDP resolver comparison cannot run through Tor. The selected DNS policy is checked during connection."; return }
-        guard model.connected else { status = "Connect first so DNS RTT uses the selected VPN path."; return }
-        guard let bundle = model.bundle,
-              let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else { return }
-        let profile = bundle.routerProfiles[index]
-        let benchmarkNodeID = profile.id
-        let benchmarkEngine = model.activeEngine
-        let benchmarkRawProfile = model.activeRawProfile
-        benchmarkSessionInvalidated = false
-        benchmarking = true
-        defer { benchmarking = false }
-        var candidates = presets.map { ($0.name, $0.address, $0.family) }
-        for (name, address, family) in [
-            ("Home AdGuard IPv4", profile.adGuardIPv4, "IPv4"),
-            ("Home AdGuard IPv6", profile.adGuardIPv6, "IPv6")
-        ] where !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            if !candidates.contains(where: { $0.1 == address }) { candidates.insert((name, address, family), at: 0) }
-        }
-        var measured: [DNSBenchmarkResult] = []
-        for candidate in candidates {
-            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
-                  model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
-                status = "DNS Retest discarded: the VPN session changed during measurement."
-                return
-            }
-            let value = await IOSDNSRTTProbe.query(address: candidate.1)
-            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
-                  model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
-                status = "DNS Retest discarded: the VPN session changed during measurement."
-                return
-            }
-            measured.append(DNSBenchmarkResult(name: candidate.0, address: candidate.1, family: candidate.2, latencyMs: value, working: value != nil))
-        }
-        results = sorted(measured)
-        guard var freshBundle = model.bundle,
-              freshBundle.selectedRouterID == benchmarkNodeID,
-              let freshIndex = freshBundle.routerProfiles.firstIndex(where: { $0.id == benchmarkNodeID }),
-              model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated,
-              model.activeEngine == benchmarkEngine, model.activeRawProfile == benchmarkRawProfile else {
-            status = "DNS Retest discarded: selected node or VPN session changed before results could be saved."
-            return
-        }
-        var p = freshBundle.routerProfiles[freshIndex]
-        p.dnsResults = results
-        if let best = results.first(where: { $0.working && $0.latencyMs != nil }) {
-            p.fastestDNSHost = best.address
-            p.fastestDNSName = best.name
-            p.fastestDNSLatencyMs = best.latencyMs
-        } else {
-            p.fastestDNSHost = nil; p.fastestDNSName = nil; p.fastestDNSLatencyMs = nil
-        }
-        freshBundle.routerProfiles[freshIndex] = p
+    private func retest(generation: UUID) async {
+        defer { benchmarking = false; legacyTask = nil }
+        guard generation == legacyGeneration, !nativeExternal,
+              !model.iosSpeedLabOwnership.active, !IOSMTUMeasurementGate.held else { return }
+        results = []; legacyCapture = nil
         do {
-            guard model.connected, !model.tunnelTransitioning, !benchmarkSessionInvalidated else {
-                status = "DNS Retest discarded: VPN session changed before persistence."
-                return
+            var capture = try IOSDNSMeasurementCapture(model: model)
+            capture.network = try await IOSViaEntryNetwork.shared.snapshot()
+            try Task.checkCancellation(); try capture.requireCurrent(model: model)
+            guard generation == legacyGeneration, !benchmarkSessionInvalidated,
+                  let profile = selectedProfile(), profile.normalizedNodeKind == "router-vpn" else { throw CancellationError() }
+            var candidates = presets.map { ($0.name, $0.address, $0.family) }
+            for (name, address, family) in [
+                ("Home AdGuard IPv4", profile.adGuardIPv4, "IPv4"),
+                ("Home AdGuard IPv6", profile.adGuardIPv6, "IPv6")
+            ] where !address.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                if !candidates.contains(where: { $0.1 == address }) { candidates.insert((name, address, family), at: 0) }
             }
-            try model.importBundle(JSONEncoder().encode(freshBundle))
-            status = p.fastestDNSHost == nil ? "Retest completed: no resolver returned a valid DNS answer." : "Retest saved the fastest real DNS-query RTT for this node/path."
-            load()
-        } catch { status = "DNS benchmark save failed: \(error.localizedDescription)" }
+            let captured = capture
+            let measured = try await IOSMTUControl.withHold(model: model) {
+                var values: [DNSBenchmarkResult] = []
+                for candidate in candidates {
+                    try Task.checkCancellation(); try captured.requireCurrent(model: model)
+                    guard generation == legacyGeneration, !benchmarkSessionInvalidated else { throw CancellationError() }
+                    let disabledIPv6 = (profile.ipv6Mode ?? "on").lowercased() == "off" && candidate.2 == "IPv6"
+                    let value = disabledIPv6 ? nil : await IOSDNSRTTProbe.query(address: candidate.1)
+                    try Task.checkCancellation(); try captured.requireCurrent(model: model)
+                    guard generation == legacyGeneration, !benchmarkSessionInvalidated else { throw CancellationError() }
+                    values.append(DNSBenchmarkResult(name: candidate.0, address: candidate.1, family: candidate.2, latencyMs: value, working: value != nil))
+                }
+                return values
+            }
+            try captured.requireCurrent(model: model)
+            guard generation == legacyGeneration, !benchmarkSessionInvalidated else { throw CancellationError() }
+            results = sorted(measured); legacyCapture = captured; legacyMeasuredAt = ProcessInfo.processInfo.systemUptime
+            status = "UDP comparison completed on the captured device route. Results stay in this editor; choose a row and explicitly Save the DNS fields."
+        } catch {
+            results = []; legacyCapture = nil
+            status = "DNS comparison discarded: the request failed or the captured VPN selection, session or network changed."
+        }
+    }
+
+    private func cancelMeasurements() {
+        nativeMeasurement.cancel()
+        legacyGeneration = UUID(); benchmarkSessionInvalidated = true; legacyTask?.cancel()
+        results = []; legacyCapture = nil
+    }
+
+    private func useMeasured(_ value: IOSDNSMeasurementResult) {
+        do {
+            let source = try nativeMeasurement.captureForEditor(model: model, result: value)
+            mode = "custom"; protocolName = value.transport
+            host = value.address; port = String(value.port)
+            serverName = value.server_name ?? ""; path = value.path ?? "/dns-query"
+            useHostnameBootstrap = false; measuredDraft = true; measuredSource = source
+            status = "Measured \(value.transportLabel) choice is prepared in the editor. Disconnect, then Save DNS for the next connection."
+        } catch is CancellationError {
+            status = "The measured DNS choice is stale. Retest the selected path before choosing a result."
+        } catch { status = error.localizedDescription }
+    }
+
+    private func useMeasuredUDP(_ value: DNSBenchmarkResult) {
+        do {
+            guard let legacyCapture, ProcessInfo.processInfo.systemUptime - legacyMeasuredAt < 120,
+                  value.working, let milliseconds = value.latencyMs, milliseconds.isFinite, milliseconds > 0,
+                  results.contains(value) else { throw CancellationError() }
+            try legacyCapture.requireCurrent(model: model)
+            mode = "custom"; protocolName = "udp"; host = value.address; port = "53"
+            serverName = ""; path = "/dns-query"; measuredDraft = true; measuredSource = legacyCapture
+            status = "Measured UDP choice is prepared in the editor. Disconnect, then Save DNS for the next connection."
+        } catch { status = "Retest the captured Router VPN path before choosing this UDP result." }
     }
 
     private func usePreset(_ preset: IOSDNSPreset) {
@@ -439,5 +506,6 @@ private enum IOSDNSRTTProbe {
 }
 
 // iOS DNS contract: Home/Fastest/Custom UDP/TCP/DoT/DoH/DoH3/Rescue; common
-// IPv4+IPv6 primary/secondary resolvers; real DNS-query RTT over active tunnel;
-// DNS-aware runtime readiness; saved policy != physical runtime proof.
+// IPv4+IPv6 primary/secondary resolvers; captured native TCP/DoT/DoH query times
+// and separately labelled Router VPN device-route UDP responses. Timings remain
+// editor-only and never rewrite fastest_dns_* or dns_results persistence.

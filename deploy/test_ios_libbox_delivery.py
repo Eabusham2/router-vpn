@@ -6,6 +6,7 @@ non-Sendable API doubles, so the old asynchronous captures fail this compilation
 Apple CI still compiles the real generated framework in the mandatory IPA job.
 """
 from pathlib import Path
+import importlib.util
 import platform
 import shutil
 import subprocess
@@ -13,6 +14,8 @@ import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 ENGINE = ROOT / 'ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift'
+spec = importlib.util.spec_from_file_location('apple_dns_boundary', ROOT / 'deploy/test_ios_dns_measurement.py')
+DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
 LIBBOX = r'''
 import Foundation
 public final class LibboxTestState: @unchecked Sendable {
@@ -151,6 +154,16 @@ public final class LibboxHopTestState: @unchecked Sendable {
     public func current()->LibboxRouterHopMeasurement?{lock.lock();defer{lock.unlock()};return probe}
     public func captured()->[String]{lock.lock();defer{lock.unlock()};return arguments}
 }
+public final class LibboxDNSTestState: @unchecked Sendable {
+    public static let shared=LibboxDNSTestState()
+    private let lock=NSLock()
+    private var probe:LibboxRouterDNSMeasurement?,arguments:[String]=[]
+    private var callback:(()->Void)?
+    public func configure(_ callback:(()->Void)?=nil){lock.lock();probe=nil;arguments=[];self.callback=callback;lock.unlock()}
+    public func make(_ arguments:[String],node:String,session:String)->LibboxRouterDNSMeasurement{lock.lock();let p=LibboxRouterDNSMeasurement(node:node,session:session);probe=p;self.arguments=arguments;let callback=self.callback;lock.unlock();callback?();return p}
+    public func current()->LibboxRouterDNSMeasurement?{lock.lock();defer{lock.unlock()};return probe}
+    public func captured()->[String]{lock.lock();defer{lock.unlock()};return arguments}
+}
 // Exact generated scalar/error ABI, including output and NSError pointers.
 public func LibboxRouterStartPerformance(_ server: LibboxCommandServer, _ count: UnsafeMutablePointer<Int64>, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool { server.activate(count,failure) }
 public func LibboxRouterInvalidatePerformance(_ server: LibboxCommandServer) { server.invalidatePadding() }
@@ -202,6 +215,7 @@ public final class LibboxRouterTorProofRequest {
     public func cancel() { lock.lock(); cancels+=1;lock.unlock();release.signal() }
     public func cancelCount() -> Int { lock.lock();defer {lock.unlock()};return cancels }
     public func healthy() -> Bool { lock.lock();defer{lock.unlock()};return cancels==0 && proved }
+    public func dnsSession() -> String { session }
 }
 public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutablePointer<NSError?>?) {
     do { try FileManager.default.createDirectory(atPath:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]);LibboxTorTestState.shared.saveRoot(path) }
@@ -254,6 +268,14 @@ public func LibboxRouterTorCreateHopMeasurement(_ server:LibboxCommandServer,_ p
     guard proof === LibboxTorTestState.shared.current(),proof.healthy()else{failure?.pointee=NSError(domain:"WrongNativeTorProof",code:1);return nil}
     return LibboxHopTestState.shared.make(["tor",exitID])
 }
+public func LibboxRouterExternalCreateDNSMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterExternalProofRequest,_ source:String,_ capture:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterDNSMeasurement? {
+    guard proof === LibboxExternalTestState.shared.current(),proof.healthy(),[source,capture,session]==LibboxExternalTestState.shared.captured()else{failure?.pointee=NSError(domain:"WrongDNSNativeProof",code:1);return nil}
+    return LibboxDNSTestState.shared.make(["external",source,capture,session],node:"saved-exit",session:session)
+}
+public func LibboxRouterTorCreateDNSMeasurement(_ server:LibboxCommandServer,_ proof:LibboxRouterTorProofRequest,_ exitID:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterDNSMeasurement? {
+    guard proof === LibboxTorTestState.shared.current(),proof.healthy()else{failure?.pointee=NSError(domain:"WrongDNSTorProof",code:1);return nil}
+    return LibboxDNSTestState.shared.make(["tor",exitID],node:exitID,session:proof.dnsSession())
+}
 
 '''
 HARNESS = r'''
@@ -279,6 +301,7 @@ final class PacketTunnelProvider {
     func count() -> Int { lock.lock(); defer { lock.unlock() }; return cancels }
 }
 final class MTUPlatformDouble {
+    let independentSession = UUID().uuidString
     var hasOwner = false
     var measurementReady = true
     private var server:LibboxCommandServer?
@@ -302,7 +325,10 @@ final class MTUPlatformDouble {
         guard proof.healthy() else{throw NSError(domain:"TorMTUFixture",code:1)}
         hasOwner=true;self.server=server;failures=MTUActivationFixture.shared.failures();MTUActivationFixture.shared.recordTor([config,profile],proof:proof)
     }
-    func request(operation: String, request: String, session: String) -> Data? { nil }
+    func request(operation: String, request: String, session: String) -> Data? {
+        guard operation == "mtu-status", session.isEmpty || session == independentSession else { return nil }
+        return try? JSONSerialization.data(withJSONObject:["ack_id":request,"session_id":independentSession])
+    }
 }
 final class MTUActivationFixture:@unchecked Sendable {
     static let shared=MTUActivationFixture()
@@ -736,7 +762,15 @@ final class CompletionState: @unchecked Sendable {
             if action=="late-factory" {check("late native measurement is closed",probe?.closeCount()==1)}
             if !failed {
                 let id=String(repeating:tor ? "b":"a",count:32),other=String(repeating:"c",count:32)
-                check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch) != nil)
+                let mtuSession=MTUActivationFixture.shared.currentPlatform()!.mtu.independentSession
+                check("MTU and provider ownership epochs are independent",mtuSession != owner.settingsEpoch)
+                check("MTU UUID cannot be substituted for provider epoch",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:mtuSession)==nil)
+                let hopInfo=owner.hopMeasurementRequest(operation:"hop-measure-info",request:id,session:"")!
+                let binding=try IOSHopMeasurementBinding.decode(hopInfo,request:id,mtuSession:mtuSession)
+                check("Info binds provider epoch and exact MTU owner separately",binding.session_id==owner.settingsEpoch && binding.mtu_session_id==mtuSession)
+                var badMTU=false;do{_ = try IOSHopMeasurementBinding.decode(hopInfo,request:id,mtuSession:UUID().uuidString)}catch{badMTU=true}
+                check("foreign MTU echo cannot enable a hop measurement",badMTU)
+                check("bounded request starts on adopted owner",owner.hopMeasurementRequest(operation:"hop-measure-start",request:id,session:binding.session_id) != nil)
                 let beforeCancel=try JSONSerialization.jsonObject(with:Data(probe!.statusJSON().utf8)) as! NSDictionary
                 let beforeCancelCalls=probe!.cancellationCalls()
                 check("early cancel receives bounded discard receipt",owner.hopMeasurementRequest(operation:"hop-measure-cancel",request:other,session:owner.settingsEpoch) != nil)
@@ -751,6 +785,40 @@ final class CompletionState: @unchecked Sendable {
                     check("retired request can prove its actual drain",value["request_id"] as? String==id && value["drained"] as? Bool==true)
                     check("retired receipt cannot start a new measurement",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-start",request:id,session:owner.settingsEpoch)==nil)
                     check("retired receipt survives a late cancelled retry",RouterVPNLibboxEngine.retiredHopMeasurementRequest(operation:"hop-measure-cancel",request:id,session:owner.settingsEpoch) != nil)
+                }
+            }
+            owner.stop()
+        }}
+        let dnsState=LibboxDNSTestState.shared
+        for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","before-proof"] {
+            state.configure();externalState.configure();torState.configure();dnsState.configure();IOSDNSRetirementReceipts.shared.reset()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            if tor {try owner.start(files:torFiles,strict:true)}else{try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)}
+            if action != "before-proof" {
+                if tor{owner.proveTor(sessionID:UUID().uuidString,profile:torProfile,completion:done.finish)}else{owner.proveExternal(completion:done.finish)}
+                check("DNS requires completed native route/DNS proof",done.wait() && done.values()==(1,0))
+            }
+            if action=="cancel-proof"{if tor{torState.current()!.cancel()}else{externalState.current()!.cancel()}}
+            if action=="late-factory"{dnsState.configure{owner.stop()}}
+            var failed=false;do{try owner.enableExternalDNSMeasurement(exitID:"saved-exit")}catch{failed=true}
+            check("only a current successful native proof creates DNS ownership",failed == (action != "stable"))
+            if ["before-proof","cancel-proof"].contains(action){check("unproved DNS never calls its factory",dnsState.current()==nil)}
+            else {
+                check("DNS factory receives the retained exact source/proof",dnsState.captured()==(tor ? ["tor","saved-exit"]:["external"]+externalState.captured()))
+                if action=="late-factory"{check("late DNS factory handle drains before it is discarded",dnsState.current()!.counts().2==1)}
+                else {
+                    let id=String(repeating:tor ? "e":"d",count:32)
+                    let info=try JSONSerialization.jsonObject(with:owner.dnsMeasurementRequest(operation:"dns-measure-info",request:id,session:"",nativeSession:"",transport:"")!) as! [String:Any]
+                    let nativeSession=info["native_session_id"] as! String
+                    check("DNS Info distinguishes proof and provider ownership",info["session_id"] as? String==owner.settingsEpoch && nativeSession != owner.settingsEpoch)
+                    let mtu=MTUActivationFixture.shared.currentPlatform()!.mtu;mtu.hasOwner=true;mtu.measurementReady=false
+                    check("adaptive MTU must actually drain before DNS Start",owner.dnsMeasurementRequest(operation:"dns-measure-start",request:id,session:owner.settingsEpoch,nativeSession:nativeSession,transport:"tls")==nil && dnsState.current()!.counts().0==0)
+                    mtu.measurementReady=true
+                    check("ready captured owner can start native DNS",owner.dnsMeasurementRequest(operation:"dns-measure-start",request:id,session:owner.settingsEpoch,nativeSession:nativeSession,transport:"tls") != nil && dnsState.current()!.counts().0==1)
+                    owner.stop()
+                    let cleaned=RouterVPNDNSMeasurementRegistry.shared.reply(operation:"dns-measure-drain",request:id,session:owner.settingsEpoch,nativeSession:nativeSession,transport:"")!
+                    let value=try JSONSerialization.jsonObject(with:cleaned) as! [String:Any]
+                    check("retired engine remains addressable only for exact DNS cleanup",value["drained"] as? Bool==true && (value["results"] as? [Any])?.isEmpty==true && dnsState.current()!.counts().1==0)
                 }
             }
             owner.stop()
@@ -851,11 +919,13 @@ def main():
     with tempfile.TemporaryDirectory(prefix='routervpn-libbox-delivery-') as tmp:
         tmp = Path(tmp)
         stub, harness = tmp/'Libbox.swift', tmp/'Harness.swift'
-        stub.write_text(LIBBOX); harness.write_text(HARNESS)
+        stub.write_text(LIBBOX + DNS.NATIVE); harness.write_text(DNS.STORAGE + HARNESS)
+        hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
+        binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
         subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(stub),
                         '-emit-module-path',str(tmp/'Libbox.swiftmodule'),'-o',str(lib)],check=True,timeout=60)
-        args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp),str(ROOT/'ios/RouterVPN/App/IOSMultihopExecution.swift')]
+        args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp),str(ROOT/'ios/RouterVPN/App/IOSMultihopExecution.swift'),str(binding),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
         subprocess.run([str(tmp/'test')],check=True,timeout=25)
         subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)

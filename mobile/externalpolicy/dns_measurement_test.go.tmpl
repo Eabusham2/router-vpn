@@ -1,0 +1,146 @@
+package box_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"strings"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Public responders are intentionally unavailable. The selected-DNS row still
+// exercises the actual native DNS router and transports, never a fake timing.
+func (o *torMTUFixtureOutbound) TorDNSMeasurementDial(ctx context.Context, session, address string) (net.Conn, error) {
+	if !o.TorHealthy(session) || ctx.Err() != nil || !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("unowned DNS fixture request")
+	}
+	o.dnsMeasurementCalls.Add(1)
+	return nil, errors.New("fixture has no public Tor circuit")
+}
+
+func TestRouterTorDNSMeasurementKeepsSelectedTransportAndUncachedActualRouter(t *testing.T) {
+	for _, ipv6 := range []string{"off", "on"} {
+		t.Run(ipv6, func(t *testing.T) {
+			profile := strings.Replace(torMTUFrozenProfile, `"ipv6_mode":"off"`, `"ipv6_mode":"`+ipv6+`"`, 1)
+			config, err := mobiletor.CompileProfile(profile, "frozen-session", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, _ := torMTUNativeConfigFixture(t, config)
+			proof := torMTUProved(t, engine)
+			outbound, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+			tor := outbound.(*torMTUFixtureOutbound)
+			before := tor.dnsCalls.Load()
+			var current atomic.Bool
+			current.Store(true)
+			measurement, err := engine.RouterVPNTorDNSMeasurement(proof, "tor-exit", current.Load)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer measurement.Close()
+			id := strings.Repeat("d", 32)
+			if err := measurement.Start(id, "https"); err != nil {
+				t.Fatal(err)
+			}
+			if err := measurement.Drain(id); err != nil {
+				t.Fatal(err)
+			}
+			var result dnsmeasure.Status
+			if json.Unmarshal([]byte(measurement.StatusJSON()), &result) != nil || !result.Complete || !result.Drained || result.Failure != "" || len(result.Results) != 13 {
+				t.Fatal("native DNS receipt incomplete", measurement.StatusJSON())
+			}
+			selected := result.Results[0]
+			if selected.ID != "selected" || selected.Transport != "tcp" || selected.Address != "9.9.9.9" || selected.Port != 53 || selected.Route != mobiletor.ProfileOutboundTag || !selected.Ready || selected.Samples != 3 || selected.Failed != 0 || selected.Median == nil || result.PublicTransport != "https" {
+				t.Fatal("selected DNS relabeled or substituted", selected)
+			}
+			if tor.dnsCalls.Load()-before != 3 {
+				t.Fatal("selected DNS was served from a cache", tor.dnsCalls.Load()-before)
+			}
+			want := int32(36)
+			if ipv6 == "off" {
+				want = 18
+			}
+			if tor.dnsMeasurementCalls.Load() != want {
+				t.Fatal("captured IPv6 policy was bypassed", tor.dnsMeasurementCalls.Load(), want)
+			}
+			for _, row := range result.Results[1:] {
+				if row.Ready || row.Median != nil || row.Failed != 3 {
+					t.Fatal("unavailable public circuit gained a score", row)
+				}
+			}
+			current.Store(false)
+			if measurement.Start(strings.Repeat("e", 32), "tcp") == nil {
+				t.Fatal("retired Box reopened DNS traffic")
+			}
+		})
+	}
+}
+
+func TestRouterTorDNSMeasurementHomeKeepsExactPrivateEntry(t *testing.T) {
+	entry := `{"id":"private-entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"captured-entry-secret","adguard_ipv4":"10.77.0.53"}`
+	base := `{"inbounds":[{"type":"tun","tag":"owned-tun","address":["172.29.10.1/30"],"mtu":1392,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"198.51.100.22","server_port":443,"method":"aes-256-gcm","password":"captured-transport-secret"}],"dns":{"servers":[{"type":"tcp","tag":"entry-dns","server":"10.77.0.53","detour":"proxy"}],"final":"entry-dns"},"route":{"final":"proxy","auto_detect_interface":true}}`
+	for _, protocol := range []string{"udp", "tcp"} {
+		t.Run(protocol, func(t *testing.T) {
+			profile := `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_protocol":"` + protocol + `","home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","multihop_enabled":true,"multihop_entry_id":"private-entry","multihop_exit_id":"tor-exit","multihop_entry_mode":"ss","multihop_exit_mode":"tor","multihop_execution":"local"}`
+			config, err := mobiletor.CompileProfileWithPredecessor(profile, "frozen-session", base, entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, _ := torMTUNativeConfigFixture(t, config)
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer proof.Cancel()
+			if _, err := proof.Run(); err != nil {
+				t.Fatal(err)
+			}
+			lower, _ := engine.Outbound().Outbound("proxy")
+			private := lower.(*torMTUFixtureOutbound)
+			before := private.dnsCalls.Load()
+			measurement, err := engine.RouterVPNTorDNSMeasurement(proof, "tor-exit", func() bool { return true })
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer measurement.Close()
+			id := strings.Repeat("a", 32)
+			if err := measurement.Start(id, "tls"); err != nil {
+				t.Fatal(err)
+			}
+			if err := measurement.Drain(id); err != nil {
+				t.Fatal(err)
+			}
+			var result dnsmeasure.Status
+			_ = json.Unmarshal([]byte(measurement.StatusJSON()), &result)
+			if len(result.Results) != 13 {
+				t.Fatal(measurement.StatusJSON())
+			}
+			row := result.Results[0]
+			if row.Transport != protocol || row.Route != "proxy" || row.Address != "10.77.0.53" || !row.Ready || private.dnsCalls.Load()-before != 3 {
+				t.Fatal("Home DNS escaped captured private entry", row, private.dnsCalls.Load()-before)
+			}
+		})
+	}
+}
+
+func TestRouterVPNExternalDNSMeasurementRejectsHostBooleanOrUnprovedOwner(t *testing.T) {
+	engine := externalNativeFixture(t, nil)
+	proof, err := engine.RouterVPNExternalCreateProof(externalFixtureSource, externalFixtureCapture, "owned-session")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, current := range []func() bool{nil, func() bool { return false }, func() bool { return true }} {
+		if measurement, err := engine.RouterVPNExternalDNSMeasurement(proof, externalFixtureSource, externalFixtureCapture, "owned-session", current); err == nil || measurement != nil {
+			t.Fatal("unproved native graph gained DNS measurement")
+		}
+	}
+	proof.Cancel()
+	if measurement, err := engine.RouterVPNExternalDNSMeasurement(proof, externalFixtureSource, externalFixtureCapture, "owned-session", func() bool { return true }); err == nil || measurement != nil {
+		t.Fatal("cancelled native proof gained DNS measurement")
+	}
+}

@@ -133,9 +133,35 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		}
 	}
 
+	requireApplePacketTunnelSources(t, "PacketTunnel", "App/IOSMultihopStartLayer.swift", "App/IOSNativePQProfile.swift", "App/IOSMultihopExecution.swift")
+}
+
+// Check exact source membership within the extension target. Other shared
+// owners may join the target without removing its captured Start Layer policy.
+func requireApplePacketTunnelSources(t *testing.T, required ...string) {
+	t.Helper()
 	project := repoFile(t, "ios/RouterVPN/project.yml")
-	if !strings.Contains(project, "sources: [PacketTunnel, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift, App/IOSMultihopExecution.swift]") {
-		t.Fatal("PacketTunnel target must compile both its source directory and the shared captured Start Layer policy")
+	_, target, ok := strings.Cut(project, "\n  RouterVPNPacketTunnel:\n")
+	if !ok {
+		t.Fatal("PacketTunnel build target is missing")
+	}
+	sources := make(map[string]bool)
+	for _, line := range strings.Split(target, "\n") {
+		if strings.HasPrefix(line, "  ") && !strings.HasPrefix(line, "    ") {
+			break
+		}
+		if !strings.HasPrefix(line, "    sources: [") || !strings.HasSuffix(line, "]") {
+			continue
+		}
+		list := strings.TrimSuffix(strings.TrimPrefix(line, "    sources: ["), "]")
+		for _, source := range strings.Split(list, ",") {
+			sources[strings.TrimSpace(source)] = true
+		}
+	}
+	for _, source := range required {
+		if !sources[source] {
+			t.Errorf("PacketTunnel target does not compile required source %q", source)
+		}
 	}
 }
 

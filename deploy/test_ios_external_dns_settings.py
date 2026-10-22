@@ -40,6 +40,9 @@ enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
  static func resolve(_ p:RouterProfile)throws->Int{1}
 }
+// Measurement-source capture is executed against the actual model builders in
+// test_ios_dns_measurement.py; this gate isolates editor/native DNS validation.
+@MainActor struct IOSDNSMeasurementCapture {func requireSources(model:RouterVPNModel)throws{}}
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?, entry:ClientBundle?, profileMutationBlocked=false, imports=0, message=""
  func importBundle(_ data:Data)throws {bundle=try JSONDecoder().decode(ClientBundle.self,from:data);imports+=1}
@@ -53,6 +56,7 @@ enum IOSDNSRuntimePolicy {
  var useHostnameBootstrap=false,results:[DNSBenchmarkResult]=[]
  var loadedExternalDNS:[String]?
  var loadedExternalProfile:RouterProfile?
+ var measuredSource:IOSDNSMeasurementCapture?,measuredDraft=false
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
  init(_ model:RouterVPNModel){self.model=model}
  // SHIPPING_SETTINGS

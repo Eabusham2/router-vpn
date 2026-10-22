@@ -106,7 +106,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerCompileExternalPolicy routerValidateExternalTransport routerValidateExternalDNS routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
+  for symbol in routerCompileExternalPolicy routerValidateExternalTransport routerValidateExternalDNS routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement routerExternalCreateDNSMeasurement routerTorCreateDNSMeasurement newRouterExternalMTU; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
   grep -Fq 'io.nekohasekai.libbox.RouterMTU newRouterExternalMTU(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterMTUPlatform, io.nekohasekai.libbox.RouterExternalProofRequest, java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {
@@ -116,6 +116,12 @@ verify_aar() {
   grep -Fq 'void drain(java.lang.String) throws java.lang.Exception;' "$tmp/router-hop-measurement.javap" || {
     echo 'combined libbox AAR measurement owner lacks synchronous request drain' >&2; return 1
   }
+  javap -classpath "$classes" io.nekohasekai.libbox.RouterDNSMeasurement >"$tmp/router-dns-measurement.javap"
+  for signature in 'void start(java.lang.String, java.lang.String) throws java.lang.Exception;' 'void cancel(java.lang.String);' 'void drain(java.lang.String) throws java.lang.Exception;' 'java.lang.String statusJSON();' 'void close() throws java.lang.Exception;' 'void networkChanged();'; do
+    grep -Fq "$signature" "$tmp/router-dns-measurement.javap" || {
+      echo 'combined libbox AAR DNS measurement owner has the wrong retained-lifecycle API' >&2; return 1
+    }
+  done
   javap -classpath "$classes" io.nekohasekai.libbox.RouterExternalProofRequest >"$tmp/router-external-proof.javap"
   for signature in 'java.lang.String run() throws java.lang.Exception;' 'java.lang.String execution();' 'void cancel();' 'void close() throws java.lang.Exception;' 'boolean healthy();'; do
     grep -Fq "$signature" "$tmp/router-external-proof.javap" || {

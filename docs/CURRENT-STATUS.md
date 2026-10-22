@@ -38,11 +38,54 @@ Published references for these changes are `5dfc934a`, `520b50ba`, `e4f82958`,
 `a6188b3d`, `75a90caf`, `b28178a1`, and `a444e6df`. Their local tests and source
 integration do not certify another commit's native packages or device behavior.
 
-Active work continues on Android external Server/Compare host adoption,
-selected Home/custom DNS through the mobile native graph and proof lifecycle,
-and measured entry-to-candidate selection across the remaining native clients.
-The final exact-SHA APK, Xcode/IPA, desktop packages, server images, generated
-compose and publication gates must run on the resulting source generation.
+The further October 22 continuation has published these source changes:
+
+| Commit | Captured behavior and regression boundary |
+| --- | --- |
+| `34ab1386` | Requirement audits retain authenticated AES Start Layer and optional XOR whitening. |
+| `23aced17` | The pinned native SOCKS UDP endpoint race is fixed in the owned source copy, with race-detector and unpatched negative-control evidence. |
+| `e5495b8c` | Apple Tor Home drafts, DNS editing and runtime composition retain the complete captured predecessor. Native host/export source gates agree. |
+| `de5cf026` | Android paired external Server/Compare reaches the real native lifecycle, preserves its permission/profile capture and restores the previously proved winner. |
+| `0ec5a1c7` | The registered server HTTP boundary accepts and authenticates the captured external fingerprint/authentication pair; malformed and replayed requests remain rejected. |
+| `453d1966` | Missing or blank mobile external-node DNS uses Home. Idle editing and runtime share the actual parser; explicit Rescue/custom choices are preserved. |
+| `4a1f7cd6` | Android profile contracts verify execution retention at the actual new call site. The four previously failing source gates pass on this commit. |
+| `0bfb3bf3` | Windows, macOS and Linux measure exit candidates through an owned native entry and validate current receipts before changing the exit picker. Generated full/split WG/AWG assets share one strict native parser. |
+| `4485a69a` | Windows PowerShell 5.1 and isolated Unix MTU fixtures exercise the same production behavior with portable test inputs. |
+| `70325a69` | Apple candidate measurement binds the entry, source, physical network and selection; waits for native socket drain; and restores captured state. Linked-node reads are pure, imports make one validated atomic commit, and ambiguous native cleanup retains ownership. |
+| `3c46bc57` | WG/AWG assets must match the saved endpoint before bootstrap. Native candidate cleanup captures Windows directory identity eagerly and preserves replacement directories. Source audits follow the current Android execution and Apple atomic-link contracts. |
+| `b2ae0257` | Repeated native preparation composes packet concurrency and UDP capacity fixes in one checksum-verified `sing` copy, including default/low-memory builds and verified upgrade of the earlier owned copy. |
+
+The desktop candidate backend uses a private authenticated userspace lane with
+real upstream TCP handshake timing, exact entry proof before and after samples,
+captured private sources and physical-network validation. It changes no system
+TUN or route. Results become selectable only after sockets and the owned process
+have drained. Linux follows the same WG/AWG base decision as Connect; Windows
+and macOS use their existing explicit WG entry. Quick samples do not overwrite
+direct latency or the durable 50-sample benchmark.
+
+Apple candidate measurement passed 240 executable Swift checks and two negative
+controls. Persistence and native restoration passed 61 and 85 checks respectively;
+the existing 433-check Speed Lab suite also passes. These tests exercise shipping
+source with declared platform boundaries doubled, not physical-device routing.
+This continuation also adds captured native DNS comparison for mobile Tor and
+ordinary external paths. Both hosts retain the exact proved session and native
+cleanup owner, validate complete results, and offer an explicit next-connection
+DNS edit. The Apple hop-measurement handshake now also distinguishes the
+provider epoch from the MTU session instead of rejecting valid sessions whose
+identifiers differ. Executable fixtures deliberately use distinct identifiers.
+
+The `3c46bc57` native matrix has passed the Windows installed/Portable packages
+for x64/ARM64, macOS for Intel/Apple Silicon, Linux for x64/ARM64 and the ARM64
+Portainer image/preflight job. Repeated native preparation then exposed a
+competing `sing` replacement in the mobile build sequence. The current fix
+composes the UDP buffer limits and packet-endpoint concurrency correction in
+one verified dependency copy. Both preparation orders, repeated preparation,
+default/low-memory capacity builds and the actual native UDP race regression
+pass; unrelated or partially modified copies remain rejected.
+
+Those earlier package results do not certify the newer source: its exact-SHA
+APK, Xcode/IPA, desktop packages, server images, generated compose and
+publication gates must run on the resulting source generation.
 
 The Apple MAX source gate, LAN-policy fixture, canonical macOS native-test
 paths and Android pinned-NDK setup order have been corrected on main. These
@@ -127,9 +170,56 @@ mandatory. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md).
 
 Router VPN node paths support Home AdGuard, measured Fastest, Custom UDP/TCP,
 DoT, DoH, DoH3 and Rescue through captured policy. Resolver names, bootstrap
-routes and destination retain the selected tunnel owner. Ordinary external-node
-policy integration is tracked above; controls on Router VPN nodes do not
-complete that separate host path.
+routes and destination retain the selected tunnel owner. Mobile ordinary
+external and Tor policies now use the shared native validation and exact
+predecessor capture. An unpaired Home draft may be edited, but it does not grant
+runtime readiness or silently select a public resolver. Tor public DNS requires
+a supported TCP transport; the selected resolver must pass the live proof.
+
+Android and Apple now compare the twelve public IPv4/IPv6 endpoints of
+Cloudflare, Google and Quad9 through the captured ordinary external exit or
+native Tor connection. The user explicitly chooses TCP DNS, authenticated DoT
+or authenticated DoH. Each public time includes a fresh TCP connection, TLS
+setup where applicable and a matching usable DNS answer; all three samples
+must succeed before a median is eligible. IPv6-Off prevents IPv6 socket attempts.
+No ambient resolver, proxy, direct path, public UDP or HTTP/3 fallback can
+silently substitute for the measured transport.
+
+The separate Selected DNS row queries the actual native DNS router with local
+caches disabled. It retains its own transport and route, including Home AdGuard
+through the exact paired entry, and is labelled separately from the public
+exit comparison. The existing Router VPN UDP comparison remains labelled as
+app-originated queries following the device route and its exclusions; it does
+not certify public DNS timing through a Tor or ordinary external exit.
+
+Both mobile hosts reject changed sessions, saved sources, selections, physical
+networks and expired results. A successful public row or the fastest eligible
+row fills an explicit DNS editor draft with its protocol, address, port,
+certificate name and path. The user must Disconnect and Save before that policy
+can apply to a later connection. Comparisons never initiate Connect, alter the
+active resolver or write the ambiguous legacy `fastest_dns_*` cache.
+
+Cancellation retains late native sockets, failed closes and measurement/MTU
+ownership until actual drain acknowledgement. Android retains its service
+owner after UI dismissal. Apple reserves requests before acknowledging Info
+and keeps the same app transaction visible after reopening the editor. If
+system Disconnect removes provider messaging, an exact drained receipt can
+recover cleanup through the shared App Group. It contains no credentials or
+measurement results and cannot select a resolver. A single retained provider
+timer retries native cleanup and receipt persistence after transient failures,
+without another IPC request. Missing or failed evidence leaves cleanup pending;
+an abrupt process exit before acknowledgement is not treated as proof.
+
+Verification includes the complete Go suite and reconciled requirements audit,
+Go race tests, actual prepared pinned-native factory and adapter tests, and two
+native late-socket/failed-close negative controls. Android passes 261 DNS
+ownership checks and 3,550 editor checks, including 200 real native compiler
+roundtrips and the corresponding mutation controls. Apple passes 324 DNS checks
+with four mutation controls, whole-engine runs of 382/382/383 checks, and 67
+real-filesystem receipt checks with two mutation controls. Apple SDK compilation
+is a separate Darwin gate. These are source/native boundary checks, not a
+public Tor circuit or physical-device acceptance. See
+[../internal/dnsmeasure/README.md](../internal/dnsmeasure/README.md).
 
 Android and Apple implement Auto-MTU, Retest and Cancel using the owned native
 interface, actual readback, authenticated through-tunnel probes, rollback,

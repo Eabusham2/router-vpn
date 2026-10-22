@@ -47,6 +47,7 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  }
  public static void externalReset(){reset();externalNext=null;externalCreated=null;externalFactoryEntered=null;externalFactoryRelease=null;}
  public static RouterHopMeasurement routerExternalCreateHopMeasurement(CommandServer s,RouterExternalProofRequest proof,String source,String capture,String id)throws Exception{return new RouterHopMeasurement();}
+ public static RouterDNSMeasurement routerExternalCreateDNSMeasurement(CommandServer s,RouterExternalProofRequest proof,String source,String capture,String id)throws Exception{return new RouterDNSMeasurement();}
  public static RouterMTU newRouterExternalMTU(CommandServer s,RouterMTUPlatform platform,RouterExternalProofRequest proof,String source,String capture)throws Exception{return new RouterMTU();}
 }'''
 

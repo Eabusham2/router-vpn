@@ -65,6 +65,7 @@ LIBBOX = LIBBOX[:-1] + r'''
  }
  public static void routerStrategyDNSProof(CommandServer s)throws Exception{dnsCalls++;if(s!=created.server)throw new AssertionError("DNS used another native Box");if(dnsEntered!=null){dnsEntered.countDown();dnsRelease.await();}if(dnsFailure)throw new IllegalStateException("DNS failed");}
  public static RouterHopMeasurement routerTorCreateHopMeasurement(CommandServer s,RouterTorProofRequest proof,String id)throws Exception{return new RouterHopMeasurement();}
+ public static RouterDNSMeasurement routerTorCreateDNSMeasurement(CommandServer s,RouterTorProofRequest proof,String id)throws Exception{return new RouterDNSMeasurement();}
  public static RouterMTU newRouterTorMTU(CommandServer s,RouterMTUPlatform platform,RouterTorProofRequest proof,String config,String profile)throws Exception{return new RouterMTU();}
 }'''
 SOURCES['io/nekohasekai/libbox/Libbox.java'] = LIBBOX

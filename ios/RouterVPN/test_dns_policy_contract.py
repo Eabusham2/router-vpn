@@ -29,9 +29,13 @@ for marker in [
     'Cloudflare Primary', 'Cloudflare Secondary', 'Google Primary', 'Google Secondary',
     'Quad9 Primary', 'Quad9 Secondary',
     'Retest over active VPN path', 'real DNS A queries', 'IOSDNSRTTProbe.query',
-    'latencyMs', 'fastestDNSHost', 'fastestDNSLatencyMs',
+    'latencyMs', 'nativeMeasurement.start(model: model, transport: comparisonTransport)',
+    'DNS query time through this connection', 'No public UDP fallback',
+    'try nativeMeasurement.captureForEditor(model: model, result: value)',
 ]:
     assert marker in view, marker
+for forbidden in ['.fastestDNSHost =', '.fastestDNSLatencyMs =', '.dnsResults =']:
+    assert forbidden not in view, 'Comparison results must retain transport/route provenance and require explicit editor Save: ' + forbidden
 
 selector = app.joinpath("IOSRuntimeSelection.swift").read_text()
 assert 'IOSDNSRuntimePolicy.validate(selection: selection, in: bundle)' in selector

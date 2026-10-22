@@ -4,6 +4,7 @@ import io.nekohasekai.libbox.CommandServer;
 import io.nekohasekai.libbox.Libbox;
 import io.nekohasekai.libbox.RouterTorProofRequest;
 import io.nekohasekai.libbox.RouterHopMeasurement;
+import io.nekohasekai.libbox.RouterDNSMeasurement;
 import io.nekohasekai.libbox.RouterMTU;
 import io.nekohasekai.libbox.RouterMTUPlatform;
 import org.json.JSONObject;
@@ -94,6 +95,17 @@ final class AndroidTorSession {
         final boolean owned;
         synchronized (this) { owned = request == proof && healthy(); }
         if (!owned) { measurement.close(); throw unavailable(); }
+        return measurement;
+    }
+
+    RouterDNSMeasurement newDNSMeasurement() throws Exception {
+        final RouterTorProofRequest proof;
+        synchronized (this) { if (!healthy()) throw unavailable(); proof = request; }
+        RouterDNSMeasurement measurement = Libbox.routerTorCreateDNSMeasurement(server, proof, externalID);
+        if (measurement == null) throw unavailable();
+        final boolean dnsOwned;
+        synchronized (this) { dnsOwned = request == proof && healthy(); }
+        if (!dnsOwned) { measurement.close(); throw unavailable(); }
         return measurement;
     }
 

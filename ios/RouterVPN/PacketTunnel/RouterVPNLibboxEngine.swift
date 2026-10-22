@@ -12,6 +12,7 @@ final class RouterVPNLibboxEngine {
     private var multihop: LibboxRouterMultihop?
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var hopMeasurement: LibboxRouterHopMeasurement?
+    private var dnsMeasurement: RouterVPNDNSMeasurementSession?
     private var multihopHealth: DispatchSourceTimer?
     private var performanceHealth: DispatchSourceTimer?
     private let ownershipLock = NSLock()
@@ -150,6 +151,7 @@ final class RouterVPNLibboxEngine {
         ownershipGeneration = UUID()
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth, torDelivery = torProofDelivery, capturedTor = torOwned, torHealth = self.torHealth
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
+        let dnsProbe = dnsMeasurement; dnsMeasurement = nil
         hopMeasurement = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         torProofDelivery = nil
         self.torHealth = nil
@@ -171,6 +173,8 @@ final class RouterVPNLibboxEngine {
         if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
         var measurementCloseFailure: Error?
         do { try probe?.close() } catch { measurementCloseFailure = error }
+        var dnsCloseFailure: Error?
+        do { try dnsProbe?.close() } catch { dnsCloseFailure = error }
         // A server-executed external graph owns a private relay lease. Release
         // it through this captured proof before tearing down its native Box.
         var externalCloseFailure: Error?
@@ -190,6 +194,10 @@ final class RouterVPNLibboxEngine {
                 do { try probe?.close(); measurementCloseFailure = nil }
                 catch { measurementCloseFailure = error }
             }
+            if dnsProbe != nil {
+                do { try dnsProbe?.close(); dnsCloseFailure = nil }
+                catch { dnsCloseFailure = error }
+            }
             if mtuOwned {
                 // Closing the exact Box releases its blocked native I/O.
                 // Retry only the controller retained by this MTU session.
@@ -197,6 +205,7 @@ final class RouterVPNLibboxEngine {
                 catch { mtuCloseFailure = error }
             }
             if closeFailure == nil { closeFailure = measurementCloseFailure }
+            if closeFailure == nil { closeFailure = dnsCloseFailure }
             if closeFailure == nil { closeFailure = mtuCloseFailure }
             if capturedTor, let closeFailure {
                 // The C runtime must not lose its last native/TUN/file owners
@@ -320,6 +329,14 @@ final class RouterVPNLibboxEngine {
                 throw failure ?? retired()
             }
             guard current(owner), request.healthy() else { try probe.close(); throw retired() }
+            return probe
+        }
+        func makeDNSMeasurement() throws -> LibboxRouterDNSMeasurement {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            var failure: NSError?
+            guard let probe = LibboxRouterExternalCreateDNSMeasurement(server, request, policy.sourceConfig, policy.capture, sessionID, &failure), failure == nil else {
+                throw failure ?? retired()
+            }
             return probe
         }
         func activateMTU() throws {
@@ -463,6 +480,14 @@ final class RouterVPNLibboxEngine {
                 throw failure ?? retired()
             }
             guard current(owner), request.healthy() else { try probe.close(); throw retired() }
+            return probe
+        }
+        func makeDNSMeasurement(exitID: String) throws -> LibboxRouterDNSMeasurement {
+            guard let owner, current(owner), request.healthy() else { throw retired() }
+            var failure: NSError?
+            guard let probe = LibboxRouterTorCreateDNSMeasurement(server, request, exitID, &failure), failure == nil else {
+                throw failure ?? retired()
+            }
             return probe
         }
         func activateMTU() throws {
@@ -722,12 +747,59 @@ final class RouterVPNLibboxEngine {
     func hopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
         ownershipLock.lock()
         defer { ownershipLock.unlock() }
-        guard session == settingsEpoch, let probe = hopMeasurement, !permanentlyStopped else { return nil }
+        guard let probe = hopMeasurement, !permanentlyStopped else { return nil }
+        if operation == "hop-measure-info", session.isEmpty {
+            guard let data = platform.mtu.request(operation: "mtu-status", request: request, session: ""),
+                  let status = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  status["ack_id"] as? String == request, let mtuSession = status["session_id"] as? String,
+                  UUID(uuidString: mtuSession) != nil else { return nil }
+            return try? JSONSerialization.data(withJSONObject: ["request_id": request,
+                "session_id": settingsEpoch, "mtu_session_id": mtuSession])
+        }
+        guard session == settingsEpoch else { return nil }
         if operation == "hop-measure-start" {
             guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
             return Self.retiredMeasurements.start(probe, request: request, session: session)
         }
         return Self.retiredMeasurements.reply(operation: operation, request: request, session: session)
+    }
+
+    func enableExternalDNSMeasurement(exitID: String) throws {
+        ownershipLock.lock()
+        let external = externalProofDelivery, tor = torProofDelivery, generation = ownershipGeneration
+        let available = server != nil && !starting && !permanentlyStopped && dnsMeasurement == nil
+        ownershipLock.unlock()
+        guard available, (external != nil) != (tor != nil) else { throw error("DNS measurement requires one captured native proof") }
+        let probe: LibboxRouterDNSMeasurement
+        if let external { probe = try external.makeDNSMeasurement() }
+        else if let tor { probe = try tor.makeDNSMeasurement(exitID: exitID) }
+        else { throw error("DNS measurement proof was lost") }
+        let session: RouterVPNDNSMeasurementSession
+        do { session = try RouterVPNDNSMeasurementSession(native: probe, epoch: settingsEpoch, nodeID: exitID) }
+        catch { try? probe.close(); throw error }
+        RouterVPNDNSMeasurementRegistry.shared.retain(session)
+        ownershipLock.lock()
+        let current = ownershipGeneration == generation && !permanentlyStopped && dnsMeasurement == nil &&
+            externalProofDelivery === external && torProofDelivery === tor
+        if current { dnsMeasurement = session }
+        ownershipLock.unlock()
+        guard current else { try session.close(); throw error("DNS measurement belongs to a retired native generation") }
+    }
+
+    func dnsMeasurementRequest(operation: String, request: String, session: String,
+                               nativeSession: String, transport: String) -> Data? {
+        ownershipLock.lock()
+        let captured = dnsMeasurement, available = !permanentlyStopped && !starting && server != nil
+        ownershipLock.unlock()
+        guard available, let captured else { return nil }
+        if operation == "dns-measure-info", session.isEmpty, nativeSession.isEmpty, transport.isEmpty {
+            return captured.info(request: request)
+        }
+        if operation == "dns-measure-start" {
+            guard !platform.mtu.hasOwner || platform.mtu.measurementReady else { return nil }
+        }
+        return captured.reply(operation: operation, request: request, session: session,
+            nativeSession: nativeSession, transport: transport)
     }
     static func retiredHopMeasurementRequest(operation: String, request: String, session: String) -> Data? {
         retiredMeasurements.reply(operation: operation, request: request, session: session)
@@ -871,19 +943,21 @@ final class RouterVPNLibboxEngine {
     }
     func invalidateMultihop() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, probe = hopMeasurement, dnsProbe = dnsMeasurement, owned = server, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
         torDelivery?.cancel()
         externalDelivery?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged()
+        dnsProbe?.networkChanged()
     }
     func pause() {
         platform.mtu.invalidate()
-        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
+        ownershipLock.lock(); let plan = multihop, owned = server, probe = hopMeasurement, dnsProbe = dnsMeasurement, torDelivery = torProofDelivery, externalDelivery = externalProofDelivery; ownershipLock.unlock()
         torDelivery?.cancel()
         externalDelivery?.cancel()
         if let owned { LibboxRouterInvalidatePerformance(owned) }
         probe?.networkChanged(); plan?.networkChanged(); owned?.pause()
+        dnsProbe?.networkChanged()
     }
     func wake() { ownershipLock.lock(); let owned = server; ownershipLock.unlock(); owned?.wake() }
     private func startService() throws {

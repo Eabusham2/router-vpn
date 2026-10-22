@@ -2,6 +2,19 @@ import SwiftUI
 @preconcurrency import NetworkExtension
 
 // HOP_RESULT_TYPES_BEGIN
+struct IOSHopMeasurementBinding: Decodable {
+    let request_id: String
+    let session_id: String
+    let mtu_session_id: String
+
+    static func decode(_ data: Data, request: String, mtuSession: String) throws -> Self {
+        guard data.count <= 1024 else { throw CancellationError() }
+        let value = try JSONDecoder().decode(Self.self, from: data)
+        guard value.request_id == request, UUID(uuidString: value.session_id) != nil,
+              value.mtu_session_id == mtuSession else { throw CancellationError() }
+        return value
+    }
+}
 struct IOSHopMeasurementStatus: Decodable {
     let request_id: String?
     let session_id: String
@@ -172,8 +185,12 @@ private final class IOSHopReply: @unchecked Sendable {
                     let binding = try await IOSMTUControl.capture(model)
                     guard binding.identity == captured else { throw CancellationError() }
                     let connection = binding.connection, date = binding.connectedDate
-                    let owned = try IOSHopMeasurementTransaction(id: id, session: binding.session,
-                        send: { operation in try await self.send(connection, operation: operation, id: id, session: binding.session) })
+                    let information = try await self.send(connection, operation: "hop-measure-info", id: id, session: "")
+                    let hop = try IOSHopMeasurementBinding.decode(information, request: id, mtuSession: binding.session)
+                    try Task.checkCancellation()
+                    guard IOSMTUControl.current(binding, model: model) else { throw CancellationError() }
+                    let owned = try IOSHopMeasurementTransaction(id: id, session: hop.session_id,
+                        send: { operation in try await self.send(connection, operation: operation, id: id, session: hop.session_id) })
                     self.transaction = owned
                     try await owned.run(current: {
                         await model.refreshTunnelStatus()

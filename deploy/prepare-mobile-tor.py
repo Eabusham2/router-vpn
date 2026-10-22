@@ -22,6 +22,7 @@ def inputs():
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
         *(ROOT/'internal/mobiletor').glob('*.go'),
+        ROOT/'internal/dnsmeasure/catalog.go',
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
 
@@ -60,6 +61,9 @@ def rewrite(data):
 
 def copies():
     result = {}
+    # The DNS-only native Tor adapter uses the same closed catalog as the full
+    # mobile measurement bridge, including in standalone pinned Tor tests.
+    result['routervpn/dnsmeasure/catalog.go'] = (ROOT/'internal/dnsmeasure/catalog.go').read_bytes()
     for name in ('common', 'mobiletor', 'awgpolicy'):
         for path in sorted((ROOT/'internal'/name).glob('*.go')):
             if name != 'mobiletor' and path.name.endswith('_test.go'):
@@ -181,7 +185,7 @@ def prepare(vendor, go='go'):
             raise ValueError('Native Tor source ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if relative not in content and not relative.startswith(('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/awgpolicy/', 'routervpn/torpt/', 'routervpn/tornotices/', 'protocol/routervpntor/')):
+            if relative not in content and not relative.startswith(('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/awgpolicy/', 'routervpn/dnsmeasure/', 'routervpn/torpt/', 'routervpn/tornotices/', 'protocol/routervpntor/')):
                 raise ValueError('Native Tor cannot own unrelated core source')
             path = destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
@@ -190,7 +194,7 @@ def prepare(vendor, go='go'):
         path = destination(vendor, relative)
         if path.exists() and (not path.is_file() or relative not in previous and path.read_bytes() != data):
             raise ValueError('Refusing to overwrite unowned native Tor source')
-    for namespace in ('routervpn/common', 'routervpn/mobiletor', 'routervpn/awgpolicy', 'routervpn/torpt', 'routervpn/tornotices', 'protocol/routervpntor'):
+    for namespace in ('routervpn/common', 'routervpn/mobiletor', 'routervpn/awgpolicy', 'routervpn/dnsmeasure', 'routervpn/torpt', 'routervpn/tornotices', 'protocol/routervpntor'):
         path = destination(vendor, namespace)
         if path.exists():
             for child in path.rglob('*'):

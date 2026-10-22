@@ -1,0 +1,87 @@
+package libbox
+
+import (
+	"errors"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+)
+
+// RouterDNSMeasurement owns only fixed-catalog resolver queries and the actual
+// selected DNS route of its successful native proof. It never changes settings.
+type RouterDNSMeasurement struct{ service *dnsmeasure.Service }
+
+func RouterExternalCreateDNSMeasurement(server *CommandServer, proof *RouterExternalProofRequest, source, capture, session string) (*RouterDNSMeasurement, error) {
+	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("DNS comparison has no successful external proof")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("DNS native instance is unavailable")
+	}
+	current := func() bool {
+		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
+	}
+	service, err := instance.Box().RouterVPNExternalDNSMeasurement(proof.request, source, capture, session, current)
+	if err != nil {
+		return nil, err
+	}
+	if !current() {
+		_ = service.Close()
+		return nil, errors.New("DNS native instance changed")
+	}
+	return &RouterDNSMeasurement{service: service}, nil
+}
+func RouterTorCreateDNSMeasurement(server *CommandServer, proof *RouterTorProofRequest, exitID string) (*RouterDNSMeasurement, error) {
+	if server == nil || server.StartedService == nil || proof == nil || !proof.Healthy() {
+		return nil, errors.New("DNS comparison has no successful Tor proof")
+	}
+	instance := server.StartedService.Instance()
+	if instance == nil || instance.Box() == nil {
+		return nil, errors.New("DNS native instance is unavailable")
+	}
+	current := func() bool {
+		return server.StartedService != nil && server.StartedService.Instance() == instance && proof.Healthy()
+	}
+	service, err := instance.Box().RouterVPNTorDNSMeasurement(proof.request, exitID, current)
+	if err != nil {
+		return nil, err
+	}
+	if !current() {
+		_ = service.Close()
+		return nil, errors.New("DNS native instance changed")
+	}
+	return &RouterDNSMeasurement{service: service}, nil
+}
+func (m *RouterDNSMeasurement) Start(request, transport string) error {
+	if m == nil || m.service == nil {
+		return errors.New("DNS measurement is unavailable")
+	}
+	return m.service.Start(request, transport)
+}
+func (m *RouterDNSMeasurement) Cancel(request string) {
+	if m != nil && m.service != nil {
+		m.service.Cancel(request)
+	}
+}
+func (m *RouterDNSMeasurement) Drain(request string) error {
+	if m == nil || m.service == nil {
+		return errors.New("DNS measurement is unavailable")
+	}
+	return m.service.Drain(request)
+}
+func (m *RouterDNSMeasurement) StatusJSON() string {
+	if m == nil || m.service == nil {
+		return ""
+	}
+	return m.service.StatusJSON()
+}
+func (m *RouterDNSMeasurement) Close() error {
+	if m == nil || m.service == nil {
+		return nil
+	}
+	return m.service.Close()
+}
+func (m *RouterDNSMeasurement) NetworkChanged() {
+	if m != nil && m.service != nil {
+		m.service.Invalidate()
+	}
+}

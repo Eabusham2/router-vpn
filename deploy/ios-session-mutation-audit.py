@@ -39,18 +39,69 @@ require(
     "ios/RouterVPN/App/IOSDNSPolicyView.swift",
     ".disabled(model.profileMutationBlocked)",
     "guard !model.profileMutationBlocked",
-    "let benchmarkNodeID = profile.id",
+    "@StateObject private var nativeMeasurement = IOSDNSMeasurementClient.shared",
     "@State private var benchmarkSessionInvalidated = false",
     ".onChange(of: model.connected)",
     ".onChange(of: model.tunnelTransitioning)",
     ".onChange(of: model.activeEngine)",
     ".onChange(of: model.activeRawProfile)",
     "!benchmarkSessionInvalidated",
-    "freshBundle.selectedRouterID == benchmarkNodeID",
-    "freshBundle.routerProfiles.firstIndex(where: { $0.id == benchmarkNodeID })",
-    "DNS Retest discarded: the VPN session changed during measurement.",
-    "DNS Retest discarded: selected node or VPN session changed before results could be saved.",
+    "let captured = capture",
+    "try captured.requireCurrent(model: model)",
+    "try nativeMeasurement.captureForEditor(model: model, result: value)",
+    "guard generation == legacyGeneration, !benchmarkSessionInvalidated",
+    "legacyTask?.cancel()",
+    "Use fastest \\(fastest.transportLabel) in editor",
+    "Disconnect to save this DNS choice",
+    "try measuredSource?.requireSources(model: model)",
+    "DNS comparison discarded: the request failed or the captured VPN selection, session or network changed.",
 )
+# Comparison is an ephemeral captured transaction. The old audit expected the
+# UDP loop to write unlabelled fastest fields into a freshly reloaded bundle;
+# both native and retained Router comparisons now require an explicit Save.
+dns_view = (ROOT / "ios/RouterVPN/App/IOSDNSPolicyView.swift").read_text()
+for forbidden in (".fastestDNSHost =", ".fastestDNSLatencyMs =", ".dnsResults ="):
+    assert forbidden not in dns_view, "DNS comparison cannot persist an unlabelled result: " + forbidden
+comparison = dns_view.split("    private func retest(", 1)[1].split("    private func usePreset(", 1)[0]
+assert "model.importBundle(" not in comparison and "savePolicy()" not in comparison
+require(
+    "ios/RouterVPN/App/IOSDNSMeasurementClient.swift",
+    "model.activeSessionIdentity == identity", "model.iosConnectGeneration == decision",
+    "model.selectedMode == mode", "model.selectedLogicalMode == logicalMode", "model.auto == auto",
+    "try Self.encoded(bundle) == selection", "selected.id == nodeID",
+    "IOSViaEntryNetwork.shared.current == network",
+    "try model.externalTorEntryData(source: bundle) == identity.entryBundleData",
+    "try Self.canonical(source) == Self.canonical(identity.bundleData)",
+    "try model.iosSpeedLabOwnership.begin", "defer { model.iosSpeedLabOwnership.finish(owner) }",
+    "try await IOSMTUControl.withHold(model: model)", "try await owned.run(current:",
+    "IOSMTUControl.current(binding, model: model)",
+    "IOSDNSRetirementReceipts.shared.drained(providerSession: information.session_id",
+    "static let shared = IOSDNSMeasurementClient()", "self.cleanupPending = true",
+)
+require(
+    "ios/RouterVPN/App/IOSDNSMeasurement.swift",
+    "value.native_session_id == owner.native_session_id", "value.session_id == owner.session_id",
+    "let cleanup = Task { @MainActor in await self.drain(pending: pending) }", "await cleanup.value",
+    "value.complete && value.drained && value.results.isEmpty && value.failure?.isEmpty == false",
+    'status("dns-measure-drain")', "samples == 3, failed == 0", "median_ms.isFinite, median_ms > 0",
+)
+require(
+    "ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift",
+    "reservations.insert(request)", "reservations.count < 128", "reservations.contains(request)",
+    "try native.drain(request)", "try native.close()", "try persist(data, request: request)",
+    "IOSDNSRetirementReceipts.shared.requireAvailable()",
+    "scheduleRetirementRetry()", "repeating: .seconds(2)", "retirementRetry?.cancel()",
+)
+require("ios/RouterVPN/test_runtime_selection_contract.py",
+        "deploy/test_ios_dns_measurement.py", "deploy/test_ios_dns_retirement_receipts.py")
+require("deploy/test_ios_dns_measurement.py",
+        "native workers retain host transaction and MTU hold",
+        "new Connect waits for actual DNS drain", "lost Start is actually tombstoned and drained",
+        "stopped provider recovery has exact native identity",
+        "stale Fastest click leaves editor fields unchanged",
+        "explicit Save rejects a changed linked entry without writes",
+        "retained provider retry recovers transient storage without IPC",
+        "lost Start reservation discarded", "native proof session not bound")
 require(
     "ios/RouterVPN/App/IOSProfileSettingsView.swift",
     ".disabled(model.profileMutationBlocked)",
