@@ -8,12 +8,15 @@ import (
 	"net/http"
 	"net/netip"
 	"os"
+	"regexp"
 	"router-vpn/internal/multihoprelay"
 	"time"
 )
 
 const multihopRelayPath = "/api/multihop/lease"
 const multihopRelayConfig = "/etc/router-vpn/multihop-relays.json"
+
+var relayExternalDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
 func (s *server) initializeMultihopRelay() error {
 	path := getenv("ROUTER_VPN_MULTIHOP_CONFIG", multihopRelayConfig)
@@ -88,7 +91,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			continue
 		}
 		switch name {
-		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password":
+		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password", "external_fingerprint", "external_authentication":
 		default:
 			return q, bad
 		}
@@ -117,7 +120,18 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 	if seen["listen_port"] != seen["listener_username"] || seen["listen_port"] != seen["listener_password"] {
 		return q, bad
 	}
-	q = multihoprelay.Request{Port: port, Username: fields["listener_username"], Password: fields["listener_password"], SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"], ExitStartLayer: fields["exit_start_layer"]}
+	// External authentication is an exact pair, bound to this captured listener
+	// and session. Preserve both fields for the manager's private credential check;
+	// neither field grants a Router node identity or supplies a transport.
+	if seen["external_fingerprint"] != seen["external_authentication"] || seen["external_fingerprint"] &&
+		(!relayExternalDigest.MatchString(fields["external_fingerprint"]) || !relayExternalDigest.MatchString(fields["external_authentication"])) {
+		return q, bad
+	}
+	q = multihoprelay.Request{
+		Port: port, Username: fields["listener_username"], Password: fields["listener_password"],
+		SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"], ExitStartLayer: fields["exit_start_layer"],
+		ExternalFingerprint: fields["external_fingerprint"], ExternalAuthentication: fields["external_authentication"],
+	}
 	return q, nil
 }
 func registerMultihopRelayRoute(h *http.ServeMux, s *server) {
