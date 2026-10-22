@@ -60,7 +60,7 @@ function ImportAnyNode([byte[]]$Bytes){
 }
 function ConnectExternal([bool]$ViaEntry){
  $Profile=SelectedNode
- $Body=@{profile_id=[string]$Profile.id}
+ $Body=@{profile_id=[string]$Profile.id;direct=(-not $ViaEntry)}
  if($ViaEntry){$Entry=[string]$MultihopEntryCombo.SelectedValue;if(-not$Entry){throw 'Choose an entry node in Advanced first.'};if($Entry-eq[string]$Profile.id){throw 'External entry and exit must be different nodes.'};$Body.entry_id=$Entry}
  $Result=Api '/api/external-profile/connect' 'POST' $Body 180
  Log ("External connect passed exact exit proof: "+($Result|ConvertTo-Json -Depth 6 -Compress))

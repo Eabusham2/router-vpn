@@ -1,9 +1,11 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"strings"
 
 	"router-vpn/internal/common"
@@ -17,6 +19,7 @@ type connectionProfilePreferencesWire connectionProfilePreferences
 
 var connectionProfilePreferenceKeys = map[string]struct{}{
 	"home_lan_access": {}, "kill_switch_policy": {}, "ipv6_mode": {},
+	"home_lan_cidrs": {}, "startup_mode": {}, "auto_connect": {},
 	"auto_require_encrypted": {}, "auto_require_obfuscation": {},
 	"base_tunnel": {}, "base_fallback": {}, "start_layer": {}, "mtu_policy": {}, "manual_mtu": {},
 	"daita_enabled": {}, "jumbo_tun": {}, "socks_enabled": {},
@@ -36,6 +39,11 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	for key := range raw {
 		if _, ok := connectionProfilePreferenceKeys[key]; !ok {
 			return fmt.Errorf("connection profile preferences contain unsupported field %q", key)
+		}
+	}
+	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect"} {
+		if value, ok := raw[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("saved connection policy cannot be null")
 		}
 	}
 	var decoded connectionProfilePreferencesWire
@@ -83,6 +91,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	}
 	settings := profileSettingsRequest{
 		HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode,
+		StartupMode: p.StartupMode, AutoConnect: p.AutoConnect,
 		AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation,
 		BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer,
 		MTUPolicy: &p.MTUPolicy, ManualMTU: &p.ManualMTU,
@@ -98,6 +107,19 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	p.StartLayer = normalized.StartLayer
 	p.MTUPolicy = normalized.MTUPolicy
 	p.ManualMTU = normalized.ManualMTU
+	if p.StartupMode != nil {
+		*p.StartupMode = normalized.StartupMode
+	}
+	if p.HomeLANCIDRs != nil {
+		if len(*p.HomeLANCIDRs) > 64 {
+			return errors.New("saved LAN policy is oversized")
+		}
+		for _, cidr := range *p.HomeLANCIDRs {
+			if _, _, err := net.ParseCIDR(cidr); err != nil {
+				return errors.New("saved LAN policy contains an invalid network")
+			}
+		}
+	}
 
 	if err := normalizeSavedConnectionDNS(p); err != nil {
 		return err

@@ -274,7 +274,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     @objc func connectExternalDirect() {
         guard let exitID = selectedNodeID() else { appendHelp("Select an external exit node first."); return }
-        asyncAction { String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: ["profile_id": exitID], timeout: 180), encoding: .utf8) ?? "External exit connected" }
+        asyncAction { String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: ["profile_id": exitID, "direct": true], timeout: 180), encoding: .utf8) ?? "External exit connected" }
     }
     @objc func connectExternalViaEntry() {
         guard let exitID = selectedNodeID() else { appendHelp("Select an external exit node first."); return }

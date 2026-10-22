@@ -235,7 +235,17 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		http.Error(w, "disconnect or let the active transition finish before saving a connection profile", http.StatusConflict)
 		return
 	}
-	if err := validateConnectionProfileSetupGraphLocked(a, q); err != nil {
+	selected, selectedOK := a.profileByIDLocked(a.profiles.SelectedID)
+	externalSelected := selectedOK && selected.NodeKind == "external" && selected.External != nil
+	// The Router-hop controls are separate from the selected external node's
+	// captured path. Saving an external connection must not copy an unrelated
+	// Router selector or erase the path that its primary Connect button uses.
+	if externalSelected {
+		q.Mode, q.CustomLayers = "external", nil
+		q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID = selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID
+		q.MultihopExitMode, q.MultihopExecution = "", "local"
+	}
+	if err := validateConnectionProfileSetupGraphLocked(a, q); err != nil && !externalSelected {
 		a.mu.Unlock()
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
@@ -296,11 +306,21 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 				store.Profiles[i].Prefs.MultihopEnabled = q.MultihopEnabled
 				store.Profiles[i].Prefs.MultihopEntryID = q.MultihopEntryID
 				store.Profiles[i].Prefs.MultihopExitID = q.MultihopExitID
+				node, exists := a.profileByIDLocked(store.Profiles[i].NodeID)
+				if !exists {
+					err = errors.New("selected node disappeared before saving its graph")
+					break
+				}
+				node.MultihopEnabled, node.MultihopEntryID, node.MultihopExitID = q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID
+				_, store.Profiles[i].Hops, err = a.snapshotConnectionPathLocked(node)
+				if err != nil {
+					break
+				}
 			}
 			found = true
 			break
 		}
-		if !found {
+		if !found && err == nil {
 			err = errors.New("connection profile disappeared before setup snapshot was finalized")
 		}
 	}
@@ -402,6 +422,13 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		payload["multihop_enabled"] = prefs["multihop_enabled"]
 		payload["multihop_entry_id"] = prefs["multihop_entry_id"]
 		payload["multihop_exit_id"] = prefs["multihop_exit_id"]
+	}
+	if external, ok := profileMap["external_policy"].(map[string]any); ok {
+		payload["multihop_enabled"] = external["multihop_enabled"]
+		payload["multihop_entry_id"] = external["multihop_entry_id"]
+		payload["multihop_exit_id"] = external["multihop_exit_id"]
+		payload["multihop_exit_mode"] = external["protocol"]
+		payload["multihop_execution"] = "local"
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")

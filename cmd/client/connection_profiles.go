@@ -19,39 +19,45 @@ const connectionProfileStoreMaxBytes = 1 << 20
 const connectionProfileStoreMaxEntries = 64
 
 type connectionProfilePreferences struct {
-	HomeLANAccess          bool     `json:"home_lan_access"`
-	KillSwitchPolicy       string   `json:"kill_switch_policy"`
-	IPv6Mode               string   `json:"ipv6_mode"`
-	AutoRequireEncrypted   bool     `json:"auto_require_encrypted"`
-	AutoRequireObfuscation bool     `json:"auto_require_obfuscation"`
-	BaseTunnel             string   `json:"base_tunnel"`
-	BaseFallback           bool     `json:"base_fallback"`
-	StartLayer             string   `json:"start_layer"`
-	MTUPolicy              string   `json:"mtu_policy"`
-	ManualMTU              int      `json:"manual_mtu,omitempty"`
-	DAITAEnabled           bool     `json:"daita_enabled"`
-	JumboTUN               bool     `json:"jumbo_tun"`
-	SocksEnabled           bool     `json:"socks_enabled"`
-	DNSMode                string   `json:"dns_mode"`
-	DNSProtocol            string   `json:"dns_protocol,omitempty"`
-	DNSHost                string   `json:"dns_host,omitempty"`
-	DNSPort                int      `json:"dns_port,omitempty"`
-	DNSServerName          string   `json:"dns_server_name,omitempty"`
-	DNSPath                string   `json:"dns_path,omitempty"`
-	MultihopEnabled        bool     `json:"multihop_enabled"`
-	MultihopEntryID        string   `json:"multihop_entry_id,omitempty"`
-	MultihopExitID         string   `json:"multihop_exit_id,omitempty"`
-	CustomLayers           []string `json:"custom_layers,omitempty"`
+	HomeLANAccess          bool      `json:"home_lan_access"`
+	HomeLANCIDRs           *[]string `json:"home_lan_cidrs,omitempty"`
+	KillSwitchPolicy       string    `json:"kill_switch_policy"`
+	IPv6Mode               string    `json:"ipv6_mode"`
+	StartupMode            *string   `json:"startup_mode,omitempty"`
+	AutoConnect            *bool     `json:"auto_connect,omitempty"`
+	AutoRequireEncrypted   bool      `json:"auto_require_encrypted"`
+	AutoRequireObfuscation bool      `json:"auto_require_obfuscation"`
+	BaseTunnel             string    `json:"base_tunnel"`
+	BaseFallback           bool      `json:"base_fallback"`
+	StartLayer             string    `json:"start_layer"`
+	MTUPolicy              string    `json:"mtu_policy"`
+	ManualMTU              int       `json:"manual_mtu,omitempty"`
+	DAITAEnabled           bool      `json:"daita_enabled"`
+	JumboTUN               bool      `json:"jumbo_tun"`
+	SocksEnabled           bool      `json:"socks_enabled"`
+	DNSMode                string    `json:"dns_mode"`
+	DNSProtocol            string    `json:"dns_protocol,omitempty"`
+	DNSHost                string    `json:"dns_host,omitempty"`
+	DNSPort                int       `json:"dns_port,omitempty"`
+	DNSServerName          string    `json:"dns_server_name,omitempty"`
+	DNSPath                string    `json:"dns_path,omitempty"`
+	MultihopEnabled        bool      `json:"multihop_enabled"`
+	MultihopEntryID        string    `json:"multihop_entry_id,omitempty"`
+	MultihopExitID         string    `json:"multihop_exit_id,omitempty"`
+	CustomLayers           []string  `json:"custom_layers,omitempty"`
 }
 
 type connectionProfileRecord struct {
-	ID        string                        `json:"id"`
-	Name      string                        `json:"name"`
-	NodeID    string                        `json:"node_id"`
-	Mode      string                        `json:"mode"`
-	Prefs     *connectionProfilePreferences `json:"preferences,omitempty"`
-	CreatedAt string                        `json:"created_at"`
-	UpdatedAt string                        `json:"updated_at"`
+	ID          string                            `json:"id"`
+	Name        string                            `json:"name"`
+	NodeID      string                            `json:"node_id"`
+	NodeProofID string                            `json:"node_proof_id,omitempty"`
+	Mode        string                            `json:"mode"`
+	Prefs       *connectionProfilePreferences     `json:"preferences,omitempty"`
+	External    *connectionProfileExternalCapture `json:"external_policy,omitempty"`
+	Hops        []connectionProfileHopCapture     `json:"hop_preferences,omitempty"`
+	CreatedAt   string                            `json:"created_at"`
+	UpdatedAt   string                            `json:"updated_at"`
 }
 
 type connectionProfileStore struct {
@@ -228,8 +234,17 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 	if err != nil {
 		return nil, err
 	}
+	// Optional pointers keep older snapshots from overwriting settings that
+	// they never captured. A new empty LAN list is still an explicit choice.
+	lan := append([]string{}, p.HomeLANCIDRs...)
+	startup := p.StartupMode
+	if startup == "" {
+		startup = "smart-auto"
+	}
+	autoConnect := p.AutoConnect
 	return &connectionProfilePreferences{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
+		HomeLANCIDRs: &lan, StartupMode: &startup, AutoConnect: &autoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
 		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: startLayer, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
@@ -345,6 +360,11 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	external, hops, err := a.snapshotConnectionPathLocked(node)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	store, err := loadConnectionProfileStore(a)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -358,7 +378,7 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 				continue
 			}
 			created := store.Profiles[i].CreatedAt
-			store.Profiles[i] = connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, Mode: q.Mode, Prefs: prefs, CreatedAt: created, UpdatedAt: now}
+			store.Profiles[i] = connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, CreatedAt: created, UpdatedAt: now}
 			found = true
 			break
 		}
@@ -372,7 +392,7 @@ func (a *app) writeConnectionProfile(w http.ResponseWriter, q connectionProfileS
 			return
 		}
 		q.ID = newID()
-		store.Profiles = append(store.Profiles, connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, Mode: q.Mode, Prefs: prefs, CreatedAt: now, UpdatedAt: now})
+		store.Profiles = append(store.Profiles, connectionProfileRecord{ID: q.ID, Name: q.Name, NodeID: node.ID, NodeProofID: node.NodeProofID, Mode: q.Mode, Prefs: prefs, External: external, Hops: hops, CreatedAt: now, UpdatedAt: now})
 	}
 	if err := persistConnectionProfileStore(a, store); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -437,7 +457,22 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "saved connection profile references a node that is no longer linked", http.StatusConflict)
 		return
 	}
-	updated := node
+	updated := cloneRouterProfile(node)
+	if saved.NodeProofID != "" && saved.NodeProofID != node.NodeProofID {
+		http.Error(w, "linked Router identity changed; update the saved connection profile", http.StatusConflict)
+		return
+	}
+	if saved.Mode == "external" && (node.NodeKind != "external" || node.External == nil) {
+		http.Error(w, "saved external profile no longer references an external node", http.StatusConflict)
+		return
+	}
+	if saved.External != nil {
+		updated, err = saved.External.apply(node)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 	if saved.Prefs != nil {
 		if strings.EqualFold(strings.TrimSpace(node.NodeKind), "external") || node.External != nil {
 			http.Error(w, "saved Router VPN preferences cannot be applied to an external node", http.StatusConflict)
@@ -457,45 +492,31 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 				}
 			}
 		}
-		req := profileSettingsRequest{
-			HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode,
-			AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation,
-			BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer, MTUPolicy: &p.MTUPolicy,
-			ManualMTU: &p.ManualMTU, DAITAEnabled: &p.DAITAEnabled, JumboTUN: &p.JumboTUN, SocksEnabled: &p.SocksEnabled,
-		}
-		updated, err = applyProfileSettings(node, req)
+		updated, err = applySavedRouterConnectionPolicy(node, p)
 		if err != nil {
-			http.Error(w, "saved connection preferences are no longer valid: "+err.Error(), http.StatusConflict)
-			return
-		}
-		if strings.TrimSpace(p.DNSMode) != "" {
-			updated.DNSMode = p.DNSMode
-			updated.DNSProtocol = p.DNSProtocol
-			updated.DNSHost = p.DNSHost
-			updated.DNSPort = p.DNSPort
-			updated.DNSServerName = p.DNSServerName
-			updated.DNSPath = p.DNSPath
-		}
-		updated.MultihopEnabled = p.MultihopEnabled
-		updated.MultihopEntryID = p.MultihopEntryID
-		updated.MultihopExitID = p.MultihopExitID
-		if err := common.NormalizeRouterProfile(&updated); err != nil {
 			http.Error(w, "saved connection preferences are no longer valid: "+err.Error(), http.StatusConflict)
 			return
 		}
 	}
 
+	hopUpdates, err := a.restoreConnectionHopPoliciesLocked(*saved, updated)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	old := cloneRouterProfileStore(a.profiles)
 	oldState := a.state
 	for i := range a.profiles.Profiles {
+		if hop, exists := hopUpdates[a.profiles.Profiles[i].ID]; exists {
+			a.profiles.Profiles[i] = hop
+		}
 		if a.profiles.Profiles[i].ID == updated.ID {
 			a.profiles.Profiles[i] = updated
-			break
 		}
 	}
 	a.profiles.SelectedID = updated.ID
 	a.state.RouterID = updated.ID
-	if saved.Prefs != nil {
+	if saved.Prefs != nil || saved.External != nil {
 		a.syncProfileOptionStateLocked(updated)
 	}
 	if err := a.persistProfilesLocked(); err != nil {

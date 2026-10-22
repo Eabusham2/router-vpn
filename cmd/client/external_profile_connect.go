@@ -108,6 +108,16 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "choose an external custom node profile", http.StatusBadRequest)
 		return
 	}
+	// Primary native Connect sends only the node reference. A restored complete
+	// profile therefore owns its saved entry choice until the user explicitly
+	// requests Direct or supplies a different entry.
+	if q.Direct == nil && strings.TrimSpace(q.EntryID) == "" && externalProfile.MultihopEnabled {
+		if externalProfile.MultihopExitID != externalProfile.ID || !validProfileID(externalProfile.MultihopEntryID) || externalProfile.MultihopEntryID == externalProfile.ID {
+			http.Error(w, "saved external path has invalid entry/exit references", http.StatusBadRequest)
+			return
+		}
+		q.EntryID = externalProfile.MultihopEntryID
+	}
 
 	if externalProfile.External.Protocol == "tor-bridge" {
 		if strings.TrimSpace(q.EntryID) != "" || (q.Direct != nil && !*q.Direct) {
@@ -374,6 +384,11 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			a.profiles.Profiles[i].UseCount++
 			a.profiles.Profiles[i].LastUsedAt = now
 			a.profiles.Profiles[i].PublicIP = exit.ExpectedPublicIP
+			a.profiles.Profiles[i].MultihopEnabled = !direct
+			a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = "", ""
+			if !direct {
+				a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = entry.ID, externalProfile.ID
+			}
 		}
 		if !direct && a.profiles.Profiles[i].ID == entry.ID {
 			a.profiles.Profiles[i].UseCount++

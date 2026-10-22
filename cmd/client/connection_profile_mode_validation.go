@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -25,6 +26,7 @@ var connectionProfilePersistedModeIDs = map[string]struct{}{
 var connectionProfileRecordKeys = map[string]struct{}{
 	"id": {}, "name": {}, "node_id": {}, "mode": {}, "preferences": {},
 	"created_at": {}, "updated_at": {},
+	"external_policy": {}, "hop_preferences": {}, "node_proof_id": {},
 }
 
 func normalizePersistedConnectionProfileMode(mode string, prefs *connectionProfilePreferences) (string, error) {
@@ -86,6 +88,9 @@ func validateConnectionProfileRecordMetadata(record connectionProfileRecord) err
 	if updated.Before(created) {
 		return errors.New("connection profile record updated_at precedes created_at")
 	}
+	if err := validateConnectionPathCapture(record); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -102,6 +107,11 @@ func (p *connectionProfileRecord) UnmarshalJSON(data []byte) error {
 	for key := range raw {
 		if _, ok := connectionProfileRecordKeys[key]; !ok {
 			return fmt.Errorf("connection profile record contains unsupported field %q", key)
+		}
+	}
+	for _, key := range []string{"external_policy", "hop_preferences"} {
+		if value, present := raw[key]; present && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+			return errors.New("saved connection policy cannot be null")
 		}
 	}
 	var decoded connectionProfileRecordWire

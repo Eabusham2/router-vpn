@@ -25,12 +25,18 @@ func TestConnectionProfilePreferencesLegacyDefaultsAreExplicit(t *testing.T) {
 
 func TestConnectionProfilePreferencesRejectUnknownAndInvalidPolicy(t *testing.T) {
 	for name, raw := range map[string]string{
-		"unknown-secret": `{"api_token":"must-not-survive"}`,
-		"bad-kill":       `{"kill_switch_policy":"maybe"}`,
-		"bad-mtu":        `{"mtu_policy":"manual","manual_mtu":100}`,
-		"bad-dns":        `{"dns_mode":"not-a-dns-mode"}`,
-		"bad-dns-host":   `{"dns_mode":"custom","dns_protocol":"udp","dns_host":"bad host","dns_port":53}`,
-		"bad-hop":        `{"multihop_enabled":true,"multihop_entry_id":"same","multihop_exit_id":"same"}`,
+		"unknown-secret":     `{"api_token":"must-not-survive"}`,
+		"bad-kill":           `{"kill_switch_policy":"maybe"}`,
+		"bad-mtu":            `{"mtu_policy":"manual","manual_mtu":100}`,
+		"bad-dns":            `{"dns_mode":"not-a-dns-mode"}`,
+		"bad-dns-host":       `{"dns_mode":"custom","dns_protocol":"udp","dns_host":"bad host","dns_port":53}`,
+		"bad-hop":            `{"multihop_enabled":true,"multihop_entry_id":"same","multihop_exit_id":"same"}`,
+		"bad-lan":            `{"home_lan_cidrs":["not a CIDR"]}`,
+		"bad-startup":        `{"startup_mode":"random"}`,
+		"manual-autoconnect": `{"startup_mode":"manual","auto_connect":true}`,
+		"null-lan":           `{"home_lan_cidrs":null}`,
+		"null-startup":       `{"startup_mode":null}`,
+		"null-autoconnect":   `{"auto_connect":null}`,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := decodeSavedPreferences(t, raw); err == nil {

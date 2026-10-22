@@ -27,6 +27,19 @@ base.SPECS[name] = (
     [(i1 + 3, i2 + 3, old, new) for i1, i2, old, new in changes],
 )
 
+# The explicit Direct action now emits a typed JSON boolean while the primary
+# Connect action follows the saved path. Its 13 additional builder lines come
+# after the Direct action's own guard and before the two via-entry guards.
+# Keep the frozen guards and exact-source rejection; only their reviewed source
+# identity and downstream insertion positions change.
+name = "routervpn-gtk-product-v4.c"
+_, changes = base.SPECS[name]
+base.SPECS[name] = (
+    "5421266644b6475980fa4c6d37ce4c14511b0d741c26242cef70539ea8e4f31a",
+    [(i1 + (13 if i1 > 186 else 0), i2 + (13 if i2 > 186 else 0), old, new)
+     for i1, i2, old, new in changes],
+)
+
 # The wrapper is both the shipping CLI and the importable compatibility API used
 # by the authoritative session-mutation audit. Keep one mutation implementation:
 # the frozen v1 apply() operates on the adjusted SPECS table above.

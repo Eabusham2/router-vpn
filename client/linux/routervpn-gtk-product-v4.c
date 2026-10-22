@@ -184,7 +184,20 @@ static void on_connect_external_node(GtkButton *button, gpointer data) {
         append_diag(app, "External connect failed: select a linked external node first.");
         return;
     }
-    char *body = json_string_body("profile_id", id);
+    JsonBuilder *builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "profile_id");
+    json_builder_add_string_value(builder, id);
+    json_builder_set_member_name(builder, "direct");
+    json_builder_add_boolean_value(builder, TRUE);
+    json_builder_end_object(builder);
+    JsonNode *root = json_builder_get_root(builder);
+    JsonGenerator *generator = json_generator_new();
+    json_generator_set_root(generator, root);
+    char *body = json_generator_to_data(generator, NULL);
+    json_node_free(root);
+    g_object_unref(generator);
+    g_object_unref(builder);
     post_and_log(app, "/api/external-profile/connect", body, 180000,
                  "External direct exit (exact public-exit proof required)");
     g_free(body);
