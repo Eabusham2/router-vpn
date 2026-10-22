@@ -53,6 +53,8 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor-with-predecessor":value,err=mobiletor.CompileProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
  case "tor-mtu-authority":value,err=mobiletor.MTUAuthority(r.Config,r.Policy,r.Node)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
+ case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
  case "external-prepare":value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,r.Policy,r.Source)
  case "external-response-probe":err=mobilemultihop.ValidateExternalResponseProbe(r.Node,r.Config);value="checked"
  case "openvpn":value,err=nativeopenvpn.CompileEndpoint(r.Config,r.Files,r.Node,r.Mode,r.Source)
@@ -93,6 +95,12 @@ public func LibboxRouterCompileTorProfileWithPredecessor(_ profile:String,_ sess
 }
 public func LibboxRouterCompileExternalPolicy(_ config:String,_ capture:String,_ error:inout NSError?)->String {
  result(&error,["Op":"external-policy","Config":config,"Policy":capture])
+}
+public func LibboxRouterValidateExternalTransport(_ config:String,_ capture:String,_ error:inout NSError?)->Bool {
+ result(&error,["Op":"external-validate-transport","Config":config,"Policy":capture]) == "checked"
+}
+public func LibboxRouterValidateExternalDNS(_ profile:String,_ entry:String,_ error:inout NSError?)->Bool {
+ result(&error,["Op":"external-validate-dns","Config":profile,"Policy":entry]) == "checked"
 }
 public func LibboxRouterPrepareExternalExecutionCapture(_ config:String,_ capture:String,_ restored:String,_ error:inout NSError?)->String {
  result(&error,["Op":"external-prepare","Config":config,"Policy":capture,"Source":restored])
@@ -644,6 +652,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
      try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU,openVPNConfig:kind=="openvpn" ? openVPN:"",wgKeepalive:29,awgParameters:kind=="amneziawg" ? ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]:[:])
      var exit=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
+     try check("every new ordinary protocol retains Home DNS and IPv6 defaults",exit["dns_mode"] as? String=="home" && exit["ipv6_mode"] as? String=="on" && exit["home_lan_access"]==nil)
+     reject("new ordinary Home draft is not a runnable direct connection"){_ = try RouterVPNExternalExitBuilder.build(profile:exit)}
      exit["multihop_enabled"]=true;exit["multihop_entry_id"]="entry";exit["multihop_entry_mode"]=mode;exit["multihop_exit_id"]=exit["id"];exit["multihop_exit_mode"]=kind;exit["multihop_execution"]="local"
      exit["dns_mode"]="custom";exit["dns_protocol"]="tcp";exit["dns_host"]="9.9.9.9";exit["dns_port"]=5353;exit["mtu_policy"]="fixed";exit["manual_mtu"]=exitMTU;exit["home_lan_access"]=false;exit["ipv6_mode"]="on"
      let frozen=try json(exit),provider:[String:Any]=["external_entry_bundle":try json(entry),"external_entry_mode":mode]

@@ -335,7 +335,7 @@ public final class StandardExitActivity extends Activity {
         catch(Exception invalid){toast("The saved external policy could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
         Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Fastest (saved successful measurement)"});
-        String mode=policy.optString("dns_mode","rescue"),protocol="custom".equals(mode)?policy.optString("dns_protocol",""):mode;
+        String mode=policy.optString("dns_mode","home"),protocol="custom".equals(mode)?policy.optString("dns_protocol",""):mode;
         int selected="home".equals(mode)?0:"rescue".equals(mode)?1:"fastest".equals(mode)?7:("dot".equals(protocol)||"tls".equals(protocol))?4:("doh".equals(protocol)||"https".equals(protocol))?5:("doh3".equals(protocol)||"h3".equals(protocol))?6:"tcp".equals(protocol)?3:2;
         dns.setSelection(selected);form.addView(text("DNS for this external connection",14,true));form.addView(dns);
         EditText host=field("Selected DNS IP or hostname",false),port=field("DNS port (blank keeps the protocol default)",false),name=field("Encrypted DNS certificate name",false),path=field("DoH / DoH3 path",false);
@@ -370,6 +370,7 @@ public final class StandardExitActivity extends Activity {
                 if(n!=selected||(n>=2&&n<=6))for(String key:new String[]{"dns_protocol","dns_host","dns_port","dns_server_name","dns_path"})p.remove(key);
                 for(String key:new String[]{"dns_bootstrap","effective_mtu","manual_mtu"})p.remove(key);
                 p.put("dns_mode",n==0?"home":n==1?"rescue":n==7?"fastest":"custom");
+                if(n==selected&&n==0){if(!captured.policy.has("dns_mode"))p.remove("dns_mode");else if(captured.policy.optString("dns_mode","").isEmpty())p.put("dns_mode","");}
                 if(n>=2&&n<=6){String transport=new String[]{"","","udp","tcp","tls","https","h3"}[n];String address=host.getText().toString().trim();if(address.isEmpty())throw new IllegalArgumentException("Enter the selected DNS address.");String number=port.getText().toString().trim();int value=number.isEmpty()?0:Integer.parseInt(number);if(value<0||value>65535)throw new IllegalArgumentException("DNS port must be 1–65535 or blank.");p.put("dns_protocol",transport).put("dns_host",address).put("dns_port",value);if(n>=4)p.put("dns_server_name",name.getText().toString().trim());if(n>=5)p.put("dns_path",path.getText().toString().trim());}
                 if(n==7&&(p.optString("fastest_dns_host","").isEmpty()||!p.has("dns_results")&&!p.has("fastest_dns_latency_ms")))throw new IllegalArgumentException("Run a successful DNS measurement before selecting its saved winner.");
                 if(bootstrapEnabled.isChecked()){
@@ -385,10 +386,10 @@ public final class StandardExitActivity extends Activity {
                 if("shadowsocks".equals(next.protocol)){
                     String url=responseURL.getText().toString().trim(),tls=responseName.getText().toString().trim();next.responseProbe=new JSONObject();
                     if(!url.isEmpty())next.responseProbe.put("url",url);if(!tls.isEmpty())next.responseProbe.put("server_name",tls);AndroidStandardExitStore.validateResponseProbe(next);
-                    if(next.responseProbe.length()!=0)io.nekohasekai.libbox.Libbox.routerValidateExternalResponseProbe(next.server,next.responseProbe.toString());
                 }
-                // Home's exact AdGuard owner is captured when the entry is selected.
-                if(!"home".equals(p.getString("dns_mode")))AndroidExternalPolicy.compile(next,null,"external");
+                // Shared idle validation defers only the unresolved Home entry;
+                // native transport, DNS shape and saved device policy stay required.
+                AndroidExternalPolicy.validateDraft(next);
                 exitStore.save(next);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
             }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}
         }));dialog.show();

@@ -106,7 +106,7 @@ verify_aar() {
   }
 
   javap -classpath "$classes" io.nekohasekai.libbox.Libbox >"$api_list"
-  for symbol in routerCompileExternalPolicy routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
+  for symbol in routerCompileExternalPolicy routerValidateExternalTransport routerValidateExternalDNS routerPrepareExternalExecutionCapture routerValidateExternalResponseProbe routerExternalCreateProof routerExternalCreateHopMeasurement routerTorCreateHopMeasurement newRouterExternalMTU; do
     grep -Fq "$symbol(" "$api_list" || { echo "combined libbox AAR is missing external policy API $symbol" >&2; return 1; }
   done
   grep -Fq 'io.nekohasekai.libbox.RouterMTU newRouterExternalMTU(io.nekohasekai.libbox.CommandServer, io.nekohasekai.libbox.RouterMTUPlatform, io.nekohasekai.libbox.RouterExternalProofRequest, java.lang.String, java.lang.String) throws java.lang.Exception;' "$api_list" || {

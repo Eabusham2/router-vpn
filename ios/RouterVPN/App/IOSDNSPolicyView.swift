@@ -25,8 +25,8 @@ struct IOSDNSPolicyView: View {
     @State private var status = ""
     @State private var benchmarking = false
     @State private var benchmarkSessionInvalidated = false
-    @State private var loadedTorDNS: [String]?
-    @State private var loadedTorProfile: RouterProfile?
+    @State private var loadedExternalDNS: [String]?
+    @State private var loadedExternalProfile: RouterProfile?
 
     private let modeValues = [
         ("Home AdGuard", "home"), ("Fastest measured", "fastest"), ("Custom UDP/TCP", "custom"),
@@ -56,7 +56,7 @@ struct IOSDNSPolicyView: View {
         return profile.normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains(profile.external?.protocolName ?? "")
     }
     private var nativeExternal: Bool { ordinaryExternal || torExternal }
-    private var torDNSFields: [String] { [mode, protocolName, host, port, serverName, path] }
+    private var externalDNSFields: [String] { [mode, protocolName, host, port, serverName, path] }
     private var encryptedDNS: Bool {
         ["dot", "doh", "doh3"].contains(mode) || (nativeExternal && ["custom", "home"].contains(mode) && ["tls", "https", "h3"].contains(protocolName))
     }
@@ -208,7 +208,7 @@ struct IOSDNSPolicyView: View {
     private func load() {
         guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "Select a linked node with native DNS policy."; return }
         let savedMode = (p.dnsMode ?? "").lowercased()
-        mode = savedMode.isEmpty ? (ordinaryExternal ? "rescue" : "home") : savedMode
+        mode = savedMode.isEmpty ? "home" : savedMode
         let savedProtocol = (p.dnsProtocol ?? "").lowercased()
         protocolName = savedProtocol.isEmpty ? (mode == "dot" ? "tls" : mode == "doh" ? "https" : mode == "doh3" ? "h3" : "udp") : savedProtocol
         if let transport = ["dot": "tls", "doh": "https", "doh3": "h3"][protocolName] { protocolName = transport }
@@ -219,8 +219,8 @@ struct IOSDNSPolicyView: View {
         useHostnameBootstrap = p.dnsBootstrap != nil
         bootstrap = p.dnsBootstrap ?? ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
         results = sorted(p.dnsResults ?? [])
-        loadedTorDNS = torExternal ? torDNSFields : nil
-        loadedTorProfile = torExternal ? p : nil
+        loadedExternalDNS = nativeExternal ? externalDNSFields : nil
+        loadedExternalProfile = nativeExternal ? p : nil
     }
 
     private func savePolicy() {
@@ -232,11 +232,11 @@ struct IOSDNSPolicyView: View {
         }
         var p = bundle.routerProfiles[index]
         guard p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "This node uses its protocol-specific DNS settings."; return }
-        guard !torExternal || loadedTorProfile == p else { status = "The selected Tor node changed while DNS settings were open. Reopen DNS settings before saving."; return }
+        guard !nativeExternal || loadedExternalProfile == p else { status = "The selected external node changed while DNS settings were open. Reopen DNS settings before saving."; return }
         guard let selectedPort = Int(port), (0...65535).contains(selectedPort) else { status = "DNS port must be 1–65535, or 0 for the selected protocol default."; return }
         // A displayed Home default must not migrate an untouched saved blank
         // policy. Explicit edits retain all six captured DNS selection fields.
-        if !torExternal || loadedTorDNS != torDNSFields {
+        if !nativeExternal || loadedExternalDNS != externalDNSFields {
             p.dnsMode = mode
             p.dnsProtocol = protocolName
             p.dnsHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -331,7 +331,10 @@ struct IOSDNSPolicyView: View {
         host = preset.address
         if ordinaryExternal { useHostnameBootstrap = false }
         serverName = preset.serverName
-        if ["home", "fastest", "rescue"].contains(mode) { mode = "custom"; protocolName = torExternal ? "tcp" : "udp"; port = "53" }
+        if ["home", "fastest", "rescue"].contains(mode) {
+            let tcpOnly = torExternal || ["http-connect", "https-connect"].contains(selectedProfile()?.external?.protocolName ?? "")
+            mode = "custom"; protocolName = tcpOnly ? "tcp" : "udp"; port = "53"
+        }
     }
 
     private func applyModeDefaults(_ value: String) {

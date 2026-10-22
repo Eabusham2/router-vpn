@@ -210,7 +210,7 @@ extension RouterVPNModel {
             "mtu_policy": "auto",
             "startup_mode": "manual",
             "kill_switch_policy": "off",
-            "dns_mode": tor ? "home" : "rescue",
+            "dns_mode": "home",
         ]
         if tor {
             let captured = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
@@ -220,9 +220,9 @@ extension RouterVPNModel {
             guard valid else { throw NSError(domain: "RouterVPN.ExternalNode", code: 35, userInfo: [NSLocalizedDescriptionKey: "Tor profile validation did not complete."]) }
         }
         if protocolName == "amneziawg", let block = external[protocolName] as? [String: Any] {
-            // Validate the imported node before storage with the same native
-            // policy compiler that later owns PacketTunnel startup. A compiler
-            // result is configuration validation, never a connection proof.
+            // Validate the exact imported transport before storage. Home DNS
+            // remains an unresolved draft until its paired entry is captured
+            // during connection; saving must not substitute a public resolver.
             var peer: [String: Any] = ["address": server, "port": port, "public_key": block["peer_public_key"]!, "allowed_ips": block["allowed_ips"]!]
             if let psk = block["preshared_key"] { peer["pre_shared_key"] = psk }
             if let keepalive = block["persistent_keepalive_interval"] { peer["persistent_keepalive_interval"] = keepalive }
@@ -234,9 +234,9 @@ extension RouterVPNModel {
             let source = String(decoding: try JSONSerialization.data(withJSONObject: graph, options: [.sortedKeys]), as: UTF8.self)
             let capture = String(decoding: try JSONSerialization.data(withJSONObject: selection, options: [.sortedKeys]), as: UTF8.self)
             var failure: NSError?
-            let compiled = LibboxRouterCompileExternalPolicy(source, capture, &failure)
+            let valid = LibboxRouterValidateExternalTransport(source, capture, &failure)
             if let failure { throw failure }
-            guard !compiled.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 38, userInfo: [NSLocalizedDescriptionKey: "AmneziaWG profile validation did not complete."]) }
+            guard valid else { throw NSError(domain: "RouterVPN.ExternalNode", code: 38, userInfo: [NSLocalizedDescriptionKey: "AmneziaWG profile validation did not complete."]) }
         }
         let bundleJSON: [String: Any] = [
             "bundleVersion": 4,
@@ -363,6 +363,11 @@ struct IOSExternalNodeBuilderView: View {
                             Text("Paste complete bridge lines, one per line. Bridge credentials stay with this private saved node.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
+                    }
+                } else {
+                    Section("DNS") {
+                        Text("Home AdGuard is the default and uses your paired Router VPN entry. You can save this node now, then choose its entry in Multihop. To connect directly, select a reachable resolver in DNS settings.")
+                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
                 if selected == .socks5 || selected == .httpConnect || selected == .httpsConnect {

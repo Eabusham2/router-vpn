@@ -346,6 +346,19 @@ public final class TorFormHarness {
   if(kind.equals("openvpn")){e.username=" private OpenVPN user ";e.password=" private OpenVPN password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 tcp-client\nauth-user-pass\nremote-cert-tls server\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
   return e;
  }
+ static void ordinaryHomeDrafts()throws Exception{
+  for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:new String[]{"missing","","home"}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-home-draft-"),null);AndroidStandardExitStore.Entry selected=ordinary(kind);selected.policy=new JSONObject();if(!mode.equals("missing"))selected.policy.put("dns_mode",mode);
+   String source=AndroidStandardExitStore.snapshot(selected);invoke(activity,"showExternalPolicyForm",selected);AlertDialog dialog=AlertDialog.last;check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0,"missing ordinary DNS displayed Rescue or Custom");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing,"valid Home draft could not be saved: "+kind+"/"+mode+" "+displayed(dialog.view));AndroidStandardExitStore.Entry saved=store(activity).get(selected.id);
+   check(mode.equals("missing")?!saved.policy.has("dns_mode"):mode.equals(saved.policy.getString("dns_mode")),"unrelated Home draft save changed missing/blank/explicit DNS representation");check(source.equals(AndroidStandardExitStore.snapshot(selected)),"Home draft form aliased source credentials");
+   boolean rejected=false;try{AndroidExternalPolicy.compile(saved,null,"external");}catch(Exception expected){rejected=true;}check(rejected,"Home draft form authorized direct runtime without entry");
+  }
+  for(String fault:new String[]{"transport","dns"}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"ordinary-home-invalid-"),null);AndroidStandardExitStore.Entry selected=ordinary("https");selected.policy=new JSONObject().put("dns_mode","home");if(fault.equals("transport"))selected.tlsServerName="invalid..example";else selected.policy.put("dns_protocol","smtp");
+   invoke(activity,"showExternalPolicyForm",selected);AlertDialog dialog=AlertDialog.last;dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(dialog.showing&&store(activity).list().isEmpty(),"Home draft bypassed native "+fault+" validation");dialog.dismiss();
+  }
+ }
  static void externalExecutionForm()throws Exception{
   String urlHint="This server's HTTPS response URL (required for Server / Compare both)",nameHint="Response TLS server name (optional)";
   StandardExitActivity editor=activity(Files.createTempDirectory(root,"external-response-"),null);AndroidStandardExitStore.Entry selected=ordinary("shadowsocks");selected.policy=AndroidExternalPolicy.editorPolicy(null);store(editor).save(selected);
@@ -424,7 +437,7 @@ public final class TorFormHarness {
   add.getButton(AlertDialog.BUTTON_POSITIVE).performClick();AlertDialog settings=AlertDialog.last;check(!add.showing&&settings.showing&&config.getText().length()==0&&store(activity).list().isEmpty(),"AmneziaWG skipped private policy capture or retained pasted keys");check(spinner(settings,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==2&&field(settings,"Selected DNS IP or hostname").getText().toString().equals("9.9.9.9"),"AmneziaWG silently replaced imported DNS selection");settings.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!settings.showing&&store(activity).list().size()==1,"AmneziaWG full profile not saved");
   AndroidStandardExitStore.Entry saved=store(activity).list().get(0);check(saved.protocol.equals("amneziawg")&&sameParams(saved.awgParameters,example.awgParameters)&&saved.wgKeepalive==17&&saved.wgDns.equals(List.of("9.9.9.9","2620:fe::fe")),"AmneziaWG form dropped parameters, keepalive or secondary DNS capture");check(new JSONObject(AndroidExternalPolicy.compile(saved,null,"external").config).getJSONArray("endpoints").getJSONObject(0).getString("type").equals("routervpn-amneziawg"),"saved AmneziaWG did not compile native protocol");
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();externalExecutionForm();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();openVPNForm();amneziaForm();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -440,6 +453,8 @@ def main():
  case "external-execution":var p struct{Config,Capture,Restored string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(p.Config,p.Capture,p.Restored)}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
+ case "external-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy)
+ case "external-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy)
  case "tor-profile":''', 1)
         (go_dir / "main.go").write_text(code)
         native = work / "policy"
@@ -472,6 +487,7 @@ def main():
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
+ public static void routerValidateExternalTransport(String source,String capture)throws Exception{call("external-transport",source,capture);}public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}
  public static String routerPrepareExternalExecutionCapture(String config,String capture,String restored)throws Exception{return call("external-execution",new JSONObject().put("Config",config).put("Capture",capture).put("Restored",restored).toString(),"");}
  public static String version(){return "1.14.1";}public static String routerOpenVPNEndpoint(String config,String username,String password,String tag,String detour)throws Exception{return call("external-openvpn",new JSONObject().put("config",config).put("username",username).put("password",password).put("tag",tag).put("detour",detour).toString(),"");}
  public static String routerCompilePQProfile(''', 1)
@@ -516,6 +532,10 @@ def main():
              '.setCustomTitle(choiceHeader("Exact Router VPN entry mode","The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof."))',
              '.setTitle("Exact Router VPN entry mode").setMessage("The complete selected encryption and Start Layer will be retained before "+exit.name+". Both entry identity and the selected external path must pass proof.")',
              "exact native mode choices missing or duplicated"),
+            ("home-draft-native", "StandardExitActivity.java",
+             'AndroidExternalPolicy.validateDraft(next);',
+             '// omitted idle native validation',
+             "Home draft bypassed native transport validation"),
         )
         for label, filename, before, after, failure in controls:
             source = (app / filename).read_text()
@@ -531,7 +551,7 @@ def main():
             rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, capture_output=True, text=True, timeout=120)
             if rejected.returncode == 0 or failure not in rejected.stderr:
                 raise AssertionError("Original Tor form defect did not fail its executable check: " + label + "\n" + rejected.stderr)
-        print("Android Tor form: all five original-source negative controls rejected")
+        print("Android Tor form: all six original-source negative controls rejected")
 
 
 if __name__ == "__main__":

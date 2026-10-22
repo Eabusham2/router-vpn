@@ -182,6 +182,14 @@ public final class ConnectionProfilesHarness {
    State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg",execution),"direct path server owner");before.same(f,"direct execution rejection");
   }
  }
+ static void externalDefaultHome(Path root)throws Exception{
+  for(boolean tor:new boolean[]{false,true})for(String mode:List.of("missing","","home")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get(tor?"external-b":"external-a");JSONObject policy=new JSONObject();if(!mode.equals("missing"))policy.put("dns_mode",mode);if(tor)exit.torPolicy=policy;else exit.policy=policy;f.exits.save(exit);
+   String original=AndroidStandardExitStore.snapshot(exit);State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg"),"implicit Home without captured entry");before.same(f,"implicit Home selection rejection");
+   f.store.selectExternalPath(exit,f.first,"wg");var record=f.store.add("Default Home");f.otherSelection();f.store.load(record.id);
+   check(!f.store.currentExternalPath(exit.id).direct()&&f.store.currentExternalPath(exit.id).entry.id.equals(f.first.id),"default Home lost its captured entry");check(original.equals(AndroidStandardExitStore.snapshot(f.exits.get(exit.id))),"profile restoration rewrote missing/blank Home or transport credentials");
+  }
+ }
  static void routerRoundtrip(Path root)throws Exception{
   Fixture f=new Fixture(root);f.prefs.edit().putString("mode","custom:captured").putString("custom_presets","[{\"name\":\"captured\",\"layers\":[\"hysteria2\",\"shadowsocks\"]}]").putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","auto").putString("multihop_entry_mode","wg").commit();
   var r=f.store.add("Router graph");f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();f.store.load(r.id);
@@ -235,7 +243,7 @@ public final class ConnectionProfilesHarness {
   f.prefs.values.put("custom_presets",42);before=new State(f);rejected(()->f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg"),"wrong preference key type");before.same(f,"typed preference preflight");f.prefs.values.remove("custom_presets");
   var home=f.exits.get("external-a");home.policy.put("dns_mode","home");f.exits.save(home);before=new State(f);final var selectedHome=home;rejected(()->f.store.selectExternalPath(selectedHome,null,"wg"),"direct Home without entry");before.same(f,"Home rejection");f.store.selectExternalPath(home,f.first,"wg");check(!f.store.currentExternalPath(home.id).direct(),"Home keeps captured Router entry");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

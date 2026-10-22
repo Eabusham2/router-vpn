@@ -218,7 +218,8 @@ final class AndroidConnectionProfileStore {
         AndroidStandardExitStore.validate(exit);AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);
         JSONObject policy=AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy,exit.protocol);
         if(entry!=null)requireEntryMode(entry,mode);
-        if(entry==null&&"home".equals(policy.optString("dns_mode","")))throw new IllegalArgumentException("Home AdGuard needs a selected Router VPN entry; choose it in Edit hops.");
+        String dns=policy.optString("dns_mode","");
+        if(entry==null&&(dns.isEmpty()||"home".equals(dns)))throw new IllegalArgumentException("Home AdGuard needs a selected Router VPN entry; choose it in Edit hops.");
     }
 
     private Map<String,Object> snapshotPreferences(){Map<String,?> current=prefs().getAll();Map<String,Object> result=new LinkedHashMap<>();for(String key:SELECTION_KEYS)if(current.containsKey(key)){Object value=current.get(key);if(MULTI_ON.equals(key)?!(value instanceof Boolean):!(value instanceof String))throw new IllegalStateException("Saved selection preferences have an invalid type.");result.put(key,value);}return result;}

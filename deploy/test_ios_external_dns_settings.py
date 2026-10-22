@@ -51,8 +51,8 @@ enum IOSDNSRuntimePolicy {
  let model:RouterVPNModel
  var mode="home",protocolName="udp",host="",port="53",serverName="",path="/dns-query",status=""
  var useHostnameBootstrap=false,results:[DNSBenchmarkResult]=[]
- var loadedTorDNS:[String]?
- var loadedTorProfile:RouterProfile?
+ var loadedExternalDNS:[String]?
+ var loadedExternalProfile:RouterProfile?
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
  init(_ model:RouterVPNModel){self.model=model}
  // SHIPPING_SETTINGS
@@ -111,9 +111,9 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
   try check("explicit Home IPv6 TCP and port retained",model.imports==1 && model.bundle!.routerProfiles[0]==exit)
   editor.host="192.168.1.1";editor.savePolicy();try check("another home's DNS cannot save",model.imports==1)
   editor.load();model.entry=nil;editor.savePolicy();try check("Home requires captured entry",model.imports==1)
-  model.entry=bundle(home);model.bundle!.routerProfiles[0].multihopEnabled=false;editor.load();editor.savePolicy();try check("direct Home never changes to public DNS",model.imports==1)
+  model.entry=bundle(home);model.bundle!.routerProfiles[0].multihopEnabled=false;editor.load();editor.savePolicy();try check("direct Home remains an explicit unresolved draft without public DNS substitution",model.imports==2 && model.bundle!.routerProfiles[0].dnsMode=="home" && model.bundle!.routerProfiles[0].dnsHost==home.adGuardIPv6)
   model.bundle=bundle(exit);editor.load();editor.protocolName="udp";editor.savePolicy()
-  try check("Home UDP uses entry even with TCP-only exit",model.imports==2 && model.bundle!.routerProfiles[0].dnsProtocol=="udp")
+  try check("Home UDP uses entry even with TCP-only exit",model.imports==3 && model.bundle!.routerProfiles[0].dnsProtocol=="udp")
  }
  static func hostileCodable()throws {
   let original=try JSONSerialization.jsonObject(with:JSONEncoder().encode(boot())) as! [String:Any]
@@ -125,6 +125,32 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
    try reject("unknown owner fields are rejected rather than dropped"){_ = try JSONDecoder().decode(ExternalDNSBootstrap.self,from:json(value))}
   }
   for raw:Any in [true,"53",1.5] {var value=original,server=value["server"] as! [String:Any];server["server_port"]=raw;value["server"]=server;try reject("invalid saved port type"){_ = try JSONDecoder().decode(ExternalDNSBootstrap.self,from:json(value))}}
+ }
+ static func ordinaryDrafts()throws {
+  for kind in IOSExternalDNSPolicy.protocols {
+   for savedMode:String? in [nil,"","home"] {
+    var p=profile(kind);p.dnsMode=savedMode;p.dnsProtocol=nil;p.dnsHost=nil;p.dnsPort=nil;p.dnsServerName=nil;p.dnsPath=nil
+    let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+    try check("ordinary missing/blank Home draft remains exact "+kind+": "+editor.status,model.imports==1 && editor.mode=="home" && model.bundle!.routerProfiles[0]==p)
+    model.bundle!.routerProfiles[0].name="Changed elsewhere";editor.port="5353";editor.savePolicy()
+    try check("ordinary DNS editor cannot replace a newer capture",model.imports==1 && model.bundle!.routerProfiles[0].name=="Changed elsewhere" && model.bundle!.routerProfiles[0].dnsPort==nil)
+   }
+   for transport in ["udp","tcp","tls","https","h3"] {
+    var p=profile(kind);p.dnsMode="home";p.dnsProtocol=transport;p.dnsHost="fd12:3456::53";p.dnsPort=5453;p.dnsServerName="adguard.home.example";p.dnsPath="/captured-query"
+    let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+    try check("all ordinary Home DNS drafts retain exact selected fields "+kind+"/"+transport+": "+editor.status,model.imports==1 && model.bundle!.routerProfiles[0]==p)
+    editor.host="10.77.0.53";editor.savePolicy()
+    let changed=model.bundle!.routerProfiles[0]
+    try check("ordinary Home field edit keeps transport port TLS and path",model.imports==2 && changed.dnsProtocol==transport && changed.dnsPort==5453 && changed.dnsServerName==p.dnsServerName && changed.dnsPath==p.dnsPath && changed.external==p.external)
+    editor.host="1.1.1.1";editor.savePolicy()
+    try check("ordinary Home draft rejects public resolver substitution",model.imports==2 && model.bundle!.routerProfiles[0]==changed)
+   }
+   var rescue=profile(kind);rescue.dnsMode="rescue"
+   let model=RouterVPNModel();model.bundle=bundle(rescue);let editor=Settings(model);editor.load();editor.savePolicy()
+   try check("explicit ordinary Rescue stays exact",model.imports==1 && model.bundle!.routerProfiles[0]==rescue)
+   editor.usePreset(IOSDNSPreset(id:"q4a",name:"Quad9",address:"9.9.9.9",serverName:"dns.quad9.net"));editor.savePolicy()
+   try check("explicit common resolver uses the ordinary protocol's transport",model.imports==2 && model.bundle!.routerProfiles[0].dnsProtocol==(["http-connect","https-connect"].contains(kind) ? "tcp":"udp") && model.bundle!.routerProfiles[0].dnsMode=="custom")
+  }
  }
  static func tor()throws {
   var original=profile("tor")
@@ -172,8 +198,8 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
  static func main() {
   defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try hostileCodable();try tor()
-   print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; Tor uses real Go validation; storage and Network boundary substituted)")
+   try settings();try home();try hostileCodable();try ordinaryDrafts();try tor()
+   print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; ordinary and Tor DNS use real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
 }
@@ -185,7 +211,7 @@ def main():
     if not swift or not go: raise RuntimeError('swiftc and go are required')
     view = (APP / 'IOSDNSPolicyView.swift').read_text()
     methods = '\n'.join(method(view, signature) for signature in [
-        'private var ordinaryExternal:', 'private var torExternal:', 'private var nativeExternal:', 'private var torDNSFields:',
+        'private var ordinaryExternal:', 'private var torExternal:', 'private var nativeExternal:', 'private var externalDNSFields:',
         'private func selectedProfile()', 'private func load()', 'private func savePolicy()',
         'private func usePreset(', 'private func defaultPort(', 'private func sorted('
     ])

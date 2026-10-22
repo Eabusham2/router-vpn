@@ -19,6 +19,7 @@ T.EXTRA_LIBBOX = r'''
  public static String version(){return "1.14.1";}
  public static String routerPrepareExternalExecutionCapture(String source,String capture,String restored)throws Exception{return call("external-execution",source,new JSONObject().put("capture",capture).put("restored",restored).toString());}
  public static String routerCompileExternalPolicy(String source,String capture)throws Exception{return call("external-policy",source,capture);}
+ public static void routerValidateExternalTransport(String source,String capture)throws Exception{call("external-transport",source,capture);}public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
  public static String routerOpenVPNEndpoint(String config,String username,String password,String tag,String detour)throws Exception{return call("external-openvpn",new JSONObject().put("config",config).put("username",username).put("password",password).put("tag",tag).put("detour",detour).toString(),"");}
 '''
 T.GO = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mobiletor";nativeopenvpn "router-vpn/mobile"', 1)
@@ -29,6 +30,9 @@ T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
   var selected struct{Capture,Restored string};err=json.Unmarshal([]byte(r.Policy),&selected)
   if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,selected.Capture,selected.Restored)}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
+ case "external-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy)
+ case "external-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy)
+ case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
  case "tor-profile":''', 1)
 T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  static boolean sameParams(JSONObject a,JSONObject b)throws Exception{if(a.length()!=11||b.length()!=11)return false;for(String key:AndroidExternalAmnezia.PARAMETERS)if(!a.get(key).equals(b.get(key)))return false;return true;}

@@ -36,9 +36,9 @@ final class AndroidExternalPolicy {
     static JSONObject editorPolicy(AndroidStandardExitStore.Entry entry) throws Exception {
         JSONObject result = entry == null || entry.policy == null ? new JSONObject() : copy(entry.policy);
         checkPolicy(result);
-        // New profiles start with the product's Home selection. A legacy exit
-        // without policy keeps its explicit migration choice visible in the UI.
-        if (!result.has("dns_mode")) result.put("dns_mode", entry == null ? "home" : "rescue");
+        // Missing and blank policy retain the shared Home default. Rescue is
+        // available only when the saved node or the user explicitly selects it.
+        if (result.optString("dns_mode", "").isEmpty()) result.put("dns_mode", "home");
         if (!result.has("ipv6_mode")) result.put("ipv6_mode", "on");
         if (!result.has("home_lan_access")) result.put("home_lan_access", true);
         if (!result.has("mtu_policy")) result.put("mtu_policy", "auto");
@@ -72,15 +72,12 @@ final class AndroidExternalPolicy {
         }
     }
 
-    static JSONObject profile(AndroidStandardExitStore.Entry exit, JSONObject inherited) throws Exception {
+    static JSONObject profile(AndroidStandardExitStore.Entry exit) throws Exception {
         if (exit == null || !supports(exit.protocol)) throw new IllegalArgumentException("Choose an ordinary native external exit.");
         JSONObject policy = exit.policy == null ? new JSONObject() : copy(exit.policy);
         checkPolicy(policy);
-        // Old hopped exits used the selected entry policy. Capture that exact
-        // policy once; a saved external policy always owns the new selection.
-        if (policy.length() == 0 && inherited != null) {
-            for (String key : POLICY) if (inherited.has(key)) policy.put(key, inherited.get(key));
-        }
+        // The entry supplies Home's private resolver identity during native
+        // composition. Its independent DNS selection cannot replace this exit's.
         if (!policy.has("ipv6_mode")) policy.put("ipv6_mode", "on");
         policy.remove("dns_bootstrap");
         policy.remove("effective_mtu"); // Historical measurements never size this new path.
@@ -164,6 +161,28 @@ final class AndroidExternalPolicy {
     }
 
     static Compiled compile(AndroidStandardExitStore.Entry exit, JSONObject entry, String entryMode, AndroidExternalEntry captured, String execution, String restoredExecution) throws Exception {
+        Captured input=capture(exit,entry,entryMode,captured,execution);
+        String frozen=Libbox.routerPrepareExternalExecutionCapture(input.source,input.capture,restoredExecution);
+        return new Compiled(input.source,frozen);
+    }
+
+    /** Idle validation keeps unresolved Home intent and grants no runnable graph or proof. */
+    static void validateDraft(AndroidStandardExitStore.Entry selected)throws Exception{
+        AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);
+        Captured input=capture(exit,null,"external",null,"local");
+        JSONObject selectedCapture=new JSONObject(input.capture),profile=selectedCapture.getJSONObject("profile");
+        if(selectedCapture.has("dns_bootstrap"))profile.put("dns_bootstrap",selectedCapture.getJSONObject("dns_bootstrap"));
+        Libbox.routerValidateExternalTransport(input.source,input.capture);
+        Libbox.routerValidateExternalDNS(profile.toString(),"");
+        if(exit.responseProbe.length()!=0)Libbox.routerValidateExternalResponseProbe(exit.server,exit.responseProbe.toString());
+    }
+
+    private static final class Captured {
+        final String source,capture;
+        Captured(String source,String capture){this.source=source;this.capture=capture;}
+    }
+
+    private static Captured capture(AndroidStandardExitStore.Entry exit,JSONObject entry,String entryMode,AndroidExternalEntry captured,String execution)throws Exception{
         AndroidStandardExitStore.validate(exit);
         AndroidStandardExitStore.validateExecution(exit,entry!=null,execution);
         JSONArray endpoints = new JSONArray(), outbounds = new JSONArray();
@@ -203,17 +222,16 @@ final class AndroidExternalPolicy {
                 .put("endpoints", endpoints).put("outbounds", outbounds)
                 .put("route", new JSONObject().put("final", "custom-exit").put("auto_detect_interface", true));
         JSONObject capture = new JSONObject().put("schema", 1).put("exit_id", exit.id).put("protocol", protocol(exit.protocol))
-                .put("expected_public_ip", exit.expectedPublicIp).put("profile", profile(exit, predecessor));
+                .put("expected_public_ip", exit.expectedPublicIp).put("profile", profile(exit));
         if (predecessor != null) {
             capture.put("entry", predecessor).put("entry_tag", entryTag);
             capture.getJSONObject("profile").put("multihop_enabled",true).put("multihop_entry_id",predecessor.getString("id"))
                     .put("multihop_exit_id",exit.id).put("multihop_exit_mode",protocol(exit.protocol)).put("multihop_execution",execution);
         }
         if (captured != null) capture.put("predecessor_config",captured.config);
-        JSONObject policy = exit.policy != null && exit.policy.length() != 0 ? exit.policy : predecessor;
+        JSONObject policy = exit.policy;
         if (policy != null && policy.has("dns_bootstrap")) capture.put("dns_bootstrap", policy.getJSONObject("dns_bootstrap"));
-        String frozen=Libbox.routerPrepareExternalExecutionCapture(source.toString(),capture.toString(),restoredExecution);
-        return new Compiled(source.toString(), frozen);
+        return new Captured(source.toString(),capture.toString());
     }
 
     static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile, AndroidStandardExitStore.Entry selected, String entryMode) throws Exception {

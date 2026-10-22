@@ -72,7 +72,9 @@ headers=list(Path(sys.argv[1]).rglob('Libbox.objc.h'))
 assert headers, 'Libbox generated headers missing'
 for header in headers:
     content=header.read_text()
-    for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest',
+    for symbol in ('LibboxRouterCompileExternalPolicy', 'LibboxRouterValidateExternalTransport', 'LibboxRouterValidateExternalDNS',
+                   'LibboxRouterPrepareExternalExecutionCapture', 'LibboxRouterValidateExternalResponseProbe',
+                   'LibboxRouterExternalCreateProof', 'LibboxRouterExternalProofRequest',
                    'LibboxRouterExternalCreateHopMeasurement', 'LibboxRouterTorCreateHopMeasurement', 'LibboxNewRouterExternalMTU'):
         assert symbol in content, 'Missing external policy/proof API: '+symbol
     assert 'FOUNDATION_EXPORT LibboxRouterMTU* _Nullable LibboxNewRouterExternalMTU(LibboxCommandServer* _Nullable server, id<LibboxRouterMTUPlatform> _Nullable platform, LibboxRouterExternalProofRequest* _Nullable proof, NSString* _Nullable source, NSString* _Nullable capture, NSError* _Nullable* _Nullable error);' in content, 'External MTU retained-proof factory signature changed'

@@ -25,7 +25,14 @@ type externalDNSMetadata struct {
 }
 
 func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool) (map[string]any, externalDNSMetadata, error) {
+	return externalDNSSelection(selection, ipv6, udp, false)
+}
+
+// Idle validation may defer an absent Home entry, but never returns a DNS
+// graph for that unresolved policy. Runtime compilation always passes false.
+func externalDNSSelection(selection externalPolicyCapture, ipv6 string, udp, allowHomeDraft bool) (map[string]any, externalDNSMetadata, error) {
 	var result externalDNSMetadata
+	unresolvedHome := false
 	profile := selection.Profile
 	values := map[string]string{}
 	for _, key := range []string{"dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "fastest_dns_host"} {
@@ -61,50 +68,64 @@ func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool)
 		result.serverName, result.path = "cloudflare-dns.com", "/dns-query"
 	case "home":
 		entry := selection.Entry
-		kind, _ := entry["node_kind"].(string)
-		node, _ := entry["node_proof_id"].(string)
-		api, _ := entry["router_api"].(string)
-		token, _ := entry["api_token"].(string)
-		if entry == nil || selection.EntryTag == "" || kind != "" && kind != "router-vpn" || !proofID.MatchString(node) || len(token) == 0 || len(token) > 4096 {
-			return nil, result, errors.New("Home AdGuard DNS requires the exact captured Router VPN entry and its private node-proof owner; choose that paired entry or explicitly select a reachable DNS policy for a direct external connection")
-		}
-		if _, err := privateAPI(api); err != nil {
-			return nil, result, errors.New("Home DNS entry has no exact private proof endpoint")
-		}
-		addresses := []string{}
-		for _, key := range []string{"adguard_ipv4", "adguard_ipv6"} {
-			text, err := externalOptionalString(entry, key)
-			if err != nil {
-				return nil, result, err
+		if entry == nil && allowHomeDraft && selection.EntryTag == "" {
+			// This is a saved intent, not a surrogate paired entry. If the
+			// user supplied an address it must already be a private literal;
+			// matching it to the real entry remains mandatory before start.
+			if result.host != "" {
+				address, err := netip.ParseAddr(result.host)
+				if err != nil || address.Is4In6() || address.Zone() != "" || !address.IsPrivate() {
+					return nil, result, errors.New("a Home DNS draft requires a private AdGuard address or an empty address awaiting its paired entry")
+				}
 			}
-			if text == "" {
-				continue
+			unresolvedHome = true
+			result.detour = "external-entry"
+		} else {
+			kind, _ := entry["node_kind"].(string)
+			node, _ := entry["node_proof_id"].(string)
+			api, _ := entry["router_api"].(string)
+			token, _ := entry["api_token"].(string)
+			if entry == nil || selection.EntryTag == "" || kind != "" && kind != "router-vpn" || !proofID.MatchString(node) || len(token) == 0 || len(token) > 4096 {
+				return nil, result, errors.New("Home AdGuard DNS requires the exact captured Router VPN entry and its private node-proof owner; choose that paired entry or explicitly select a reachable DNS policy for a direct external connection")
 			}
-			address, err := netip.ParseAddr(text)
-			if err != nil || address.Is4In6() || address.Zone() != "" || !address.IsPrivate() || key == "adguard_ipv4" && !address.Is4() || key == "adguard_ipv6" && !address.Is6() {
-				return nil, result, errors.New("Home DNS must use an explicit captured private AdGuard address")
+			if _, err := privateAPI(api); err != nil {
+				return nil, result, errors.New("Home DNS entry has no exact private proof endpoint")
 			}
-			addresses = append(addresses, text)
-		}
-		if len(addresses) == 0 {
-			return nil, result, errors.New("Home DNS entry has no saved AdGuard address")
-		}
-		if result.host == "" {
-			result.host = addresses[0]
-		}
-		matched := false
-		for _, host := range addresses {
-			if result.host == host {
-				matched = true
+			addresses := []string{}
+			for _, key := range []string{"adguard_ipv4", "adguard_ipv6"} {
+				text, err := externalOptionalString(entry, key)
+				if err != nil {
+					return nil, result, err
+				}
+				if text == "" {
+					continue
+				}
+				address, err := netip.ParseAddr(text)
+				if err != nil || address.Is4In6() || address.Zone() != "" || !address.IsPrivate() || key == "adguard_ipv4" && !address.Is4() || key == "adguard_ipv6" && !address.Is6() {
+					return nil, result, errors.New("Home DNS must use an explicit captured private AdGuard address")
+				}
+				addresses = append(addresses, text)
 			}
-		}
-		if !matched {
-			return nil, result, errors.New("selected Home DNS belongs to a different node than the captured entry")
+			if len(addresses) == 0 {
+				return nil, result, errors.New("Home DNS entry has no saved AdGuard address")
+			}
+			if result.host == "" {
+				result.host = addresses[0]
+			}
+			matched := false
+			for _, host := range addresses {
+				if result.host == host {
+					matched = true
+				}
+			}
+			if !matched {
+				return nil, result, errors.New("selected Home DNS belongs to a different node than the captured entry")
+			}
+			result.detour = selection.EntryTag
 		}
 		if result.protocol == "" {
 			result.protocol = "udp"
 		}
-		result.detour = selection.EntryTag
 		// This internal DNS request is carried only by the entry. A TCP-only
 		// final exit does not constrain the private entry's own UDP DNS path.
 		udp = true
@@ -135,7 +156,7 @@ func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool)
 	case "doh3":
 		result.protocol = "h3"
 	}
-	if result.host == "" {
+	if result.host == "" && !unresolvedHome {
 		return nil, result, errors.New("the selected external DNS policy has no resolver address")
 	}
 	if result.port == 0 {
@@ -169,8 +190,14 @@ func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool)
 	// to generated and caller-supplied bootstrap transports.
 	encoded, _ := json.Marshal(server)
 	_ = json.Unmarshal(encoded, &server)
-	if err := externalDNSTransport(server, result.detour, false, udp); err != nil {
+	if err := externalDNSValidateTransport(server, result.detour, false, udp, unresolvedHome); err != nil {
 		return nil, result, err
+	}
+	if unresolvedHome {
+		if selection.DNSBootstrap != nil {
+			return nil, result, errors.New("an unresolved Home DNS draft cannot adopt a hostname bootstrap resolver")
+		}
+		return nil, result, nil
 	}
 	servers := []any{server}
 	_, literalErr := netip.ParseAddr(result.host)
@@ -229,6 +256,10 @@ func externalFastestSelection(profile map[string]any, host string) bool {
 }
 
 func externalDNSTransport(server map[string]any, detour string, literalOnly, udp bool) error {
+	return externalDNSValidateTransport(server, detour, literalOnly, udp, false)
+}
+
+func externalDNSValidateTransport(server map[string]any, detour string, literalOnly, udp, unresolvedHome bool) error {
 	bad := errors.New("external DNS transport must retain its exact selected address, TLS identity and owned route")
 	protocol, ok := server["type"].(string)
 	if !ok || server["detour"] != detour || !externalPort(server["server_port"]) {
@@ -242,7 +273,10 @@ func externalDNSTransport(server map[string]any, detour string, literalOnly, udp
 	if !ok {
 		return bad
 	}
-	if address, err := netip.ParseAddr(host); err == nil {
+	if unresolvedHome && host == "" {
+		// Only the idle Home path may defer the address; all other fields
+		// still pass the same selected-transport checks used at runtime.
+	} else if address, err := netip.ParseAddr(host); err == nil {
 		if address.Zone() != "" || address.Is4In6() || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != host {
 			return bad
 		}

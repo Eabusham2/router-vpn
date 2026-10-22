@@ -32,6 +32,12 @@ func RouterValidateExternalTransport(source, capture string) error {
 	return mobilemultihop.ValidateExternalTransport(source, capture)
 }
 
+// The shared runtime DNS parser permits an unresolved Home choice only while
+// editing. It returns no runnable graph and never substitutes a public preset.
+func RouterValidateExternalDNS(profile, entry string) error {
+	return mobilemultihop.ValidateExternalDNS(profile, entry)
+}
+
 type RouterExternalProofRequest struct {
 	request *box.RouterVPNExternalProofRequest
 	current func() bool
