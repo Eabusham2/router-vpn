@@ -404,6 +404,8 @@ def pair(bundle, alias, selected=None):
     selected = selected or bundle.get('selectedRouterID')
     matches = [p for p in profiles if p.get('id') == selected]
     profile = matches[0] if len(matches) == 1 else None
+    if isinstance(profile, dict) and profile.get('node_kind') == 'external':
+        return pair_external(profile, alias)
     if not isinstance(profile, dict) or profile.get('node_kind', 'router-vpn') != 'router-vpn':
         raise ValueError('select one Router VPN exit bundle profile')
     node = profile.get('node_proof_id') or bundle.get('nodeProofId')
@@ -477,6 +479,37 @@ def pair(bundle, alias, selected=None):
         for item in exits: item['start_layer'] = copy.deepcopy(layer)
     return exits
 
+def pair_external(profile, alias):
+    """Privately pair exact external SS credentials; never invent a Router ID."""
+    ext = profile.get('external')
+    bad = ValueError('external server execution requires one captured Shadowsocks profile and public proof address')
+    if not isinstance(ext, dict) or set(ext) != {'protocol', 'expected_public_ip', 'shadowsocks', 'response_probe'} or ext.get('protocol') != 'shadowsocks':
+        raise bad
+    if profile.get('node_proof_id') or profile.get('router_api') or profile.get('api_token') or profile.get('start_layer', 'off') not in ('', 'off'):
+        raise bad
+    ss = ext.get('shadowsocks')
+    probe = ext.get('response_probe')
+    if not isinstance(probe, dict) or set(probe) - {'url', 'server_name'} or not isinstance(probe.get('url'), str) or not isinstance(probe.get('server_name', ''), str):
+        raise bad
+    if not isinstance(ss, dict) or set(ss) != {'server', 'port', 'method', 'password'} or type(ss['port']) is not int or not 1 <= ss['port'] <= 65535:
+        raise bad
+    for key in ('server', 'method', 'password'):
+        if not isinstance(ss[key], str) or not ss[key] or len(ss[key].encode('utf-8')) > 4096:
+            raise bad
+    try:
+        host, expected = literal(ss['server']), literal(ext.get('expected_public_ip', ''))
+    except (ValueError, TypeError):
+        raise bad from None
+    for raw in (host, expected):
+        address = ipaddress.ip_address(raw)
+        if address.is_loopback or address.is_multicast or address.is_link_local or address.is_unspecified or address in ipaddress.ip_network('10.0.0.0/8') or address in ipaddress.ip_network('172.16.0.0/12') or address in ipaddress.ip_network('192.168.0.0/16') or address in ipaddress.ip_network('100.64.0.0/10') or (address.version == 6 and (address.ipv4_mapped is not None or address in ipaddress.ip_network('fc00::/7'))):
+            raise bad
+    # Runtime validation repeats the native cipher/key and exact public identity
+    # checks before the private registry can be installed. No hostname resolver
+    # is configured on this relay; selected DNS remains owned by the client.
+    transport = dict(type='shadowsocks', tag='exit', server=host, server_port=ss['port'], method=ss['method'], password=ss['password'])
+    return [dict(id=alias, mode='shadowsocks', node_id='', dns_server='', transport=transport, external=dict(expected_public_ip=expected, response_probe=copy.deepcopy(probe)))]
+
 def registry_bytes(registry):
     body = (json.dumps(registry, indent=2, allow_nan=False)+'\n').encode('utf-8')
     if len(body) > MAX_REGISTRY_BYTES:
@@ -498,7 +531,7 @@ def main():
     listen = ipaddress.ip_address(literal(args.listen_ip))
     if not listen.is_private or not any(listen in ipaddress.ip_network(n) for n in agent.get('tunnel_cidrs', [])):
         raise ValueError('listen IP must belong to the entry tunnel ranges')
-    if any(e['node_id'] == agent.get('node_id') for e in entries):
+    if any(e.get('node_id') and e['node_id'] == agent.get('node_id') for e in entries):
         raise ValueError('entry and exit must have distinct identities')
     with registry_lock(args.registry):
         try:

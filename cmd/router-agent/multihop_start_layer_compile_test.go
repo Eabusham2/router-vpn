@@ -40,7 +40,10 @@ func TestCompileSelectedRelayStartLayerMatchesRuntimeAndPrivateLease(t *testing.
 			t.Fatal("selected source changed")
 		}
 		exit := multihoprelay.Exit{ID: "exit", Mode: "shadowsocks", NodeID: strings.Repeat("b", 64), DNS: "10.88.0.1", Transport: layer.Transport, StartLayer: &layer}
-		lease := relayValidationLease(exit, "10.77.0.1", 26240)
+		lease, err := relayValidationLease(exit, "10.77.0.1", 26240, strings.Repeat("a", 64))
+		if err != nil {
+			t.Fatal(err)
+		}
 		if lease.ExitMode != exit.Mode || lease.ExitID != exit.ID || lease.ExitStartLayer != mode {
 			t.Fatal("offline check omitted exact layer identity")
 		}

@@ -153,6 +153,10 @@ func cloneExternalNodeConfig(source *common.ExternalNodeConfig) *common.External
 		return nil
 	}
 	cloned := *source
+	if source.ResponseProbe != nil {
+		value := *source.ResponseProbe
+		cloned.ResponseProbe = &value
+	}
 	if source.WireGuard != nil {
 		value := *source.WireGuard
 		value.Addresses = cloneStrings(source.WireGuard.Addresses)

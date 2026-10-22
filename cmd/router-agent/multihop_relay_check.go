@@ -64,7 +64,10 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 	}
 	defer os.RemoveAll(dir)
 	for _, exit := range registry.Exits {
-		lease := relayValidationLease(exit, registry.ListenIP, registry.FirstPort)
+		lease, err := relayValidationLease(exit, registry.ListenIP, registry.FirstPort, entry.NodeID)
+		if err != nil {
+			return 0, err
+		}
 		body, err := multihoprelay.Build(exit, ip.Next(), lease)
 		if err != nil {
 			return 0, err
@@ -88,9 +91,22 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 }
 
 // Offline checks must use the same layer identity required by a live lease.
-func relayValidationLease(exit multihoprelay.Exit, host string, port int) multihoprelay.Lease {
-	return multihoprelay.Lease{
+func relayValidationLease(exit multihoprelay.Exit, host string, port int, entryNodeID string) (multihoprelay.Lease, error) {
+	lease := multihoprelay.Lease{
 		Request: multihoprelay.Request{ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.LayerMode(exit.StartLayer)},
 		Host:    host, Port: port, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48),
 	}
+	if exit.External != nil {
+		// Offline validation proves the same private credential binding as a live
+		// proposal. This synthetic owner is only compiled; no manager starts it.
+		lease.Request.SessionID = strings.Repeat("0", 32)
+		lease.Request.EntryNodeID = entryNodeID
+		lease.Request.Port, lease.Request.Username, lease.Request.Password = lease.Port, lease.Username, lease.Password
+		request, err := multihoprelay.AuthenticateExternalRequest(exit, lease.Request)
+		if err != nil {
+			return multihoprelay.Lease{}, err
+		}
+		lease.Request = request
+	}
+	return lease, nil
 }

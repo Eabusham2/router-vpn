@@ -83,6 +83,10 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	case "tor_bridge", "tor-bridge": ext.Protocol = "tor-bridge"
 	}
 	ext.ExpectedPublicIP = strings.TrimSpace(ext.ExpectedPublicIP)
+	if ext.ResponseProbe != nil {
+		if ext.Protocol != "shadowsocks" || ext.Shadowsocks == nil { return fmt.Errorf("node response probe currently requires an external Shadowsocks node") }
+		if err := ValidateExternalResponseProbe(ext.Shadowsocks.Server, ext.ResponseProbe); err != nil { return err }
+	}
 	if ext.Protocol == "tor-bridge" || ext.Protocol == "tor" {
 		if ext.ExpectedPublicIP != "" { return fmt.Errorf("Tor bridge has a dynamic circuit exit; expected_public_ip must be empty and the runtime must prove/observe the live Tor exit") }
 	} else {

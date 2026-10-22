@@ -1,9 +1,12 @@
 package libbox
 
 import (
+	"net/netip"
+	"strings"
 	"testing"
 
 	"github.com/sagernet/sing-box/daemon"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 )
 
 func TestRouterExternalProofRequiresAnActualStartedNativeInstance(t *testing.T) {
@@ -14,11 +17,42 @@ func TestRouterExternalProofRequiresAnActualStartedNativeInstance(t *testing.T) 
 	}
 	for _, request := range []*RouterExternalProofRequest{nil, {}} {
 		request.Cancel()
+		if request.Close() != nil || request.Execution() != "" || request.ProgressJSON() != "" {
+			t.Fatal("empty request manufactured execution ownership")
+		}
 		if request.Healthy() {
 			t.Fatal("empty request manufactured health")
 		}
 		if result, err := request.Run(); result != "" || err == nil {
 			t.Fatal("empty native request ran", err)
 		}
+	}
+}
+
+func TestRouterExternalResponseEndpointEditorUsesShippingValidator(t *testing.T) {
+	valid := `{"url":"https://203.0.113.20/response","server_name":"node.example"}`
+	if err := RouterValidateExternalResponseProbe("203.0.113.20", valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, input := range []string{`{"url":"https://203.0.113.21/response"}`, `{"url":"https://203.0.113.20/response","insecure":true}`, `{"url":"http://203.0.113.20/response"}`, `{"url":"https://203.0.113.20/response","url":"https://203.0.113.20/changed"}`} {
+		if err := RouterValidateExternalResponseProbe("203.0.113.20", input); err == nil {
+			t.Fatal("native editor accepted a different or ambiguous last-node endpoint")
+		}
+	}
+}
+
+func TestRouterExternalServerLeaseCompilesInTheActualPinnedCore(t *testing.T) {
+	exit := multihoprelay.Exit{ID: "external-exit", Mode: "shadowsocks", Transport: map[string]any{"type": "shadowsocks", "tag": "exit", "server": "203.0.113.20", "server_port": 8388, "method": "aes-256-gcm", "password": "captured-test-password"}, External: &multihoprelay.ExternalExit{ExpectedPublicIP: "203.0.113.88", ResponseProbe: multihoprelay.ResponseProbe{URL: "https://203.0.113.20/response", ServerName: "node.example"}}}
+	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: strings.Repeat("c", 64), ExitID: exit.ID, ExitMode: exit.Mode, Port: 26240, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	lease := multihoprelay.Lease{Request: request, NodeID: request.EntryNodeID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password}
+	body, err := multihoprelay.Build(exit, netip.MustParseAddr("10.77.0.2"), lease)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := CheckConfig(string(body)); err != nil {
+		t.Fatal("actual pinned core rejected external isolated relay", err)
 	}
 }

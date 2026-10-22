@@ -40,6 +40,7 @@ type ExternalProofResult struct {
 	DNSProven    bool   `json:"dns_proven"`
 	EntryProven  bool   `json:"entry_proven"`
 	CheckedAt    int64  `json:"checked_at"`
+	Execution    string `json:"execution,omitempty"`
 }
 
 // ExternalProofRequest owns one immutable graph and one cancellable proof.
@@ -55,9 +56,12 @@ type ExternalProofRequest struct {
 	session   string
 	started   atomic.Bool
 	succeeded atomic.Bool
+	runMu     sync.Mutex
+	runDone   chan struct{}
 	// Unexported test seams exercise the lifecycle without public networking.
-	public  func(context.Context, string, string) error
-	private func(context.Context) error
+	public    func(context.Context, string, string) error
+	private   func(context.Context) error
+	execution *Controller
 }
 
 func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, session string, engine ExternalProofEngine) (*ExternalProofRequest, error) {
@@ -74,6 +78,18 @@ func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, ses
 	}
 	ctx, cancel := context.WithCancel(parent)
 	r := &ExternalProofRequest{ctx: ctx, cancel: cancel, engine: engine, identity: identity, policy: policy, meta: meta, session: session}
+	if policy.capture.Execution != nil {
+		if _, ok := engine.(Engine); !ok {
+			cancel()
+			return nil, errors.New("external execution requires the captured native selector")
+		}
+		var err error
+		r.execution, err = newExternalExecution(policy)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	r.public = r.provePublic
 	r.private = r.provePrivateEntry
 	return r, nil
@@ -86,15 +102,61 @@ func (r *ExternalProofRequest) Cancel() {
 	if r != nil {
 		r.cancel()
 		r.succeeded.Store(false)
+		if r.execution != nil {
+			r.execution.NetworkChanged()
+		}
 	}
 }
 func (r *ExternalProofRequest) Healthy() bool {
-	return r != nil && r.succeeded.Load() && r.current()
+	return r != nil && r.succeeded.Load() && r.current() && (r.execution == nil || r.execution.Healthy())
+}
+func (r *ExternalProofRequest) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.Cancel()
+	r.runMu.Lock()
+	done := r.runDone
+	r.runMu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(12 * time.Second):
+			return errors.New("external proof teardown is still pending")
+		}
+	}
+	if r.execution != nil {
+		return r.execution.Close()
+	}
+	return nil
+}
+func (r *ExternalProofRequest) ProgressJSON() string {
+	if r == nil || r.execution == nil {
+		return ""
+	}
+	return r.execution.ProgressJSON()
+}
+func (r *ExternalProofRequest) Execution() string {
+	if !r.Healthy() || r.execution == nil {
+		return ""
+	}
+	r.execution.mu.Lock()
+	defer r.execution.mu.Unlock()
+	return r.execution.progress.Execution
 }
 func (r *ExternalProofRequest) Run() (result string, failure error) {
-	if r == nil || !r.started.CompareAndSwap(false, true) {
+	if r == nil {
 		return "", errors.New("external proof request is unavailable or already used")
 	}
+	r.runMu.Lock()
+	if r.ctx.Err() != nil || !r.started.CompareAndSwap(false, true) {
+		r.runMu.Unlock()
+		return "", errors.New("external proof request is unavailable or already used")
+	}
+	r.runDone = make(chan struct{})
+	done := r.runDone
+	r.runMu.Unlock()
+	defer close(done)
 	defer func() {
 		if failure != nil {
 			r.Cancel()
@@ -102,6 +164,14 @@ func (r *ExternalProofRequest) Run() (result string, failure error) {
 	}()
 	if !r.current() {
 		return "", errors.New("external proof belongs to a retired connection")
+	}
+	if r.execution != nil {
+		if err := r.execution.Run(r.ctx, r.engine.(Engine)); err != nil {
+			return "", err
+		}
+		if !r.current() || !r.execution.Healthy() {
+			return "", errors.New("external execution retired before final proof")
+		}
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 45*time.Second)
 	defer cancel()
@@ -125,12 +195,17 @@ func (r *ExternalProofRequest) Run() (result string, failure error) {
 		return "", errors.New("captured public exit proof failed or became stale")
 	}
 	proof := ExternalProofResult{Schema: 1, SessionID: r.session, SourceSHA256: r.meta.SourceSHA256, ConfigSHA256: r.meta.ConfigSHA256, ExitID: r.meta.ExitID, EntryID: r.meta.EntryID, EntryNodeID: r.meta.EntryNodeID, IP: r.meta.ExpectedPublicIP, DNSProven: true, EntryProven: r.meta.EntryID != "", CheckedAt: time.Now().UnixMilli()}
+	if r.execution != nil {
+		r.execution.mu.Lock()
+		proof.Execution = r.execution.progress.Execution
+		r.execution.mu.Unlock()
+	}
 	raw, err := json.Marshal(proof)
 	if err != nil {
 		return "", errors.New("external proof could not be encoded")
 	}
 	r.succeeded.Store(true)
-	if !r.current() || ctx.Err() != nil {
+	if !r.current() || ctx.Err() != nil || r.execution != nil && !r.execution.Healthy() {
 		return "", errors.New("external proof delivery was canceled")
 	}
 	return string(raw), nil
@@ -194,6 +269,10 @@ func externalTraceAddress(data []byte, expected string) error {
 // closes the exact socket; TLS verifies the literal origin, redirects are not
 // followed, and no environment proxy, hostname resolver or keepalive is used.
 func externalProofHTTP(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token string, testTLS *tls.Config) (data []byte, failure error) {
+	return externalProofHTTPName(parent, dial, tag, target, token, "", testTLS)
+}
+
+func externalProofHTTPName(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token, serverName string, testTLS *tls.Config) (data []byte, failure error) {
 	u, err := url.Parse(target)
 	if err != nil || u.User != nil || u.Fragment != "" || u.Host == "" || u.Scheme != "http" && u.Scheme != "https" {
 		return nil, errors.New("invalid captured external proof endpoint")
@@ -246,6 +325,9 @@ func externalProofHTTP(parent context.Context, dial func(context.Context, string
 			config = testTLS.Clone()
 			config.ServerName = u.Hostname()
 		}
+		if serverName != "" {
+			config.ServerName = serverName
+		}
 		secure := tls.Client(connection, config)
 		if secure.HandshakeContext(ctx) != nil {
 			return nil, errors.New("external proof TLS identity failed")
@@ -257,6 +339,14 @@ func externalProofHTTP(parent context.Context, dial func(context.Context, string
 		return nil, errors.New("external proof request invalid")
 	}
 	request.Close = true
+	if serverName != "" {
+		// Route and URL remain pinned to the captured literal server. The
+		// separately verified TLS name also selects its HTTPS virtual host.
+		request.Host = serverName
+		if u.Port() != "" && u.Port() != "443" {
+			request.Host = net.JoinHostPort(serverName, u.Port())
+		}
+	}
 	request.Header.Set("Accept-Encoding", "identity")
 	request.Header.Set("Cache-Control", "no-store")
 	if token != "" {

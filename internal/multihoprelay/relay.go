@@ -32,10 +32,11 @@ var ErrOwnership = errors.New("relay lease does not belong to this peer and sess
 var ErrBusy = errors.New("this peer already owns another relay session")
 
 type Exit struct {
-	ID     string `json:"id"`
-	Mode   string `json:"mode"`
-	NodeID string `json:"node_id"`
-	DNS    string `json:"dns_server"`
+	ID       string        `json:"id"`
+	Mode     string        `json:"mode"`
+	NodeID   string        `json:"node_id"`
+	DNS      string        `json:"dns_server"`
+	External *ExternalExit `json:"external,omitempty"`
 	// Operator-owned, private configuration. A client request never supplies
 	// arbitrary sing-box configuration, executable paths or remote credentials.
 	Transport  map[string]any `json:"transport"`
@@ -54,11 +55,13 @@ type Config struct {
 	Exits      []Exit `json:"exits"`
 }
 type Request struct {
-	SessionID      string `json:"session_id"`
-	EntryNodeID    string `json:"entry_node_id"`
-	ExitID         string `json:"exit_id"`
-	ExitMode       string `json:"exit_mode"`
-	ExitStartLayer string `json:"exit_start_layer,omitempty"`
+	SessionID              string `json:"session_id"`
+	EntryNodeID            string `json:"entry_node_id"`
+	ExitID                 string `json:"exit_id"`
+	ExitMode               string `json:"exit_mode"`
+	ExitStartLayer         string `json:"exit_start_layer,omitempty"`
+	ExternalFingerprint    string `json:"external_fingerprint,omitempty"`
+	ExternalAuthentication string `json:"external_authentication,omitempty"`
 	// Optional client-generated listener proposal allows the client to prepare
 	// its final graph before acquiring a lease, without restarting its TUN.
 	Port     int    `json:"listen_port,omitempty"`
@@ -117,8 +120,13 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	}
 	seen := map[string]bool{}
 	for _, e := range c.Exits {
-		if !ident.MatchString(e.ID) || !proofID.MatchString(e.NodeID) || e.NodeID == node || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
+		if !ident.MatchString(e.ID) || (e.External == nil && (!proofID.MatchString(e.NodeID) || e.NodeID == node)) || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
 			return nil, errors.New("relay exits require distinct paired identities and unique modes")
+		}
+		if e.External != nil {
+			if _, err := ExternalFingerprint(e); err != nil {
+				return nil, err
+			}
 		}
 		validated, err := validateTransport(e)
 		if err != nil {
@@ -156,6 +164,10 @@ func (m *Manager) Available() []map[string]string {
 	out := []map[string]string{}
 	for _, e := range m.cfg.Exits {
 		item := map[string]string{"exit_id": e.ID, "exit_mode": e.Mode, "exit_node_id": e.NodeID}
+		if e.External != nil {
+			item["external_fingerprint"], _ = ExternalFingerprint(e)
+			item["expected_public_ip"] = e.External.ExpectedPublicIP
+		}
 		if e.StartLayer != nil {
 			item["exit_start_layer"] = e.StartLayer.Mode
 		}
@@ -180,6 +192,9 @@ func (m *Manager) Available() []map[string]string {
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
+	if (q.ExternalFingerprint == "") != (q.ExternalAuthentication == "") || q.ExternalFingerprint != "" && (!proofID.MatchString(q.ExternalFingerprint) || !proofID.MatchString(q.ExternalAuthentication)) {
+		return ErrOwnership
+	}
 	if q.ExitStartLayer != "" && !ValidLayerMode(q.ExitStartLayer) {
 		return ErrOwnership
 	}
@@ -243,6 +258,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	}
 	if exit == nil {
 		return Lease{}, ErrUnavailable
+	}
+	if err := ValidateExternalRequest(*exit, q); err != nil {
+		return Lease{}, err
 	}
 	if PacketMode(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
@@ -455,8 +473,11 @@ func validateTransport(e Exit) (map[string]any, error) {
 }
 
 func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, error) {
-	if !literalServer(e.DNS) {
+	if e.External == nil && !literalServer(e.DNS) {
 		return nil, errors.New("relay exit requires a literal exit-routed DNS server")
+	}
+	if e.External != nil && e.DNS != "" {
+		return nil, errors.New("external relay DNS remains owned by the captured client policy")
 	}
 	if CompleteMAXMode(e.Mode) {
 		return validateMAXTransport(e)
@@ -581,6 +602,11 @@ func validPort(v any) bool {
 	return ok && n >= 1 && n <= 65535 && n == float64(int(n))
 }
 func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
+	if exit.External != nil {
+		if err := ValidateExternalRequest(exit, lease.Request); err != nil {
+			return nil, err
+		}
+	}
 	if LayerMode(exit.StartLayer) != lease.ExitStartLayer {
 		return nil, errors.New("relay lease does not match paired exit encryption")
 	}
@@ -602,6 +628,15 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		"inbounds": []any{map[string]any{"type": "socks", "tag": "leased-client", "listen": ip.String(), "listen_port": lease.Port, "users": []any{map[string]string{"username": lease.Username, "password": lease.Password}}}},
 		"dns":      map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "exit-dns", "server": exit.DNS, "detour": "exit"}}, "final": "exit-dns"},
 		"route":    map[string]any{"default_domain_resolver": "exit-dns", "rules": []any{map[string]any{"source_ip_cidr": []string{netip.PrefixFrom(peer, bits).String()}, "invert": true, "action": "reject"}}, "final": "exit"},
+	}
+	if exit.External != nil {
+		// The captured client resolves through its selected DNS policy and sends
+		// literal destinations. Never let the relay or third-party provider
+		// silently resolve a SOCKS hostname with another DNS policy.
+		delete(config, "dns")
+		route := config["route"].(map[string]any)
+		delete(route, "default_domain_resolver")
+		route["rules"] = append(route["rules"].([]any), map[string]any{"domain_regex": []string{"."}, "action": "reject"})
 	}
 	if CompleteMAXMode(exit.Mode) {
 		base, outputs, err := maxRelayChain(exit)

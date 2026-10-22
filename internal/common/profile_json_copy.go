@@ -26,6 +26,7 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 		return out
 	}
 	e := out.External
+	e.ResponseProbe = copyProfileJSONPointer(e.ResponseProbe)
 	e.WireGuard = copyProfileJSONPointer(e.WireGuard)
 	if w := e.WireGuard; w != nil {
 		w.Addresses = slices.Clone(w.Addresses)

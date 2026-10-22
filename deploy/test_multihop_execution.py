@@ -27,7 +27,73 @@ def fixture():
     return dict(selectedRouterID='exit',routerProfiles=[profile],profiles={'shadowsocks':{
         'sing-box.json':base64.b64encode(json.dumps({'outbounds':[transport]}).encode()).decode()}})
 
+def external_fixture():
+    profile = dict(id='external-exit',node_kind='external',external=dict(
+        protocol='shadowsocks',expected_public_ip='203.0.113.88',
+        shadowsocks=dict(server='203.0.113.20',port=8388,method='aes-256-gcm',password='captured-private-key'),
+        response_probe=dict(url='https://203.0.113.20/response',server_name='node.example')))
+    return dict(selectedRouterID=profile['id'],routerProfiles=[profile])
+
 class ExecutionTests(unittest.TestCase):
+    def test_external_pair_keeps_transport_credentials_and_independent_identity(self):
+        source=external_fixture();before=copy.deepcopy(source)
+        result=pairing.pair(source,'external-exit')
+        self.assertEqual(source,before)
+        self.assertEqual(len(result),1)
+        value=result[0]
+        self.assertEqual(value['node_id'],'')
+        self.assertEqual(value['dns_server'],'')
+        self.assertEqual(value['transport'],dict(type='shadowsocks',tag='exit',server='203.0.113.20',server_port=8388,method='aes-256-gcm',password='captured-private-key'))
+        self.assertEqual(value['external']['expected_public_ip'],'203.0.113.88')
+        self.assertEqual(value['external']['response_probe'],source['routerProfiles'][0]['external']['response_probe'])
+        value['external']['response_probe']['url']='https://203.0.113.20/changed'
+        self.assertEqual(source,before)
+
+    def test_external_pair_refuses_router_identity_unowned_fields_and_private_targets(self):
+        for field,value in [('node_proof_id','b'*64),('router_api','http://10.77.0.1:8787'),('api_token','must-not-echo'),('start_layer','aes')]:
+            source=external_fixture();source['routerProfiles'][0][field]=value
+            with self.assertRaises(ValueError) as failed:pairing.pair(source,'external-exit')
+            self.assertNotIn('must-not-echo',str(failed.exception))
+        for field,value in [('protocol','hysteria2'),('dns_server','1.1.1.1'),('response_probe',None)]:
+            source=external_fixture();source['routerProfiles'][0]['external'][field]=value
+            with self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+        for host in ['must-not-echo','192.168.50.1','127.0.0.1','100.64.0.1','::ffff:203.0.113.20']:
+            source=external_fixture();source['routerProfiles'][0]['external']['shadowsocks']['server']=host
+            with self.assertRaises(ValueError) as failed:pairing.pair(source,'external-exit')
+            self.assertNotIn('must-not-echo',str(failed.exception))
+        for field,value in [('plugin','opaque-helper'),('port',True),('password','')]:
+            source=external_fixture();source['routerProfiles'][0]['external']['shadowsocks'][field]=value
+            with self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+
+    def test_external_registry_is_private_atomic_and_must_pass_native_check(self):
+        for reject in (False,True):
+            with self.subTest(reject=reject),tempfile.TemporaryDirectory() as tmp:
+                root=Path(tmp);read,write,_=pairing.helpers()
+                bundle=root/'external.json';agent=root/'agent.json';registry=root/'registry.json'
+                write(bundle,json.dumps(external_fixture()).encode())
+                write(agent,json.dumps(dict(node_id='a'*64,tunnel_cidrs=['10.77.0.0/24'])).encode())
+                original=dict(listen_ip='10.77.0.1',first_port=26240,last_port=26271,ttl_seconds=90,exits=[dict(id='foreign',mode='shadowsocks',node_id='b'*64)])
+                write(registry,json.dumps(original).encode());before=registry.read_bytes()
+                argv=['pair','--bundle',str(bundle),'--exit-id','external-exit','--agent-config',str(agent),'--registry',str(registry),'--listen-ip','10.77.0.1']
+                def native_check(command,**kwargs):
+                    self.assertEqual(command[:2],['/usr/local/bin/router-vpn-agent','check-multihop-registry'])
+                    self.assertTrue(kwargs['check']);self.assertEqual(kwargs['timeout'],60)
+                    staged=pairing.decode(read(Path(command[2]),1<<20))
+                    self.assertEqual(staged['exits'][0],original['exits'][0])
+                    self.assertEqual(staged['exits'][1]['external']['response_probe']['server_name'],'node.example')
+                    self.assertEqual(Path(command[2]).stat().st_mode&0o777,0o600)
+                    if reject:raise RuntimeError('native validation rejected')
+                with patch.object(sys,'argv',argv),patch.object(pairing.subprocess,'run',side_effect=native_check) as check:
+                    if reject:
+                        with self.assertRaises(RuntimeError):pairing.main()
+                    else:pairing.main()
+                    self.assertEqual(check.call_count,1)
+                if reject:self.assertEqual(registry.read_bytes(),before)
+                else:
+                    self.assertEqual(registry.stat().st_mode&0o777,0o600)
+                    self.assertEqual([e['id'] for e in pairing.decode(read(registry,1<<20))['exits']],['foreign','external-exit'])
+                self.assertFalse(list(root.glob('.relay-pair-*')))
+
     def graph(self):
         return dict(dns={'servers':[{'tag':'selected','detour':'proxy','type':'https','server':'1.1.1.1'}]},
                     outbounds=[{'type':'shadowsocks','tag':'proxy'},{'type':'socks','tag':'entry-socks'}],

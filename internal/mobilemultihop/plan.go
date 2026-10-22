@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/ecdh"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -68,32 +69,36 @@ type Engine interface {
 }
 
 type Progress struct {
-	Stage        string                    `json:"stage"`
-	Complete     bool                      `json:"complete"`
-	Execution    string                    `json:"execution,omitempty"`
-	Measurements []routechoice.Measurement `json:"measurements"`
-	Failure      string                    `json:"failure,omitempty"`
+	Stage               string                    `json:"stage"`
+	Complete            bool                      `json:"complete"`
+	Execution           string                    `json:"execution,omitempty"`
+	Measurements        []routechoice.Measurement `json:"measurements"`
+	Failure             string                    `json:"failure,omitempty"`
+	LastNodeMeasurement string                    `json:"last_node_measurement,omitempty"`
+	ExternalMeasurement string                    `json:"external_measurement,omitempty"`
 }
 
 type Controller struct {
-	meta            Metadata
-	config          string
-	proposal        multihoprelay.Request
-	expected        multihoprelay.Lease
-	localPublicKey  string
-	localPQIdentity string
-	generation      atomic.Uint64
-	mu              sync.Mutex
-	progress        Progress
-	engine          Engine
-	engineID        string
-	cancel          context.CancelFunc
-	runDone         chan struct{}
-	leaseMu         sync.Mutex
-	leaseDeadline   atomic.Pointer[time.Time]
-	ownsLease       bool
-	renewCancel     context.CancelFunc
-	renewDone       chan struct{}
+	meta                Metadata
+	config              string
+	proposal            multihoprelay.Request
+	expected            multihoprelay.Lease
+	localPublicKey      string
+	localPQIdentity     string
+	generation          atomic.Uint64
+	mu                  sync.Mutex
+	progress            Progress
+	engine              Engine
+	engineID            string
+	cancel              context.CancelFunc
+	runDone             chan struct{}
+	leaseMu             sync.Mutex
+	leaseDeadline       atomic.Pointer[time.Time]
+	ownsLease           bool
+	renewCancel         context.CancelFunc
+	renewDone           chan struct{}
+	external            *ExternalPolicy
+	externalResponseTLS *tls.Config // Unexported loopback-test trust; nil in every host bridge.
 }
 
 func exactJSON(data []byte, output any, limit int) error {

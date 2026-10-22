@@ -2,6 +2,7 @@ package box_test
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
@@ -14,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
 	SJ "github.com/sagernet/sing/common/json"
 )
 
@@ -28,8 +30,12 @@ const externalFixtureSource = `{"log":{"disabled":true},"inbounds":[{"type":"tun
 const externalFixtureCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"203.0.113.20","port":443,"username":"captured-user","password":"captured-secret"}},"dns_mode":"rescue","mtu_policy":"fixed","manual_mtu":1280,"home_lan_access":false,"ipv6_mode":"off"}}`
 
 func externalNativeFixture(t *testing.T, mutate func(map[string]any)) *box.Box {
+	return externalNativeCapturedFixture(t, externalFixtureSource, externalFixtureCapture, mutate)
+}
+
+func externalNativeCapturedFixture(t *testing.T, source, capture string, mutate func(map[string]any)) *box.Box {
 	t.Helper()
-	policy, err := mobilemultihop.NewExternalPolicy(externalFixtureSource, externalFixtureCapture)
+	policy, err := mobilemultihop.NewExternalPolicy(source, capture)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -60,6 +66,94 @@ func externalNativeFixture(t *testing.T, mutate func(map[string]any)) *box.Box {
 	}
 	t.Cleanup(func() { _ = engine.Close() })
 	return engine
+}
+
+func externalNativeExecutionSource(t *testing.T) (string, string) {
+	t.Helper()
+	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
+	ss := map[string]any{"type": "shadowsocks", "tag": "custom-exit", "server": "203.0.113.20", "server_port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret", "detour": "entry-wg"}
+	wg := map[string]any{"type": "wireguard", "tag": "entry-wg", "system": false, "listen_port": 51888, "mtu": 1280, "private_key": key, "address": []string{"10.77.0.2/32"}, "peers": []any{map[string]any{"address": "198.51.100.20", "port": 51820, "public_key": key, "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
+	var graph map[string]any
+	if err := json.Unmarshal([]byte(externalFixtureSource), &graph); err != nil {
+		t.Fatal(err)
+	}
+	graph["outbounds"], graph["endpoints"] = []any{ss}, []any{wg}
+	profile := map[string]any{"id": "selected-exit", "node_kind": "external", "dns_mode": "rescue", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "fixed", "manual_mtu": 1280, "multihop_enabled": true, "multihop_entry_id": "paired-entry", "multihop_exit_id": "selected-exit", "multihop_exit_mode": "shadowsocks", "multihop_execution": "auto", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": "203.0.113.20", "port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret"}, "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}}
+	capture := map[string]any{"schema": 1, "exit_id": "selected-exit", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "entry_tag": "entry-wg", "profile": profile, "entry": map[string]any{"id": "paired-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("c", 64), "router_api": "http://10.77.0.1:8787", "api_token": "captured-entry-token"}}
+	source, err := json.Marshal(graph)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(capture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	prepared, err := mobilemultihop.PrepareExternalExecutionCapture(string(source), string(raw), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(source), prepared
+}
+
+func TestRouterVPNExternalExecutionAdoptsOnlyExactNativeSelectorCandidates(t *testing.T) {
+	source, capture := externalNativeExecutionSource(t)
+	engine := externalNativeCapturedFixture(t, source, capture, nil)
+	r, err := engine.RouterVPNExternalCreateProof(source, capture, "owned-session")
+	if err != nil {
+		t.Fatal("captured selector graph rejected by actual native Box", err)
+	}
+	outbound, ok := engine.Outbound().Outbound(mobilemultihop.ExternalFinalTag)
+	if !ok {
+		t.Fatal("native selector is missing")
+	}
+	selector, ok := outbound.(*group.Selector)
+	if !ok || selector.Start() != nil {
+		t.Fatal("actual selector cannot acquire both native candidates")
+	}
+	if selector.Now() != mobilemultihop.LocalTag || !selector.SelectOutbound(mobilemultihop.ServerTag) || selector.Now() != mobilemultihop.ServerTag || !selector.SelectOutbound(mobilemultihop.LocalTag) || selector.SelectOutbound("direct") {
+		t.Fatal("actual native selector lost captured candidate ownership")
+	}
+	if r.Healthy() || r.Execution() != "" {
+		t.Fatal("configuration alone fabricated live execution proof")
+	}
+	// This pinned manager reports its dependency error after removing the
+	// candidate from its lookup map. An error alone cannot authorize reuse:
+	// the captured native proof must recheck every exact owner.
+	if err := engine.Outbound().Remove(mobilemultihop.ServerTag); err == nil {
+		t.Fatal("expected the actual native dependency error")
+	}
+	if raw, err := r.Run(); err == nil || raw != "" || r.Healthy() {
+		t.Fatal("removed captured candidate retained native execution authority")
+	}
+	if err := r.Close(); err != nil {
+		t.Fatal(err)
+	}
+	for _, change := range []struct {
+		name, tag, field string
+		value            any
+	}{
+		{"listener credential", mobilemultihop.ServerTag, "password", "foreign-private-secret"},
+		{"listener entry detour", mobilemultihop.ServerTag, "detour", mobilemultihop.LocalTag},
+		{"external credential", mobilemultihop.LocalTag, "password", "foreign-private-secret"},
+		{"selector candidate", mobilemultihop.ExternalFinalTag, "outbounds", []string{mobilemultihop.LocalTag}},
+		{"selector initial owner", mobilemultihop.ExternalFinalTag, "default", mobilemultihop.ServerTag},
+	} {
+		t.Run(change.name, func(t *testing.T) {
+			changed := externalNativeCapturedFixture(t, source, capture, func(g map[string]any) {
+				for _, raw := range g["outbounds"].([]any) {
+					item := raw.(map[string]any)
+					if item["tag"] == change.tag {
+						item[change.field] = change.value
+						return
+					}
+				}
+				t.Fatal("test lost captured native outbound")
+			})
+			if _, err := changed.RouterVPNExternalCreateProof(source, capture, "owned-session"); err == nil || strings.Contains(err.Error(), "foreign-private-secret") {
+				t.Fatal("foreign native execution graph was adopted or exposed", err)
+			}
+		})
+	}
 }
 
 func TestRouterVPNExternalProofRequiresTheExactConstructedConfiguration(t *testing.T) {

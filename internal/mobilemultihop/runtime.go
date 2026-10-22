@@ -107,7 +107,10 @@ func (c *Controller) acquire(ctx context.Context) error {
 	}
 	found := false
 	for _, exit := range caps.Exits {
-		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer {
+		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer && exit.ExternalFingerprint == c.proposal.ExternalFingerprint {
+			if c.external != nil && exit.ExpectedPublicIP != c.external.capture.ExpectedPublicIP {
+				return errors.New("paired external public proof changed")
+			}
 			if (multihoprelay.PacketMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}
@@ -253,6 +256,9 @@ func (s *trial) Identity() string {
 }
 func (s *trial) Verify(ctx context.Context) error {
 	c := s.owner
+	if c.external != nil {
+		return c.verifyExternalTrial(ctx, s.tag)
+	}
 	if _, e := c.prove(ctx, c.meta.EntryTag, c.meta.EntryAPI, c.meta.EntryToken, c.meta.EntryNodeID); e != nil {
 		return e
 	}
@@ -261,6 +267,9 @@ func (s *trial) Verify(ctx context.Context) error {
 }
 func (s *trial) ProbeLast(ctx context.Context) (time.Duration, error) {
 	c := s.owner
+	if c.external != nil {
+		return c.externalNodeResponse(ctx, s.tag)
+	}
 	return c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)
 }
 func (s *trial) ProbeExternal(ctx context.Context, target string) (time.Duration, error) {
@@ -301,6 +310,14 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 		s.tag = ServerTag
 		if e := c.acquire(ctx); e != nil {
 			return s, e
+		}
+	}
+	if c.external != nil {
+		if err := c.engine.Select(s.tag); err != nil {
+			return s, err
+		}
+		if c.engine.Selected() != s.tag || c.requireValid() != nil || ctx.Err() != nil {
+			return s, errors.New("external candidate selection retired")
 		}
 	}
 	return s, nil

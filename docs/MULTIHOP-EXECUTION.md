@@ -18,8 +18,10 @@ For a fixed entry, exit and selected exit transport, the score is:
 One external HTTPS test endpoint is randomly selected from the approved literal
 IP endpoints at the beginning of the round and reused for both candidates and
 the final recheck. These are bounded routed HTTP response-time probes, not a
-claim to be ICMP measurements. The last-node probe verifies the exact private
-agent identity; the external request carries no node token. Requests use the
+claim to be ICMP measurements. For Router VPN exits, the last-node probe verifies
+the exact private agent identity. The external Shadowsocks extension below uses
+its explicitly configured HTTPS endpoint on the captured exit server. The
+external request carries no node token. Requests use the
 candidate's actual exit path with no ordinary-interface/proxy fallback.
 
 Either timeout, failed identity proof, nonpositive result, changed network or
@@ -79,6 +81,73 @@ take another session's port. Lease renewals preserve identity; Disconnect reques
 exact readback of deletion; expiry removes abandoned sessions. A Linux agent
 crash terminates its owned child engines. Exit credentials remain in private
 operator files; they are not returned in capability or progress responses.
+
+## Router entry to an external Shadowsocks exit
+
+The shared native execution path also supports a privately paired third-party
+Shadowsocks exit behind an existing captured Router VPN predecessor graph. Its
+supported native entry mode, entry Start Layer, helpers and bootstrap policy
+stay in that same graph. Apple captures this path in its ordinary external
+PacketTunnel owner. The client
+keeps the external server identity separate from Router VPN node identities:
+an external provider does not need, and is never assumed to expose, a Router
+administration API.
+
+An eligible Server or Compare profile needs its exact external Shadowsocks
+configuration, expected public exit address, and a node-response endpoint
+configured in the external node editor or imported profile. This endpoint is
+optional for an ordinary Local connection:
+
+```json
+"response_probe": {
+  "url": "https://203.0.113.20/node-response",
+  "server_name": "node.example"
+}
+```
+
+Place this member inside the node's `external` object. The example address and
+name are placeholders. The URL must use the same public literal IP as the
+captured Shadowsocks server, with HTTPS and a successful bounded response.
+`server_name` is optional when the certificate already verifies the literal IP;
+otherwise it selects and verifies the server's HTTPS virtual host. The socket
+still dials only the captured literal address. Query strings, credentials in
+URLs, redirects, private targets and ambient hostname resolution are refused.
+The optional endpoint does not change ordinary Local connection eligibility.
+
+Pair this exact external node bundle on the Router entry with the same
+`router-vpn-relay-pair` command above and its actual client exit ID. The private
+registry retains the Shadowsocks credentials and response-endpoint parameters.
+The native offline check validates the resulting relay graph before atomic
+publication. Its public capability catalog contains the public endpoint/proof
+fingerprint and expected egress IP; it contains no password digest or private
+credential. A per-session keyed proof binds the client's captured credentials
+to the particular entry, exit and random listener proposal before a server
+engine can start.
+
+Each trial measures a complete **HTTPS response time** from that configured
+last node and the same randomly selected external HTTPS endpoint. Merely opening
+the Shadowsocks stream is insufficient: native early connection establishment
+does not prove that the requested final destination answered. The trial also
+proves the selected DNS policy and the expected public exit independently. The
+lower valid average wins only after both measurement probes pass again. A
+failed response, certificate, DNS policy, exit proof or session has no score.
+
+The Local candidate and authenticated server SOCKS candidate remain within one
+captured native selector and TUN. The relay accepts only the owning tunnel
+client and literal destinations; it cannot introduce a provider DNS fallback
+for hostnames. Saved DNS, IPv6, LAN and MTU policy remains bound to the complete
+compiled graph. The proof owner retains the private lease, renewal and selected
+candidate; cancellation invalidates publication immediately, and checked close
+waits for late proof callbacks and confirmed lease cleanup before native
+teardown. Restoring a proved winner for a saved Compare profile directly
+reopens that local/server choice without changing the saved preference or
+starting another comparison.
+
+This extension is bounded to the graph above. Other external exit transports,
+external-entry server execution, external exit Start Layers and devices without the
+host integration remain open requirements. Operator pairing and device/off-LAN
+acceptance still require their own evidence; no private deployment occurs when
+these sources or tests are updated.
 
 ## Mobile LAN-Off enforcement
 

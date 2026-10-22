@@ -23,12 +23,14 @@ func LeaseResponseLimit(method string) int {
 }
 
 type Capability struct {
-	ID         string `json:"exit_id"`
-	Mode       string `json:"exit_mode"`
-	NodeID     string `json:"exit_node_id"`
-	PublicKey  string `json:"client_public_key,omitempty"`
-	PQIdentity string `json:"pq_client_identity,omitempty"`
-	Layer      string `json:"exit_start_layer,omitempty"`
+	ID                  string `json:"exit_id"`
+	Mode                string `json:"exit_mode"`
+	NodeID              string `json:"exit_node_id"`
+	PublicKey           string `json:"client_public_key,omitempty"`
+	PQIdentity          string `json:"pq_client_identity,omitempty"`
+	Layer               string `json:"exit_start_layer,omitempty"`
+	ExternalFingerprint string `json:"external_fingerprint,omitempty"`
+	ExpectedPublicIP    string `json:"expected_public_ip,omitempty"`
 }
 
 type Capabilities struct {
@@ -47,7 +49,11 @@ func (c Capabilities) Validate(expectedNode string) error {
 	}
 	seen := make(map[string]bool, len(c.Exits))
 	for _, e := range c.Exits {
-		if !ident.MatchString(e.ID) || !ident.MatchString(e.Mode) || !proofID.MatchString(e.NodeID) || e.NodeID == expectedNode || e.Layer != "" && !ValidLayerMode(e.Layer) {
+		external := e.ExternalFingerprint != "" || e.ExpectedPublicIP != ""
+		if !ident.MatchString(e.ID) || !ident.MatchString(e.Mode) || (!external && (!proofID.MatchString(e.NodeID) || e.NodeID == expectedNode)) || e.Layer != "" && !ValidLayerMode(e.Layer) {
+			return bad
+		}
+		if external && (e.NodeID != "" || e.Mode != "shadowsocks" || e.Layer != "" || e.PublicKey != "" || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
 			return bad
 		}
 		identity := e.ID + "/" + e.Mode + "/" + e.Layer

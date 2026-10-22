@@ -30,52 +30,55 @@ func (p *ExternalPolicy) Metadata() string     { return p.metadata }
 func (p *ExternalPolicy) SourceSHA256() string { return p.source }
 
 type externalPolicyCapture struct {
-	Schema            int                   `json:"schema"`
-	ExitID            string                `json:"exit_id"`
-	Protocol          string                `json:"protocol"`
-	ExpectedPublicIP  string                `json:"expected_public_ip"`
-	Profile           map[string]any        `json:"profile"`
-	EntryTag          string                `json:"entry_tag,omitempty"`
-	Entry             map[string]any        `json:"entry,omitempty"`
-	PredecessorConfig string                `json:"predecessor_config,omitempty"`
-	DNSBootstrap      *externalDNSBootstrap `json:"dns_bootstrap,omitempty"`
+	Schema            int                       `json:"schema"`
+	ExitID            string                    `json:"exit_id"`
+	Protocol          string                    `json:"protocol"`
+	ExpectedPublicIP  string                    `json:"expected_public_ip"`
+	Profile           map[string]any            `json:"profile"`
+	EntryTag          string                    `json:"entry_tag,omitempty"`
+	Entry             map[string]any            `json:"entry,omitempty"`
+	PredecessorConfig string                    `json:"predecessor_config,omitempty"`
+	DNSBootstrap      *externalDNSBootstrap     `json:"dns_bootstrap,omitempty"`
+	Execution         *externalExecutionCapture `json:"execution,omitempty"`
 }
 
 type externalPolicyMetadata struct {
-	Schema             int      `json:"schema"`
-	SourceSHA256       string   `json:"source_sha256"`
-	ConfigSHA256       string   `json:"config_sha256"`
-	ExitID             string   `json:"exit_id"`
-	PolicyID           string   `json:"policy_id"`
-	Protocol           string   `json:"protocol"`
-	ExpectedPublicIP   string   `json:"expected_public_ip"`
-	EntryID            string   `json:"entry_id,omitempty"`
-	EntryNodeID        string   `json:"entry_node_id,omitempty"`
-	EntryTag           string   `json:"entry_tag,omitempty"`
-	PredecessorSHA256  string   `json:"predecessor_sha256,omitempty"`
-	FinalTag           string   `json:"final_tag"`
-	TUNTag             string   `json:"tun_tag"`
-	DNSMode            string   `json:"dns_mode"`
-	DNSProtocol        string   `json:"dns_protocol"`
-	DNSServer          string   `json:"dns_server"`
-	DNSPort            int      `json:"dns_port"`
-	DNSServerName      string   `json:"dns_server_name,omitempty"`
-	DNSPath            string   `json:"dns_path,omitempty"`
-	DNSDetour          string   `json:"dns_detour"`
-	DNSBootstrapSHA256 string   `json:"dns_bootstrap_sha256,omitempty"`
-	DNSDefaultMigrated bool     `json:"dns_default_migrated,omitempty"`
-	DNSProof           string   `json:"dns_proof"`
-	PublicExitProof    string   `json:"public_exit_proof"`
-	EntryProof         string   `json:"entry_proof,omitempty"`
-	IPv6Mode           string   `json:"ipv6_mode"`
-	HomeLANAccess      bool     `json:"home_lan_access"`
-	BlockedLANCIDRs    []string `json:"blocked_lan_cidrs"`
-	MTUPolicy          string   `json:"mtu_policy"`
-	ConfiguredMTU      int      `json:"configured_mtu"`
-	EntryMTU           int      `json:"entry_mtu,omitempty"`
-	AutoMTU            string   `json:"auto_mtu"`
-	AutoMTUReason      string   `json:"auto_mtu_reason,omitempty"`
-	UDPAvailable       bool     `json:"udp_available"`
+	Schema              int      `json:"schema"`
+	SourceSHA256        string   `json:"source_sha256"`
+	ConfigSHA256        string   `json:"config_sha256"`
+	ExitID              string   `json:"exit_id"`
+	PolicyID            string   `json:"policy_id"`
+	Protocol            string   `json:"protocol"`
+	ExpectedPublicIP    string   `json:"expected_public_ip"`
+	EntryID             string   `json:"entry_id,omitempty"`
+	EntryNodeID         string   `json:"entry_node_id,omitempty"`
+	EntryTag            string   `json:"entry_tag,omitempty"`
+	PredecessorSHA256   string   `json:"predecessor_sha256,omitempty"`
+	FinalTag            string   `json:"final_tag"`
+	TUNTag              string   `json:"tun_tag"`
+	DNSMode             string   `json:"dns_mode"`
+	DNSProtocol         string   `json:"dns_protocol"`
+	DNSServer           string   `json:"dns_server"`
+	DNSPort             int      `json:"dns_port"`
+	DNSServerName       string   `json:"dns_server_name,omitempty"`
+	DNSPath             string   `json:"dns_path,omitempty"`
+	DNSDetour           string   `json:"dns_detour"`
+	DNSBootstrapSHA256  string   `json:"dns_bootstrap_sha256,omitempty"`
+	DNSDefaultMigrated  bool     `json:"dns_default_migrated,omitempty"`
+	DNSProof            string   `json:"dns_proof"`
+	PublicExitProof     string   `json:"public_exit_proof"`
+	EntryProof          string   `json:"entry_proof,omitempty"`
+	IPv6Mode            string   `json:"ipv6_mode"`
+	HomeLANAccess       bool     `json:"home_lan_access"`
+	BlockedLANCIDRs     []string `json:"blocked_lan_cidrs"`
+	MTUPolicy           string   `json:"mtu_policy"`
+	ConfiguredMTU       int      `json:"configured_mtu"`
+	EntryMTU            int      `json:"entry_mtu,omitempty"`
+	AutoMTU             string   `json:"auto_mtu"`
+	AutoMTUReason       string   `json:"auto_mtu_reason,omitempty"`
+	UDPAvailable        bool     `json:"udp_available"`
+	Execution           string   `json:"execution,omitempty"`
+	LastNodeMeasurement string   `json:"last_node_measurement,omitempty"`
 }
 
 // CompileExternalPolicy is the string-only host bridge. The returned strings
@@ -278,6 +281,14 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 		meta.AutoMTU = "unmeasured"
 		meta.AutoMTUReason = "This external exit has no captured authenticated packet-probe owner; the configured MTU is a baseline, not an Auto-MTU result."
 	}
+	if err := compileExternalExecution(graph, selection, &meta); err != nil {
+		return nil, err
+	}
+	body, err = json.Marshal(graph)
+	if err != nil || len(body) > 4<<20 {
+		return nil, errors.New("compiled external execution exceeds its bound")
+	}
+	meta.ConfigSHA256 = externalDigest(body)
 	metadata, err := json.Marshal(meta)
 	if err != nil {
 		return nil, err

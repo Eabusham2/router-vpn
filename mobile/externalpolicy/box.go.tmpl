@@ -16,6 +16,7 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/json"
 	M "github.com/sagernet/sing/common/metadata"
@@ -110,6 +111,24 @@ func (r *RouterVPNExternalProofRequest) Cancel() {
 func (r *RouterVPNExternalProofRequest) Healthy() bool {
 	return r != nil && r.request != nil && r.request.Healthy()
 }
+func (r *RouterVPNExternalProofRequest) Close() error {
+	if r == nil || r.request == nil {
+		return nil
+	}
+	return r.request.Close()
+}
+func (r *RouterVPNExternalProofRequest) ProgressJSON() string {
+	if r == nil || r.request == nil {
+		return ""
+	}
+	return r.request.ProgressJSON()
+}
+func (r *RouterVPNExternalProofRequest) Execution() string {
+	if r == nil || r.request == nil {
+		return ""
+	}
+	return r.request.Execution()
+}
 
 type routerVPNExternalNativeEngine struct {
 	mu       sync.RWMutex
@@ -163,6 +182,17 @@ func (s *Box) routerVPNCapturedEngine(entryTag, tunTag, finalTag, dnsTag string,
 			return nil, errors.New("external native proof route missing")
 		}
 		routes[tag] = owner
+	}
+	// Execution candidates can be dialed only when the exact captured final
+	// owner is the selector installed by the shared external policy compiler.
+	if selector, ok := owners[mobilemultihop.ExternalFinalTag].(*group.Selector); ok && finalTag == mobilemultihop.ExternalFinalTag {
+		_ = selector
+		for _, tag := range []string{mobilemultihop.LocalTag, mobilemultihop.ServerTag} {
+			if owners[tag] == nil {
+				return nil, errors.New("external native candidate owner missing")
+			}
+			routes[tag] = owners[tag]
+		}
 	}
 	dns := map[string]adapter.DNSTransport{}
 	for _, configured := range compiled.DNS.Servers {
@@ -269,4 +299,25 @@ func (e *routerVPNExternalNativeEngine) DNSProof(parent context.Context, tunTag 
 		return errors.New("external DNS owner changed during proof")
 	}
 	return nil
+}
+
+func (e *routerVPNExternalNativeEngine) Select(tag string) error {
+	if e.Identity() == "" || tag != mobilemultihop.LocalTag && tag != mobilemultihop.ServerTag || e.routes[tag] == nil {
+		return errors.New("external candidate selection is unowned")
+	}
+	selector, ok := e.routes[mobilemultihop.ExternalFinalTag].(*group.Selector)
+	if !ok || !selector.SelectOutbound(tag) || selector.Now() != tag || e.Identity() == "" {
+		return errors.New("external selector did not retain the captured candidate")
+	}
+	return nil
+}
+func (e *routerVPNExternalNativeEngine) Selected() string {
+	if e.Identity() == "" {
+		return ""
+	}
+	selector, ok := e.routes[mobilemultihop.ExternalFinalTag].(*group.Selector)
+	if !ok {
+		return ""
+	}
+	return selector.Now()
 }
