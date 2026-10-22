@@ -162,13 +162,25 @@ func desktopReadGraph(t *testing.T, directory string) map[string]any {
 	return graph
 }
 
+func desktopAWGPrivateTestRoot(t *testing.T) string {
+	t.Helper()
+	// macOS exposes its temporary directory through the system /var symlink.
+	// Resolve only the root just created for this test; the shipping private
+	// store must continue rejecting symlinked roots and runtime subdirectories.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	return root
+}
+
 func TestDesktopAmneziaPreparedDirectAndImportedGraphs(t *testing.T) {
 	profile := desktopAWGProfile(t)
 	exit, err := standardExitFromExternalProfile(profile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	directory, _, err := prepareDirectStandardExit(t.TempDir(), profile, exit)
+	directory, _, err := prepareDirectStandardExit(desktopAWGPrivateTestRoot(t), profile, exit)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -195,7 +207,7 @@ func TestDesktopAmneziaPreparedDirectAndImportedGraphs(t *testing.T) {
 				t.Fatal(err)
 			}
 			entryProfile.MTUPolicy = "auto"
-			directory, _, err := prepareExternalEntryStandardExit(t.TempDir(), profile, entryProfile, exit)
+			directory, _, err := prepareExternalEntryStandardExit(desktopAWGPrivateTestRoot(t), profile, entryProfile, exit)
 			if protocol == "http-connect" || protocol == "https-connect" {
 				if err == nil {
 					t.Fatal("TCP-only entry accepted native AWG UDP")
@@ -231,7 +243,7 @@ func TestDesktopAmneziaPreparedDirectAndImportedGraphs(t *testing.T) {
 				exit.WGMTU = 1280
 				exit.WGAllowedIPs = []string{"0.0.0.0/0", "::/0"}
 			}
-			directory, _, err := prepareExternalEntryStandardExit(t.TempDir(), profile, entryProfile, exit)
+			directory, _, err := prepareExternalEntryStandardExit(desktopAWGPrivateTestRoot(t), profile, entryProfile, exit)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -239,7 +251,7 @@ func TestDesktopAmneziaPreparedDirectAndImportedGraphs(t *testing.T) {
 		})
 	}
 	profile.MTUPolicy, profile.ManualMTU = "fixed", 1450
-	root := t.TempDir()
+	root := desktopAWGPrivateTestRoot(t)
 	if _, _, err := prepareExternalEntryStandardExit(root, profile, entryProfile, exit); err == nil {
 		t.Fatal("oversized fixed nested AWG MTU accepted")
 	}
