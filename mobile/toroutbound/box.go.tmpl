@@ -20,8 +20,12 @@ type torProofOwner interface {
 
 // Full mobile preparation installs this capture hook at package initialization.
 // Standalone Tor builds retain their original proof API without importing the
-// larger TUN/measurement runtime. Only that full capture can grant MTU access.
-type routerVPNTorProofCapture interface{ Identity() string }
+// larger TUN/measurement runtime. A full capture must prove its selected DNS
+// route before success and is the only kind that can grant MTU access.
+type routerVPNTorProofCapture interface {
+	Identity() string
+	DNSProof(context.Context) error
+}
 
 var routerVPNTorCaptureProof func(*Box) (routerVPNTorProofCapture, error)
 
@@ -105,12 +109,22 @@ func (r *RouterVPNTorProofRequest) Run() (result string, failure error) {
 	if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() || proof.SessionID != r.sessionID || !proof.IsTor {
 		return "", errors.New("native Tor proof belongs to a retired outbound")
 	}
+	proof.DNSProven = false
+	if r.capture != nil {
+		if err := r.capture.DNSProof(ctx); err != nil {
+			return "", errors.New("native Tor selected DNS failed proof")
+		}
+		if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() {
+			return "", errors.New("native Tor DNS proof belongs to a retired graph")
+		}
+		proof.DNSProven = true
+	}
 	data, err := json.Marshal(proof)
 	if err != nil {
 		return "", errors.New("native Tor traffic proof could not be encoded")
 	}
 	r.succeeded.Store(true)
-	if r.canceled.Load() {
+	if r.canceled.Load() || ctx.Err() != nil || !r.currentNative() {
 		r.succeeded.Store(false)
 		return "", errors.New("native Tor proof was canceled")
 	}

@@ -37,6 +37,7 @@ type Options struct {
 	Bridges       []string `json:"bridges"`
 	SessionID     string   `json:"session_id"`
 	ProfileSHA256 string   `json:"profile_sha256,omitempty"`
+	EntrySHA256   string   `json:"entry_sha256,omitempty"`
 }
 
 func RegisterOutbound(registry *outbound.Registry) {
@@ -54,6 +55,7 @@ type Outbound struct {
 	directory      string
 	sessionID      string
 	predecessor    string
+	entrySHA256    string
 	upstream       *torUpstreamCapture
 	lower          N.Dialer
 	networkCapture *torNetworkCapture
@@ -96,6 +98,12 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 			return nil, errors.New("native Tor frozen profile digest is invalid")
 		}
 	}
+	if options.EntrySHA256 != "" {
+		digest, err := hex.DecodeString(options.EntrySHA256)
+		if err != nil || len(digest) != 32 || hex.EncodeToString(digest) != options.EntrySHA256 || options.Detour == "" || options.ProfileSHA256 == "" {
+			return nil, errors.New("native Tor requires its exact captured predecessor digest and route")
+		}
+	}
 	var plan mobiletor.Plan
 	var err error
 	if len(options.Bridges) != 0 {
@@ -134,8 +142,8 @@ func NewOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag
 	}
 	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(Type, tag, []string{N.NetworkTCP}, options.DialerOptions),
 		ctx: owned, cancel: cancel, plan: plan, directory: directory, sessionID: options.SessionID, predecessor: options.Detour, lower: lower, resident: processResident,
-		networkCapture: networkCapture,
-		ready:          make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
+		networkCapture: networkCapture, entrySHA256: options.EntrySHA256,
+		ready: make(chan struct{}), workerDone: make(chan struct{}), closeDone: make(chan struct{})}
 	h.parentStop = context.AfterFunc(ctx, h.beginClose)
 	return h, nil
 }

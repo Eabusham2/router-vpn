@@ -47,7 +47,44 @@ func torPredecessorFixture(t *testing.T, dial func(context.Context, string, M.So
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.entrySHA256 = proof.Fingerprint()
 	return h, proof
+}
+
+func TestTorPrivateProofRejectsMissingOrChangedCapturedEntryBeforeDial(t *testing.T) {
+	for _, kind := range []string{"missing", "authentication", "transport", "DNS"} {
+		t.Run(kind, func(t *testing.T) {
+			var dials atomic.Int32
+			h, _ := torPredecessorFixture(t, func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+				dials.Add(1)
+				return nil, errors.New("unowned predecessor dial")
+			})
+			var candidate *mobiletor.PredecessorProof
+			if kind != "missing" {
+				profile := `{"id":"entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"captured-entry-secret"}`
+				switch kind {
+				case "authentication":
+					profile = strings.Replace(profile, "captured-entry-secret", "replacement-secret", 1)
+				case "transport":
+					profile = strings.TrimSuffix(profile, "}") + `,"wireguard":{"private_key":"replacement-key"}}`
+				case "DNS":
+					profile = strings.TrimSuffix(profile, "}") + `,"dns_mode":"rescue"}`
+				}
+				var err error
+				candidate, err = mobiletor.NewPredecessorProof(profile)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			proof, err := h.TorProofWithPredecessor(context.Background(), h.sessionID, candidate)
+			if err == nil || proof.IsTor || dials.Load() != 0 || strings.Contains(err.Error(), "secret") {
+				t.Fatal("uncaptured entry reached the private proof or exposed credentials", err)
+			}
+			if err := h.Close(); err != nil {
+				t.Fatal(err)
+			}
+		})
+	}
 }
 
 func TestTorPrivatePredecessorProofUsesCapturedLowerBeforeExitReadiness(t *testing.T) {

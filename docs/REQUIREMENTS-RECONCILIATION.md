@@ -2,8 +2,8 @@
 
 This document records the current requirement precedence used by the source and release gates.
 
-1. Verified current source and exact-head evidence determine what is implemented.
-2. Later explicit user corrections supersede contradictory older handoff text.
+1. Later explicit user corrections refine the original requirements; shorter assistant handoffs cannot remove uncancelled scope.
+2. Verified current source and exact-SHA evidence determine what is implemented, tested, built and published. They do not redefine what the user requested.
 3. Requirements remain binding when they were never explicitly cancelled or replaced.
 4. The final repository workflow is direct commits to `main`; old branch/PR instructions are cancelled.
 5. The native Router VPN app is the map-first daily product. Setup Center remains private deployment, administration, download, recovery, and update infrastructure.
@@ -14,3 +14,6 @@ The reconciled scope includes the original 356 requirements, corrections C1–C7
 Setup Center package delivery is exact-SHA GitHub Release first, same-SHA Actions artifact second, then only a bounded local desktop/Portable fallback that the server can genuinely build. Android and iOS remain exact-SHA artifact-only. A generated package and its owned temporary build workspace are retained for retry for exactly 30 minutes from READY, without extending the deadline after download, then deleted. Explicit cancel/delete and shutdown clean them immediately.
 
 Unsupported platform capabilities are disabled with a truthful reason; no UI may fake a working dataplane, route, DNS policy, exit proof, forwarding operation, multihop graph, or encryption layer.
+Those capabilities remain unfinished requirements. A passing source audit,
+successful build or published release does not establish all-device or private
+deployment acceptance.

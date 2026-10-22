@@ -3,6 +3,9 @@ package mobiletor
 import (
 	"bufio"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -22,11 +25,12 @@ var predecessorNodeID = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Its credentials are deliberately private and cannot be replaced after the
 // native Tor request captures the corresponding encrypted lower outbound.
 type PredecessorProof struct {
-	id      string
-	address string
-	target  string
-	token   string
-	node    string
+	id          string
+	address     string
+	target      string
+	token       string
+	node        string
+	fingerprint string
 }
 
 func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
@@ -54,7 +58,21 @@ func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
 		}
 	}
 	api.Path = "/health"
-	return &PredecessorProof{id: profileString(profile, "id"), address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id")}, nil
+	canonical, err := json.Marshal(profile)
+	if err != nil {
+		return nil, failure
+	}
+	digest := sha256.Sum256(append([]byte("routervpn-tor-entry-v1\x00"), canonical...))
+	return &PredecessorProof{id: profileString(profile, "id"), address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id"), fingerprint: hex.EncodeToString(digest[:])}, nil
+}
+
+// Fingerprint binds the complete captured entry, including transport credentials
+// and selected policy. It is kept inside the private compiled native graph.
+func (p *PredecessorProof) Fingerprint() string {
+	if p == nil {
+		return ""
+	}
+	return p.fingerprint
 }
 
 // Prove sends only GET /health to the captured private literal origin through

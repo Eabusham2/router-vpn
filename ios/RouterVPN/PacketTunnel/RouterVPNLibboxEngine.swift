@@ -1,4 +1,5 @@
 import Foundation
+import CoreFoundation
 import Libbox
 
 final class RouterVPNLibboxEngine {
@@ -420,8 +421,10 @@ final class RouterVPNLibboxEngine {
                 let text = try request.run()
                 guard text.utf8.count <= 4096, let data = text.data(using: .utf8),
                       let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                      Set(value.keys) == Set(["session_id", "ip", "is_tor", "checked_at"]),
-                      value["session_id"] as? String == sessionID, value["is_tor"] as? Bool == true,
+                      Set(value.keys) == Set(["session_id", "ip", "is_tor", "checked_at", "dns_proven"]),
+                      value["session_id"] as? String == sessionID,
+                      let isTor = value["is_tor"] as? NSNumber, CFGetTypeID(isTor) == CFBooleanGetTypeID(), isTor.boolValue,
+                      let dns = value["dns_proven"] as? NSNumber, CFGetTypeID(dns) == CFBooleanGetTypeID(), dns.boolValue,
                       let ip = value["ip"] as? String, !ip.isEmpty, ip.utf8.count <= 64,
                       let timestamp = value["checked_at"] as? String else { throw retired() }
                 let clock = ISO8601DateFormatter(); clock.formatOptions = [.withInternetDateTime, .withFractionalSeconds]

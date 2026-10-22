@@ -23,6 +23,9 @@ func (h *Outbound) TorProofWithPredecessor(ctx context.Context, sessionID string
 	if ctx == nil || sessionID == "" || sessionID != h.sessionID {
 		return proof, errors.New("native Tor proof belongs to another VPN session")
 	}
+	if h.entrySHA256 != "" && (predecessor == nil || predecessor.Fingerprint() != h.entrySHA256) {
+		return proof, errors.New("native Tor proof does not match its captured predecessor")
+	}
 	h.mu.Lock()
 	if h.closing || !h.started || h.ctx.Err() != nil {
 		h.mu.Unlock()

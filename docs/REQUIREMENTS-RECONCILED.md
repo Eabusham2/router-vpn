@@ -4,14 +4,21 @@ This file records the newest surviving requirement set after reconciling the Rou
 
 ## Authority and superseded directions
 
-Later verified source and later explicit user direction win over stale handoff status text.
+The latest explicit user correction refines the original requirements. Earlier
+requirements remain binding unless the user cancels or replaces them. An
+assistant's shorter handoff cannot remove scope.
+
+Current source and exact-SHA evidence establish what is implemented, tested,
+built or published. They do not supersede the required product. Historical
+status text may lag newer implementation; physical-device and deployment
+acceptance require separate observations.
 
 The following older directions are superseded or canceled:
 
 - Development changes land directly on `main`; do not create feature branches or pull requests for routine continuation work.
 - The old tab-heavy/debug-console daily UI is retired. The native map-first product is authoritative.
 - Temporary package output is **not** deleted immediately after a successful or interrupted browser delivery. It is retained for 30 minutes from READY for repeat download/retry; delivery does not extend that deadline. Explicit cancellation, Delete now, or service shutdown cleans it immediately.
-- Do not invent XOR, homemade packet encryption, or a cosmetic “extra encryption” cipher. Use established authenticated encryption and require an encrypted inner tunnel when a bridge/proxy is not itself an authenticated full VPN.
+- Start Layer choices are Off, AES-256-GCM, and AES-256-GCM + XOR whitening. The later explicit whitening choice supersedes older shorthand forbidding all XOR. Whitening is obfuscation alongside vetted authenticated encryption, never a replacement cipher. Capture entry and exit Start Layers separately and preserve their exact credentials and routing owners. Require an encrypted inner tunnel when a bridge/proxy is not itself an authenticated full VPN.
 - Unsupported platform functionality remains disabled/unavailable with a precise reason. Parity never permits fake controls, fake Connected state, fake public exit, fake location, fake Mbps, or fake multihop. These are safety rules for unfinished capabilities, not permission to count platform exclusions as delivered. The later all-device requirement remains open until the actual capability is implemented and verified on each requested platform.
 - No moving `latest`, `main`, `/releases/latest`, or newest-artifact fallback may certify or feed an exact-SHA release.
 - Android/iOS packages remain exact-SHA artifact-only; the Linux AI Board does not pretend to build or sign native mobile applications.
@@ -71,7 +78,7 @@ DNS
 - MTU Auto by default, plus Fixed and Retest. Auto/Retest is tied to the current node/profile/mode/runtime/base/path identity; stale measurements cannot be adopted.
 - Require encrypted AUTO candidates and Require obfuscation for AUTO candidates are both Off by default.
 - Expose kill switch, LAN policy, base/fallback, startup/autoconnect, bounded DAITA-like padding, Jumbo where real, forwarding/Protected DMZ entry, diagnostics and updates.
-- DNS offers Home AdGuard, Fastest measured, Custom UDP/TCP, DoT, DoH, DoH3 where enforceable, and Rescue. Benchmark means DNS-query RTT and may not overwrite a newer saved policy.
+- Home AdGuard is the default. DNS also offers Fastest measured, Custom UDP/TCP, DoT, DoH, DoH3 where enforceable, and explicit Rescue. A path that cannot reach the selected resolver must explain the missing path or ask for an explicit alternative; it cannot silently substitute public DNS. Benchmark means DNS-query RTT and may not overwrite a newer saved policy.
 - Keep live RTT, durable 50-sample node statistics, current-path Mbps, routed-hop Mbps and MTU-optimizer throughput separate.
 - Multihop candidate X→Y/X→Z measurements must actually traverse X; no direct-cache substitution and no RTT-to-Mbps conversion.
 

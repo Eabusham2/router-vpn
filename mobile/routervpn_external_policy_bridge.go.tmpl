@@ -26,6 +26,12 @@ func RouterValidateExternalResponseProbe(host, probeJSON string) error {
 	return mobilemultihop.ValidateExternalResponseProbe(host, probeJSON)
 }
 
+// Draft validation deliberately emits no runnable graph or DNS substitution.
+// A real connection must still compile and prove its complete captured policy.
+func RouterValidateExternalTransport(source, capture string) error {
+	return mobilemultihop.ValidateExternalTransport(source, capture)
+}
+
 type RouterExternalProofRequest struct {
 	request *box.RouterVPNExternalProofRequest
 	current func() bool

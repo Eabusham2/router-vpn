@@ -22,6 +22,18 @@ func RouterCompileTorProfile(profileJSON, sessionID, predecessorJSON string) (st
 	return mobiletor.CompileProfile(profileJSON, sessionID, predecessorJSON)
 }
 
+// An idle Home-default node can be saved before its Router entry is selected.
+// Validation never emits a runnable graph or changes the saved DNS choice.
+func RouterValidateTorProfile(profileJSON string) error {
+	return mobiletor.ValidateProfile(profileJSON)
+}
+
+// The full entry profile is captured separately from the external node. Its
+// private proof identity must match the compiled native predecessor at Run.
+func RouterCompileTorProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string) (string, error) {
+	return mobiletor.CompileProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON)
+}
+
 type RouterTorProofRequest struct {
 	request *box.RouterVPNTorProofRequest
 }

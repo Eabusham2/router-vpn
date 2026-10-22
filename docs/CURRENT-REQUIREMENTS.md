@@ -1,6 +1,9 @@
 # Router VPN Current Requirements
 
-This file resolves conflicting historical notes. Verified current source and the latest explicit user correction win. Historical handoffs remain evidence only where not superseded.
+This file indexes the surviving requirements. The latest explicit user
+correction refines earlier requests; shorter assistant handoffs cannot remove
+uncancelled scope. Current source and exact-SHA results establish implementation
+and delivery evidence, not a different requirement set.
 
 ## Binding product
 
@@ -9,8 +12,9 @@ This file resolves conflicting historical notes. Verified current source and the
 - One selected node by default; SMART AUTO default; Connect/Disconnect, Multihop, Settings, Mode and DNS in the expandable control surface.
 - Real-coordinate VPN map/globe, truthful role colors, route lines, packet animation, node/path RTT and real speed tests.
 - Whole-connection profile Add/Load/Update/Delete without duplicating secrets.
+- Home AdGuard by default, with explicit alternative resolvers and no silent public-DNS substitution.
 - Auto/Fixed/Retest MTU; IPv6 On; AUTO encryption/obfuscation requirements Off by default; capability-gated kill switch, forwarding, Jumbo and DAITA-like padding.
-- External nodes and bridges only where a real native dataplane exists. No invented XOR/custom cipher.
+- External nodes and bridges need a real native dataplane. Start Layer choices remain Off, AES-256-GCM, and AES-256-GCM + XOR whitening. XOR is obfuscation alongside authenticated encryption, never a replacement cipher.
 
 ## Package delivery
 

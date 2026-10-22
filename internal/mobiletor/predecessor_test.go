@@ -2,6 +2,7 @@ package mobiletor
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -21,6 +22,57 @@ func predecessorProfile() map[string]any {
 }
 
 func predecessorJSON(value any) string { data, _ := json.Marshal(value); return string(data) }
+
+func TestPredecessorFingerprintBindsCompleteCapturedEntry(t *testing.T) {
+	profile := predecessorProfile()
+	profile["wireguard"] = map[string]any{"private_key": "captured-wg-key", "peer_public_key": "captured-peer"}
+	profile["dns_mode"] = "home"
+	profile["adguard_ip"] = "10.77.0.53"
+	source := predecessorJSON(profile)
+	owned, err := NewPredecessorProof(source)
+	if err != nil || !predecessorNodeID.MatchString(owned.Fingerprint()) {
+		t.Fatal("captured entry has no canonical fingerprint", err)
+	}
+	// JSON formatting and object-key order do not change the captured node.
+	var formatted bytes.Buffer
+	if err := json.Indent(&formatted, []byte(source), "", "  "); err != nil {
+		t.Fatal(err)
+	}
+	other, err := NewPredecessorProof(formatted.String())
+	if err != nil || other.Fingerprint() != owned.Fingerprint() {
+		t.Fatal("JSON formatting changed captured entry identity", err)
+	}
+	reordered := `{"wireguard":{"peer_public_key":"captured-peer","private_key":"captured-wg-key"},"router_api":"http://10.77.0.1:8787","node_proof_id":"` + strings.Repeat("a", 64) + `","node_kind":"router-vpn","id":"captured-entry","dns_mode":"home","api_token":"private-entry-secret","adguard_ip":"10.77.0.53"}`
+	other, err = NewPredecessorProof(reordered)
+	if err != nil || other.Fingerprint() != owned.Fingerprint() {
+		t.Fatal("JSON object-key order changed captured entry identity", err)
+	}
+	for name, change := range map[string]func(map[string]any){
+		"node":           func(p map[string]any) { p["node_proof_id"] = strings.Repeat("b", 64) },
+		"origin":         func(p map[string]any) { p["router_api"] = "http://10.77.0.2:8787" },
+		"authentication": func(p map[string]any) { p["api_token"] = "replacement-secret" },
+		"transport-key":  func(p map[string]any) { p["wireguard"].(map[string]any)["private_key"] = "other-wg-key" },
+		"peer":           func(p map[string]any) { p["wireguard"].(map[string]any)["peer_public_key"] = "other-peer" },
+		"policy":         func(p map[string]any) { p["dns_mode"] = "rescue" },
+		"home-resolver":  func(p map[string]any) { p["adguard_ip"] = "10.77.0.54" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			var changed map[string]any
+			if err := json.Unmarshal([]byte(source), &changed); err != nil {
+				t.Fatal(err)
+			}
+			change(changed)
+			candidate, err := NewPredecessorProof(predecessorJSON(changed))
+			if err != nil || candidate.Fingerprint() == owned.Fingerprint() {
+				t.Fatal("changed entry retained captured proof identity", err)
+			}
+		})
+	}
+	var absent *PredecessorProof
+	if absent.Fingerprint() != "" {
+		t.Fatal("absent entry has an identity")
+	}
+}
 
 func TestPredecessorProofCapturesExactPrivateOriginAndAuthentication(t *testing.T) {
 	t.Setenv("HTTP_PROXY", "http://unowned.invalid:9")

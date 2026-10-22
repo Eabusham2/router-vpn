@@ -48,12 +48,10 @@ func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool)
 		host: values["dns_host"], port: port, serverName: values["dns_server_name"], path: values["dns_path"], detour: ExternalFinalTag,
 	}
 	if result.mode == "" {
-		kind, _ := profile["node_kind"].(string)
-		if kind == "external" {
-			result.mode, result.migrated = "rescue", true
-		} else {
-			result.mode = "home"
-		}
+		// Missing preferences retain the product's Home AdGuard default.
+		// A direct external node must choose a reachable resolver explicitly;
+		// it must never become a silent migration to a public DNS preset.
+		result.mode = "home"
 	}
 	switch result.mode {
 	case "rescue":
@@ -68,7 +66,7 @@ func externalSelectedDNS(selection externalPolicyCapture, ipv6 string, udp bool)
 		api, _ := entry["router_api"].(string)
 		token, _ := entry["api_token"].(string)
 		if entry == nil || selection.EntryTag == "" || kind != "" && kind != "router-vpn" || !proofID.MatchString(node) || len(token) == 0 || len(token) > 4096 {
-			return nil, result, errors.New("Home AdGuard DNS requires the exact captured Router VPN entry and its private node-proof owner")
+			return nil, result, errors.New("Home AdGuard DNS requires the exact captured Router VPN entry and its private node-proof owner; choose that paired entry or explicitly select a reachable DNS policy for a direct external connection")
 		}
 		if _, err := privateAPI(api); err != nil {
 			return nil, result, errors.New("Home DNS entry has no exact private proof endpoint")

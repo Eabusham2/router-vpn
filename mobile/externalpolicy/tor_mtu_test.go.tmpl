@@ -3,12 +3,15 @@ package box_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/miekg/dns"
 	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/outbound"
@@ -17,6 +20,7 @@ import (
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
 )
@@ -26,14 +30,98 @@ type torMTUFixtureOptions struct {
 	Bridges       []string `json:"bridges"`
 	SessionID     string   `json:"session_id"`
 	ProfileSHA256 string   `json:"profile_sha256,omitempty"`
+	EntrySHA256   string   `json:"entry_sha256,omitempty"`
 }
 type torMTUFixtureOutbound struct {
 	outbound.Adapter
 	N.Dialer
-	ctx      context.Context
-	cancel   context.CancelFunc
-	session  string
-	canceled atomic.Bool
+	ctx       context.Context
+	cancel    context.CancelFunc
+	session   string
+	entrySHA  string
+	dnsTarget string
+	canceled  atomic.Bool
+	dnsCalls  atomic.Int32
+	dnsReply  atomic.Int32
+	workers   sync.WaitGroup
+	mu        sync.Mutex
+	closed    bool
+}
+
+// Keep the real Box DNS router and compiled TCP transport. Only the final Tor
+// network is replaced by an owned in-memory DNS peer; no system resolver or
+// external socket can make the selected-policy proof pass accidentally.
+func (o *torMTUFixtureOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	target := o.dnsTarget
+	if target == "" {
+		target = "9.9.9.9:53"
+	}
+	if ctx.Err() != nil || network != N.NetworkTCP && !(network == N.NetworkUDP && o.dnsTarget != "") || destination.String() != target {
+		return nil, errors.New("selected DNS escaped captured Tor route")
+	}
+	o.mu.Lock()
+	if o.closed || o.ctx.Err() != nil {
+		o.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	o.workers.Add(1)
+	o.mu.Unlock()
+	client, server := net.Pipe()
+	stop := context.AfterFunc(o.ctx, func() { _ = client.Close(); _ = server.Close() })
+	go func() {
+		defer o.workers.Done()
+		defer stop()
+		defer server.Close()
+		peer := &dns.Conn{Conn: server}
+		read := peer.ReadMsg
+		write := peer.WriteMsg
+		if network == N.NetworkUDP {
+			// A datagram returned by the captured entry has no TCP length prefix.
+			read = func() (*dns.Msg, error) {
+				packet := make([]byte, 8192)
+				n, err := server.Read(packet)
+				if err != nil {
+					return nil, err
+				}
+				message := new(dns.Msg)
+				return message, message.Unpack(packet[:n])
+			}
+			write = func(message *dns.Msg) error {
+				packet, err := message.Pack()
+				if err == nil {
+					_, err = server.Write(packet)
+				}
+				return err
+			}
+		}
+		for {
+			query, err := read()
+			if err != nil {
+				return
+			}
+			o.dnsCalls.Add(1)
+			answer := new(dns.Msg)
+			answer.SetReply(query)
+			if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+				answer.Rcode = dns.RcodeRefused
+			} else {
+				name, address := query.Question[0].Name, "93.184.216.34"
+				switch o.dnsReply.Load() {
+				case 1:
+					answer.Rcode = dns.RcodeServerFailure
+				case 2:
+					address = "10.77.0.1"
+				case 3:
+					name = "unrelated.example."
+				}
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: name, Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP(address)}}
+			}
+			if write(answer) != nil {
+				return
+			}
+		}
+	}()
+	return client, nil
 }
 
 func (o *torMTUFixtureOutbound) TorSessionID() string { return o.session }
@@ -46,13 +134,23 @@ func (o *torMTUFixtureOutbound) CancelTor(session string) {
 		o.cancel()
 	}
 }
-func (o *torMTUFixtureOutbound) TorProofWithPredecessor(ctx context.Context, session string, _ *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+func (o *torMTUFixtureOutbound) TorProofWithPredecessor(ctx context.Context, session string, entry *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+	if o.entrySHA != "" && entry.Fingerprint() != o.entrySHA {
+		return mobiletor.Proof{}, errors.New("fixture circuit belongs to another captured entry")
+	}
 	return mobiletor.Proof{SessionID: session, IsTor: o.TorHealthy(session) && ctx.Err() == nil, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
 }
 func (o *torMTUFixtureOutbound) TorMeasurementDial(context.Context, string, bool, string) (net.Conn, error) {
 	return nil, net.ErrClosed
 }
-func (o *torMTUFixtureOutbound) Close() error { o.cancel(); return nil }
+func (o *torMTUFixtureOutbound) Close() error {
+	o.mu.Lock()
+	o.closed = true
+	o.mu.Unlock()
+	o.cancel()
+	o.workers.Wait()
+	return nil
+}
 
 const torMTUFrozenProfile = `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":53,"home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","jumbo_tun":false}`
 
@@ -62,10 +160,21 @@ func torMTUNativeFixture(t *testing.T) (*box.Box, string) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	return torMTUNativeConfigFixture(t, raw)
+}
+
+func torMTUNativeConfigFixture(t *testing.T, raw string) (*box.Box, string) {
+	t.Helper()
 	registry := include.OutboundRegistry()
 	outbound.Register[torMTUFixtureOptions](registry, "routervpn-tor", func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options torMTUFixtureOptions) (adapter.Outbound, error) {
 		owned, cancel := context.WithCancel(ctx)
-		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID}, nil
+		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID, entrySHA: options.EntrySHA256}, nil
+	})
+	// This peer stands in for the private network beyond the encrypted entry.
+	// The shipping DNS router and UDP/TCP transport still select their own detour.
+	outbound.Register[option.ShadowsocksOutboundOptions](registry, "shadowsocks", func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		owned, cancel := context.WithCancel(ctx)
+		return &torMTUFixtureOutbound{Adapter: outbound.NewAdapter("shadowsocks", tag, []string{N.NetworkTCP, N.NetworkUDP}, nil), ctx: owned, cancel: cancel, dnsTarget: "10.77.0.53:53"}, nil
 	})
 	ctx, cancel := context.WithCancel(context.Background())
 	t.Cleanup(cancel)
@@ -82,17 +191,96 @@ func torMTUNativeFixture(t *testing.T) (*box.Box, string) {
 	return engine, raw
 }
 
+func TestRouterTorHomeDNSUsesOnlyCapturedPrivateEntry(t *testing.T) {
+	entry := `{"id":"private-entry","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.77.0.1:8787","api_token":"captured-entry-secret","adguard_ipv4":"10.77.0.53"}`
+	base := `{"inbounds":[{"type":"tun","tag":"owned-tun","address":["172.29.10.1/30"],"mtu":1392,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"198.51.100.22","server_port":443,"method":"aes-256-gcm","password":"captured-transport-secret"}],"dns":{"servers":[{"type":"tcp","tag":"entry-dns","server":"10.77.0.53","detour":"proxy"}],"final":"entry-dns"},"route":{"final":"proxy","auto_detect_interface":true}}`
+	for _, protocol := range []string{"", "udp", "tcp"} {
+		for _, failed := range []bool{false, true} {
+			t.Run(protocol+map[bool]string{false: "/answer", true: "/failed"}[failed], func(t *testing.T) {
+				profile := `{"id":"tor-exit","node_kind":"external","external":{"protocol":"tor"},"dns_protocol":"` + protocol + `","home_lan_access":false,"ipv6_mode":"off","mtu_policy":"auto","multihop_enabled":true,"multihop_entry_id":"private-entry","multihop_exit_id":"tor-exit","multihop_entry_mode":"ss","multihop_exit_mode":"tor","multihop_execution":"local"}`
+				config, err := mobiletor.CompileProfileWithPredecessor(profile, "frozen-session", base, entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				engine, _ := torMTUNativeConfigFixture(t, config)
+				lower, _ := engine.Outbound().Outbound("proxy")
+				final, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+				private := lower.(*torMTUFixtureOutbound)
+				tor := final.(*torMTUFixtureOutbound)
+				if failed {
+					private.dnsReply.Store(1)
+				}
+				proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", entry)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(proof.Cancel)
+				raw, err := proof.Run()
+				if private.dnsCalls.Load() == 0 || tor.dnsCalls.Load() != 0 {
+					t.Fatal("Home DNS did not exclusively use the captured private entry")
+				}
+				if failed {
+					if err == nil || raw != "" || proof.Healthy() {
+						t.Fatal("failed private AdGuard silently fell back", err)
+					}
+					return
+				}
+				var result mobiletor.Proof
+				if err != nil || json.Unmarshal([]byte(raw), &result) != nil || !result.DNSProven || !proof.Healthy() {
+					t.Fatal("captured private AdGuard proof failed", err)
+				}
+				if err := engine.Outbound().Remove("proxy"); err != nil {
+					t.Fatal(err)
+				}
+				if proof.Healthy() {
+					t.Fatal("removed private entry retained Tor DNS authority")
+				}
+			})
+		}
+	}
+}
+
 func torMTUProved(t *testing.T, engine *box.Box) *box.RouterVPNTorProofRequest {
 	t.Helper()
 	proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err := proof.Run(); err != nil || !proof.Healthy() {
+	raw, err := proof.Run()
+	if err != nil || !proof.Healthy() {
 		t.Fatal("actual native capture rejected synthetic circuit fixture", err)
+	}
+	var delivered mobiletor.Proof
+	if json.Unmarshal([]byte(raw), &delivered) != nil || !delivered.DNSProven {
+		t.Fatal("actual selected native DNS route was not proved")
+	}
+	final, found := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	if !found || final.(*torMTUFixtureOutbound).dnsCalls.Load() == 0 {
+		t.Fatal("Tor native proof bypassed the compiled DNS transport")
 	}
 	t.Cleanup(proof.Cancel)
 	return proof
+}
+
+func TestRouterTorProofRejectsActualSelectedDNSFailures(t *testing.T) {
+	for _, kind := range []int32{1, 2, 3} {
+		t.Run(map[int32]string{1: "failed-response", 2: "private-answer", 3: "unrelated-answer"}[kind], func(t *testing.T) {
+			engine, _ := torMTUNativeFixture(t)
+			final, found := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+			if !found {
+				t.Fatal("actual Tor fixture missing")
+			}
+			owned := final.(*torMTUFixtureOutbound)
+			owned.dnsReply.Store(kind)
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			if raw, err := proof.Run(); err == nil || raw != "" || proof.Healthy() || !owned.canceled.Load() || owned.dnsCalls.Load() == 0 {
+				t.Fatal("failed captured DNS became a healthy Tor session", err)
+			}
+		})
+	}
 }
 
 func TestRouterTorMTUCapturesActualNativeGraphAndPolicy(t *testing.T) {

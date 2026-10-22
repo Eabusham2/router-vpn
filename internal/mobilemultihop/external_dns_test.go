@@ -76,9 +76,8 @@ func TestExternalDNSDefaultsFastestAndHomeOwnerAreExplicit(t *testing.T) {
 	graph, capture := externalTestFixture(t, "http-connect", "")
 	p := capture["profile"].(map[string]any)
 	delete(p, "dns_mode")
-	_, meta, _ := externalTestDNS(t, graph, capture)
-	if meta["dns_mode"] != "rescue" || meta["dns_default_migrated"] != true {
-		t.Fatal("absent external DNS did not use the explicit Rescue migration")
+	if _, err := NewExternalPolicy(externalTestJSON(t, graph), externalTestJSON(t, capture)); err == nil || !strings.Contains(err.Error(), "Home AdGuard") {
+		t.Fatal("absent external DNS must require its Home owner, not become public Rescue", err)
 	}
 	p["dns_mode"], p["fastest_dns_host"] = "fastest", "9.9.9.9"
 	if _, err := NewExternalPolicy(externalTestJSON(t, graph), externalTestJSON(t, capture)); err == nil {
@@ -88,7 +87,7 @@ func TestExternalDNSDefaultsFastestAndHomeOwnerAreExplicit(t *testing.T) {
 	p = capture["profile"].(map[string]any)
 	p["dns_mode"], p["fastest_dns_host"], p["dns_host"] = "fastest", "149.112.112.112", "1.1.1.1"
 	p["fastest_dns_latency_ms"] = 4.5
-	_, meta, _ = externalTestDNS(t, graph, capture)
+	_, meta, _ := externalTestDNS(t, graph, capture)
 	if meta["dns_server"] != "149.112.112.112" || meta["dns_protocol"] != "udp" || meta["dns_port"] != float64(53) {
 		t.Fatal("Fastest lost its captured winner")
 	}
@@ -133,6 +132,40 @@ func TestExternalDNSDefaultsFastestAndHomeOwnerAreExplicit(t *testing.T) {
 	_, meta, _ = externalTestDNS(t, graph, capture)
 	if meta["dns_server"] != "fd77:77::1" || meta["dns_protocol"] != "tcp" || meta["dns_port"] != float64(5353) {
 		t.Fatal("explicit Home resolver transport or IPv6 identity changed")
+	}
+}
+
+func TestExternalMissingDNSKeepsHomeDefaultAndCapturedEntry(t *testing.T) {
+	for _, mode := range []string{"absent", "", "home"} {
+		for _, entry := range []string{"", "router-wg", "socks5"} {
+			t.Run(mode+"/"+entry, func(t *testing.T) {
+				graph, capture := externalTestFixture(t, "https-connect", entry)
+				profile := capture["profile"].(map[string]any)
+				if mode == "absent" {
+					delete(profile, "dns_mode")
+				} else {
+					profile["dns_mode"] = mode
+				}
+				before := externalTestJSON(t, capture)
+				policy, err := NewExternalPolicy(externalTestJSON(t, graph), before)
+				if entry != "router-wg" {
+					if err == nil || !strings.Contains(err.Error(), "Home AdGuard") {
+						t.Fatal("missing private Home owner silently obtained public DNS", err)
+					}
+				} else {
+					if err != nil {
+						t.Fatal(err)
+					}
+					metadata := externalTestRead(t, policy.Metadata())
+					if metadata["dns_mode"] != "home" || metadata["dns_server"] != "10.77.0.1" || metadata["dns_detour"] != "entry-wg" || metadata["entry_proof"] != "required" || metadata["dns_default_migrated"] == true {
+						t.Fatal("Home default lost its exact private entry and proof", metadata)
+					}
+				}
+				if before != externalTestJSON(t, capture) {
+					t.Fatal("default handling changed the saved selection or node credentials")
+				}
+			})
+		}
 	}
 }
 

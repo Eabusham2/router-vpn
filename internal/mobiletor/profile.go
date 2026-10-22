@@ -28,67 +28,139 @@ var dnsHostname = regexp.MustCompile(`^[A-Za-z0-9](?:[A-Za-z0-9.-]{0,251}[A-Za-z
 // by the UI. Its encrypted final outbound owns Tor's TCP and packet underlay.
 // The function opens no socket, stages no secret, and mutates no caller object.
 func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, error) {
-	if !profileIdentifier.MatchString(sessionID) {
-		return "", errors.New("Tor requires the captured connection session identity")
+	return compileProfile(profileJSON, sessionID, predecessorJSON, "", false)
+}
+
+// CompileProfileWithPredecessor binds the exact captured Router node to its
+// complete native graph. Home DNS belongs to that authenticated private entry;
+// the Tor circuit still owns application traffic and its independent exit proof.
+func CompileProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string) (string, error) {
+	return compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON, true)
+}
+
+// ValidateProfile checks an idle saved node without claiming a runnable graph
+// or replacing its unresolved Home default with a public resolver. Connection
+// compilation and live proof remain mandatory after the entry is captured.
+func ValidateProfile(profileJSON string) error {
+	profile, _, err := capturedTorProfile(profileJSON)
+	if err != nil {
+		return err
 	}
+	if _, _, err = torSelectedDNS(profile, nil, true); err != nil {
+		return err
+	}
+	root, tun, _, err := torPredecessor("")
+	if err != nil {
+		return err
+	}
+	root["dns"] = map[string]any{}
+	if err = applyTorDevicePolicy(root, tun, profile); err != nil {
+		return err
+	}
+	_, err = torProfileDigest(profile)
+	return err
+}
+
+func capturedTorProfile(profileJSON string) (map[string]any, []string, error) {
 	profile, err := profileObject(profileJSON, 256*1024)
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
-		return "", errors.New("Tor requires one frozen external node profile")
+		return nil, nil, errors.New("Tor requires one frozen external node profile")
 	}
-	for _, key := range []string{"start_layer", "dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "ipv6_mode", "mtu_policy"} {
+	for _, key := range []string{"start_layer", "dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "ipv6_mode", "mtu_policy", "multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode", "multihop_execution"} {
 		if value, exists := profile[key]; exists {
 			if _, ok := value.(string); !ok {
-				return "", errors.New("Tor profile policy requires typed saved values")
+				return nil, nil, errors.New("Tor profile policy requires typed saved values")
 			}
 		}
 	}
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if value, exists := profile[key]; exists && value != "" && value != nil {
-			return "", errors.New("Tor external profile contains another node's control credentials")
+			return nil, nil, errors.New("Tor external profile contains another node's control credentials")
 		}
 	}
 	if value := profileString(profile, "start_layer"); value != "" && value != "off" {
-		return "", errors.New("Tor external profile cannot replace a captured predecessor Start Layer")
+		return nil, nil, errors.New("Tor external profile cannot replace a captured predecessor Start Layer")
 	}
 	external, ok := profile["external"].(map[string]any)
 	if !ok || external["expected_public_ip"] != nil && external["expected_public_ip"] != "" {
-		return "", errors.New("Tor requires dynamic exit proof, with no fixed expected public IP")
+		return nil, nil, errors.New("Tor requires dynamic exit proof, with no fixed expected public IP")
 	}
 	for key := range external {
 		if key != "protocol" && key != "expected_public_ip" && key != "tor_bridge" {
-			return "", errors.New("Tor external profile contains a second protocol owner")
+			return nil, nil, errors.New("Tor external profile contains a second protocol owner")
 		}
 	}
 	bridges := []string{}
 	switch external["protocol"] {
 	case "tor":
 		if external["tor_bridge"] != nil {
-			return "", errors.New("Plain Tor cannot discard an imported bridge selection")
+			return nil, nil, errors.New("Plain Tor cannot discard an imported bridge selection")
 		}
 	case "tor-bridge":
 		block, ok := external["tor_bridge"].(map[string]any)
 		if !ok {
-			return "", errors.New("Tor bridge configuration is missing")
+			return nil, nil, errors.New("Tor bridge configuration is missing")
 		}
 		for key := range block {
 			if key != "transport" && key != "bridges" && key != "socks_port" {
-				return "", errors.New("Unknown Tor bridge configuration field")
+				return nil, nil, errors.New("Unknown Tor bridge configuration field")
 			}
 		}
 		data, _ := json.Marshal(block)
 		var configuration common.ExternalTorBridgeConfig
 		if json.Unmarshal(data, &configuration) != nil || configuration.SocksPort != 0 {
-			return "", errors.New("Mobile Tor owns its private SOCKS listener")
+			return nil, nil, errors.New("Mobile Tor owns its private SOCKS listener")
 		}
 		plan, err := NewPlan(configuration)
 		if err != nil {
-			return "", err
+			return nil, nil, err
 		}
 		for _, bridge := range plan.Bridges {
 			bridges = append(bridges, bridge.Line)
 		}
 	default:
-		return "", errors.New("Selected external node is not Tor")
+		return nil, nil, errors.New("Selected external node is not Tor")
+	}
+
+	return profile, bridges, nil
+}
+
+func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool) (string, error) {
+	if !profileIdentifier.MatchString(sessionID) {
+		return "", errors.New("Tor requires the captured connection session identity")
+	}
+	profile, bridges, err := capturedTorProfile(profileJSON)
+	if err != nil {
+		return "", err
+	}
+	var entry map[string]any
+	var entryProof *PredecessorProof
+	if captured {
+		throughEntry, exists := profile["multihop_enabled"]
+		if exists && throughEntry != true && throughEntry != false {
+			return "", errors.New("Tor requires an explicit captured multihop selection")
+		}
+		if (throughEntry == true) != (predecessorJSON != "") || (throughEntry == true) != (predecessorProfileJSON != "") {
+			return "", errors.New("Tor entry graph does not match the captured node selection")
+		}
+	}
+	if predecessorProfileJSON != "" {
+		entry, err = profileObject(predecessorProfileJSON, 256*1024)
+		if err != nil {
+			return "", err
+		}
+		entryProof, err = NewPredecessorProof(predecessorProfileJSON)
+		if err != nil {
+			return "", err
+		}
+		external := profile["external"].(map[string]any)
+		if predecessorJSON == "" || profile["multihop_enabled"] != true ||
+			profile["multihop_entry_id"] != entry["id"] || profile["multihop_exit_id"] != profile["id"] ||
+			profile["multihop_exit_mode"] != external["protocol"] || entry["id"] == profile["id"] ||
+			!profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) ||
+			(profileString(profile, "multihop_execution") != "" && profileString(profile, "multihop_execution") != "local") {
+			return "", errors.New("Tor predecessor belongs to a different captured entry, exit or execution selection")
+		}
 	}
 
 	root, tun, predecessor, err := torPredecessor(predecessorJSON)
@@ -98,11 +170,17 @@ func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, err
 	if err := torFreezeNaiveDNS(root); err != nil {
 		return "", err
 	}
-	selected, err := torSelectedDNS(profile)
+	selected, home, err := torSelectedDNS(profile, entry, false)
 	if err != nil {
 		return "", err
 	}
 	selected["tag"], selected["detour"] = profileDNS, ProfileOutboundTag
+	if home {
+		if predecessor == "" || entryProof == nil {
+			return "", errors.New("Home AdGuard requires its captured private Router VPN entry")
+		}
+		selected["detour"] = predecessor
+	}
 	bootstrap := make(map[string]any, len(selected))
 	for key, value := range selected {
 		bootstrap[key] = value
@@ -142,6 +220,9 @@ func CompileProfile(profileJSON, sessionID, predecessorJSON string) (string, err
 	tor := map[string]any{"type": "routervpn-tor", "tag": ProfileOutboundTag, "session_id": sessionID, "bridges": bridges, "profile_sha256": profileDigest}
 	if predecessor != "" {
 		tor["detour"] = predecessor
+	}
+	if entryProof != nil {
+		tor["entry_sha256"] = entryProof.Fingerprint()
 	}
 	if len(bridges) != 0 {
 		tor["domain_resolver"] = map[string]any{"server": bootstrapDNS}
@@ -491,70 +572,124 @@ func torAuthenticatedWhitening(outbound map[string]any) bool {
 	return true
 }
 
-func torSelectedDNS(profile map[string]any) (map[string]any, error) {
+func torSelectedDNS(profile, entry map[string]any, idle bool) (map[string]any, bool, error) {
 	mode := profileString(profile, "dns_mode")
-	if mode == "" || mode == "rescue" {
-		return map[string]any{"type": "https", "server": "1.1.1.1", "server_port": 443, "path": "/dns-query", "tls": map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"}}, nil
+	if mode == "" {
+		mode = "home"
 	}
-	if mode == "home" {
-		return nil, errors.New("A Tor circuit exit cannot reach private Home AdGuard; select the reachable resolver explicitly, or put that home node after Tor")
+	if raw := profile["dns_bootstrap"]; raw != nil {
+		return nil, false, errors.New("Tor DNS requires its exact literal resolver; an unrelated hostname bootstrap cannot be discarded")
 	}
+	if mode == "rescue" {
+		return map[string]any{"type": "https", "server": "1.1.1.1", "server_port": 443, "path": "/dns-query", "tls": map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"}}, false, nil
+	}
+	home := mode == "home"
+	host := profileString(profile, "dns_host")
 	protocol := profileString(profile, "dns_protocol")
 	switch mode {
+	case "home":
+		if entry == nil && !idle {
+			return nil, true, errors.New("Home AdGuard requires the exact paired Router VPN entry; choose that entry or explicitly select a reachable TCP, DoT or DoH resolver for direct Tor")
+		}
+		if entry != nil {
+			addresses := []string{}
+			for _, key := range []string{"adguard_ipv4", "adguard_ipv6"} {
+				raw, exists := entry[key]
+				if !exists {
+					continue
+				}
+				text, ok := raw.(string)
+				if !ok {
+					return nil, true, errors.New("Home DNS entry requires typed captured AdGuard addresses")
+				}
+				if text == "" {
+					continue
+				}
+				address, err := netip.ParseAddr(text)
+				if err != nil || address.Zone() != "" || address.Is4In6() || !address.IsPrivate() ||
+					(key == "adguard_ipv4" && !address.Is4()) || (key == "adguard_ipv6" && !address.Is6()) {
+					return nil, true, errors.New("Home DNS must use the captured entry's private AdGuard address")
+				}
+				addresses = append(addresses, text)
+			}
+			if len(addresses) == 0 {
+				return nil, true, errors.New("Home DNS entry has no saved private AdGuard address")
+			}
+			if host == "" {
+				host = addresses[0]
+			}
+			matched := false
+			for _, address := range addresses {
+				if host == address {
+					matched = true
+				}
+			}
+			if !matched {
+				return nil, true, errors.New("Home DNS belongs to a different node than the captured Tor entry")
+			}
+		}
+		if protocol == "" {
+			protocol = "udp"
+		}
 	case "custom":
 	case "dot", "doh", "doh3":
 		protocol = mode
 	case "fastest":
-		return nil, errors.New("Saved Fastest UDP DNS does not run through a Tor TCP circuit; select TCP, DoT or DoH")
+		return nil, false, errors.New("Saved Fastest UDP DNS does not run through a Tor TCP circuit; select TCP, DoT or DoH")
 	default:
-		return nil, errors.New("Unknown captured Tor DNS mode")
+		return nil, false, errors.New("Unknown captured Tor DNS mode")
 	}
 	switch protocol {
 	case "dot":
 		protocol = "tls"
 	case "doh":
 		protocol = "https"
+	case "doh3":
+		protocol = "h3"
 	}
-	if protocol != "tcp" && protocol != "tls" && protocol != "https" {
-		return nil, errors.New("Tor DNS requires the selected resolver's TCP, DoT or DoH endpoint")
+	if protocol != "tcp" && protocol != "tls" && protocol != "https" && !(home && (protocol == "udp" || protocol == "h3")) {
+		return nil, home, errors.New("Tor DNS requires the selected resolver's TCP, DoT or DoH endpoint; private Home DNS uses its captured entry transport")
 	}
-	address, err := netip.ParseAddr(profileString(profile, "dns_host"))
-	if err != nil || address.Zone() != "" || !address.IsGlobalUnicast() || address.IsPrivate() {
-		return nil, errors.New("Tor DNS requires a reachable literal resolver address; no system bootstrap or private resolver substitution is allowed")
+	if host != "" || !home || !idle {
+		address, err := netip.ParseAddr(host)
+		if err != nil || address.Zone() != "" || address.Is4In6() || !address.IsGlobalUnicast() || address.IsPrivate() != home {
+			return nil, home, errors.New("Tor DNS requires the exact reachable literal resolver; no system lookup or private/public resolver substitution is allowed")
+		}
+		host = address.String()
 	}
 	port, err := profileInteger(profile, "dns_port", 0)
 	if err != nil || port < 0 || port > 65535 {
-		return nil, errors.New("Invalid captured Tor DNS port")
+		return nil, home, errors.New("Invalid captured Tor DNS port")
 	}
 	if port == 0 {
 		port = 53
 		if protocol == "tls" {
 			port = 853
 		}
-		if protocol == "https" {
+		if protocol == "https" || protocol == "h3" {
 			port = 443
 		}
 	}
-	server := map[string]any{"type": protocol, "server": address.Unmap().String(), "server_port": port}
-	if protocol != "tcp" {
+	server := map[string]any{"type": protocol, "server": host, "server_port": port}
+	if protocol == "tls" || protocol == "https" || protocol == "h3" {
 		hostname := profileString(profile, "dns_server_name")
 		if !dnsHostname.MatchString(hostname) || strings.Contains(hostname, "..") {
-			return nil, errors.New("Encrypted Tor DNS requires the captured certificate server name")
+			return nil, home, errors.New("Encrypted Tor DNS requires the captured certificate server name")
 		}
 		server["tls"] = map[string]any{"enabled": true, "server_name": hostname}
 	}
-	if protocol == "https" {
+	if protocol == "https" || protocol == "h3" {
 		path := profileString(profile, "dns_path")
 		if path == "" {
 			path = "/dns-query"
 		}
 		parsed, err := url.ParseRequestURI(path)
 		if err != nil || !strings.HasPrefix(path, "/") || strings.HasPrefix(path, "//") || parsed.IsAbs() || parsed.Host != "" || strings.ContainsAny(path, "\x00\r\n") || len(path) > 2048 {
-			return nil, errors.New("Invalid captured Tor DoH request path")
+			return nil, home, errors.New("Invalid captured Tor DoH request path")
 		}
 		server["path"] = path
 	}
-	return server, nil
+	return server, home, nil
 }
 
 func applyTorDevicePolicy(root, tun, profile map[string]any) error {

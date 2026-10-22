@@ -31,6 +31,13 @@ func (c *routerVPNTorCapturedOwner) Identity() string {
 	return c.engine.Identity()
 }
 
+func (c *routerVPNTorCapturedOwner) DNSProof(ctx context.Context) error {
+	if c == nil || c.engine == nil || c.Identity() == "" {
+		return errors.New("native Tor DNS owner is unavailable")
+	}
+	return c.engine.DNSProof(ctx, c.engine.tunTag)
+}
+
 func init() {
 	routerVPNTorCaptureProof = func(s *Box) (routerVPNTorProofCapture, error) {
 		if s == nil || s.routerVPNTorOptions == "" {

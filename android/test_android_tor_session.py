@@ -47,7 +47,7 @@ public class RouterTorProofRequest {
  public RouterTorProofRequest(CommandServer s,String id,String p){server=s;session=id;predecessor=p;}
  public String run()throws Exception {if(entered!=null){entered.countDown();release.await();}ran=true;
   if(!alive&&!ignoreCancellation)throw new IllegalStateException("cancelled");
-  return response!=null?response:new JSONObject().put("session_id",session).put("is_tor",true).put("ip","8.8.4.4").put("checked_at",Instant.now().toString()).toString();}
+  return response!=null?response:new JSONObject().put("session_id",session).put("is_tor",true).put("dns_proven",true).put("ip","8.8.4.4").put("checked_at",Instant.now().toString()).toString();}
  public void cancel(){cancels.incrementAndGet();if(!ignoreCancellation){alive=false;if(release!=null)release.countDown();if(Libbox.dnsRelease!=null)Libbox.dnsRelease.countDown();}}
  public boolean healthy(){return alive&&ran;}
 }'''
@@ -95,10 +95,11 @@ public final class TorSessionHarness {
    Libbox.created.alive=false;check(!f.session.healthy(),"dead native owner stayed healthy");check(Libbox.dnsCalls==1,"health started another proof");}
  }
  static void responses()throws Exception{
-  for(String field:new String[]{"session","false","typed","private4","private6","loopback","hostname","legacy","mapped","empty","stale","future","extra","missing","oversized"}){
+  for(String field:new String[]{"session","false","typed","dns-missing","dns-false","dns-typed","private4","private6","loopback","hostname","legacy","mapped","empty","stale","future","extra","missing","oversized"}){
    Libbox.reset();Fixture f=new Fixture(false);RouterTorProofRequest r=new RouterTorProofRequest(f.server,"session-owned","");Libbox.next=r;
-   JSONObject p=new JSONObject().put("session_id","session-owned").put("is_tor",true).put("ip","8.8.8.8").put("checked_at",Instant.now().toString());
+   JSONObject p=new JSONObject().put("session_id","session-owned").put("is_tor",true).put("dns_proven",true).put("ip","8.8.8.8").put("checked_at",Instant.now().toString());
    switch(field){case "session":p.put("session_id","other");break;case "false":p.put("is_tor",false);break;case "typed":p.put("is_tor","true");break;
+    case "dns-missing":p.remove("dns_proven");break;case "dns-false":p.put("dns_proven",false);break;case "dns-typed":p.put("dns_proven","true");break;
     case "private4":p.put("ip","10.0.0.1");break;case "private6":p.put("ip","fd00::1");break;case "loopback":p.put("ip","127.0.0.1");break;case "hostname":p.put("ip","must-not-resolve.example");break;case "legacy":p.put("ip","010.1.2.3");break;case "mapped":p.put("ip","::ffff:8.8.8.8");break;case "empty":p.put("ip","");break;
     case "stale":p.put("checked_at",Instant.now().minusSeconds(60).toString());break;case "future":p.put("checked_at",Instant.now().plusSeconds(120).toString());break;
     case "extra":p.put("other","foreign");break;case "missing":p.remove("checked_at");break;case "oversized":p.put("ip","x".repeat(5000));break;}

@@ -104,7 +104,7 @@ func TestRouterTorProofRunAndHealthRequireSameSuccessfulOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	var proof mobiletor.Proof
-	if json.Unmarshal([]byte(raw), &proof) != nil || proof.SessionID != f.session || !proof.IsTor || !r.Healthy() {
+	if json.Unmarshal([]byte(raw), &proof) != nil || proof.SessionID != f.session || !proof.IsTor || proof.DNSProven || !r.Healthy() {
 		t.Fatal("captured proof was not delivered")
 	}
 	if _, err := r.Run(); err == nil || f.calls.Load() != 1 {
@@ -122,6 +122,124 @@ func TestRouterTorProofRunAndHealthRequireSameSuccessfulOwner(t *testing.T) {
 	r.Cancel()
 	if r.Healthy() {
 		t.Fatal("canceled successful owner remained healthy")
+	}
+}
+
+type torBoxDNSCapture struct {
+	valid atomic.Bool
+	calls atomic.Int32
+	prove func(context.Context) error
+}
+
+func (c *torBoxDNSCapture) Identity() string {
+	if c.valid.Load() {
+		return "captured-native-graph"
+	}
+	return ""
+}
+func (c *torBoxDNSCapture) DNSProof(ctx context.Context) error {
+	c.calls.Add(1)
+	if c.prove != nil {
+		return c.prove(ctx)
+	}
+	return nil
+}
+
+func TestRouterTorProofRequiresCapturedDNSBeforeSuccess(t *testing.T) {
+	for _, kind := range []string{"success", "DNS-failure", "graph-retired", "cancel", "owner-replaced"} {
+		t.Run(kind, func(t *testing.T) {
+			old := newTorBoxFixture(t, "captured")
+			replacement := newTorBoxFixture(t, "replacement")
+			var current atomic.Pointer[torBoxFixture]
+			current.Store(old)
+			r, err := newRouterTorProofRequest(context.Background(), old, old.session, "", func() bool { return current.Load() == old })
+			if err != nil {
+				t.Fatal(err)
+			}
+			capture := &torBoxDNSCapture{}
+			capture.valid.Store(true)
+			r.capture = capture
+			capture.prove = func(ctx context.Context) error {
+				if ctx.Err() != nil || old.calls.Load() != 1 || r.Healthy() {
+					t.Error("DNS did not run after circuit proof and before Connected")
+				}
+				switch kind {
+				case "DNS-failure":
+					return errors.New("private-resolver-secret")
+				case "graph-retired":
+					capture.valid.Store(false)
+				case "cancel":
+					r.Cancel()
+				case "owner-replaced":
+					current.Store(replacement)
+				}
+				return nil
+			}
+			raw, err := r.Run()
+			if kind == "success" {
+				var proof mobiletor.Proof
+				if err != nil || json.Unmarshal([]byte(raw), &proof) != nil || !proof.IsTor || !proof.DNSProven || !r.Healthy() {
+					t.Fatal("selected DNS proof did not authorize captured session", err)
+				}
+				capture.valid.Store(false)
+				if r.Healthy() {
+					t.Fatal("retired DNS graph retained session authority")
+				}
+				r.Cancel()
+			} else if err == nil || raw != "" || r.Healthy() || strings.Contains(err.Error(), "secret") {
+				t.Fatal("failed or stale selected DNS proof became Connected", raw, err)
+			}
+			if capture.calls.Load() != 1 || old.cancels.Load() != 1 || replacement.cancels.Load() != 0 || replacement.ctx.Err() != nil {
+				t.Fatal("DNS proof reached or stopped a replacement owner")
+			}
+		})
+	}
+}
+
+func TestRouterTorProofCancellationRetainsPendingDNSAndRejectsLateSuccess(t *testing.T) {
+	f := newTorBoxFixture(t, "captured")
+	r, err := newRouterTorProofRequest(context.Background(), f, f.session, "", func() bool { return true })
+	if err != nil {
+		t.Fatal(err)
+	}
+	entered, release, canceled := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	capture := &torBoxDNSCapture{}
+	capture.valid.Store(true)
+	capture.prove = func(ctx context.Context) error {
+		close(entered)
+		<-ctx.Done()
+		close(canceled)
+		<-release // An uncooperative native callback remains owned until it exits.
+		return nil
+	}
+	r.capture = capture
+	done := make(chan error, 1)
+	go func() {
+		raw, err := r.Run()
+		if raw != "" {
+			t.Error("canceled DNS proof delivered a result")
+		}
+		done <- err
+	}()
+	<-entered
+	r.Cancel()
+	<-canceled
+	select {
+	case <-done:
+		t.Fatal("proof forgot its pending native DNS callback")
+	default:
+	}
+	if r.Healthy() {
+		t.Fatal("pending canceled DNS proof retained authority")
+	}
+	close(release)
+	select {
+	case err := <-done:
+		if err == nil || r.Healthy() || f.cancels.Load() != 1 {
+			t.Fatal("late DNS success was published after cancellation", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("released native DNS proof failed to drain")
 	}
 }
 

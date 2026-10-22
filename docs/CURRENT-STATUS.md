@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated October 19, 2026. This file describes committed source and remaining
+Updated October 22, 2026. This file describes committed source and remaining
 delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
@@ -11,20 +11,38 @@ The source has advanced beyond the old WireGuard-only mobile multihop and
 mobile-Tor exclusions. Those historical restrictions no longer describe the
 application source and must not trigger reimplementation of committed work.
 
-The active implementation work is:
+The October 22 continuation has published these bounded changes:
 
-- Finish Android and Apple adoption of complete MAX profiles whose physical
-  outer endpoint is a hostname. The committed shared compiler validates the
-  complete capture, uses an explicitly owned cancellable resolver and preserves
-  credentials, TLS identity, mode and source hashes. The app/provider handoff
-  must retain that ownership through startup, cancellation and replacement.
-- Apply saved DNS, IPv6, LAN and MTU policy consistently to ordinary external
-  nodes in the graph compiler and native hosts. Explicit Home DNS now survives
-  import and reload. It requires a captured, proven Router VPN entry; a direct
-  external connection cannot silently replace it with Rescue. Absent legacy
-  policy retains its documented persisted migration.
-- Complete the new exact-SHA APK, Xcode/IPA, desktop packages, server images,
-  generated compose and publication gates after source changes.
+- Complete Android connection profiles and desktop connection profiles retain
+  the captured external path and references to private credentials. Android
+  measured hop selection uses a temporary owned entry, rejects stale results,
+  and restores the captured session. Its quick candidate sample is separate
+  from the durable 50-sample node benchmark.
+- Desktop external paths preserve Home AdGuard as the default and capture its
+  address from the Router VPN entry. A direct path without a usable selected
+  resolver is rejected before stopping a working connection. Explicit Rescue
+  and custom resolver choices remain explicit.
+- Shared paired external Shadowsocks Server/Compare execution uses an
+  authenticated isolated lease, an explicit TLS response endpoint, independent
+  node/DNS/exit proof, the required comparison formula, and checked cleanup.
+  Apple hosts now wire that path through PacketTunnel, all 19 supported entry
+  mode families and their Start Layers, saved profiles and source-bound
+  restoration of the already-proved winner. This does not establish server
+  execution of every external protocol.
+- The Apple MAX hostname handoff, captured LAN-policy fixtures, macOS session
+  transform and Windows/macOS Tor composition checks have executable
+  regressions. The current source does not need the old MAX hostname or
+  composite-exit fixture patches reapplied.
+
+Published references for these changes are `5dfc934a`, `520b50ba`, `e4f82958`,
+`a6188b3d`, `75a90caf`, `b28178a1`, and `a444e6df`. Their local tests and source
+integration do not certify another commit's native packages or device behavior.
+
+Active work continues on Android external Server/Compare host adoption,
+selected Home/custom DNS through the mobile native graph and proof lifecycle,
+and measured entry-to-candidate selection across the remaining native clients.
+The final exact-SHA APK, Xcode/IPA, desktop packages, server images, generated
+compose and publication gates must run on the resulting source generation.
 
 The Apple MAX source gate, LAN-policy fixture, canonical macOS native-test
 paths and Android pinned-NDK setup order have been corrected on main. These
@@ -139,8 +157,13 @@ See [SPEED-LAB.md](SPEED-LAB.md).
 Android and Apple now contain native Tor and pluggable-transport source for
 plain Tor, obfs4, meek_lite, Snowflake, WebTunnel and validated bridge sets.
 The C package and PT/session implementation join the existing VPN runtime;
-Tor is not simulated by an ordinary SOCKS profile. Selected DNS, Tor proof and
-the captured predecessor are checked before Connected. Imported values cannot
+Tor is not simulated by an ordinary SOCKS profile. Its native proof request
+requires a live query through the exact captured DNS router before delivery;
+both mobile hosts require that DNS confirmation. Home DNS traverses the
+captured private entry, while an explicitly selected public resolver traverses
+Tor. Entry credentials and policy are fingerprinted, and a retired DNS or entry
+owner invalidates the proof. Native constructor and in-memory network tests do
+not establish a public circuit or a physical device's routing. Imported values cannot
 inject torrc commands or executable plugin paths.
 
 Real Java/Swift graph fixtures cover 348 Tor variants per mobile platform.

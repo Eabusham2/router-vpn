@@ -194,7 +194,7 @@ public final class LibboxRouterTorProofRequest {
         lock.lock(); proved=true; lock.unlock()
         if let payload { return payload }
         let clock=ISO8601DateFormatter();clock.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
-        let value:[String:Any] = ["session_id":session,"ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date())]
+        let value:[String:Any] = ["session_id":session,"ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date()),"dns_proven":true]
         return String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self)
     }
     // Intentionally permits late Run success after cancel. The shipping host
@@ -695,6 +695,24 @@ final class CompletionState: @unchecked Sendable {
             try owner.start(files:torFiles,strict:false)
             let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
             check("malformed/replayed/non-Tor results cannot report Connected",done.wait() && done.values()==(1,1));owner.stop()
+        }
+        for fault in ["missing","false","number","string","null","tor-number"] {
+            let clock=ISO8601DateFormatter();clock.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
+            var proof:[String:Any] = ["session_id":"tor-session","ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date()),"dns_proven":true]
+            switch fault {
+            case "missing":proof.removeValue(forKey:"dns_proven")
+            case "false":proof["dns_proven"]=false
+            case "number":proof["dns_proven"]=1
+            case "string":proof["dns_proven"]="true"
+            case "null":proof["dns_proven"]=NSNull()
+            default:proof["is_tor"]=1
+            }
+            let payload=String(decoding:try JSONSerialization.data(withJSONObject:proof),as:UTF8.self)
+            torState.configure(payload:payload)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner.start(files:torFiles,strict:false)
+            let done=CompletionState();owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
+            check("Tor cannot connect without exact Boolean DNS/exit proof: "+fault,done.wait() && done.values()==(1,1));owner.stop()
         }
         let hopState=LibboxHopTestState.shared
         for tor in [false,true] {for action in ["stable","cancel-proof","late-factory","retired-reply"] {

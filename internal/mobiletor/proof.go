@@ -22,6 +22,7 @@ type Proof struct {
 	SessionID string    `json:"session_id"`
 	IP        string    `json:"ip"`
 	IsTor     bool      `json:"is_tor"`
+	DNSProven bool      `json:"dns_proven,omitempty"`
 	CheckedAt time.Time `json:"checked_at"`
 }
 

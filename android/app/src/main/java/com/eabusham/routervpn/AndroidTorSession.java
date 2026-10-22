@@ -57,7 +57,8 @@ final class AndroidTorSession {
         String response = captured.run();
         if (response == null || response.getBytes(StandardCharsets.UTF_8).length > 4096) throw unavailable();
         JSONObject proof = new JSONObject(response);
-        if (proof.length() != 4 || !sessionID.equals(proof.getString("session_id"))
+        if (proof.length() != 5 || !sessionID.equals(proof.getString("session_id"))
+                || !(proof.get("dns_proven") instanceof Boolean) || !proof.getBoolean("dns_proven")
                 || !(proof.get("is_tor") instanceof Boolean) || !proof.getBoolean("is_tor")) throw unavailable();
         InetAddress address = AndroidNumericAddress.parse(proof.getString("ip"));
         byte[] bytes = address.getAddress();
