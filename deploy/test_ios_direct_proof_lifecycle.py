@@ -38,6 +38,7 @@ struct RouterVPNExternalPolicy {let executionRequested:String?}
  var started=false
  var externalStarted=false
  var measurements:[String]=[]
+ var dnsMeasurements:[String]=[]
  var externalMTU=0
  var torMTU=0
  var executionBindings=0
@@ -50,6 +51,7 @@ struct RouterVPNExternalPolicy {let executionRequested:String?}
  func proveTor(sessionID:String,profile:String,predecessorProfile:String?,completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil);owner.torSession=sessionID;owner.torProfile=profile;owner.proofCallback=completion}
  func proveExternal(completion:@escaping(Error?)->Void){precondition(owner.pathProofGuard != nil && externalStarted);owner.nativeExternalProof=true;owner.proofCallback=completion}
  func enableExternalHopMeasurement(exitID:String)throws{precondition(owner.pathProofGuard != nil);measurements.append(exitID);owner.duringMeasurement?();if owner.measurementFails{throw NSError(domain:"MeasurementFixture",code:1)}}
+ func enableExternalDNSMeasurement(exitID:String)throws{guard owner.pathProofGuard != nil else{throw NSError(domain:"DNSFixture",code:2)};precondition(measurements==[exitID] && (owner.nativeExternalProof || owner.torSession != nil));dnsMeasurements.append(exitID);owner.duringDNS?();if owner.dnsFails{throw NSError(domain:"DNSFixture",code:1)}}
  func activateExternalMTU()throws{precondition(owner.pathProofGuard != nil && externalStarted && !measurements.isEmpty);externalMTU += 1;owner.duringMTU?();if owner.mtuFails{throw NSError(domain:"MTUFixture",code:1)}}
  func activateTorMTU()throws{precondition(owner.pathProofGuard != nil && owner.torSession != nil && !externalStarted && !measurements.isEmpty);torMTU += 1;owner.duringMTU?();if owner.mtuFails{throw NSError(domain:"MTUFixture",code:2)}}
  func bindExternalExecutionSource(_ source:IOSMultihopExecution.Source)throws{precondition(owner.nativeExternalProof && externalMTU==1 && !measurements.isEmpty);executionBindings += 1;owner.duringExecution?();if owner.executionFails{throw IOSMultihopExecution.issue()}}
@@ -80,6 +82,7 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var torProfile:String?
  var nativeExternalProof=false
  var duringMeasurement:(()->Void)?,measurementFails=false
+ var duringDNS:(()->Void)?,dnsFails=false
  var duringMTU:(()->Void)?,mtuFails=false
  var duringExecution:(()->Void)?,executionFails=false
  var arms=0
@@ -112,9 +115,10 @@ TEST=r'''
   func check(_ name:String,_ test:Bool){if !test{fatalError(name)};checks += 1}
   let failure=NSError(domain:"Fixture",code:1)
   for kind in ["raw","external","native-external","server-external","tor"] {
-   for event in ["stable","network","proof-error","replacement","stop","forwarding-change","measurement-change","measurement-error","mtu-change","mtu-error","execution-change","execution-error"] {
+   for event in ["stable","network","proof-error","replacement","stop","forwarding-change","measurement-change","measurement-error","dns-change","dns-error","mtu-change","mtu-error","execution-change","execution-error"] {
     if kind != "raw" && event=="forwarding-change"{continue}
     if ["measurement-change","measurement-error"].contains(event) && !["native-external","server-external","tor"].contains(kind){continue}
+    if ["dns-change","dns-error"].contains(event) && !["native-external","server-external","tor"].contains(kind){continue}
     if ["mtu-change","mtu-error"].contains(event) && !["native-external","server-external","tor"].contains(kind){continue}
     if ["execution-change","execution-error"].contains(event) && kind != "server-external"{continue}
     let p=PacketTunnelProvider();var replies:[Error?]=[]
@@ -135,6 +139,8 @@ TEST=r'''
     if event=="forwarding-change"{p.duringForwarding={p.pathProofGuard=nil}}
     if event=="measurement-change"{p.duringMeasurement={p.pathProofGuard=nil}}
     if event=="measurement-error"{p.measurementFails=true}
+    if event=="dns-change"{p.duringDNS={p.pathProofGuard=nil}}
+    if event=="dns-error"{p.dnsFails=true}
     if event=="mtu-change"{p.duringMTU={p.pathProofGuard=nil}}
     if event=="mtu-error"{p.mtuFails=true}
     if event=="execution-change"{p.duringExecution={p.pathProofGuard=nil}}
@@ -148,6 +154,7 @@ TEST=r'''
      check("successful engine retained",kind=="raw" ? adapter?.stops==0 : engine?.stops==0)
      check("forwarding only for verified owned home",p.forwarded==(kind=="raw" ? 1:0))
      if ["native-external","server-external","tor"].contains(kind){check("measurement activation follows native proof and frozen exit",engine?.measurements==["saved-exit"])}
+     if kind != "raw"{check("DNS activates only after native proof for exact exit",engine?.dnsMeasurements==(["native-external","server-external","tor"].contains(kind) ? ["saved-exit"]:[]))}
      if kind != "raw"{check("ordinary external MTU activates under final network guard",engine?.externalMTU==(["native-external","server-external"].contains(kind) ? 1:0))}
      if kind != "raw"{check("Tor MTU activates under its distinct final network guard",engine?.torMTU==(kind=="tor" ? 1:0))}
      if kind != "raw"{check("only proved execution binds a winner after MTU adoption",engine?.executionBindings==(kind=="server-external" ? 1:0))}
@@ -155,6 +162,7 @@ TEST=r'''
      check("stale proof never becomes Connected",replies[0] != nil)
      check("only original engine stopped",kind=="raw" ? adapter?.stops==1 : engine?.stops==1)
      if event != "forwarding-change"{check("failed proof does not enable forwarding",p.forwarded==0)}
+     if ["dns-change","dns-error"].contains(event){check("DNS activation failure prevents MTU and execution adoption",engine?.externalMTU==0 && engine?.torMTU==0 && engine?.executionBindings==0)}
      if event=="proof-error"{check("failed proof releases own monitor",p.pathProofGuard==nil && p.pathMonitor==nil && monitor?.cancelled==true)}
      if event=="replacement"{
       check("replacement network guard survives",p.pathProofGuard===nextGuard && p.pathMonitor===nextMonitor && nextMonitor?.cancelled==false)

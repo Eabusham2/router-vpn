@@ -8,9 +8,11 @@ export GOTOOLCHAIN=go1.26.3
 # this same checkout in their single module graph; retain that replacement.
 XRAY=${2:-$(cd "$VENDOR" && go list -mod=readonly -m -f '{{.Dir}}' github.com/xtls/xray-core)}
 [[ $(git -C "$XRAY" rev-parse HEAD) == 50231eaff98ccc31b5cbd247a721c16e97fe5ec1 ]]
-# Composite encrypted-lane tests import the owned native Xray adapter. Install
-# both source families before tidy scans every test import, including custom tags.
+# Composite encrypted-lane tests import the owned native Xray adapter, while
+# shared Box proof methods use the owned Tor types. Install all source families
+# before tidy scans every test import, including custom tags.
 python3 "$ROOT/deploy/prepare-mobile-multihop.py" "$VENDOR"
+python3 "$ROOT/deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)"
 python3 "$ROOT/deploy/prepare-apple-xray.py" "$VENDOR" "$XRAY"
 (
   cd "$VENDOR"

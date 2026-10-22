@@ -33,6 +33,7 @@ SOURCES["android/os/Looper.java"] = "package android.os;public class Looper {pub
 SOURCES["android/app/AlertDialog.java"] = SOURCES["android/app/AlertDialog.java"].replace("BUTTON_NEGATIVE=-2;", "BUTTON_NEGATIVE=-2,BUTTON_NEUTRAL=-3;").replace("public AlertDialog create(){", "public Builder setNeutralButton(CharSequence text,OnClickListener listener){return button(BUTTON_NEUTRAL,text,listener);}public AlertDialog create(){")
 SOURCES["android/widget/TextView.java"] = SOURCES["android/widget/TextView.java"][:-1] + "public void setTextIsSelectable(boolean value){} }"
 SOURCES["io/nekohasekai/libbox/RouterHopMeasurement.java"] = "package io.nekohasekai.libbox;public class RouterHopMeasurement {public void close(){}}"
+SOURCES["io/nekohasekai/libbox/RouterDNSMeasurement.java"] = E.SOURCES["io/nekohasekai/libbox/RouterDNSMeasurement.java"]
 SOURCES["io/nekohasekai/libbox/RouterExternalProofRequest.java"] = E.SOURCES["io/nekohasekai/libbox/RouterExternalProofRequest.java"].replace('boolean entry=!capture.equals("{}");', 'boolean entry=new JSONObject(capture).has("entry");')
 SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Libbox.java"][:-1] + r'''
  public static volatile RouterExternalProofRequest externalCreated;
@@ -41,6 +42,7 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  public static String passedSource,passedCapture;public static boolean wrongFactory;public static int externalCalls;
  public static RouterExternalProofRequest routerExternalCreateProof(CommandServer core,String source,String capture,String session){externalCreated=new RouterExternalProofRequest(core,source,capture,session);return externalCreated;}
  public static RouterHopMeasurement routerExternalCreateHopMeasurement(CommandServer core,RouterExternalProofRequest proof,String source,String capture,String session){return new RouterHopMeasurement();}
+ public static RouterDNSMeasurement routerExternalCreateDNSMeasurement(CommandServer core,RouterExternalProofRequest proof,String source,String capture,String session){return new RouterDNSMeasurement();}
  public static RouterMTU newRouterExternalMTU(CommandServer core,RouterMTUPlatform platform,RouterExternalProofRequest proof,String source,String capture)throws Exception{
   if(proof==null||!proof.healthy()||proof.server!=core||!proof.source.equals(source)||!proof.capture.equals(capture))throw new IllegalStateException("wrong retained proof/config");
   passedServer=core;passedProof=proof;passedSource=source;passedCapture=capture;externalCalls++;

@@ -141,9 +141,24 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 func requireApplePacketTunnelSources(t *testing.T, required ...string) {
 	t.Helper()
 	project := repoFile(t, "ios/RouterVPN/project.yml")
-	_, target, ok := strings.Cut(project, "\n  RouterVPNPacketTunnel:\n")
+	sources, ok := applePacketTunnelSources(project)
 	if !ok {
 		t.Fatal("PacketTunnel build target is missing")
+	}
+	for _, source := range required {
+		if !sources[source] {
+			t.Errorf("PacketTunnel target does not compile required source %q", source)
+		}
+	}
+}
+
+func applePacketTunnelSources(project string) (map[string]bool, bool) {
+	// Git's Windows checkout may use CRLF; target boundaries and exact source
+	// membership are identical to the LF checkout used by Apple/Linux CI.
+	project = strings.ReplaceAll(project, "\r\n", "\n")
+	_, target, ok := strings.Cut(project, "\n  RouterVPNPacketTunnel:\n")
+	if !ok {
+		return nil, false
 	}
 	sources := make(map[string]bool)
 	for _, line := range strings.Split(target, "\n") {
@@ -158,9 +173,22 @@ func requireApplePacketTunnelSources(t *testing.T, required ...string) {
 			sources[strings.TrimSpace(source)] = true
 		}
 	}
-	for _, source := range required {
-		if !sources[source] {
-			t.Errorf("PacketTunnel target does not compile required source %q", source)
+	return sources, true
+}
+
+func TestApplePacketTunnelMembershipAcrossCheckoutLineEndings(t *testing.T) {
+	project := "targets:\n  RouterVPN:\n    sources: [App, App/OnlyHost.swift]\n  RouterVPNPacketTunnel:\n    sources: [PacketTunnel, App/Required.swift]\n  Unrelated:\n    sources: [App/OnlyOtherTarget.swift]\n"
+	for _, newline := range []string{"\n", "\r\n"} {
+		sources, ok := applePacketTunnelSources(strings.ReplaceAll(project, "\n", newline))
+		if !ok || !sources["PacketTunnel"] || !sources["App/Required.swift"] {
+			t.Errorf("%q checkout lost exact extension source membership: %v", newline, sources)
+		}
+		if sources["App"] || sources["App/OnlyHost.swift"] || sources["App/OnlyOtherTarget.swift"] {
+			t.Errorf("%q checkout incorrectly accepted a different target's source: %v", newline, sources)
+		}
+		missing := strings.ReplaceAll(project, "  RouterVPNPacketTunnel:", "  DifferentExtension:")
+		if _, ok := applePacketTunnelSources(strings.ReplaceAll(missing, "\n", newline)); ok {
+			t.Errorf("%q checkout accepted a missing PacketTunnel target", newline)
 		}
 	}
 }

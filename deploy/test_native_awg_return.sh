@@ -10,21 +10,6 @@ git -C "$WORK/core" remote add origin https://github.com/SagerNet/sing-box.git
 git -C "$WORK/core" fetch -q --depth=1 origin "$PIN"
 git -C "$WORK/core" checkout -q --detach FETCH_HEAD
 test "$(git -C "$WORK/core" rev-parse HEAD)" = "$PIN"
-python3 - "$ROOT" "$WORK/core" <<'PY'
-from pathlib import Path
-import sys
-source,core=map(Path,sys.argv[1:])
-packages=('awgpolicy','routechoice','multihoprelay','mobilemultihop', 'mobilepq', 'applexray','startwhitening','nativesip003','nativecomposite','mobileperf','hopmeasure','nativeopenvpn')
-for package in packages:
-    target=core/'experimental/libbox/routervpn'/package
-    target.mkdir(parents=True,exist_ok=True)
-    for path in (source/'internal'/package).glob('*.go'):
-        if path.name.endswith('_test.go'):continue
-        text=path.read_text()
-        for name in packages:
-            text=text.replace('"router-vpn/internal/'+name+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"')
-        (target/path.name).write_text(text)
-PY
 python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$WORK/core"
 (
  cd "$WORK/core"

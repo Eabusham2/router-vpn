@@ -5,13 +5,19 @@ on:
       - 'ios/RouterVPN/PacketTunnel/IOSStartLayer.swift'
       - 'deploy/test_ios_start_layer.py'
       - 'internal/startwhitening/**'
+      - 'internal/mobilemultihop/**'
+      - 'mobile/amnezia/**'
+      - 'mobile/wireguard/**'
       - 'mobile/startwhitening/**'
       - 'cmd/start-layer-relay/**'
       - 'deploy/prepare-mobile-whitening.py'
+      - 'deploy/prepare-mobile-amnezia.py'
+      - 'deploy/mobile_wireguard_bind_policy.py'
       - 'deploy/prepare-mobile-buffers.py'
       - 'deploy/mobile_udp_socket_policy.py'
       - 'deploy/test_prepare_mobile_whitening.py'
       - 'deploy/test_mobile_whitening_pinned.sh'
+      - 'deploy/test_native_runner_dependencies.py'
       - '.github/workflows/mobile-start-layer-native.yml'
   workflow_dispatch:
 permissions:
@@ -36,6 +42,7 @@ jobs:
           set -euo pipefail
           go test -race -count=1 ./internal/startwhitening ./cmd/start-layer-relay
           python3 deploy/test_prepare_mobile_whitening.py
+          python3 deploy/test_native_runner_dependencies.py
           SING="$RUNNER_TEMP/routervpn-whitening-core"
           git init "$SING"
           git -C "$SING" remote add origin https://github.com/SagerNet/sing-box.git

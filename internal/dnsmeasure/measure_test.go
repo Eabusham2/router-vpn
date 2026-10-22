@@ -294,21 +294,85 @@ func TestIPv6OffCatalogRowsStayVisibleWithoutAnyIPv6Dial(t *testing.T) {
 func TestTLSCertificateFailureCannotBecomeLatency(t *testing.T) {
 	serverTLS, _ := certificates(t)
 	for _, transport := range []string{"tls", "https"} {
-		t.Run(transport, func(t *testing.T) {
-			s, e := fixture(t)
-			e.dial = func(context.Context, string) (net.Conn, error) {
-				return served(func(raw net.Conn) { _ = tls.Server(raw, serverTLS).Handshake() }), nil
-			}
-			if err := s.Start(firstRequest, transport); err != nil {
-				t.Fatal(err)
-			}
-			r := finish(t, s, firstRequest)
-			for _, row := range r.Results[1:] {
-				if row.Ready || row.Median != nil || row.Failed != 3 {
-					t.Fatal("untrusted certificate was accepted")
+		for _, version := range []uint16{tls.VersionTLS12, tls.VersionTLS13} {
+			t.Run(transport+"/"+tls.VersionName(version), func(t *testing.T) {
+				s, e := fixture(t)
+				config := serverTLS.Clone()
+				config.MinVersion, config.MaxVersion = version, version
+				e.dial = untrustedTLSResolver(t, config, transport)
+				if err := s.Start(firstRequest, transport); err != nil {
+					t.Fatal(err)
 				}
+				r := finish(t, s, firstRequest)
+				if len(r.Results) != 13 || !r.Results[0].Ready {
+					t.Fatal("certificate rejection changed the selected DNS row or catalog")
+				}
+				for _, row := range r.Results[1:] {
+					if row.Ready || row.Median != nil || row.Samples != 0 || row.Failed != 3 {
+						t.Fatal("untrusted certificate was accepted")
+					}
+				}
+				e.mu.Lock()
+				defer e.mu.Unlock()
+				if len(e.dials) != 36 || e.active || e.releases != 1 {
+					t.Fatal("certificate rejection did not join every sample and native activity")
+				}
+			})
+		}
+	}
+}
+
+func untrustedTLSResolver(t *testing.T, config *tls.Config, transport string) func(context.Context, string) (net.Conn, error) {
+	t.Helper()
+	// A real TCP pair lets a TLS rejection alert cross a pending server flight.
+	// Go 1.23 can otherwise block both writes on unbuffered net.Pipe until the
+	// sample deadline, exercising an artificial duplex deadlock instead of the
+	// certificate rejection. Keep the production sample/drain bounds unchanged.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	accepted := make(chan struct{})
+	var peers sync.WaitGroup
+	go func() {
+		defer close(accepted)
+		for {
+			raw, err := listener.Accept()
+			if err != nil {
+				return
 			}
-		})
+			peers.Add(1)
+			go func() {
+				defer peers.Done()
+				defer raw.Close()
+				_ = raw.SetDeadline(time.Now().Add(SampleTimeout))
+				connection := tls.Server(raw, config)
+				if connection.Handshake() != nil {
+					return
+				}
+				// A verification bypass must produce eligible answers and fail the
+				// test, rather than being hidden by a peer that sends no DNS reply.
+				if transport == "tls" {
+					tcpAnswer(connection)
+					return
+				}
+				request, err := http.ReadRequest(bufio.NewReader(connection))
+				if err != nil {
+					return
+				}
+				query, err := io.ReadAll(io.LimitReader(request.Body, maxDNSMessage+1))
+				if err != nil || len(query) > maxDNSMessage {
+					return
+				}
+				response := answer(query)
+				_, _ = io.WriteString(connection, "HTTP/1.1 200 OK\r\nContent-Type: application/dns-message\r\nContent-Length: "+strconv.Itoa(len(response))+"\r\nConnection: close\r\n\r\n")
+				_, _ = connection.Write(response)
+			}()
+		}
+	}()
+	t.Cleanup(func() { _ = listener.Close(); <-accepted; peers.Wait() })
+	return func(ctx context.Context, _ string) (net.Conn, error) {
+		return (&net.Dialer{}).DialContext(ctx, "tcp", listener.Addr().String())
 	}
 }
 

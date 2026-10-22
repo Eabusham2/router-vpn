@@ -3,7 +3,11 @@ set -euo pipefail
 ROOT=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 VENDOR=${1:?prepared pinned sing-box checkout}
 [[ $(git -C "$VENDOR" rev-parse HEAD) == 1ac1a339cb1223e9c70eae14c44411c75033c02d ]]
+# The required native base-over-Start-Layer gate exercises both WG and AWG.
+# Prepare the endpoint and its shared policy before the buffer step runs tidy.
+python3 "$ROOT/deploy/prepare-mobile-amnezia.py" "$VENDOR"
 python3 "$ROOT/deploy/prepare-mobile-buffers.py" "$VENDOR"
+python3 "$ROOT/deploy/prepare-mobile-amnezia.py" --verify-dependency "$VENDOR"
 FIXTURE_DIR=$(mktemp -d)
 trap 'rm -rf "$FIXTURE_DIR"' EXIT
 (cd "$ROOT" && go build -o "$FIXTURE_DIR/start-layer-relay" ./cmd/start-layer-relay)

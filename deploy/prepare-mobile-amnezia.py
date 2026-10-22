@@ -12,15 +12,36 @@ CORE='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 VERSION='v3.1.20260814'
 MODULE='github.com/amnezia-vpn/amneziawg-go/v3'
 SUM='h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0='
+POLICY_PACKAGES=('awgpolicy','routechoice','multihoprelay','mobilemultihop','mobilepq','applexray','startwhitening','nativesip003','nativecomposite','mobileperf','hopmeasure','nativeopenvpn')
 _scheduler_spec=importlib.util.spec_from_file_location('routervpn_gvisor_scheduler', ROOT/'deploy/prepare-gvisor-scheduler.py')
 SCHEDULER=importlib.util.module_from_spec(_scheduler_spec)
 _scheduler_spec.loader.exec_module(SCHEDULER)
 _packet_spec=importlib.util.spec_from_file_location('routervpn_sing_packet_concurrency', ROOT/'deploy/prepare-sing-packet-concurrency.py')
 PACKET=importlib.util.module_from_spec(_packet_spec)
 _packet_spec.loader.exec_module(PACKET)
+_wireguard_spec=importlib.util.spec_from_file_location('routervpn_native_base_wireguard_bind', ROOT/'deploy/mobile_wireguard_bind_policy.py')
+WIREGUARD_BIND=importlib.util.module_from_spec(_wireguard_spec)
+_wireguard_spec.loader.exec_module(WIREGUARD_BIND)
 
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))
+    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))+policy_inputs()+WIREGUARD_BIND.inputs()
+def policy_inputs():
+    return [path for package in POLICY_PACKAGES for path in sorted((ROOT/'internal'/package).glob('*.go')) if not path.name.endswith('_test.go')]
+def prepare_policies(vendor):
+    # The native endpoint and its real packet tests import this shared policy.
+    # Standalone callers need the same closure as a full Libbox preparation.
+    # Parent-module tests are not part of this native production import graph.
+    sources={}
+    for path in policy_inputs():
+        text=path.read_text()
+        for package in POLICY_PACKAGES:
+            text=text.replace('"router-vpn/internal/'+package+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+package+'"')
+        if '"router-vpn/internal/' in text:
+            raise ValueError('Native AWG policy import closure is incomplete: '+str(path.relative_to(ROOT)))
+        sources[vendor/'experimental/libbox/routervpn'/path.parent.name/path.name]=text
+    for path,text in sources.items():
+        path.parent.mkdir(parents=True,exist_ok=True)
+        path.write_text(text)
 def digest():
     h=hashlib.sha256()
     for path in inputs():h.update(str(path.relative_to(ROOT)).encode()+b'\0'+path.read_bytes())
@@ -31,6 +52,8 @@ def prepare(vendor):
         raise ValueError('native AWG requires the exact pinned core')
     SCHEDULER.prepare(vendor)
     PACKET.prepare(vendor)
+    WIREGUARD_BIND.prepare(vendor)
+    prepare_policies(vendor)
     registry=vendor/'include/registry.go';text=registry.read_text()
     for old,extra in [('"github.com/sagernet/sing-box/protocol/tor"','\n\t"github.com/sagernet/sing-box/protocol/routervpnamnezia"'),
                       ('\tregisterWireGuardEndpoint(registry)','\n\troutervpnamnezia.RegisterEndpoint(registry)')]:
