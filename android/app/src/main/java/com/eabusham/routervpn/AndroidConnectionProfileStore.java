@@ -14,6 +14,8 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Locale;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.Set;
 
 /** App-private connection-choice profiles. Linked node secrets are referenced by ID, never copied. */
@@ -24,11 +26,12 @@ final class AndroidConnectionProfileStore {
     private static final String MULTI_ON="multihop_on", MULTI_ENTRY="multihop_entry", MULTI_EXIT="multihop_exit", MULTI_MODE="multihop_exit_mode";
     private static final SecureRandom RANDOM=new SecureRandom();
     private static final String[] POLICY_KEYS={
-            "home_lan_access","kill_switch_policy","ipv6_mode","base_tunnel","base_fallback","start_layer",
+            "home_lan_access","home_lan_cidrs","kill_switch","kill_switch_policy","ipv6_mode","base_tunnel","base_fallback","start_layer",
             "auto_require_encrypted","auto_require_obfuscation","mtu_policy","manual_mtu",
-            "daita_enabled","jumbo_tun","socks_enabled","dns_mode","dns_protocol","dns_host",
-            "dns_port","dns_server_name","dns_path"
+            "daita_enabled","jumbo_tun","socks_enabled","startup_mode","auto_connect","dns_mode","dns_protocol","dns_host",
+            "dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_name","fastest_dns_latency_ms","dns_results","dns_bootstrap"
     };
+    private static final String[] SELECTION_KEYS={SELECTED_KIND,SELECTED_ID,MODE_KEY,CUSTOM_KEY,MULTI_ON,MULTI_ENTRY,MULTI_EXIT,MULTI_MODE,"multihop_execution","multihop_entry_mode"};
 
     static final class Record {
         final String id,name,nodeKind,nodeId,mode,startLayer; final List<String> customLayers; final boolean autoRequireEncrypted,autoRequireObfuscation;
@@ -49,35 +52,61 @@ final class AndroidConnectionProfileStore {
         requireIdle("loading a connection profile");
         JSONObject row=find(id);String kind=row.getString("node_kind"),nodeId=row.getString("node_id");
         String mode=normalizeMode(row.optString("mode","smart-auto"));List<String>layers=jsonStrings(row.optJSONArray("custom_layers"),32);
-        boolean multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks"));String execution=normalizeExecution(row.optString("multihop_execution","local"));String entryMode=normalizeEntryMode(row.optString("multihop_entry_mode","wg"));
-        if(multi){
-            if(!"router-vpn".equals(kind))throw new IllegalStateException("Android multihop connection profiles must use a Router VPN node, not an external-only selected node.");
-            if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null||findNode(exit)==null)throw new IllegalStateException("Saved multihop references missing/invalid Router nodes.");
-        }else{entry="";exit="";multiMode="shadowsocks";}
-        String preparedCustom=prepareCustomPresetJSON(mode,layers);
-        byte[] originalBundle=null,updatedBundle=null;
-        if("router-vpn".equals(kind)){
-            AndroidNodeStore.Node selected=findNode(nodeId);if(selected==null)throw new IllegalStateException("Saved Router node is no longer linked.");
-            originalBundle=readLimited(selected.file,AndroidNodeStore.MAX_BUNDLE);
-            JSONObject bundle=new JSONObject(new String(originalBundle,StandardCharsets.UTF_8)),profile=selectedProfile(bundle);if(profile==null)throw new IllegalStateException("Saved Router node bundle has no selected profile.");
-            JSONObject policy=row.optJSONObject("policy");if(policy!=null)for(String key:POLICY_KEYS){if(policy.has(key))profile.put(key,policy.get(key));}
-            updatedBundle=bundle.toString().getBytes(StandardCharsets.UTF_8);
-            String updatedId=AndroidNodeStore.deriveId(bundle,updatedBundle);
-            if(!nodeId.equals(updatedId))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity, so applying saved policy would change its local node ID. Re-import a current Router VPN bundle before loading this connection profile.");
-        }else if("external".equals(kind)){exits.get(nodeId);}else throw new IllegalStateException("Saved connection profile has an unsupported node kind.");
-
-        // All validation above is complete before any selection, node-file, preset or preference mutation.
-        if(updatedBundle!=null){AndroidNodeStore.Node applied=nodes.importBundle(updatedBundle);if(!nodeId.equals(applied.id))throw new IllegalStateException("Router node identity changed during connection-profile apply; refusing to continue.");}
-        SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,mode)
-                .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode).putString("multihop_execution",execution).putString("multihop_entry_mode",entryMode);
-        if(preparedCustom!=null)edit.putString(CUSTOM_KEY,preparedCustom);
-        if(!edit.commit()){
-            String rollbackDetail="";
-            if(originalBundle!=null){
-                try{AndroidNodeStore.Node restored=nodes.importBundle(originalBundle);if(!nodeId.equals(restored.id))throw new IllegalStateException("restored node identity changed");}
-                catch(Exception rollbackError){rollbackDetail=" Rollback also failed: "+rollbackError.getMessage();}
+        boolean external="external".equals(kind),multi=row.optBoolean("multihop_enabled",false);String entry=row.optString("multihop_entry_id",""),exit=row.optString("multihop_exit_id","");String multiMode=external?row.optString("multihop_exit_mode",""):multi?normalizeMultiMode(row.optString("multihop_exit_mode","shadowsocks")):"shadowsocks";String execution=normalizeExecution(row.optString("multihop_execution","local"));String entryMode=normalizeEntryMode(row.optString("multihop_entry_mode","wg"));
+        AndroidStandardExitStore.Entry originalExternal=external?AndroidStandardExitStore.copy(exits.get(nodeId)):null,updatedExternal=null;
+        if(external){
+            AndroidStandardExitStore.validate(originalExternal);
+            if(row.has("external_policy")){
+                requireExternalIdentity(row,originalExternal);
+                updatedExternal=AndroidStandardExitStore.copy(originalExternal);
+                JSONObject policy=AndroidConnectionProfilePolicy.external(row.getJSONObject("external_policy"),originalExternal.protocol);
+                if(AndroidTorProfile.isTor(originalExternal.protocol))updatedExternal.torPolicy=policy;else updatedExternal.policy=policy;
+                AndroidStandardExitStore.validate(updatedExternal);
             }
-            throw new IllegalStateException("Could not persist the loaded connection profile; prior Router node state was restored."+rollbackDetail);
+        }
+        if(multi){
+            if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Saved multihop references a missing/invalid entry.");
+            if(external){if(!exit.equals(nodeId)||!multiMode.equals(originalExternal.protocol)||!"local".equals(execution))throw new IllegalStateException("Saved external multihop must retain its exact exit protocol and local execution owner.");}
+            else if(findNode(exit)==null)throw new IllegalStateException("Saved multihop references a missing Router exit.");
+            requireEntryMode(findNode(entry),entryMode);
+        }else{entry="";exit="";multiMode=external?originalExternal.protocol:"shadowsocks";}
+        String preparedCustom=external?null:prepareCustomPresetJSON(mode,layers);
+        Map<String,NodeUpdate> updates=new LinkedHashMap<>();
+        if(!external)stageNode(updates,nodeId,row.optJSONObject("policy"),row.optString("node_profile_id",""));
+        if(multi){stageNode(updates,entry,row.optJSONObject("entry_policy"),row.optString("entry_profile_id",""));if(!external)stageNode(updates,exit,row.optJSONObject("exit_policy"),row.optString("exit_profile_id",""));}
+        if(updatedExternal!=null)validateExternalGraph(updatedExternal,multi?findNode(entry):null,entryMode);
+        AndroidNodeStore.SelectionSnapshot originalSelection=nodes.snapshotSelection();
+        Map<String,Object> originalPreferences=snapshotPreferences();
+        // All validation above is complete before any selection, node-file, preset or preference mutation.
+        List<NodeUpdate> applied=new ArrayList<>();boolean externalAttempted=false,selectionAttempted=false;
+        try{
+            requireIdle("loading a connection profile");
+            for(NodeUpdate update:updates.values()){
+                if(!java.util.Arrays.equals(update.original,readLimited(nodes.file(update.id),AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("A linked Router node changed during profile validation.");
+                applied.add(update);selectionAttempted=true;
+                byte[] updatedBundle=update.updated;
+                if(!update.id.equals(nodes.importBundle(updatedBundle).id))throw new IllegalStateException("Router node identity changed during connection-profile apply.");
+            }
+            if(updatedExternal!=null){
+                if(!AndroidStandardExitStore.snapshot(originalExternal).equals(AndroidStandardExitStore.snapshot(exits.get(nodeId))))throw new IllegalStateException("The linked external node changed during profile validation.");
+                externalAttempted=true;exits.save(updatedExternal);
+            }
+            selectionAttempted=true;
+            if(!external)nodes.select(nodeId);
+            else if(!originalSelection.id.isEmpty())nodes.select(originalSelection.id);
+            else nodes.restoreSelection(originalSelection);
+            SharedPreferences.Editor edit=prefs().edit().putString(SELECTED_KIND,kind).putString(SELECTED_ID,nodeId).putString(MODE_KEY,external?"external":mode)
+                    .putBoolean(MULTI_ON,multi).putString(MULTI_ENTRY,entry).putString(MULTI_EXIT,exit).putString(MULTI_MODE,multiMode).putString("multihop_execution",execution).putString("multihop_entry_mode",entryMode);
+            if(preparedCustom!=null)edit.putString(CUSTOM_KEY,preparedCustom);
+            if(!edit.commit())throw new IllegalStateException("Could not persist loaded connection choices.");
+        }catch(Exception failure){
+            Exception rollback=null;
+            if(externalAttempted)try{exits.save(originalExternal);}catch(Exception error){rollback=append(rollback,error);}
+            for(int i=applied.size()-1;i>=0;i--)try{NodeUpdate update=applied.get(i);byte[] originalBundle=update.original;if(!update.id.equals(nodes.importBundle(originalBundle).id))throw new IllegalStateException("Restored Router node identity changed.");}catch(Exception error){rollback=append(rollback,error);}
+            if(selectionAttempted)try{nodes.restoreSelection(originalSelection);}catch(Exception error){rollback=append(rollback,error);}
+            try{restorePreferences(originalPreferences);}catch(Exception error){rollback=append(rollback,error);}
+            IllegalStateException result=new IllegalStateException(rollback==null?"Could not load the connection profile; prior connection state was restored.":"Could not load the connection profile and rollback is incomplete; inspect the linked nodes before connecting.",failure);
+            if(rollback!=null)result.addSuppressed(rollback);throw result;
         }
         return toRecord(row);
     }
@@ -86,14 +115,116 @@ final class AndroidConnectionProfileStore {
 
     private JSONObject snapshot(String name,String id) throws Exception {
         SharedPreferences p=prefs();String kind=p.getString(SELECTED_KIND,"router-vpn"),nodeId=p.getString(SELECTED_ID,nodes.activeId());if(nodeId==null||nodeId.isEmpty())throw new IllegalStateException("Select a Router or Custom node first.");
-        JSONObject policy=null;if("router-vpn".equals(kind)){AndroidNodeStore.Node node=findNode(nodeId);if(node==null)throw new IllegalStateException("Selected Router node is not linked.");JSONObject profile=selectedProfile(readBundle(node.file));if(profile==null)throw new IllegalStateException("Selected Router node has no profile.");policy=new JSONObject();for(String key:POLICY_KEYS)if(profile.has(key))policy.put(key,profile.get(key));}
-        else if("external".equals(kind)){exits.get(nodeId);}else throw new IllegalStateException("Selected node kind is unsupported.");
-        String mode=normalizeMode(p.getString(MODE_KEY,"smart-auto"));List<String>layers=customLayers(mode);boolean multi=p.getBoolean(MULTI_ON,false);String entry=p.getString(MULTI_ENTRY,""),exit=p.getString(MULTI_EXIT,"");String multiMode=normalizeMultiMode(p.getString(MULTI_MODE,"shadowsocks"));
-        if(multi){if(!"router-vpn".equals(kind))throw new IllegalStateException("Disable multihop before saving an external-only connection profile.");if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null||findNode(exit)==null)throw new IllegalStateException("Current multihop selection is incomplete or references missing nodes.");}
-        else{entry="";exit="";multiMode="shadowsocks";}
+        boolean external="external".equals(kind);AndroidStandardExitStore.Entry custom=external?AndroidStandardExitStore.copy(exits.get(nodeId)):null;
+        NodePolicy policy=external?null:routerPolicy(nodeId);
+        if(!external&&!"router-vpn".equals(kind))throw new IllegalStateException("Selected node kind is unsupported.");
+        String mode=external?"external":normalizeMode(p.getString(MODE_KEY,"smart-auto"));List<String>layers=external?new ArrayList<>():customLayers(mode);boolean multi=p.getBoolean(MULTI_ON,false);String entry=p.getString(MULTI_ENTRY,""),exit=p.getString(MULTI_EXIT,"");String multiMode=external?custom.protocol:multi?normalizeMultiMode(p.getString(MULTI_MODE,"shadowsocks")):"shadowsocks";
+        String execution=normalizeExecution(p.getString("multihop_execution","local")),entryMode=normalizeEntryMode(p.getString("multihop_entry_mode","wg"));
+        if(multi){if(entry==null||exit==null||entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Current multihop selection is incomplete or references a missing entry.");if(external){if(!exit.equals(nodeId)||!p.getString(MULTI_MODE,"").equals(custom.protocol)||!"local".equals(execution))throw new IllegalStateException("Choose this exact external exit and its local native path before saving.");}else if(findNode(exit)==null)throw new IllegalStateException("Current multihop exit is missing.");requireEntryMode(findNode(entry),entryMode);}
+        else{entry="";exit="";multiMode=external?custom.protocol:"shadowsocks";}
         JSONObject row=new JSONObject().put("id",id).put("name",name).put("node_kind",kind).put("node_id",nodeId).put("mode",mode).put("custom_layers",new JSONArray(layers))
-                .put("multihop_enabled",multi).put("multihop_entry_id",entry==null?"":entry).put("multihop_exit_id",exit==null?"":exit).put("multihop_exit_mode",multiMode).put("multihop_execution",normalizeExecution(p.getString("multihop_execution","local"))).put("multihop_entry_mode",normalizeEntryMode(p.getString("multihop_entry_mode","wg")));if(policy!=null)row.put("policy",policy);return row;
+                .put("multihop_enabled",multi).put("multihop_entry_id",entry).put("multihop_exit_id",exit).put("multihop_exit_mode",multiMode).put("multihop_execution",execution).put("multihop_entry_mode",entryMode);
+        if(policy!=null)row.put("policy",policy.choices).put("node_profile_id",policy.profileId);
+        if(multi){NodePolicy entryPolicy=routerPolicy(entry);row.put("entry_policy",entryPolicy.choices).put("entry_profile_id",entryPolicy.profileId);if(!external){NodePolicy exitPolicy=routerPolicy(exit);row.put("exit_policy",exitPolicy.choices).put("exit_profile_id",exitPolicy.profileId);}}
+        if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi?findNode(entry):null,entryMode);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol));}
+        return row;
     }
+
+    static final class ExternalSelection {
+        final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry exit;final String entryMode;
+        ExternalSelection(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode){this.entry=entry;this.exit=exit;this.entryMode=entryMode;}
+        boolean direct(){return entry==null;}
+    }
+
+    /** Select a complete external path without starting a VPN or changing any node secret. */
+    synchronized void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String entryMode)throws Exception{
+        requireIdle("selecting an external path");
+        AndroidStandardExitStore.Entry current=exits.get(exit.id);
+        if(!AndroidStandardExitStore.snapshot(exit).equals(AndroidStandardExitStore.snapshot(current)))throw new IllegalStateException("The selected external node changed; select its path again.");
+        if(entry!=null){AndroidNodeStore.Node currentEntry=findNode(entry.id);if(currentEntry==null||!java.util.Arrays.equals(readLimited(entry.file,AndroidNodeStore.MAX_BUNDLE),readLimited(currentEntry.file,AndroidNodeStore.MAX_BUNDLE)))throw new IllegalStateException("The selected entry changed.");requireEntryMode(currentEntry,entryMode);}
+        validateExternalGraph(current,entry,entryMode);
+        Map<String,Object> original=snapshotPreferences();
+        try{
+            requireIdle("selecting an external path");
+            if(!prefs().edit().putString(SELECTED_KIND,"external").putString(SELECTED_ID,current.id).putString(MODE_KEY,"external")
+                    .putBoolean(MULTI_ON,entry!=null).putString(MULTI_ENTRY,entry==null?"":entry.id).putString(MULTI_EXIT,entry==null?"":current.id)
+                    .putString(MULTI_MODE,current.protocol).putString("multihop_execution","local").putString("multihop_entry_mode",entry==null?"wg":entryMode).commit())throw new IllegalStateException("Could not persist the selected external path.");
+        }catch(Exception failure){try{restorePreferences(original);}catch(Exception rollback){IllegalStateException error=new IllegalStateException("External path selection failed and rollback is incomplete.",failure);error.addSuppressed(rollback);throw error;}throw failure;}
+    }
+
+    synchronized ExternalSelection currentExternalPath(String id)throws Exception{
+        SharedPreferences p=prefs();
+        if(!"external".equals(p.getString(SELECTED_KIND,""))||!id.equals(p.getString(SELECTED_ID,"")))throw new IllegalStateException("Select the exact external node first.");
+        AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(exits.get(id));AndroidNodeStore.Node entry=null;String mode="wg";
+        if(p.getBoolean(MULTI_ON,false)){
+            String entryID=p.getString(MULTI_ENTRY,"");
+            if(!id.equals(p.getString(MULTI_EXIT,""))||!exit.protocol.equals(p.getString(MULTI_MODE,""))||!"local".equals(p.getString("multihop_execution","local")))throw new IllegalStateException("Choose this external node's exact local path in Edit hops.");
+            entry=findNode(entryID);mode=normalizeEntryMode(p.getString("multihop_entry_mode","wg"));requireEntryMode(entry,mode);
+        }
+        validateExternalGraph(exit,entry,mode);return new ExternalSelection(entry,exit,mode);
+    }
+
+    private static final class NodeUpdate {
+        final String id;final byte[] original,updated;
+        NodeUpdate(String id,byte[] original,byte[] updated){this.id=id;this.original=original;this.updated=updated;}
+    }
+
+    private static final class NodePolicy {
+        final String profileId;final JSONObject choices;
+        NodePolicy(String profileId,JSONObject choices){this.profileId=profileId;this.choices=choices;}
+    }
+
+    private NodePolicy routerPolicy(String id)throws Exception{
+        if(findNode(id)==null)throw new IllegalStateException("The saved Router node is no longer linked.");
+        JSONObject profile=selectedProfile(readBundle(nodes.file(id))),policy=new JSONObject();
+        if(profile==null)throw new IllegalStateException("The Router node has no selected profile.");
+        for(String key:POLICY_KEYS)if(profile.has(key))policy.put(key,profile.get(key));
+        String profileId=profile.optString("id","").trim();if(profileId.isEmpty()||profileId.length()>256)throw new IllegalStateException("The Router node has no bounded selected profile identity.");
+        return new NodePolicy(profileId,AndroidConnectionProfilePolicy.router(policy,POLICY_KEYS));
+    }
+
+    private void stageNode(Map<String,NodeUpdate> updates,String id,JSONObject saved,String profileId)throws Exception{
+        if(findNode(id)==null)throw new IllegalStateException("The saved Router node is no longer linked.");
+        byte[] original=readLimited(nodes.file(id),AndroidNodeStore.MAX_BUNDLE);
+        JSONObject bundle=new JSONObject(new String(original,StandardCharsets.UTF_8)),profile=selectedProfile(bundle);
+        if(profile==null)throw new IllegalStateException("The Router node has no selected profile.");
+        if(!profileId.isEmpty()&&!profileId.equals(profile.optString("id","").trim()))throw new IllegalStateException("The linked Router node's selected credential profile changed; update the saved connection profile.");
+        if(saved==null)return; // Legacy rows referenced the hop without copying its policy.
+        JSONObject policy=AndroidConnectionProfilePolicy.router(saved,POLICY_KEYS);
+        // New captures own absence/defaults too. Older rows never captured the
+        // expanded policy, so they may only replace the fields they recorded.
+        if(!profileId.isEmpty())for(String key:POLICY_KEYS)profile.remove(key);
+        for(Iterator<String> keys=policy.keys();keys.hasNext();){String key=keys.next();profile.put(key,policy.get(key));}
+        AndroidNodeStore.validateBundle(bundle);byte[] updatedBundle=bundle.toString().getBytes(StandardCharsets.UTF_8);
+        if(!id.equals(AndroidNodeStore.deriveId(bundle,updatedBundle)))throw new IllegalStateException("This legacy Router node has no stable proof-bound identity. Re-import its current bundle before restoring policy.");
+        NodeUpdate existing=updates.get(id);
+        if(existing!=null&&!java.util.Arrays.equals(existing.updated,updatedBundle))throw new IllegalStateException("A saved path assigns conflicting policies to the same Router node.");
+        if(existing==null)updates.put(id,new NodeUpdate(id,original,updatedBundle));
+    }
+
+    private static void requireEntryMode(AndroidNodeStore.Node entry,String mode)throws Exception{
+        normalizeEntryMode(mode);if(entry==null)throw new IllegalStateException("The saved entry is no longer linked.");
+        JSONObject bundle=readBundle(entry.file);AndroidNodeStore.validateBundle(bundle);
+        if(bundle.getJSONObject("profiles").optJSONObject(mode)==null)throw new IllegalStateException("The saved entry no longer supplies its selected transport.");
+    }
+
+    private static void requireExternalIdentity(JSONObject row,AndroidStandardExitStore.Entry exit)throws Exception{
+        if(!row.getString("external_protocol").equals(exit.protocol)||!row.getString("external_public_ip").equals(exit.expectedPublicIp))throw new IllegalStateException("The linked external node's protocol or public identity changed; update the saved connection profile.");
+    }
+
+    private static void validateExternalGraph(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode)throws Exception{
+        AndroidStandardExitStore.validate(exit);
+        JSONObject policy=AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(exit.protocol)?exit.torPolicy:exit.policy,exit.protocol);
+        if(entry!=null)requireEntryMode(entry,mode);
+        if(entry==null&&"home".equals(policy.optString("dns_mode","")))throw new IllegalArgumentException("Home AdGuard needs a selected Router VPN entry; choose it in Edit hops.");
+    }
+
+    private Map<String,Object> snapshotPreferences(){Map<String,?> current=prefs().getAll();Map<String,Object> result=new LinkedHashMap<>();for(String key:SELECTION_KEYS)if(current.containsKey(key)){Object value=current.get(key);if(MULTI_ON.equals(key)?!(value instanceof Boolean):!(value instanceof String))throw new IllegalStateException("Saved selection preferences have an invalid type.");result.put(key,value);}return result;}
+    private void restorePreferences(Map<String,Object> original){
+        SharedPreferences.Editor edit=prefs().edit();for(String key:SELECTION_KEYS){if(!original.containsKey(key)){edit.remove(key);continue;}Object value=original.get(key);if(value instanceof String)edit.putString(key,(String)value);else if(value instanceof Boolean)edit.putBoolean(key,(Boolean)value);else if(value instanceof Integer)edit.putInt(key,(Integer)value);else if(value instanceof Long)edit.putLong(key,(Long)value);else if(value instanceof Float)edit.putFloat(key,(Float)value);else throw new IllegalStateException("Saved selection preferences have an invalid type.");}
+        if(!edit.commit())throw new IllegalStateException("Could not restore previous connection preferences.");
+    }
+    private static Exception append(Exception aggregate,Exception error){if(aggregate==null)return error;aggregate.addSuppressed(error);return aggregate;}
 
     private void requireIdle(String action){if(AndroidVpnMutationGuard.isBusy(context))throw new IllegalStateException("Disconnect Router VPN or let the active transition finish before "+action+"; live session identity and proof must remain immutable.");}
     private AndroidNodeStore.Node findNode(String id) throws Exception { for(AndroidNodeStore.Node n:nodes.list())if(n.id.equals(id))return n;return null; }
@@ -134,11 +265,16 @@ final class AndroidConnectionProfileStore {
             }
             normalizeMode(row.optString("mode", "smart-auto"));
             jsonStrings(row.optJSONArray("custom_layers"), 32);
-            normalizeMultiMode(row.optString("multihop_exit_mode", "shadowsocks"));
+            if(row.has("multihop_enabled")&&!(row.get("multihop_enabled") instanceof Boolean))throw new IllegalStateException("Saved multihop enabled must be boolean.");
+            if(row.has("custom_layers")&&!(row.get("custom_layers") instanceof JSONArray))throw new IllegalStateException("Saved CUSTOM layers must be a list.");
+            if("router-vpn".equals(kind)&&row.optBoolean("multihop_enabled",false))normalizeMultiMode(row.optString("multihop_exit_mode", "shadowsocks"));
             normalizeExecution(row.optString("multihop_execution","local"));
             normalizeEntryMode(row.optString("multihop_entry_mode","wg"));
-            JSONObject policy = row.optJSONObject("policy");
-            if (policy != null) {
+            for(String reference:new String[]{"node_profile_id","entry_profile_id","exit_profile_id"})if(row.has(reference)){
+                Object value=row.get(reference);if(!(value instanceof String)||((String)value).trim().isEmpty()||((String)value).length()>256)throw new IllegalStateException("Saved Router profile identity is invalid.");
+            }
+            for(String policyKey:new String[]{"policy","entry_policy","exit_policy"})if(row.has(policyKey)){
+                JSONObject policy=row.getJSONObject(policyKey);
                 Iterator<String> keys = policy.keys();
                 while (keys.hasNext()) {
                     String key = keys.next();
@@ -147,6 +283,12 @@ final class AndroidConnectionProfileStore {
                     }
                 }
                 if (policy.has("start_layer")) normalizeStartLayer(policy.optString("start_layer", "off"));
+                AndroidConnectionProfilePolicy.router(policy,POLICY_KEYS);
+            }
+            if(row.has("external_policy")){
+                if(!"external".equals(kind)||!(row.get("external_protocol") instanceof String)||!(row.get("external_public_ip") instanceof String))throw new IllegalStateException("Saved external policy lost its node identity.");
+                AndroidConnectionProfilePolicy.external(row.getJSONObject("external_policy"),row.getString("external_protocol"));
+                if(row.optBoolean("multihop_enabled",false)&&!row.getString("external_protocol").equals(row.getString("multihop_exit_mode")))throw new IllegalStateException("Saved external path protocol changed.");
             }
         }
         if (legacyPath || schema < SCHEMA_VERSION) {

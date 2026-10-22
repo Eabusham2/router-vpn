@@ -38,6 +38,7 @@ public class Context {public static final String CONNECTIVITY_SERVICE="connectiv
  public Intent(){}public Intent(String action){}public Intent(Context context,Class<?> type){}
  public Intent setAction(String value){return this;}public Intent putExtra(String key,String value){extras.put(key,value);return this;}
  public Intent putExtra(String key,long value){extras.put(key,value);return this;}public String getStringExtra(String key){return (String)extras.get(key);}
+ public Intent putExtra(String key,boolean value){extras.put(key,value);return this;}public boolean getBooleanExtra(String key,boolean fallback){return (Boolean)extras.getOrDefault(key,fallback);}
 }''',
 "android/content/DialogInterface.java": r'''package android.content;public interface DialogInterface {
  void dismiss();interface OnClickListener{void onClick(DialogInterface dialog,int which);}
@@ -52,11 +53,11 @@ public class Context {public static final String CONNECTIVITY_SERVICE="connectiv
  public boolean getBoolean(String key,boolean fallback){Object value=values.get(key);return value instanceof Boolean?(Boolean)value:fallback;}
 }''',
 "android/app/Activity.java": r'''package android.app;public class Activity extends android.content.Context {
- public static final int RESULT_OK=-1;public android.view.View content;public android.content.Intent permission;public int permissionRequest;
+ public static final int RESULT_OK=-1;public android.view.View content;public android.content.Intent permission;public int permissionRequest;public android.content.Intent intent=new android.content.Intent();public boolean finished;
  protected void onCreate(android.os.Bundle state){}protected void onResume(){}protected void onDestroy(){}
  protected void onSaveInstanceState(android.os.Bundle state){}protected void onActivityResult(int request,int result,android.content.Intent data){}
- public void setContentView(android.view.View view){content=view;}public boolean isFinishing(){return false;}
- public void runOnUiThread(Runnable action){action.run();}public android.content.Intent getIntent(){return new android.content.Intent();}
+ public void setContentView(android.view.View view){content=view;}public boolean isFinishing(){return finished;}public void finish(){finished=true;}
+ public void runOnUiThread(Runnable action){action.run();}public android.content.Intent getIntent(){return intent;}
  public void startActivity(android.content.Intent intent){}public void startActivityForResult(android.content.Intent intent,int request){permission=intent;permissionRequest=request;}
 }''',
 "android/net/VpnService.java": "package android.net;public final class VpnService {public static boolean needsPermission=true;public static android.content.Intent prepare(android.content.Context c){return needsPermission?new android.content.Intent():null;}}",
@@ -150,6 +151,13 @@ public final class AlertDialog implements DialogInterface {
 }
 
 APP = r'''
+// Selection persistence is exercised with the shipping stores by test_android_connection_profiles.py.
+// Here its API boundary records only public references so permission/UI behavior stays isolated.
+final class AndroidConnectionProfileStore {
+ static final java.util.Map<String,String> selected=new java.util.HashMap<>();final android.content.Context context;
+ AndroidConnectionProfileStore(android.content.Context c,AndroidNodeStore nodes,AndroidStandardExitStore exits){context=c;}
+ void selectExternalPath(AndroidStandardExitStore.Entry exit,AndroidNodeStore.Node entry,String mode){selected.put(context.getFilesDir().toString(),exit.id+"|"+(entry==null?"":entry.id)+"|"+mode);}
+}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context c){return busy;}}
 final class AndroidHomeStateStore {
  static final class Snapshot{boolean connected;String sessionId="form-session",phase="idle",logicalMode="",activeExternalName="",activeExternalProtocol="";}
@@ -305,6 +313,14 @@ public final class TorFormHarness {
   Path directory=Files.createTempDirectory(root,"direct-");StandardExitActivity activity=activity(directory,null);AndroidStandardExitStore.Entry selected=tor("tor","doh");store(activity).save(selected);
   invoke(activity,"requestDirect",selected);activity.onActivityResult(2101,Activity.RESULT_OK,null);
   check(AndroidRuntimeRegistry.get(activity).standardExit.starts==1&&AndroidRuntimeRegistry.get(activity).standardExit.mode.equals("external"),"direct Tor permission path was lost");
+  for(boolean direct:new boolean[]{true,false}){
+   directory=Files.createTempDirectory(root,"select-only-");activity=activity(directory,null);AndroidNodeStore.Node entry=node(directory);selected=tor("obfs4","doh");store(activity).save(selected);
+   activity.intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID,selected.id).putExtra(StandardExitActivity.EXTRA_SELECT_PATH,true);activity.onResume();
+   AlertDialog paths=AlertDialog.last;check(paths.itemsVisible()&&paths.items.length==2,"external path choices are reachable without connecting");paths.clickItem(direct?0:1);
+   if(!direct){AlertDialog.last.clickItem(0);AlertDialog.last.clickItem(0);}
+   check(activity.finished&&activity.permission==null&&get(activity,"pendingExit")==null&&AndroidRuntimeRegistry.get(activity).standardExit.starts==0,"selection-only path requested permission or started VPN");
+   check(AndroidConnectionProfileStore.selected.get(directory.toString()).equals(selected.id+"|"+(direct?"":entry.id)+"|wg"),"selection-only lost exact entry/exit reference");
+  }
  }
 
  static AndroidStandardExitStore.Entry ordinary(String kind)throws Exception{

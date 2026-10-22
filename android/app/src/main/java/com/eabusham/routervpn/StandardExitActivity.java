@@ -26,6 +26,7 @@ import java.nio.charset.StandardCharsets;
 /** Native custom standard-exit management and connection screen. */
 public final class StandardExitActivity extends Activity {
     static final String EXTRA_EXIT_ID = "routervpn.standard_exit_id";
+    static final String EXTRA_SELECT_PATH = "routervpn.select_external_path";
     private static final int PREPARE_STANDARD_EXIT = 2101;
     private static final String STATE_PENDING_ENTRY="pending_entry",STATE_PENDING_EXIT="pending_exit",STATE_PENDING_DIRECT="pending_direct",STATE_REQUESTED_HANDLED="requested_handled";
     private AndroidNodeStore nodeStore;
@@ -83,8 +84,19 @@ public final class StandardExitActivity extends Activity {
         String id = getIntent() == null ? "" : getIntent().getStringExtra(EXTRA_EXIT_ID);
         if (id == null || id.trim().isEmpty()) return;
         requestedExitHandled = true;
-        try { showExitActions(exitStore.get(id.trim())); }
+        try {
+            AndroidStandardExitStore.Entry exit=exitStore.get(id.trim());
+            if(selectionOnly())new AlertDialog.Builder(this).setCustomTitle(choiceHeader("External path","Choose a saved path. Return to the map and press Connect when ready."))
+                    .setItems(new String[]{"Direct → "+exit.name,"Router VPN entry → "+exit.name},(d,w)->{if(w==0)requestDirect(exit);else chooseEntry(exit);}).setNegativeButton("Cancel",null).show();
+            else showExitActions(exit);
+        }
         catch (Exception error) { toast("External node unavailable: " + safe(error)); }
+    }
+
+    private boolean selectionOnly(){return getIntent()!=null&&getIntent().getBooleanExtra(EXTRA_SELECT_PATH,false);}
+
+    private void rememberExternalPath(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String mode)throws Exception{
+        new AndroidConnectionProfileStore(this,nodeStore,exitStore).selectExternalPath(exit,entry,mode);
     }
 
     private View buildUi() {
@@ -95,8 +107,8 @@ public final class StandardExitActivity extends Activity {
         statusView=text("Disconnected",16,true); root.addView(statusView,margins(0,0,0,dp(10)));
         addButton=button("Add custom exit"); addButton.setOnClickListener(v->chooseProtocol()); root.addView(addButton);
         Button manage=button("Manage saved exits"); manage.setOnClickListener(v->showSavedExits(false,false)); root.addView(manage,margins(0,dp(8),0,0));
-        directButton=button("Connect direct external exit"); directButton.setOnClickListener(v->showSavedExits(true,true)); root.addView(directButton,margins(0,dp(8),0,0));
-        hoppedButton=button("Connect via Router VPN entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
+        directButton=button(selectionOnly()?"Select direct external path":"Connect direct external exit"); directButton.setOnClickListener(v->showSavedExits(true,true)); root.addView(directButton,margins(0,dp(8),0,0));
+        hoppedButton=button(selectionOnly()?"Select Router VPN entry → external exit":"Connect via Router VPN entry → external exit"); hoppedButton.setOnClickListener(v->showSavedExits(true,false)); root.addView(hoppedButton,margins(0,dp(8),0,0));
         Button disconnect=button("Disconnect custom exit"); disconnect.setOnClickListener(v->{
             clearPending();statusView.setText("Disconnecting; waiting for the captured runtime to stop…");disconnect.setEnabled(false);
             new Thread(()->{String failure="";try{runtime.disconnect();}catch(Exception error){failure="Teardown is not confirmed. Runtime ownership is retained; retry Disconnect.";}String result=failure;
@@ -366,7 +378,8 @@ public final class StandardExitActivity extends Activity {
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        try{capturePending(null,exit,true,"external");}catch(Exception invalid){toast("The selected external node changed or could not be captured.");return;}
+        try{capturePending(null,exit,true,"external");rememberExternalPath(null,exit,"wg");}catch(Exception invalid){clearPending();toast(safe(invalid));return;}
+        if(selectionOnly()){clearPending();toast("External path selected. Press Connect when ready.");finish();return;}
         Intent permission=VpnService.prepare(this);
         if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
@@ -390,7 +403,8 @@ public final class StandardExitActivity extends Activity {
 
     private void requestConnect(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String entryMode) {
         if(activeOrTransitioning()){toast("Disconnect the current VPN session before starting another custom exit.");return;}
-        try{capturePending(entry,exit,false,entryMode);}catch(Exception invalid){toast("The selected nodes changed or could not be captured.");return;}
+        try{capturePending(entry,exit,false,entryMode);rememberExternalPath(entry,exit,entryMode);}catch(Exception invalid){clearPending();toast(safe(invalid));return;}
+        if(selectionOnly()){clearPending();toast("External path selected. Press Connect when ready.");finish();return;}
         Intent permission=VpnService.prepare(this);if(permission!=null){statusView.setText("Waiting for Android VPN permission…");startActivityForResult(permission,PREPARE_STANDARD_EXIT);}else startPending();
     }
 

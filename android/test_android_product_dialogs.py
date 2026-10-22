@@ -89,6 +89,7 @@ public final class ProductDialogHarness extends android.app.Activity {
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
  void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
+ boolean openSelectedExternal(boolean selectPath){return false;}
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}

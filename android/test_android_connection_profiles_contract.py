@@ -30,7 +30,12 @@ for marker in (
     'legacy Router node has no stable proof-bound identity',
     'All validation above is complete before any selection, node-file, preset or preference mutation.',
     'nodes.importBundle(updatedBundle)', 'putString(MULTI_MODE,multiMode)',
-    'Could not persist the loaded connection profile; prior Router node state was restored.',
+    'prior connection state was restored.', 'rollback is incomplete',
+    'nodes.snapshotSelection()', 'nodes.restoreSelection(originalSelection)',
+    'snapshotPreferences()', 'restorePreferences(originalPreferences)',
+    '"external_policy"', '"entry_policy"', '"exit_policy"',
+    'requireExternalIdentity', 'selectExternalPath', 'currentExternalPath',
+    'AndroidConnectionProfilePolicy.external', 'exits.save(updatedExternal)', 'exits.save(originalExternal)',
     'nodes.importBundle(originalBundle)',
     'requireIdle("saving a connection profile")', 'requireIdle("loading a connection profile")',
     'requireIdle("updating a connection profile")', 'requireIdle("deleting a connection profile")',
@@ -45,13 +50,24 @@ for forbidden in ('Os.rename(', 'FileOutputStream', 'requirePrivateRegularFile',
 # The exact saved graph, transport and custom data must be validated before the
 # first node mutation in load().
 load = store.split('synchronized Record load(String id)', 1)[1].split('synchronized void delete', 1)[0]
-for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'AndroidNodeStore.deriveId'):
+for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'stageNode', 'validateExternalGraph'):
     assert validation in load, f"Android profile load lost preflight validation {validation!r}"
 first_mutation = load.find('nodes.importBundle(updatedBundle)')
 assert first_mutation > 0
-for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'AndroidNodeStore.deriveId'):
+for validation in ('normalizeMultiMode', 'findNode(entry)', 'findNode(exit)', 'prepareCustomPresetJSON', 'stageNode', 'validateExternalGraph'):
     assert load.find(validation) < first_mutation, f"{validation} moved after node mutation"
-assert 'nodes.select(nodeId)' not in load, "Android connection-profile load must not select before validation/apply"
+assert load.index('nodes.select(nodeId)') > first_mutation, "Final Router selection must follow all staged policy validation and apply"
+stage = store.split('private void stageNode(', 1)[1].split('private static void requireEntryMode', 1)[0]
+assert 'AndroidNodeStore.deriveId(bundle,updatedBundle)' in stage and 'nodes.importBundle' not in stage
+assert 'conflicting policies to the same Router node' in stage
+assert 'profile.remove(key)' in stage, "Loading saved choices must also restore defaults that were absent when captured"
+
+product = read('ProductActivity.java')
+activity = read('StandardExitActivity.java')
+assert 'connection.connectExternal(path.entry,path.exit,path.direct(),path.entryMode,callback())' in product
+assert 'if(openSelectedExternal(true))return;' in product
+assert 'rememberExternalPath(entry,exit,entryMode)' in activity
+assert 'if(selectionOnly()){clearPending();' in activity
 
 # Only explicitly whitelisted policy fields may be copied; node/dataplane secrets
 # stay in the private linked node stores.
