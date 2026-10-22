@@ -64,9 +64,10 @@ assert 'profile.remove(key)' in stage, "Loading saved choices must also restore 
 
 product = read('ProductActivity.java')
 activity = read('StandardExitActivity.java')
-assert 'connection.connectExternal(path.entry,path.exit,path.direct(),path.entryMode,callback())' in product
+assert 'connection.connectExternal(path.entry,path.exit,path.direct(),path.entryMode,path.execution,callback())' in product
 assert 'if(openSelectedExternal(true))return;' in product
 assert 'rememberExternalPath(entry,exit,entryMode)' in activity
+assert 'selectExternalPath(exit,entry,mode,pendingExecution)' in activity
 assert 'if(selectionOnly()){clearPending();' in activity
 
 # Only explicitly whitelisted policy fields may be copied; node/dataplane secrets
