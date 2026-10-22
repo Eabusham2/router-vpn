@@ -1,10 +1,13 @@
 #!/usr/bin/env python3
-"""Synchronize the pinned SOCKS UDP reply endpoint in an owned core copy.
+"""Compose the pinned UDP fixes in one checksum-verified owned sing copy.
 
 sing 0.9.4 stores a multiword remote address on every packet receive while the
 reply goroutine reads it. Guard all three receive APIs and all reply/getter APIs
-without holding a lock across network IO. Preserve upstream routing semantics,
-the whole-module h1 checksum, and the license; never edit the Go module cache.
+without holding a lock across network IO. The same copy also preserves complete
+65535-byte UDP ciphertext in default and low-memory builds. Both native build
+preparations use this owner, so neither can replace the other's dependency.
+Preserve TCP capacities, upstream routing semantics, the whole-module h1
+checksum, and the license; never edit the Go module cache.
 """
 from pathlib import Path, PurePosixPath
 import base64
@@ -22,6 +25,10 @@ SUM = 'h1:nIdH+Yvy4NzTezB+c3z/9of1jLRggnrtMtb3uMOIaNM='
 COPY = 'routervpn-patched-sing'
 PREFIX = MODULE + '@' + VERSION + '/'
 MAX_BYTES = 32 * 1024 * 1024
+BUFFER_FILES = {
+    'common/buf/buffer_standard.go': ('608fbf3f13067a7568c491990dba764b81107e87', '16 * 1024'),
+    'common/buf/buffer_low_memory.go': ('81fb10a26460dea3586486118d091a43020284eb', '8 * 1024'),
+}
 PATCHES = {
     'common/bufio/bind.go': ('dd46fb836525f573a1d4578ad73903dc766516c6', (
         ('\t"net"\n', '\t"net"\n\t"sync"\n'),
@@ -44,6 +51,8 @@ PATCHES = {
         ('\tw.remoteAddr = destination\n', '\tw.setRemoteAddr(destination)\n'),
     )),
 }
+PATCHES.update({name: (digest, (('UDPBufferSize = ' + size, 'UDPBufferSize = 65535'),))
+                for name, (digest, size) in BUFFER_FILES.items()})
 
 
 def git_blob(data):
@@ -72,10 +81,10 @@ def h1(rows):
     return 'h1:' + base64.b64encode(hashlib.sha256(summary.encode()).digest()).decode()
 
 
-def verify_tree(directory):
+def verify_tree(directory, allow_packet_only=False):
     if directory.is_symlink() or not directory.is_dir():
         raise ValueError('Prepared sing must be an owned directory')
-    rows, total = [], 0
+    rows, total, upgrades = [], 0, {}
     for path in sorted(directory.rglob('*')):
         if path.is_symlink() or (not path.is_dir() and not path.is_file()):
             raise ValueError('Prepared sing contains a linked or special entry')
@@ -87,10 +96,23 @@ def verify_tree(directory):
         total += path.stat().st_size
         if total > MAX_BYTES or len(rows) >= 5000:
             raise ValueError('Prepared sing exceeds source bounds')
-        original = transform(relative, path.read_bytes(), reverse=True)
+        data = path.read_bytes()
+        if allow_packet_only and relative in BUFFER_FILES and git_blob(data) == BUFFER_FILES[relative][0]:
+            # The earlier owned copy contained exactly the endpoint fix. Only
+            # those two pristine pinned buffers may be upgraded, and only after
+            # the entire module below reverses to its original exact checksum.
+            if path.stat().st_nlink != 1:
+                raise ValueError('Cannot upgrade an aliased native buffer file')
+            original = data
+            upgrades[relative] = transform(relative, data)
+        else:
+            original = transform(relative, data, reverse=True)
         rows.append((PREFIX + relative, hashlib.sha256(original).hexdigest()))
     if h1(rows) != SUM:
         raise ValueError('Prepared sing differs from its pinned module plus packet synchronization')
+    if upgrades and set(upgrades) != set(BUFFER_FILES):
+        raise ValueError('Prepared sing has a partial UDP capacity policy')
+    return upgrades
 
 
 def extract_verified(archive, target):
@@ -142,6 +164,9 @@ def prepare(vendor):
     module_plan(vendor)
     target = vendor / COPY
     if target.exists() or target.is_symlink():
+        upgrades = verify_tree(target, allow_packet_only=True)
+        for relative, data in upgrades.items():
+            (target / relative).write_bytes(data)
         verify_tree(target)
     else:
         info = json.loads(subprocess.check_output(
@@ -154,7 +179,7 @@ def prepare(vendor):
             extract_verified(Path(info['Zip']), staged)
             staged.rename(target)
     subprocess.run(['go', 'mod', 'edit', '-replace=' + MODULE + '@' + VERSION + '=./' + COPY], cwd=vendor, check=True)
-    print('Prepared checksum-verified sing UDP endpoint synchronization:', VERSION)
+    print('Prepared checksum-verified sing UDP endpoint synchronization and complete ciphertext buffers:', VERSION)
 
 
 def verify(vendor):

@@ -3,6 +3,7 @@
 from pathlib import Path
 import importlib.util
 import json
+import shutil
 import subprocess
 import tempfile
 import unittest
@@ -24,8 +25,11 @@ class PacketPreparation(unittest.TestCase):
             raise ValueError('Test source does not match the pinned public module')
         cls.archive = Path(info['Zip'])
         cls.before = cls.archive.read_bytes()
+        cls.cache = Path(info['Dir'])
         with zipfile.ZipFile(cls.archive) as archive:
             cls.originals = {name: archive.read(PATCH.PREFIX+name) for name in (*PATCH.PATCHES, 'LICENSE')}
+        cls.cache_before = {name: ((cls.cache/name).read_bytes(), (cls.cache/name).stat().st_mode,
+                                  (cls.cache/name).parent.stat().st_mode) for name in cls.originals}
 
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory()
@@ -45,6 +49,52 @@ class PacketPreparation(unittest.TestCase):
         for name in PATCH.PATCHES:
             with self.assertRaises(ValueError):
                 PATCH.transform(name, self.originals[name]+b'\n// unrelated change\n')
+
+    def assert_cache_unchanged(self):
+        self.assertEqual(self.archive.read_bytes(), self.before)
+        self.assertEqual({name: ((self.cache/name).read_bytes(), (self.cache/name).stat().st_mode,
+                               (self.cache/name).parent.stat().st_mode) for name in self.originals}, self.cache_before)
+
+    def test_exact_older_packet_only_copy_upgrades_after_full_checksum_verification(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}],
+                'Replace': [{'Old': {'Path': PATCH.MODULE, 'Version': PATCH.VERSION}, 'New': {'Path': './'+PATCH.COPY}}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        for name in PATCH.BUFFER_FILES:
+            (self.target/name).write_bytes(self.originals[name])
+        with self.assertRaises(ValueError):
+            PATCH.verify_tree(self.target)
+        with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'):
+            PATCH.prepare(self.root)
+            PATCH.prepare(self.root)
+        PATCH.verify_tree(self.target)
+        for name in PATCH.BUFFER_FILES:
+            self.assertEqual((self.target/name).read_bytes(), PATCH.transform(name, self.originals[name]))
+        self.assert_cache_unchanged()
+
+    def test_packet_only_upgrade_rejects_unrelated_or_partial_source_before_writing(self):
+        plan = {'Require': [{'Path': PATCH.MODULE, 'Version': PATCH.VERSION}]}
+        def command(args, **kwargs):
+            return PATCH.CORE+'\n' if args[0] == 'git' else json.dumps(plan)
+        for fault in ('license', 'unrelated', 'partial', 'missing-lock'):
+            with self.subTest(fault=fault):
+                for name, original in self.originals.items():
+                    (self.target/name).write_bytes(original if name in PATCH.BUFFER_FILES else PATCH.transform(name, original))
+                if fault == 'license':
+                    (self.target/'LICENSE').write_bytes(b'changed license')
+                elif fault == 'unrelated':
+                    path = self.target/'common/buf/buffer_standard.go'
+                    path.write_bytes(path.read_bytes()+b'\n// unexpected source\n')
+                elif fault == 'partial':
+                    name = 'common/buf/buffer_standard.go'
+                    (self.target/name).write_bytes(PATCH.transform(name, self.originals[name]))
+                else:
+                    (self.target/'common/bufio/bind.go').write_bytes(self.originals['common/bufio/bind.go'])
+                before = {name: (self.target/name).read_bytes() for name in self.originals}
+                with mock.patch.object(PATCH.subprocess, 'check_output', side_effect=command), mock.patch.object(PATCH.subprocess, 'run'), self.assertRaises(ValueError):
+                    PATCH.prepare(self.root)
+                self.assertEqual({name: (self.target/name).read_bytes() for name in self.originals}, before)
+        self.assert_cache_unchanged()
 
     def test_missing_extra_reverted_and_unrelated_edits_are_rejected(self):
         cases = [('common/bufio/bind.go', self.originals['common/bufio/bind.go']),
@@ -126,6 +176,64 @@ class PacketPreparation(unittest.TestCase):
         self.assertIn(ROOT/'deploy/prepare-sing-packet-concurrency.py', preparation.inputs())
         self.assertIn(ROOT/'mobile/amnezia/packet_concurrency_test.go.tmpl', preparation.inputs())
         self.assertIn('../deploy/prepare-sing-packet-concurrency.py', (ROOT/'android/app/build.gradle').read_text())
+        spec = importlib.util.spec_from_file_location('whitening_preparation', ROOT/'deploy/prepare-mobile-whitening.py')
+        whitening = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(whitening)
+        self.assertIn(ROOT/'deploy/prepare-sing-packet-concurrency.py', whitening.inputs())
+
+    def test_real_go_buffer_preparation_and_packet_repreparation_share_one_copy(self):
+        spec = importlib.util.spec_from_file_location('combined_buffer_policy', ROOT/'deploy/prepare-mobile-buffers.py')
+        buffers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(buffers)
+        # Exercise the real Go module editor, MVS selection, tidy and compiler.
+        # Only the outer core's Git identity and unrelated socket insertion are
+        # fixtures; both dependency preparations operate on the pinned archive.
+        (self.root/'go.mod').write_text('module github.com/sagernet/sing-box\n\ngo 1.26.0\n\nrequire '+PATCH.MODULE+' '+PATCH.VERSION+'\n')
+        (self.root/'main.go').write_text('package main\nimport ("fmt"; "github.com/sagernet/sing/common/buf")\nfunc main() { fmt.Printf("%d %d\\n", buf.BufferSize, buf.UDPBufferSize) }\n')
+        actual = subprocess.check_output
+        def command(args, **kwargs):
+            if args[0] == 'git':
+                self.assertEqual(args[-2:], ['rev-parse', 'HEAD'])
+                return PATCH.CORE+'\n'
+            return actual(args, **kwargs)
+        with mock.patch.object(subprocess, 'check_output', side_effect=command), mock.patch.object(buffers.SOCKETS, 'prepare') as sockets:
+            PATCH.prepare(self.root)
+            buffers.prepare(self.root)
+            PATCH.prepare(self.root)
+            buffers.prepare(self.root)
+            PATCH.verify(self.root)
+            self.assertEqual(sockets.call_count, 2)
+        plan = json.loads(actual(['go', 'mod', 'edit', '-json'], cwd=self.root, text=True))
+        self.assertEqual([r for r in plan['Replace'] if r['Old']['Path'] == PATCH.MODULE],
+                         [{'Old': {'Path': PATCH.MODULE, 'Version': PATCH.VERSION}, 'New': {'Path': './'+PATCH.COPY}}])
+        for tags, expected in (('', '32768 65535'), ('with_low_memory', '16384 65535')):
+            self.assertEqual(actual(['go', 'run', '-tags='+tags, '.'], cwd=self.root, text=True).strip(), expected)
+        self.assertFalse((self.root/'.routervpn-sources/sing').exists())
+        self.assert_cache_unchanged()
+        # An explicit competing replacement remains rejected, even if an
+        # intact verified owned copy is also present.
+        subprocess.run(['go', 'mod', 'edit', '-replace='+PATCH.MODULE+'=/foreign'], cwd=self.root, check=True)
+        with mock.patch.object(subprocess, 'check_output', side_effect=command), self.assertRaises(ValueError):
+            buffers.prepare(self.root)
+        PATCH.verify_tree(self.target)
+
+    def test_buffers_first_also_create_the_same_verified_copy(self):
+        spec = importlib.util.spec_from_file_location('buffers_first_policy', ROOT/'deploy/prepare-mobile-buffers.py')
+        buffers = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(buffers)
+        shutil.rmtree(self.target)
+        (self.root/'go.mod').write_text('module github.com/sagernet/sing-box\n\ngo 1.26.0\n\nrequire '+PATCH.MODULE+' '+PATCH.VERSION+'\n')
+        (self.root/'main.go').write_text('package main\nimport _ "github.com/sagernet/sing/common/buf"\nfunc main() {}\n')
+        actual = subprocess.check_output
+        def command(args, **kwargs):
+            if args[0] == 'git':
+                return PATCH.CORE+'\n'
+            return actual(args, **kwargs)
+        with mock.patch.object(subprocess, 'check_output', side_effect=command), mock.patch.object(buffers.SOCKETS, 'prepare'):
+            buffers.prepare(self.root)
+            PATCH.prepare(self.root)
+            PATCH.verify(self.root)
+        self.assertFalse((self.root/'.routervpn-sources/sing').exists())
 
 
 if __name__ == '__main__':

@@ -12,7 +12,7 @@ STREAM=importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(STREAM)
 
 def inputs():
-    return STREAM.inputs() + [Path(__file__).resolve(), ROOT/"deploy/prepare-mobile-buffers.py", ROOT/"deploy/mobile_udp_socket_policy.py"] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
+    return STREAM.inputs() + [Path(__file__).resolve(), ROOT/"deploy/prepare-mobile-buffers.py", ROOT/"deploy/prepare-sing-packet-concurrency.py", ROOT/"deploy/mobile_udp_socket_policy.py"] + sorted((ROOT/'internal/startwhitening').glob('*.go')) + sorted((ROOT/'mobile/startwhitening').glob('*.tmpl'))
 
 def digest():
     h=hashlib.sha256()
