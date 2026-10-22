@@ -95,6 +95,94 @@ final class IOSSpeedLabRunner: ObservableObject {
         activeTask?.cancel()
     }
 
+    /// Other measurements use the same captured native owner, durable recovery
+    /// and checked restoration as Speed Lab. The caller supplies actual work;
+    /// no synthetic throughput result is created for a latency-only operation.
+    func withTemporaryProvedPath<Value: Sendable>(model: RouterVPNModel,
+        onSuperseded: @escaping () -> Void,
+        validateBeforeStart: @MainActor () throws -> Void,
+        prepare: @MainActor () async throws -> Void,
+        measure: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        await model.refreshTunnelStatus()
+        try Task.checkCancellation()
+        guard !model.tunnelTransitioning else { throw error("Wait for the current VPN transition before measuring a temporary path.") }
+        try validateBeforeStart()
+        let owner = try model.iosSpeedLabOwnership.begin {
+            model.iosConnectGeneration = UUID()
+            model.iosStrategyTaskActive = false
+            onSuperseded()
+        }
+        defer { model.iosSpeedLabOwnership.finish(owner) }
+        let snapshot = ModelSnapshot(bundleData: try model.bundle.map { try JSONEncoder().encode($0) },
+            selectedLogicalMode: model.selectedLogicalMode, selectedMode: model.selectedMode,
+            auto: model.auto, message: model.message)
+        return try await IOSSpeedLabContext.$owner.withValue(owner) {
+            let original = try await IOSSpeedLabTunnel.capture(model: model, owner: owner)
+            let originalToken = pathToken(model)
+            return try await IOSMTUControl.withHold(model: model) {
+                try model.iosSpeedLabOwnership.require(owner)
+                guard pathToken(model) == originalToken else { throw CancellationError() }
+                try IOSSpeedLabPersistenceJournal.begin(owner: owner)
+                let outcome: Result<Value, Error>
+                do {
+                    try await Task { @MainActor in try await original.stopOriginal(model: model, owner: owner) }.value
+                    try model.iosSpeedLabOwnership.require(owner)
+                    try Task.checkCancellation()
+                    try await prepare()
+                    try model.iosSpeedLabOwnership.require(owner)
+                    try IOSSpeedLabPersistenceJournal.reassertOriginalPersistentState()
+                    await model.refreshTunnelStatus()
+                    let token = pathToken(model)
+                    guard token.connected, token.sessionIdentity != nil, !token.transitioning else {
+                        throw error("The temporary VPN did not prove its captured path.")
+                    }
+                    let value = try await guardedPathOperation(model: model, token: token, operation: measure)
+                    try Task.checkCancellation()
+                    try model.iosSpeedLabOwnership.require(owner)
+                    outcome = .success(value)
+                } catch { outcome = .failure(error) }
+                // Join uncancelled retirement before releasing the MTU hold or
+                // returning a result, including when the caller was cancelled.
+                try await Task { @MainActor in
+                    try await restore(snapshot, original: original, model: model, owner: owner)
+                }.value
+                try Task.checkCancellation()
+                try model.iosSpeedLabOwnership.require(owner)
+                return try outcome.get()
+            }
+        }
+    }
+
+    private func guardedPathOperation<Value: Sendable>(model: RouterVPNModel, token: PathToken,
+        operation: @escaping @MainActor () async throws -> Value) async throws -> Value {
+        guard IOSMTUMeasurementGate.held else { throw error("MTU measurement lease is missing") }
+        try await IOSMTUControl.holdCurrent(model, request: IOSMTUMeasurementGate.current)
+        guard pathToken(model) == token else { throw CancellationError() }
+        let worker = Task { @MainActor in try await operation() }
+        let watcher = Task { @MainActor in
+            while !Task.isCancelled {
+                try? await Task.sleep(for: .milliseconds(100))
+                if Task.isCancelled { return }
+                await model.refreshTunnelStatus()
+                if self.pathToken(model) != token { worker.cancel(); return }
+            }
+        }
+        do {
+            let result = try await withTaskCancellationHandler { try await worker.value } onCancel: {
+                worker.cancel(); watcher.cancel()
+            }
+            watcher.cancel(); _ = await watcher.result
+            await model.refreshTunnelStatus()
+            try Task.checkCancellation()
+            guard pathToken(model) == token else { throw CancellationError() }
+            return result
+        } catch {
+            worker.cancel(); watcher.cancel()
+            _ = await worker.result; _ = await watcher.result
+            throw error
+        }
+    }
+
     private func runCurrent(_ request: IOSSpeedLabRunRequest, model: RouterVPNModel) async throws -> IOSSpeedLabRunResult {
         await model.refreshTunnelStatus()
         guard !model.tunnelTransitioning else { throw error("Wait for the VPN transition to finish before testing the current path.") }

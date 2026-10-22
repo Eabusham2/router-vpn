@@ -115,7 +115,8 @@ import subprocess
 import sys
 if platform.system() == 'Darwin':
     for external_test in ('test_ios_external_policy.py', 'test_ios_external_entry_selection.py', 'test_ios_external_execution_owner.py',
-                          'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py'):
+                          'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py',
+                          'test_ios_node_store_transactions.py'):
         subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_start_layer.py')], check=True, timeout=150)
@@ -132,7 +133,8 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_provider_runtime_driver.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_owned_strategy_app.py')], check=True, timeout=300)
     for speed_lab_contract in ['test_ios_speed_lab_ownership.py', 'test_ios_speed_lab_external_paths.py',
-                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py']:
+                               'test_ios_speed_lab_tunnel.py', 'test_ios_multihop_execution.py',
+                               'test_ios_via_entry_candidates.py']:
         subprocess.run([sys.executable, str(root / 'deploy' / speed_lab_contract)], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_base_selection.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_native_xray_profiles.py')], check=True, timeout=150)

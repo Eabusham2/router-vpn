@@ -46,20 +46,26 @@ final class IOSNodeBundleStore {
         }
     }
 
-    func link(_ incomingData: Data, preserving current: ClientBundle?) throws -> Data {
+    func link(_ incomingData: Data, preserving current: ClientBundle?,
+              prepare: (ClientBundle) throws -> ClientBundle) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
-        if let current { _ = try store(current, replaceExistingRecord: true) }
         let incoming = try JSONDecoder().decode(ClientBundle.self, from: incomingData)
-        return try store(incoming, replaceExistingRecord: true)
+        return try store(incoming, replaceExistingRecord: true, preserving: current, prepare: prepare)
+    }
+
+    /// Only an explicit, durable model save may replace a linked bundle.
+    /// Inventory and selection reads must never persist a temporary test path.
+    func save(_ source: ClientBundle) throws {
+        _ = try store(source, replaceExistingRecord: true)
     }
 
     func profiles(current: ClientBundle?) -> [RouterProfile] {
         guard storageError == nil else { return [] }
-        if let current { _ = try? store(current, replaceExistingRecord: true) }
+        let available = readableRecords(current: current)
         var result: [RouterProfile] = []
         var seen = Set<String>()
-        for key in records.keys.sorted() {
-            guard let data = records[key],
+        for key in available.keys.sorted() {
+            guard let data = available[key],
                   let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
             for profile in bundle.routerProfiles where seen.insert(profile.id).inserted {
                 result.append(profile)
@@ -73,10 +79,10 @@ final class IOSNodeBundleStore {
 
     func bundleData(containing profileID: String, current: ClientBundle?) -> Data? {
         guard storageError == nil else { return nil }
-        if let current { _ = try? store(current, replaceExistingRecord: true) }
+        let available = readableRecords(current: current)
         let wanted = canonicalProfileID(profileID, current: current)
-        for key in records.keys.sorted() {
-            guard let data = records[key],
+        for key in available.keys.sorted() {
+            guard let data = available[key],
                   let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             return data
@@ -86,10 +92,10 @@ final class IOSNodeBundleStore {
 
     func remove(profileID: String, current: ClientBundle?) throws -> Data? {
         try ensureStorageReady()
-        if let current { _ = try store(current, replaceExistingRecord: true) }
+        let available = readableRecords(current: current)
         let wanted = canonicalProfileID(profileID, current: current)
-        for key in records.keys.sorted() {
-            guard let data = records[key],
+        for key in available.keys.sorted() {
+            guard let data = available[key],
                   var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             bundle.routerProfiles.removeAll(where: { $0.id == wanted })
@@ -119,10 +125,10 @@ final class IOSNodeBundleStore {
         responseProbe: ExternalResponseProbe? = nil
     ) throws -> Data {
         try ensureStorageReady()
-        if let current { _ = try store(current, replaceExistingRecord: true) }
+        let available = readableRecords(current: current)
         let wanted = canonicalProfileID(profileID, current: current)
-        for key in records.keys.sorted() {
-            guard let data = records[key],
+        for key in available.keys.sorted() {
+            guard let data = available[key],
                   var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == wanted }) else { continue }
             if let expectedExternal {
@@ -150,8 +156,37 @@ final class IOSNodeBundleStore {
         throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
     }
 
-    private func store(_ source: ClientBundle, replaceExistingRecord: Bool) throws -> Data {
+    private func store(_ source: ClientBundle, replaceExistingRecord: Bool, preserving current: ClientBundle? = nil,
+                       prepare: (ClientBundle) throws -> ClientBundle = { $0 }) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
+        // Run all import/runtime preparation before the one durable write.
+        // The returned model and bytes are the exact committed selection.
+        let bundle = try prepare(normalizedBundle(source))
+        var next = readableRecords(current: current)
+        let key = try owningRecordKey(bundle, in: next)
+        let existingIDs = globalProfileIDs(in: next, excludingRecord: replaceExistingRecord ? key : nil)
+        for profile in bundle.routerProfiles where existingIDs.contains(profile.id) {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 5, userInfo: [NSLocalizedDescriptionKey: "A different linked bundle already uses node id \(profile.id)"])
+        }
+        let normalized = try JSONEncoder().encode(bundle)
+        next[key] = normalized
+        try commitRecords(next)
+        return (bundle, normalized)
+    }
+
+    /// Older installations may have a saved current bundle that has not yet
+    /// been linked. Expose it without writing or replacing an existing record.
+    private func readableRecords(current: ClientBundle?) -> [String: Data] {
+        var available = records
+        guard let current, let bundle = try? normalizedBundle(current),
+              globalProfileIDs(in: records, excludingRecord: nil).isDisjoint(with: bundle.routerProfiles.map(\.id)),
+              available[recordKey(bundle)] == nil,
+              let data = try? JSONEncoder().encode(bundle) else { return available }
+        available[recordKey(bundle)] = data
+        return available
+    }
+
+    private func normalizedBundle(_ source: ClientBundle) throws -> ClientBundle {
         var bundle = source
         guard !bundle.routerProfiles.isEmpty else {
             throw NSError(domain: "RouterVPN.NodeStore", code: 1, userInfo: [NSLocalizedDescriptionKey: "Node bundle contains no Router VPN or external profiles"])
@@ -217,16 +252,22 @@ final class IOSNodeBundleStore {
                 bundle.socks5Host = ""; bundle.socks5Port = 0
             }
         }
-        let key = recordKey(bundle)
-        let existingIDs = globalProfileIDs(excludingRecord: replaceExistingRecord ? key : nil)
-        for profile in bundle.routerProfiles where existingIDs.contains(profile.id) {
-            throw NSError(domain: "RouterVPN.NodeStore", code: 5, userInfo: [NSLocalizedDescriptionKey: "A different linked bundle already uses node id \(profile.id)"])
+        return bundle
+    }
+
+    /// A full private bundle keeps its original record when its selected node
+    /// changes. A profile cannot acquire a second record or merge two owners.
+    private func owningRecordKey(_ bundle: ClientBundle, in available: [String: Data]) throws -> String {
+        let incomingIDs = Set(bundle.routerProfiles.map(\.id))
+        let owners = available.compactMap { key, data -> String? in
+            guard let saved = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  !incomingIDs.isDisjoint(with: saved.routerProfiles.map(\.id)) else { return nil }
+            return key
         }
-        let normalized = try JSONEncoder().encode(bundle)
-        var next = records
-        next[key] = normalized
-        try commitRecords(next)
-        return normalized
+        guard owners.count <= 1 else {
+            throw NSError(domain: "RouterVPN.NodeStore", code: 5, userInfo: [NSLocalizedDescriptionKey: "Node bundle spans different private linked records"])
+        }
+        return owners.first ?? recordKey(bundle)
     }
 
     private func canonicalProfileID(_ id: String, current: ClientBundle?) -> String {
@@ -252,9 +293,9 @@ final class IOSNodeBundleStore {
         return "bundle-" + bundle.selectedRouterID
     }
 
-    private func globalProfileIDs(excludingRecord: String?) -> Set<String> {
+    private func globalProfileIDs(in available: [String: Data], excludingRecord: String?) -> Set<String> {
         var ids = Set<String>()
-        for (key, data) in records where key != excludingRecord {
+        for (key, data) in available where key != excludingRecord {
             guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
             for profile in bundle.routerProfiles { ids.insert(profile.id) }
         }

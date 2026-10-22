@@ -57,14 +57,25 @@ typealias NETunnelProviderSession=Connection
 @MainActor enum Trace {static var values:[String]=[]}
 @MainActor final class NETunnelProviderManager {
  static var stored:[NETunnelProviderManager]=[],hook:(()->Void)?
+ static var allReads=0,allReadFailures=0,allReadHook:(()->Void)?
  var protocolConfiguration:NEVPNProtocol?,onDemandRules:[NEOnDemandRule]?,localizedDescription:String?
  var isEnabled=true,isOnDemandEnabled=true,saves=0,reads=0,autoStartsOnSave=true
  let connection=Connection()
- static func loadAllFromPreferences()async throws->[NETunnelProviderManager]{await Task.yield();return stored}
+ static func loadAllFromPreferences()async throws->[NETunnelProviderManager]{
+  allReads+=1;await Task.yield();let action=allReadHook;allReadHook=nil;action?()
+  if allReadFailures>0{allReadFailures-=1;throw NSError(domain:"Fixture.Preferences",code:1)}
+  return stored
+ }
  func saveToPreferences()async throws{saves+=1;Trace.values.append("save");let action=Self.hook;Self.hook=nil;await Task.yield();action?();if autoStartsOnSave,isOnDemandEnabled,connection.status == .disconnected {try connection.startVPNTunnel()}}
  func loadFromPreferences()async throws{reads+=1;Trace.values.append("read");await Task.yield()}
 }
 @MainActor enum IOSMTUMeasurementGate{static var current=String(repeating:"a",count:32)}
+@MainActor enum IOSSpeedLabPersistenceJournal {
+ static var abandoned=0,finished=0
+ static func abandon()throws{abandoned+=1}
+ static func reassertOriginalPersistentState()throws{}
+ static func finish()throws{finished+=1}
+}
 @MainActor enum IOSMTUControl{
  static var healthy=true
  static func send(_ connection:Connection,operation:String,request:String,session:String)async throws->Data{
@@ -76,10 +87,13 @@ typealias NETunnelProviderSession=Connection
 }
 @MainActor final class RouterVPNModel {
  let iosSpeedLabOwnership=IOSSpeedLabOwnership()
- var connected=true,tunnelTransitioning=false,iosUserDisconnectInProgress=false
+ var connected=true,tunnelTransitioning=false,iosUserDisconnectInProgress=false,refreshUnknown=false
  var activeSessionIdentity:IOSSessionIdentity?,iosConnectGeneration=UUID()
+ var selectedLogicalMode="base-raw",selectedMode="base-raw",auto=true,message="original",bundleRestores=0
+ func restoreIOSSpeedLabBundle(_ data:Data?)throws{bundleRestores+=1}
  static func iosStrategyDigest(_ data:Data)->String{let hash=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211};return String(repeating:String(format:"%016llx",hash),count:4)}
  func refreshTunnelStatus()async {
+  if refreshUnknown{connected=false;tunnelTransitioning=true;activeSessionIdentity=nil;return}
   guard let m=NETunnelProviderManager.stored.first,let p=m.protocolConfiguration as? NETunnelProviderProtocol,let c=p.providerConfiguration else{connected=false;tunnelTransitioning=false;activeSessionIdentity=nil;return}
   connected=m.connection.status == .connected && !m.connection.failedProof
   tunnelTransitioning=[.connecting,.reasserting,.disconnecting].contains(m.connection.status) || m.connection.failedProof
@@ -93,7 +107,10 @@ typealias NETunnelProviderSession=Connection
  static func check(_ text:String,_ value:@autoclosure()->Bool){guard value()else{fatalError("FAIL: "+text)};checks+=1}
  static func rejected(_ text:String,_ action:()async throws->Void)async{do{try await action();fatalError("FAIL: "+text)}catch{checks+=1}}
  static func fresh(_ engine:String="libbox",_ raw:String="awg2-fast",_ strategy:Bool=false,_ entry:Bool=false)throws->(RouterVPNModel,NETunnelProviderManager,UUID){
-  Trace.values=[];FixtureClock.value=0;NETunnelProviderManager.hook=nil;IOSMTUMeasurementGate.current=String(repeating:"a",count:32);IOSMTUControl.healthy=true
+  Trace.values=[];FixtureClock.value=0;NETunnelProviderManager.hook=nil;NETunnelProviderManager.allReadHook=nil
+  NETunnelProviderManager.allReads=0;NETunnelProviderManager.allReadFailures=0
+  IOSMTUMeasurementGate.current=String(repeating:"a",count:32);IOSMTUControl.healthy=true
+  IOSSpeedLabPersistenceJournal.abandoned=0;IOSSpeedLabPersistenceJournal.finished=0
   let model=RouterVPNModel(),m=NETunnelProviderManager(),p=NETunnelProviderProtocol(),rule=NEOnDemandRuleConnect()
   rule.ssidMatch=["original-network"];m.onDemandRules=[rule];m.localizedDescription="Original selected router"
   p.providerBundleIdentifier="com.eabusham.routervpn.PacketTunnel";p.serverAddress="original-endpoint"
@@ -168,6 +185,61 @@ typealias NETunnelProviderSession=Connection
    check("changed multihop owner is not stopped "+invalid,m.connection.stops==0)
   }}
   do{
+   let(model,m,owner)=try fresh()
+   m.connection.status = .disconnected;m.isOnDemandEnabled=false;await model.refreshTunnelStatus()
+   let original=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+   (m.protocolConfiguration as! NETunnelProviderProtocol).providerConfiguration?[IOSSpeedLabContext.ownerKey]=owner.uuidString
+   try m.connection.startVPNTunnel();await model.refreshTunnelStatus()
+   let cleanup=NativeCleanupFixture(),hold=IOSMTUMeasurementGate.current
+   let snapshot=NativeCleanupFixture.ModelSnapshot(bundleData:nil,selectedLogicalMode:"base-raw",selectedMode:"base-raw",auto:true,message:"original")
+   NETunnelProviderManager.allReadFailures=10
+   let worker=Task{@MainActor in
+    defer{IOSMTUMeasurementGate.current="";model.iosSpeedLabOwnership.finish(owner)}
+    try await IOSSpeedLabContext.$owner.withValue(owner){
+     try await cleanup.restore(snapshot,original:original,model:model,owner:owner)
+    }
+   }
+   for _ in 0..<1000 {
+    if cleanup.progress.contains("Waiting for the captured") || !model.iosSpeedLabOwnership.owns(owner){break}
+    await Task.yield()
+   }
+   check("failed preferences read remains pending in shipping cleanup loop",cleanup.progress.contains("Waiting for the captured"))
+   check("unreadable native owner retains transaction and MTU hold",model.iosSpeedLabOwnership.owns(owner) && IOSMTUMeasurementGate.current==hold)
+   check("unreadable preferences cannot fake a native stop",m.connection.stops==0 && model.connected && m.connection.status == .connected)
+   var newerAdmitted=false
+   let newer=Task{@MainActor in newerAdmitted=await model.iosSpeedLabOwnership.admitConnection()}
+   for _ in 0..<1000 {if !model.iosSpeedLabOwnership.current(owner){break};await Task.yield()}
+   check("newer Connect waits for unreadable temporary owner",!model.iosSpeedLabOwnership.current(owner) && model.iosSpeedLabOwnership.owns(owner) && !newerAdmitted)
+   NETunnelProviderManager.allReadFailures=0
+   try await worker.value;await newer.value
+   check("recovered preferences stop the exact temporary native owner",m.connection.stops==1 && m.connection.status == .disconnected && !model.connected)
+   check("only verified retirement releases owner and MTU hold",!model.iosSpeedLabOwnership.active && IOSMTUMeasurementGate.current.isEmpty && newerAdmitted)
+   check("newer connection intent keeps selection and avoids original restart",model.bundleRestores==0 && m.connection.starts==1 && IOSSpeedLabPersistenceJournal.abandoned==1)
+  }
+  do{
+   let(model,m,owner)=try fresh()
+   NETunnelProviderManager.allReadFailures=1
+   NETunnelProviderManager.allReadHook={model.iosSpeedLabOwnership.finish(owner)}
+   do{try await IOSSpeedLabTunnel.stopTemporary(model:model,owner:owner);fatalError("FAIL: lost owner accepted")}
+   catch{check("lost ownership during failed lookup is cancellation",error is CancellationError && !IOSSpeedLabTunnel.retirementPending(error))}
+   check("failed lookup never stops a replacement native owner",m.connection.stops==0)
+  }
+  do{
+   let(model,m,owner)=try fresh()
+   NETunnelProviderManager.stored.append(m)
+   do{try await IOSSpeedLabTunnel.stopTemporary(model:model,owner:owner);fatalError("FAIL: ambiguous cleanup accepted")}
+   catch{check("ambiguous preferences retain pending retirement",IOSSpeedLabTunnel.retirementPending(error))}
+   check("ambiguous cleanup retains exact lease without native mutation",model.iosSpeedLabOwnership.owns(owner) && m.connection.stops==0)
+  }
+  do{
+   let(model,m,owner)=try fresh();NETunnelProviderManager.stored=[];model.refreshUnknown=true
+   do{try await IOSSpeedLabTunnel.stopTemporary(model:model,owner:owner);fatalError("FAIL: unknown missing-manager state accepted")}
+   catch{check("missing manager with unknown status retains retirement ownership",IOSSpeedLabTunnel.retirementPending(error) && model.iosSpeedLabOwnership.owns(owner))}
+   model.refreshUnknown=false
+   try await IOSSpeedLabTunnel.stopTemporary(model:model,owner:owner)
+   check("confirmed manager removal clears cached active state before restoration",!model.connected && !model.tunnelTransitioning && model.activeSessionIdentity==nil && m.connection.stops==0)
+  }
+  do{
    let(model,m,owner)=try fresh();let snapshot=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
    NETunnelProviderManager.hook={_ = model.iosSpeedLabOwnership.admit(.disconnect)}
    await rejected("Disconnect during preference save supersedes original stop"){try await snapshot.stopOriginal(model:model,owner:owner)}
@@ -197,15 +269,29 @@ typealias NETunnelProviderSession=Connection
 }
 '''
 
+def declaration(source, marker):
+    start=source.index(marker)
+    opening=source.index('{',start)
+    depth=1;end=opening+1
+    while depth:
+        depth+=(source[end]=='{')-(source[end]=='}');end+=1
+    return source[start:end]
+
 def main():
     swift=shutil.which('swiftc')
     if not swift:raise SystemExit('swiftc required')
     wire=(APP/'IOSStrategySession.swift').read_text().split('#if canImport(NetworkExtension)',1)[0]
     source=(APP/'IOSSpeedLabTunnel.swift').read_text().replace('@preconcurrency import NetworkExtension','')
     source=source.replace('ProcessInfo.processInfo.systemUptime','FixtureClock.now')
+    # Exercise the shipping retry/retirement loop, not a test implementation.
+    # ObservableObject/UI and journal I/O are outside this system-handle fixture.
+    runner=(APP/'IOSSpeedLabRunner.swift').read_text()
+    cleanup='@MainActor final class NativeCleanupFixture { var progress=""\n'
+    cleanup+=declaration(runner,'private struct ModelSnapshot {').replace('private struct','struct',1)+'\n'
+    cleanup+=declaration(runner,'private func restore(').replace('private func','func',1)+'\n}'
     with tempfile.TemporaryDirectory(prefix='routervpn-speed-native-') as folder:
         path=Path(folder)/'test.swift';binary=Path(folder)/'test'
-        path.write_text(SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'+source)
+        path.write_text(SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'+source+'\n'+cleanup)
         subprocess.run([swift,'-swift-version','6','-parse-as-library',str(path),'-o',str(binary)],check=True,timeout=90)
         subprocess.run([str(binary)],check=True,timeout=30)
 

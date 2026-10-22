@@ -82,8 +82,27 @@ import Foundation
 
     static func stopTemporary(model: RouterVPNModel, owner: UUID) async throws {
         guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
-        guard let manager = try await ownedManager() else { return }
+        let captured: NETunnelProviderManager?
+        do { captured = try await ownedManager() }
+        catch {
+            // An unavailable or ambiguous preferences read cannot prove that
+            // the temporary native owner retired. Keep its transaction and
+            // MTU lease until a later read can identify and stop that owner.
+            guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
+            throw pendingRetirement(error)
+        }
         guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
+        guard let manager = captured else {
+            // A removed manager must also clear the cached model before any
+            // saved selection is restored. An unreadable second lookup is
+            // still unknown and retains the same cleanup lease.
+            await model.refreshTunnelStatus()
+            guard model.iosSpeedLabOwnership.owns(owner) else { throw CancellationError() }
+            guard !model.connected, !model.tunnelTransitioning, !model.iosUserDisconnectInProgress else {
+                throw pendingRetirement(issue("Native status is still unverified after the captured manager disappeared."))
+            }
+            return
+        }
         if idle(manager), !manager.isOnDemandEnabled { await model.refreshTunnelStatus(); return }
         guard let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
               proto.providerConfiguration?[ownerKey] as? String == owner.uuidString else {
@@ -97,9 +116,13 @@ import Foundation
             // A timed-out stop or unavailable preferences is not retirement.
             // Its caller retains the MTU hold and retries the same owner.
             guard sameProtocol(manager.protocolConfiguration, expected) else { throw CancellationError() }
-            throw NSError(domain: "RouterVPN.SpeedLab", code: 62,
-                userInfo: [NSLocalizedDescriptionKey: "The captured temporary VPN has not finished shutdown: \(error.localizedDescription)"])
+            throw pendingRetirement(error)
         }
+    }
+
+    private static func pendingRetirement(_ error: Error) -> NSError {
+        NSError(domain: "RouterVPN.SpeedLab", code: 62,
+                userInfo: [NSLocalizedDescriptionKey: "The captured temporary VPN has not finished shutdown: \(error.localizedDescription)"])
     }
 
     static func retirementPending(_ error: Error) -> Bool {

@@ -180,6 +180,7 @@ struct IOSMultihopView: View {
     @State private var exitMode = "shadowsocks"
     @State private var execution = "local"
     @State private var detail = ""
+    @StateObject private var viaEntry = IOSViaEntryLatency()
     private var nodes: [RouterProfile] {
         model.allNodeProfiles.filter { $0.normalizedNodeKind == "router-vpn" ||
             (ordinaryExitProtocol != nil && $0.normalizedNodeKind == "external" && RouterVPNModel.ordinaryExternalHopProtocols.contains($0.external?.protocolName ?? "")) }
@@ -213,14 +214,16 @@ struct IOSMultihopView: View {
             Form {
                 Section("Entry → exit") {
                     Toggle("Use multihop", isOn: $enabled)
-                    Picker("Entry node", selection: $entryID) {
+                    Picker("Entry node", selection: Binding(get: { entryID }, set: { chooseEntry(id: $0, mode: entryMode) })) {
                         Text("Choose entry").tag("")
                         ForEach(nodes) { node in Text(node.name.isEmpty ? node.id : node.name).tag(node.id) }
                     }
+                    Text("Choosing a Router VPN entry measures exit response times through a temporary VPN, then returns to Disconnected.")
+                        .font(.caption).foregroundStyle(.secondary)
                     if let externalEntryProtocol {
                         LabeledContent("Entry transport", value: externalEntryProtocol)
                     } else {
-                    Picker("Entry transport", selection: $entryMode) {
+                    Picker("Entry transport", selection: Binding(get: { entryMode }, set: { chooseEntry(id: entryID, mode: $0) })) {
                         Text("WireGuard").tag("wg")
                         Text("AmneziaWG Fast").tag("awg2-fast")
                         Text("AmneziaWG Strong").tag("awg2-strong")
@@ -242,9 +245,11 @@ struct IOSMultihopView: View {
                         Text("MAX QUIC — AWG + PQ").tag("max-quic-awg")
                     }
                     }
-                    Picker("Exit node", selection: $exitID) {
+                    Picker("Exit node", selection: Binding(get: { exitID }, set: { chooseExit(id: $0) })) {
                         Text("Choose exit").tag("")
-                        ForEach(exitNodes) { node in Text(node.name.isEmpty ? node.id : node.name).tag(node.id) }
+                        ForEach(exitNodes) { node in
+                            Text(viaEntry.receipt?.values.first(where: { $0.id == node.id })?.label ?? (node.name.isEmpty ? node.id : node.name)).tag(node.id)
+                        }
                     }
                     if let torExitProtocol {
                         LabeledContent("Exit transport", value: torExitProtocol == "tor" ? "Tor" : "Tor with saved bridges")
@@ -302,7 +307,40 @@ struct IOSMultihopView: View {
                     Text("One PacketTunnel owns both hops. Exit transport traffic goes through the entry, DNS goes through the exit, and each node is proved separately before Connected.")
                         .font(.caption).foregroundStyle(.secondary)
                     }
-                }.disabled(model.profileMutationBlocked)
+                }.disabled(model.profileMutationBlocked || viaEntry.running)
+                if !entryID.isEmpty && externalEntryProtocol == nil {
+                    Section("Response time through entry") {
+                        if viaEntry.running {
+                            ProgressView(viaEntry.progress)
+                            Button("Cancel and restore", role: .cancel) { viaEntry.cancel() }
+                        } else {
+                            Button(viaEntry.receipt == nil ? "Measure exit candidates" : "Retest through entry") {
+                                viaEntry.start(model: model, entryID: entryID, mode: entryMode, candidates: exitNodes)
+                            }.disabled(model.profileMutationBlocked)
+                            if let receipt = viaEntry.receipt {
+                                ForEach(receipt.values) { value in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(value.label).monospacedDigit()
+                                        if !value.eligible { Text(value.reason).font(.caption).foregroundStyle(.secondary) }
+                                    }
+                                }
+                                if let fastest = receipt.fastest {
+                                    Button("Select fastest measured exit") {
+                                        do {
+                                            try receipt.requireCurrent(model: model, entryID: entryID, entryMode: entryMode)
+                                            exitID = fastest.id
+                                            detail = "Selected \(fastest.name) from responses through \(receipt.capture.entryName). Save graph, then Connect when ready."
+                                        } catch { detail = error.localizedDescription; viaEntry.cancel() }
+                                    }.disabled(model.profileMutationBlocked)
+                                }
+                            }
+                            if !viaEntry.progress.isEmpty { Text(viaEntry.progress).font(.caption) }
+                        }
+                        if !viaEntry.error.isEmpty { Text(viaEntry.error).font(.caption).foregroundStyle(.secondary) }
+                        Text("Measures five TCP connection responses per reachable exit through a temporary, proved entry using the selected transport. The temporary VPN stops before results appear. Failed samples exclude automatic selection. These values are separate from direct-node tests and do not start the saved multihop graph.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                }
                 Section("Connection requirements") {
                     Text("Link at least two Router VPN homes. This path uses a full-route WireGuard, native AmneziaWG Fast/Strong, WireGuard/AmneziaWG with Rosenpass PQ, Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP entry and a WireGuard/AmneziaWG (with or without Rosenpass PQ), self-contained Shadowsocks, Hysteria2, Naive HTTP/2 or HTTP/3, or native REALITY/PQ/XHTTP exit. Transport endpoints are literal IP addresses. Custom UDP/TCP, DoT, DoH and DoH3 DNS stay inside the exit; resolver hostnames use a saved literal bootstrap over that same path. Both nodes' LAN-Off and IPv6-Off policies are enforced. An entry AES or AES+XOR Start Layer stays on the captured entry for Local, Server and Compare. Exit AES or AES+XOR uses the same captured exit in Local, Server and Compare; Server requires matching private relay provisioning. Bounded padding is available per node; Jumbo applies only to a compatible proxy exit, not a raw entry.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -311,12 +349,20 @@ struct IOSMultihopView: View {
                     Button("Save graph") {
                         do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: torExitProtocol == nil ? execution : "local", entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
-                    }.disabled(model.profileMutationBlocked || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
+                    }.disabled(model.profileMutationBlocked || viaEntry.running || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }
                 }
             }
             .navigationTitle("Multihop")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() }.disabled(viaEntry.running) } }
+            .interactiveDismissDisabled(viaEntry.running)
+            .onDisappear { viaEntry.cancel() }
+            .task {
+                while !Task.isCancelled {
+                    viaEntry.invalidateIfStale(model: model, entryID: entryID, mode: entryMode)
+                    do { try await Task.sleep(for: .seconds(1)) } catch { return }
+                }
+            }
             .onAppear {
                 let profile = model.selectedNodeProfile
                 enabled = profile?.multihopEnabled ?? false
@@ -327,5 +373,22 @@ struct IOSMultihopView: View {
                 execution = profile?.multihopExecution ?? "local"
             }
         }
+    }
+
+    private func chooseEntry(id: String, mode: String) {
+        guard id != entryID || mode != entryMode else { return }
+        viaEntry.cancel()
+        entryID = id; entryMode = mode
+        guard !id.isEmpty, nodes.first(where: { $0.id == id })?.normalizedNodeKind == "router-vpn" else { return }
+        let candidates = exitNodes
+        viaEntry.start(model: model, entryID: id, mode: mode, candidates: candidates)
+    }
+
+    private func chooseExit(id: String) {
+        if let receipt = viaEntry.receipt, receipt.values.contains(where: { $0.id == id && $0.medianMS != nil }) {
+            do { try receipt.requireCurrent(model: model, entryID: entryID, entryMode: entryMode) }
+            catch { detail = error.localizedDescription; viaEntry.cancel(); return }
+        }
+        exitID = id
     }
 }

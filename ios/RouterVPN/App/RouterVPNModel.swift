@@ -51,6 +51,13 @@ final class RouterVPNModel: ObservableObject {
     private let bundleKey = "router-vpn.bundle"
     private let lanImportKey = "router-vpn.lan-import-host"
 
+    /// Linking another node may preserve the durable selection, never the
+    /// temporary bundle currently installed by a Speed Lab transaction.
+    var persistedNodeBundle: ClientBundle? {
+        guard let data = UserDefaults.standard.data(forKey: bundleKey) else { return nil }
+        return try? JSONDecoder().decode(ClientBundle.self, from: data)
+    }
+
     init() {
         let defaults = UserDefaults.standard
         lanImportHost = defaults.string(forKey: lanImportKey) ?? ""
@@ -130,9 +137,39 @@ final class RouterVPNModel: ObservableObject {
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
         try IOSExternalExecution.validateImported(decoded)
         let prepared = try IOSDNSRuntimePolicy.patch(decoded)
+        let previous = bundle
         apply(prepared)
-        guard saveRouter() else { throw NSError(domain: "RouterVPN.ProfileSave", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+        guard saveRouter() else {
+            let failure = message
+            apply(previous ?? ClientBundle.empty)
+            if previous == nil { bundle = nil }
+            throw NSError(domain: "RouterVPN.ProfileSave", code: 1, userInfo: [NSLocalizedDescriptionKey: failure])
+        }
         message = "Router bundle imported • \(iosRunnableLogicalModes.count) iOS runtime mode(s) available"
+    }
+
+    /// A link validates its normalized source before one atomic private-store
+    /// commit. Adopting those exact bytes must not perform a second, fallible
+    /// private save after the first has already made the node durable.
+    func commitLinkedNodeBundle(_ data: Data) throws {
+        guard IOSSpeedLabContext.owner == nil else { throw CancellationError() }
+        guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
+        let linked = try IOSNodeBundleStore.shared.link(data, preserving: persistedNodeBundle) { normalized in
+            try IOSExternalExecution.validateImported(normalized)
+            var prepared = normalized
+            prepared.endpoint = prepared.endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !prepared.endpoint.isEmpty else {
+                throw NSError(domain: "RouterVPN.ProfileSave", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "Enter the home router public IP or hostname"])
+            }
+            prepared.socks5Username = ""; prepared.socks5Password = ""
+            if prepared.logicalModes.isEmpty { prepared.logicalModes = legacyLogicalModes(prepared.modes) }
+            return try IOSDNSRuntimePolicy.patch(prepared)
+        }
+        apply(linked.bundle)
+        UserDefaults.standard.set(linked.data, forKey: bundleKey)
+        UserDefaults.standard.set(lanImportHost, forKey: lanImportKey)
+        multihopProgressGeneration = UUID(); multihopProgressText = ""
     }
 
     func restoreIOSSpeedLabBundle(_ data: Data?) throws {
@@ -191,11 +228,19 @@ final class RouterVPNModel: ObservableObject {
         current.logicalModes = logicalModes
         do { current = try IOSDNSRuntimePolicy.patch(current) }
         catch { message = "DNS policy is not runnable on this iOS node: \(error.localizedDescription)"; return false }
-        bundle = current
         guard let data = try? JSONEncoder().encode(current) else { message = "Router profile could not be encoded"; return false }
-        UserDefaults.standard.set(data, forKey: bundleKey)
-        UserDefaults.standard.set(lanImportHost, forKey: lanImportKey)
-        message = "Router profile saved on this device"
+        if IOSSpeedLabContext.owner == nil {
+            do {
+                if !current.routerProfiles.isEmpty { try IOSNodeBundleStore.shared.save(current) }
+            } catch {
+                message = "Private node profile could not be saved: \(error.localizedDescription)"
+                return false
+            }
+            UserDefaults.standard.set(data, forKey: bundleKey)
+            UserDefaults.standard.set(lanImportHost, forKey: lanImportKey)
+        }
+        bundle = current
+        message = IOSSpeedLabContext.owner == nil ? "Router profile saved on this device" : "Temporary test profile prepared"
         return true
     }
 

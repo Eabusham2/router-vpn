@@ -75,9 +75,7 @@ extension RouterVPNModel {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.NodeMutation", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before linking node data."])
         }
-        try IOSExternalExecution.validateImported(JSONDecoder().decode(ClientBundle.self, from: data))
-        let normalized = try IOSNodeBundleStore.shared.link(data, preserving: bundle)
-        try importBundle(normalized)
+        try commitLinkedNodeBundle(data)
         message = "Linked node bundle • \(allNodeProfiles.count) node(s) available without reinstalling Router VPN"
     }
 

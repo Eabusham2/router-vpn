@@ -36,6 +36,7 @@ enum IOSDNSRuntimePolicy {
  private var records:[String:Data]{get{nodes}set{nodes=newValue}}
  private func ensureStorageReady()throws{}
  private func canonicalProfileID(_ id:String,current:ClientBundle?)->String{id}
+ private func readableRecords(current:ClientBundle?)->[String:Data]{nodes}
  private func store(_ source:ClientBundle,replaceExistingRecord:Bool)throws->Data {
   let data=try JSONEncoder().encode(source);var next=nodes;next[source.selectedRouterID]=data;try commitRecords(next);return data
  }
@@ -157,10 +158,12 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try check("stale edit leaves newer source intact",encoded(edit.bundle!)==before)
   for execution in ["server","auto"] {
    edit.bundle!.routerProfiles[0].multihopExecution=execution
+   IOSNodeBundleStore.shared.nodes[ss.id]=try JSONEncoder().encode(edit.bundle!)
    try check("live graph preference cannot lose its response endpoint",!edit.updateNodeMetadata(id:ss.id,name:"Clear",location:"",latitudeText:"",longitudeText:"",expectedExternal:current))
    try check("rejected clear keeps the saved execution choice",edit.bundle!.routerProfiles[0].multihopExecution==execution && edit.bundle!.routerProfiles[0].external==current)
   }
   edit.bundle!.routerProfiles[0].multihopExecution="local"
+  IOSNodeBundleStore.shared.nodes[ss.id]=try JSONEncoder().encode(edit.bundle!)
   IOSNodeBundleStore.shared.failWrite=true
   try check("private write failure is surfaced",!edit.updateNodeMetadata(id:ss.id,name:"Unwritten",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,responseProbeURL:"https://198.51.100.8/final"))
   try check("write failure keeps active credentials and response",edit.bundle!.routerProfiles[0].external==current)
