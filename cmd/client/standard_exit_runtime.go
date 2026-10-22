@@ -52,13 +52,18 @@ func selectedStandardExitDNS(control common.RouterProfile, direct bool) (map[str
 		if direct {
 			return nil, errors.New("Home AdGuard DNS requires a Router VPN entry; choose Fastest, Custom, DoH, DoT, DoH3 or Rescue for a direct external node")
 		}
-		host = strings.TrimSpace(control.AdGuardIPv4)
+		if host == "" {
+			host = strings.TrimSpace(control.AdGuardIPv4)
+		}
 		if host == "" {
 			host = strings.TrimSpace(control.AdGuardIPv6)
 		}
-		protocol = "udp"
-		port = 53
-		serverName = ""
+		if protocol == "" {
+			protocol = "udp"
+		}
+		if port == 0 {
+			port = 53
+		}
 		detour = "entry-wg"
 	case "fastest":
 		host = strings.TrimSpace(control.FastestDNSHost)
@@ -96,10 +101,7 @@ func selectedStandardExitDNS(control common.RouterProfile, direct bool) (map[str
 		return nil, fmt.Errorf("unsupported DNS mode %q for standard exit", mode)
 	}
 	if host == "" {
-		host = strings.TrimSpace(control.FastestDNSHost)
-	}
-	if host == "" {
-		host = "1.1.1.1"
+		return nil, errors.New("selected DNS policy has no resolver address; configure or measure the selected resolver before connecting")
 	}
 	host = strings.Trim(host, "[]")
 	if net.ParseIP(host) == nil {
