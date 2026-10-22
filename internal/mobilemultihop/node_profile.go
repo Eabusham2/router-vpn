@@ -100,7 +100,7 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 			source, err = ComposeNativeBaseStartLayer(source, string(aes), string(policy))
 		}
 	case mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong":
-		base, baseErr := NativeBaseSource(mode, assets)
+		base, baseErr := NativeBaseSourceForEndpoint(mode, assets, predecessorText(profile, "endpoint"))
 		if baseErr != nil {
 			return nil, baseErr
 		}

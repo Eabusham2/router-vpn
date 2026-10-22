@@ -23,7 +23,7 @@ import (
 
 func viaEntryFixture(t *testing.T) (*app, common.RouterProfile, []common.RouterProfile) {
 	t.Helper()
-	root := t.TempDir()
+	root := desktopAWGPrivateTestRoot(t)
 	t.Setenv("HOMEVPN_ROOT", root)
 	entry, assets := desktopNodeFixture(t, "198.51.100.8")
 	assets["wg-socks.conf"] = []byte(strings.ReplaceAll(string(assets["wg.conf"]), "0.0.0.0/0, ::/0", "10.77.0.0/24"))

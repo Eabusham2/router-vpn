@@ -133,7 +133,7 @@ func freezeDesktopNodeAssets(files map[string][]byte, host, address string) (map
 				if e != nil {
 					return nil, errors.New("native peer endpoint is malformed")
 				}
-				if strings.EqualFold(captured, host) {
+				if mobilemultihop.SameNativeNodeHost(captured, host) {
 					lines[i] = key + "= " + net.JoinHostPort(address, port)
 				}
 			}
@@ -181,6 +181,11 @@ func compileDesktopNode(ctx context.Context, p common.RouterProfile, mode string
 	}
 	if p.NodeKind == "" {
 		p.NodeKind = "router-vpn"
+	}
+	if mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong" {
+		if _, err := mobilemultihop.NativeBaseSourceForEndpoint(mode, files, p.Endpoint); err != nil {
+			return nil, "", err
+		}
 	}
 	bootstrap, err := desktopNodeDNSBootstrap(p)
 	if err != nil {

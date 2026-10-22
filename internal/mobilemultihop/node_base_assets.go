@@ -2,8 +2,61 @@ package mobilemultihop
 
 import (
 	"errors"
+	"net"
+	"net/netip"
 	"strings"
+
+	"router-vpn/internal/applexray"
 )
+
+// SameNativeNodeHost compares captured outer hosts without resolving either
+// name. Literal spellings may normalize to the same address, while a hostname
+// can match only that same DNS name, never a previous resolution of it.
+func SameNativeNodeHost(a, b string) bool {
+	ipA, errA := netip.ParseAddr(a)
+	ipB, errB := netip.ParseAddr(b)
+	if errA == nil || errB == nil {
+		return errA == nil && errB == nil && ipA.Zone() == "" && ipB.Zone() == "" && !ipA.Is4In6() && !ipB.Is4In6() && ipA == ipB
+	}
+	return applexray.ValidNodeHostname(a) && applexray.ValidNodeHostname(b) &&
+		strings.EqualFold(strings.TrimSuffix(a, "."), strings.TrimSuffix(b, "."))
+}
+
+// NativeBaseSourceForEndpoint also binds the captured base transport to the
+// saved node's outer host. An authentic peer key alone cannot authorize an old
+// endpoint or a stale DNS answer. The source owns its port; it is never replaced
+// with a default. Call this before any bootstrap and again after freezing.
+func NativeBaseSourceForEndpoint(mode string, assets map[string][]byte, endpoint string) ([]byte, error) {
+	full, err := NativeBaseSource(mode, assets)
+	if err != nil {
+		return nil, err
+	}
+	bad := errors.New("native base endpoint does not match the captured node host")
+	section, captured := "", ""
+	for _, line := range strings.Split(string(full), "\n") {
+		line = strings.TrimSpace(strings.SplitN(line, "#", 2)[0])
+		if strings.HasPrefix(line, "[") {
+			section = strings.ToLower(line)
+			continue
+		}
+		key, value, ok := strings.Cut(line, "=")
+		if !ok || !strings.EqualFold(strings.TrimSpace(key), "Endpoint") {
+			continue
+		}
+		if section != "[peer]" || captured != "" {
+			return nil, bad
+		}
+		captured = strings.TrimSpace(value)
+	}
+	host, port, err := net.SplitHostPort(captured)
+	if err != nil || !SameNativeNodeHost(host, endpoint) {
+		return nil, bad
+	}
+	if _, err := wireGuardNumber(port, 1, 65535); err != nil {
+		return nil, bad
+	}
+	return full, nil
+}
 
 // NativeBaseSource selects the full-device source from a generated base pair.
 // Server bundles also carry a split-route *-socks.conf for kernel multihop. It

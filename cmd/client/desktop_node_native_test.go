@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
@@ -64,6 +65,73 @@ func TestDesktopNativeHostnameCaptureAndCancellation(t *testing.T) {
 	before := calls
 	if _, _, err := compileDesktopNode(context.Background(), p, "wg", files, nil, lookup); err == nil || calls != before {
 		t.Fatal("invalid source reached resolver")
+	}
+}
+
+func TestDesktopNativeBaseRejectsStaleEndpointBeforeBootstrap(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, test := range []struct{ saved, captured string }{
+			{"198.51.100.99", "198.51.100.8"},
+			{"node.example.test", "198.51.100.8"},
+			{"node.example.test", "old.example.test"},
+		} {
+			t.Run(mode+"/"+test.saved+"/"+test.captured, func(t *testing.T) {
+				p, files := viaEntryBaseFixture(t, mode)
+				p.Endpoint = test.saved
+				for name, body := range files {
+					files[name] = []byte(strings.ReplaceAll(string(body), "198.51.100.8:51820", net.JoinHostPort(test.captured, "52999")))
+				}
+				before := encodeDesktopNodeAssets(files)
+				calls := 0
+				compiled, endpoint, err := compileDesktopNode(context.Background(), p, mode, files, nil, func(context.Context, string) ([]netip.Addr, error) {
+					calls++
+					return []netip.Addr{netip.MustParseAddr("198.51.100.8")}, nil
+				})
+				if err == nil || compiled != nil || endpoint != "" || calls != 0 || before != encodeDesktopNodeAssets(files) {
+					t.Fatal("old authentic endpoint reached bootstrap or compilation", calls, err)
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopNativeBaseHostNormalizationRetainsCapturedPort(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, test := range []struct{ saved, captured, resolved string }{
+			{"node.example.test", "NODE.Example.Test.", "198.51.100.8"},
+			{"2001:db8::8", "2001:0db8:0000:0:0:0:0:8", "2001:db8::8"},
+		} {
+			t.Run(mode+"/"+test.saved, func(t *testing.T) {
+				p, files := viaEntryBaseFixture(t, mode)
+				p.Endpoint = test.saved
+				for name, body := range files {
+					files[name] = []byte(strings.ReplaceAll(string(body), "198.51.100.8:51820", net.JoinHostPort(test.captured, "52999")))
+				}
+				before := encodeDesktopNodeAssets(files)
+				calls := 0
+				compiled, endpoint, err := compileDesktopNode(context.Background(), p, mode, files, nil, func(_ context.Context, host string) ([]netip.Addr, error) {
+					calls++
+					if host != test.saved {
+						t.Fatal("bootstrap changed the saved host")
+					}
+					return []netip.Addr{netip.MustParseAddr(test.resolved)}, nil
+				})
+				if err != nil || endpoint != test.resolved {
+					t.Fatal("equivalent captured endpoint was rejected", err)
+				}
+				var graph map[string]any
+				if err := json.Unmarshal([]byte(compiled.Config()), &graph); err != nil {
+					t.Fatal(err)
+				}
+				peer := graph["endpoints"].([]any)[0].(map[string]any)["peers"].([]any)[0].(map[string]any)
+				if peer["port"] != float64(52999) || before != encodeDesktopNodeAssets(files) {
+					t.Fatal("bootstrap overwrote the captured port or saved bytes")
+				}
+				if want := map[bool]int{true: 1, false: 0}[test.saved == "node.example.test"]; calls != want {
+					t.Fatal("unexpected resolver calls", calls)
+				}
+			})
+		}
 	}
 }
 

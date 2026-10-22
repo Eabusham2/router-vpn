@@ -235,12 +235,15 @@ func TestViaEntryProcessFixture(t *testing.T) {
 }
 
 func TestViaEntryNativeCloseJoinsExactProcessAndRetainsChangedDirectory(t *testing.T) {
-	root := t.TempDir()
+	root := desktopAWGPrivateTestRoot(t)
 	directory, err := newPrivateRuntimeDir(root, "via-entry-candidates")
 	if err != nil {
 		t.Fatal(err)
 	}
-	info, _ := os.Lstat(directory)
+	info, err := captureViaEntryDirectory(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	command := exec.Command(os.Args[0], "-test.run=^TestViaEntryProcessFixture$")
 	command.Env = append(os.Environ(), "ROUTERVPN_VIA_ENTRY_PROCESS_FIXTURE=1")
@@ -281,6 +284,49 @@ func TestViaEntryNativeCloseJoinsExactProcessAndRetainsChangedDirectory(t *testi
 	}
 	if _, err := os.Lstat(directory); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal("owned private source was not retired")
+	}
+}
+
+func TestViaEntryFailedLaunchDoesNotDeleteReplacementDirectory(t *testing.T) {
+	root := desktopAWGPrivateTestRoot(t)
+	lane, err := launchViaEntryNativeLane(context.Background(), root, filepath.Join(root, "missing-native-binary"), []byte(`{"fixture":true}`), 27123, "private-user", "private-password", nil)
+	if err == nil || lane == nil {
+		t.Fatal("failed process start forgot its staged source owner")
+	}
+	owned := lane.(*viaEntryNativeLane)
+	directory, retired := owned.directory, owned.directory+"-original"
+	if err := os.Rename(directory, retired); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := filepath.Join(directory, "foreign.txt")
+	if err := os.WriteFile(foreign, []byte("replacement owner"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	stop, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := lane.Close(stop); err == nil || owned.removed {
+		t.Fatal("failed launch retired a different directory at the same path")
+	}
+	if body, err := os.ReadFile(foreign); err != nil || string(body) != "replacement owner" {
+		t.Fatal("replacement contents changed", err)
+	}
+	if _, err := os.Stat(filepath.Join(retired, "sing-box.json")); err != nil {
+		t.Fatal("original launch source was forgotten before confirmed cleanup", err)
+	}
+	if err := os.Remove(foreign); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(retired, directory); err != nil {
+		t.Fatal(err)
+	}
+	if err := lane.Close(stop); err != nil || !owned.removed {
+		t.Fatal("restored original source could not be retired", err)
 	}
 }
 
@@ -384,7 +430,7 @@ func TestViaEntryPinnedNativeUpstreamResponseAndCancellation(t *testing.T) {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	lane, err := launchViaEntryNativeLane(ctx, t.TempDir(), binary, data, port, "local-user", "local-password", allowed)
+	lane, err := launchViaEntryNativeLane(ctx, desktopAWGPrivateTestRoot(t), binary, data, port, "local-user", "local-password", allowed)
 	if lane != nil {
 		defer func() {
 			stop, cancel := context.WithTimeout(context.Background(), 10*time.Second)

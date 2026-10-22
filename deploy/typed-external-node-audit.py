@@ -213,7 +213,7 @@ need(
     "Tor bridges • obfs4 / meek / Snowflake / WebTunnel • current circuit exit verification",
     'let entryBundleKey = tor ? "tor_entry_bundle" : "external_entry_bundle"',
     'proto.providerConfiguration?[entryBundleKey] = capturedEntry',
-    "IOSNodeBundleStore.shared.link",
+    "try commitLinkedNodeBundle(data)",
     'value.socks5Host = ""; value.socks5Port = 0',
     "externalRuntimeBundleData",
     "runtime.routerProfiles = [runtimeProfile]",
@@ -232,6 +232,34 @@ forbid(
     "ios/RouterVPN/App/RouterVPNModelExternal.swift",
     'value.socks5Host = ""; value.socks5Port = 1080',
     '"bundle": try JSONEncoder().encode(bundle)',
+)
+# Linking prepares the normalized source before one durable commit. The model
+# then adopts those exact committed bytes; it must not perform a second save
+# that can fail after the linked-node store has already changed.
+need(
+    "ios/RouterVPN/App/RouterVPNModel.swift",
+    "func commitLinkedNodeBundle(_ data: Data) throws",
+    "IOSNodeBundleStore.shared.link(data, preserving: persistedNodeBundle) { normalized in",
+    "IOSExternalExecution.validateImported(normalized)",
+    "return try IOSDNSRuntimePolicy.patch(prepared)",
+    "apply(linked.bundle)",
+    "UserDefaults.standard.set(linked.data, forKey: bundleKey)",
+)
+need(
+    "ios/RouterVPN/App/IOSNodeBundleStore.swift",
+    "let bundle = try prepare(normalizedBundle(source))",
+    "var next = readableRecords(current: current)",
+    "return (bundle, normalized)",
+)
+need(
+    "ios/RouterVPN/test_runtime_selection_contract.py",
+    "test_ios_node_store_transactions.py",
+)
+need(
+    "deploy/test_ios_node_store_transactions.py",
+    '"failed link is atomic"',
+    '" // SHIPPING_IMPORT"',
+    '" // SHIPPING_SELECT_AND_LINK"',
 )
 need(
     "ios/RouterVPN/App/NodeManagerSheet.swift",

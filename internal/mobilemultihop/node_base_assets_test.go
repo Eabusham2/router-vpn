@@ -3,6 +3,7 @@ package mobilemultihop
 import (
 	"encoding/base64"
 	"encoding/json"
+	"net"
 	"strings"
 	"testing"
 )
@@ -87,5 +88,80 @@ func TestNodeBasePairAllowsOnlyGeneratedRoutingDifferences(t *testing.T) {
 	delete(assets, "wg.conf")
 	if _, err := NativeBaseSource("wg", assets); err == nil {
 		t.Fatal("split source substituted for a full native profile")
+	}
+}
+
+func TestNativeNodeHostIdentityDoesNotUseDNSSubstitution(t *testing.T) {
+	for _, test := range []struct {
+		a, b string
+		want bool
+	}{
+		{"198.51.100.8", "198.51.100.8", true},
+		{"2001:db8::8", "2001:0db8:0000:0:0:0:0:8", true},
+		{"Node.Example.Test.", "node.example.test", true},
+		{"198.51.100.8", "198.51.100.9", false},
+		{"node.example.test", "198.51.100.8", false},
+		{"198.51.100.8", "node.example.test", false},
+		{"node.example.test", "old.example.test", false},
+		{"::ffff:198.51.100.8", "198.51.100.8", false},
+		{"fe80::1%eth0", "fe80::1%eth0", false},
+		{"", "", false},
+		{"node.example.test:51820", "node.example.test", false},
+		{"node.example.test..", "node.example.test", false},
+	} {
+		if got := SameNativeNodeHost(test.a, test.b); got != test.want {
+			t.Fatalf("host identity %q versus %q = %v, want %v", test.a, test.b, got, test.want)
+		}
+	}
+}
+
+func TestNodeProfileBaseBindsSavedEndpointAndPreservesSourcePort(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, paired := range []bool{false, true} {
+			t.Run(mode+"/paired="+map[bool]string{false: "false", true: "true"}[paired], func(t *testing.T) {
+				encoded, profile, _ := nodeProfileFixture(t, mode, "")
+				assets, err := nodeProfileAssets(encoded)
+				if err != nil {
+					t.Fatal(err)
+				}
+				full, split := "wg.conf", "wg-socks.conf"
+				if mode != "wg" {
+					full, split = "awg.conf", "awg-socks.conf"
+				}
+				original := string(assets[full])
+				for _, test := range []struct{ saved, captured string }{
+					{"192.0.2.99", "192.0.2.1"},
+					{"node.example.test", "192.0.2.1"},
+					{"node.example.test", "old.example.test"},
+				} {
+					profile["endpoint"] = test.saved
+					assets[full] = []byte(strings.Replace(original, "192.0.2.1:51820", net.JoinHostPort(test.captured, "52999"), 1))
+					if paired {
+						assets[split] = []byte(strings.ReplaceAll(string(assets[full]), "0.0.0.0/0, ::/0", "10.77.0.0/24"))
+					}
+					if _, err := NativeBaseSourceForEndpoint(mode, assets, test.saved); err == nil {
+						t.Fatal("authentic base asset retained a stale endpoint", test)
+					}
+					if _, err := NewNodeProfile(mode, encodeNodeBasePair(t, assets), startJSON(t, profile), "", ""); err == nil {
+						t.Fatal("shared compiler adopted an unowned outer endpoint", test)
+					}
+				}
+				profile["endpoint"] = "2001:db8::8"
+				assets[full] = []byte(strings.Replace(original, "192.0.2.1:51820", "[2001:0db8:0000:0:0:0:0:8]:52999", 1))
+				if paired {
+					assets[split] = []byte(strings.ReplaceAll(string(assets[full]), "0.0.0.0/0, ::/0", "10.77.0.0/24"))
+				}
+				before := encodeNodeBasePair(t, assets)
+				compiled, err := NewNodeProfile(mode, before, startJSON(t, profile), "", "")
+				if err != nil {
+					t.Fatal("equivalent literal endpoint rejected", err)
+				}
+				graph := startObject(t, compiled.Config())
+				peer := graph["endpoints"].([]any)[0].(map[string]any)["peers"].([]any)[0].(map[string]any)
+				if peer["port"] != float64(52999) || !SameNativeNodeHost(peer["address"].(string), "2001:db8::8") || before != encodeNodeBasePair(t, assets) {
+					t.Fatal("host binding replaced the port, address or saved source")
+				}
+			})
+		}
 	}
 }

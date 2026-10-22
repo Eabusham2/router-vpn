@@ -252,7 +252,7 @@ func launchViaEntryNativeLane(ctx context.Context, root, binary string, config [
 	if err != nil {
 		return nil, err
 	}
-	info, err := os.Lstat(directory)
+	info, err := captureViaEntryDirectory(directory)
 	if err != nil {
 		return nil, err
 	}
@@ -312,6 +312,26 @@ func (l *viaEntryNativeLane) Alive() bool {
 	default:
 		return true
 	}
+}
+
+// Capture the directory identity from an opened handle. Windows Lstat may
+// defer loading its file ID until SameFile is called; retaining that lazy
+// result would authorize a replacement at the same pathname during cleanup.
+func captureViaEntryDirectory(directory string) (os.FileInfo, error) {
+	file, err := os.Open(directory)
+	if err != nil {
+		return nil, errors.New("candidate private directory identity is unavailable")
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !opened.IsDir() {
+		return nil, errors.New("candidate private directory identity is invalid")
+	}
+	current, err := os.Lstat(directory)
+	if err != nil || current.Mode()&os.ModeSymlink != 0 || !current.IsDir() || !os.SameFile(opened, current) {
+		return nil, errors.New("candidate private directory changed during capture")
+	}
+	return opened, nil
 }
 
 func (l *viaEntryNativeLane) DialContext(ctx context.Context, network, address string) (net.Conn, error) {
