@@ -54,28 +54,33 @@ final class AndroidUnifiedNodeCatalog {
  static final String SORT_CURRENT="current";
  static final class Item {
   final String id,name;final boolean router;Item(String id,boolean router){this.id=id;this.name="Catalog "+id;this.router=router;}
-  boolean isRouterVpn(){return router;}boolean hasCoordinates(){return router;}
+  boolean isRouterVpn(){return router;}boolean hasCoordinates(){return router;}Double latencyMedianMs;boolean hasMeasuredLatency(){return latencyMedianMs!=null;}
  }
  final List<Item> items=new ArrayList<>(Arrays.asList(new Item("a",true),new Item("external",false)));
  List<Item> list(String order){return items;}
 }
 final class AndroidTelemetry {
- static final class Result {
+ static class Result {
   final String id,name;final double medianMs;final int samples=50,failed=0;final String proof="routed proof";
   Result(String id,double ms){this.id=id;name="Measured "+id;medianMs=ms;}
-  String shortLabel(){return medianMs+" ms";}String detail(){return "detail "+id;}
+  boolean stale;void requireCurrent(){if(stale)throw new IllegalStateException("Measured source changed; Retest.");}String shortLabel(){return medianMs+" ms";}String detail(){return "detail "+id;}
  }
+ static final class PathResult extends Result {PathResult(){super("current",3);}}
  interface One{void result(Result value,Throwable error);}interface Many{void result(List<Result> values,Throwable error);}
+ interface PathOne{void result(PathResult value,Throwable error);}final PathResult path=new PathResult();PathOne pending;boolean delayPath;
  final List<Result> results=Arrays.asList(new Result("b",3),new Result("a",8),new Result("c",12));
- int allSamples,nodeSamples,currentSamples,speedBytes;String measuredNode="";
+ int allSamples,nodeSamples,currentSamples,currentCalls,speedBytes;String measuredNode="";
  double cachedMedian(String id){return id.equals("a")?7:0;}
  void measureAll(int count,Many callback){allSamples=count;callback.result(results,null);}
  void measureNode(AndroidNodeStore.Node node,int count,One callback){measuredNode=node.id;nodeSamples=count;callback.result(results.get(0),null);}
- void currentPath(int count,One callback){currentSamples=count;callback.result(results.get(0),null);}
+ void currentPath(int count,PathOne callback){currentSamples=count;currentCalls++;if(delayPath)pending=callback;else callback.result(path,null);}
  void speedTest(int bytes,One callback){speedBytes=bytes;callback.result(results.get(0),null);}
 }
 final class Connection {boolean connected=true;boolean isConnected(){return connected;}}
+final class AndroidHomeStateStore {static class Snapshot{String logicalMode="raw-tunnel";}static Snapshot state=new Snapshot();static Snapshot snapshot(android.content.Context context){return state;}}
+final class AndroidMTUMeasurementGate {static boolean busy;static boolean held(){return busy;}}
 final class AndroidViaEntryLatencyProbe {
+ static boolean hasActiveOperation(){return false;}
  static final class Result {
   final AndroidNodeStore.Node entry;final List<AndroidNodeStore.Node> candidates;final List<AndroidTelemetry.Result> values;
   boolean stale;
@@ -95,15 +100,17 @@ public final class ProductDialogHarness extends android.app.Activity {
  final MemoryPreferences saved=new MemoryPreferences();final AndroidNodeStore nodeStore=new AndroidNodeStore();
  final AndroidUnifiedNodeCatalog catalog=new AndroidUnifiedNodeCatalog();final AndroidTelemetry telemetry=new AndroidTelemetry();
  final Connection connection=new Connection();final Button fastestButton=new Button(this);final CheckBox multihopToggle=new CheckBox(this);
+ final TextView liveLatency=new TextView(this);AndroidTelemetry.PathResult currentPathReceipt;boolean resumed=true,telemetryBusy;long lastTelemetryAt,telemetryGeneration;double currentPathMs;
  boolean busy;String selected="",profile="",pair="",entry="",exit="",message="",infoTitle="",info="";int routed,refreshes;
  SharedPreferences prefs(){return saved;}boolean mutationBusy(){return busy;}void toast(String text){message=text;}
  void refreshNodes(){}void refreshAll(){refreshes++;}void refreshMap(){}void dialog(String title,String text){infoTitle=title;info=text;}
- void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
+ public boolean isDestroyed(){return false;}void showNodeSort(){pair="sort";}void showSavedStatistics(){infoTitle="Saved statistics";}void runCurrentSpeed(){if(!connection.isConnected()){toast("Connect first");return;}telemetry.speedTest(8<<20,(r,e)->dialog("Real VPN path speed",r.detail()));}void showAddRouter(){showPairDialog();}void showPairDialog(){pair="router";}void openStandardExits(){pair="external";}
  boolean openSelectedExternal(boolean selectPath){return false;}
  void selectCatalog(AndroidUnifiedNodeCatalog.Item item){selected=item.id;}
  void showProfileActions(AndroidNodeStore.Node node){profile=node.id;}
  AndroidNodeStore.Node nodeById(String id){for(AndroidNodeStore.Node n:nodeStore.nodes)if(n.id.equals(id))return n;return null;}
  JSONObject activeRouterProfile(){return new JSONObject();}void runRoutedHopSpeeds(){routed++;}
+ void refreshMultihopSummary(){}
  void prepareViaEntryExitMeasurement(AndroidNodeStore.Node node,List<AndroidNodeStore.Node> nodes){entry=node.id;exit=Integer.toString(nodes.size());}
  void chooseMultihopMode(AndroidNodeStore.Node first,AndroidNodeStore.Node last,AndroidViaEntryLatencyProbe.Result result){entry=first.id;exit=last.id;}
  AndroidViaEntryLatencyProbe.Result capture(){return new AndroidViaEntryLatencyProbe.Result(nodeById("a"),Arrays.asList(nodeById("b"),nodeById("c")),Collections.emptyList());}
@@ -128,23 +135,31 @@ HARNESS_SUFFIX = r'''
   h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");d.clickItem(2);check(h.nodeStore.selected.equals("a"),"specific Fastest list choice exact");
   h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");h.busy=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"late busy prevents Fastest mutation");
   h=new ProductDialogHarness();h.busy=true;h.showFastConnectMenu();check(h.telemetry.allSamples==0,"initial busy avoids measurement");
+  h=new ProductDialogHarness();h.showFastConnectMenu();d=shown(4,"Select node");h.telemetry.results.get(0).stale=true;d.clickItem(0);check(h.nodeStore.selections==0&&h.saved.writes==0,"stale measured source cannot be selected");
  }
  static void performance(){
-  for(int action=0;action<6;action++){
-   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(6,"Performance");d.clickItem(action);
+  for(int action=0;action<7;action++){
+   ProductDialogHarness h=new ProductDialogHarness();h.showPerformance();AlertDialog d=shown(7,"Performance");d.clickItem(action);
    switch(action){case 0:check(h.telemetry.currentSamples==5,"current path actual callback");break;
     case 1:check(h.telemetry.nodeSamples==50&&h.telemetry.measuredNode.equals("a"),"durable 50-sample selected node");break;
     case 2:check(h.telemetry.allSamples==5,"all-node callback");break;
     case 3:check(h.telemetry.speedBytes==8<<20,"real transfer requested8MiB");break;
     case 4:check(h.routed==1,"native routed hop speed action");break;
+    case 6:check(h.infoTitle.equals("Saved statistics"),"saved durable statistics action");break;
     default:check(h.infoTitle.equals("Path throughput / Auto MTU")&&h.info.contains("No proven"),"unmeasured MTU is truthful");
    }
   }
-  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(6,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
+  for(int action:new int[]{0,3}){ProductDialogHarness h=new ProductDialogHarness();h.connection.connected=false;h.showPerformance();shown(7,"Performance").clickItem(action);check(h.telemetry.currentSamples==0&&h.telemetry.speedBytes==0,"disconnected path speed cannot run");}
  }
  static void nodes(){
   ProductDialogHarness h=new ProductDialogHarness();h.showNodes();AlertDialog d=shown(2,"Choose node");check(d.items[1].contains("list only"),"no invented external coordinates");d.clickItem(1);check(h.selected.equals("external"),"exact external node callback");
   h=new ProductDialogHarness();h.catalog.items.clear();h.showNodes();check(AlertDialog.last.items==null&&AlertDialog.last.message!=null,"empty node informational dialog retained");
+ }
+ static void polling(){
+  ProductDialogHarness h=new ProductDialogHarness();h.refreshTelemetry(true);check(h.currentPathMs==3&&h.currentPathReceipt==h.telemetry.path&&h.liveLatency.getText().toString().contains("3.0"),"resumed polling did not publish current captured result");h.telemetry.path.stale=true;AndroidMTUMeasurementGate.busy=true;h.refreshTelemetry(true);check(h.currentPathMs==0&&h.currentPathReceipt==null&&h.liveLatency.getText().toString().equals("-- ms")&&h.telemetry.currentCalls==1,"owned measurement kept stale current RTT label");AndroidMTUMeasurementGate.busy=false;
+  h=new ProductDialogHarness();h.refreshTelemetry(true);h.connection.connected=false;h.telemetryBusy=true;h.refreshTelemetry(true);check(h.currentPathMs==0&&h.currentPathReceipt==null,"busy polling retained disconnected path label");
+  h=new ProductDialogHarness();h.telemetry.delayPath=true;h.refreshTelemetry(true);h.telemetryGeneration++;h.resumed=false;h.telemetry.pending.result(h.telemetry.path,null);check(h.currentPathMs==0&&h.currentPathReceipt==null&&!h.telemetryBusy,"paused or newer UI adopted delayed current RTT");
+  h=new ProductDialogHarness();h.telemetry.delayPath=true;h.refreshTelemetry(true);h.telemetry.path.stale=true;h.telemetry.pending.result(h.telemetry.path,null);check(h.currentPathMs==0&&h.currentPathReceipt==null,"delayed stale native path published current RTT");
  }
  static void profiles(){ProductDialogHarness h=new ProductDialogHarness();h.showProfileManager();shown(3,"Router profiles").clickItem(2);check(h.profile.equals("c"),"exact stored router profile callback");}
  static void execution(){
@@ -175,7 +190,7 @@ HARNESS_SUFFIX = r'''
   AlertDialog broken=new AlertDialog.Builder(new ProductDialogHarness()).setMessage("suppresses list").setItems(new String[]{"unreachable"},(d,i)->{throw new AssertionError("hidden callback ran");}).show();
   check(!broken.itemsVisible(),"AOSP precedence double must reject original form");
   try{broken.clickItem(0);throw new AssertionError("hidden item clickable");}catch(IllegalStateException expected){checks++;}
-  fastest();performance();nodes();profiles();execution();entry();exits();
+  fastest();performance();nodes();profiles();execution();entry();exits();polling();
   System.out.println("Android shipping ProductActivity dialog actions: PASS "+checks+" checks (AOSP dialog boundary; OS/network handles doubled)");
  }
 }
@@ -186,7 +201,7 @@ def main():
     handlers = [method(signature) for signature in SIGNATURES]
     for signature, handler in zip(SIGNATURES, handlers):
         assert handler.count("choiceDialog(") == 1, signature
-    support = method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(")
+    support = method("AlertDialog.Builder choiceDialog(") + method("TextView text(") + method("int dp(") + method("void refreshTelemetry(") + method("void clearCurrentTelemetry(")
     with tempfile.TemporaryDirectory(prefix="routervpn-product-dialog-") as work:
         tmp = Path(work)
         sources = dict(W.UI)
@@ -194,6 +209,7 @@ def main():
             "public Builder setNegativeButton(",
             "public Builder setNeutralButton(CharSequence text,OnClickListener listener){return button(-3,text,listener);}\n  public Builder setNegativeButton(")
         sources["android/graphics/Color.java"] = "package android.graphics;public final class Color {public static final int WHITE=-1;}"
+        sources["android/os/SystemClock.java"] = "package android.os;public final class SystemClock {public static long elapsedRealtime(){return 10000;}}"
         sources["android/content/SharedPreferences.java"] = """package android.content;
 public interface SharedPreferences {String getString(String key,String fallback);default Editor edit(){throw new UnsupportedOperationException();}
 interface Editor{Editor putString(String key,String value);Editor putBoolean(String key,boolean value);void apply();}}"""

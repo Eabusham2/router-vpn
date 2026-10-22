@@ -114,6 +114,7 @@ import platform
 import subprocess
 import sys
 if platform.system() == 'Darwin':
+    subprocess.run([sys.executable, str(root / 'deploy/test_apple_vector_map.py')], check=True, timeout=300)
     for external_test in ('test_ios_external_policy.py', 'test_ios_external_entry_selection.py', 'test_ios_external_execution_owner.py',
                           'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py',
                           'test_ios_node_store_transactions.py'):
@@ -144,6 +145,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_mtu_policy.py')], check=True, timeout=150)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_dns_measurement.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_dns_retirement_receipts.py')], check=True, timeout=180)
+    subprocess.run([sys.executable, str(root / 'deploy/test_ios_unified_telemetry.py')], check=True, timeout=600)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_policy.py')], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_forwarding_sdk.py')], check=True, timeout=240)
 else:

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"context"
 	"encoding/json"
 	"os"
 	"path/filepath"
@@ -16,12 +17,25 @@ func executionFixture() (map[string]any, desktopExecutionDescriptor) {
 	return cfg, d
 }
 func TestNativeServerGraphOwnsEntryControlAndPreservesDNS(t *testing.T) {
-	cfg, d := executionFixture()
+	root, sel := nativeMultihopCapturedFixture(t, "wg", "off")
+	sel, err := captureNativeMultihopSelection(context.Background(), root, sel, []string{"shadowsocks"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	dir, _, err := prepareNativeMultihop(root, sel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(dir, "sing-box.json")
+	raw, _ := os.ReadFile(path)
+	var cfg map[string]any
+	if json.Unmarshal(raw, &cfg) != nil {
+		t.Fatal("invalid captured graph")
+	}
+	_, d := executionFixture()
+	d.Lease.ExitMode = sel.ExitMode
 	before, _ := json.Marshal(cfg["dns"])
-	path := filepath.Join(t.TempDir(), "sing-box.json")
-	raw, _ := json.Marshal(cfg)
-	os.WriteFile(path, raw, 0600)
-	if err := patchDesktopExecutionConfig(path, d); err != nil {
+	if err := patchDesktopExecutionConfig(path, d, sel); err != nil {
 		t.Fatal(err)
 	}
 	raw, _ = os.ReadFile(path)
@@ -47,7 +61,7 @@ func TestNativeServerGraphRejectsUnsafeDescriptorWithoutWrite(t *testing.T) {
 		path := filepath.Join(t.TempDir(), "sing-box.json")
 		raw, _ := json.Marshal(cfg)
 		os.WriteFile(path, raw, 0600)
-		if err := patchDesktopExecutionConfig(path, d); err == nil {
+		if err := patchDesktopExecutionConfig(path, d, multihopSelection{}); err == nil {
 			t.Fatal("unsafe listener", host)
 		}
 		got, _ := os.ReadFile(path)

@@ -28,7 +28,7 @@ import java.util.concurrent.TimeUnit;
 
 /** Android AUTO/SMART/CUSTOM/ALL/logical mode chooser. Every success requires selected-node path proof. */
 final class AndroidModeOrchestrator {
-    interface Callback { void progress(String message); void finished(boolean success, String modeId, String message); default void owned(String homeSession) {} }
+    interface Callback { void progress(String message); void finished(boolean success, String modeId, String message); default void owned(String homeSession) {} default void proved(String homeSession,String raw,String source) {} }
     private enum Kind { WG, AWG, LIBBOX, XRAY }
     private static final class Candidate {
         final Kind kind; final String id,name; final List<String> layers,simplify; final int order;
@@ -46,6 +46,7 @@ final class AndroidModeOrchestrator {
     private volatile String activeSource;
     private volatile Candidate current;
     private String selectionSessionId="", selectionNodeId="", selectionSource;
+    private long selectionPathGeneration;
 
     private static final class SelectionAbortedException extends Exception {
         private static final long serialVersionUID=1L;
@@ -58,11 +59,24 @@ final class AndroidModeOrchestrator {
     void close(){executor.shutdownNow();}
 
     void auto(File bundle,boolean smart,Callback cb){run(bundle,smart,null,cb);}
+    void startup(File bundle,String mode,String lastRaw,String capturedSource,Callback cb){
+        if(!java.util.Arrays.asList("smart-auto","auto","last").contains(mode)||capturedSource==null||capturedSource.isEmpty()){
+            cb.finished(false,"","The captured startup strategy is invalid.");return;
+        }
+        run(bundle,"smart-auto".equals(mode),null,cb,capturedSource,"last".equals(mode)?(lastRaw==null?"":lastRaw):null);
+    }
     void custom(File bundle,List<String>requested,Callback cb){run(bundle,false,new ArrayList<>(requested),cb);}
     void all(File bundle,Callback cb){runAll(bundle,cb);}
     void logical(File bundle,String logicalId,Callback cb){runLogical(bundle,logicalId,cb);}
-    void disconnect(Callback cb){
-        if(running||stopping){cb.finished(false,"","A Router VPN transition is still running.");return;}
+    synchronized void disconnect(Callback cb){
+        if(stopping){cb.finished(false,"","The captured Router VPN transition is still draining.");return;}
+        if(running){
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+            if(!selectionSessionId.isEmpty()&&selectionSessionId.equals(home.sessionId)){
+                disconnectCaptured(selectionSessionId,cb);return;
+            }
+            cb.finished(false,"","A newer Router VPN transition owns cleanup.");return;
+        }
         running=true;
         AndroidHomeStateStore.beginPathRevalidation(context,"Router VPN disconnect requested; retaining logical runtime ownership until every child proves terminal.");
         executor.execute(()->{
@@ -96,7 +110,7 @@ final class AndroidModeOrchestrator {
         try{if(source==null||source.isEmpty()||!source.equals(load(bundle).toString()))throw new IllegalStateException("Original node settings changed; restoration was cancelled.");}
         catch(Exception error){cb.finished(false,"",safe(error));return;}
         running=true;selectionNodeId=nodeId(bundle);selectionSource=source;
-        selectionSessionId=AndroidHomeStateStore.begin(context,logical,"","auto",selectionNodeId);
+        beginSelection(logical,selectionNodeId);
         executor.execute(()->{
             selectionWorker=Thread.currentThread();
             try{
@@ -107,8 +121,11 @@ final class AndroidModeOrchestrator {
                 }
                 if(captured==null||!startAndProve(bundle,captured,cb))throw new IllegalStateException("The original exact runtime failed its fresh node proof.");
                 synchronized(AndroidModeOrchestrator.this){
+                synchronized(AndroidHomeStateStore.class){
                 checkedBundle(bundle);current=captured;activeSource=selectionSource;
                 AndroidHomeStateStore.connected(context,logical,captured.id,baseFor(captured),fallback,selectionNodeId);
+                reportProved(captured,cb);
+                }
                 if(captured.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,captured.id,"Restored the original exact runtime after fresh selected-node proof.");
                 }
@@ -144,17 +161,34 @@ final class AndroidModeOrchestrator {
     }
 
     private synchronized void run(File bundle,boolean smart,List<String>custom,Callback cb){
+        run(bundle,smart,custom,cb,null,null);
+    }
+
+    private synchronized void run(File bundle,boolean smart,List<String>custom,Callback cb,String capturedSource,String lastRaw){
         if(running||stopping){cb.finished(false,"","Another Android mode selection is already running.");return;}
+        if(capturedSource!=null)try{if(!capturedSource.equals(load(bundle).toString()))throw new IllegalStateException("The captured startup node changed before strategy dispatch.");}
+        catch(Exception changed){cb.finished(false,"",safe(changed));return;}
         running=true;
-        final String requested=custom!=null?"CUSTOM":smart?"SMART AUTO":"AUTO";
+        final String requested=custom!=null?"CUSTOM":lastRaw!=null?"LAST / AUTO":smart?"SMART AUTO":"AUTO";
         final String activeNodeId=nodeId(bundle);
-        selectionNodeId=activeNodeId;selectionSource=null;
-        selectionSessionId=AndroidHomeStateStore.begin(context,requested,"","auto",activeNodeId);
+        selectionNodeId=activeNodeId;selectionSource=capturedSource;
+        beginSelection(requested,activeNodeId);
         executor.execute(()->{
             selectionWorker=Thread.currentThread();
             try{
                 cb.owned(selectionSessionId);
                 List<Candidate> candidates=collect(bundle,true,custom==null);
+                if(lastRaw!=null){
+                    Candidate previous=null;
+                    for(Candidate candidate:collect(bundle,false,true))if(lastRaw.equals(candidate.id)){
+                        if(previous!=null)throw new IllegalStateException("The saved last runtime is ambiguous under the current catalog.");
+                        previous=candidate;
+                    }
+                    if(previous!=null){
+                        candidates.removeIf(candidate->lastRaw.equals(candidate.id));candidates.add(0,previous);
+                        cb.progress("Trying the last proven runtime with fresh current-policy and selected-node proof; ordinary failure proceeds to AUTO after cleanup.");
+                    }else cb.progress("No matching last proven runtime satisfies the current node and policy; using AUTO.");
+                }
                 if(custom!=null){
                     Set<String>wanted=new HashSet<>();for(String layer:custom){String v=layer==null?"":layer.trim().toLowerCase();if(!v.isEmpty())wanted.add(v);}
                     if(wanted.isEmpty())throw new IllegalStateException("CUSTOM requires at least one layer.");
@@ -174,9 +208,12 @@ final class AndroidModeOrchestrator {
                 Candidate initial=best;
                 if(smart)best=smartReduce(bundle,best,candidates,cb);
                 synchronized(AndroidModeOrchestrator.this){
+                synchronized(AndroidHomeStateStore.class){
                 checkedBundle(bundle);current=best;activeSource=selectionSource;
-                String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:"";
+                String transition=smart&&!initial.id.equals(best.id)?initial.id+" -> "+best.id:lastRaw!=null&&!lastRaw.isEmpty()&&!lastRaw.equals(best.id)?lastRaw+" -> "+best.id:"";
                 AndroidHomeStateStore.connected(context,requested,best.id,baseFor(best),transition,activeNodeId);
+                reportProved(best,cb);
+                }
                 if(best.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,best.id,requested+" selected "+best.name+" after real selected-node path proof.");
                 }
@@ -189,7 +226,7 @@ final class AndroidModeOrchestrator {
         if(running||stopping){cb.finished(false,"","Another Android mode selection is already running.");return;}
         final String activeNodeId=nodeId(bundle);
         running=true;selectionNodeId=activeNodeId;selectionSource=null;
-        selectionSessionId=AndroidHomeStateStore.begin(context,logicalId,"","auto",activeNodeId);
+        beginSelection(logicalId,activeNodeId);
         executor.execute(()->{
             selectionWorker=Thread.currentThread();
             try{
@@ -217,9 +254,12 @@ final class AndroidModeOrchestrator {
                 for(String rawId:candidateIds){Candidate c=byId.get(rawId);if(c==null){failures.add(rawId+": unavailable on Android under current node/Start Layer policy");continue;}cb.progress(logical.optString("name",logicalId)+" trying "+c.name+"…");if(startAndProve(bundle,c,cb)){winner=c;break;}failures.add(rawId+": selected-node proof or Start Layer requirement failed");}
                 if(winner==null)throw new IllegalStateException("Logical mode "+logical.optString("name",logicalId)+" failed closed: "+String.join(" • ",failures));
                 synchronized(AndroidModeOrchestrator.this){
+                synchronized(AndroidHomeStateStore.class){
                 checkedBundle(bundle);current=winner;activeSource=selectionSource;
                 String transition=candidateIds.get(0).equals(winner.id)?"":candidateIds.get(0)+" -> "+winner.id;
                 AndroidHomeStateStore.connected(context,logicalId,winner.id,baseFor(winner),transition,activeNodeId);
+                reportProved(winner,cb);
+                }
                 if(winner.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,winner.id,logical.optString("name",logicalId)+" connected with runtime "+winner.id+" after selected-node proof.");
                 }
@@ -231,7 +271,7 @@ final class AndroidModeOrchestrator {
         if(running||stopping){cb.finished(false,"","Another Android mode selection is already running.");return;}
         final String activeNodeId=nodeId(bundle);
         running=true;selectionNodeId=activeNodeId;selectionSource=null;
-        selectionSessionId=AndroidHomeStateStore.begin(context,"ALL","","auto",activeNodeId);
+        beginSelection("ALL",activeNodeId);
         executor.execute(()->{
             selectionWorker=Thread.currentThread();
             try{
@@ -244,9 +284,12 @@ final class AndroidModeOrchestrator {
                 Candidate best=null;for(Candidate c:candidates){cb.progress("ALL testing protected Android-native branch "+c.name+"…");if(startAndProve(bundle,c,cb)){best=c;break;}}
                 if(best==null)throw new IllegalStateException("ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof.");
                 synchronized(AndroidModeOrchestrator.this){
-                checkedBundle(bundle);current=best;activeSource=selectionSource;
                 String preferred="max-tls-"+bases.get(0),transition=preferred.equals(best.id)?"":preferred+" -> "+best.id;
+                synchronized(AndroidHomeStateStore.class){
+                checkedBundle(bundle);current=best;activeSource=selectionSource;
                 AndroidHomeStateStore.connected(context,"ALL",best.id,baseFor(best),transition,activeNodeId);
+                reportProved(best,cb);
+                }
                 if(best.kind==Kind.LIBBOX)LayeredVpnService.startAutomaticMTU();
                 cb.finished(true,best.id,"ALL selected complete MAX branch "+best.name+" after selected-node path proof."+(transition.isEmpty()?"":" Fallback: "+transition+"."));
                 }
@@ -255,6 +298,11 @@ final class AndroidModeOrchestrator {
     }
 
     private static JSONObject findLogical(JSONArray values,String id){if(values==null)return null;for(int i=0;i<values.length();i++){JSONObject x=values.optJSONObject(i);if(x!=null&&id.equals(x.optString("id")))return x;}return null;}
+    private void reportProved(Candidate candidate,Callback callback)throws Exception{
+        if(current!=candidate||!ownsSelection()||!transportUp(candidate)||activeSource==null)
+            throw new SelectionAbortedException("The proved runtime changed before its startup receipt could be recorded.");
+        callback.proved(selectionSessionId,candidate.id,activeSource);
+    }
     private static String baseFor(Candidate c){if(c==null)return"";if(c.kind==Kind.WG||"wg".equals(c.id)||"wg-pq".equals(c.id)||c.id.endsWith("-wg"))return"wg";if(c.kind==Kind.AWG||c.id.startsWith("awg2-")||c.id.endsWith("-awg"))return"awg";if(c.kind==Kind.LIBBOX)return"libbox";return"xray";}
     private static int protectionRank(Candidate c){switch(c.id){case"max-tls-wg":case"max-tls-awg":return 2;case"max-quic-wg":case"max-quic-awg":return 1;default:return 0;}}
 
@@ -316,10 +364,18 @@ final class AndroidModeOrchestrator {
             if(error instanceof CancellationException||error instanceof SecurityException)throw new SelectionAbortedException("Android mode selection was cancelled or VPN permission was lost.");
         }
     }
-    private boolean ownsSelection(){AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);return!selectionSessionId.isEmpty()&&selectionSessionId.equals(state.sessionId)&&selectionNodeId.equals(state.activeNodeId);}
+    private void beginSelection(String logical,String node){
+        synchronized(AndroidHomeStateStore.class){
+            selectionSessionId=AndroidHomeStateStore.begin(context,logical,"","auto",node);
+            selectionPathGeneration=AndroidHomeStateStore.snapshot(context).pathGeneration;
+        }
+    }
+    private boolean ownsSelection(){return ownsSelection(AndroidHomeStateStore.snapshot(context));}
+    private boolean ownsSelection(AndroidHomeStateStore.Snapshot state){return!selectionSessionId.isEmpty()&&selectionSessionId.equals(state.sessionId)&&selectionNodeId.equals(state.activeNodeId);}
     private void checkSelection()throws Exception{
         if(stopping||Thread.currentThread().isInterrupted()||executor.isShutdown())throw new InterruptedException("Android mode selection was cancelled.");
-        if(!ownsSelection()||AndroidHomeStateStore.emergencyDisconnectPending(context)||!"connecting".equals(AndroidHomeStateStore.snapshot(context).phase))throw new SelectionAbortedException("Android selection lost its captured session ownership; no fallback was started.");
+        AndroidHomeStateStore.Snapshot state=AndroidHomeStateStore.snapshot(context);
+        if(!ownsSelection(state)||state.pathGeneration!=selectionPathGeneration||AndroidHomeStateStore.emergencyDisconnectPending(context)||!"connecting".equals(state.phase))throw new SelectionAbortedException("Android selection lost its captured session ownership; no fallback was started.");
     }
     private JSONObject checkedBundle(File bundle)throws Exception{
         checkSelection();JSONObject root=load(bundle);String source=root.toString();checkSelection();

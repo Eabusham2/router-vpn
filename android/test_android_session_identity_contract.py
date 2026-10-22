@@ -20,6 +20,7 @@ exit_store = read("AndroidStandardExitStore.java")
 home_state = read("AndroidHomeStateStore.java")
 home = read("AndroidHomeSummary.java")
 telemetry = read("AndroidTelemetry.java")
+telemetry_capture = read("AndroidTelemetryCapture.java")
 unified = read("AndroidUnifiedConnectionController.java")
 product = read("ProductActivity.java")
 forwarding = read("AndroidForwardingMaster.java")
@@ -231,11 +232,18 @@ assert "awg.connect(bundle" not in orchestrator
 # selection or saved multihop preferences while a graph is actually running.
 for marker in (
     "state.activeExitId",
-    "state.activeNodeId",
     "validateRoutedHopIdentity(node)",
     "Requested hop is not part of the active Android multihop graph",
 ):
     assert marker in telemetry, f"telemetry session identity missing: {marker}"
+for marker in (
+    '"multihop".equals(home.logicalMode)?home.activeExitId:home.activeNodeId',
+    'home.sessionId+"|"+home.pathGeneration',
+    '"passed".equals(home.pathProof)',
+    '"external".equals(home.logicalMode)',
+    'AndroidTelemetryNetwork.digest(AndroidPrivateFileStore.read(current,AndroidNodeStore.MAX_BUNDLE))',
+):
+    assert marker in telemetry_capture, f"current telemetry retained capture missing: {marker}"
 
 # Pre-connect X→Y/X→Z latency is a real temporary-entry routed measurement, but
 # it is not a user connection/session. The temporary WG child must be proved,

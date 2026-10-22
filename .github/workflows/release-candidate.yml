@@ -12,6 +12,12 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtimes:
+    name: Build and verify complete native runtimes
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: all
+
   source-audit:
     name: Source security and release-gap audits
     runs-on: ubuntu-24.04
@@ -31,6 +37,9 @@ jobs:
       - name: Repository and current-product contracts
         run: |
           python3 deploy/validate-repo.py
+          python3 deploy/test_native_runtime_delivery.py
+          python3 deploy/test_linux_runtime_install.py
+          python3 deploy/test_desktop_native_toolchain.py
           python3 deploy/test_multihop_execution.py
           python3 deploy/test_native_hop_measurement.py
           python3 deploy/test_mobile_lan_policy.py
@@ -132,16 +141,26 @@ jobs:
           sh -n server/scripts/configure-ai-help.sh
 
   generic-builds:
+    needs: native-runtimes
     name: Generic desktop and Windows packages
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24.x', cache: false}
+        with: {go-version: '1.26.3', cache: false}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
       - name: Build and package generic clients
         run: |
           chmod +x deploy/build-client.sh deploy/package-builds.sh
           ./deploy/build-client.sh
+          python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
           ./deploy/package-builds.sh
           (cd dist/packages && sha256sum -c SHA256SUMS)
           bash deploy/scope-windows-release-candidate.sh
@@ -191,6 +210,7 @@ jobs:
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
         run: |
+          $ErrorActionPreference='Stop'
           $arch=$env:ROUTER_VPN_ARCH; $archive=(Get-ChildItem artifacts -Recurse -Filter "RouterVPN-Windows-$arch.zip"|Select-Object -First 1).FullName
           $extract=Join-Path $env:RUNNER_TEMP "installed-$arch"; Expand-Archive $archive $extract -Force; $root=Get-ChildItem $extract -Directory|Select-Object -First 1; $start=Get-Content (Join-Path $root.FullName 'Start-RouterVPN.ps1') -Raw
           if($start-notmatch'RouterVPN-Windows-App\.ps1'){throw 'installed package not native WPF'}; if($start-match'msedge\.exe|chrome\.exe|--app='){throw 'browser shell regression'}
@@ -200,6 +220,11 @@ jobs:
           & $asyncTest -Root $root.FullName
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $asyncTest -Root $root.FullName
           if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 packaged async lifecycle tests failed'}
+          $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
+          & $runtimeTest -SourceRoot $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 runtime installation fixture failed'}
+          & (Join-Path $root.FullName 'client\test-windows-installed-runtimes.ps1') -PackageRoot $root.FullName -ExpectedArchitecture $arch
       - name: Execute shipped Tor helpers on the actual Windows architecture
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
@@ -312,12 +337,24 @@ jobs:
         with: {name: RouterVPN-iOS-release-candidate, path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa, if-no-files-found: error, retention-days: 1}
 
   macos:
+    needs: native-runtimes
     name: macOS native AppKit amd64 + arm64
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24.x', cache: false}
+        with: {go-version: '1.26.3', cache: false}
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-darwin-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify and stage exact native runtime payloads
+        shell: bash
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime darwin/amd64 darwin/arm64
       - name: Build native macOS packages
         run: |
           chmod +x client/macos/build-native-app.sh deploy/package-macos-native.sh
@@ -334,6 +371,7 @@ jobs:
           retention-days: 1
 
   linux:
+    needs: native-runtimes
     name: Linux native GTK ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -344,10 +382,21 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@v5
-        with: {go-version: '1.24.x', cache: false}
+        with: {go-version: '1.26.3', cache: false}
       - name: Install GTK native build dependencies
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth binutils
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify and stage exact native runtime payloads
+        shell: bash
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/${{ matrix.arch }}
       - name: Build native Linux package
         run: |
           chmod +x client/linux/build-native-app.sh deploy/package-linux-native.sh

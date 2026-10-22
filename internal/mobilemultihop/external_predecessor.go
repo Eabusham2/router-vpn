@@ -403,12 +403,21 @@ func predecessorNamespace(family, tag string) string {
 }
 
 func (p *externalPredecessor) merge(graph, tun, exit map[string]any) error {
+	return p.mergeAs(graph, tun, exit, externalEntryTag)
+}
+
+// mergeAs preserves the complete captured predecessor while assigning the
+// final owner the tag used by this caller's existing proof and service lanes.
+func (p *externalPredecessor) mergeAs(graph, tun, exit map[string]any, entryTag string) error {
 	bad := externalPredecessorError
+	if entryTag != externalEntryTag && entryTag != "entry-wg" {
+		return bad
+	}
 	names := map[string]string{}
 	for tag := range p.nodes {
 		names[tag] = predecessorNamespace("node", tag)
 	}
-	names[p.finalTag] = externalEntryTag
+	names[p.finalTag] = entryTag
 	dnsNames := map[string]string{}
 	for tag := range p.resolvers {
 		dnsNames[tag] = predecessorNamespace("dns", tag)
@@ -477,6 +486,6 @@ func (p *externalPredecessor) merge(graph, tun, exit map[string]any) error {
 	}
 	route := graph["route"].(map[string]any)
 	route["rules"] = append(p.restrictions, route["rules"].([]any)...)
-	exit["detour"] = externalEntryTag
+	exit["detour"] = entryTag
 	return nil
 }

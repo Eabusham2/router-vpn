@@ -128,13 +128,14 @@ final class LayeredVpnService {
  static void startAutomaticMTU(){if(!AndroidHomeStateStore.current.connected)throw new AssertionError("MTU before adoption");Env.mtuStarts++;}
 }
 final class AndroidHomeStateStore {
- static final class Snapshot {String sessionId="",phase="off",activeNodeId="",runtimeMode="",actualBase="",fallback="",logicalMode="";boolean connected;}
+ static final class Snapshot {String sessionId="",phase="off",activeNodeId="",runtimeMode="",actualBase="",fallback="",logicalMode="";boolean connected;long pathGeneration;}
  static Snapshot current=new Snapshot();static boolean emergency;static int sequence;
  static void reset(){current=new Snapshot();emergency=false;}
  static Snapshot snapshot(Context context){return current;}
  static String nodeIdFromBundleFile(File file){return"captured-node";}
  static boolean emergencyDisconnectPending(Context context){return emergency;}
- static String begin(Context context,String logical,String raw,String base,String node){Snapshot s=new Snapshot();s.sessionId="selection-"+(++sequence);s.phase="connecting";s.activeNodeId=node;s.logicalMode=logical;current=s;return s.sessionId;}
+ static String begin(Context context,String logical,String raw,String base,String node){Snapshot s=new Snapshot();s.pathGeneration=current.pathGeneration+1;s.sessionId="selection-"+(++sequence);s.phase="connecting";s.activeNodeId=node;s.logicalMode=logical;current=s;return s.sessionId;}
+ static synchronized void advancePathGeneration(Context context){current.pathGeneration++;}
  static void connected(Context context,String logical,String raw,String base,String fallback,String node){current.phase="connected";current.logicalMode=logical;current.connected=true;current.runtimeMode=raw;current.actualBase=base;current.fallback=fallback;current.activeNodeId=node;Env.adoptions++;}
  static void beginPathRevalidation(Context context,String why){current.phase="disconnecting";current.connected=false;}
  static void failed(Context context,String why){current.phase="failed";current.connected=false;}
@@ -164,8 +165,8 @@ public final class StrategyHarness {
   return new JSONObject().put("selectedRouterID","node").put("routerProfiles",new JSONArray().put(profile)).put("modes",modes).put("profiles",profiles).put("logicalModes",new JSONArray(logical.toString()));
  }
  static final class Result implements AndroidModeOrchestrator.Callback {
-  final CountDownLatch done=new CountDownLatch(1);final List<String>progress=new ArrayList<>();boolean success;String mode="",message="",owner="";
-  public void owned(String session){owner=session;}
+  final CountDownLatch done=new CountDownLatch(1);final List<String>progress=new ArrayList<>();boolean success;String mode="",message="",owner="",provedRaw="",provedSource="",provedOwner="";int receipts;
+  public void owned(String session){owner=session;}public void proved(String session,String raw,String source){receipts++;provedOwner=session;provedRaw=raw;provedSource=source;}
   public void progress(String value){progress.add(value);}
   public void finished(boolean ok,String mode,String value){success=ok;this.mode=mode;message=value;done.countDown();}
  }
@@ -198,6 +199,22 @@ public final class StrategyHarness {
   test("changed original profile prevents restoration",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){Result first=o.run("auto");String source=o.chooser.captureSource(o.file,first.owner,"wg");Result stop=new Result();o.chooser.disconnectCaptured(first.owner,stop);await(o,stop);Files.writeString(o.file.toPath(),new JSONObject(source).put("new-setting",true).toString());Result restore=new Result();int attempts=Env.attempts.size();o.chooser.restoreCaptured(o.file,"wg","AUTO","",source,restore);await(o,restore);check(!restore.success&&Env.attempts.size()==attempts&&!AndroidHomeStateStore.current.connected,"changed saved profile silently restored");}});
   test("restoration failure cannot fallback to another mode",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){Result first=o.run("auto");String source=o.chooser.captureSource(o.file,first.owner,"wg");Result stop=new Result();o.chooser.disconnectCaptured(first.owner,stop);await(o,stop);Env.plan("wg",badProof());Result restore=new Result();o.chooser.restoreCaptured(o.file,"wg","AUTO","",source,restore);await(o,restore);check(!restore.success&&!AndroidHomeStateStore.current.connected&&Env.attempts.equals(List.of("libbox:wg","libbox:wg")),"failed exact restore switched to another candidate");}});
   test("captured selector cancellation waits for late proof",()->{try(Owner o=new Owner(source("wg",true,true,"wg","awg2-fast"))){CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);Step late=new Step("");late.proved=()->{entered.countDown();boolean interrupted=false;while(true)try{release.await();break;}catch(InterruptedException ignored){interrupted=true;}if(interrupted)Thread.currentThread().interrupt();};Env.plan("wg",late);Result selected=new Result();o.chooser.auto(o.file,false,selected);check(entered.await(2,TimeUnit.SECONDS),"proof boundary missing");Result stop=new Result();o.chooser.disconnectCaptured(selected.owner,stop);try{check(!stop.done.await(100,TimeUnit.MILLISECONDS)&&o.chooser.isRunning(),"captured cleanup outran selector worker");}finally{release.countDown();}await(o,selected);await(o,stop);check(!selected.success&&stop.success&&!o.chooser.isActive()&&!AndroidHomeStateStore.current.connected,"late selected path survived captured cancellation");attempted("wg");}});
+ }
+ static Result startup(Owner owner,String mode,String raw,String source)throws Exception{Result r=new Result();owner.chooser.startup(owner.file,mode,raw,source,r);await(owner,r);return r;}
+ static void startupTests()throws Exception{
+  test("startup Last tries the exact prior raw before AUTO order",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){String source=Files.readString(o.file.toPath());Result r=startup(o,"last","shadowsocks",source);o.selected(r,"shadowsocks");attempted("shadowsocks");check(r.receipts==1&&r.provedRaw.equals("shadowsocks")&&r.provedSource.equals(source)&&r.provedOwner.equals(r.owner),"startup receipt did not follow exact current proof");}});
+  for(String failure:new String[]{"prepare","start","failed","proof-error","bad-proof"})test("Last ordinary "+failure+" failure joins cleanup before AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Env.plan("shadowsocks",failure.equals("bad-proof")?badProof():new Step(failure));Result r=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));o.selected(r,"wg");attempted("shadowsocks","wg");if(!failure.equals("prepare"))stoppedBefore("shadowsocks","wg");check(r.receipts==1&&r.provedRaw.equals("wg"),"failed last candidate entered proved startup memory");}});
+  for(String failure:new String[]{"interrupt","cancel","permission","revoked","proof-interrupt"})test("Last "+failure+" never falls through to AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Env.plan("shadowsocks",new Step(failure));Result r=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));check(!r.success&&r.receipts==0,"cancelled/revoked last attempt was adopted");attempted("shadowsocks");}});
+  test("Last unconfirmed cleanup keeps ownership and forbids AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Step late=new Step("start");late.failStop=true;Env.plan("shadowsocks",late);Result r=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));check(!r.success&&r.receipts==0&&Env.preserved,"last cleanup failure was replaced by AUTO");attempted("shadowsocks");}});
+  test("Last current AUTO requirements exclude an obsolete raw",()->{JSONObject input=source("auto",true,true,"wg","reality-vision");input.getJSONArray("routerProfiles").getJSONObject(0).put("auto_require_obfuscation",true);try(Owner o=new Owner(input)){o.selected(startup(o,"last","wg",Files.readString(o.file.toPath())),"reality-vision");attempted("reality-vision");}});
+  test("Last can freshly prove an explicit non-AUTO raw",()->{JSONObject input=source("auto",true,true,"wg","shadowsocks");for(int i=0;i<input.getJSONArray("modes").length();i++){JSONObject m=input.getJSONArray("modes").getJSONObject(i);if(m.getString("id").equals("shadowsocks"))m.put("auto_eligible",false);}try(Owner o=new Owner(input)){o.selected(startup(o,"last","shadowsocks",Files.readString(o.file.toPath())),"shadowsocks");attempted("shadowsocks");}});
+  test("missing last receipt selects freshly proved AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){o.selected(startup(o,"last","",Files.readString(o.file.toPath())),"wg");attempted("wg");}});
+  for(String mode:new String[]{"smart-auto","auto","last"})test("startup "+mode+" rejects changed captured source before launch",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){String source=Files.readString(o.file.toPath());Files.writeString(o.file.toPath(),new JSONObject(source).put("changed",true).toString());Result r=startup(o,mode,"shadowsocks",source);check(!r.success&&r.receipts==0&&Env.attempts.isEmpty()&&AndroidHomeStateStore.current.phase.equals("off"),"changed startup source launched a different strategy");}});
+  test("Last source change inside preparation never becomes AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Step step=new Step("");step.prepared=()->{try{Files.writeString(o.file.toPath(),new JSONObject(Files.readString(o.file.toPath())).put("changed",true).toString());}catch(Exception e){throw new RuntimeException(e);}};Env.plan("shadowsocks",step);Result r=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));check(!r.success&&r.receipts==0&&Env.starts==0,"last changed source became AUTO");attempted("shadowsocks");}});
+  test("Last newer Home owner prevents fallback and old receipt",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Step step=new Step("prepare");step.prepared=()->AndroidHomeStateStore.begin(o.context,"external","","","new-owner");Env.plan("shadowsocks",step);Result r=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));check(!r.success&&r.receipts==0&&AndroidHomeStateStore.current.activeNodeId.equals("new-owner"),"last operation replaced a newer owner");attempted("shadowsocks");}});
+  test("manual Disconnect during startup joins the actual selector and forbids AUTO",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){CountDownLatch entered=new CountDownLatch(1),release=new CountDownLatch(1);Step late=new Step("");late.proved=()->{entered.countDown();boolean interrupted=false;while(true)try{release.await();break;}catch(InterruptedException ignored){interrupted=true;}if(interrupted)Thread.currentThread().interrupt();};Env.plan("shadowsocks",late);Result started=new Result();o.chooser.startup(o.file,"last","shadowsocks",Files.readString(o.file.toPath()),started);check(entered.await(2,TimeUnit.SECONDS),"startup proof did not enter");Result stop=new Result();o.chooser.disconnect(stop);try{check(!stop.done.await(100,TimeUnit.MILLISECONDS)&&o.chooser.isRunning(),"manual Disconnect outran pending native proof");}finally{release.countDown();}await(o,started);await(o,stop);check(!started.success&&started.receipts==0&&stop.success&&!o.chooser.isActive()&&!AndroidHomeStateStore.current.connected,"startup connected after manual Disconnect");attempted("shadowsocks");}});
+  test("Disconnect generation cancels late startup proof before its queued stop worker",()->{try(Owner o=new Owner(source("auto",true,true,"wg","shadowsocks"))){Step late=new Step("");late.proved=()->AndroidHomeStateStore.advancePathGeneration(o.context);Env.plan("shadowsocks",late);Result started=startup(o,"last","shadowsocks",Files.readString(o.file.toPath()));check(!started.success&&started.receipts==0&&Env.adoptions==0&&!o.chooser.isActive()&&!AndroidHomeStateStore.current.connected,"generation-only Disconnect was ignored before the stop worker");attempted("shadowsocks");}});
+
  }
  public static void main(String[] args)throws Exception {
   directory=Path.of(args[0]);catalog=new JSONArray(Files.readString(Path.of(args[1])));logical=new JSONArray(Files.readString(Path.of(args[2])));
@@ -234,6 +251,7 @@ public final class StrategyHarness {
   test("unknown base fails before any engine prepares",()->{try(Owner o=new Owner(source("invalid",true,true,MAX))){Result result=o.run("all");check(!result.success&&Env.attempts.isEmpty(),"unknown base silently defaulted to a real tunnel");}});
   test("typed fallback policy cannot silently enable another base",()->{JSONObject input=source("wg",true,true,MAX);input.getJSONArray("routerProfiles").getJSONObject(0).put("base_fallback","false");try(Owner o=new Owner(input)){Result result=o.run("all");check(!result.success&&Env.attempts.isEmpty(),"nonboolean fallback silently selected another base");}});
   restorationTests();
+  startupTests();
   if(!failures.isEmpty())throw new AssertionError(String.join("\n",failures));
   System.out.println("Shipping Android strategy: "+cases+" scenarios, "+checks+" checks PASS (Android/engine boundaries doubled)");
  }
@@ -258,11 +276,22 @@ def main():
             if name == 'AndroidModeOrchestrator':
                 source = Path(os.environ.get('ROUTERVPN_ORCHESTRATOR_SOURCE', str(source)))
             (root/'com/eabusham/routervpn'/(name+'.java')).write_bytes(source.read_bytes())
-        subprocess.run(['javac', '--release', '17', '-Xlint:all,-auxiliaryclass', '-Werror', '-cp', str(jar),
-                        '-d', str(root), *map(str, root.rglob('*.java'))], check=True, timeout=45)
-        subprocess.run(['java', '-cp', os.pathsep.join((str(root), str(jar))), 'com.eabusham.routervpn.StrategyHarness',
-                        str(root), str(ROOT/'configs/client/modes.json'), str(ROOT/'configs/client/logical-modes.json')],
-                       check=True, timeout=30)
+        compile_command=['javac', '--release', '17', '-Xlint:all,-auxiliaryclass', '-Werror', '-cp', str(jar),
+                         '-d', str(root), *map(str, root.rglob('*.java'))]
+        execute_command=['java', '-cp', os.pathsep.join((str(root), str(jar))), 'com.eabusham.routervpn.StrategyHarness',
+                         str(root), str(ROOT/'configs/client/modes.json'), str(ROOT/'configs/client/logical-modes.json')]
+        subprocess.run(compile_command, check=True, timeout=45)
+        subprocess.run(execute_command, check=True, timeout=30)
+        if not os.environ.get('ROUTERVPN_ORCHESTRATOR_SOURCE'):
+            path=root/'com/eabusham/routervpn/AndroidModeOrchestrator.java'
+            original=path.read_text()
+            guard='state.pathGeneration!=selectionPathGeneration||'
+            assert original.count(guard)==1, 'missing exact captured path-generation guard'
+            path.write_text(original.replace(guard,''))
+            subprocess.run(compile_command, check=True, timeout=45)
+            mutated=subprocess.run(execute_command,capture_output=True,text=True,timeout=30)
+            assert mutated.returncode and 'generation-only Disconnect was ignored before the stop worker' in mutated.stdout+mutated.stderr, 'Disconnect-generation mutation was not rejected by its executable regression'
+            print('Android strategy Disconnect-generation negative control rejected')
 
 
 if __name__ == '__main__':

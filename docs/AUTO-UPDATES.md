@@ -79,7 +79,36 @@ Android checks at application startup without blocking VPN startup. Before notif
 - manifest schema/repository/source/tag/`build-all.yml` identity; and
 - matching APK size plus a valid published SHA-256 digest.
 
-The app stores the exact target, APK URL, size and digest in app-private preferences and opens the trusted GitHub release asset from a notification. Router VPN does not request silent-install authority or bypass Android package-signature and user-confirmation controls.
+The shipped daily-use screen exposes **Help → More → Updates**, including an
+explicit Check for updates action, installed and available source identities,
+published APK size/digest, and a download action. Startup discovery and the
+screen join one process-owned check. The screen works when notifications are
+denied; a separate user action requests Android 13+ notification permission or
+opens app notification settings. Android 7/7.1 uses the compatible notification
+builder and app-details settings path.
+
+The app stores the installed source that was checked, exact target, canonical
+repository/tag/APK URL, size, digest and verification time in private
+preferences. The displayed download receipt expires after 24 hours and is
+invalid if the installed source changes. The action revalidates the receipt
+when tapped. Initial manifest and APK URLs must identify that exact repository,
+release and asset; metadata redirects remain bounded to HTTPS GitHub hosts.
+A dismissed or destroyed screen cannot adopt a late discovery result.
+
+Download opens the verified release asset in Android's browser. The verified
+digest here is published metadata, not a claim that this app has downloaded
+and hashed the APK. Router VPN does not request silent-install authority or
+bypass Android package-signature and user-confirmation controls. In-place
+installation still requires a compatible signing identity; a CI debug APK is
+a release candidate, not evidence of production signing or a successful
+device upgrade.
+
+`android/test_android_updates.py` executes the shipping provider, receipt and
+dialog against deterministic Android/HTTPS boundaries. It checks installed
+source and expiry rejection, canonical assets and descendant validation,
+notification denial/grant, API 24/25 compatibility, coalesced checks, late UI
+completion and action-time revalidation, including mutation controls. Actual
+notification delivery, browser download and installation remain device gates.
 
 ## iOS and iPadOS
 

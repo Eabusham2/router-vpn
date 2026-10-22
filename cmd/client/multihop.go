@@ -33,6 +33,7 @@ type multihopSelection struct {
 	Exit     common.RouterProfile
 	Base     string
 	ExitMode string
+	Native   *nativeMultihopCapture
 }
 
 type multihopNodeSummary struct {
@@ -53,6 +54,8 @@ type activeMultihopGraph struct {
 	EntryID   string
 	ExitID    string
 	Base      string
+	EntryMode string
+	SourceSHA string
 	ExitMode  string
 	Started   time.Time
 }
@@ -60,9 +63,13 @@ type activeMultihopGraph struct {
 var activeMultihopGraphs sync.Map
 
 func setActiveMultihopGraph(a *app, sel multihopSelection) {
-	activeMultihopGraphs.Store(a, activeMultihopGraph{
+	graph := activeMultihopGraph{
 		Execution: "local", EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
-	})
+	}
+	if sel.Native != nil {
+		graph.EntryMode, graph.SourceSHA = sel.Native.entryMode, sel.Native.source
+	}
+	activeMultihopGraphs.Store(a, graph)
 	homeExitProofs.Delete(a)
 }
 

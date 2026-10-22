@@ -63,6 +63,12 @@ final class AndroidConnectionProfileStore {
                 if(AndroidTorProfile.isTor(originalExternal.protocol))updatedExternal.torPolicy=policy;else updatedExternal.policy=policy;
                 AndroidStandardExitStore.validate(updatedExternal);
             }
+            if(row.has("external_startup")){
+                requireExternalIdentity(row,originalExternal);
+                if(updatedExternal==null)updatedExternal=AndroidStandardExitStore.copy(originalExternal);
+                AndroidStandardExitStore.applyStartupMetadata(updatedExternal,row.getJSONObject("external_startup"));
+                AndroidStandardExitStore.validate(updatedExternal);
+            }
         }
         if(multi){
             if(entry.isEmpty()||exit.isEmpty()||entry.equals(exit)||findNode(entry)==null)throw new IllegalStateException("Saved multihop references a missing/invalid entry.");
@@ -126,7 +132,7 @@ final class AndroidConnectionProfileStore {
                 .put("multihop_enabled",multi).put("multihop_entry_id",entry).put("multihop_exit_id",exit).put("multihop_exit_mode",multiMode).put("multihop_execution",execution).put("multihop_entry_mode",entryMode);
         if(policy!=null)row.put("policy",policy.choices).put("node_profile_id",policy.profileId);
         if(multi){NodePolicy entryPolicy=routerPolicy(entry);row.put("entry_policy",entryPolicy.choices).put("entry_profile_id",entryPolicy.profileId);if(!external){NodePolicy exitPolicy=routerPolicy(exit);row.put("exit_policy",exitPolicy.choices).put("exit_profile_id",exitPolicy.profileId);}}
-        if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi?findNode(entry):null,entryMode,execution);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol));}
+        if(external){AndroidStandardExitStore.validate(custom);validateExternalGraph(custom,multi?findNode(entry):null,entryMode,execution);row.put("external_protocol",custom.protocol).put("external_public_ip",custom.expectedPublicIp).put("external_policy",AndroidConnectionProfilePolicy.external(AndroidTorProfile.isTor(custom.protocol)?custom.torPolicy:custom.policy,custom.protocol)).put("external_startup",AndroidStandardExitStore.startupMetadata(custom));}
         return row;
     }
 
@@ -292,6 +298,10 @@ final class AndroidConnectionProfileStore {
                 if(!"external".equals(kind)||!(row.get("external_protocol") instanceof String)||!(row.get("external_public_ip") instanceof String))throw new IllegalStateException("Saved external policy lost its node identity.");
                 AndroidConnectionProfilePolicy.external(row.getJSONObject("external_policy"),row.getString("external_protocol"));
                 if(row.optBoolean("multihop_enabled",false)&&!row.getString("external_protocol").equals(row.getString("multihop_exit_mode")))throw new IllegalStateException("Saved external path protocol changed.");
+            }
+            if(row.has("external_startup")){
+                if(!"external".equals(kind)||!row.has("external_policy"))throw new IllegalStateException("Saved external startup lost its captured node policy.");
+                AndroidStandardExitStore.applyStartupMetadata(new AndroidStandardExitStore.Entry(),row.getJSONObject("external_startup"));
             }
         }
         if (legacyPath || schema < SCHEMA_VERSION) {

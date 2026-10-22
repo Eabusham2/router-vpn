@@ -36,6 +36,7 @@ SOURCES["io/nekohasekai/libbox/RouterHopMeasurement.java"] = "package io.nekohas
 SOURCES.pop("com/eabusham/routervpn/AndroidTorSession.java")
 SOURCES["com/eabusham/routervpn/AndroidTorProfile.java"] = E.SOURCES["com/eabusham/routervpn/AndroidTorProfile.java"]
 SOURCES["io/nekohasekai/libbox/RouterTorProofRequest.java"] = E.SOURCES["io/nekohasekai/libbox/RouterTorProofRequest.java"]
+SOURCES["io/nekohasekai/libbox/RouterDNSMeasurement.java"] = E.SOURCES["io/nekohasekai/libbox/RouterDNSMeasurement.java"]
 SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Libbox.java"][:-1] + r'''
  public static volatile RouterTorProofRequest torCreated;
  public static volatile java.util.concurrent.CountDownLatch dnsRelease;
@@ -45,6 +46,7 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  public static RouterTorProofRequest routerTorCreateProofWithPredecessor(CommandServer core,String tag,String session,String predecessor){torCreated=new RouterTorProofRequest(core,session,predecessor);return torCreated;}
  public static void routerStrategyDNSProof(CommandServer core)throws Exception{if(torCreated.server!=core||!torCreated.healthy())throw new IllegalStateException("wrong native Tor owner");}
  public static RouterHopMeasurement routerTorCreateHopMeasurement(CommandServer core,RouterTorProofRequest proof,String external){return new RouterHopMeasurement();}
+ public static RouterDNSMeasurement routerTorCreateDNSMeasurement(CommandServer core,RouterTorProofRequest proof,String external){return new RouterDNSMeasurement();}
  public static RouterMTU newRouterTorMTU(CommandServer core,RouterMTUPlatform platform,RouterTorProofRequest proof,String source,String capture)throws Exception{
   if(proof==null||!proof.healthy()||proof.server!=core)throw new IllegalStateException("wrong retained Tor proof/config");
   passedServer=core;passedProof=proof;passedSource=source;passedCapture=capture;externalCalls++;

@@ -60,6 +60,7 @@ for arch in amd64 arm64; do
 
   "$ROOT/deploy/package-xray-runtime.sh" "darwin/$arch" "$dir"
   "$ROOT/deploy/package-amnezia-runtime.sh" "darwin/$arch" "$dir"
+  "$ROOT/deploy/package-native-runtime.sh" "darwin/$arch" "$dir"
 
   # Seal every distributed Mach-O before packaging. CI/release candidates use
   # an ad-hoc identity so quarantine cannot mistake an unsealed bundle for a
@@ -75,6 +76,7 @@ for arch in amd64 arm64; do
   python3 "$ROOT/deploy/seal-xray-runtime.py" "$dir/runtime/xray" "darwin/$arch"
   sign_macho "$dir/runtime/amnezia/sing-box-amnezia"
   python3 "$ROOT/deploy/seal-amnezia-runtime.py" "$dir/runtime/amnezia" "darwin/$arch"
+  python3 "$ROOT/deploy/seal-native-runtime.py" "$dir/runtime/native" "darwin/$arch" --identity "$MACOS_SIGN_IDENTITY"
 
   cat >"$dir/start-router-vpn.sh" <<'SH'
 #!/usr/bin/env bash
@@ -124,6 +126,7 @@ TXT
   python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "macos-$arch"
 
   tar -C "$WORK" -czf "$OUT/$name.tar.gz" "$name"
+  python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "darwin/$arch" "$OUT/$name.tar.gz"
   archive_list="$WORK/$name-members.txt"
   tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
   grep -Fxq "$name/RouterVPN.app/Contents/MacOS/RouterVPN" "$archive_list"

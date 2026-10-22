@@ -53,8 +53,8 @@ private final class RouterVPNMacRouteChromeView: NSView {
         super.draw(dirtyRect)
         guard let mapView else { return }
 
-        // The MapKit map remains the real-coordinate interaction engine. This
-        // overlay adds Router VPN-specific chrome without inventing geography.
+        // The shared opaque vector base owns geography; MapKit remains the
+        // coordinate/gesture engine. This chrome draws only VPN route state.
         let border = NSBezierPath(roundedRect: bounds.insetBy(dx: 8, dy: 8), xRadius: 24, yRadius: 24)
         NSColor(calibratedRed: 0.16, green: 0.31, blue: 0.49, alpha: 0.55).setStroke()
         border.lineWidth = 1.2
@@ -230,6 +230,7 @@ extension ProductWindowController {
         map.showsBuildings = false
         map.showsTraffic = false
         map.pointOfInterestFilter = .excludingAll
+        RouterVPNVectorMap.install(on: map)
         map.wantsLayer = true
         map.layer?.backgroundColor = NSColor(calibratedRed: 0.03, green: 0.07, blue: 0.13, alpha: 1).cgColor
 

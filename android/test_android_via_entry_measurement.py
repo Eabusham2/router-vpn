@@ -243,6 +243,15 @@ public final class ViaEntryHarness {
 }
 
 
+# Read-only telemetry captures add native peer/interface declarations; this
+# lifecycle fixture keeps using its existing independent backend state double.
+SOURCES["com/wireguard/crypto/Key.java"] = "package com.wireguard.crypto;public class Key {}"
+SOURCES["com/wireguard/config/InetNetwork.java"] = "package com.wireguard.config;public class InetNetwork {}"
+SOURCES["com/wireguard/config/Peer.java"] = "package com.wireguard.config;public class Peer {public com.wireguard.crypto.Key getPublicKey(){return null;}}"
+SOURCES["com/wireguard/config/Config.java"] = SOURCES["com/wireguard/config/Config.java"][:-1] + "public static class Interface {public java.util.List<InetNetwork> getAddresses(){return java.util.List.of();}}public Interface getInterface(){return new Interface();}public java.util.List<Peer> getPeers(){return java.util.List.of();}}"
+SOURCES["com/wireguard/android/backend/GoBackend.java"] = SOURCES["com/wireguard/android/backend/GoBackend.java"].rstrip()[:-1] + "public Tunnel.State getState(Tunnel t){return Tunnel.State.DOWN;}public static class Statistics {public com.wireguard.crypto.Key[] peers(){return new com.wireguard.crypto.Key[0];}}public Statistics getStatistics(Tunnel t){return new Statistics();}}"
+SOURCES["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
+
 def main():
     with tempfile.TemporaryDirectory(prefix="routervpn-via-entry-") as work:
         base = Path(work)

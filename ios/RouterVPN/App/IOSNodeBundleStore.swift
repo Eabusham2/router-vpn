@@ -90,6 +90,26 @@ final class IOSNodeBundleStore {
         return nil
     }
 
+    /// Compare the exact saved source immediately before the one atomic write.
+    /// A relink/edit/removal or another benchmark cannot accept this old result.
+    func recordLatency(_ result: IOSLatencyResult, expectedRecord: Data,
+                       current: ClientBundle?) throws -> (bundle: ClientBundle, data: Data) {
+        try ensureStorageReady()
+        let available = readableRecords(current: current)
+        for key in available.keys.sorted() {
+            guard let data = available[key], data == expectedRecord,
+                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  bundle.routerProfiles.filter({ $0.id == result.id }).count == 1,
+                  let index = bundle.routerProfiles.firstIndex(where: { $0.id == result.id }) else { continue }
+            bundle.routerProfiles[index] = try result.applying(to: bundle.routerProfiles[index])
+            let replacement = try JSONEncoder().encode(bundle)
+            var next = records; next[key] = replacement
+            try commitRecords(next)
+            return (bundle, replacement)
+        }
+        throw IOSLatencyResult.issue("The saved node changed during its benchmark; the result was discarded.")
+    }
+
     func remove(profileID: String, current: ClientBundle?) throws -> Data? {
         try ensureStorageReady()
         let available = readableRecords(current: current)

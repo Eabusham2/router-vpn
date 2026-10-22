@@ -19,6 +19,9 @@ DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
 
 BOUNDARIES = r'''
 import Foundation
+#if !canImport(ObjectiveC)
+typealias NSErrorPointer = UnsafeMutablePointer<NSError?>?
+#endif
 enum FixtureFailure {static var error:NSError{NSError(domain:"ExternalOwnerBoundary",code:1)}}
 final class Trace: @unchecked Sendable {
  static let shared=Trace();private let lock=NSLock();private var values:[String]=[]
@@ -41,7 +44,10 @@ final class LibboxRouterExternalProofRequest: @unchecked Sendable {
  let entered=DispatchSemaphore(value:0),release=DispatchSemaphore(value:0),finished=DispatchSemaphore(value:0)
  var hold=false,lateSuccess=false,failProof=false,failClose=false
  var winner="server",source="",capture="",session=""
- func run()throws->String{
+ func run(_ failure:NSErrorPointer)->String{
+  do{return try runCaptured()}catch{failure?.pointee=error as NSError;return ""}
+ }
+ private func runCaptured()throws->String{
   defer{finished.signal()};entered.signal();if hold{guard release.wait(timeout:.now()+5) == .success else{throw FixtureFailure.error}}
   lock.lock();let stopped=cancelled;succeeded = !failProof;lock.unlock()
   if failProof || (stopped && !lateSuccess){throw FixtureFailure.error}

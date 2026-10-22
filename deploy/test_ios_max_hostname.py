@@ -116,11 +116,17 @@ public func DNSServiceRefDeallocate(_ ref:DNSServiceRef){DNSSDTest.shared.retire
 
 LIBBOX = r'''
 import Foundation
-public protocol LibboxRouterMAXEndpointResolverProtocol: AnyObject {func ownerID()->String;func current()->Bool;func lookup(_ hostname:String?)throws->String;func cancel()}
+#if !canImport(ObjectiveC)
+public typealias NSErrorPointer = UnsafeMutablePointer<NSError?>?
+#endif
+// Exact gobind v0.1.12 nonnull NSString/NSError ABI, not Swift throws.
+public protocol LibboxRouterMAXEndpointResolverProtocol: AnyObject {func ownerID()->String;func current()->Bool;func lookup(_ hostname:String?,error:NSErrorPointer)->String;func cancel()}
 public final class NativeMAXTest: @unchecked Sendable {
- public static let shared=NativeMAXTest();private let lock=NSLock();private var handler:((String,String,String,String,String)throws->String)?;private var changes=""
+ public static let shared=NativeMAXTest();private let lock=NSLock();private var handler:((String,String,String,String,String)throws->String)?;private var changes="",runFailure=false
  public func configure(_ value:@escaping (String,String,String,String,String)throws->String){lock.lock();handler=value;lock.unlock()}
  public func mutate(_ value:String){lock.lock();changes=value;lock.unlock()}
+ public func failRun(_ value:Bool){lock.lock();runFailure=value;lock.unlock()}
+ public func failsRun()->Bool{lock.lock();defer{lock.unlock()};return runFailure}
  public func call(_ operation:String,_ mode:String,_ files:String,_ metadata:String,_ answer:String="")throws->String{lock.lock();let h=handler;lock.unlock();return try h!(operation,mode,files,metadata,answer)}
  public func change(_ value:String)throws->String{lock.lock();let change=changes;lock.unlock();guard !change.isEmpty else{return value};var body=try JSONSerialization.jsonObject(with:Data(value.utf8)) as! [String:Any]
   switch change{case "digest":body["source_sha256"]=String(repeating:"f",count:64);case "owner":body["owner_id"]="foreign";case "hostname":body["hostname"]="foreign.example";case "schema":body["extra"]=true;case "endpoint":body["endpoint"]="unresolved.example";case "metadata":var meta=try JSONSerialization.jsonObject(with:Data((body["metadata_json"] as! String).utf8)) as! [String:Any];meta["router_api"]="http://10.66.0.1:8787";body["metadata_json"]=String(decoding:try JSONSerialization.data(withJSONObject:meta),as:UTF8.self);default:body["config_json"]="{}"}
@@ -134,7 +140,19 @@ public final class LibboxRouterMAXProfileRequest {
  private let lock=NSLock();private var stopped=false,used=false,success=false
  public init(_ mode:String,_ files:String,_ metadata:String,_ digest:String,_ resolver:any LibboxRouterMAXEndpointResolverProtocol){self.mode=mode;self.files=files;self.metadata=metadata;self.digest=digest;self.resolver=resolver}
  public func sourceSHA256()->String{digest}
- public func run()throws->String{lock.lock();let valid = !stopped && !used;used=true;lock.unlock();guard valid else{throw NSError(domain:"RetiredNativeMAX",code:1)};let object=try JSONSerialization.jsonObject(with:Data(metadata.utf8)) as! [String:String];let answer=try resolver.lookup(object["endpoint"]!);guard resolver.current() else{throw NSError(domain:"RetiredNativeMAX",code:1)};let result=try NativeMAXTest.shared.call("max-resolve",mode,files,metadata,answer);lock.lock();success = !stopped;lock.unlock();return try NativeMAXTest.shared.change(result)}
+ public func run(_ failure:NSErrorPointer)->String{
+  do{
+   lock.lock();let valid = !stopped && !used;used=true;lock.unlock();guard valid else{throw NSError(domain:"RetiredNativeMAX",code:1)}
+   let object=try JSONSerialization.jsonObject(with:Data(metadata.utf8)) as! [String:String]
+   var resolverError:NSError?;let answer=resolver.lookup(object["endpoint"]!,error:&resolverError)
+   if let resolverError{throw resolverError}
+   guard resolver.current() else{throw NSError(domain:"RetiredNativeMAX",code:1)}
+   let result=try NativeMAXTest.shared.call("max-resolve",mode,files,metadata,answer);lock.lock();success = !stopped;lock.unlock()
+   let changed=try NativeMAXTest.shared.change(result)
+   if NativeMAXTest.shared.failsRun(){failure?.pointee=NSError(domain:"NativeMAXRun",code:53)}
+   return changed
+  }catch{failure?.pointee=error as NSError;return ""}
+ }
  public func healthy()->Bool{lock.lock();let valid = !stopped && success;lock.unlock();return valid && resolver.current()}
  public func cancel(){lock.lock();stopped=true;lock.unlock()}
  public func close(){cancel();resolver.cancel()}
@@ -211,6 +229,20 @@ func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
   }}}
   let mode="max-tls-wg",base=fixtures["max-tls-wg"] as! [String:Any]
   let good=try checked(fixture(base,mode,"off","captured.example"))
+  do {
+   let resolver=RouterVPNMAXDNSOwner();try resolver.capture()
+   let captured:any LibboxRouterMAXEndpointResolverProtocol=resolver
+   var failure:NSError?
+   let answer=captured.lookup(nil,error:&failure)
+   try check("MAX resolver reports its actual NSError through the generated protocol",answer.isEmpty && failure?.domain=="RouterVPN.MAXDNS" && failure?.code==1)
+   try check("invalid callback without an NSError receiver still fails closed",captured.lookup(nil,error:nil).isEmpty)
+   resolver.cancel()
+  }
+  NativeMAXTest.shared.failRun(true)
+  let errored=try RouterVPNMAXPreparation(provider:good)
+  do{_ = try errored.run();fatalError("MAX nonempty result hid the native NSError")}
+  catch let failure as NSError{try check("MAX propagates the native NSError before accepting a complete launch",failure.domain=="NativeMAXRun" && failure.code==53)}
+  errored.close();NativeMAXTest.shared.failRun(false)
   for change in ["digest","owner","hostname","schema","endpoint","metadata","config"]{NativeMAXTest.shared.mutate(change);let q=try RouterVPNMAXPreparation(provider:good);reject("bad native envelope "+change){_ = try q.run()};q.close()};NativeMAXTest.shared.mutate("")
   let literal=try fixture(base,mode,"off",nil),before=DNSSDTest.shared.counts().0,literalOwner=try RouterVPNMAXPreparation(provider:literal)
   try check("legacy literal stays synchronous",!literalOwner.requiresResolution && literalOwner.run()["bundle"] as? Data==literal["bundle"] as? Data && DNSSDTest.shared.counts().0==before);literalOwner.close()
@@ -222,7 +254,10 @@ func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
   try check("invalid complete source creates no path or DNS owner",DNSSDTest.shared.counts().0==validationQueries && NetworkTest.shared.counts().0==validationCaptures)
   let canceled=try RouterVPNMAXPreparation(provider:good);canceled.cancel();let calls=DNSSDTest.shared.counts().0;reject("canceled before first DNS"){_ = try canceled.run()};canceled.close();try check("no DNS after early cancel",calls==DNSSDTest.shared.counts().0)
   for tuple in [(0,"en0",true,true),(7,"utun3",true,true),(7,"en0",false,true),(7,"en0",true,false)]{NetworkTest.shared.set(index:tuple.0,name:tuple.1,valid:tuple.2,dns:tuple.3);let q=try RouterVPNMAXPreparation(provider:good);reject("no unowned physical interface"){_ = try q.run()};q.close()};NetworkTest.shared.set()
-  DNSSDTest.shared.configure(index:8);let foreign=try RouterVPNMAXPreparation(provider:good);reject("foreign answer interface"){_ = try foreign.run()};foreign.close()
+  DNSSDTest.shared.configure(index:8);let foreign=try RouterVPNMAXPreparation(provider:good)
+  do{_ = try foreign.run();fatalError("accepted foreign answer interface")}
+  catch let failure as NSError{try check("DNS resolver NSError survives native request and MAX launch adapters",failure.domain=="RouterVPN.MAXDNS" && failure.code==1)}
+  foreign.close()
   DNSSDTest.shared.configure();NetworkTest.shared.set()
   let stale=try RouterVPNMAXPreparation(provider:good);_ = try stale.run();NetworkTest.shared.set(signature:"physical-B");NetworkTest.shared.join();try check("completed answer cannot survive physical path replacement",!stale.healthy());stale.close()
   NetworkTest.shared.set();DNSSDTest.shared.configure(hold:true)
@@ -305,6 +340,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private func currentProviderStrategy()->PrestartStrategy?{providerStrategy}
  private func retireLibboxSettings(epoch:String){}
  private func clearPathProofGuard(){}
+ // This pre-start fixture has no proved telemetry channel. The telemetry
+ // lifecycle fixture executes real channel retirement and callback joins.
+ private func retireTelemetry(){}
  private func cancelActiveProof(){}
  private func tunnelError(_ code:Int,_ text:String)->NSError{NSError(domain:"ProviderBoundary",code:code,userInfo:[NSLocalizedDescriptionKey:text])}
  private func native(_ provider:[String:Any],_ complete:@escaping(Error?)->Void)throws{libboxEngine=PrestartEngine(trace);try trace.started(provider,complete:complete)}

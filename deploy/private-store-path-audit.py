@@ -61,9 +61,13 @@ require(
 )
 require(
     "cmd/client/multihop_native.go",
-    "newPrivateRuntimeDir",
     "readPrivateRegular",
     "writePrivateRuntimeFile",
+)
+require(
+    "cmd/client/multihop_native_capture.go",
+    'newPrivateRuntimeDir(root, "native-multihop")',
+    "captured private source",
 )
 require(
     "cmd/client/openvpn_entry_bridge.go",

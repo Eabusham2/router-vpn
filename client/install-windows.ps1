@@ -16,7 +16,7 @@ foreach ($required in @('client.json','routers.json','modes.json','logical-modes
         throw "Run this from an extracted RouterVPN-Windows package; missing $required"
     }
 }
-foreach ($requiredDir in @('modes','generated','client')) {
+foreach ($requiredDir in @('modes','generated','client','runtime')) {
     if (-not (Test-Path -LiteralPath (Join-Path $Bundle $requiredDir) -PathType Container)) {
         throw "Router VPN package is missing $requiredDir/"
     }
@@ -28,6 +28,18 @@ if (-not (Test-Path -LiteralPath $AclHelper -PathType Leaf)) {
 $AclHelperItem = Get-Item -LiteralPath $AclHelper -Force
 if (($AclHelperItem.Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) {
     throw 'Refusing a reparse-point Windows private-root ACL hardener.'
+}
+$RuntimeHelper = Join-Path $Bundle 'client\Install-Bundled-Desktop-Runtimes.ps1'
+if (-not (Test-Path -LiteralPath $RuntimeHelper -PathType Leaf) -or
+    (((Get-Item -LiteralPath $RuntimeHelper -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0)) {
+    throw 'Router VPN package is missing its regular desktop runtime installer.'
+}
+$MachineArchitecture = $env:PROCESSOR_ARCHITEW6432
+if ([string]::IsNullOrWhiteSpace($MachineArchitecture)) { $MachineArchitecture = $env:PROCESSOR_ARCHITECTURE }
+$RuntimeArchitecture = switch ($MachineArchitecture.ToLowerInvariant()) {
+    'amd64' { 'amd64' }
+    'arm64' { 'arm64' }
+    default { throw 'Router VPN Windows installation requires an amd64 or arm64 host.' }
 }
 
 $Root = Join-Path $env:ProgramData 'RouterVPN'
@@ -55,6 +67,12 @@ Copy-Item (Join-Path $Bundle 'RouterVPN.ico') (Join-Path $Root 'RouterVPN.ico') 
 if (Test-Path -LiteralPath (Join-Path $Bundle 'RouterVPN.png') -PathType Leaf) {
     Copy-Item (Join-Path $Bundle 'RouterVPN.png') (Join-Path $Root 'RouterVPN.png') -Force
 }
+
+# Verify the exact packaged engines on both sides of a staged directory
+# transaction. Keep installed driver assets under runtime/windows and all
+# linked-node state outside these three owned directories untouched.
+. $RuntimeHelper
+Install-RouterVPNBundledDesktopRuntimes -BundleRoot $Bundle -ApplicationRoot $Root -Architecture $RuntimeArchitecture
 
 # Private linked-node state is install-once data. Never replace a valid existing
 # node store with the generic package's intentionally blank routers.json.

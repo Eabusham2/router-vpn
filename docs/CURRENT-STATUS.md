@@ -54,14 +54,80 @@ The further October 22 continuation has published these source changes:
 | `70325a69` | Apple candidate measurement binds the entry, source, physical network and selection; waits for native socket drain; and restores captured state. Linked-node reads are pure, imports make one validated atomic commit, and ambiguous native cleanup retains ownership. |
 | `3c46bc57` | WG/AWG assets must match the saved endpoint before bootstrap. Native candidate cleanup captures Windows directory identity eagerly and preserves replacement directories. Source audits follow the current Android execution and Apple atomic-link contracts. |
 | `b2ae0257` | Repeated native preparation composes packet concurrency and UDP capacity fixes in one checksum-verified `sing` copy, including default/low-memory builds and verified upgrade of the earlier owned copy. |
+| `f29b6d2d` | Android and Apple DNS comparison runs through the captured native external/Tor path, validates complete source-bound receipts, and retains cancellation ownership until actual native drain. |
+| `1394ec8f` | Standalone native runners prepare their complete Tor/AWG policy dependency closure. Windows source checks normalize CRLF; TLS denial fixtures use real joined TCP connections; mobile MTU/proof fixtures include the owned DNS activation boundary. |
+
+This native UI continuation replaces the visible Apple stock map with a
+shared opaque vector basemap. Both application packages ship the same pinned
+land outlines; native MapKit still owns coordinate transforms, gestures and
+annotations. Refresh preserves the custom base, date-line routes stay short,
+and macOS map taps use guarded saved node selection without connecting.
+The shared geometry passes 298 executable Swift checks, with route and
+selection negative controls. Apple SDK compilation and real bitmap rendering
+are mandatory in the native shipping lanes; the Linux run does not claim them.
+See [NATIVE-VECTOR-MAP.md](NATIVE-VECTOR-MAP.md).
+
+Android updates are reachable from Help → More → Updates even when notification
+permission is denied. Discovery joins one owned worker, and download actions
+require an unexpired receipt tied to the installed source and exact release
+asset. The real provider/dialog source passes 117 executable checks with
+Android and HTTPS boundaries doubled, plus installed-source and expiry
+mutation controls. This does not establish a physical Android upgrade or a
+production APK signing identity; see [AUTO-UPDATES.md](AUTO-UPDATES.md).
+
+Android startup now executes the saved per-node policy once per cold app
+process. Auto-connect defaults to Off; SMART AUTO, AUTO, Last / AUTO and Manual
+are reachable settings. Permission recreation retains only a nonce referring
+to the captured private request. Router and external paths preserve the saved
+entry, exit, execution choice, credentials and policy; a foreign VPN, changed
+selection/source, manual Disconnect or newer owner invalidates the request.
+External choices retain the saved protocol and path, with fresh native proof.
+Router Last / AUTO tries the last proved runtime only when it still satisfies
+the current policy, then uses AUTO after ordinary failure and completed cleanup.
+Resume/rotation never starts another attempt. Startup passes 899 executable
+checks and two mutation controls; the real mode selector passes 70 scenarios
+and 442 checks, including cancellation before late proof adoption. The complete
+Android runtime contract passes all 44 registered executable fixtures in one
+uninterrupted run against this continuation's source.
+
+Mobile telemetry now separates direct probing, live routed RTT, current-path
+throughput and saved 50-sample statistics. Android captures the exact native
+VPN owner and physical network; iOS uses a provider-owned connection with
+proof-before-token delivery. Both reject changed source/session/network state
+and retain measurement/MTU ownership until native cleanup completes. Only a
+complete 50-sample run replaces a durable record, including minimum, median,
+average, 10% trimmed mean, p90, maximum and measurement date. A partial run or
+failed write leaves the previous record and ranking intact. Android telemetry
+passes 148 checks and eight negative controls; iOS telemetry passes 230 checks
+and two controls. These executable tests double the declared OS boundaries;
+physical routing, endpoint throughput and network transitions remain separate.
 
 The desktop candidate backend uses a private authenticated userspace lane with
 real upstream TCP handshake timing, exact entry proof before and after samples,
 captured private sources and physical-network validation. It changes no system
 TUN or route. Results become selectable only after sockets and the owned process
-have drained. Linux follows the same WG/AWG base decision as Connect; Windows
-and macOS use their existing explicit WG entry. Quick samples do not overwrite
-direct latency or the durable 50-sample benchmark.
+have drained. Windows, macOS and Linux now follow the same saved Auto/WG/AWG
+base decision as Connect. Complete captured Router profiles retain both hops'
+DNS, cover traffic and authenticated Start Layers. The real complete Linux
+engine accepts the 36 captured Local/Server WG/AWG graphs; stale proof/source
+regressions pass with race detection. Quick samples do not overwrite direct
+latency or the durable 50-sample benchmark.
+
+Desktop delivery previously omitted the complete runtime despite having its
+builder in source. All six native target producers now build/verify the engine,
+its Cronet payload where required, licenses and exact source/target/file
+receipt. Installed and Portable archives are checked after compression.
+macOS signs a verified staged bundle and seals only its own signed result;
+Windows/Linux installation and the same-image Windows download fallback carry
+all required runtimes. The actual Linux engine passed 28 receipt/relocation
+checks plus the graph gate, and its payload survived artifact extraction and
+installed/Portable archive roundtrips. Delivery/signing boundary tests pass 358
+checks. Windows runtime installation passes 202 filesystem checks and two
+rollback mutation controls. Linux passes 15 transaction checks and actual
+first-install and upgrade verification of all three built engines. These
+transactions cover runtime directories, not every outer installer action.
+A six-target packaged result still requires the new commit's CI.
+See [NATIVE-DESKTOP-DELIVERY.md](NATIVE-DESKTOP-DELIVERY.md).
 
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;
@@ -86,6 +152,25 @@ pass; unrelated or partially modified copies remain rejected.
 Those earlier package results do not certify the newer source: its exact-SHA
 APK, Xcode/IPA, desktop packages, server images, generated compose and
 publication gates must run on the resulting source generation.
+
+The `1394ec8f` run also passed its then-existing desktop and ARM64 preflight
+gates, but mobile gates exposed stale Tor-MTU and Apple hop-proof fixtures.
+The real Android native producer additionally emitted 570 external graphs
+while its consumer still required 456. The corrected consumer requires all
+456 Local plus 114 paired Server/Compare cases from each mobile host, and
+Apple now exports those paired cases as well. No matrix entries are removed
+to obtain a passing result. The real prepared native registry accepts all 570
+graphs from each host and rejects every corresponding missing-engine control.
+Earlier desktop success did not test the missing
+complete-runtime delivery path described above.
+
+The actual `1394ec8f` Xcode build also exposed a generated-binding mismatch:
+native String-returning proof and MAX calls require an explicit NSError
+pointer, as does the MAX DNS callback. The adapters now match headers generated
+by the pinned gomobile version, preserve the native error domain/code, and
+reject an errored result even when it contains nonempty proof text. The affected
+full-engine, MAX and external-execution gates pass with these real API shapes;
+the next exact-SHA Xcode build owns native SDK acceptance.
 
 The Apple MAX source gate, LAN-policy fixture, canonical macOS native-test
 paths and Android pinned-NDK setup order have been corrected on main. These

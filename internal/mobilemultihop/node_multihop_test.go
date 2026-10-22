@@ -1,0 +1,117 @@
+package mobilemultihop
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+)
+
+func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
+	t.Helper()
+	files, profile, start := nodeProfileFixture(t, mode, layer)
+	profile["id"] = id
+	if id == "exit" {
+		profile["node_proof_id"] = strings.Repeat("f", 64)
+		profile["router_api"], profile["adguard_ipv4"] = "http://10.88.0.1:8787", "10.88.0.53"
+	}
+	profile["daita_enabled"], profile["daita_rate_kbps"], profile["daita_host"] = true, float64(64), "10.77.0.1"
+	profile["ipv6_mode"], profile["home_lan_access"] = "off", false
+	compiled, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return compiled
+}
+
+func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		for _, entryLayer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, exitMode := range []string{"shadowsocks", "hysteria2"} {
+				for _, exitLayer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+					t.Run(mode+"/"+entryLayer+"/"+exitMode+"/"+exitLayer, func(t *testing.T) {
+						entry, exit := multihopNodeFixture(t, mode, entryLayer, "entry"), multihopNodeFixture(t, exitMode, exitLayer, "exit")
+						entryBefore, exitBefore := entry.Config(), exit.Config()
+						compiled, err := NodeMultihopConfig(entry, exit)
+						if err != nil {
+							t.Fatal(err)
+						}
+						graph := startObject(t, compiled)
+						if len(graph["inbounds"].([]any)) != 1 || graph["route"].(map[string]any)["final"] != "proxy" || entry.Config() != entryBefore || exit.Config() != exitBefore {
+							t.Fatal("composition changed source, TUN ownership or final route")
+						}
+						nodes := map[string]map[string]any{}
+						for _, family := range []string{"endpoints", "outbounds"} {
+							for _, raw := range graph[family].([]any) {
+								node := raw.(map[string]any)
+								if nodes[predecessorText(node, "tag")] != nil {
+									t.Fatal("duplicate transport owner")
+								}
+								nodes[predecessorText(node, "tag")] = node
+							}
+						}
+						prior := startObject(t, entryBefore)["endpoints"].([]any)[0].(map[string]any)
+						actual := predecessorCopy(nodes["entry-wg"])
+						actual["tag"] = "proxy"
+						delete(prior, "mtu")
+						delete(actual, "mtu")
+						if entryLayer != "" {
+							if actual["detour"] != predecessorNamespace("node", NativeStartLayerTag) {
+								t.Fatal("entry Start Layer bypassed")
+							}
+							actual["detour"] = NativeStartLayerTag
+						}
+						if !reflect.DeepEqual(prior, actual) {
+							t.Fatal("captured WG/AWG parameters changed", prior, actual)
+						}
+						outer := nodes["proxy"]
+						if exitLayer != "" && exitMode == "hysteria2" {
+							if outer["detour"] != NativeStartLayerTag {
+								t.Fatal("exit Start Layer bypassed")
+							}
+							outer = nodes[NativeStartLayerTag]
+						}
+						if outer["detour"] != "entry-wg" {
+							t.Fatal("exit did not retain the selected entry")
+						}
+						servers := graph["dns"].(map[string]any)["servers"].([]any)
+						if len(servers) != 2 || servers[0].(map[string]any)["server"] != "10.88.0.53" || servers[0].(map[string]any)["detour"] != "proxy" || servers[1].(map[string]any)["server"] != "192.168.50.133" || servers[1].(map[string]any)["detour"] != "entry-wg" {
+							t.Fatal("captured per-node DNS owners were substituted")
+						}
+						services := graph["services"].([]any)
+						if len(services) != 2 || services[0].(map[string]any)["tag"] != "routervpn-cover-entry" || services[0].(map[string]any)["proof_tag"] != "entry-wg" || services[1].(map[string]any)["tag"] != "routervpn-cover-exit" || services[1].(map[string]any)["proof_tag"] != "proxy" {
+							t.Fatal("per-node cover identity changed")
+						}
+						if len(graph["route"].(map[string]any)["rules"].([]any)) < 6 {
+							t.Fatal("captured IPv6/LAN restrictions dropped")
+						}
+					})
+				}
+			}
+		}
+	}
+}
+
+func TestNodeMultihopRejectsUnownedAndUnsupportedCaptures(t *testing.T) {
+	entry, exit := multihopNodeFixture(t, "awg2-strong", "aes-256-gcm", "entry"), multihopNodeFixture(t, "hysteria2", "", "exit")
+	for _, pair := range [][2]*NodeProfile{{nil, exit}, {entry, nil}, {entry, entry}, {exit, entry}, {&NodeProfile{config: entry.config}, exit}} {
+		if _, err := NodeMultihopConfig(pair[0], pair[1]); err == nil {
+			t.Fatal("unowned or unsupported capture accepted")
+		}
+	}
+	for _, mutate := range []func(map[string]any){
+		func(g map[string]any) { g["endpoints"].([]any)[0].(map[string]any)["type"] = "wireguard" },
+		func(g map[string]any) { delete(g, "outbounds") },
+		func(g map[string]any) { delete(g, "services") },
+		func(g map[string]any) {
+			g["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "direct"
+		},
+	} {
+		broken := *entry
+		graph := startObject(t, entry.config)
+		mutate(graph)
+		broken.config = startJSON(t, graph)
+		if _, err := NodeMultihopConfig(&broken, exit); err == nil {
+			t.Fatal("incomplete captured predecessor accepted")
+		}
+	}
+}

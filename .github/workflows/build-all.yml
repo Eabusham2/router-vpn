@@ -58,14 +58,19 @@ jobs:
     secrets: inherit
 
   portainer-preflight:
+    needs: release-candidate
     name: Authoritative ARM64 Portainer preflight
     uses: ./.github/workflows/arm64-portainer-preflight.yml
+    with:
+      native_runtimes_ready: true
     secrets: inherit
 
   publish-arm64-images:
     name: Publish exact-SHA ARM64 server images
     needs: [source-snapshot, release-candidate, portainer-preflight]
     uses: ./.github/workflows/publish-arm64-images.yml
+    with:
+      native_runtimes_ready: true
     secrets: inherit
 
   production-compose:

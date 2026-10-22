@@ -10,6 +10,8 @@ SPEED_LAB_SRC="$ROOT/client/macos/RouterVPNMacSpeedLab.swift"
 VIA_ENTRY_POLICY_SRC="$ROOT/client/macos/RouterVPNMacViaEntryPolicy.swift"
 VIA_ENTRY_UI_SRC="$ROOT/client/macos/RouterVPNMacViaEntryCandidates.swift"
 GLOBE_SRC="$ROOT/client/macos/RouterVPNMacGlobeChrome.swift"
+MAP_GEOMETRY_SRC="$ROOT/client/shared/RouterVPNMapGeometry.swift"
+MAP_RENDERER_SRC="$ROOT/client/shared/RouterVPNVectorMap.swift"
 PROFILE_SRC="$ROOT/client/macos/RouterVPNConnectionProfiles.swift"
 PROFILE_CHROME_SRC="$ROOT/client/macos/RouterVPNConnectionProfileChrome.swift"
 ONBOARDING_SRC="$ROOT/client/macos/RouterVPNProductOnboarding.swift"
@@ -25,6 +27,7 @@ case "$ARCH" in
 esac
 
 python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"
+python3 "$ROOT/deploy/test_apple_vector_map.py"
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"
@@ -153,8 +156,10 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework CoreLocation -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$MAP_GEOMETRY_SRC" "$MAP_RENDERER_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
+cp "$ROOT/client/shared/map/routervpn-land-110m.json" "$ROOT/client/shared/map/NATURAL-EARTH.txt" "$APP/Contents/Resources/"
+test -s "$APP/Contents/Resources/routervpn-land-110m.json"
 
 ICON_WORK="$BUILD_WORK/icon"; mkdir -p "$ICON_WORK"
 python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$ICON_WORK/router-vpn-1024.png" --ico "$ICON_WORK/router-vpn.ico"

@@ -1,0 +1,111 @@
+name: Complete native desktop transport runtimes
+
+on:
+  workflow_call:
+    inputs:
+      platform:
+        description: Build all, windows, darwin, or linux native targets
+        type: string
+        default: all
+  workflow_dispatch:
+    inputs:
+      platform:
+        type: choice
+        options: [all, windows, darwin, linux]
+        default: all
+
+permissions:
+  contents: read
+
+jobs:
+  targets:
+    runs-on: ubuntu-24.04
+    outputs:
+      matrix: ${{ steps.select.outputs.matrix }}
+    steps:
+      - id: select
+        env:
+          NATIVE_PLATFORM: ${{ inputs.platform || 'all' }}
+        run: |
+          python3 - <<'PY'
+          import json, os
+          platform = os.environ['NATIVE_PLATFORM']
+          assert platform in ('all', 'windows', 'darwin', 'linux')
+          targets = [
+            ('linux', 'amd64', 'ubuntu-24.04'),
+            ('linux', 'arm64', 'ubuntu-24.04-arm'),
+            ('darwin', 'amd64', 'macos-15-intel'),
+            ('darwin', 'arm64', 'macos-15'),
+            ('windows', 'amd64', 'windows-latest'),
+            ('windows', 'arm64', 'windows-11-arm'),
+          ]
+          matrix = {'include': [{'target': system+'/'+arch, 'slug': system+'-'+arch,
+                                 'runner': runner} for system, arch, runner in targets
+                                if platform in ('all', system)]}
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('matrix='+json.dumps(matrix, separators=(',', ':'))+'\n')
+          PY
+
+  runtime:
+    name: Complete native engine ${{ matrix.target }}
+    needs: targets
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install native Linux build libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev
+      - name: Install native macOS build libraries
+        if: runner.os == 'macOS'
+        run: brew install cmake ninja pkg-config openssl@3
+      - name: Prepare exact Rust and native C toolchains
+        shell: bash
+        run: python3 deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' "$RUNNER_TEMP/native-toolchain"
+      - name: Compute complete source identity
+        id: policy
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import importlib.util, os
+          spec = importlib.util.spec_from_file_location('native_build', 'deploy/build-native-runtime.py')
+          build = importlib.util.module_from_spec(spec); spec.loader.exec_module(build)
+          with open(os.environ['GITHUB_OUTPUT'], 'a') as output:
+              output.write('sha256='+build.digest()+'\n')
+          PY
+      - uses: actions/cache/restore@v4
+        id: engine-cache
+        with:
+          key: complete-native-v1-${{ runner.os }}-${{ matrix.slug }}-${{ steps.policy.outputs.sha256 }}-${{ hashFiles('deploy/setup-desktop-native-toolchain.py', 'deploy/install-desktop-windows-toolchain.py') }}
+          path: dist/native-runtime/${{ matrix.slug }}
+      - name: Build and validate the complete native engine
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 deploy/build-native-runtime.py '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}'
+          python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
+          python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
+          python3 deploy/native-runtime-bundle.py archive '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' 'dist/native-artifact/native-${{ matrix.slug }}.tar.gz'
+      - uses: actions/cache/save@v4
+        if: steps.engine-cache.outputs.cache-hit != 'true'
+        with:
+          key: ${{ steps.engine-cache.outputs.cache-primary-key }}
+          path: dist/native-runtime/${{ matrix.slug }}
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-${{ matrix.slug }}-${{ github.sha }}
+          path: dist/native-artifact/native-${{ matrix.slug }}.tar.gz
+          if-no-files-found: error
+          retention-days: 3

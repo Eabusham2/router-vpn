@@ -28,6 +28,8 @@ struct MacViaEntryCandidateReceipt {
     }
     let requestID: String
     let entryID: String
+    let entryBase: String
+    let entryMode: String
     let measuredAt: Date
     let expiresAt: Date
     let rows: [Row]
@@ -44,16 +46,16 @@ struct MacViaEntryCandidateReceipt {
     }
     private struct Failure: Decodable { let id: String, error: String }
 
-    init(data: Data, requestID: String, entryID: String, candidates: [String], now: Date = Date()) throws {
+    init(data: Data, requestID: String, entryID: String, candidates: [String], base: String = "wg", now: Date = Date()) throws {
         guard data.count <= 256 * 1024 else { throw Self.issue("Candidate response is too large.") }
         let value = try JSONDecoder().decode(Payload.self, from: data)
         guard value.schema == 1, value.request_id == requestID, value.entry_id == entryID,
-              value.entry_mode == "wg", value.entry_base == "wg", value.drained,
+              Self.matches(base: value.entry_base, mode: value.entry_mode, requested: base), value.drained,
               let measured = Self.date(value.measured_at), let expires = Self.date(value.expires_at),
               measured <= now.addingTimeInterval(5), expires > now, expires > measured,
               expires.timeIntervalSince(measured) <= 150,
               !candidates.isEmpty, candidates.count <= 64, Set(candidates).count == candidates.count,
-              !candidates.contains(entryID) else { throw Self.issue("Candidate result is stale or does not match the captured WireGuard entry.") }
+              !candidates.contains(entryID) else { throw Self.issue("Candidate result is stale or does not match the captured entry base.") }
         let requested = Set(candidates)
         var seen = Set<String>(), rows: [Row] = []
         for result in value.results ?? [] {
@@ -79,6 +81,7 @@ struct MacViaEntryCandidateReceipt {
             }
         }
         self.requestID = requestID; self.entryID = entryID; measuredAt = measured; expiresAt = expires
+        self.entryBase = value.entry_base; self.entryMode = value.entry_mode
         self.rows = rows.sorted {
             if let a = $0.medianMS, let b = $1.medianMS { return a == b ? $0.id < $1.id : a < b }
             if ($0.medianMS != nil) != ($1.medianMS != nil) { return $0.medianMS != nil }
@@ -89,6 +92,13 @@ struct MacViaEntryCandidateReceipt {
 
     func eligible(_ id: String, now: Date = Date()) -> Bool {
         now < expiresAt && rows.contains { $0.id == id && $0.medianMS != nil }
+    }
+    static func matches(base: String, mode: String, requested: String) -> Bool {
+        ["auto", "wg", "awg"].contains(requested) && (requested == "auto" || requested == base) &&
+            ((base == "wg" && mode == "wg") || (base == "awg" && ["awg2-fast", "awg2-strong"].contains(mode)))
+    }
+    var entryLabel: String {
+        entryMode == "awg2-fast" ? "AmneziaWG Fast" : entryMode == "awg2-strong" ? "AmneziaWG Strong" : "WireGuard"
     }
     static func issue(_ message: String) -> NSError {
         NSError(domain: "RouterVPN.ViaEntryCandidates", code: 1, userInfo: [NSLocalizedDescriptionKey: message])
@@ -110,6 +120,7 @@ final class MacViaEntryCandidateSession {
     struct Ticket: Equatable {
         let requestID: String
         let entryID: String
+        let base: String
         let candidates: [String]
     }
     private(set) var phase = Phase.idle
@@ -119,19 +130,19 @@ final class MacViaEntryCandidateSession {
     private var validatingExit: String?
     private var usedNonces = Set<String>()
 
-    func begin(entryID: String, candidates: [String], nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()) throws -> Ticket {
+    func begin(entryID: String, candidates: [String], base: String = "wg", nonce: String = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()) throws -> Ticket {
         guard phase == .idle, ticket == nil, !entryID.isEmpty, !candidates.isEmpty, candidates.count <= 64,
-              Set(candidates).count == candidates.count, !candidates.contains(entryID), candidates.allSatisfy({ !$0.isEmpty }),
+              Set(candidates).count == candidates.count, !candidates.contains(entryID), candidates.allSatisfy({ !$0.isEmpty }), ["auto", "wg", "awg"].contains(base),
               nonce.count == 32, nonce.allSatisfy({ "0123456789abcdef".contains($0) }), !usedNonces.contains(nonce) else {
             throw MacViaEntryCandidateReceipt.issue("Candidate test cannot start until its previous transaction has drained.")
         }
-        let next = Ticket(requestID: nonce, entryID: entryID, candidates: candidates)
+        let next = Ticket(requestID: nonce, entryID: entryID, base: base, candidates: candidates)
         usedNonces.insert(nonce); ticket = next; receipt = nil; phase = .measuring; return next
     }
 
     @discardableResult func accept(_ data: Data, for captured: Ticket, now: Date = Date()) throws -> Bool {
         guard ticket == captured, phase == .measuring else { return false }
-        receipt = try MacViaEntryCandidateReceipt(data: data, requestID: captured.requestID, entryID: captured.entryID, candidates: captured.candidates, now: now)
+        receipt = try MacViaEntryCandidateReceipt(data: data, requestID: captured.requestID, entryID: captured.entryID, candidates: captured.candidates, base: captured.base, now: now)
         phase = .ready; return true
     }
 
@@ -148,7 +159,7 @@ final class MacViaEntryCandidateSession {
         struct Reply: Decodable { let ok: Bool, request_id: String, entry_id: String, exit_id: String, entry_base: String, entry_mode: String, measured: Bool }
         let value = try JSONDecoder().decode(Reply.self, from: data)
         guard value.ok, value.request_id == captured.requestID, value.entry_id == captured.entryID,
-              value.exit_id == exitID, value.entry_base == "wg", value.entry_mode == "wg", value.measured,
+              value.exit_id == exitID, value.entry_base == receipt?.entryBase, value.entry_mode == receipt?.entryMode, value.measured,
               receipt?.eligible(exitID, now: now) == true else {
             throw MacViaEntryCandidateReceipt.issue("The source, network or measured selection changed. Retest before adopting an exit.")
         }

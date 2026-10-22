@@ -39,6 +39,16 @@ final class AndroidProfileSettingsDialog {
             Spinner base=spinner(activity,new String[]{"Auto","WireGuard","AmneziaWG"},index(new String[]{"auto","wg","awg"},profile.optString("base_tunnel","auto"))); body.addView(label(activity,"WG/AWG base preference")); body.addView(base);
             CheckBox fallback=check(activity,"Allow WG/AWG base fallback",profile.optBoolean("base_fallback",false)); body.addView(fallback);
 
+            String[] startupValues={"smart-auto","auto","last","manual"};
+            Spinner startup=spinner(activity,new String[]{"SMART AUTO — default","AUTO — first proved path","Last proven mode, then AUTO","Manual / stay disconnected"},index(startupValues,AndroidStartupPolicy.startupMode(profile)));
+            body.addView(label(activity,"Startup behavior"));body.addView(startup);
+            CheckBox autoConnect=check(activity,"Auto-connect once when the app starts",profile.optBoolean("auto_connect",false));body.addView(autoConnect);
+            startup.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){
+                public void onNothingSelected(android.widget.AdapterView<?> parent){}
+                public void onItemSelected(android.widget.AdapterView<?> parent,android.view.View view,int position,long id){boolean manualStartup=position==3;if(manualStartup)autoConnect.setChecked(false);autoConnect.setEnabled(!manualStartup);}
+            });
+            body.addView(label(activity,"Auto-connect is Off by default. Startup runs once per cold app launch, preserves saved multihop hops and execution, and never retries on resume or after Disconnect. Last mode requires fresh proof under current policy; an ordinary failure continues with AUTO. Manual stays disconnected."));
+
             body.addView(label(activity,"AUTO / SMART AUTO filters"));
             CheckBox requireEncrypted=check(activity,"Require encrypted AUTO candidates",profile.optBoolean("auto_require_encrypted",false)); body.addView(requireEncrypted);
             CheckBox requireObfuscation=check(activity,"Require obfuscation for AUTO candidates",profile.optBoolean("auto_require_obfuscation",false)); body.addView(requireObfuscation);
@@ -77,7 +87,8 @@ final class AndroidProfileSettingsDialog {
                     profile.put("start_layer",startLayerValue);
                     profile.put("mtu_policy",mtuPolicy); profile.put("manual_mtu",manualValue);
                     profile.put("daita_enabled",daita.isChecked()); profile.put("jumbo_tun",jumbo.isChecked()); profile.put("socks_enabled",socks.isChecked());
-                    if(!profile.has("startup_mode")||profile.optString("startup_mode","").trim().isEmpty())profile.put("startup_mode","smart-auto");
+                    String startupValue=startupValues[startup.getSelectedItemPosition()];
+                    profile.put("startup_mode",startupValue);profile.put("auto_connect",!"manual".equals(startupValue)&&autoConnect.isChecked());
                     if (AndroidVpnMutationGuard.isBusy(activity)) throw new IllegalStateException("VPN became active or began transitioning before settings commit; refusing to rewrite node policy.");
                     byte[] updated=bundle.toString().getBytes(StandardCharsets.UTF_8);
                     String updatedId=AndroidNodeStore.deriveId(bundle,updated);

@@ -2,6 +2,10 @@ name: Publish ARM64 Portainer images
 
 on:
   workflow_call:
+    inputs:
+      native_runtimes_ready:
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -13,11 +17,19 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtimes:
+    if: ${{ !inputs.native_runtimes_ready }}
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: windows
+
   validate-source:
     name: Validate source before registry publication
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
       - uses: actions/setup-go@v5
         with: {go-version: '1.24.x', cache: false}
       - name: Compile and syntax gates
@@ -32,7 +44,8 @@ jobs:
           python3 deploy/server-image-dependency-audit.py
 
   publish:
-    needs: validate-source
+    if: ${{ !cancelled() && needs.validate-source.result == 'success' && (needs.native-runtimes.result == 'success' || needs.native-runtimes.result == 'skipped') }}
+    needs: [validate-source, native-runtimes]
     name: Build and publish ARM64 images
     runs-on: ubuntu-24.04-arm
     strategy:
@@ -68,6 +81,22 @@ jobs:
             image: router-vpn-aux
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        if: matrix.name == 'init'
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        if: matrix.name == 'init'
+        with:
+          pattern: RouterVPN-native-runtime-windows-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify complete Windows runtimes for same-image fallback
+        if: matrix.name == 'init'
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime windows/amd64 windows/arm64
       - name: Record exact source tree identity
         shell: bash
         run: |

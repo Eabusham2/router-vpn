@@ -2,6 +2,10 @@ name: ARM64 Portainer preflight
 
 on:
   workflow_call:
+    inputs:
+      native_runtimes_ready:
+        type: boolean
+        default: false
   workflow_dispatch:
 
 permissions:
@@ -12,11 +16,32 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtimes:
+    if: ${{ !inputs.native_runtimes_ready }}
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: windows
+
   arm64-portainer:
+    if: ${{ !cancelled() && (needs.native-runtimes.result == 'success' || needs.native-runtimes.result == 'skipped') }}
+    needs: native-runtimes
     name: Build production images for linux/arm64
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-windows-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify complete Windows runtimes for same-image fallback
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime windows/amd64 windows/arm64
 
       - name: Static production preflight
         run: |

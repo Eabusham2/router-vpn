@@ -28,6 +28,7 @@ MODES = ('wg', 'awg2-fast', 'awg2-strong', 'wg-pq', 'awg2-pq', 'shadowsocks', 'h
          'reality-vision', 'reality-pq-vision', 'reality-xhttp', 'max-tls-wg', 'max-tls-awg',
          'max-quic-wg', 'max-quic-awg', 'ss-v2ray', 'split', 'max', 'naive-h2', 'naive-h3')
 LAYERS = ('off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening')
+EXECUTIONS = ('server', 'auto')
 PROTOCOLS = {
     'android': ('wireguard', 'amneziawg', 'socks5', 'http', 'https', 'shadowsocks', 'hysteria2', 'openvpn'),
     'ios': ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn'),
@@ -37,7 +38,8 @@ PROTOCOLS = {
 def inputs() -> list[Path]:
     # Host changes must invalidate the package's cached native verification,
     # even when the linked Go code and its public binding signatures stay put.
-    return [Path(__file__).resolve(), ROOT/'mobile/externalpolicy/graph_test.go.tmpl',
+    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_external_graphs_contract.py',
+            ROOT/'mobile/externalpolicy/graph_test.go.tmpl',
             ROOT/'android/test_android_external_entries.py', ROOT/'android/test_android_tor_profile.py',
             ROOT/'deploy/test_ios_tor_profile.py',
             *sorted((ROOT/'android/app/src/main/java/com/eabusham/routervpn').glob('*.java')),
@@ -53,13 +55,23 @@ def digest() -> str:
 
 
 def expected_names(target: str) -> set[str]:
-    return {'-'.join(case)+'.json' for case in itertools.product(MODES, LAYERS, PROTOCOLS[target])}
+    local = {'-'.join(case)+'.json' for case in itertools.product(MODES, LAYERS, PROTOCOLS[target])}
+    # Both shipping hosts also compile the paired Shadowsocks relay selector.
+    # Requiring these exact names keeps Server and Compare in the same native
+    # constructor and missing-engine gate as every ordinary Local graph.
+    paired = {'-'.join(case)+'.json'
+              for case in itertools.product(MODES, LAYERS, ('shadowsocks',), EXECUTIONS)}
+    return local | paired
 
 
 def require_matrix(directory: Path, target: str) -> int:
     expected = expected_names(target)
-    if directory.is_symlink() or not directory.is_dir() or {p.name for p in directory.iterdir()} != expected:
+    if directory.is_symlink() or not directory.is_dir():
         raise ValueError('Missing, extra or stale '+target+' external graph combinations')
+    actual = {p.name for p in directory.iterdir()}
+    if actual != expected:
+        raise ValueError('Missing, extra or stale '+target+' external graph combinations: '
+                         +str(len(expected-actual))+' missing, '+str(len(actual-expected))+' extra')
     for name in expected:
         info = (directory/name).lstat()
         if not stat.S_ISREG(info.st_mode) or not 0 < info.st_size <= 4*1024*1024:

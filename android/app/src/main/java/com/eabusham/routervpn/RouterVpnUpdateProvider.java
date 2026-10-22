@@ -8,6 +8,7 @@ import android.content.ContentProvider;
 import android.content.ContentValues;
 import android.content.Context;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
@@ -23,6 +24,8 @@ import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
 import java.util.Locale;
+import java.util.ArrayList;
+import java.util.List;
 
 /**
  * Startup-safe exact-SHA update check.
@@ -41,6 +44,9 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
     private static final String CHANNEL = "router_vpn_updates";
     private static final int MAX_METADATA = 1024 * 1024;
     private static final long MAX_APK_BYTES = 768L * 1024L * 1024L;
+    private static final Object CHECK_LOCK = new Object();
+    private static final List<Runnable> CHECK_LISTENERS = new ArrayList<>();
+    private static boolean checking;
 
     private static final class VerifiedUpdate {
         final String target;
@@ -59,31 +65,91 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
     @Override
     public boolean onCreate() {
         Context context = getContext();
-        if (context != null) {
-            Thread worker = new Thread(() -> check(context.getApplicationContext()), "router-vpn-update-check");
-            worker.setDaemon(true);
-            worker.start();
-        }
+        if (context != null) requestCheck(context, null);
         return true;
+    }
+
+    static void requestCheck(Context context, Runnable completed) {
+        Context app = context.getApplicationContext();
+        synchronized (CHECK_LOCK) {
+            if (completed != null) CHECK_LISTENERS.add(completed);
+            if (checking) return;
+            checking = true;
+        }
+        Thread worker = new Thread(() -> {
+            try { check(app); }
+            finally {
+                List<Runnable> listeners;
+                synchronized (CHECK_LOCK) {
+                    checking = false;
+                    listeners = new ArrayList<>(CHECK_LISTENERS);
+                    CHECK_LISTENERS.clear();
+                }
+                for (Runnable listener : listeners) { try { listener.run(); } catch (RuntimeException ignored) { } }
+            }
+        }, "router-vpn-update-check");
+        worker.setDaemon(true);
+        worker.start();
+    }
+
+    static boolean isChecking() { synchronized (CHECK_LOCK) { return checking; } }
+
+    static String installedSource(Context context) {
+        try { String value=sourceSha(context);return validSha(value)?value:"unverified development build"; }
+        catch (Exception missing) { return "source manifest unavailable"; }
+    }
+
+    static AndroidUpdateSnapshot availableUpdate(Context context) {
+        try {
+            SharedPreferences p=context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE);
+            return AndroidUpdateSnapshot.verified(installedSource(context),p.getString("checked_from_sha",""),
+                    p.getString("available_sha",""),p.getString("apk_url",""),p.getLong("apk_size",0),
+                    p.getString("apk_sha256",""),p.getLong("verified_at_ms",0),
+                    p.getBoolean("release_manifest_verified",false),System.currentTimeMillis());
+        } catch (RuntimeException malformed) { return null; }
+    }
+
+    static String checkMessage(Context context) {
+        try {
+            return context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE)
+                    .getString("check_message","An update check starts when the app opens. You can also check here.");
+        } catch (RuntimeException malformed) { return "Check again to refresh update status."; }
+    }
+
+    static void notifyAvailableUpdate(Context context) {
+        AndroidUpdateSnapshot update=availableUpdate(context);
+        if(update!=null)notifyUpdate(context,new VerifiedUpdate(update.target,update.apkURL,update.apkBytes,update.apkDigest));
     }
 
     private static void check(Context context) {
         try {
             String current = sourceSha(context);
-            if (!validSha(current)) return;
+            if (!validSha(current)) throw new IllegalStateException("This build has no exact source manifest; install a published generic package to use updates.");
             VerifiedUpdate update = newestVerifiedUpdate(current);
-            if (update == null) return;
+            if (update == null) {
+                context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE).edit()
+                        .remove("available_sha").remove("apk_url").remove("apk_size").remove("apk_sha256")
+                        .remove("verified_at_ms").putBoolean("release_manifest_verified",false)
+                        .putString("checked_from_sha",current)
+                        .putString("check_message","No newer exact-source release with valid APK metadata is available.").apply();
+                return;
+            }
             context.getSharedPreferences("router_vpn_updates", Context.MODE_PRIVATE)
                     .edit()
+                    .putString("checked_from_sha",current)
+                    .putLong("verified_at_ms",System.currentTimeMillis())
                     .putString("available_sha", update.target)
                     .putString("apk_url", update.apkUrl)
                     .putLong("apk_size", update.apkSize)
                     .putString("apk_sha256", update.apkSha256)
                     .putBoolean("release_manifest_verified", true)
+                    .putString("check_message","A newer exact-source APK has verified published digest metadata.")
                     .apply();
-            notifyUpdate(context, update);
-        } catch (Exception ignored) {
+            notifyAvailableUpdate(context);
+        } catch (Exception error) {
             // Update discovery must never interfere with VPN startup.
+            context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE).edit()
+                    .putString("check_message","Update check unavailable. Retry when GitHub is reachable; previously verified metadata may still be shown.").apply();
         }
     }
 
@@ -99,6 +165,9 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
         JSONObject manifestAsset = uniqueReleaseAsset(release, RELEASE_MANIFEST, MAX_METADATA);
         JSONObject apkAsset = uniqueReleaseAsset(release, APK_ASSET, MAX_APK_BYTES);
         if (manifestAsset == null || apkAsset == null) return null;
+        String releaseRoot = "https://github.com/" + REPOSITORY + "/releases/download/" + TAG_PREFIX + target + "/";
+        if (!(releaseRoot + RELEASE_MANIFEST).equals(manifestAsset.optString("browser_download_url", ""))
+                || !(releaseRoot + APK_ASSET).equals(apkAsset.optString("browser_download_url", ""))) return null;
         byte[] manifestBytes = downloadTrustedReleaseAsset(
                 manifestAsset.optString("browser_download_url", ""), MAX_METADATA);
         JSONObject manifest = parseObject(manifestBytes);
@@ -245,7 +314,8 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
     }
 
     private static boolean trustedReleaseAssetUrl(URL url) {
-        if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getUserInfo() != null) return false;
+        if (!"https".equalsIgnoreCase(url.getProtocol()) || url.getUserInfo() != null
+                || (url.getPort() != -1 && url.getPort() != 443) || url.getRef() != null) return false;
         String host = url.getHost().toLowerCase(Locale.ROOT);
         return "github.com".equals(host) || "release-assets.githubusercontent.com".equals(host)
                 || host.endsWith(".githubusercontent.com");
@@ -304,7 +374,9 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
         Intent intent = new Intent(Intent.ACTION_VIEW, Uri.parse(update.apkUrl));
         intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
         PendingIntent pending = PendingIntent.getActivity(context, 0, intent, PendingIntent.FLAG_UPDATE_CURRENT | PendingIntent.FLAG_IMMUTABLE);
-        android.app.Notification notification = new android.app.Notification.Builder(context, CHANNEL)
+        android.app.Notification.Builder builder = Build.VERSION.SDK_INT >= 26
+                ? new android.app.Notification.Builder(context, CHANNEL) : new android.app.Notification.Builder(context);
+        android.app.Notification notification = builder
                 .setSmallIcon(android.R.drawable.stat_sys_download_done)
                 .setContentTitle("Router VPN update available")
                 .setContentText("Exact release " + update.target.substring(0, 12) + " has verified published APK digest metadata. Android will confirm installation.")

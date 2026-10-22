@@ -50,7 +50,14 @@ def run(command, *, cwd=None, env=None, timeout=1800):
 
 def inputs():
     return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
-                             ROOT/'deploy/build-mobile-pq.py', *POLICY.inputs(),
+                             ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
+                             ROOT/'deploy/setup-desktop-native-toolchain.py',
+                             ROOT/'deploy/install-desktop-windows-toolchain.py',
+                             *sorted((ROOT/'mobile/rosenpass').glob('Cargo.*')),
+                             *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
+                             *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
+                             *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs')),
+                             *POLICY.inputs(),
                              *PERFORMANCE.inputs(), *OPENVPN.inputs(),
                              ROOT/'mobile/desktop/native_library.go.tmpl',
                              ROOT/'deploy/prepare-mobile-buffers.py',

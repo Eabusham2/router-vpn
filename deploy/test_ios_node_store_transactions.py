@@ -49,6 +49,7 @@ enum IOSExternalExecution {
  var bundle: ClientBundle?, modes: [VPNMode] = [], logicalModes: [LogicalMode] = []
  var endpoint = "", apiToken = "", routerAPI = "", socksHost = "", socksPort = "0"
  var lanImportHost = "", message = "", multihopProgressText = ""
+ var selectedMode = "wg", selectedLogicalMode = "fast"
  var multihopProgressGeneration = UUID(), profileMutationBlocked = false
  let iosSpeedLabOwnership = IOSSpeedLabOwnership()
  private let bundleKey = "router-vpn.bundle", lanImportKey = "router-vpn.lan-import-host"
@@ -56,12 +57,14 @@ enum IOSExternalExecution {
  var allNodeProfiles: [RouterProfile] { IOSNodeBundleStore.shared.profiles(current: bundle) }
  func nodeRuntimeSummary(_ profile: RouterProfile) -> String { profile.name }
  func apply(_ value: ClientBundle) {
+  selectedMode = selectedLogicalMode
   bundle = value; modes = value.modes; logicalModes = value.logicalModes
   endpoint = value.endpoint; apiToken = value.apiToken; routerAPI = value.routerAPI
   socksHost = value.socks5Host; socksPort = String(value.socks5Port)
  }
  // SHIPPING_PERSISTED_BUNDLE
  // SHIPPING_IMPORT
+ // SHIPPING_LATENCY_COMMIT
  // SHIPPING_SAVE
  // SHIPPING_LEGACY_MODES
  // SHIPPING_SELECT_AND_LINK
@@ -230,6 +233,43 @@ func temporary(_ source: ClientBundle) -> ClientBundle {
   try reject("one incoming bundle cannot merge different owners") { try store.save(collision) }
   try check("owner collision leaves both records intact", store.records == beforeCollision)
 
+  store.reset(); UserDefaults.standard.removeObject(forKey: "router-vpn.bundle")
+  try model.linkNodeBundle(encoded(third))
+  try store.save(second)
+  let directSource = store.bundleData(containing: "third", current: model.bundle)!
+  let directSelection = try encoded(model.bundle!)
+  model.selectedMode = "exact user raw mode"
+  let otherRecord = store.records["bundle-second"]
+  let measurements = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...50).map(Double.init), failed: 0)
+  try check("50 sample median min max and average are real statistics", measurements.samples == 50 && measurements.medianMs == 25.5 && measurements.minMs == 1 && measurements.maxMs == 50 && measurements.averageMs == 25.5)
+  try check("50 sample interpolated p90 and 10 percent trimmed mean are computed", measurements.p90Ms == 45.1 && measurements.trimmedMeanMs == 25.5)
+  let statisticsOwner = try model.iosSpeedLabOwnership.begin {}
+  let writesBeforeStatistics = store.writes
+  store.failAtWrite = writesBeforeStatistics + 2
+  try model.commitNodeLatency(measurements, expectedRecord: directSource, expectedSelection: directSelection, owner: statisticsOwner)
+  store.failAtWrite = nil
+  try check("50 sample statistics use one atomic durable write", store.writes == writesBeforeStatistics + 1 && store.records["bundle-second"] == otherRecord)
+  try check("statistics commit preserves the user's existing mode choice", model.selectedMode == "exact user raw mode")
+  let statisticsData = store.bundleData(containing: "third", current: model.bundle)!
+  let savedStatistics = try JSONDecoder().decode(ClientBundle.self, from: statisticsData).routerProfiles[0]
+  try check("all requested metrics persist in actual profile fields", savedStatistics.latencySamples == 50 && savedStatistics.latencyMinMs == 1 && savedStatistics.latencyMedianMs == 25.5 && savedStatistics.latencyAverageMs == 25.5 && savedStatistics.latencyTrimmedMeanMs == 25.5 && savedStatistics.latencyP90Ms == 45.1 && savedStatistics.latencyMaxMs == 50 && savedStatistics.latencyLastTest != nil)
+  try check("model and defaults adopt identical committed statistics", encoded(model.bundle!) == encoded(JSONDecoder().decode(ClientBundle.self, from: statisticsData)) && UserDefaults.standard.data(forKey: "router-vpn.bundle") == statisticsData)
+  let statisticsRecords = store.records, statisticsDefaults = UserDefaults.standard.data(forKey: "router-vpn.bundle")
+  try reject("stale source cannot overwrite newer statistics") { try model.commitNodeLatency(measurements, expectedRecord: directSource, expectedSelection: directSelection, owner: statisticsOwner) }
+  let currentSelection = try encoded(model.bundle!)
+  let partial = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...49).map(Double.init), failed: 1)
+  try reject("failed sample does not overwrite durable 50 sample ranking") { try model.commitNodeLatency(partial, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
+  let stale = try IOSLatencyResult.summarize(id: "third", name: "third", values: Array(1...50).map(Double.init), failed: 0, measuredAt: Date().addingTimeInterval(-301))
+  try reject("stale result timestamp cannot become fresh ranking") { try model.commitNodeLatency(stale, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
+  try reject("invalid direct values rejected") { _ = try IOSLatencyResult.summarize(id: "third", name: "third", values: [.nan], failed: 0) }
+  store.failWrite = true
+  try reject("statistics durable failure is surfaced") { try model.commitNodeLatency(measurements, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
+  store.failWrite = false
+  try check("failed writes and stale results leave records RAM and defaults untouched", store.records == statisticsRecords && encoded(model.bundle!) == currentSelection && UserDefaults.standard.data(forKey: "router-vpn.bundle") == statisticsDefaults)
+  _ = model.iosSpeedLabOwnership.admit(.profile)
+  try reject("newer user mutation revokes statistics commit") { try model.commitNodeLatency(measurements, expectedRecord: statisticsData, expectedSelection: currentSelection, owner: statisticsOwner) }
+  model.iosSpeedLabOwnership.finish(statisticsOwner)
+
   store.reset()
   let proof = String(repeating: "a", count: 64), router = bundle(try node("legacy-router", proof: String(repeating: "a", count: 64)))
   try store.save(router)
@@ -266,6 +306,7 @@ def main():
     body = SWIFT.replace(" // SHIPPING_STORE", store[store.index("    func link("):store.index("    private func storeDirectory(")])
     body = body.replace(" // SHIPPING_PERSISTED_BUNDLE", model[model.index("    var persistedNodeBundle:"):model.index("    init()")])
     body = body.replace(" // SHIPPING_IMPORT", model[model.index("    func importBundle("):model.index("    func restoreIOSSpeedLabBundle(")])
+    body = body.replace(" // SHIPPING_LATENCY_COMMIT", model[model.index("    func commitNodeLatency("):model.index("    func importFromLAN(")])
     body = body.replace(" // SHIPPING_SAVE", model[model.index("    @discardableResult\n    func saveRouter("):model.index("    private func apply(")])
     body = body.replace(" // SHIPPING_LEGACY_MODES", model[model.index("    private func legacyLogicalModes("):model.index("    func modeCandidates(")])
     body = body.replace(" // SHIPPING_SELECT_AND_LINK", external[external.index("    func selectNode("):external.index("    func connectSelectedExternal(")])
@@ -273,7 +314,7 @@ def main():
         work = Path(folder)
         source = work / "Test.swift"
         source.write_text(body)
-        subprocess.run([swift, "-swift-version", "6", "-module-cache-path", str(work / "module-cache"), str(APP / "Models.swift"), str(APP / "IOSSpeedLabOwnership.swift"), str(source), "-o", str(work / "test")], check=True, timeout=90)
+        subprocess.run([swift, "-swift-version", "6", "-module-cache-path", str(work / "module-cache"), str(APP / "Models.swift"), str(APP / "IOSNodeLatencyStatistics.swift"), str(APP / "IOSSpeedLabOwnership.swift"), str(source), "-o", str(work / "test")], check=True, timeout=90)
         subprocess.run([str(work / "test")], check=True, timeout=30)
 
 

@@ -58,8 +58,15 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 	requireRepoMarkers(t, "client/linux/build-native-app.sh", "routervpn-telemetry-v9.inc", "linux_install_telemetry_v9(&app);")
 
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
-		"class SpeedResult", "speedTest", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
-		"Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps")
+		"class SpeedResult", "speedTest", "speedTest(AndroidNodeStore.Node", "AndroidTelemetryCapture.current", "captured::requireCurrent",
+		"io.drain()", "AndroidMTUMeasurementGate.release(lease)", "AndroidNodeStatistics.save", "downloadMbps", "uploadMbps")
+	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryHttp.java",
+		"/api/benchmark/download", "/api/benchmark/upload", "Authorization", "Accept-Encoding", "expectedNode.equals", "authorize.run()", "io.open()")
+	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryCapture.java",
+		"home.activeNodeId", "home.activeExitId", "home.sessionId", "home.pathGeneration", "AndroidPrivateFileStore.read", "route.check()")
+	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStatistics.java",
+		"samples==50&&failed==0", "source_sha256", "average_ms", "trimmed_mean_ms", "p90_ms", "max_ms", "measured_at_ms", "!r.eligible()")
+	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/AndroidUnifiedNodeCatalog.java", "AndroidNodeStatistics.load(node)", "measured.eligible()")
 	requireRepoMarkers(t, "android/app/src/main/java/com/eabusham/routervpn/ProductActivity.java",
 		"⚡ Fastest", "liveLatency", "Performance", "Forward", "Profiles", "showProfileManager",
 		"Real current VPN path speed", "Routed multihop speeds", "runRoutedHopSpeeds", "telemetry.speedTest(entry", "telemetry.speedTest(exit",
@@ -68,8 +75,27 @@ func TestUnifiedTelemetryAndPerformanceContract(t *testing.T) {
 		"latencyMs", "System.currentTimeMillis", "postInvalidateDelayed", "ROLE_ENTRY", "ROLE_EXIT", "canvas.drawLine")
 
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
-		"IOSSpeedResult", "speedTest", "/api/benchmark/download", "/api/benchmark/upload",
-		"Authorization", "downloadMbps", "uploadMbps", "IOSProbeOnce")
+		"IOSSpeedResult", "speedTest", "IOSNativeTelemetryReply", "IOSCurrentTelemetryCapture",
+		"IOSNativeTelemetryTransaction", "IOSMTUControl.withHold", "commitNodeLatency",
+		"requireDirectResultCurrent", "try Task.checkCancellation()", "sendProviderMessage")
+	requireRepoMarkers(t, "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryChannel.swift",
+		"RouterVPNForwardingPolicy.verifyProof", "/api/benchmark/download", "/api/benchmark/upload",
+		"Authorization: Bearer", "finishCancelled", "pendingWrites", "retryWrites()")
+	requireRepoMarkers(t, "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryTransport.swift",
+		"nativeCancelled, pendingIO == 0", "connection.cancel()", "connection.retire()", "bodyLimit")
+	requireRepoMarkers(t, "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryNativeConnection.swift",
+		"RVPNTunnelTCPConnection(provider: provider", "func retire()", "observation?.invalidate()")
+	requireRepoMarkers(t, "ios/RouterVPN/App/IOSNodeLatencyStatistics.swift",
+		"samples == 50, failed == 0", "latencyTrimmedMeanMs", "latencyLastTest", "measuredAt")
+	requireRepoMarkers(t, "ios/RouterVPN/App/IOSNodeBundleStore.swift", "func recordLatency", "data == expectedRecord", "try commitRecords(next)")
+	requireRepoMarkers(t, "ios/RouterVPN/test_runtime_selection_contract.py", "test_ios_unified_telemetry.py")
+	iosTelemetry, err := os.ReadFile(filepath.Join("..", "..", "ios", "RouterVPN", "App", "IOSUnifiedTelemetry.swift"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(iosTelemetry), "URLSession") {
+		t.Error("iOS current-path telemetry must use its proved native channel, not an unbound app HTTP session")
+	}
 	requireRepoMarkers(t, "ios/RouterVPN/App/IOSUnifiedProductView.swift",
 		"bolt.fill", "livePathMs", "Performance", "IOSForwardingMasterButton().environmentObject(model)", "IOSUnifiedMap",
 		"Run real current VPN path speed", "telemetry.speedTest", "packet", "multihop", "New CUSTOM preset")

@@ -5,6 +5,7 @@ This is the shipping interaction contract for iOS/iPadOS, Android, macOS, Window
 ## Primary surface
 
 - The map is the app's primary surface. It opens first and consumes the upper/main region.
+- Apple platforms use the shared native [Router VPN vector basemap](NATIVE-VECTOR-MAP.md): bundled land outlines and a custom grid/palette replace the generic map content while native coordinate transforms and gestures remain available.
 - Plot only coordinates explicitly stored with linked Router VPN or external/custom nodes. Never infer, geolocate, or fabricate a map pin from an IP address.
 - A selected path is visually distinct. Multihop entry, intermediate and exit nodes use stable, distinct hop colors and a path overlay; custom/external hops use the same path model.
 - Exactly one normal node is selected by default. The node control distinguishes `Router node` from `Custom / external`, with Add/Manage as a drill-in action rather than cluttering the primary surface.

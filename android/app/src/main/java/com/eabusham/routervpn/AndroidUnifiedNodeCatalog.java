@@ -116,8 +116,10 @@ final class AndroidUnifiedNodeCatalog {
         JSONObject profile=selectedProfile(node.file);
         String location=profile==null?"":profile.optString("location","").trim();
         String lastUsed=profile==null?"":profile.optString("last_used_at","").trim();
-        Double latitude=number(profile,"latitude"),longitude=number(profile,"longitude"),latency=number(profile,"latency_median_ms"),p90=number(profile,"latency_p90_ms");
-        int samples=profile==null?0:Math.max(0,profile.optInt("latency_samples",0));
+        Double latitude=number(profile,"latitude"),longitude=number(profile,"longitude"),latency=null,p90=null;
+        int samples=0;
+        AndroidNodeStatistics.Record measured=AndroidNodeStatistics.load(node);
+        if(measured!=null&&measured.eligible()){latency=measured.median;p90=measured.p90;samples=measured.samples;}
         int useCount=profile==null?0:Math.max(0,profile.optInt("use_count",0));
         return new Item(KIND_ROUTER_VPN,node.id,node.name,node.endpoint,"Router VPN","",location,latitude,longitude,latency,p90,samples,useCount,lastUsed,current,node.file);
     }

@@ -197,7 +197,7 @@ def main():
             ("LayeredVpnService.java", "capturedExternal.bindSocket(borrowed.getFileDescriptor());", "", "physical network binding"),
             ("LayeredVpnService.java", "AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?\"The captured external VPN is stopping; its path proof is no longer valid.\":error,false);", "", "Home invalidation before native drain"),
             ("LayeredVpnService.java", "discardPreparedSession(this,sessionId);\n        }\n    }", "\n        }\n    }", "preflight preparation cleanup"),
-            ("LayeredVpnService.java", "generation!=service.lifecycle.get()||", "", "queued external MTU generation"),
+            ("LayeredVpnService.java", "||generation!=service.lifecycle.get()||service.explicitStop||!\"UP\".equals(service.state))return;", "||service.explicitStop||!\"UP\".equals(service.state))return;", "queued external MTU generation"),
             ("LayeredVpnService.java", 'if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', 'if(home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', "queued external MTU native owner"),
             ("LayeredVpnService.java", 'catch(Exception error){publish("STOPPING",activeMode,"MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("MTU controller teardown has not drained.");}', "catch(Exception error){}", "retained failed MTU cleanup"),
         ]

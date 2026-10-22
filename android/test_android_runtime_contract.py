@@ -316,10 +316,14 @@ for executable_contract in (
     "test_android_start_layer_relay_lifecycle.py",
     "test_android_custom_preset_commit.py",
     "test_android_product_dialogs.py",
+    "test_android_current_telemetry.py",
+    "test_android_router_import_ui.py",
+    "test_android_updates.py",
     "test_android_via_entry_measurement.py",
     "test_android_profile_selection_consumers.py",
     "test_android_connection_profiles.py",
     "test_android_mode_orchestrator.py",
+    "test_android_startup_policy.py",
     "test_android_runtime_teardown.py",
     "test_android_service_stop_confirmation.py",
     "test_android_mutation_idle_proof.py",
@@ -340,6 +344,8 @@ subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_multihop_
 subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_android_tor_pinned_contract.py")],
                cwd=ROOT.parent, check=True)
 subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_native_tor_graph_host.py")],
+               cwd=ROOT.parent, check=True)
+subprocess.run([sys.executable, str(ROOT.parent / "deploy/test_mobile_external_graphs_contract.py")],
                cwd=ROOT.parent, check=True)
 
 print("Android runtime truth contract: PASS")

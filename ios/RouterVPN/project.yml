@@ -19,6 +19,12 @@ targets:
     sources:
       - App
       - Resources
+      - ../../client/shared/RouterVPNMapGeometry.swift
+      - ../../client/shared/RouterVPNVectorMap.swift
+      - path: ../../client/shared/map/routervpn-land-110m.json
+        buildPhase: resources
+      - path: ../../client/shared/map/NATURAL-EARTH.txt
+        buildPhase: resources
       - path: ../../LICENSE
         buildPhase: resources
       - path: .deps/xray-core-LICENSE.txt
@@ -39,6 +45,12 @@ targets:
         script: |
           set -euo pipefail
           test -s "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/LICENSE"
+      - name: Verify bundled VPN vector map
+        basedOnDependencyAnalysis: false
+        script: |
+          set -euo pipefail
+          test -s "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/routervpn-land-110m.json"
+          test -s "$TARGET_BUILD_DIR/$UNLOCALIZED_RESOURCES_FOLDER_PATH/NATURAL-EARTH.txt"
       - name: Verify embedded native Tor runtime and source notices
         basedOnDependencyAnalysis: false
         script: |
@@ -73,7 +85,7 @@ targets:
   RouterVPNPacketTunnel:
     type: app-extension
     platform: iOS
-    sources: [PacketTunnel, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift, App/IOSMultihopExecution.swift, App/IOSDNSRetirementReceipts.swift]
+    sources: [PacketTunnel, App/IOSMultihopStartLayer.swift, App/IOSNativePQProfile.swift, App/IOSMultihopExecution.swift, App/IOSDNSRetirementReceipts.swift, App/IOSTelemetryProtocol.swift]
     preBuildScripts:
       - name: Build pinned wireguard-go bridge and Libbox bridge
         basedOnDependencyAnalysis: false

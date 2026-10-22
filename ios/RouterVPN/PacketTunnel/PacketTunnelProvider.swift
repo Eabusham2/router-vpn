@@ -47,6 +47,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var restoredMultihopExecution: String?
     private var forwardingChannel: RouterVPNForwardingChannel?
+    private let telemetryLock = NSLock()
+    private var telemetryChannel: RouterVPNTelemetryChannel?
+    private var telemetryProof: NetworkProofGuard?
     private var networkSettingsOwner: RouterVPNSettingsQueue<NEPacketTunnelNetworkSettings>?
     private let strategyOwnerLock = NSLock()
     private var providerStrategy: RouterVPNProviderStrategy?
@@ -67,6 +70,9 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func handleAppMessage(_ messageData: Data, completionHandler: ((Data?) -> Void)? = nil) {
         guard let completionHandler else { return }
+        if messageData.count <= 1024, (try? IOSTelemetryProtocol.command(messageData)) != nil {
+            completionHandler(currentTelemetryChannel()?.handle(messageData)); return
+        }
         if messageData.count <= 8192,
            let request = try? JSONSerialization.jsonObject(with: messageData) as? [String: Any],
            let operation = request["operation"] as? String, operation.hasPrefix("strategy-") {
@@ -362,13 +368,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
         func activate(_ attempt: RouterVPNStrategyAttempt, completion: @escaping @Sendable (Error?) -> Void) {
             queue.async { [self] in
-                guard let (provider, engine) = provedOwner(attempt), let compiled,
+                guard let (provider, engine) = provedOwner(attempt), let compiled, let capturedGuard,
                       let profile = try? JSONSerialization.jsonObject(with: compiled.profile) as? [String: Any] else {
                     completion(RouterVPNStrategyPolicy.error("The final native strategy owner was replaced.")); return
                 }
                 engine.activateMTU(profile: profile)
                 guard provedOwner(attempt) != nil else { completion(RouterVPNStrategyPolicy.error("The native path changed during MTU activation.")); return }
-                provider.enableForwarding(profileData: compiled.profile, proofID: compiled.nodeID)
+                provider.enableForwarding(profileData: compiled.profile, proofID: compiled.nodeID, captured: capturedGuard)
                 guard provedOwner(attempt) != nil else {
                     provider.forwardingChannel?.invalidate()
                     completion(RouterVPNStrategyPolicy.error("The native path changed during forwarding activation.")); return
@@ -404,9 +410,32 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         func expire() { provider?.currentProviderStrategy()?.invalidate(epoch: epoch) }
     }
 
-    private func enableForwarding(profileData: Data, proofID: String) {
-        guard let profile = try? JSONSerialization.jsonObject(with: profileData) as? [String: Any] else { return }
+    private func enableForwarding(profileData: Data, proofID: String, captured proof: NetworkProofGuard) {
+        guard currentPathProofGuard() === proof,
+              let profile = try? JSONSerialization.jsonObject(with: profileData) as? [String: Any] else { return }
         forwardingChannel?.activate(profile: profile, proofID: proofID)
+        guard let channel = try? RouterVPNTelemetryChannel(profile: profile, proofID: proofID,
+                factory: RouterVPNTelemetryNativeConnection.factory(self, current: {
+                    proof.owner?.currentPathProofGuard() === proof
+                })) else { return }
+        telemetryLock.lock()
+        guard currentPathProofGuard() === proof else { telemetryLock.unlock(); channel.close(); return }
+        let previous = telemetryChannel; telemetryChannel = channel; telemetryProof = proof
+        telemetryLock.unlock()
+        previous?.close()
+    }
+
+    private func currentTelemetryChannel() -> RouterVPNTelemetryChannel? {
+        telemetryLock.lock(); defer { telemetryLock.unlock() }
+        guard let proof = telemetryProof, currentPathProofGuard() === proof else { return nil }
+        return telemetryChannel
+    }
+
+    private func retireTelemetry(_ proof: NetworkProofGuard? = nil) {
+        telemetryLock.lock()
+        guard proof == nil || telemetryProof === proof else { telemetryLock.unlock(); return }
+        let captured = telemetryChannel; telemetryChannel = nil; telemetryProof = nil
+        telemetryLock.unlock(); captured?.close()
     }
 
     private var wireGuardAdapter: WireGuardAdapter?
@@ -421,6 +450,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func startTunnel(options: [String: NSObject]? = nil, completionHandler: @escaping (Error?) -> Void) {
         forwardingChannel?.invalidate()
+        retireTelemetry()
         do {
             maxStartOwnerLock.lock()
             guard maxStartOwner == nil, !maxStartDraining else { maxStartOwnerLock.unlock(); throw RouterVPNMAXPreparation.issue() }
@@ -573,7 +603,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during node proof.")) }
                     return
                 }
-                self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID)
+                self.enableForwarding(profileData: forwardingProfileData, proofID: expectedNodeID, captured: rawPathGuard)
                 guard self.currentPathProofGuard() === rawPathGuard else {
                     adapter.stop { _ in if self.wireGuardAdapter === adapter { self.wireGuardAdapter = nil }; completionHandler(self.tunnelError(57, "WireGuard path changed during forwarding activation.")) }
                     return
@@ -859,7 +889,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     guard let source = self.multihopExecutionSource else { throw IOSMultihopExecution.issue() }
                     try engine.bindMultihopExecutionSource(source, metadata: hopMetadata)
                 } catch { engine.stop(); self.libboxEngine = nil; completionHandler(error); return }
-                self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID)
+                self.enableForwarding(profileData: forwardingProfileData, proofID: exitProofID, captured: comparisonGuard)
                 completionHandler(nil)
             }
         }
@@ -920,7 +950,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             var mtuProfile = selectedProfile
             mtuProfile["node_proof_id"] = provenNodeID
             engine.activateMTU(profile: mtuProfile)
-            self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID)
+            self.enableForwarding(profileData: forwardingProfileData, proofID: provenNodeID, captured: singlePathGuard)
             completionHandler(nil)
         }
     }
@@ -1233,9 +1263,11 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         let guardState = NetworkProofGuard(owner: self)
         pathProofOwnerLock.lock()
         let previous = pathMonitor
+        let previousProof = pathProofGuard
         pathProofGuard = guardState
         pathMonitor = monitor
         pathProofOwnerLock.unlock()
+        if let previousProof { retireTelemetry(previousProof) }
         previous?.cancel()
         monitor.pathUpdateHandler = { path in guardState.handle(path) }
         monitor.start(queue: pathMonitorQueue)
@@ -1252,6 +1284,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         monitor?.cancel()
         libboxEngine?.invalidateMultihop()
         forwardingChannel?.invalidate()
+        retireTelemetry(guardState)
         if let strategy = currentProviderStrategy() {
             strategy.invalidate(epoch: libboxEngine?.settingsEpoch ?? strategy.currentEpoch)
             return
@@ -1268,16 +1301,19 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         pathProofGuard = nil
         pathProofOwnerLock.unlock()
         monitor?.cancel()
+        retireTelemetry(captured)
     }
 
     private func clearPathProofGuard() {
         forwardingChannel?.invalidate()
         pathProofOwnerLock.lock()
         let monitor = pathMonitor
+        let captured = pathProofGuard
         pathMonitor = nil
         pathProofGuard = nil
         pathProofOwnerLock.unlock()
         monitor?.cancel()
+        if let captured { retireTelemetry(captured) }
     }
 
     private func currentPathProofGuard() -> NetworkProofGuard? {
@@ -1334,6 +1370,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
 
     override func sleep(completionHandler: @escaping () -> Void) {
         forwardingChannel?.invalidate()
+        retireTelemetry()
         maxStartOwnerLock.lock(); let pending = maxStartOwner
         if pending != nil { maxStartGeneration = UUID(); maxStartDraining = true }
         maxStartOwnerLock.unlock()

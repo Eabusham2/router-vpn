@@ -7,10 +7,12 @@ RUN mkdir -p dist \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-client-${GOOS}-${GOARCH}${ext}" ./cmd/client; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-start-layer-relay-${GOOS}-${GOARCH}${ext}" ./cmd/start-layer-relay; \
+      CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-update-${GOOS}-${GOARCH}${ext}" ./cmd/app-update; \
     done \
  && for arch in amd64 arm64; do \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPN-${arch}.exe" ./cmd/windows-app-launcher; \
-      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortable-${arch}.exe" ./cmd/portable-launcher; \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortable-${arch}.exe" ./cmd/portable-bootstrap; \
+      CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNPortableCore-${arch}.exe" ./cmd/portable-launcher; \
       CGO_ENABLED=0 GOOS=windows GOARCH=$arch go build -trimpath -ldflags='-s -w -H=windowsgui' -o "dist/RouterVPNSetupRuntime-${arch}.exe" ./cmd/portable-runtime-setup; \
     done \
  && for target in linux/amd64 linux/arm64; do \
@@ -23,7 +25,18 @@ RUN mkdir -p dist \
 # if a supported Windows/Portable component is unexpectedly absent. The
 # native AppKit/GTK SDK environments are intentionally not installed here;
 # macOS/Linux desktop fallback requires the exact-SHA native GitHub artifact.
-FROM golang:1.24.13-bookworm AS go-toolchain
+FROM golang:1.26.3-bookworm AS go-toolchain
+
+# The small AWG-only compatibility runtime is cross-built at image creation.
+# The complete CGO/Rust/Cronet runtime below arrives from the same-source host
+# producer; neither engine is compiled or started on the live home node.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS amnezia
+RUN apk add --no-cache git python3
+WORKDIR /src
+COPY . /src
+RUN set -eu; for arch in amd64 arm64; do \
+      python3 /src/deploy/build-amnezia-runtime.py "windows/$arch" "/amnezia/windows-$arch"; \
+    done
 
 FROM ghcr.io/sagernet/sing-box:v1.13.12 AS singbox
 FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS xray
@@ -49,6 +62,11 @@ WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
 COPY --from=xray /xray /src/dist/xray
+COPY --from=amnezia /amnezia /src/dist/amnezia
+# Explicit inputs make an unstaged/partial native artifact a Docker build
+# failure, rather than a later incomplete package served by the router.
+COPY dist/native-runtime/windows-amd64/ /src/dist/native-runtime/windows-amd64/
+COPY dist/native-runtime/windows-arm64/ /src/dist/native-runtime/windows-arm64/
 # Mode validators resolve the code-owned runtime, not the private node bundle.
 # Keep the receipt and license alongside the native binary; a PATH-only copy
 # cannot satisfy the corrected-engine integrity contract.
@@ -63,6 +81,7 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && /bin/bash -n /usr/local/bin/router-vpn-init-entrypoint \
  && /bin/bash -n /src/server/scripts/apply-runtime.sh \
  && go version \
+ && python3 /src/server/scripts/build-download-on-demand.py --verify-desktop-runtimes \
  && python3 /src/client/verify-bundled-xray.py /src/runtime/xray >/dev/null \
  && /usr/local/bin/rosenpass --version >/dev/null \
  && command -v qrencode >/dev/null \
@@ -87,6 +106,10 @@ RUN find /src -type f \( -name '*.sh' -o -name '*.py' \) -exec sed -i 's/\r$//' 
  && test -f /src/dist/RouterVPN-arm64.exe \
  && test -f /src/dist/RouterVPNPortable-amd64.exe \
  && test -f /src/dist/RouterVPNPortable-arm64.exe \
+ && test -f /src/dist/RouterVPNPortableCore-amd64.exe \
+ && test -f /src/dist/RouterVPNPortableCore-arm64.exe \
+ && test -f /src/dist/router-vpn-update-windows-amd64.exe \
+ && test -f /src/dist/router-vpn-update-windows-arm64.exe \
  && test -f /src/dist/RouterVPNSetupRuntime-amd64.exe \
  && test -f /src/dist/RouterVPNSetupRuntime-arm64.exe
 ENTRYPOINT ["/bin/bash", "/usr/local/bin/router-vpn-init-entrypoint"]

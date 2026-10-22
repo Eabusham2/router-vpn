@@ -15,11 +15,30 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtimes:
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: windows
+
   arm64:
+    needs: native-runtimes
     name: Native ARM64 setup assets + ephemeral downloads + mode validation
     runs-on: ubuntu-24.04-arm
     steps:
       - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-windows-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Stage verified native fallback components
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime windows/amd64 windows/arm64
       - uses: docker/setup-buildx-action@v3
 
       - name: Static checks
@@ -190,6 +209,7 @@ jobs:
             ! grep -Eq '(^|/)router-vpn-bundle\.json$' "$portable_members"
             ! grep -Eq "$root/(App/RouterVPN/|Data/)generated/.+" "$portable_members"
             unzip -p "$portable" "$root/Data/routers.json" | python3 -c 'import json,sys; x=json.load(sys.stdin); assert x.get("selected_id","")=="" and x.get("profiles",[])==[]'
+            python3 deploy/native-runtime-bundle.py verify-package "windows/$arch" "$portable"
             ! grep -q "$root/App/AppInfo/" "$portable_members"
             rm -f "$portable" "$portable_members"
           done

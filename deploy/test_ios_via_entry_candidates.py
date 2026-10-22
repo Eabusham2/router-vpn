@@ -37,9 +37,12 @@ public enum NWEndpoint {
  public struct Host:Sendable{let value:String;public init(_ value:String){self.value=value}}
  public struct Port:Sendable{let value:UInt16;public init?(rawValue:UInt16){guard rawValue>0 else{return nil};value=rawValue}}
 }
-public struct NWParameters:Sendable{public static let tcp=NWParameters()}
-public enum NWInterface { public enum InterfaceType:Sendable {case other,loopback,wifi} }
-public struct NWPath:Sendable{public enum Status:Sendable{case satisfied,unsatisfied};public let status:Status}
+public final class NWParameters:@unchecked Sendable{public static var tcp:NWParameters{NWParameters()};public var requiredInterface:NWInterface?}
+public struct NWInterface:Sendable { public enum InterfaceType:Sendable {case other,loopback,wifi,cellular,wiredEthernet};public let type:InterfaceType;public let name:String }
+public struct NWPath:Sendable{public enum Status:Sendable{case satisfied,unsatisfied};public let status:Status
+ public var availableInterfaces:[NWInterface]{[NWInterface(type:.wifi,name:"physical-wifi")]}
+ public func usesInterfaceType(_ type:NWInterface.InterfaceType)->Bool{type == .wifi}
+}
 public final class NWTest:@unchecked Sendable {
  public static let shared=NWTest()
  private let lock=NSLock()
@@ -69,9 +72,10 @@ public final class NWConnection:@unchecked Sendable {
  public enum State:Sendable{case ready,failed(URLError),cancelled,setup}
  public var stateUpdateHandler:(@Sendable(State)->Void)?
  private let host:String,port:UInt16
+ private let requiredInterface:String?
  private var queue:DispatchQueue?
- public init(host:NWEndpoint.Host,port:NWEndpoint.Port,using:NWParameters){self.host=host.value;self.port=port.value}
- public func start(queue:DispatchQueue){self.queue=queue;NWTest.shared.record("start:"+host+":"+String(port));queue.asyncAfter(deadline:.now()+0.003){
+ public init(host:NWEndpoint.Host,port:NWEndpoint.Port,using:NWParameters){self.host=host.value;self.port=port.value;self.requiredInterface=using.requiredInterface?.name}
+ public func start(queue:DispatchQueue){self.queue=queue;if let requiredInterface{NWTest.shared.record("bound:"+requiredInterface)};NWTest.shared.record("start:"+host+":"+String(port));queue.asyncAfter(deadline:.now()+0.003){
    if self.host.hasSuffix(".99"){self.stateUpdateHandler?(.failed(URLError(.cannotConnectToHost)))}else{self.stateUpdateHandler?(.ready)}
  }}
  public func cancel(){NWTest.shared.record("cancel:"+host);NWTest.shared.cancelled{[self] in queue?.async{NWTest.shared.record("drained:"+self.host);self.stateUpdateHandler?(.cancelled)}}}
@@ -231,6 +235,16 @@ import Network
    check("IPv6-Off cannot probe a candidate over an excluded physical route",value.medianMS==nil && NWTest.shared.events.isEmpty)
   }
   do {
+   NWTest.shared.reset();let captured=try await IOSViaEntryNetwork.shared.snapshot()
+   _ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured)
+   check("direct measurements require captured physical interface",NWTest.shared.events.contains("bound:physical-wifi"))
+   NWTest.shared.reset();_ = try await IOSViaEntryTCP.probe(host:"203.0.113.22",port:443,timeoutMS:100)
+   check("routed candidate probe never bypasses tunnel with physical binding",!NWTest.shared.events.contains(where:{$0.hasPrefix("bound:")}))
+   NWTest.shared.changed();NWTest.shared.reset()
+   do{_ = try await IOSViaEntryTCP.probeDirect(host:"203.0.113.22",port:443,timeoutMS:100,network:captured);check("stale physical interface must reject",false)}catch{}
+   check("stale physical interface cannot fall back to unbound socket",NWTest.shared.events.isEmpty)
+  }
+  do {
    let model=try fresh(),runner=IOSViaEntryLatency();CandidateFault.wrongRaw=true
    await runner.measure(model:model,entryID:"entry",mode:"wg",candidates:candidates(model))
    check("substituted entry transport cannot emit candidate sockets",runner.receipt==nil && NWTest.shared.events.isEmpty && model.bundle?.selectedRouterID=="original")
@@ -289,6 +303,9 @@ def main():
             'cancel substituted for acknowledged socket drain': (
                 'if let connection { connection.cancel() } else { deliver() }',
                 'if let connection { connection.cancel(); self.connection = nil; deliver() } else { deliver() }'),
+            'direct probe lost its required physical interface': (
+                'if let physical { parameters.requiredInterface = physical }',
+                '_ = physical'),
         }
         for name, (before, after) in mutations.items():
             assert code.count(before) == 1, f'Mutation anchor changed: {name}'

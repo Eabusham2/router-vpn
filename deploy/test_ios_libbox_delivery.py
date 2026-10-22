@@ -18,6 +18,9 @@ spec = importlib.util.spec_from_file_location('apple_dns_boundary', ROOT / 'depl
 DNS = importlib.util.module_from_spec(spec); spec.loader.exec_module(DNS)
 LIBBOX = r'''
 import Foundation
+#if !canImport(ObjectiveC)
+public typealias NSErrorPointer = UnsafeMutablePointer<NSError?>?
+#endif
 public final class LibboxTestState: @unchecked Sendable {
     public static let shared = LibboxTestState()
     private let lock = NSLock()
@@ -183,32 +186,35 @@ public func LibboxNewCommandServer(_ platform: AnyObject, _ handler: AnyObject, 
 public final class LibboxTorTestState: @unchecked Sendable {
     public static let shared = LibboxTorTestState()
     private let lock = NSLock()
-    private var block = false
+    private var block = false, nativeError = false
     private var payload: String?
     private var request: LibboxRouterTorProofRequest?
     private var roots: [String] = []
-    public func configure(block: Bool = false, payload: String? = nil) { lock.lock(); self.block=block; self.payload=payload; request=nil; lock.unlock() }
-    public func make(_ session: String) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload); request=value; return value }
+    public func configure(block: Bool = false, payload: String? = nil, nativeError: Bool = false) { lock.lock(); self.block=block; self.payload=payload; self.nativeError=nativeError; request=nil; lock.unlock() }
+    public func make(_ session: String) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload,nativeError); request=value; return value }
     public func current() -> LibboxRouterTorProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
     public func saveRoot(_ path: String) { lock.lock(); roots.append(path); lock.unlock() }
     public func stateRoots() -> [String] { lock.lock(); defer { lock.unlock() }; return roots }
 }
 // Deliberately non-Sendable, like the actual generated gomobile reference.
 public final class LibboxRouterTorProofRequest {
-    private let session: String, block: Bool, payload: String?
+    private let session: String, block: Bool, payload: String?, nativeError: Bool
     private let lock = NSLock()
     private var cancels = 0, proved = false
     private let release = DispatchSemaphore(value:0)
     public let entered = DispatchSemaphore(value:0)
-    init(_ session: String, _ block: Bool, _ payload: String?) { self.session=session;self.block=block;self.payload=payload }
-    public func run() throws -> String {
+    init(_ session: String, _ block: Bool, _ payload: String?, _ nativeError: Bool) { self.session=session;self.block=block;self.payload=payload;self.nativeError=nativeError }
+    // gobind v0.1.12: nonnull NSString plus NSErrorPointer, not Swift throws.
+    public func run(_ failure: NSErrorPointer) -> String {
         entered.signal()
         if block { _ = release.wait(timeout:.now()+4) }
         lock.lock(); proved=true; lock.unlock()
+        if nativeError { failure?.pointee=NSError(domain:"NativeTorRun",code:37) }
         if let payload { return payload }
         let clock=ISO8601DateFormatter();clock.formatOptions=[.withInternetDateTime,.withFractionalSeconds]
         let value:[String:Any] = ["session_id":session,"ip":"203.0.113.77","is_tor":true,"checked_at":clock.string(from:Date()),"dns_proven":true]
-        return String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self)
+        do { return String(decoding:try JSONSerialization.data(withJSONObject:value),as:UTF8.self) }
+        catch { failure?.pointee=error as NSError;return "" }
     }
     // Intentionally permits late Run success after cancel. The shipping host
     // must reject it even when a native callback arrives after its owner left.
@@ -226,13 +232,13 @@ public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServ
 public final class LibboxExternalTestState: @unchecked Sendable {
     public static let shared = LibboxExternalTestState()
     private let lock = NSLock()
-    private var block = false, invalid = false
+    private var block = false, invalid = false, nativeError = false
     private var request: LibboxRouterExternalProofRequest?
     private var capture: [String] = []
-    public func configure(block: Bool = false, invalid: Bool = false) { lock.lock(); self.block=block; self.invalid=invalid; request=nil; lock.unlock() }
+    public func configure(block: Bool = false, invalid: Bool = false, nativeError: Bool = false) { lock.lock(); self.block=block; self.invalid=invalid; self.nativeError=nativeError; request=nil; lock.unlock() }
     public func make(_ source: String, _ capture: String, _ session: String) -> LibboxRouterExternalProofRequest {
         lock.lock(); defer { lock.unlock() }
-        self.capture=[source,capture,session]; let value=LibboxRouterExternalProofRequest(session,block,invalid);request=value;return value
+        self.capture=[source,capture,session]; let value=LibboxRouterExternalProofRequest(session,block,invalid,nativeError);request=value;return value
     }
     public func current() -> LibboxRouterExternalProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
     public func captured() -> [String] { lock.lock(); defer { lock.unlock() }; return capture }
@@ -240,15 +246,17 @@ public final class LibboxExternalTestState: @unchecked Sendable {
 // Foreign native references deliberately remain non-Sendable. Result-policy
 // validation is exercised separately against shipping Swift and the Go compiler.
 public final class LibboxRouterExternalProofRequest {
-    private let session: String, block: Bool, invalid: Bool
+    private let session: String, block: Bool, invalid: Bool, nativeError: Bool
     private let lock=NSLock(), release=DispatchSemaphore(value:0)
     private var cancels=0,proved=false
     public let entered=DispatchSemaphore(value:0)
-    init(_ session:String,_ block:Bool,_ invalid:Bool){self.session=session;self.block=block;self.invalid=invalid}
-    public func run() throws -> String {
+    init(_ session:String,_ block:Bool,_ invalid:Bool,_ nativeError:Bool){self.session=session;self.block=block;self.invalid=invalid;self.nativeError=nativeError}
+    public func run(_ failure: NSErrorPointer) -> String {
         entered.signal();if block {_ = release.wait(timeout:.now()+4)}
         lock.lock();proved = !invalid;lock.unlock()
-        return String(decoding:try JSONSerialization.data(withJSONObject:["session_id":session,"valid": !invalid]),as:UTF8.self)
+        if nativeError { failure?.pointee=NSError(domain:"NativeExternalRun",code:41) }
+        do { return String(decoding:try JSONSerialization.data(withJSONObject:["session_id":session,"valid": !invalid]),as:UTF8.self) }
+        catch { failure?.pointee=error as NSError;return "" }
     }
     public func cancel(){lock.lock();cancels+=1;lock.unlock();release.signal()}
     public func close()throws{cancel()}
@@ -372,9 +380,11 @@ final class CompletionState: @unchecked Sendable {
     private let lock = NSLock()
     private var calls = 0
     private var failures = 0
+    private var nativeError: NSError?
     let done = DispatchSemaphore(value: 0)
-    func finish(_ error: Error?) { lock.lock(); calls += 1; if error != nil { failures += 1 }; lock.unlock(); done.signal() }
+    func finish(_ error: Error?) { lock.lock(); calls += 1; if let error { failures += 1;nativeError=error as NSError }; lock.unlock(); done.signal() }
     func values() -> (Int, Int) { lock.lock(); defer { lock.unlock() }; return (calls, failures) }
+    func matches(_ domain: String, _ code: Int) -> Bool { lock.lock(); defer { lock.unlock() }; return nativeError?.domain==domain && nativeError?.code==code }
     func wait() -> Bool { done.wait(timeout: .now() + 5) == .success }
 }
 @main struct Tests {
@@ -607,8 +617,8 @@ final class CompletionState: @unchecked Sendable {
         let externalConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\"}],\"outbounds\":[] }"
         let externalFiles=["sing-box.json":Data(externalConfig.utf8)]
         let externalPolicy=RouterVPNExternalPolicy(sourceConfig:"exact source bytes",capture:"frozen profile/policy",config:externalConfig)
-        for action in ["stable","stop","network","pause","invalid"] {
-            state.configure();externalState.configure(block:["stop","network","pause"].contains(action),invalid:action=="invalid")
+        for action in ["stable","stop","network","pause","invalid","native-error"] {
+            state.configure();externalState.configure(block:["stop","network","pause"].contains(action),invalid:action=="invalid",nativeError:action=="native-error")
             let provider=PacketTunnelProvider(),owner=RouterVPNLibboxEngine(tunnel:provider)
             try owner.start(files:externalFiles,strict:true,externalPolicy:externalPolicy)
             let server=state.currentServer()!,done=CompletionState()
@@ -620,6 +630,7 @@ final class CompletionState: @unchecked Sendable {
                 check("external interruption cancels its native handle",request.cancelCount()>0)
             }
             check("external result delivered exactly once",done.wait() && done.values()==(1,action=="stable" ? 0:1))
+            if action=="native-error" { check("external nonempty result cannot hide the native NSError",done.matches("NativeExternalRun",41)) }
             check("external proof receives exact compiler source and capture",Array(externalState.captured().prefix(2))==[externalPolicy.sourceConfig,externalPolicy.capture])
             check("external startup uses bounded owned service",server.strategyCalls().first=="start")
             owner.stop();request.cancel()
@@ -643,6 +654,16 @@ final class CompletionState: @unchecked Sendable {
             check("external compiler bytes cannot be silently rewritten",rejected)
         }
         let torState=LibboxTorTestState.shared
+        do {
+            torState.configure(nativeError:true)
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(files:torFiles,strict:true)
+            let server=state.currentServer()!
+            owner.proveTor(sessionID:"tor-session",profile:torProfile,completion:done.finish)
+            check("Tor nonempty result cannot hide the native NSError",done.wait() && done.values()==(1,1) && done.matches("NativeTorRun",37))
+            check("failed Tor native result cannot start subsequent DNS proof",server.strategyCalls()==["start"])
+            owner.stop()
+        }
         for profile in ["", "[]", "null",String(repeating:" ",count:4*1024*1024+1)] {
             torState.configure()
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()

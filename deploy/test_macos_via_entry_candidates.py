@@ -139,6 +139,31 @@ func drained(_ request: String = nonce) -> [String: Any] { ["ok": true, "request
   for (entry, ids, badNonce) in [("", ["a"], nonce), ("a", ["a"], nonce), ("entry", [], nonce), ("entry", ["a", "a"], nonce), ("entry", [""], nonce), ("entry", (1...65).map(String.init), nonce), ("entry", ["a"], "bad"), ("entry", ["a"], String(repeating: "A", count: 32))] {
    try reject("invalid capture rejected before request") { _ = try MacViaEntryCandidateSession().begin(entryID: entry, candidates: ids, nonce: badNonce) }
   }
+  for (base, mode) in [("wg", "wg"), ("awg", "awg2-fast"), ("awg", "awg2-strong")] {
+   for requested in ["auto", base] {
+    var value = receipt(); value["entry_base"] = base; value["entry_mode"] = mode
+    let routed = MacViaEntryCandidateSession()
+    let ticket = try routed.begin(entryID: "entry", candidates: candidates, base: requested, nonce: nonce)
+    try check("ticket freezes selected entry base", ticket.base == requested)
+    try check("exact WG/AWG receipt accepted", routed.accept(json(value), for: ticket, now: now))
+    try check("actual raw mode retained", routed.receipt?.entryBase == base && routed.receipt?.entryMode == mode)
+    try check("AWG not mislabeled WG", routed.receipt?.entryLabel == (mode == "wg" ? "WireGuard" : mode == "awg2-fast" ? "AmneziaWG Fast" : "AmneziaWG Strong"))
+    _ = try routed.beginValidation(exitID: "fast", now: now)
+    var echo = validation(); echo["entry_base"] = base; echo["entry_mode"] = mode == "awg2-fast" ? "awg2-strong" : "awg2-fast"
+    try reject("selection refuses another valid raw mode") { _ = try routed.acceptValidation(json(echo), for: ticket, exitID: "fast", now: now) }
+    echo["entry_mode"] = mode
+    try check("selection accepts exact measured raw mode", routed.acceptValidation(json(echo), for: ticket, exitID: "fast", now: now))
+    _ = routed.beginDrain(.close); _ = try routed.acceptDrain(json(drained()), for: ticket); try routed.closeIdle()
+    try reject("opposite explicit base cannot borrow receipt") {
+     _ = try MacViaEntryCandidateReceipt(data: json(value), requestID: nonce, entryID: "entry", candidates: candidates, base: base == "wg" ? "awg" : "wg", now: now)
+    }
+   }
+  }
+  for (base, mode) in [("wg", "awg2-fast"), ("awg", "wg"), ("awg", "auto"), ("auto", "wg"), ("AWG", "awg2-fast")] {
+   var value = receipt(); value["entry_base"] = base; value["entry_mode"] = mode
+   try reject("Auto never authorizes a mismatched base/mode") { _ = try MacViaEntryCandidateReceipt(data: json(value), requestID: nonce, entryID: "entry", candidates: candidates, base: "auto", now: now) }
+  }
+  try reject("unsupported requested base") { _ = try MacViaEntryCandidateSession().begin(entryID: "entry", candidates: candidates, base: "unknown") }
   let reservation = MacViaEntryCandidateReservation.shared, lease = reservation.acquire()!
   try check("modal holds shared native mutation reservation", reservation.active && reservation.acquire() == nil)
   reservation.release(UUID()); try check("foreign cleanup cannot unlock UI", reservation.active)
@@ -177,7 +202,7 @@ def main():
         'guard adopt(id)', 'transaction.failedDrain(captured)', 'NSApp.runModal(for: panel)',
         'while !controller.retired', 'MacViaEntryCandidateReservation.shared.release(lease)',
         'contextCurrent()', 'WireGuard', 'TCP response', 'Use Connect separately.',
-        '"samples": 5', '"base": "wg"', 'timeout: 180', 'timeout: 15', 'windowShouldClose',
+        '"samples": 5', '"base": captured.base', 'timeout: 180', 'timeout: 15', 'windowShouldClose',
     ]:
         assert marker in body, marker
     assert body.index('transaction.acceptValidation(') < body.index('guard adopt(id)')
@@ -186,6 +211,9 @@ def main():
     assert 'multihopEntryPopup.action = #selector(unifiedEntryCandidatesChanged)' in product
     assert 'MacViaEntryCandidateReservation.shared.active { return true }' in product
     assert 'Retest exits via entry' in unified
+    assert 'baseRow.addArrangedSubview(basePopup)' in unified
+    assert 'self.multihopBaseChoice() == base' in body
+    assert '"base": base' in product
     build = (MAC / "build-native-app.sh").read_text()
     assert '"$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC"' in build
     assert 'python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"' in build

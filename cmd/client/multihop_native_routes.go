@@ -30,8 +30,8 @@ func nativeMultihopPlatformSupported() bool {
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
-	if err := validateMultihopStartLayer(control); err != nil {
-		return multihopSelection{}, err
+	if q.Base != "" && q.Base != "auto" && q.Base != "wg" && q.Base != "awg" {
+		return multihopSelection{}, errors.New("native multihop entry base must be Auto, WireGuard or AmneziaWG")
 	}
 	entryID := strings.TrimSpace(q.EntryID)
 	exitID := strings.TrimSpace(q.ExitID)
@@ -55,6 +55,13 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if !ok {
 		return multihopSelection{}, fmt.Errorf("exit node %q is not linked", exitID)
 	}
+	// A layer belongs to its saved node. Both selected nodes are fully compiled
+	// below; a third control profile cannot supply a substitute layer.
+	if control.ID != entry.ID && control.ID != exit.ID {
+		if err := validateMultihopStartLayer(control); err != nil {
+			return multihopSelection{}, err
+		}
+	}
 	if (entry.NodeKind != "" && entry.NodeKind != "router-vpn") || (exit.NodeKind != "" && exit.NodeKind != "router-vpn") {
 		return multihopSelection{}, errors.New("Router VPN node-to-node multihop requires Router VPN entry and exit profiles; use External Connect when the exit is a custom external node")
 	}
@@ -62,8 +69,8 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 		return multihopSelection{}, errors.New("both multihop nodes need public endpoints")
 	}
 	base := resolveMultihopEntryBase(control, entry, q.Base)
-	if base != "wg" {
-		return multihopSelection{}, errors.New("first native Windows/macOS multihop path supports standard WireGuard entry only")
+	if base != "wg" && base != "awg" {
+		return multihopSelection{}, errors.New("native Windows/macOS multihop requires a captured WireGuard or AmneziaWG entry")
 	}
 	exitMode := strings.TrimSpace(q.ExitMode)
 	if exitMode == "auto" && q.Execution == "auto" {
@@ -123,7 +130,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"comparison":                 comparisonProgress(a),
 		"execution":                  graph.Execution,
 		"supported_executions":       []string{"local", "server", "auto"},
-		"supported_entry_bases":      []string{"wg"},
+		"supported_entry_bases":      []string{"wg", "awg"},
 		"supported_exit_modes":       []string{"shadowsocks", "hysteria2"},
 		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
 		"standard_exits":             standard,
@@ -136,6 +143,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		}(),
 		"connected":          state.Connected && state.Mode == "multihop" && graphOK,
 		"runtime_entry_base": actualBase,
+		"runtime_entry_mode": graph.EntryMode,
 		"runtime_exit_mode":  actualMode,
 		"nodes":              multihopNodeSummaries(profiles),
 	})
@@ -206,6 +214,12 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	sel, err = captureNativeMultihopForApp(a, sel, []string{sel.ExitMode})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+
 	// Preserve any existing graph until its owning runtime has actually stopped.
 	// Failed teardown must keep exact entry/exit identity available for recovery.
 	sessionTrackerFor(a).declareRequest("multihop", sel.Base)
@@ -257,7 +271,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, message, status)
 		return
 	}
-	proofErr := a.proveMultihopExit(sel.Exit)
+	proofErr := a.proveNativeMultihop(sel, cmd)
 	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 		message, cleanupFailed := a.multihopStopFailure(cmd, cancelErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -269,7 +283,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if proofErr != nil {
-		msg, cleanupFailed := a.multihopStopFailure(cmd, "multihop exit proof failed: "+proofErr.Error())
+		msg, cleanupFailed := a.multihopStopFailure(cmd, "multihop entry/exit proof failed: "+proofErr.Error())
 		a.mu.Lock()
 		a.state.Mode = "multihop"
 		a.state.LogicalMode = "multihop"
@@ -322,5 +336,5 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "exit_mode": sel.ExitMode, "exit_path_proof": "passed-through-exit-only-local-proxy", "route": "client TUN -> exit proxy outbound -> entry WireGuard endpoint -> exit node -> Internet"})
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "entry_mode": sel.Native.entryMode, "exit_mode": sel.ExitMode, "exit_path_proof": "passed-through-exit-only-local-proxy", "route": "client TUN -> captured exit proxy -> captured entry endpoint -> exit node -> Internet"})
 }

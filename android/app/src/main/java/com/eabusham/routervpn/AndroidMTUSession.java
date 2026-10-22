@@ -33,6 +33,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     // callbacks on another thread, and those callbacks synchronize on this.
     private final Object lifecycle = new Object();
     private final ConnectivityManager connectivity;
+    private final Context context;
     private final SharedPreferences preferences;
     private final Failure failure;
     private final InterfaceReader interfaces;
@@ -53,6 +54,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     }
     // Only the OS readback boundary is replaceable by lifecycle tests.
     AndroidMTUSession(Context context, Failure failure, InterfaceReader interfaces) {
+        this.context=context.getApplicationContext();
         connectivity = (ConnectivityManager) context.getSystemService(Context.CONNECTIVITY_SERVICE);
         preferences = context.getSharedPreferences("routervpn-mtu-v3", Context.MODE_PRIVATE);
         this.failure = failure;
@@ -152,6 +154,15 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     private static boolean same(RouterMTUState a, RouterMTUState b) {
         return a != null && b != null && a.getSession().equals(b.getSession()) && a.getPath().equals(b.getPath())
                 && a.getInterface().equals(b.getInterface()) && a.getMTU() == b.getMTU();
+    }
+    synchronized AndroidTelemetryNetwork captureTelemetryNetwork() throws Exception {
+        RouterMTUState captured=captureMTU();
+        if(captured==null||changing)throw new IllegalStateException("The retained native TUN is not stable for current telemetry.");
+        return AndroidTelemetryNetwork.named(context,name,()->{
+            synchronized(AndroidMTUSession.this){
+                if(changing||!same(captured,captureMTU()))throw new IllegalStateException("The captured native TUN or MTU generation changed.");
+            }
+        });
     }
     @Override public synchronized void beginMTUChange(RouterMTUState expected) throws Exception {
         if (changing || !same(captureMTU(), expected)) throw new IllegalStateException("MTU mutation lost its captured VPN.");

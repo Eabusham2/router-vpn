@@ -704,6 +704,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
        try check("Server/Compare retains entire native entry mode and Start Layer",captured["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(captured["entry"]!)==json(profile))
        try check("Server/Compare owns real local transport and selector",tagged(graph,"routervpn-execution-local")["type"] as? String=="shadowsocks" && tagged(graph,"routervpn-execution-local")["detour"] as? String=="external-entry" && tagged(graph,"custom-exit")["type"] as? String=="selector")
        try check("external execution leaves entry graph cryptography intact",tagged(graph,"external-entry")["type"] as? String==tagged(previous,oldFinal)["type"] as? String && built.executionRequested==execution)
+       if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
+        let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+"-"+execution+".json")
+        try Data(built.config.utf8).write(to:file,options:.withoutOverwriting)
+       }
        executionGraphs+=1
       }
      }

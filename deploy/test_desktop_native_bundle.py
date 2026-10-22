@@ -71,6 +71,20 @@ def test(bundle, target):
         BUILD.reuse(moved, target)
         checks += 1
         print(f'{checks} complete native runtime receipt/relocation checks passed for {target}', flush=True)
+        # These captured graphs retain both nodes' DNS, cover, authenticated
+        # Start Layers and exact WG/AWG parameters. Only the complete shipping
+        # runtime owns those registrations; the AWG diagnostic CLI does not.
+        env = BUILD.environment(target)
+        env['ROUTERVPN_VIA_ENTRY_NATIVE_CLI'] = str(engine)
+        # Go1.26.3 src/internal/platform/supported.go supports the race
+        # detector on all six shipping targets except Windows ARM64. `dist
+        # list` has no -race flag; an unrelated compiler failure must not be
+        # caught and silently retried without race instrumentation.
+        race = [] if target == 'windows/arm64' else ['-race']
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s',
+                        './cmd/client', '-run', '^Test(NativeMultihop|NativeServerGraph)'],
+                       cwd=ROOT, env=env, check=True, timeout=300)
+        print('Complete native runtime accepted captured WG/AWG Local and Server graphs with exact layers, DNS and cover; stale proof/source regressions passed', flush=True)
 
 
 if __name__ == '__main__':

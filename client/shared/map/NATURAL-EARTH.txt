@@ -1,0 +1,22 @@
+Made with Natural Earth.
+
+Dataset: Natural Earth 1:110m physical land polygons, version 4.1.0
+Source: https://naciscdn.org/naturalearth/110m/physical/ne_110m_land.zip
+Archive SHA-256: 1926c621afd6ac67c3f36639bb1236134a48d82226dc675d3e3df53d02d2a3de
+Dataset page: https://www.naturalearthdata.com/downloads/110m-physical-vectors/110m-land/
+Terms: https://www.naturalearthdata.com/about/terms-of-use/
+
+Natural Earth raster and vector data is public domain. Its authors permit
+redistribution and modification for personal, educational and commercial use.
+The archived VERSION.txt identifies 4.1.0 (the download page still says 4.0.0).
+
+The bundled file contains land outline rings only, rounded to 0.0001 degree
+integer coordinates. It contains no political borders, place names, device
+locations, VPN nodes, credentials, tracking identifiers or online tile URL.
+Native rendering clamps polar latitude only for the Mercator projection; the
+stored source geometry retains its full WGS84 coordinate range.
+
+Reproduce from the pinned archive:
+  python3 deploy/prepare-vpn-map-land.py /path/to/ne_110m_land.zip
+Verify the committed result:
+  python3 deploy/prepare-vpn-map-land.py /path/to/ne_110m_land.zip --check

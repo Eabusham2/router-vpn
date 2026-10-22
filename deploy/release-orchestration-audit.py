@@ -112,7 +112,8 @@ for marker in (
     assert marker in build, f"Build all lost release-order marker: {marker}"
 
 assert "\n  push:\n" not in publish, "ARM64 publisher must not bypass Build-all ordering with an autonomous push trigger"
-assert "validate-source:" in publish and "needs: validate-source" in publish, "ARM64 publication lost its whole-source validation prerequisite"
+assert "validate-source:" in publish and "needs: [validate-source, native-runtimes]" in publish, "ARM64 publication lost its source/native artifact validation prerequisites"
+assert "needs.validate-source.result == 'success'" in publish, "A skipped native producer must never bypass source validation"
 assert "go test ./cmd/update-controller -count=1" in publish, "ARM64 publication no longer compiles the updater before pushing images"
 assert "python3 deploy/durable-state-syntax-audit.py" in publish, "ARM64 publication lost durability syntax preflight"
 assert "python3 deploy/server-image-dependency-audit.py" in publish, "ARM64 publication lost server dependency pin preflight"

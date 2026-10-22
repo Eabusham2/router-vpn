@@ -39,6 +39,21 @@ final class NativeAmneziaWGController implements Tunnel {
     State getState() { return state; }
     String getError() { return lastError; }
 
+    AndroidTelemetryNetwork captureTelemetryNetwork() throws Exception {
+        Config config=activeConfig;File source=activeBundle;
+        if(config==null||source==null)throw new IllegalStateException("AmneziaWG has no retained native configuration.");
+        java.util.ArrayList<String> addresses=new java.util.ArrayList<>();
+        for(org.amnezia.awg.config.InetNetwork address:config.getInterface().getAddresses())addresses.add(address.toString());
+        return AndroidTelemetryNetwork.addressed(appContext,addresses,()->{
+            if(activeConfig!=config||activeBundle!=source||state!=State.UP||backend.getState(this)!=State.UP)
+                throw new IllegalStateException("The retained AmneziaWG session changed.");
+            java.util.Set<org.amnezia.awg.crypto.Key> expected=new java.util.HashSet<>();for(org.amnezia.awg.config.Peer peer:config.getPeers())expected.add(peer.getPublicKey());
+            java.util.Set<org.amnezia.awg.crypto.Key> actual=new java.util.HashSet<>(java.util.Arrays.asList(backend.getStatistics(this).peers()));
+            if(expected.isEmpty()||!actual.equals(expected))throw new IllegalStateException("Native AmneziaWG peer readback does not match the retained configuration.");
+            if(activeConfig!=config||activeBundle!=source||state!=State.UP)throw new IllegalStateException("AmneziaWG changed during native readback.");
+        });
+    }
+
     /** Direct raw-tunnel use owns the shared Home/session state. */
     void connect(File privateBundle, Callback callback) { connectInternal(privateBundle, "awg2-fast", true, callback); }
 

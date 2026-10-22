@@ -154,7 +154,11 @@ for marker in (
 need(
     "server/init/Dockerfile",
     "FROM golang:1.24.13-alpine AS binaries",
-    "FROM golang:1.24.13-bookworm AS go-toolchain",
+    "FROM golang:1.26.3-bookworm AS go-toolchain",
+    "build-download-on-demand.py --verify-desktop-runtimes",
+    "COPY --from=amnezia /amnezia /src/dist/amnezia",
+    "COPY dist/native-runtime/windows-amd64/ /src/dist/native-runtime/windows-amd64/",
+    "COPY dist/native-runtime/windows-arm64/ /src/dist/native-runtime/windows-arm64/",
     'dist/RouterVPN-${arch}.exe',
     "prebuilt components",
     "native AppKit/GTK SDK environments are intentionally not installed here",

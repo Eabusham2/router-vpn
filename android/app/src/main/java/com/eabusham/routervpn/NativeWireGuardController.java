@@ -76,6 +76,21 @@ final class NativeWireGuardController implements Tunnel {
 
     long generation() { return sessionGeneration.get(); }
 
+    AndroidTelemetryNetwork captureTelemetryNetwork() throws Exception {
+        Config config=activeConfig;File source=activeBundle;long owner=sessionGeneration.get(),path=pathGeneration.get();
+        if(config==null||source==null)throw new IllegalStateException("WireGuard has no retained native configuration.");
+        java.util.ArrayList<String> addresses=new java.util.ArrayList<>();
+        for(com.wireguard.config.InetNetwork address:config.getInterface().getAddresses())addresses.add(address.toString());
+        return AndroidTelemetryNetwork.addressed(appContext,addresses,()->{
+            if(activeConfig!=config||activeBundle!=source||sessionGeneration.get()!=owner||pathGeneration.get()!=path||state!=State.UP||backend.getState(this)!=State.UP)
+                throw new IllegalStateException("The retained WireGuard session changed.");
+            java.util.Set<com.wireguard.crypto.Key> expected=new java.util.HashSet<>();for(com.wireguard.config.Peer peer:config.getPeers())expected.add(peer.getPublicKey());
+            java.util.Set<com.wireguard.crypto.Key> actual=new java.util.HashSet<>(java.util.Arrays.asList(backend.getStatistics(this).peers()));
+            if(expected.isEmpty()||!actual.equals(expected))throw new IllegalStateException("Native WireGuard peer readback does not match the retained configuration.");
+            if(activeConfig!=config||sessionGeneration.get()!=owner||pathGeneration.get()!=path||state!=State.UP)throw new IllegalStateException("WireGuard changed during native readback.");
+        });
+    }
+
     private long beginGeneration() { pathGeneration.incrementAndGet(); return sessionGeneration.incrementAndGet(); }
 
     private void connectInternal(File privateBundle, boolean publishHomeState, Callback callback) {

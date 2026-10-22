@@ -67,6 +67,7 @@ final class AndroidPrivateFileStore {
  static void write(File file,byte[] bytes,int max)throws Exception{if(bytes.length==0||bytes.length>max)throw new IOException("bad size");Files.createDirectories(file.getParentFile().toPath());Files.write(file.toPath(),bytes);writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}}
  static void remove(File file,int max)throws Exception{Files.deleteIfExists(file.toPath());}
 }
+final class AndroidStartupPolicy {static void cancelPending(){}}
 final class AndroidVpnMutationGuard {static boolean busy;static boolean isBusy(android.content.Context context){return busy;}}
 final class AndroidHomeStateStore {static final class Snapshot{boolean connected;String phase="off";}static Snapshot snapshot(android.content.Context c){return new Snapshot();}}
 final class AndroidRuntimeRegistry {
@@ -99,7 +100,7 @@ final class ProductConnectSurface extends Context {
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
   int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry exit;String mode,execution;
-  boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
+  boolean cancelStartupPending(){return false;}boolean isActiveOrTransitioning(){return false;}void disconnect(Object callback){throw new AssertionError("unexpected disconnect");}
   void connectExternal(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,boolean direct,String mode,String execution,Object callback){starts++;this.entry=entry;this.exit=exit;this.direct=direct;this.mode=mode;this.execution=execution;}
   void connectMultihop(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String mode,String execution,String entryMode,Object callback){throw new AssertionError("external selection became Router multihop");}
   void connect(String mode,List<String> layers,Object callback){throw new AssertionError("external selection used unrelated active Router");}
@@ -190,6 +191,11 @@ public final class ConnectionProfilesHarness {
    check(!f.store.currentExternalPath(exit.id).direct()&&f.store.currentExternalPath(exit.id).entry.id.equals(f.first.id),"default Home lost its captured entry");check(original.equals(AndroidStandardExitStore.snapshot(f.exits.get(exit.id))),"profile restoration rewrote missing/blank Home or transport credentials");
   }
  }
+ static void externalStartup(Path root)throws Exception{
+  for(boolean tor:new boolean[]{false,true}){Fixture f=new Fixture(root);String id=tor?"external-b":"external-a";AndroidStandardExitStore.Entry exit=f.exits.get(id);exit.startupMode="last";exit.autoConnect=true;f.exits.save(exit);f.store.selectExternalPath(exit,f.first,"wg");var r=f.store.add("Startup profile");JSONObject row=f.row();check(row.getJSONObject("external_startup").getString("startup_mode").equals("last")&&row.getJSONObject("external_startup").getBoolean("auto_connect"),"external startup missing from connection profile");exit.startupMode="manual";exit.autoConnect=false;f.exits.save(exit);f.otherSelection();f.store.load(r.id);AndroidStandardExitStore.Entry loaded=f.exits.get(id);check(loaded.startupMode.equals("last")&&loaded.autoConnect,"connection profile did not restore external startup choice");
+   JSONObject bad=f.row();bad.getJSONObject("external_startup").put("auto_connect","true");f.row(bad);State before=new State(f);rejected(()->f.store.load(r.id),"typed external startup");before.same(f,"invalid external startup did not mutate selection or credentials");
+  }
+ }
  static void routerRoundtrip(Path root)throws Exception{
   Fixture f=new Fixture(root);f.prefs.edit().putString("mode","custom:captured").putString("custom_presets","[{\"name\":\"captured\",\"layers\":[\"hysteria2\",\"shadowsocks\"]}]").putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","auto").putString("multihop_entry_mode","wg").commit();
   var r=f.store.add("Router graph");f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();f.store.load(r.id);
@@ -227,7 +233,7 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);var exit=f.exits.get("external-a");exit.policy.put("fastest_dns_host","9.9.9.9").put("fastest_dns_latency_ms",4.5).put("dns_results",new JSONArray().put(new JSONObject().put("name","Quad9").put("address","9.9.9.9").put("family","IPv4").put("working",true).put("latency_ms",4.5))).put("effective_mtu",9000)
    .put("dns_bootstrap",new JSONObject().put("server",new JSONObject().put("type","tls").put("tag","bootstrap").put("server","9.9.9.9").put("server_port",8853).put("detour","custom-exit").put("tls",new JSONObject().put("enabled",true).put("server_name","resolver.example").put("certificate",new JSONArray().put("public-certificate")))).put("query",new JSONObject().put("server","bootstrap").put("strategy","prefer_ipv4").put("disable_cache",true).put("rewrite_ttl",7).put("timeout","2300ms")));
   f.exits.save(exit);f.store.selectExternalPath(exit,null,"wg");var saved=f.store.add("Evidence");JSONObject captured=f.row().getJSONObject("external_policy");check(!captured.has("effective_mtu")&&captured.getJSONObject("dns_bootstrap").toString().equals(exit.policy.getJSONObject("dns_bootstrap").toString())&&captured.getJSONArray("dns_results").length()==1,"capture complete DNS evidence, omit stale MTU");f.changeExternal(exit.id);f.store.load(saved.id);check(!f.exits.get(exit.id).policy.has("effective_mtu"),"restore cannot resurrect stale MTU proof");
-  JSONObject old=f.row();old.remove("external_policy");old.remove("external_protocol");old.remove("external_public_ip");old.put("multihop_exit_mode","shadowsocks");f.row(old);f.changeExternal(exit.id);String current=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));f.otherSelection();f.store.load(saved.id);check(AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"legacy external profile remains selection-only");
+  JSONObject old=f.row();old.remove("external_policy");old.remove("external_startup");old.remove("external_protocol");old.remove("external_public_ip");old.put("multihop_exit_mode","shadowsocks");f.row(old);f.changeExternal(exit.id);String current=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));f.otherSelection();f.store.load(saved.id);check(AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"legacy external profile remains selection-only");
   Files.delete(f.rows.toPath());Files.writeString(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"),new JSONObject().put("schema_version",1).put("profiles",new JSONArray().put(old)).toString());f.otherSelection();f.store.load(saved.id);check(f.rows().getInt("schema_version")==4&&!Files.exists(f.context.getFilesDir().toPath().resolve("connection-profiles-v1.json"))&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(current),"schema1 path migration preserves selection-only external semantics");
  }
  static void activeSelectionEdges(Path root)throws Exception{
@@ -243,7 +249,7 @@ public final class ConnectionProfilesHarness {
   f.prefs.values.put("custom_presets",42);before=new State(f);rejected(()->f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg"),"wrong preference key type");before.same(f,"typed preference preflight");f.prefs.values.remove("custom_presets");
   var home=f.exits.get("external-a");home.policy.put("dns_mode","home");f.exits.save(home);before=new State(f);final var selectedHome=home;rejected(()->f.store.selectExternalPath(selectedHome,null,"wg"),"direct Home without entry");before.same(f,"Home rejection");f.store.selectExternalPath(home,f.first,"wg");check(!f.store.currentExternalPath(home.id).direct(),"Home keeps captured Router entry");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

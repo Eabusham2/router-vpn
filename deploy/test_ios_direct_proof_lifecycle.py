@@ -87,11 +87,13 @@ final class NETunnelProviderProtocol {var includeAllNetworks=true;var enforceRou
  var duringExecution:(()->Void)?,executionFails=false
  var arms=0
  var forwarded=0
+ var retiredTelemetry:[NetworkProofGuard]=[]
  var duringForwarding:(()->Void)?
  func tunnelError(_ code:Int,_ message:String)->NSError{NSError(domain:"RouterVPN.Test",code:code,userInfo:[NSLocalizedDescriptionKey:message])}
  func armNetworkProofGuard()->NetworkProofGuard{arms += 1;pathMonitor?.cancel();pathMonitor=Monitor();let value=NetworkProofGuard();pathProofGuard=value;return value}
  func currentPathProofGuard()->NetworkProofGuard?{pathProofGuard}
- func enableForwarding(profileData:Data,proofID:String){forwarded += 1;duringForwarding?()}
+ func enableForwarding(profileData:Data,proofID:String,captured:NetworkProofGuard){precondition(pathProofGuard===captured);forwarded += 1;duringForwarding?()}
+ func retireTelemetry(_ captured:NetworkProofGuard?=nil){if let captured{retiredTelemetry.append(captured)}}
  func proveSelectedNode(url:URL,expectedNodeID:String,proxyPort:Int?,completionHandler:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completionHandler}
  func proveExternalExit(expectedPublicIP:String,proxyPort:Int,completion:@escaping(Error?)->Void){precondition(pathProofGuard != nil);proofCallback=completion}
  func beginExternal(tor:Bool=false,native:Bool=false,execution:Bool=false,_ done:@escaping(Error?)->Void)throws{multihopExecutionSource=execution ? IOSMultihopExecution.Source():nil;try startExternalLibbox(provider:[:],selectedProfile:["id":"saved-exit","tor":tor,"native":native,"execution":execution,"external":["protocol":tor ? "tor":"socks5"]],strict:true,completionHandler:done)}
@@ -163,9 +165,10 @@ TEST=r'''
      check("only original engine stopped",kind=="raw" ? adapter?.stops==1 : engine?.stops==1)
      if event != "forwarding-change"{check("failed proof does not enable forwarding",p.forwarded==0)}
      if ["dns-change","dns-error"].contains(event){check("DNS activation failure prevents MTU and execution adoption",engine?.externalMTU==0 && engine?.torMTU==0 && engine?.executionBindings==0)}
-     if event=="proof-error"{check("failed proof releases own monitor",p.pathProofGuard==nil && p.pathMonitor==nil && monitor?.cancelled==true)}
+     if event=="proof-error"{check("failed proof releases own monitor",p.pathProofGuard==nil && p.pathMonitor==nil && monitor?.cancelled==true);check("failed proof retires only its captured telemetry",p.retiredTelemetry.count==1 && p.retiredTelemetry[0]===guardState)}
      if event=="replacement"{
       check("replacement network guard survives",p.pathProofGuard===nextGuard && p.pathMonitor===nextMonitor && nextMonitor?.cancelled==false)
+      check("stale cleanup cannot retire newer telemetry",p.retiredTelemetry.isEmpty)
       check("replacement engine is not cleared or stopped",kind=="raw" ? (p.wireGuardAdapter===nextAdapter && nextAdapter?.stops==0):(p.libboxEngine===nextEngine && nextEngine?.stops==0))
      }
     }

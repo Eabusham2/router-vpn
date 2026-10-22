@@ -43,7 +43,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  native-runtimes:
+    name: Build and verify complete native runtimes
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: linux
+
   native-linux:
+    needs: native-runtimes
     name: Native GTK ${{ matrix.arch }}
     strategy:
       fail-fast: false
@@ -56,9 +63,12 @@ jobs:
     runs-on: ${{ matrix.runner }}
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.3'
           cache: false
       - name: Install native GUI build dependencies
         run: |
@@ -70,6 +80,14 @@ jobs:
         run: python3 deploy/test-linux-via-entry-candidates-ui.py
       - name: Test controller and shared contracts
         run: go test ./cmd/client ./internal/common
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
+      - name: Verify and stage exact native runtime payloads
+        shell: bash
+        run: python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/${{ matrix.arch }}
       - name: Build and package native Linux app
         shell: bash
         run: |

@@ -20,6 +20,8 @@ expected to stream/delete it after the request.
 from __future__ import annotations
 
 import argparse
+import hashlib
+import importlib.util
 import json
 import os
 import runpy
@@ -52,6 +54,7 @@ verify_parent_chain = _VERIFIED["verify_parent_chain"]
 _OWNED_TEMP = runpy.run_path(str(Path(__file__).with_name("owned-temp.py")))
 create_owned_temp = _OWNED_TEMP["create_owned_temp"]
 cleanup_owned_temp = _OWNED_TEMP["cleanup_owned_temp"]
+_DESKTOP_RUNTIME_BUILDERS = None
 
 PACKAGE_MAP = {
     "router-vpn-windows-amd64.zip": ("RouterVPN-Windows-amd64.zip", "windows", "amd64"),
@@ -314,6 +317,65 @@ def copy_tree(src: Path, dst: Path, required: bool = True) -> None:
         raise ValueError(f"package source directory changed during traversal: {src}")
 
 
+def _desktop_runtime_builders():
+    """Load verification policy from this image's code, never a package input."""
+    global _DESKTOP_RUNTIME_BUILDERS
+    if _DESKTOP_RUNTIME_BUILDERS is None:
+        deploy = Path(__file__).resolve().parents[2] / "deploy"
+        loaded = {}
+        for kind, filename in (("native", "build-native-runtime.py"), ("amnezia", "build-amnezia-runtime.py")):
+            spec = importlib.util.spec_from_file_location("router_vpn_fallback_" + kind, deploy / filename)
+            if spec is None or spec.loader is None:
+                raise RuntimeError("missing same-image desktop runtime verification policy")
+            module = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(module)
+            loaded[kind] = module
+        _DESKTOP_RUNTIME_BUILDERS = loaded
+    return _DESKTOP_RUNTIME_BUILDERS
+
+
+def _verify_desktop_runtime(directory: Path, target: str, kind: str):
+    """Inspect sealed bytes and Go metadata; never build or run a native engine."""
+    module = _desktop_runtime_builders()[kind]
+    receipt_name = "NATIVE-RUNTIME.json" if kind == "native" else "AMNEZIA-RUNTIME.json"
+    parents = parent_chain_snapshot(directory / receipt_name)
+    env = module.environment(target)
+    # The init image already contains Go 1.26.3. Metadata inspection must not
+    # fetch a toolchain or module, even when a caller inherited an auto setting.
+    env.update(GOTOOLCHAIN="local", GOPROXY="off", GOSUMDB="off")
+    if kind == "native":
+        receipt = module.reuse(directory, target, env=env)
+        licenses = {}
+    else:
+        names = {"sing-box-amnezia.exe", receipt_name, "SING-BOX-LICENSE", "AMNEZIA-LICENSE"}
+        if directory.is_symlink() or not directory.is_dir() or {p.name for p in directory.iterdir()} != names:
+            raise ValueError("AmneziaWG runtime payload set is incomplete or contains unowned files")
+        receipt = module.reuse(directory, target, module.digest(), env)
+        # Its existing receipt predates individual license hashes. Preserve the
+        # exact same-image license bytes across the verified copy as well.
+        licenses = {name: hashlib.sha256(_VERIFIED["read_verified_regular"](directory / name, 128 * 1024)).hexdigest()
+                    for name in ("SING-BOX-LICENSE", "AMNEZIA-LICENSE")}
+    verify_parent_chain(parents)
+    return {"receipt": receipt, "licenses": licenses}
+
+
+def verify_desktop_runtimes(src_root: Path, arch: str):
+    if arch not in {"amd64", "arm64"}:
+        raise ValueError("unsupported router-local native runtime architecture")
+    target = "windows/" + arch
+    return {kind: _verify_desktop_runtime(src_root / "dist" / source / ("windows-" + arch), target, kind)
+            for kind, source in (("native", "native-runtime"), ("amnezia", "amnezia"))}
+
+
+def copy_desktop_runtimes(src_root: Path, root: Path, arch: str) -> None:
+    expected = verify_desktop_runtimes(src_root, arch)
+    for kind, source in (("native", "native-runtime"), ("amnezia", "amnezia")):
+        destination = root / "runtime" / kind
+        copy_tree(src_root / "dist" / source / ("windows-" + arch), destination)
+        if _verify_desktop_runtime(destination, "windows/" + arch, kind) != expected[kind]:
+            raise ValueError("desktop runtime changed while assembling the requested package")
+
+
 def write_blank_routers(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(
@@ -491,9 +553,13 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
         data.mkdir(parents=True, exist_ok=True)
         copy_generic_runtime(src_root, app)
         copy_tree(src_root / "dist" / "xray" / f"windows-{arch}", app / "runtime" / "xray")
+        copy_desktop_runtimes(src_root, app, arch)
         copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), app / "router-vpn-client.exe")
         copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), app / "router-vpn-dns.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-start-layer-relay-windows-{arch}.exe"), app / "router-vpn-start-layer-relay.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-update-windows-{arch}.exe"), app / "router-vpn-update.exe")
         copy_file(require_dist(compiled_root, f"RouterVPNPortable-{arch}.exe"), root / "RouterVPNPortable.exe")
+        copy_file(require_dist(compiled_root, f"RouterVPNPortableCore-{arch}.exe"), root / "RouterVPNPortableCore.exe")
         copy_file(require_dist(compiled_root, f"RouterVPNSetupRuntime-{arch}.exe"), root / "RouterVPNSetupRuntime.exe")
         copy_file(src_root / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
         materialize_icons(src_root, app)
@@ -515,8 +581,11 @@ def build_local(work: Path, name: str, src_root: Path, compiled_root: Path, base
         root = work / f"RouterVPN-Windows-{arch}"
         copy_generic_runtime(src_root, root)
         copy_tree(src_root / "dist" / "xray" / f"windows-{arch}", root / "runtime" / "xray")
+        copy_desktop_runtimes(src_root, root, arch)
         copy_file(require_dist(compiled_root, f"router-vpn-client-windows-{arch}.exe"), root / "router-vpn-client.exe")
         copy_file(require_dist(compiled_root, f"router-vpn-dns-windows-{arch}.exe"), root / "router-vpn-dns.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-start-layer-relay-windows-{arch}.exe"), root / "router-vpn-start-layer-relay.exe")
+        copy_file(require_dist(compiled_root, f"router-vpn-update-windows-{arch}.exe"), root / "router-vpn-update.exe")
         copy_file(require_dist(compiled_root, f"RouterVPN-{arch}.exe"), root / "RouterVPN.exe")
         copy_file(src_root / "client" / "install-windows.ps1", root / "install-windows.ps1")
         copy_file(src_root / "client" / "Setup-Windows-Runtime.ps1", root / "Setup-Windows-Runtime.ps1")
@@ -567,13 +636,18 @@ def _supported_components(family: str, arch: str) -> list[tuple[str, str, bool]]
         return [
             (f"router-vpn-client-windows-{arch}.exe", "./cmd/client", False),
             (f"router-vpn-dns-windows-{arch}.exe", "./cmd/dnsproxy", False),
+            (f"router-vpn-start-layer-relay-windows-{arch}.exe", "./cmd/start-layer-relay", False),
+            (f"router-vpn-update-windows-{arch}.exe", "./cmd/app-update", False),
             (f"RouterVPN-{arch}.exe", "./cmd/windows-app-launcher", True),
         ]
     if family == "portable":
         return [
             (f"router-vpn-client-windows-{arch}.exe", "./cmd/client", False),
             (f"router-vpn-dns-windows-{arch}.exe", "./cmd/dnsproxy", False),
-            (f"RouterVPNPortable-{arch}.exe", "./cmd/portable-launcher", True),
+            (f"router-vpn-start-layer-relay-windows-{arch}.exe", "./cmd/start-layer-relay", False),
+            (f"router-vpn-update-windows-{arch}.exe", "./cmd/app-update", False),
+            (f"RouterVPNPortable-{arch}.exe", "./cmd/portable-bootstrap", True),
+            (f"RouterVPNPortableCore-{arch}.exe", "./cmd/portable-launcher", True),
             (f"RouterVPNSetupRuntime-{arch}.exe", "./cmd/portable-runtime-setup", True),
         ]
     return []
@@ -592,6 +666,9 @@ def compile_requested(work: Path, name: str, src_root: Path) -> Path:
     if family not in {"windows", "portable"}:
         raise ValueError(f"unsupported router-local fallback family: {family}")
 
+    # Missing/corrupt sealed engines cannot be repaired by compiling the Go
+    # controller. Fail before starting that optional bounded compilation.
+    verify_desktop_runtimes(src_root, arch)
     components = _supported_components(family, arch)
     prebuilt_dist = src_root / "dist"
     if components and all((prebuilt_dist / filename).is_file() for filename, _, _ in components):
@@ -646,10 +723,22 @@ def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--base", default="/opt/router-vpn")
     ap.add_argument("--source-root", default="/src")
-    ap.add_argument("--name", required=True, choices=sorted(PACKAGE_MAP))
-    ap.add_argument("--output", required=True)
+    ap.add_argument("--name", choices=sorted(PACKAGE_MAP))
+    ap.add_argument("--output")
     ap.add_argument("--source-archive")
+    ap.add_argument("--verify-desktop-runtimes", action="store_true",
+                    help="verify both same-image Windows runtime inputs without building a package")
     args = ap.parse_args()
+
+    if args.verify_desktop_runtimes:
+        if args.name or args.output or args.source_archive:
+            ap.error("runtime verification cannot be combined with a package request")
+        for arch in ("amd64", "arm64"):
+            verify_desktop_runtimes(Path(args.source_root), arch)
+        print("Same-image Windows native and AmneziaWG runtimes verified")
+        return 0
+    if not args.name or not args.output:
+        ap.error("a package request requires --name and --output")
 
     output = Path(args.output).resolve()
     base = Path(args.base).resolve()

@@ -10,13 +10,23 @@ permissions:
   contents: read
 
 jobs:
+  native-runtimes:
+    name: Build and verify complete native runtimes
+    uses: ./.github/workflows/desktop-native-runtime.yml
+    with:
+      platform: all
+
   product-self-test:
+    needs: native-runtimes
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.24.x'
+          go-version: '1.26.3'
           cache: false
       - name: Desktop icon generator self-test
         shell: pwsh
@@ -27,6 +37,11 @@ jobs:
           $ErrorActionPreference='Stop'
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/RouterVPN-Windows-App.ps1 -SelfTest
           if($LASTEXITCODE -ne 0){ throw "Native Windows product self-test failed" }
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: RouterVPN-native-runtime-*-${{ github.sha }}
+          path: ${{ runner.temp }}/native-runtime-artifacts
+          merge-multiple: true
       - name: Build generic packages
         shell: bash
         run: |
@@ -46,6 +61,7 @@ jobs:
           chmod +x "$TOOL_DIR/zip"
           export PATH="$TOOL_DIR:$PATH"
           ./deploy/build-client.sh
+          python3 deploy/native-runtime-bundle.py stage "$RUNNER_TEMP/native-runtime-artifacts" dist/native-runtime linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64
           ./deploy/package-builds.sh
       - name: Normal Windows amd64 launcher and installer contract
         shell: pwsh
@@ -61,30 +77,13 @@ jobs:
           $p=Start-Process -FilePath (Join-Path $root.FullName 'RouterVPN.exe') -ArgumentList '--self-test' -Wait -PassThru
           if($p.ExitCode -ne 0){ throw "Normal Windows launcher self-test failed with exit code $($p.ExitCode)" }
 
-          # Install into an isolated ProgramData tree so CI proves the Start Menu
-          # integration and upgrade-state preservation without changing the runner.
-          $sandbox=Join-Path $env:RUNNER_TEMP 'routervpn-programdata'
-          New-Item -ItemType Directory -Path $sandbox -Force | Out-Null
-          $realProgramData=$env:ProgramData
-          try {
-            $env:ProgramData=$sandbox
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'install-windows.ps1') -Bundle $root.FullName
-            if($LASTEXITCODE -ne 0){ throw 'Windows installer first pass failed' }
-            $installed=Join-Path $sandbox 'RouterVPN'
-            $shortcut=Join-Path $sandbox 'Microsoft\Windows\Start Menu\Programs\Router VPN.lnk'
-            foreach($path in @((Join-Path $installed 'RouterVPN.exe'),(Join-Path $installed 'RouterVPN.ico'),$shortcut)){
-              if(-not(Test-Path -LiteralPath $path)){ throw "Installed application integration missing: $path" }
-            }
-            Set-Content -LiteralPath (Join-Path $installed 'routers.json') -Encoding UTF8 -Value '{"schema_version":3,"selected_id":"sentinel","profiles":[{"id":"sentinel","name":"keep-me"}]}'
-            & powershell.exe -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root.FullName 'install-windows.ps1') -Bundle $root.FullName
-            if($LASTEXITCODE -ne 0){ throw 'Windows installer upgrade pass failed' }
-            $stored=Get-Content -Raw -LiteralPath (Join-Path $installed 'routers.json') | ConvertFrom-Json
-            if($stored.selected_id -ne 'sentinel'){ throw 'Windows upgrade replaced the existing linked-node store' }
-            $p2=Start-Process -FilePath (Join-Path $installed 'RouterVPN.exe') -ArgumentList '--self-test' -Wait -PassThru
-            if($p2.ExitCode -ne 0){ throw "Installed Router VPN self-test failed with exit code $($p2.ExitCode)" }
-          } finally {
-            $env:ProgramData=$realProgramData
-          }
+          # Run the shipped ownership/rollback fixture, then the actual installer
+          # and engine verifiers in an isolated temporary ProgramData tree.
+          $runtimeTest=Join-Path $root.FullName 'client\test-windows-runtime-install.ps1'
+          & $runtimeTest -SourceRoot $root.FullName
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
+          if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 runtime installation fixture failed'}
+          & (Join-Path $root.FullName 'client\test-windows-installed-runtimes.ps1') -PackageRoot $root.FullName -ExpectedArchitecture amd64
       - name: Normal Windows arm64 archive contract
         shell: pwsh
         run: |

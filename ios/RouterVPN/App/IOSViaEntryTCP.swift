@@ -9,16 +9,27 @@ final class IOSViaEntryNetwork: @unchecked Sendable {
     private let monitor = NWPathMonitor(prohibitedInterfaceTypes: [.other, .loopback])
     private var generation: UInt64 = 0
     private var available = false
+    private var physical: NWInterface?
 
     private init() {
         monitor.pathUpdateHandler = { [weak self] path in
             guard let self else { return }
-            self.lock.lock(); self.generation &+= 1; self.available = path.status == .satisfied; self.lock.unlock()
+            let physical = path.availableInterfaces.first {
+                [.wifi, .cellular, .wiredEthernet].contains($0.type) && path.usesInterfaceType($0.type)
+            }
+            self.lock.lock(); self.generation &+= 1
+            self.available = path.status == .satisfied && physical != nil; self.physical = physical
+            self.lock.unlock()
         }
         monitor.start(queue: DispatchQueue(label: "routervpn.via-entry.network"))
     }
 
     var current: UInt64? { lock.lock(); defer { lock.unlock() }; return available ? generation : nil }
+
+    func physicalInterface(for captured: UInt64) -> NWInterface? {
+        lock.lock(); defer { lock.unlock() }
+        return available && generation == captured ? physical : nil
+    }
 
     func snapshot() async throws -> UInt64 {
         for _ in 0..<40 {
@@ -96,10 +107,21 @@ enum IOSViaEntryTCP {
     }
 
     static func probe(host: String, port: UInt16, timeoutMS: Int) async throws -> Double {
+        try await probe(host: host, port: port, timeoutMS: timeoutMS, physical: nil)
+    }
+
+    /// Direct rankings must bypass any other installed VPN. A missing or
+    /// changed physical interface is a failure, never an unbound fallback.
+    static func probeDirect(host: String, port: UInt16, timeoutMS: Int, network: UInt64) async throws -> Double {
+        guard let physical = IOSViaEntryNetwork.shared.physicalInterface(for: network) else { throw CancellationError() }
+        return try await probe(host: host, port: port, timeoutMS: timeoutMS, physical: physical)
+    }
+
+    private static func probe(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?) async throws -> Double {
         let state = Probe()
         let result = try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
-                state.start(host: host, port: port, timeoutMS: timeoutMS, continuation: continuation)
+                state.start(host: host, port: port, timeoutMS: timeoutMS, physical: physical, continuation: continuation)
             }
         } onCancel: { state.cancel() }
         try Task.checkCancellation()
@@ -114,12 +136,14 @@ enum IOSViaEntryTCP {
         private var continuation: CheckedContinuation<Double, Error>?
         private var outcome: Result<Double, Error>?
 
-        func start(host: String, port: UInt16, timeoutMS: Int, continuation: CheckedContinuation<Double, Error>) {
+        func start(host: String, port: UInt16, timeoutMS: Int, physical: NWInterface?, continuation: CheckedContinuation<Double, Error>) {
             queue.async {
                 self.continuation = continuation
                 if self.outcome != nil { self.deliver(); return }
                 guard let port = NWEndpoint.Port(rawValue: port) else { self.finish(.failure(URLError(.badURL))); return }
-                let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: .tcp)
+                let parameters = NWParameters.tcp
+                if let physical { parameters.requiredInterface = physical }
+                let connection = NWConnection(host: NWEndpoint.Host(host), port: port, using: parameters)
                 self.connection = connection
                 let started = DispatchTime.now().uptimeNanoseconds
                 connection.stateUpdateHandler = { state in

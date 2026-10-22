@@ -225,6 +225,7 @@ public final class StandardExitActivity extends Activity {
         CheckBox blockLAN=new CheckBox(this);blockLAN.setText("Block private LAN ranges");blockLAN.setChecked(!policy.optBoolean("home_lan_access",false));form.addView(blockLAN);
         EditText lan=field("Private LAN CIDRs to block, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Manual interface MTU, 1280–9000 (blank uses automatic)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if("manual".equals(policy.optString("mtu_policy"))||"fixed".equals(policy.optString("mtu_policy")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
+        final ExternalStartupControls startup=new ExternalStartupControls(form,saved);
         final JSONObject initialEditor;
         try{initialEditor=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);}
         catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
@@ -239,6 +240,7 @@ public final class StandardExitActivity extends Activity {
                 if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
                 JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);
                 entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);
+                startup.apply(entry);
                 exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
             }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges and MTU. The saved profile was not changed.");}
         }));
@@ -372,6 +374,21 @@ public final class StandardExitActivity extends Activity {
                 }).setNegativeButton("Keep current connection",null).show();
     }
 
+    private final class ExternalStartupControls {
+        private final Spinner mode;
+        private final CheckBox enabled;
+        private final String[] values={"smart-auto","auto","last","manual"};
+        ExternalStartupControls(LinearLayout form,AndroidStandardExitStore.Entry entry){
+            mode=choice(new String[]{"SMART AUTO — saved external path","AUTO — saved external path","Last mode — saved external protocol","Manual / stay disconnected"});
+            int selected=0;if(entry!=null)for(int i=0;i<values.length;i++)if(values[i].equals(entry.startupMode))selected=i;mode.setSelection(selected);
+            form.addView(text("Startup behavior",14,true));form.addView(mode);
+            enabled=new CheckBox(StandardExitActivity.this);enabled.setText("Auto-connect this saved external path when the app starts");enabled.setChecked(entry!=null&&entry.autoConnect);form.addView(enabled);
+            mode.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){boolean manual=position==3;if(manual)enabled.setChecked(false);enabled.setEnabled(!manual);}});
+            form.addView(text("Auto-connect is Off by default and runs once per cold app launch. Every automatic choice keeps this external protocol, the selected Router entry and Local / Server / Compare preference. Its native path and DNS must pass fresh proof; failure stays disconnected. Startup never selects a different protocol or a single-hop substitute.",13,false));
+        }
+        void apply(AndroidStandardExitStore.Entry entry){entry.startupMode=values[mode.getSelectedItemPosition()];entry.autoConnect=!"manual".equals(entry.startupMode)&&enabled.isChecked();}
+    }
+
     private void showExternalPolicyForm(AndroidStandardExitStore.Entry saved) {
         showExternalDNSDraft(saved,null);
     }
@@ -401,6 +418,7 @@ public final class StandardExitActivity extends Activity {
         CheckBox blockLAN=new CheckBox(this);blockLAN.setText("Block private LAN ranges");blockLAN.setChecked(!policy.optBoolean("home_lan_access",true));form.addView(blockLAN);
         EditText lan=field("Private LAN CIDRs, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Fixed MTU 1280–9000 (blank: Auto baseline)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if(!"auto".equals(policy.optString("mtu_policy","auto")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
+        final ExternalStartupControls startup=new ExternalStartupControls(form,captured);
         form.addView(text("Home uses the selected Router VPN entry's private AdGuard and requires that entry's authenticated proof. Direct connections need an explicit reachable resolver. Resolver hostnames use only the bootstrap you save here, through this path. Auto MTU is an unmeasured baseline until this external exit provides an authenticated packet-probe owner; saved measurements are not reused. A TCP-only transport rejects unsupported UDP and DoH3 settings.",13,false));
         EditText responseURL=field("This server's HTTPS response URL (required for Server / Compare both)",false),responseName=field("Response TLS server name (optional)",false);
         if("shadowsocks".equals(captured.protocol)){
@@ -439,6 +457,7 @@ public final class StandardExitActivity extends Activity {
                 }
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
+                startup.apply(next);
                 AndroidExternalPolicy.validateDraft(next);
                 exitStore.save(next);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
             }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}

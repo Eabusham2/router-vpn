@@ -66,7 +66,8 @@ final class RouterVPNMAXPreparation: @unchecked Sendable {
                 if retired { request.cancel() }
             }
             guard failure == nil, let request, active, request.sourceSHA256() == digest else { throw Self.issue() }
-            let result = try request.run()
+            let result = request.run(&failure)
+            if let failure { throw failure }
             guard active, request.healthy(), resolver.current(), request.sourceSHA256() == digest else { throw Self.issue() }
             let bytes = try Self.launchBundle(source: source, digest: digest, ownerID: resolver.ownerID(), envelope: result)
             guard active, request.healthy() else { throw Self.issue() }

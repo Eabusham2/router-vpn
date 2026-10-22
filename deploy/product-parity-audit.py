@@ -220,8 +220,21 @@ require(
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetry.java",
-    "class SpeedResult", "speedTest(AndroidNodeStore.Node", "/api/benchmark/download", "/api/benchmark/upload",
-    "Authorization", "Accept-Encoding", "downloadMbps", "uploadMbps", "state.activeNodeId", "state.activeExitId",
+    "class SpeedResult", "speedTest(AndroidNodeStore.Node", "AndroidTelemetryCapture.current", "captured::requireCurrent",
+    "io.drain()", "AndroidMTUMeasurementGate.release(lease)", "AndroidNodeStatistics.save", "downloadMbps", "uploadMbps",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryHttp.java",
+    "/api/benchmark/download", "/api/benchmark/upload", "Authorization", "Accept-Encoding",
+    "expectedNode.equals", "authorize.run()", "io.open()",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidTelemetryCapture.java",
+    "home.activeNodeId", "home.activeExitId", "home.sessionId", "home.pathGeneration", "AndroidPrivateFileStore.read", "route.check()",
+)
+require(
+    "android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStatistics.java",
+    "samples==50&&failed==0", "source_sha256", "average_ms", "trimmed_mean_ms", "p90_ms", "max_ms", "measured_at_ms", "!r.eligible()",
 )
 require(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidForwardingMaster.java",
@@ -294,10 +307,30 @@ require(
     "systemBlue", "systemOrange", "systemPink", "Require encrypted", "Require obfuscation",
     "Run real current VPN path speed", "telemetry.speedTest",
 )
-require(
+ios_telemetry = require(
     "ios/RouterVPN/App/IOSUnifiedTelemetry.swift",
-    "IOSSpeedResult", "IOSProbeOnce", "/api/benchmark/download", "/api/benchmark/upload",
-    "Authorization", "downloadMbps", "uploadMbps",
+    "IOSSpeedResult", "IOSNativeTelemetryReply", "IOSCurrentTelemetryCapture", "IOSNativeTelemetryTransaction",
+    "IOSMTUControl.withHold", "commitNodeLatency", "requireDirectResultCurrent", "sendProviderMessage",
+    "downloadMbps", "uploadMbps",
+)
+if "URLSession" in ios_telemetry:
+    errors.append("iOS current-path telemetry bypasses the proved native channel")
+require(
+    "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryChannel.swift",
+    "RouterVPNForwardingPolicy.verifyProof", "/api/benchmark/download", "/api/benchmark/upload",
+    "Authorization: Bearer", "finishCancelled", "pendingWrites", "retryWrites()",
+)
+require(
+    "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryTransport.swift",
+    "nativeCancelled, pendingIO == 0", "connection.cancel()", "connection.retire()", "bodyLimit",
+)
+require(
+    "ios/RouterVPN/PacketTunnel/RouterVPNTelemetryNativeConnection.swift",
+    "RVPNTunnelTCPConnection(provider: provider", "func retire()", "observation?.invalidate()",
+)
+require(
+    "ios/RouterVPN/App/IOSNodeLatencyStatistics.swift",
+    "samples == 50, failed == 0", "latencyTrimmedMeanMs", "latencyLastTest", "measuredAt",
 )
 require(
     "ios/RouterVPN/App/NodeManagerSheet.swift",

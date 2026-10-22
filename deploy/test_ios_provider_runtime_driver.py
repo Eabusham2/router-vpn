@@ -140,8 +140,8 @@ final class PacketTunnelProvider: @unchecked Sendable {
         }
         events.append("node:" + (libboxEngine?.raw ?? "missing")); proofs.append(completion)
     }
-    func enableForwarding(profileData: Data, proofID: String) {
-        precondition(proofID == Main.node)
+    func enableForwarding(profileData: Data, proofID: String, captured: NetworkProofGuard) {
+        precondition(proofID == Main.node && pathGuard === captured)
         events.append("forward:" + (libboxEngine?.raw ?? "missing"))
         forwardingChannel?.active = true; forwardingHook?()
     }

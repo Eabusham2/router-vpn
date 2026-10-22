@@ -302,7 +302,9 @@ final class RouterVPNLibboxEngine {
             do {
                 guard let owner, current(owner) else { throw retired() }
                 let began = Date()
-                let result = try request.run()
+                var failure: NSError?
+                let result = request.run(&failure)
+                if let failure { throw failure }
                 try policy.validateProof(result, sessionID: sessionID, began: began)
                 guard current(owner), request.healthy() else { throw retired() }
                 lock.lock(); let usable = !cancelled; lock.unlock()
@@ -435,7 +437,9 @@ final class RouterVPNLibboxEngine {
             do {
                 guard let owner, current(owner) else { throw retired() }
                 let began = Date()
-                let text = try request.run()
+                var failure: NSError?
+                let text = request.run(&failure)
+                if let failure { throw failure }
                 guard text.utf8.count <= 4096, let data = text.data(using: .utf8),
                       let value = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                       Set(value.keys) == Set(["session_id", "ip", "is_tor", "checked_at", "dns_proven"]),

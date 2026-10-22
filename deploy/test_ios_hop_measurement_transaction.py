@@ -25,16 +25,23 @@ protocol ObservableObject {}
 }
 @MainActor final class Native {
  static let shared=Native()
- let session=UUID().uuidString,connection=NETunnelProviderSession()
+ let session=UUID().uuidString,mtuSession=UUID().uuidString,connection=NETunnelProviderSession()
  var mode="stable",drained=true,starts=0,cancels=0,statuses=0,releases=0,held=false
  var captured:[String:Any]?,pending:((Data?)->Void)?,pendingRequest:[String:Any]?
- func reset(_ mode:String){self.mode=mode;drained=mode=="stable";starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
+ var informationHook:(()->Void)?
+ func reset(_ mode:String){self.mode=mode;drained=mode=="stable";starts=0;cancels=0;statuses=0;releases=0;held=false;captured=nil;pending=nil;pendingRequest=nil;informationHook=nil;connection.status = .connected;connection.connectedDate=Date(timeIntervalSince1970:10)}
  func body(_ request:[String:Any],complete:Bool,drained:Bool)->Data {
   try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":request["session_id"]!,"stage":complete ? "complete":"running","complete":complete,"drained":drained,"results":[]])
  }
  func handle(_ data:Data,_ reply:@escaping(Data?)->Void) {
   let request=try! JSONSerialization.jsonObject(with:data) as! [String:Any]
-  guard request.count==3 && request["session_id"] as? String==session && held else {FileHandle.standardError.write(Data("native IPC lost its captured session or MTU hold\n".utf8));exit(1)}
+  guard request.count==3 && held else {FileHandle.standardError.write(Data("native IPC lost its MTU hold\n".utf8));exit(1)}
+  if request["operation"] as? String=="hop-measure-info" {
+   guard request["session_id"] as? String=="" else{FileHandle.standardError.write(Data("hop Info incorrectly equated MTU and proof epochs\n".utf8));exit(1)}
+   informationHook?()
+   reply(try! JSONSerialization.data(withJSONObject:["request_id":request["request_id"]!,"session_id":session,"mtu_session_id":mode=="wrong-info-mtu" ? UUID().uuidString:mtuSession]));return
+  }
+  guard request["session_id"] as? String==session else{FileHandle.standardError.write(Data("native IPC lost its exact hop proof session\n".utf8));exit(1)}
   captured=request
   switch request["operation"] as? String {
    case "hop-measure-start":
@@ -53,8 +60,9 @@ protocol ObservableObject {}
  struct Binding {let connection:NETunnelProviderSession;let connectedDate:Date;let identity:String;let session:String}
  static func capture(_ model:RouterVPNModel)async throws->Binding{
   guard let identity=model.activeSessionIdentity else{throw CancellationError()}
-  return Binding(connection:Native.shared.connection,connectedDate:Native.shared.connection.connectedDate!,identity:identity,session:Native.shared.session)
+  return Binding(connection:Native.shared.connection,connectedDate:Native.shared.connection.connectedDate!,identity:identity,session:Native.shared.mtuSession)
  }
+CURRENT_BINDING
  static func holdCurrent(_ model:RouterVPNModel,request:String)async throws{Native.shared.held=true}
  static func releaseCurrent(_ model:RouterVPNModel,request:String)async throws{Native.shared.held=false;Native.shared.releases+=1}
 WITH_HOLD
@@ -76,6 +84,7 @@ TEST=r'''
    probe.start(model:model);await wait{!probe.running}
    check("supported graph is measured",native.starts==1 && native.releases==1 && !IOSMTUMeasurementGate.held)
    check("native request captures immutable session epoch",native.captured?["session_id"] as? String==native.session)
+   check("hop proof UUID remains distinct from MTU lease session",native.session != native.mtuSession)
   }
   for engine in ["libbox","wireguardkit","none"] {
    native.reset("stable");let model=RouterVPNModel();model.activeEngine=engine;let probe=IOSHopMeasurements();probe.start(model:model)
@@ -104,6 +113,20 @@ TEST=r'''
    check("cancel cleanup drains before hold release",native.releases==1 && !IOSMTUMeasurementGate.held)
    check("stale result is discarded",probe.text.contains("discarded") && !probe.text.contains("Mbps"))
   }
+  for drift in ["identity","connected","native-status","native-date","wrong-info-mtu"] {
+   native.reset(drift);let model=RouterVPNModel(),probe=IOSHopMeasurements()
+   native.informationHook={
+    switch drift {
+     case "identity":model.activeSessionIdentity="new-selection"
+     case "connected":model.connected=false
+     case "native-status":native.connection.status = .disconnected
+     case "native-date":native.connection.connectedDate=Date(timeIntervalSince1970:20)
+     default:break
+    }
+   }
+   probe.start(model:model);await wait{!probe.running}
+   check("stale info binding rejected before native start: "+drift,native.starts==0 && native.cancels==0 && native.releases==1 && !IOSMTUMeasurementGate.held && probe.text.contains("discarded"))
+  }
   print("Apple owned hop transaction: PASS (\(checks) shipping UI/MTU/IPC cancellation checks; native OS handles doubled)")
  }
 }
@@ -114,7 +137,8 @@ def main():
     source=source.replace('import SwiftUI','import Foundation').replace('@preconcurrency import NetworkExtension','')
     mtu=(APP/'IOSMTUControl.swift').read_text()
     hold=mtu[mtu.index('    static func withHold<T>'):].rsplit('\n}',1)[0]
-    fixture=FIXTURE.replace('WITH_HOLD',hold)
+    current=mtu[mtu.index('    static func current('):mtu.index('    static func message(')]
+    fixture=FIXTURE.replace('WITH_HOLD',hold).replace('CURRENT_BINDING',current)
     gate=(APP/'IOSMTUMeasurementGate.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-hop-') as directory:
         work=Path(directory);code=work/'Main.swift';binary=work/'test'

@@ -18,6 +18,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -139,7 +140,10 @@ func (s *desktopExecutionSession) Identity() string {
 		return ""
 	}
 	g, ok := getActiveMultihopGraph(s.driver.a)
-	if !ok || g.EntryID != s.candidate.EntryID || g.ExitID != s.candidate.ExitID || g.ExitMode != s.candidate.Transport || g.Execution != string(s.candidate.Execution) {
+	if !ok || g.EntryID != s.candidate.EntryID || g.ExitID != s.candidate.ExitID || g.Base != s.selection.Base || g.ExitMode != s.candidate.Transport || g.Execution != string(s.candidate.Execution) {
+		return ""
+	}
+	if capture := s.selection.Native; capture != nil && (g.EntryMode != capture.entryMode || g.SourceSHA != capture.source || capture.validate(s.selection) != nil) {
 		return ""
 	}
 	return s.generation
@@ -151,7 +155,16 @@ func (s *desktopExecutionSession) Verify(ctx context.Context) error {
 	if err := proveMultihopLaneNodeContext(ctx, s.selection.Entry, multihopEntryProofProxy); err != nil {
 		return err
 	}
-	return proveMultihopLaneNodeContext(ctx, s.selection.Exit, multihopProofProxy)
+	if s.Identity() == "" {
+		return errors.New("entry proof completed for a retired candidate")
+	}
+	if err := proveMultihopLaneNodeContext(ctx, s.selection.Exit, multihopProofProxy); err != nil {
+		return err
+	}
+	if s.Identity() == "" {
+		return errors.New("exit proof completed for a retired candidate")
+	}
+	return nil
 }
 func (s *desktopExecutionSession) ProbeLast(ctx context.Context) (time.Duration, error) {
 	target, err := multihopLaneProofURL(s.selection.Exit)
@@ -278,7 +291,11 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		if e != nil {
 			return nil, e
 		}
-		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, Port: 26240 + int(number.Int64()), Username: user, Password: password}
+		layer := sel.Exit.StartLayer
+		if layer == "off" {
+			layer = ""
+		}
+		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: layer, Port: 26240 + int(number.Int64()), Username: user, Password: password}
 		lease := multihoprelay.Lease{Request: q, NodeID: sel.Entry.NodeProofID, ExitNodeID: sel.Exit.NodeProofID, Host: host.Unmap().String(), Port: q.Port, Username: user, Password: password}
 		descriptor = &desktopExecutionDescriptor{Execution: "server", Lease: lease}
 		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q}
@@ -412,7 +429,7 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 		return err
 	}
 	for _, exit := range response.Exits {
-		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == "" {
+		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == o.request.ExitStartLayer {
 			return nil
 		}
 	}
@@ -531,6 +548,21 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 	sel.Control = cloneRouterProfile(sel.Control)
 	sel.Entry = cloneRouterProfile(sel.Entry)
 	sel.Exit = cloneRouterProfile(sel.Exit)
+	modes := []string{sel.ExitMode}
+	if q.ExitMode == "auto" && execution == "auto" {
+		modes = []string{"shadowsocks", "hysteria2"}
+	}
+	if runtime.GOOS != "linux" {
+		sel, err = captureNativeMultihopForApp(a, sel, modes)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	if err := ctx.Err(); err != nil {
+		http.Error(w, "comparison cancelled before native capture completed", http.StatusConflict)
+		return
+	}
 	id, err := randomHex(16)
 	if err != nil {
 		http.Error(w, "could not allocate comparison identity", 500)
@@ -560,10 +592,6 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 		finish("previous session teardown failed")
 		http.Error(w, "previous session teardown failed", 500)
 		return
-	}
-	modes := []string{sel.ExitMode}
-	if q.ExitMode == "auto" && execution == "auto" {
-		modes = []string{"shadowsocks", "hysteria2"}
 	}
 	driver := &desktopExecutionDriver{a: a, selection: sel, network: network}
 	var active routechoice.Session
@@ -658,5 +686,6 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 	progress.mu.Unlock()
 	finish("")
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "execution": result.Winner.Execution, "entry_id": sel.Entry.ID, "exit_id": sel.Exit.ID, "exit_mode": result.Winner.Transport, "comparison": result, "proof": "both nodes verified through the owned candidate"})
+	graph, _ := getActiveMultihopGraph(a)
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "execution": result.Winner.Execution, "entry_id": sel.Entry.ID, "exit_id": sel.Exit.ID, "entry_base": sel.Base, "entry_mode": graph.EntryMode, "exit_mode": result.Winner.Transport, "comparison": result, "proof": "both nodes verified through the owned candidate"})
 }

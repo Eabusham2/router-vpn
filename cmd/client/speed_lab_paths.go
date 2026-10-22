@@ -176,6 +176,7 @@ func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error)
 	if strings.EqualFold(entryProfile.NodeKind, "external") || entryProfile.External != nil { return speedLabPath{}, errors.New("Router VPN node-to-node multihop requires a Router VPN entry; use topology=external for an external entry/exit graph") }
 	a.mu.Lock(); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); a.mu.Unlock()
 	sel, err := a.resolveSpeedLabMultihop(q, entryProfile, profiles); if err != nil { return speedLabPath{}, err }
+	if runtime.GOOS != "linux" { sel, err = captureNativeMultihopForApp(a, sel, []string{sel.ExitMode}); if err != nil { return speedLabPath{}, err } }
 	sessionTrackerFor(a).declareRequest("speed-lab:multihop", sel.Base)
 	if err := a.stopMode(); err != nil { return speedLabPath{}, err }
 	var cmd *exec.Cmd
@@ -185,7 +186,8 @@ func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error)
 	a.mu.Lock(); a.cmd = cmd; a.state.Mode = "multihop"; a.state.LogicalMode = "multihop"; a.state.RuntimeMode = sel.ExitMode; a.state.Base = sel.Base; a.state.RouterID = sel.Exit.ID; a.state.Connected = false; a.state.Phase = "speed-lab:multihop:proving-exit"; a.state.LastError = ""; a.mu.Unlock()
 	setActiveMultihopGraph(a, sel)
 	if err := a.checkConnectionOperation(); err != nil { message, _ := a.multihopStopFailure(cmd, err.Error()); return speedLabPath{}, errors.New(message) }
-	if err := a.proveMultihopExit(sel.Exit); err != nil { message, _ := a.multihopStopFailure(cmd, "temporary multihop exit proof failed: "+err.Error()); return speedLabPath{}, errors.New(message) }
+	if runtime.GOOS == "linux" { err = a.proveMultihopExit(sel.Exit) } else { err = a.proveNativeMultihop(sel, cmd) }
+	if err != nil { message, _ := a.multihopStopFailure(cmd, "temporary multihop path proof failed: "+err.Error()); return speedLabPath{}, errors.New(message) }
 	if err := a.checkConnectionOperation(); err != nil || !a.ownsConnectionRuntime(cmd) {
 		cause := "temporary multihop runtime changed before proof adoption"; if err != nil { cause = err.Error() }
 		message, cleanupFailed := a.multihopStopFailure(cmd, cause); if !a.ownsConnectionRuntime(cmd) && !cleanupFailed { clearActiveMultihopGraph(a) }; return speedLabPath{}, errors.New(message)

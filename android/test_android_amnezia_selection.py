@@ -127,6 +127,15 @@ public final class AmneziaSelectionHarness {
 }
 """
 
+# Read-only telemetry captures add native peer/interface declarations; this
+# lifecycle fixture keeps using its existing independent backend state double.
+STUBS["org/amnezia/awg/crypto/Key.java"] = "package org.amnezia.awg.crypto;public class Key {}"
+STUBS["org/amnezia/awg/config/InetNetwork.java"] = "package org.amnezia.awg.config;public class InetNetwork {}"
+STUBS["org/amnezia/awg/config/Peer.java"] = "package org.amnezia.awg.config;public class Peer {public org.amnezia.awg.crypto.Key getPublicKey(){return null;}}"
+STUBS["org/amnezia/awg/config/Config.java"] = STUBS["org/amnezia/awg/config/Config.java"][:-1] + "public static class Interface {public java.util.List<InetNetwork> getAddresses(){return java.util.List.of();}}public Interface getInterface(){return new Interface();}public java.util.List<Peer> getPeers(){return java.util.List.of();}}"
+STUBS["org/amnezia/awg/backend/GoBackend.java"] = STUBS["org/amnezia/awg/backend/GoBackend.java"].rstrip()[:-1] + "public Tunnel.State getState(Tunnel t){return Tunnel.State.DOWN;}public static class Statistics {public org.amnezia.awg.crypto.Key[] peers(){return new org.amnezia.awg.crypto.Key[0];}}public Statistics getStatistics(Tunnel t){return new Statistics();}}"
+STUBS["com/eabusham/routervpn/AndroidTelemetryNetwork.java"] = "package com.eabusham.routervpn;final class AndroidTelemetryNetwork {interface Check{void run()throws Exception;}static AndroidTelemetryNetwork addressed(android.content.Context c,java.util.Collection<String> addresses,Check check)throws Exception{throw new IllegalStateException(\"No telemetry native owner in this fixture\");}}"
+
 def main():
     javac, java = shutil.which("javac"), shutil.which("java")
     if not javac or not java:

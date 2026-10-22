@@ -182,6 +182,20 @@ final class RouterVPNModel: ObservableObject {
         }
     }
 
+    /// Measurement commits use the same atomic node store as explicit edits.
+    /// Never call import/save again after the durable commit already succeeded.
+    func commitNodeLatency(_ result: IOSLatencyResult, expectedRecord: Data,
+                           expectedSelection: Data, owner: UUID) throws {
+        try iosSpeedLabOwnership.require(owner)
+        guard !profileMutationBlocked, let bundle, bundle.selectedRouterID == result.id else { throw CancellationError() }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+        guard try encoder.encode(bundle) == expectedSelection,
+              try encoder.encode(JSONDecoder().decode(ClientBundle.self, from: expectedRecord)) == expectedSelection else { throw CancellationError() }
+        let committed = try IOSNodeBundleStore.shared.recordLatency(result, expectedRecord: expectedRecord, current: persistedNodeBundle)
+        self.bundle = committed.bundle
+        UserDefaults.standard.set(committed.data, forKey: bundleKey)
+    }
+
     func importFromLAN() async {
         let raw = lanImportHost.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !raw.isEmpty else { message = "Enter the AI Board LAN IP or hostname"; return }

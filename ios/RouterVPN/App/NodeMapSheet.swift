@@ -10,10 +10,10 @@ enum RouterVPNMapRole: String {
 
     var color: Color {
         switch self {
-        case .selected: return .blue
-        case .entry: return .orange
-        case .exit: return .purple
-        case .external: return .green
+        case .selected: return .purple
+        case .entry: return .blue
+        case .exit: return .orange
+        case .external: return .pink
         case .normal: return .teal
         }
     }
@@ -61,11 +61,11 @@ func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
     let profiles = model.bundle?.routerProfiles ?? []
     let selectedID = model.bundle?.selectedRouterID ?? ""
 
-    // iOS/iPadOS currently has no native multihop dataplane. Saved multihop
-    // preferences can arrive in a cross-platform profile, but they are not a
-    // running graph and must never be painted as live Entry/Exit roles here.
-    // A future Apple multihop implementation must source these roles from its
-    // actual launched PacketTunnel graph identity, not from saved preferences.
+    // Planned roles use the selected saved graph. The shared native map draws
+    // a dashed planned route and animates packets only while the VPN is proved.
+    let selected = profiles.first { $0.id == selectedID }
+    let entryID = selected?.multihopEnabled == true ? selected?.multihopEntryID : nil
+    let exitID = selected?.multihopEnabled == true ? selected?.multihopExitID : nil
     return profiles.compactMap { profile in
         guard let latitude = profile.latitude,
               let longitude = profile.longitude,
@@ -73,7 +73,9 @@ func routerVPNMapPoints(model: RouterVPNModel) -> [RouterVPNMapPoint] {
               (-180.0...180.0).contains(longitude),
               !(latitude == 0 && longitude == 0) else { return nil }
         let role: RouterVPNMapRole
-        if profile.id == selectedID { role = .selected }
+        if profile.id == entryID { role = .entry }
+        else if profile.id == exitID { role = .exit }
+        else if profile.id == selectedID { role = .selected }
         else if profile.normalizedNodeKind == "external" { role = .external }
         else { role = .normal }
         return RouterVPNMapPoint(
@@ -101,42 +103,11 @@ struct RouterVPNMapPoint: Identifiable {
 }
 
 struct RouterVPNMapPanel: View {
+    @EnvironmentObject var model: RouterVPNModel
     let nodes: [RouterVPNMapPoint]
-    @State private var region = MKCoordinateRegion()
 
     var body: some View {
-        Map(coordinateRegion: $region, annotationItems: nodes) { node in
-            MapAnnotation(coordinate: node.coordinate) {
-                VStack(spacing: 2) {
-                    Image(systemName: node.role.symbol)
-                        .font(.title2)
-                        .foregroundStyle(node.role.color)
-                    Text(node.name)
-                        .font(.caption2)
-                        .lineLimit(1)
-                        .padding(.horizontal, 6)
-                        .padding(.vertical, 2)
-                        .background(.regularMaterial, in: Capsule())
-                }
-                .accessibilityLabel("\(node.role.rawValue) node \(node.name), \(node.location)")
-            }
-        }
-        .frame(minHeight: 260)
-        .onAppear { region = fittedRegion(nodes) }
-        .onChange(of: nodes.map(\.id)) { _ in region = fittedRegion(nodes) }
-    }
-
-    private func fittedRegion(_ values: [RouterVPNMapPoint]) -> MKCoordinateRegion {
-        guard let first = values.first else { return MKCoordinateRegion() }
-        var minLat = first.latitude, maxLat = first.latitude, minLon = first.longitude, maxLon = first.longitude
-        for item in values.dropFirst() {
-            minLat = min(minLat, item.latitude); maxLat = max(maxLat, item.latitude)
-            minLon = min(minLon, item.longitude); maxLon = max(maxLon, item.longitude)
-        }
-        let center = CLLocationCoordinate2D(latitude: (minLat + maxLat) / 2, longitude: (minLon + maxLon) / 2)
-        let latDelta = max(0.05, (maxLat - minLat) * 1.5)
-        let lonDelta = max(0.05, (maxLon - minLon) * 1.5)
-        return MKCoordinateRegion(center: center, span: MKCoordinateSpan(latitudeDelta: min(180, latDelta), longitudeDelta: min(360, lonDelta)))
+        IOSUnifiedMap(latencyByID: [:]).environmentObject(model).frame(minHeight: 260)
     }
 }
 

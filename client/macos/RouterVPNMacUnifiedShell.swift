@@ -319,6 +319,9 @@ extension ProductWindowController {
         let editHops = NSButton(title: "Details", target: self, action: #selector(openUnifiedMultihop)); editHops.bezelStyle = .rounded; multihopRow.addArrangedSubview(editHops); controls.addArrangedSubview(multihopRow)
 
         configureMultihopExecution()
+        let baseRow = unifiedLabeledRow(title: "Entry base")
+        basePopup.toolTip = "Auto follows the selected entry node's saved base. AmneziaWG retains its exact saved Fast or Strong configuration."
+        baseRow.addArrangedSubview(basePopup); controls.addArrangedSubview(baseRow)
         let executionRow = unifiedLabeledRow(title: "Execution")
         executionRow.addArrangedSubview(multihopExecutionPopup); controls.addArrangedSubview(executionRow)
         controls.addArrangedSubview(multihopComparisonLabel)
@@ -542,7 +545,7 @@ extension ProductWindowController {
     }
 
     func refreshUnifiedHopOverlay() {
-        map.removeOverlays(map.overlays)
+        RouterVPNVectorMap.clearRoutes(on: map)
         for annotation in map.annotations.compactMap({ $0 as? RouterAnnotation }) { if let view = map.view(for: annotation) as? MKMarkerAnnotationView { view.markerTintColor = color(for: hopRole(for: annotation.routerID)) } }
         guard UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) else { return }
         let entryIndex = multihopEntryPopup.indexOfSelectedItem, exitIndex = multihopExitPopup.indexOfSelectedItem
@@ -550,7 +553,7 @@ extension ProductWindowController {
         let ids = [multihopNodeIDs[entryIndex], multihopNodeIDs[exitIndex]]
         let coordinates: [CLLocationCoordinate2D] = ids.compactMap { id in guard let profile = profiles.first(where: { ($0["id"] as? String) == id }) else { return nil }; let lat = (profile["latitude"] as? NSNumber)?.doubleValue ?? 0, lon = (profile["longitude"] as? NSNumber)?.doubleValue ?? 0; let coordinate = CLLocationCoordinate2D(latitude: lat, longitude: lon); return CLLocationCoordinate2DIsValid(coordinate) && !(lat == 0 && lon == 0) ? coordinate : nil }
         guard coordinates.count == ids.count else { return }
-        map.addOverlay(MKPolyline(coordinates: coordinates, count: coordinates.count))
+        map.addOverlays(RouterVPNVectorMap.routes(from: coordinates[0], to: coordinates[1]), level: .aboveLabels)
     }
 
     func mapView(_ mapView: MKMapView, viewFor annotation: MKAnnotation) -> MKAnnotationView? {
@@ -560,7 +563,25 @@ extension ProductWindowController {
         view.annotation = annotation; view.canShowCallout = true; view.markerTintColor = color(for: hopRole(for: node.routerID)); return view
     }
 
+    func selectUnifiedMapNode(_ nodeID: String) -> Bool {
+        guard let index = routerIDs.firstIndex(of: nodeID) else { return false }
+        if routerPopup.indexOfSelectedItem == index { return true }
+        guard ensureMutationIdle("selecting a map node") else { return false }
+        routerPopup.selectItem(at: index)
+        nodePopup.selectItem(at: index)
+        // The existing controller transaction rechecks idle state and saves the
+        // selection. A marker tap never invokes Connect or changes a live path.
+        selectRouter()
+        return true
+    }
+
+    func mapView(_ mapView: MKMapView, didSelect view: MKAnnotationView) {
+        guard let node = view.annotation as? RouterAnnotation else { return }
+        if !selectUnifiedMapNode(node.routerID) { mapView.deselectAnnotation(node, animated: false) }
+    }
+
     func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+        if let base = overlay as? RouterVPNVectorMapOverlay { return RouterVPNVectorMapRenderer(overlay: base) }
         guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
         let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round; return renderer
     }

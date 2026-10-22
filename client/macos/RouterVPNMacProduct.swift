@@ -266,10 +266,12 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }
         let exitMode = multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
         let execution = multihopExecutionChoice()
+        let base = multihopBaseChoice()
         multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"
         startMultihopProgress()
-        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": "wg", "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
+        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
     }
+    func multihopBaseChoice() -> String { ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))] }
     func selectedNodeID() -> String? {
         if let a = map.selectedAnnotations.first as? RouterAnnotation { return a.routerID }
         let i = nodePopup.indexOfSelectedItem

@@ -104,7 +104,7 @@ private final class IOSUnifiedMapAnnotation: MKPointAnnotation {
     init(profileID: String, role: String) { self.profileID = profileID; self.role = role; super.init() }
 }
 
-private struct IOSUnifiedMap: UIViewRepresentable {
+struct IOSUnifiedMap: UIViewRepresentable {
     @EnvironmentObject var model: RouterVPNModel
     var latencyByID: [String: Double]
 
@@ -115,6 +115,7 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         map.showsCompass = true
         map.showsScale = true
         map.pointOfInterestFilter = .excludingAll
+        RouterVPNVectorMap.install(on: map)
         context.coordinator.startPacketAnimation(map)
         return map
     }
@@ -131,7 +132,7 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         context.coordinator.parent = self
         let packet = context.coordinator.packet
         map.removeAnnotations(map.annotations.filter { $0 !== packet })
-        map.removeOverlays(map.overlays)
+        RouterVPNVectorMap.clearRoutes(on: map)
         let profiles = model.allNodeProfiles
         let selectedID = model.bundle?.selectedRouterID ?? ""
         let selected = profiles.first(where: { $0.id == selectedID })
@@ -157,15 +158,23 @@ private struct IOSUnifiedMap: UIViewRepresentable {
             coordinatesByID[profile.id] = annotation.coordinate
         }
         if let entryID, let exitID, let a = coordinatesByID[entryID], let b = coordinatesByID[exitID] {
-            var values = [a, b]
-            map.addOverlay(MKPolyline(coordinates: &values, count: values.count))
-            context.coordinator.entry = a; context.coordinator.exit = b; context.coordinator.ensurePacket(on: map)
+            map.addOverlays(RouterVPNVectorMap.routes(from: a, to: b), level: .aboveLabels)
+            context.coordinator.entry = a; context.coordinator.exit = b
+            if model.connected { context.coordinator.ensurePacket(on: map) }
+            else if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         } else {
             context.coordinator.entry = nil; context.coordinator.exit = nil
             if let packet { map.removeAnnotation(packet); context.coordinator.packet = nil }
         }
         let regular = map.annotations.filter { $0 !== context.coordinator.packet }
-        if !regular.isEmpty { map.showAnnotations(regular, animated: false) }
+        let geometryID = coordinatesByID.keys.sorted().map { id in
+            let p = coordinatesByID[id]!
+            return "\(id):\(p.latitude):\(p.longitude)"
+        }.joined(separator: "|")
+        if !regular.isEmpty && geometryID != context.coordinator.fittedGeometryID {
+            map.showAnnotations(regular, animated: false)
+            context.coordinator.fittedGeometryID = geometryID
+        }
     }
 
     final class Coordinator: NSObject, MKMapViewDelegate {
@@ -174,6 +183,7 @@ private struct IOSUnifiedMap: UIViewRepresentable {
         var entry: CLLocationCoordinate2D?
         var exit: CLLocationCoordinate2D?
         var packet: IOSUnifiedMapAnnotation?
+        var fittedGeometryID = ""
         private var timer: Timer?
         private var phase: Double = 0
         init(_ parent: IOSUnifiedMap) { self.parent = parent }
@@ -192,9 +202,9 @@ private struct IOSUnifiedMap: UIViewRepresentable {
                 // actor before touching MapKit/coordinator state instead of
                 // weakening concurrency checking for the whole target.
                 Task { @MainActor [weak self] in
-                    guard let self, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
+                    guard let self, self.parent.model.connected, let a = self.entry, let b = self.exit, let packet = self.packet else { return }
                     self.phase += 0.035; if self.phase >= 1 { self.phase -= 1 }
-                    packet.coordinate = CLLocationCoordinate2D(latitude: a.latitude + (b.latitude-a.latitude)*self.phase, longitude: a.longitude + (b.longitude-a.longitude)*self.phase)
+                    if let coordinate = RouterVPNVectorMap.packetCoordinate(from: a, to: b, fraction: self.phase) { packet.coordinate = coordinate }
                 }
             }
         }
@@ -227,15 +237,18 @@ private struct IOSUnifiedMap: UIViewRepresentable {
             }
         }
         func mapView(_ mapView: MKMapView, rendererFor overlay: MKOverlay) -> MKOverlayRenderer {
+            if let base = overlay as? RouterVPNVectorMapOverlay { return RouterVPNVectorMapRenderer(overlay: base) }
             guard let line = overlay as? MKPolyline else { return MKOverlayRenderer(overlay: overlay) }
-            let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round; return renderer
+            let renderer = MKPolylineRenderer(polyline: line); renderer.strokeColor = .systemBlue; renderer.lineWidth = 4; renderer.lineCap = .round; renderer.lineJoin = .round
+            renderer.lineDashPattern = parent.model.connected ? nil : [6, 5]
+            return renderer
         }
     }
 }
 
 struct IOSUnifiedProductView: View {
     @EnvironmentObject var model: RouterVPNModel
-    @StateObject private var telemetry = IOSUnifiedTelemetry()
+    @StateObject private var telemetry = IOSUnifiedTelemetry.shared
     @AppStorage(iosUnifiedModeKey) private var selectedMode = IOSUnifiedModeSelection.smart
     @State private var expanded = false
     @State private var showingNodes = false
@@ -291,7 +304,7 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
         .onChange(of: model.activeRawProfile) { value in if model.connected && !value.isEmpty { model.recordIOSLastRuntime() } }
-        .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, samples: 2) }
+        .task { guard !startupApplied else { return }; startupApplied = true; await model.applyIOSStartupPolicyIfNeeded(); _ = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 2) }
         .task {
             while !Task.isCancelled {
                 await model.refreshIOSMultihopExecutionProgress()
@@ -300,7 +313,7 @@ struct IOSUnifiedProductView: View {
         }
         .task(id: model.connected) {
             while !Task.isCancelled {
-                await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected)
+                await telemetry.refreshLivePath(model: model)
                 try? await Task.sleep(for: .seconds(2))
             }
         }
@@ -452,12 +465,14 @@ struct IOSUnifiedProductView: View {
     }
     private func selectFastest() async {
         guard !model.profileMutationBlocked else { return }
-        let results = await telemetry.measureAll(routerProfiles, samples: 4)
+        let results = await telemetry.measureAll(routerProfiles, model: model, samples: 4)
         guard !model.profileMutationBlocked else {
             model.message = "VPN state changed while Fastest was measuring; the result was not selected."
             return
         }
         guard let winner = results.first else { model.message = telemetry.lastError; return }
+        do { try telemetry.requireDirectResultCurrent(model: model) }
+        catch { model.message = "The selected source or network changed after Fastest measured; retest before selecting its result."; return }
         model.selectNode(winner.id)
         model.message = "Selected fastest live node: \(winner.name) • \(winner.shortLabel). Press Connect when ready with \(selectedModeTitle)."
     }
@@ -663,23 +678,25 @@ private struct IOSUnifiedPerformanceView: View {
     @ObservedObject var telemetry: IOSUnifiedTelemetry
     @State private var output = "Choose a real measurement."
     @State private var busy = false
+    @State private var operation: Task<Void, Never>?
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Current path") {
-                    LabeledContent("Live RTT", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "Not connected")
-                    Button("Measure current tunnel RTT") { runLive() }.disabled(!model.connected || busy)
+                    LabeledContent("Private node response", value: telemetry.livePathMs.map { String(format: "%.1f ms", $0) } ?? "No current measurement")
+                    Button("Measure current tunnel RTT") { runLive() }.disabled(!model.connected || busy || telemetry.measuring)
                     Button(telemetry.isSpeedTesting ? "Testing real VPN path speed…" : "Run real current VPN path speed") { runSpeed() }
-                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.isSpeedTesting)
+                        .disabled(!model.connected || model.unifiedSelectedProfile?.normalizedNodeKind != "router-vpn" || busy || telemetry.measuring)
                     if let speed = telemetry.lastSpeedResult {
                         Text(speed.detail).font(.caption.monospaced()).textSelection(.enabled)
                     }
-                    Text("Real speed transfers 8 MiB down and 8 MiB up against the selected Router VPN node's authenticated private router-agent through the active PacketTunnel route. It is not inferred from RTT.").font(.caption).foregroundStyle(.secondary)
+                    Text("Real speed transfers 8 MiB down and 8 MiB up through the captured PacketTunnel after its private Router VPN node proves its identity. Auto MTU is held until native sockets finish cleanup. Response time includes a new TCP connection and the complete private health response.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Nodes") {
-                    Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || busy)
-                    Button("Benchmark all linked nodes") { runAll() }.disabled(busy)
+                    Button("50-sample selected node") { runSelected() }.disabled(model.unifiedSelectedProfile == nil || model.profileMutationBlocked || busy || telemetry.measuring)
+                    Button("Benchmark all linked nodes") { runAll() }.disabled(model.profileMutationBlocked || busy || telemetry.measuring)
+                    Text("Disconnect for direct node TCP measurements. A complete 50-sample test atomically saves min, median, average, 10% trimmed mean, p90, max, sample count and test time to that exact node. The short all-node comparison does not replace these saved statistics.").font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Auto MTU") {
                     if let p = model.unifiedSelectedProfile, let mbps = p.effectiveMTUMbps, mbps > 0 {
@@ -687,16 +704,26 @@ private struct IOSUnifiedPerformanceView: View {
                     } else { Text("No proven Auto-MTU optimizer result is stored for this path yet.").foregroundStyle(.secondary) }
                     Text("Auto-MTU throughput and the real 8 MiB down/up speed test are separate measurements. Hop-specific Mbps is shown only when that hop's private benchmark is actually reachable; Router VPN never derives it from latency arithmetic.").font(.caption).foregroundStyle(.secondary)
                 }
+                if telemetry.measuring {
+                    Section(telemetry.cleanupPending ? "Cleanup pending" : "Measurement") {
+                        Text(telemetry.progress).font(.caption).textSelection(.enabled)
+                        Button("Cancel measurement") { cancelMeasurement() }
+                    }
+                }
                 Section("Result") { Text(output).font(.caption.monospaced()).textSelection(.enabled) }
             }
             .navigationTitle("Performance")
-            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { dismiss() } } }
+            .toolbar { ToolbarItem(placement: .confirmationAction) { Button("Done") { cancelMeasurement(); dismiss() } } }
+            .onAppear { telemetry.showPerformance(true); telemetry.invalidateResults(model: model) }
+            .onDisappear { cancelMeasurement(); telemetry.showPerformance(false) }
+            .onChange(of: model.connected) { _ in telemetry.invalidateResults(model: model) }
         }
     }
-    private func runLive() { busy = true; Task { await telemetry.refreshLivePath(profile: model.unifiedSelectedProfile, connected: model.connected); output = telemetry.livePathMs.map { String(format: "Current private tunnel median RTT: %.1f ms", $0) } ?? "Current tunnel RTT failed."; busy = false } }
-    private func runSpeed() { busy = true; Task { do { output = try await telemetry.speedTest(profile: model.unifiedSelectedProfile, connected: model.connected, bytes: 8 << 20).detail } catch { output = error.localizedDescription }; busy = false } }
-    private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; Task { do { output = try await telemetry.measureOne(p, samples: 50).detail } catch { output = error.localizedDescription }; busy = false } }
-    private func runAll() { busy = true; Task { let values = await telemetry.measureAll(model.allNodeProfiles, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
+    private func cancelMeasurement() { operation?.cancel(); telemetry.cancel() }
+    private func runLive() { busy = true; operation = Task { do { output = String(format: "Current private tunnel median response time: %.1f ms", try await telemetry.measureCurrentRTT(model: model)) } catch { output = error.localizedDescription }; busy = false } }
+    private func runSpeed() { busy = true; operation = Task { do { output = try await telemetry.speedTest(model: model).detail } catch { output = error.localizedDescription }; busy = false } }
+    private func runSelected() { guard let p = model.unifiedSelectedProfile else { return }; busy = true; operation = Task { do { output = try await telemetry.measureOne(p, model: model, samples: 50).detail + "\nSaved to this node." } catch { output = error.localizedDescription }; busy = false } }
+    private func runAll() { busy = true; operation = Task { let values = await telemetry.measureAll(model.allNodeProfiles, model: model, samples: 5); output = values.isEmpty ? telemetry.lastError : values.map(\.detail).joined(separator: "\n"); busy = false } }
 }
 
 private let iosUnifiedUXContract = "map-first swipe-up Connect Disconnect fastest-node live RTT real path Mbps quick kill switch forwarding shortcut Multihop Settings Performance Mode DNS SMART AUTO default AUTO all presets CUSTOM builder saved delete Router node Custom external color-coded hops real coordinates node ms animated packet path IPv6 On Auto MTU Require encrypted Require obfuscation schema-v4 profile-shared requirements Connection Profiles Add Load Update Delete real opt-in user location"

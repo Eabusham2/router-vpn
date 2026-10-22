@@ -85,7 +85,14 @@ final class RouterVPNMAXDNSOwner: NSObject, LibboxRouterMAXEndpointResolverProto
 
     private func finishPathFailure() { captured.signal() }
 
-    func lookup(_ hostname: String?) throws -> String {
+    // The generated nonnull NSString result keeps the NSError out-parameter;
+    // Swift does not import this foreign callback as a throwing method.
+    func lookup(_ hostname: String?, error failure: NSErrorPointer) -> String {
+        do { return try resolve(hostname) }
+        catch { failure?.pointee = error as NSError; return "" }
+    }
+
+    private func resolve(_ hostname: String?) throws -> String {
         guard let hostname, Self.validAbsoluteInput(hostname) else { throw Self.issue() }
         lock.lock()
         guard !canceled, pathReady, !queryStarted, interfaceIndex != 0 else { lock.unlock(); throw Self.issue() }

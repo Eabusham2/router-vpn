@@ -14,7 +14,7 @@ STUBS = {}
 def stub(package,name,body,kind='class'):
     STUBS[package.replace('.','/')+'/'+name+'.java']='package '+package+';\npublic '+kind+' '+name+' '+body
 stub('android.content','SharedPreferences','''{String getString(String key,String fallback);Editor edit();interface Editor {Editor putString(String key,String value);boolean commit();}}''','interface')
-stub('android.content','Context','''{public static final int MODE_PRIVATE=0;public static final String CONNECTIVITY_SERVICE="connectivity";public Object service;public SharedPreferences preferences;public Object getSystemService(String name){return service;}public SharedPreferences getSharedPreferences(String name,int mode){return preferences;}}''')
+stub('android.content','Context','''{public static final int MODE_PRIVATE=0;public static final String CONNECTIVITY_SERVICE="connectivity";public Object service;public SharedPreferences preferences;public Context getApplicationContext(){return this;}public Object getSystemService(String name){return service;}public SharedPreferences getSharedPreferences(String name,int mode){return preferences;}}''')
 stub('android.os','Build','{public static class VERSION{public static int SDK_INT=36;}public static class VERSION_CODES{public static final int R=30;}}')
 stub('android.os','Process','{public static int myUid(){return 2000;}}')
 stub('android.os','SystemClock','{public static long elapsedRealtime(){return System.nanoTime()/1000000;}}')
@@ -23,6 +23,7 @@ stub('android.net','NetworkCapabilities','''{public static final int TRANSPORT_V
 stub('android.net','LinkProperties','''{public String name="tun0";public java.util.List<String> addresses=new java.util.ArrayList<>();public String getInterfaceName(){return name;}public java.util.List<String> getLinkAddresses(){return addresses;}public java.util.List<String> getRoutes(){return java.util.List.of("route");}public java.util.List<String> getDnsServers(){return java.util.List.of("dns");}}''')
 stub('android.net','Network','''{public long handle;public NetworkCapabilities caps=new NetworkCapabilities();public LinkProperties links=new LinkProperties();public int bindings;public boolean fail;public Runnable hook;public Network(long h){handle=h;}public long getNetworkHandle(){return handle;}public void bindSocket(java.io.FileDescriptor fd)throws java.io.IOException{if(fail)throw new java.io.IOException("injected bind failure");bindings++;if(hook!=null)hook.run();}}''')
 stub('android.net','ConnectivityManager','''{public Network[] networks=new Network[0];public Network active;public Network[] getAllNetworks(){return networks;}public Network getActiveNetwork(){return active;}public NetworkCapabilities getNetworkCapabilities(Network n){return n.caps;}public LinkProperties getLinkProperties(Network n){return n.links;}}''')
+stub('com.eabusham.routervpn','AndroidTelemetryNetwork','{public interface Check{void run()throws Exception;}private Check owner;public String name;public static AndroidTelemetryNetwork named(android.content.Context c,String name,Check check)throws Exception{check.run();AndroidTelemetryNetwork value=new AndroidTelemetryNetwork();value.owner=check;value.name=name;return value;}public void check()throws Exception{owner.run();}}')
 P='io.nekohasekai.libbox'
 stub('com.eabusham.routervpn','AndroidExternalSession','{public org.json.JSONObject mtuProfile()throws Exception{throw new IllegalStateException();}public boolean healthy(){return false;}public io.nekohasekai.libbox.RouterMTU newMTU(io.nekohasekai.libbox.RouterMTUPlatform platform)throws Exception{throw new IllegalStateException();}}')
 STUBS['com/eabusham/routervpn/AndroidTorSession.java'] = STUBS['com/eabusham/routervpn/AndroidExternalSession.java'].replace('AndroidExternalSession', 'AndroidTorSession')
@@ -178,8 +179,18 @@ public class Main {
   rejects(fixed.owner::drainForMeasurement,"no-optimizer handoff skipped current OS MTU verification");
   fixed.owner.close();rejects(fixed.owner::drainForMeasurement,"stopped fixed policy passed Speed Lab handoff");
  }
+ static void capturedTelemetry()throws Exception {
+  for(int api:new int[]{24,25,36}){
+   android.os.Build.VERSION.SDK_INT=api;Fixture fixture=new Fixture();RouterMTUState before=fixture.establish();
+   AndroidTelemetryNetwork captured=fixture.owner.captureTelemetryNetwork();captured.check();check(captured.name.equals("tun0"),"telemetry did not retain exact native TUN interface");
+   fixture.owner.beginMTUChange(before);rejects(fixture.owner::captureTelemetryNetwork,"changing native TUN became a fresh telemetry owner");rejects(captured::check,"retained telemetry ignored MTU replacement beginning");
+   fixture.owner.beforeOpen();fixture.mtu=1420;fixture.owner.established(1420);fixture.owner.registered("tun0");fixture.owner.endMTUChange();rejects(captured::check,"retained telemetry accepted new reader UUID/MTU");
+   AndroidTelemetryNetwork current=fixture.owner.captureTelemetryNetwork();current.check();fixture.owner.networkChanged();rejects(current::check,"native path invalidation retained telemetry owner");fixture.owner.close();
+  }
+  android.os.Build.VERSION.SDK_INT=36;
+ }
  public static void main(String[] args)throws Exception{
-  constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();
+  constructorShutdown();failedDrainRetry();staleConstructorDrainRetry();verifiedHandoff();capturedTelemetry();
   Fixture a=new Fixture();check(a.owner.captureMTU()==null,"missing interface invented");RouterMTUState first=a.establish();check(first!=null&&first.getMTU()==1280,"initial actual readback lost");
   rejects(a.owner::beforeOpen,"unowned reader replacement allowed");
   RouterMTUState wrong=new RouterMTUState();wrong.setSession("other");wrong.setPath(first.getPath());wrong.setInterface(first.getInterface());wrong.setMTU(1280);

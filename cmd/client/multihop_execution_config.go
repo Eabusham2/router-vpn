@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"path/filepath"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
 	"runtime"
 )
@@ -18,7 +19,7 @@ type desktopExecutionDescriptor struct {
 
 // Only a copy of the already-validated, session-owned native configuration is
 // changed. The original generated node profiles and selected DNS policy survive.
-func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor) error {
+func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor, sel multihopSelection) error {
 	if d.Execution != "server" {
 		return errors.New("invalid server execution descriptor")
 	}
@@ -38,6 +39,13 @@ func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor) erro
 	if err != nil {
 		return err
 	}
+	layer := sel.Exit.StartLayer
+	if layer == "off" {
+		layer = ""
+	}
+	if sel.Native == nil || sel.Native.validate(sel) != nil || string(raw) != sel.Native.configs[sel.ExitMode] || d.Lease.ExitMode != sel.ExitMode || d.Lease.ExitStartLayer != layer {
+		return errors.New("native server graph differs from the immutable selected source")
+	}
 	var cfg map[string]any
 	if err = json.Unmarshal(raw, &cfg); err != nil {
 		return err
@@ -51,23 +59,38 @@ func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor) erro
 		return errors.New("native server path requires one owned entry endpoint")
 	}
 	entry, ok := endpoints[0].(map[string]any)
-	if !ok || entry["tag"] != "entry-wg" || entry["type"] != "wireguard" {
+	if !ok || entry["tag"] != "entry-wg" || entry["type"] != "wireguard" && entry["type"] != mobilemultihop.AmneziaType {
 		return errors.New("native entry endpoint identity changed")
+	}
+	if entry["type"] == mobilemultihop.AmneziaType {
+		encoded, _ := json.Marshal(entry)
+		if _, err := mobilemultihop.AmneziaRuntimeConfig(string(encoded)); err != nil {
+			return errors.New("native AWG entry lost its captured parameters")
+		}
 	}
 	outbounds, ok := cfg["outbounds"].([]any)
 	if !ok {
 		return errors.New("native multihop outbounds missing")
 	}
 	found := 0
-	for i, item := range outbounds {
+	retained := make([]any, 0, len(outbounds))
+	for _, item := range outbounds {
 		out, ok := item.(map[string]any)
 		if !ok {
 			return errors.New("invalid native outbound")
 		}
 		if out["tag"] == "proxy" {
 			found++
-			outbounds[i] = map[string]any{"type": "socks", "tag": "proxy", "version": "5", "server": d.Lease.Host, "server_port": d.Lease.Port, "username": d.Lease.Username, "password": d.Lease.Password, "detour": "entry-wg"}
+			out = map[string]any{"type": "socks", "tag": "proxy", "version": "5", "server": d.Lease.Host, "server_port": d.Lease.Port, "username": d.Lease.Username, "password": d.Lease.Password, "detour": "entry-wg"}
+		} else if out["tag"] == mobilemultihop.NativeStartLayerTag {
+			// The authenticated lease owns this exact exit layer on the entry
+			// server. The namespaced entry layer stays in the local graph.
+			if !multihoprelay.ValidLayerMode(d.Lease.ExitStartLayer) || out["detour"] != "entry-wg" {
+				return errors.New("server lease does not own the captured exit Start Layer")
+			}
+			continue
 		}
+		retained = append(retained, out)
 	}
 	if found != 1 {
 		return errors.New("ambiguous exit proxy")
@@ -96,7 +119,7 @@ func patchDesktopExecutionConfig(path string, d desktopExecutionDescriptor) erro
 	if control != 1 {
 		return errors.New("entry control must have exactly one private tunnel route")
 	}
-	cfg["outbounds"] = outbounds
+	cfg["outbounds"] = retained
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
@@ -142,7 +165,10 @@ func desktopExecutionCommand(a *app, sel multihopSelection, d *desktopExecutionD
 		if e != nil {
 			return nil, "", e
 		}
-		if err = patchDesktopExecutionConfig(filepath.Join(dir, "sing-box.json"), *d); err != nil {
+		if sel.Native == nil {
+			return nil, dir, errors.New("server execution has no immutable native source")
+		}
+		if err = patchDesktopExecutionConfig(filepath.Join(dir, "sing-box.json"), *d, sel); err != nil {
 			return nil, dir, err
 		}
 	}

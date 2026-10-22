@@ -28,12 +28,12 @@ final class AndroidNodeStore {
 }
 final class AndroidStandardExitStore {
  static final Map<String,Entry> saved=new HashMap<>();
- static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";}
+ static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";String startupMode="smart-auto";boolean autoConnect;}
  AndroidStandardExitStore(Context c){}List<Entry> list()throws Exception{List<Entry> list=new ArrayList<>();for(Entry e:saved.values())list.add(copy(e));return list;}Entry get(String id)throws Exception{Entry e=saved.get(id);if(e==null)throw new IllegalArgumentException("missing exit");return copy(e);}
  static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||!e.protocol.equals("shadowsocks")))throw new IllegalArgumentException("unowned execution");}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("missing saved exit");}
- static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;return x;}
- static String snapshot(Entry e)throws Exception{return new JSONObject().put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).toString();}
+ static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;x.startupMode=e.startupMode;x.autoConnect=e.autoConnect;return x;}
+ static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).toString();}
 }
 final class NativeWireGuardController {}final class NativeAmneziaWGController {}final class NativeXrayController {}
 final class NativeSingBoxController {
@@ -44,7 +44,8 @@ final class AndroidNativeCompositeProfile {
  // PRODUCTION_COMPOSITE_PREDICATE
 }
 final class AndroidModeOrchestrator {
- interface Callback{void progress(String message);void finished(boolean ok,String mode,String message);default void owned(String id){}}
+ interface Callback{void progress(String message);void finished(boolean ok,String mode,String message);default void owned(String id){}default void proved(String session,String raw,String source){}}
+ void startup(File file,String mode,String raw,String source,Callback cb){throw new AssertionError("external permission cannot dispatch Router startup");}
  String captureSource(File f,String session,String raw)throws Exception{return Files.readString(f.toPath());}void restoreCaptured(File f,String raw,String logical,String fallback,String source,Callback cb){}void disconnectCaptured(String session,Callback cb){cb.finished(true,"","stopped");}
  void disconnect(Callback cb){cb.finished(true,"","stopped");}void auto(File f,boolean smart,Callback cb){}void all(File f,Callback cb){}void custom(File f,List<String> l,Callback cb){}void logical(File f,String m,Callback cb){}
 }
@@ -69,6 +70,12 @@ final class AndroidStandardExitRuntime {
 final class AndroidRuntimeRegistry {
  static AndroidRuntimeRegistry instance=new AndroidRuntimeRegistry();static AndroidRuntimeRegistry get(Context c){return instance;}
  final NativeWireGuardController wireGuard=new NativeWireGuardController();final NativeAmneziaWGController amneziaWG=new NativeAmneziaWGController();final NativeSingBoxController singBox=new NativeSingBoxController();final NativeXrayController xray=new NativeXrayController();final AndroidModeOrchestrator orchestrator=new AndroidModeOrchestrator();final AndroidMultihopRuntime multihop=new AndroidMultihopRuntime();final AndroidStandardExitRuntime standardExit=new AndroidStandardExitRuntime();
+}
+// Startup has its own shipping-policy/permission fixture. This suite never
+// creates a startup capture or records a single-Router proof.
+final class AndroidStartupPolicy {
+ static final class Attempt {String nonce="",mode="",source="",lastRaw="",entryMode="wg",exitMode="",execution="local";AndroidNodeStore.Node node,entry,exit;AndroidStandardExitStore.Entry external;boolean external(){return external!=null;}boolean multihop(){return entry!=null;}void requireCurrent(Context c,AndroidNodeStore n,AndroidUnifiedConnectionController o){throw new AssertionError("unexpected startup capture");}void dispatched(){}void cancel(){}}
+ static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
 

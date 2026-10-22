@@ -82,15 +82,17 @@ def macos_killswitch_gate() -> bool:
 
 def controller_multihop_platform(platform: str) -> bool:
     routes = "cmd/client/multihop_native_routes.go"
-    if not mod.has(routes, "nativeMultihopPlatformSupported", "/api/multihop/status", "/api/multihop/connect", "proveMultihopExit"):
+    if not mod.has(routes, "nativeMultihopPlatformSupported", "/api/multihop/status", "/api/multihop/connect", "proveNativeMultihop"):
+        return False
+    if not mod.has("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig", "verifyBundledNative", "nativeMultihopEnvironment", "HOMEVPN_POLICY_PROFILE_ID", "proveMultihopLaneNodeContext", "captureNativeMultihopSelection"):
         return False
     if platform == "windows":
         return mod.has(routes, 'runtime.GOOS == "windows"', "nativeWindowsMultihopCommand") and mod.has(
             "cmd/client/multihop_native.go",
             "nativeWindowsMultihopCommand",
             "prepareNativeMultihop",
-            'proxy["detour"] = "entry-wg"',
-            "nativeWGEndpoint",
+            "stageNativeMultihopCapture",
+            "nativeMultihopEnvironment",
         )
     if platform == "darwin":
         return mod.has(routes, 'runtime.GOOS == "darwin"', "nativeDarwinMultihopCommand") and mod.has(
@@ -98,7 +100,7 @@ def controller_multihop_platform(platform: str) -> bool:
             "nativeDarwinMultihopCommand",
             "prepareNativeMultihop",
             "native-multihop-darwin.sh",
-            "HOMEVPN_POLICY_PROFILE_ID",
+            "nativeMultihopEnvironment",
         ) and mod.has(
             "modes/native-multihop-darwin.sh",
             "sing-box",

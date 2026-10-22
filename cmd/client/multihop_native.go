@@ -2,7 +2,6 @@ package main
 
 import (
 	"bufio"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -26,8 +25,8 @@ var nativeMultihopID = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
 
 type nativeWG struct {
 	PrivateKey, PublicKey, PSK, Host string
-	Addresses, AllowedIPs             []string
-	Port, MTU                         int
+	Addresses, AllowedIPs            []string
+	Port, MTU                        int
 }
 
 func nativeGeneratedDir(root, id, mode string) (string, error) {
@@ -235,155 +234,14 @@ func nativeEntryPrivateOutbound(host string, port int, username, password string
 	return out, nil
 }
 
-func patchNativeMultihopConfig(path, exitMode string, wg nativeWG, entrySocksHost string, entrySocksPort int, entrySocksUsername, entrySocksPassword string) (string, error) {
-	raw, err := readPrivateRegular(path, 4<<20)
-	if err != nil {
-		return "", err
-	}
-	if len(raw) == 0 {
-		return "", errors.New("exit sing-box config size is invalid")
-	}
-	var cfg map[string]any
-	if err = json.Unmarshal(raw, &cfg); err != nil {
-		return "", fmt.Errorf("exit sing-box config: %w", err)
-	}
-	if endpoints, ok := cfg["endpoints"].([]any); ok && len(endpoints) > 0 {
-		return "", errors.New("exit config already contains endpoints; nested endpoint graphs are refused")
-	}
-	inbounds, ok := cfg["inbounds"].([]any)
-	if !ok {
-		return "", errors.New("exit config has no inbounds")
-	}
-	fullTun := false
-	tunAlias := "router-vpn-multihop"
-	for _, item := range inbounds {
-		m, _ := item.(map[string]any)
-		if m == nil {
-			continue
-		}
-		if m["type"] == "tun" {
-			auto, _ := m["auto_route"].(bool)
-			if auto {
-				fullTun = true
-			}
-			if name, _ := m["interface_name"].(string); strings.TrimSpace(name) != "" {
-				tunAlias = name
-			}
-		}
-		if port, ok := m["listen_port"].(float64); ok && (int(port) == nativeMultihopEntryProofPort || int(port) == nativeMultihopExitProofPort) {
-			return "", fmt.Errorf("exit profile already consumes multihop proof port %d", int(port))
-		}
-		if tag, _ := m["tag"].(string); tag == "multihop-entry-proof" || tag == "multihop-proof" {
-			return "", errors.New("exit profile already contains a reserved multihop proof inbound")
-		}
-	}
-	if !fullTun {
-		return "", errors.New("exit mode is not a full-device sing-box TUN profile")
-	}
-	route, ok := cfg["route"].(map[string]any)
-	if !ok || route["final"] != "proxy" {
-		return "", errors.New("exit profile final route is not expected proxy outbound")
-	}
-	outbounds, ok := cfg["outbounds"].([]any)
-	if !ok {
-		return "", errors.New("exit profile has no outbounds")
-	}
-	var proxy map[string]any
-	for _, item := range outbounds {
-		m, _ := item.(map[string]any)
-		if m == nil {
-			continue
-		}
-		if m["tag"] == "entry-private" {
-			return "", errors.New("exit profile already contains reserved entry-private outbound")
-		}
-		if m["tag"] == "proxy" {
-			proxy = m
-		}
-	}
-	if proxy == nil {
-		return "", errors.New("exit profile has no proxy outbound")
-	}
-	expected := exitMode
-	if exitMode == "shadowsocks" {
-		expected = "shadowsocks"
-	}
-	if typ, _ := proxy["type"].(string); strings.ToLower(typ) != expected {
-		return "", errors.New("exit mode engine does not match generated profile")
-	}
-	if d, _ := proxy["detour"].(string); strings.TrimSpace(d) != "" {
-		return "", errors.New("exit proxy already has a detour; nested multihop is refused")
-	}
-	entryPrivate, err := nativeEntryPrivateOutbound(entrySocksHost, entrySocksPort, entrySocksUsername, entrySocksPassword)
-	if err != nil {
-		return "", err
-	}
-	proxy["detour"] = "entry-wg"
-	cfg["endpoints"] = []any{nativeWGEndpoint(wg)}
-	cfg["outbounds"] = append(outbounds, entryPrivate)
-	cfg["inbounds"] = append(inbounds,
-		map[string]any{"type": "mixed", "tag": "multihop-entry-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopEntryProofPort},
-		map[string]any{"type": "mixed", "tag": "multihop-proof", "listen": "127.0.0.1", "listen_port": nativeMultihopExitProofPort},
-	)
-	existingRules, _ := route["rules"].([]any)
-	route["rules"] = append([]any{
-		map[string]any{"inbound": []any{"multihop-entry-proof"}, "outbound": "entry-private"},
-		map[string]any{"inbound": []any{"multihop-proof"}, "outbound": "proxy"},
-	}, existingRules...)
-	cfg["route"] = route
-	patched, err := json.MarshalIndent(cfg, "", "  ")
-	if err != nil {
-		return "", err
-	}
-	patched = append(patched, '\n')
-	if len(patched) > 4<<20 {
-		return "", errors.New("prepared multihop config exceeds safety limit")
-	}
-	if err = writePrivateRuntimeFile(path, patched); err != nil {
-		return "", err
-	}
-	return tunAlias, nil
-}
-
 func prepareNativeMultihop(root string, sel multihopSelection) (string, string, error) {
-	if sel.Base != "wg" {
-		return "", "", errors.New("first Windows/macOS native multihop path supports standard WireGuard entry only")
-	}
-	entryDir, err := nativeGeneratedDir(root, sel.Entry.ID, "wg")
-	if err != nil {
-		return "", "", err
-	}
-	exitDir, err := nativeGeneratedDir(root, sel.Exit.ID, sel.ExitMode)
-	if err != nil {
-		return "", "", err
-	}
-	wg, err := parseNativeWG(filepath.Join(entryDir, "wg.conf"))
-	if err != nil {
-		return "", "", err
-	}
-	if st, err := os.Lstat(exitDir); err != nil || !st.IsDir() || st.Mode()&os.ModeSymlink != 0 {
-		return "", "", errors.New("exit node generated mode profile is missing or unsafe")
-	}
-	runtimeDir, err := newPrivateRuntimeDir(root, "native-multihop")
-	if err != nil {
-		return "", "", err
-	}
-	if err = copyNativeMultihopTree(exitDir, runtimeDir); err != nil {
-		_ = os.RemoveAll(runtimeDir)
-		return "", "", err
-	}
-	tunAlias, err := patchNativeMultihopConfig(
-		filepath.Join(runtimeDir, "sing-box.json"), sel.ExitMode, wg,
-		sel.Entry.SocksHost, sel.Entry.SocksPort, sel.Entry.SocksUsername, sel.Entry.SocksPassword,
-	)
-	if err != nil {
-		_ = os.RemoveAll(runtimeDir)
-		return "", "", err
-	}
-	return runtimeDir, tunAlias, nil
+	return stageNativeMultihopCapture(root, sel)
 }
 
 func nativeWindowsMultihopCommand(a *app, sel multihopSelection) (*exec.Cmd, error) {
+	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+		return nil, err
+	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	runtimeDir, tunAlias, err := prepareNativeMultihop(root, sel)
 	if err != nil {
@@ -393,9 +251,9 @@ func nativeWindowsMultihopCommand(a *app, sel multihopSelection) (*exec.Cmd, err
 	if _, err = os.Stat(helper); err != nil {
 		helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-multihop-windows.ps1")
 	}
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", runtimeDir, "-Endpoint", sel.Entry.Endpoint, "-TunnelAlias", tunAlias)
+	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", runtimeDir, "-Endpoint", sel.Native.endpoint, "-TunnelAlias", tunAlias)
 	cmd.Dir = root
-	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+sel.Entry.ID, "HOMEVPN_POLICY_PROFILE_ID="+sel.Control.ID)
+	cmd.Env = nativeMultihopEnvironment(root, sel)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil

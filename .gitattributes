@@ -1,0 +1,18 @@
+# Native source receipts hash exact file bytes across Windows/macOS/Linux.
+# Keep every checked-out text input canonical before a producer or consumer
+# computes that policy identity. Binary payloads retain their original bytes.
+* text=auto eol=lf
+*.png -text
+*.jpg -text
+*.jpeg -text
+*.gif -text
+*.ico -text
+*.icns -text
+*.zip -text
+*.gz -text
+*.xz -text
+*.jar -text
+*.a -text
+*.so -text
+*.dll -text
+*.exe -text

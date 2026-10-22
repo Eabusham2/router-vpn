@@ -3,7 +3,7 @@ $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 Add-Type -AssemblyName System.Net.Http
 $Ast=[ScriptBlock]::Create($ProductSource).Ast
-$Names=@('BeginUnifiedCandidateEntryChoice','MarkUnifiedCandidateEntryChoice','CommitUnifiedCandidateEntryChoice','UnifiedMultihopValue','TestUnifiedCandidateCurrent','TestUnifiedCandidateFresh','ReadUnifiedCandidateReceipt','TestUnifiedCandidateValidation','UpdateUnifiedCandidateButtons','NewUnifiedCandidateRequest','StartUnifiedCandidates','FinishUnifiedCandidateCancel','StopUnifiedCandidates','SelectUnifiedCandidate','PollUnifiedCandidates')
+$Names=@('BaseChoice','TestUnifiedCandidateBase','UnifiedCandidateBaseLabel','BeginUnifiedCandidateEntryChoice','MarkUnifiedCandidateEntryChoice','CommitUnifiedCandidateEntryChoice','UnifiedMultihopValue','TestUnifiedCandidateCurrent','TestUnifiedCandidateFresh','ReadUnifiedCandidateReceipt','TestUnifiedCandidateValidation','UpdateUnifiedCandidateButtons','NewUnifiedCandidateRequest','StartUnifiedCandidates','FinishUnifiedCandidateCancel','StopUnifiedCandidates','SelectUnifiedCandidate','PollUnifiedCandidates')
 $Original=@{}
 foreach($Name in $Names){
     $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst] -and $N.Name-eq$Name},$true))
@@ -22,9 +22,9 @@ function New-State{
         [void]$this.Jobs.Add($Job);return $Source.Task
     }
     $Dialog=[pscustomobject]@{CloseCalls=0};$Dialog|Add-Member ScriptMethod Close {$this.CloseCalls++}
-    $S=@{Closed=$false;AllowClose=$false;EntryID='entry';EntryName='Selected entry';Names=[ordered]@{slow='Slow exit';best='Best exit';failed='Failed exit'};RequestID='';Receipt=$null;Expires=[DateTimeOffset]::MinValue;Rows=@();Eligible=@{};FastestID='';PendingExit='';Operation='';Action='';LastError='';Cancelled=$false;CancelAck=$false;Client=$Client;Task=$null;Request=$null;Cts=$null;CancelTask=$null;CancelRequest=$null;CancelCts=$null;List=[pscustomobject]@{SelectedItem=$null;ItemsSource=$null};Status=[pscustomobject]@{Text=''};Dialog=$Dialog}
+    $S=@{Closed=$false;AllowClose=$false;EntryID='entry';EntryName='Selected entry';Base='wg';EntryBase='';EntryMode='';Names=[ordered]@{slow='Slow exit';best='Best exit';failed='Failed exit'};RequestID='';Receipt=$null;Expires=[DateTimeOffset]::MinValue;Rows=@();Eligible=@{};FastestID='';PendingExit='';Operation='';Action='';LastError='';Cancelled=$false;CancelAck=$false;Client=$Client;Task=$null;Request=$null;Cts=$null;CancelTask=$null;CancelRequest=$null;CancelCts=$null;List=[pscustomobject]@{SelectedItem=$null;ItemsSource=$null};Status=[pscustomobject]@{Text=''};Dialog=$Dialog}
     foreach($N in @('Select','Fastest','Retest','Cancel')){$S[$N]=[pscustomobject]@{IsEnabled=$false}}
-    $script:MultihopEntryCombo=[pscustomobject]@{SelectedValue='entry'};$script:MultihopExitCombo=[pscustomobject]@{SelectedValue='slow'};$script:UnifiedCandidates=$S
+    $script:BaseCombo=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='wg'}};$script:MultihopEntryCombo=[pscustomobject]@{SelectedValue='entry'};$script:MultihopExitCombo=[pscustomobject]@{SelectedValue='slow'};$script:UnifiedCandidates=$S
     return $S
 }
 function Receipt($S){return @{schema=1;request_id=$S.RequestID;entry_id=$S.EntryID;entry_mode='wg';entry_base='wg';drained=$true;measured_at=[DateTimeOffset]::UtcNow.ToString('o');expires_at=[DateTimeOffset]::UtcNow.AddSeconds(120).ToString('o');results=@(@{id='slow';samples=5;failed=0;median_ms=20.5},@{id='best';samples=5;failed=0;median_ms=7.25},@{id='failed';samples=4;failed=1;median_ms=1});errors=@(@{id='failed';error='candidate TCP timeout'});fastest_id='best'}}
@@ -128,6 +128,28 @@ $S=New-State;StartUnifiedCandidates $S;$Late=Receipt $S;$MultihopEntryCombo.Sele
 Check ($S.Cancelled -and $S.Action-eq'close') 'Entry replacement did not invalidate pending operation'
 Complete $S.Client.Jobs[0] $Late;Ack $S
 Check ($S.Dialog.CloseCalls-eq1 -and $MultihopExitCombo.SelectedValue-eq'slow') 'Old entry response survived reselection'
+
+foreach($Mode in @('wg','awg2-fast','awg2-strong')){
+    $Base=if($Mode-eq'wg'){'wg'}else{'awg'}
+    foreach($Requested in @('auto',$Base)){
+        $S=New-State;$S.Base=$Requested;$BaseCombo.SelectedItem.Tag=$Requested;StartUnifiedCandidates $S
+        Check ($S.Client.Jobs[0].Body.base-ceq$Requested) 'Candidate request lost the selected base'
+        $R=Receipt $S;$R.entry_base=$Base;$R.entry_mode=$Mode;Complete $S.Client.Jobs[0] $R;PollUnifiedCandidates $S
+        Check ($S.EntryBase-ceq$Base -and $S.EntryMode-ceq$Mode -and $S.Rows[1].response.EndsWith((UnifiedCandidateBaseLabel $Mode))) 'Actual measured base or variant label changed'
+        SelectUnifiedCandidate $S 'best'
+        $Wrong=if($Mode-eq'awg2-fast'){'awg2-strong'}else{'awg2-fast'}
+        $V=@{ok=$true;measured=$true;request_id=$S.RequestID;entry_id='entry';exit_id='best';entry_base=$Base;entry_mode=$Wrong}
+        Check (-not(TestUnifiedCandidateValidation $S $V)) 'Different valid raw mode borrowed a selection receipt'
+        $V.entry_mode=$Mode;Complete $S.Client.Jobs[1] $V;PollUnifiedCandidates $S
+        Check ($MultihopExitCombo.SelectedValue-eq'best' -and $S.Cancelled) 'Exact measured WG/AWG receipt was not adopted with cleanup'
+        Ack $S
+    }
+}
+$S=New-State;StartUnifiedCandidates $S;$Late=Receipt $S;$BaseCombo.SelectedItem.Tag='awg';PollUnifiedCandidates $S
+Check ($S.Cancelled -and $S.Action-eq'close') 'Changed requested base did not retire candidate ownership'
+Complete $S.Client.Jobs[0] $Late;Ack $S
+Check ($S.Dialog.CloseCalls-eq1 -and $MultihopExitCombo.SelectedValue-eq'slow') 'Old-base candidate response survived a changed selection'
+Check ($ProductSource.Contains('base=(BaseChoice)') -and $ProductSource.Contains('UnifiedBaseCombo')) 'Connect lacks visible exact base selection'
 
 # Executable mutation control: removing the receipt validation branch must make
 # the actual completion callback adopt a stale ID and fail this same test.

@@ -95,13 +95,7 @@ for path in modes client; do
   rm -rf "$ROOT/$path"
   cp -a "$SRC/$path" "$ROOT/$path"
 done
-mkdir -p "$ROOT/runtime"
-[[ ! -L "$ROOT/runtime" ]] || { echo 'Unsafe runtime installation path' >&2; exit 1; }
-for runtime in xray amnezia; do
-  [[ -d "$SRC/runtime/$runtime" && ! -L "$SRC/runtime/$runtime" && ! -L "$ROOT/runtime/$runtime" ]] || { echo 'Unsafe or missing packaged runtime' >&2; exit 1; }
-  rm -rf "$ROOT/runtime/$runtime"
-  cp -a "$SRC/runtime/$runtime" "$ROOT/runtime/$runtime"
-done
+bash "$SRC/client/install-bundled-desktop-runtime.sh" "$SRC" "$ROOT"
 for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
   [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
 done
@@ -162,8 +156,11 @@ TXT
 
 "$ROOT/deploy/package-xray-runtime.sh" "linux/$ARCH" "$dir"
 "$ROOT/deploy/package-amnezia-runtime.sh" "linux/$ARCH" "$dir"
+"$ROOT/deploy/package-native-runtime.sh" "linux/$ARCH" "$dir"
+python3 "$ROOT/deploy/test_linux_runtime_install.py" --package "$dir"
 python3 "$ROOT/server/scripts/source_provenance.py" "$dir" --family "linux-$ARCH"
 tar -C "$work" -czf "$OUT/$name.tar.gz" "$name"
+python3 "$ROOT/deploy/native-runtime-bundle.py" verify-package "linux/$ARCH" "$OUT/$name.tar.gz"
 archive_list="$work/archive-members.txt"
 tar -tzf "$OUT/$name.tar.gz" > "$archive_list"
 grep -Fxq "$name/router-vpn-app" "$archive_list"

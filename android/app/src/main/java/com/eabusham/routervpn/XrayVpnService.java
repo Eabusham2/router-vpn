@@ -36,6 +36,7 @@ public final class XrayVpnService extends VpnService {
     private static final int MAX_CONFIG = 4 * 1024 * 1024;
     private static final int MAX_META = 64 * 1024;
     private static final String EXPECTED_LIBXRAY_REVISION = "294fb37343205b9b0cb7b7b1b423d3d4b60d9998";
+    private static final java.util.concurrent.atomic.AtomicReference<XrayVpnService> currentService=new java.util.concurrent.atomic.AtomicReference<>();
 
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
@@ -58,8 +59,26 @@ public final class XrayVpnService extends VpnService {
 
     @Override public void onCreate() {
         super.onCreate();
+        currentService.set(this);
         networkMonitor = new AndroidUnderlyingNetworkMonitor(this);
         ensureNotificationChannel();
+    }
+
+    static AndroidTelemetryNetwork captureTelemetryNetwork() throws Exception {
+        XrayVpnService service=currentService.get();
+        if(service==null)throw new IllegalStateException("The native Xray VPN service is not retained.");
+        final ParcelFileDescriptor descriptor;final File session;final JSONObject config;
+        synchronized(service.lock){descriptor=service.tun;session=service.activeSession;config=service.activeConfig;}
+        if(descriptor==null||session==null||config==null)throw new IllegalStateException("Xray has no retained TUN/session.");
+        return AndroidTelemetryNetwork.addressed(service,java.util.Arrays.asList("198.18.0.1/30","fd00:5256:504e::1/126"),()->{
+            synchronized(service.lock){
+                if(currentService.get()!=service||service.explicitStop||!"UP".equals(service.state)||service.tun!=descriptor||service.activeSession!=session||service.activeConfig!=config||!descriptor.getFileDescriptor().valid())
+                    throw new IllegalStateException("The captured Xray native TUN or session changed.");
+                JSONObject response=requireInvokeSuccess(Libbox.routerXrayInvoke(new JSONObject().put("apiVersion",1).put("method","getXrayState").toString()),"read captured Xray state");
+                JSONObject data=response.optJSONObject("data");
+                if(data==null||!data.optBoolean("running",false))throw new IllegalStateException("The retained Xray native core is no longer running.");
+            }
+        });
     }
 
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
@@ -220,6 +239,7 @@ public final class XrayVpnService extends VpnService {
     }
 
     @Override public void onDestroy() {
+        currentService.compareAndSet(this,null);
         String terminal = state;
         String mode = activeMode;
         File session;

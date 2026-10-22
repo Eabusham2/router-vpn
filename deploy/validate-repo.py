@@ -381,7 +381,7 @@ if workflow_root.is_dir():
 
 pins = {
     "server/init/Dockerfile": (
-        "golang:1.24.13-alpine", "golang:1.24.13-bookworm",
+        "golang:1.24.13-alpine", "golang:1.26.3-bookworm",
         "ghcr.io/sagernet/sing-box:v1.13.12",
         "golang:1.26.3-alpine AS xray", "deploy/build-xray-runtime.py", "ghcr.io/rosenpass/rosenpass:sha-00569eb",
     ),
