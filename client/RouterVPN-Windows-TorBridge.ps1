@@ -180,7 +180,7 @@ function ShowUnifiedTorBridgeBuilder{
     if(-not $ProductSource.Contains($eventMarker)){throw 'Windows Tor bridge UI: unified node event seam drifted.'}
     $ProductSource=$ProductSource.Replace($eventMarker,$eventMarker+"`r`n(Control 'UnifiedTorButton').Add_Click({ShowUnifiedTorBridgeBuilder})")
 
-    foreach($marker in @('UnifiedTorButton','Tor bridges…','ShowUnifiedTorBridgeBuilder','/api/tor-bridge/capabilities','/api/tor-bridge/import','meek_lite','Snowflake','WebTunnel','Auto / Custom','short-lived volunteer WebRTC proxies','profile data cannot inject ClientTransportPlugin commands')){if(-not$ProductSource.Contains($marker)){throw "Windows Tor bridge transform missing $marker"}}
+    foreach($marker in @('UnifiedTorButton','Tor bridges…','ShowUnifiedTorBridgeBuilder','/api/tor-bridge/capabilities','/api/tor-bridge/import','meek_lite','Snowflake','WebTunnel','Auto / Custom','short-lived volunteer WebRTC proxies','choose Custom TCP, DoT, DoH or Rescue in DNS')){if(-not$ProductSource.Contains($marker)){throw "Windows Tor bridge transform missing $marker"}}
     $ProductSource=Add-RouterVPNExternalNodeWindowsShell -ProductSource $ProductSource
     return $ProductSource
 }

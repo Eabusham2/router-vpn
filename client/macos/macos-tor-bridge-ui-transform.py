@@ -171,7 +171,7 @@ required = (
     '/api/tor-bridge/import',
     '"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"',
     'Snowflake uses brokers plus short-lived volunteer WebRTC proxies',
-    'profile data cannot inject ClientTransportPlugin commands',
+    'choose Custom TCP, DoT, DoH or Rescue in DNS',
     'Dynamic Tor transports require Kill switch Off',
 )
 for marker in required:
