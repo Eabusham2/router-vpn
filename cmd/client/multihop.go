@@ -122,6 +122,22 @@ func validateMultihopStartLayer(control common.RouterProfile) error {
 	return fmt.Errorf("multihop refuses Start Layer %s because the current node-to-node graph has no proved entry-side Start Layer composition path; disable Start Layer or use a direct compatible mode rather than silently weakening the requested layer", mode)
 }
 
+// Shared by actual multihop launch and pre-connect candidate measurements.
+// A captured explicit base wins, then entry preference, then control preference.
+func resolveMultihopEntryBase(control, entry common.RouterProfile, requested string) string {
+	base := normalizeBase(requested)
+	if base == "auto" {
+		base = normalizeBase(entry.BaseTunnel)
+	}
+	if base == "auto" {
+		base = normalizeBase(control.BaseTunnel)
+	}
+	if base == "auto" {
+		base = "wg"
+	}
+	return base
+}
+
 func resolveMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
 	if err := validateMultihopStartLayer(control); err != nil {
 		return multihopSelection{}, err
@@ -154,16 +170,7 @@ func resolveMultihopSelection(control common.RouterProfile, profiles []common.Ro
 	if strings.TrimSpace(entry.SocksHost) == "" || entry.SocksPort <= 0 {
 		return multihopSelection{}, errors.New("entry node is missing its private SOCKS5 endpoint")
 	}
-	base := normalizeBase(q.Base)
-	if base == "" || base == "auto" {
-		base = normalizeBase(entry.BaseTunnel)
-	}
-	if base == "" || base == "auto" {
-		base = normalizeBase(control.BaseTunnel)
-	}
-	if base == "" || base == "auto" {
-		base = "wg"
-	}
+	base := resolveMultihopEntryBase(control, entry, q.Base)
 	if base != "wg" && base != "awg" {
 		return multihopSelection{}, errors.New("multihop entry base must be WireGuard or AmneziaWG")
 	}

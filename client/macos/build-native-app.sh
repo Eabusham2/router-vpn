@@ -7,6 +7,8 @@ UNIFIED_SRC="$ROOT/client/macos/RouterVPNMacUnifiedShell.swift"
 SESSION_MUTATION_TRANSFORM="$ROOT/client/macos/macos-session-mutation-transform.py"
 TELEMETRY_SRC="$ROOT/client/macos/RouterVPNMacTelemetry.swift"
 SPEED_LAB_SRC="$ROOT/client/macos/RouterVPNMacSpeedLab.swift"
+VIA_ENTRY_POLICY_SRC="$ROOT/client/macos/RouterVPNMacViaEntryPolicy.swift"
+VIA_ENTRY_UI_SRC="$ROOT/client/macos/RouterVPNMacViaEntryCandidates.swift"
 GLOBE_SRC="$ROOT/client/macos/RouterVPNMacGlobeChrome.swift"
 PROFILE_SRC="$ROOT/client/macos/RouterVPNConnectionProfiles.swift"
 PROFILE_CHROME_SRC="$ROOT/client/macos/RouterVPNConnectionProfileChrome.swift"
@@ -21,6 +23,8 @@ case "$ARCH" in
   arm64) TARGET=arm64-apple-macosx13.0; CLANG_ARCH=arm64 ;;
   *) echo "Unsupported macOS app architecture: $ARCH" >&2; exit 2 ;;
 esac
+
+python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"
@@ -149,7 +153,7 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework CoreLocation -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 
 ICON_WORK="$BUILD_WORK/icon"; mkdir -p "$ICON_WORK"
@@ -180,7 +184,7 @@ plutil -lint "$APP/Contents/Info.plist" >/dev/null
 file "$BIN"
 case "$ARCH" in amd64) file "$BIN" | grep -Eq 'x86_64|Mach-O 64-bit executable x86_64';; arm64) file "$BIN" | grep -Eq 'arm64|Mach-O 64-bit executable arm64';; esac
 
-! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
+! grep -Eq 'import[[:space:]]+WebKit|WKWebView|SFSafariViewController' "$SRC" "$UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC"
 for marker in 'NSWindow(' 'import MapKit' 'MKMapView' 'http://127.0.0.1:8788' '/api/connect-logical' '/api/session/events' '/api/multihop/status' '/api/multihop/connect' '/api/external-profile/import' '/api/external-profile/connect' 'entry_id' 'externalEntryPopup' '/api/mtu/retest' 'Retest MTU' 'effective_mtu_mbps' '/api/emergency-stop'; do grep -Fq "$marker" "$SRC"; done
 for marker in 'buildUnifiedUI' 'unified-sheet' 'unified-connect' 'SMART AUTO — recommended' 'AUTO — first proven path' 'New CUSTOM preset…' 'CUSTOM preset builder' 'Kill switch' 'Multihop' 'Open settings' 'Mode' 'DNS' 'systemBlue' 'systemOrange' 'systemPink' 'real coordinates'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done
 for marker in 'self.mutationBusy(from: statusObject)' 'Disconnect already in progress.' 'changing the selected mode' 'saving a CUSTOM preset' 'deleting a CUSTOM preset' 'changing persistent kill-switch policy' 'changing DNS policy' 'Disconnecting…' 'Checking…'; do grep -Fq "$marker" "$HARDENED_UNIFIED_SRC"; done

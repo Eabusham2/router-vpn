@@ -7,6 +7,7 @@ on:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
       - 'deploy/test-linux-rendered-layout.sh'
+      - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -22,6 +23,7 @@ on:
       - 'client/linux/**'
       - 'deploy/package-linux-native.sh'
       - 'deploy/test-linux-rendered-layout.sh'
+      - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -64,6 +66,8 @@ jobs:
           sudo apt-get install -y --no-install-recommends libgtk-3-dev libcurl4-openssl-dev libjson-glib-dev pkg-config file xvfb xauth
       - name: Desktop icon generator self-test
         run: python3 deploy/materialize-desktop-icons.py --self-test
+      - name: Native routed candidate selection and cancellation
+        run: python3 deploy/test-linux-via-entry-candidates-ui.py
       - name: Test controller and shared contracts
         run: go test ./cmd/client ./internal/common
       - name: Build and package native Linux app

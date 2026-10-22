@@ -76,6 +76,12 @@ def transform(source: str, mode: str) -> str:
         if count != 1:
             raise SystemExit(f"{mode} session-mutation source contract drifted: anchor count={count}")
         source=source.replace(old,new,1)
+    if mode == "product":
+        old = 'func mutationBusy(from status: [String: Any]?) -> Bool {\n        guard let status'
+        new = 'func mutationBusy(from status: [String: Any]?) -> Bool {\n        if MacViaEntryCandidateReservation.shared.active { return true }\n        guard let status'
+        if source.count(old) != 1:
+            raise SystemExit("macOS candidate reservation mutation boundary drifted")
+        source = source.replace(old, new, 1)
     if mode == "unified":
         bad = 'for id in ["unified-kill-switch", "unified-multihop-toggle", "unified-mode-popup", "unified-dns-popup"] { self.findUnifiedView(id)?.isEnabled = !busy }'
         good = 'for id in ["unified-kill-switch", "unified-multihop-toggle", "unified-mode-popup", "unified-dns-popup"] { if let control = self.findUnifiedView(id) as? NSControl { control.isEnabled = !busy } }'

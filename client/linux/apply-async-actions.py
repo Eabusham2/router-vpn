@@ -94,4 +94,10 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
         module = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(module)
         text = module.apply(text)
+        candidates_spec = importlib.util.spec_from_file_location("linux_via_entry_candidates", Path(__file__).with_name("apply-via-entry-candidates.py"))
+        if candidates_spec is None or candidates_spec.loader is None:
+            raise RuntimeError("Missing routed candidate UI composer")
+        candidates = importlib.util.module_from_spec(candidates_spec)
+        candidates_spec.loader.exec_module(candidates)
+        text = candidates.apply(text)
     path.write_text(text)

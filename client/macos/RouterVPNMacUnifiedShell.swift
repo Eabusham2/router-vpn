@@ -467,6 +467,7 @@ extension ProductWindowController {
         refreshAdvanced()
         let content = NSStackView(); content.orientation = .vertical; content.spacing = 8
         let note = NSTextField(wrappingLabelWithString: "Choose entry → exit directly in the main control sheet. Each real-coordinate hop is color-coded on the map. The controller still decides platform/runtime support and fails closed rather than simulating a hop."); note.textColor = .secondaryLabelColor; content.addArrangedSubview(note)
+        let candidates = NSButton(title: "Retest exits via entry", target: self, action: #selector(openViaEntryCandidates)); candidates.bezelStyle = .rounded; content.addArrangedSubview(candidates)
         let refresh = NSButton(title: "Refresh readiness", target: self, action: #selector(refreshAdvancedAction)); refresh.bezelStyle = .rounded; content.addArrangedSubview(refresh); content.addArrangedSubview(scroll(advancedText))
         presentUnifiedDetail(title: "Multihop", view: content, width: 760, height: 520)
     }

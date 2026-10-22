@@ -61,16 +61,7 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if strings.TrimSpace(entry.Endpoint) == "" || strings.TrimSpace(exit.Endpoint) == "" {
 		return multihopSelection{}, errors.New("both multihop nodes need public endpoints")
 	}
-	base := normalizeBase(q.Base)
-	if base == "" || base == "auto" {
-		base = normalizeBase(entry.BaseTunnel)
-	}
-	if base == "" || base == "auto" {
-		base = normalizeBase(control.BaseTunnel)
-	}
-	if base == "" || base == "auto" {
-		base = "wg"
-	}
+	base := resolveMultihopEntryBase(control, entry, q.Base)
 	if base != "wg" {
 		return multihopSelection{}, errors.New("first native Windows/macOS multihop path supports standard WireGuard entry only")
 	}

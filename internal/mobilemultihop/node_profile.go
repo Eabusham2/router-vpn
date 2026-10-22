@@ -100,17 +100,14 @@ func NewNodeProfile(mode, files, profileJSON, start, dnsBootstrap string) (*Node
 			source, err = ComposeNativeBaseStartLayer(source, string(aes), string(policy))
 		}
 	case mode == "wg" || mode == "awg2-fast" || mode == "awg2-strong":
-		name := "wg.conf"
-		if mode != "wg" {
-			name = "awg.conf"
-		}
-		if len(assets) != 1 || len(assets[name]) == 0 {
-			return nil, errors.New("native base requires its exact one peer asset")
+		base, baseErr := NativeBaseSource(mode, assets)
+		if baseErr != nil {
+			return nil, baseErr
 		}
 		if mode == "wg" {
-			source, err = WireGuardExitConfig(string(assets[name]), node)
+			source, err = WireGuardExitConfig(string(base), node)
 		} else {
-			source, err = AmneziaExitConfig(string(assets[name]), node)
+			source, err = AmneziaExitConfig(string(base), node)
 		}
 		if err == nil && layer != "" {
 			source, err = ComposeNativeBaseStartLayer(source, string(aes), string(policy))

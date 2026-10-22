@@ -121,7 +121,7 @@ func freezeDesktopNodeAssets(files map[string][]byte, host, address string) (map
 	for name, body := range files {
 		copy[name] = append([]byte(nil), body...)
 		switch name {
-		case "wg.conf", "awg.conf":
+		case "wg.conf", "wg-socks.conf", "awg.conf", "awg-socks.conf":
 			lines := strings.Split(string(body), "\n")
 			for i, line := range lines {
 				key, value, ok := strings.Cut(line, "=")

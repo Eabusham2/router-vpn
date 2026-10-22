@@ -28,6 +28,10 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 	if !a.operationMu.TryLock() {
 		return nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
+	if err := guardViaEntryDecision(a); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
+	}
 	return a.operationMu.Unlock, nil
 }
 
@@ -44,6 +48,10 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 	if busy {
 		a.operationMu.Unlock()
 		return nil, errors.New("disconnect and wait for Router VPN to become fully idle before changing session or profile state")
+	}
+	if err := guardViaEntryDecision(a); err != nil {
+		a.operationMu.Unlock()
+		return nil, err
 	}
 	return a.operationMu.Unlock, nil
 }
@@ -74,6 +82,10 @@ func (a *app) beginConnectionOperation() (context.Context, func(), error) {
 	if busy {
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
+	}
+	if err := guardViaEntryDecision(a); err != nil {
+		a.operationMu.Unlock()
+		return nil, nil, err
 	}
 
 	// Validate/create every secret-bearing desktop runtime root before recording
@@ -136,6 +148,7 @@ func (a *app) cancelConnectionOperation() {
 	// delayed startup policy before cancelling any transaction that has already
 	// begun, closing both sides of the startup-timer race.
 	cancelPendingStartupPolicy(a)
+	cancelViaEntryOperation(a)
 	a.mu.Lock()
 	cancel := a.connectionCancel
 	a.mu.Unlock()

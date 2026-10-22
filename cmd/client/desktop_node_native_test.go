@@ -28,7 +28,9 @@ func desktopNodeFixture(t *testing.T, endpoint string) (common.RouterProfile, ma
 
 func TestDesktopNativeHostnameCaptureAndCancellation(t *testing.T) {
 	p, files := desktopNodeFixture(t, "node.example.test")
+	files["wg-socks.conf"] = []byte(strings.ReplaceAll(string(files["wg.conf"]), "0.0.0.0/0, ::/0", "10.77.0.0/24"))
 	original := string(files["wg.conf"])
+	originalSplit := string(files["wg-socks.conf"])
 	calls := 0
 	lookup := func(ctx context.Context, host string) ([]netip.Addr, error) {
 		calls++
@@ -41,7 +43,7 @@ func TestDesktopNativeHostnameCaptureAndCancellation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if endpoint != "198.51.100.8" || calls != 1 || !strings.Contains(compiled.Config(), endpoint) || !strings.Contains(compiled.Config(), p.AdGuardIPv4) || original != string(files["wg.conf"]) {
+	if endpoint != "198.51.100.8" || calls != 1 || !strings.Contains(compiled.Config(), endpoint) || !strings.Contains(compiled.Config(), p.AdGuardIPv4) || original != string(files["wg.conf"]) || originalSplit != string(files["wg-socks.conf"]) {
 		t.Fatal("captured node resolution changed source or DNS")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

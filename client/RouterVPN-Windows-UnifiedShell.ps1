@@ -35,6 +35,7 @@ function Add-RouterVPNUnifiedWindowsShell {
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Multihop" FontWeight="SemiBold" VerticalAlignment="Center"/><CheckBox Name="UnifiedMultihop" Grid.Column="1" VerticalAlignment="Center" Margin="6,0"/><ComboBox Name="UnifiedEntryCombo" Grid.Column="2" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><TextBlock Grid.Column="3" Text=" → " VerticalAlignment="Center"/><ComboBox Name="UnifiedExitCombo" Grid.Column="4" DisplayMemberPath="name" SelectedValuePath="id" MinWidth="150"/><ComboBox Name="UnifiedExitMode" Grid.Column="5" Margin="6,0,0,0"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><TextBlock Text="Execution" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedExecution" Grid.Column="1" SelectedIndex="2" ToolTip="Local keeps the exit tunnel on this device. Server trusts the entry node to run the exit. Compare tests both and keeps the lower valid average."><ComboBoxItem Content="Local — exit runs on device" Tag="local"/><ComboBoxItem Content="Server — exit runs on entry node" Tag="server"/><ComboBoxItem Content="Compare both — lowest valid average" Tag="auto"/></ComboBox></Grid>
       <TextBlock Name="UnifiedComparisonText" Text="Compare: (last-node RTT + external-server RTT) / 2. Either timeout excludes the candidate." TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="76,0,0,4"/>
+      <Button Name="UnifiedCandidatesButton" Content="Measure exits via entry…" HorizontalAlignment="Left" Margin="76,2,0,6" Padding="10,5" ToolTip="Measure candidate TCP responses through the selected WireGuard entry. Selecting an exit is separate from Connect."/>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Settings" FontWeight="SemiBold" VerticalAlignment="Center"/><TextBlock Name="UnifiedSettingsSummary" Grid.Column="1" Foreground="#A8B6D5" VerticalAlignment="Center" TextTrimming="CharacterEllipsis"/><StackPanel Grid.Column="2" Orientation="Horizontal"><Button Name="UnifiedSettingsButton" Content="Open settings" Padding="10,5"/><Button Name="UnifiedMtuButton" Content="Retest MTU" Margin="6,0,0,0" Padding="10,5"/></StackPanel></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="Mode" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedModeCombo" Grid.Column="1" DisplayMemberPath="display" SelectedValuePath="id"/><Button Name="UnifiedPresetsButton" Grid.Column="2" Content="Presets / CUSTOM" Margin="6,0,0,0" Padding="10,5"/></Grid>
       <Grid Margin="0,4"><Grid.ColumnDefinitions><ColumnDefinition Width="76"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Text="DNS" FontWeight="SemiBold" VerticalAlignment="Center"/><ComboBox Name="UnifiedDnsCombo" Grid.Column="1"><ComboBoxItem Content="Home AdGuard" Tag="home"/><ComboBoxItem Content="Fastest measured" Tag="fastest"/><ComboBoxItem Content="Custom" Tag="custom"/><ComboBoxItem Content="DoT" Tag="dot"/><ComboBoxItem Content="DoH" Tag="doh"/><ComboBoxItem Content="DoH3" Tag="doh3"/><ComboBoxItem Content="Rescue" Tag="rescue"/></ComboBox><Button Name="UnifiedDnsDetailsButton" Grid.Column="2" Content="DNS details" Margin="6,0,0,0" Padding="10,5"/></Grid>
@@ -82,6 +83,8 @@ $script:UnifiedAsyncDisconnectAfterCancel=$false
 $script:UnifiedAsyncActive=$false
 $script:UnifiedAsyncCompleting=$false
 $script:UnifiedAsyncClosed=$false
+$script:UnifiedCandidates=$null
+$script:UnifiedEntryChoice=$null
 $script:UnifiedAsyncPoller=New-Object Windows.Threading.DispatcherTimer
 $script:UnifiedAsyncPoller.Interval=[TimeSpan]::FromMilliseconds(100)
 # HTTP completion is not UI completion. Keep this reservation through callbacks
@@ -174,7 +177,7 @@ function PollUnifiedComparisonProgress {
 $script:UnifiedComparisonPoller.Add_Tick({PollUnifiedComparisonProgress})
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     if($script:UnifiedAsyncClosed){return}
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedExecution','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedExecution','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
@@ -335,7 +338,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
         $LastErrorText.Text=[string]$Status.last_error
         if($Connected){$ProofText.Text='Connected - selected-router private path proof passed.'}
         $DnsSaveButton.IsEnabled=-not$MutationBusy;$DnsButton.IsEnabled=$Connected
-        foreach($Name in @('PairNodeButton','ImportNodeButton','DeleteNodeButton','SelectNodeButton','SelectLowestLatencyButton','ExternalDirectButton','ExternalViaEntryButton','MultihopConnectButton','AutoButton','ConnectButton')){
+        foreach($Name in @('PairNodeButton','ImportNodeButton','DeleteNodeButton','SelectNodeButton','SelectLowestLatencyButton','ExternalDirectButton','ExternalViaEntryButton','MultihopConnectButton','UnifiedCandidatesButton','AutoButton','ConnectButton')){
             $C=Control $Name;if($null-ne$C){$C.IsEnabled=-not$MutationBusy}
         }
         foreach($Widget in @($RouterCombo,$ModeCombo,$BaseCombo,$DnsModeCombo,$DnsProtocolCombo,$DnsPresetCombo,$DnsHostBox,$DnsPortBox,$DnsServerBox,$DnsPathBox,$MultihopEntryCombo,$MultihopExitCombo,$MultihopExitModeCombo)){
@@ -472,6 +475,180 @@ function UnifiedConnect{
         [void](StartUnifiedApiAsync $Label $Path 'POST' $Body $Timeout $Success {param($E)Log ('Connect failed: '+$E)} $null)
     }catch{Log ('Connect failed: '+$_.Exception.Message);RefreshProduct}
 }
+# Candidate medians live only in this owned dialog; direct RTT caches are never changed.
+function BeginUnifiedCandidateEntryChoice{
+    $script:UnifiedEntryChoice=if($script:Busy -or (UnifiedAsyncBusy)){$null}else{@{Previous=[string]$MultihopEntryCombo.SelectedValue;Changed=$false}}
+}
+function MarkUnifiedCandidateEntryChoice{
+    if($null-ne$script:UnifiedEntryChoice -and -not$script:Busy -and -not(UnifiedAsyncBusy)){$script:UnifiedEntryChoice.Changed=$true}
+}
+function CommitUnifiedCandidateEntryChoice{
+    $Choice=$script:UnifiedEntryChoice;$script:UnifiedEntryChoice=$null
+    if($null-ne$Choice -and $Choice.Changed -and -not$script:Busy -and -not(UnifiedAsyncBusy) -and [string]$MultihopEntryCombo.SelectedValue -and [string]$MultihopEntryCombo.SelectedValue-ne$Choice.Previous){ShowUnifiedCandidates}
+}
+function TestUnifiedCandidateCurrent($State){
+    return -not$State.Closed -and [object]::ReferenceEquals($script:UnifiedCandidates,$State) -and [string]$MultihopEntryCombo.SelectedValue-eq$State.EntryID
+}
+function TestUnifiedCandidateFresh($State){
+    return (TestUnifiedCandidateCurrent $State) -and -not$State.Cancelled -and $null-ne$State.Receipt -and [DateTimeOffset]::UtcNow-lt$State.Expires
+}
+function ReadUnifiedCandidateReceipt($State,$Receipt){
+    $State.Receipt=$null;$State.Expires=[DateTimeOffset]::MinValue
+    if([int](UnifiedMultihopValue $Receipt 'schema' 0)-ne1 -or [string](UnifiedMultihopValue $Receipt 'request_id' '')-cne$State.RequestID -or [string](UnifiedMultihopValue $Receipt 'entry_id' '')-cne$State.EntryID -or [string](UnifiedMultihopValue $Receipt 'entry_base' '')-cne'wg' -or [string](UnifiedMultihopValue $Receipt 'entry_mode' '')-cne'wg' -or (UnifiedMultihopValue $Receipt 'drained' $false)-isnot[bool] -or -not(UnifiedMultihopValue $Receipt 'drained' $false)){throw 'The routed measurement receipt does not match this entry and request, or cleanup is incomplete.'}
+    $Expiry=[DateTimeOffset]::MinValue;$Measured=[DateTimeOffset]::MinValue
+    if(-not[DateTimeOffset]::TryParse([string](UnifiedMultihopValue $Receipt 'expires_at' ''),[ref]$Expiry) -or -not[DateTimeOffset]::TryParse([string](UnifiedMultihopValue $Receipt 'measured_at' ''),[ref]$Measured) -or $Expiry-le[DateTimeOffset]::UtcNow -or $Expiry-le$Measured){throw 'This routed measurement receipt has expired or has no valid measurement time. Retest.'}
+    $Results=@{};$Errors=@{}
+    $RawResults=UnifiedMultihopValue $Receipt 'results' @();$RawErrors=UnifiedMultihopValue $Receipt 'errors' @()
+    if($null-eq$RawResults){$RawResults=@()};if($null-eq$RawErrors){$RawErrors=@()}
+    foreach($R in @($RawResults)){
+        $ID=[string](UnifiedMultihopValue $R 'id' '')
+        if(-not$State.Names.Contains($ID) -or $Results.ContainsKey($ID)){throw 'The routed response contains an unknown or duplicate candidate.'}
+        $Results[$ID]=$R
+    }
+    foreach($E in @($RawErrors)){
+        $ID=[string](UnifiedMultihopValue $E 'id' '')
+        if(-not$State.Names.Contains($ID) -or $Errors.ContainsKey($ID)){throw 'The routed response contains an unknown or duplicate failure.'}
+        $Errors[$ID]=[string](UnifiedMultihopValue $E 'error' 'Routed response unavailable')
+    }
+    $Rows=@();$Eligible=@{}
+    foreach($ID in $State.Names.Keys){
+        if(-not$Results.ContainsKey($ID) -and -not$Errors.ContainsKey($ID)){throw 'The routed receipt did not account for every requested candidate. Retest.'}
+        $Good=$false;$Median=0.0;$Reason='No routed response';$Samples=0;$Failed=0
+        if($Results.ContainsKey($ID)){
+            $R=$Results[$ID];$Samples=[double](UnifiedMultihopValue $R 'samples' 0);$Failed=[double](UnifiedMultihopValue $R 'failed' -1);$Median=[double](UnifiedMultihopValue $R 'median_ms' 0)
+            $Good=$Samples-ge3 -and [Math]::Floor($Samples)-eq$Samples -and -not[Double]::IsInfinity($Samples) -and $Failed-eq0 -and $Median-gt0 -and -not[Double]::IsNaN($Median) -and -not[Double]::IsInfinity($Median)
+            $Reason="$Samples successful samples, $Failed failed; at least 3 and no failures are required"
+        }
+        if($Errors.ContainsKey($ID)){$Good=$false;$Reason=$Errors[$ID]}
+        $Response=if($Good){'via {0} · TCP response {1:F1} ms · {2} samples' -f $State.EntryName,$Median,$Samples}else{'via '+$State.EntryName+' · unavailable — '+$Reason}
+        $Row=[pscustomobject]@{id=[string]$ID;name=[string]$State.Names[$ID];response=$Response;eligible=$Good;median_ms=if($Good){$Median}else{$null}}
+        $Rows+=,$Row;if($Good){$Eligible[$ID]=$Row}
+    }
+    $Fastest=[string](UnifiedMultihopValue $Receipt 'fastest_id' '')
+    if($Fastest -and -not$Eligible.ContainsKey($Fastest)){throw 'The fastest candidate has no eligible routed response.'}
+    $State.Receipt=$Receipt;$State.Expires=$Expiry;$State.Rows=$Rows;$State.Eligible=$Eligible;$State.FastestID=$Fastest
+}
+function TestUnifiedCandidateValidation($State,$Value){
+    return (TestUnifiedCandidateFresh $State) -and $State.Eligible.ContainsKey($State.PendingExit) -and (UnifiedMultihopValue $Value 'ok' $false)-is[bool] -and (UnifiedMultihopValue $Value 'ok' $false) -and (UnifiedMultihopValue $Value 'measured' $false)-is[bool] -and (UnifiedMultihopValue $Value 'measured' $false) -and [string](UnifiedMultihopValue $Value 'request_id' '')-ceq$State.RequestID -and [string](UnifiedMultihopValue $Value 'entry_id' '')-ceq$State.EntryID -and [string](UnifiedMultihopValue $Value 'exit_id' '')-ceq$State.PendingExit -and [string](UnifiedMultihopValue $Value 'entry_base' '')-ceq'wg' -and [string](UnifiedMultihopValue $Value 'entry_mode' '')-ceq'wg'
+}
+function UpdateUnifiedCandidateButtons($State){
+    $Idle=$null-eq$State.Task -and $null-eq$State.CancelTask -and -not$State.Cancelled
+    $Fresh=$Idle -and (TestUnifiedCandidateFresh $State)
+    $Row=$State.List.SelectedItem
+    $State.Select.IsEnabled=$Fresh -and $null-ne$Row -and [bool]$Row.eligible
+    $State.Fastest.IsEnabled=$Fresh -and [bool]$State.FastestID
+    $State.Retest.IsEnabled=$Idle
+    $State.Cancel.IsEnabled=[bool]$State.RequestID -and $null-eq$State.CancelTask
+    if($null-ne$State.Receipt -and -not$Fresh -and $Idle){$State.Status.Text='Measurements expired or the entry changed. Retest before selecting an exit.'}
+}
+function NewUnifiedCandidateRequest($State,[string]$Path,$Body,[int]$Timeout=180){
+    $Req=[System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Post,'http://127.0.0.1:8788'+$Path)
+    $Req.Content=[System.Net.Http.StringContent]::new(($Body|ConvertTo-Json -Depth 8 -Compress),[System.Text.Encoding]::UTF8,'application/json')
+    $Cts=[System.Threading.CancellationTokenSource]::new();$Cts.CancelAfter([TimeSpan]::FromSeconds($Timeout))
+    try{$Task=$State.Client.SendAsync($Req,$Cts.Token);return @{Task=$Task;Request=$Req;Cts=$Cts}}catch{$Req.Dispose();$Cts.Dispose();throw}
+}
+function StartUnifiedCandidates($State){
+    if(-not(TestUnifiedCandidateCurrent $State) -or $null-ne$State.Task -or $null-ne$State.CancelTask -or $State.RequestID){return}
+    # Publish the nonce before SendAsync so even a queued POST can be cancelled.
+    $State.RequestID=[Guid]::NewGuid().ToString('N');$State.Cancelled=$false;$State.CancelAck=$false;$State.PendingExit='';$State.Receipt=$null;$State.Eligible=@{};$State.FastestID='';$State.LastError='';$State.Rows=@();$State.List.ItemsSource=$null;$State.Action='';$State.Operation='measure'
+    $State.Status.Text='Measuring TCP responses via '+$State.EntryName+' with its saved Start Layer and DNS. Selection and Connect remain separate.'
+    try{$Job=NewUnifiedCandidateRequest $State '/api/multihop/candidates' @{request_id=$State.RequestID;entry_id=$State.EntryID;base='wg';candidate_ids=@($State.Names.Keys);samples=5};$State.Task=$Job.Task;$State.Request=$Job.Request;$State.Cts=$Job.Cts}catch{$State.LastError=$_.Exception.Message;StopUnifiedCandidates $State 'cancel'}
+    UpdateUnifiedCandidateButtons $State
+}
+function FinishUnifiedCandidateCancel($State){
+    if(-not$State.CancelAck -or $null-ne$State.Task -or $null-ne$State.CancelTask){return}
+    $Action=$State.Action;$State.RequestID='';$State.Cancelled=$false;$State.CancelAck=$false;$State.Action=''
+    if($Action-eq'close'){$State.AllowClose=$true;$State.Dialog.Close();return}
+    if($Action-eq'retest'){StartUnifiedCandidates $State;return}
+    $State.Status.Text=if($State.LastError){$State.LastError+' Native cleanup is confirmed. Retest to measure again.'}else{'Cancelled. Native cleanup is confirmed. Retest to measure again.'}
+    UpdateUnifiedCandidateButtons $State
+}
+function StopUnifiedCandidates($State,[string]$Action='cancel'){
+    if($State.Closed){return}
+    # Retest and close never reuse an old nonce or allow a late result to win.
+    if($State.Action-ne'close'){$State.Action=$Action}
+    $State.Cancelled=$true;$State.Receipt=$null;$State.Eligible=@{};$State.FastestID=''
+    if(-not$State.RequestID){$State.CancelAck=$true;FinishUnifiedCandidateCancel $State;return}
+    try{if($null-ne$State.Cts){$State.Cts.Cancel()}}catch{}
+    if($null-eq$State.CancelTask -and -not$State.CancelAck){
+        $State.Status.Text='Cancelling and waiting for native cleanup…'
+        try{$Job=NewUnifiedCandidateRequest $State '/api/multihop/candidates/cancel' @{request_id=$State.RequestID};$State.CancelTask=$Job.Task;$State.CancelRequest=$Job.Request;$State.CancelCts=$Job.Cts}catch{$State.Status.Text='Cleanup could not be confirmed: '+$_.Exception.Message+'. Retry Cancel.'}
+    }
+    UpdateUnifiedCandidateButtons $State
+}
+function SelectUnifiedCandidate($State,[string]$ID){
+    if($null-ne$State.Task -or $null-ne$State.CancelTask -or -not(TestUnifiedCandidateFresh $State) -or -not$State.Eligible.ContainsKey($ID)){UpdateUnifiedCandidateButtons $State;return}
+    $State.PendingExit=$ID;$State.Operation='validate';$State.Status.Text='Checking that this measurement still belongs to the current entry, network and saved settings…'
+    try{$Job=NewUnifiedCandidateRequest $State '/api/multihop/candidates/validate' @{request_id=$State.RequestID;entry_id=$State.EntryID;exit_id=$ID} 15;$State.Task=$Job.Task;$State.Request=$Job.Request;$State.Cts=$Job.Cts}catch{$State.LastError=$_.Exception.Message;StopUnifiedCandidates $State 'cancel'}
+    UpdateUnifiedCandidateButtons $State
+}
+function PollUnifiedCandidates($State){
+    if($State.Closed){return}
+    if(-not(TestUnifiedCandidateCurrent $State) -and -not$State.Cancelled){$State.LastError='The selected entry changed; this measurement was discarded.';StopUnifiedCandidates $State 'close'}
+    if($null-ne$State.Task -and $State.Task.IsCompleted){
+        $Response=$null;$Value=$null;$ErrorText=''
+        try{$Response=$State.Task.GetAwaiter().GetResult();$Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$Response.IsSuccessStatusCode){throw ('HTTP '+[int]$Response.StatusCode+' '+$Text)};$Value=$Text|ConvertFrom-Json}catch{$ErrorText=$_.Exception.Message}finally{
+            if($null-ne$Response){$Response.Dispose()};$State.Request.Dispose();$State.Cts.Dispose();$State.Task=$null;$State.Request=$null;$State.Cts=$null
+        }
+        if(-not$State.Cancelled -and (TestUnifiedCandidateCurrent $State)){
+            try{
+                if($ErrorText){throw $ErrorText}
+                if($State.Operation-eq'measure'){
+                    ReadUnifiedCandidateReceipt $State $Value;$State.List.ItemsSource=@($State.Rows)
+                    $State.Status.Text='Routed TCP response medians. Unavailable candidates cannot be selected from this measured list. Choose an exit, then use Connect on the main sheet.'
+                }elseif($State.Operation-eq'validate'){
+                    if(-not(TestUnifiedCandidateValidation $State $Value)){throw 'The routed selection receipt is stale or does not match this candidate. Retest.'}
+                    $MultihopExitCombo.SelectedValue=$State.PendingExit
+                    Log ('Selected exit '+$State.Names[$State.PendingExit]+' from a current routed measurement via '+$State.EntryName+'. Use Connect to start the VPN.')
+                    StopUnifiedCandidates $State 'close'
+                }
+            }catch{$State.LastError=$_.Exception.Message;StopUnifiedCandidates $State 'cancel'}
+        }
+    }
+    if($null-ne$State.CancelTask -and $State.CancelTask.IsCompleted){
+        $Response=$null
+        try{$Response=$State.CancelTask.GetAwaiter().GetResult();$Text=$Response.Content.ReadAsStringAsync().GetAwaiter().GetResult();if(-not$Response.IsSuccessStatusCode){throw ('HTTP '+[int]$Response.StatusCode+' '+$Text)};$Value=$Text|ConvertFrom-Json
+            if((UnifiedMultihopValue $Value 'ok' $false)-isnot[bool] -or -not(UnifiedMultihopValue $Value 'ok' $false) -or (UnifiedMultihopValue $Value 'drained' $false)-isnot[bool] -or -not(UnifiedMultihopValue $Value 'drained' $false) -or [string](UnifiedMultihopValue $Value 'request_id' '')-cne$State.RequestID){throw 'Cancellation did not acknowledge this request and native cleanup.'}
+            $State.CancelAck=$true
+        }catch{$State.Status.Text='Cleanup could not be confirmed: '+$_.Exception.Message+'. Retry Cancel.'}finally{
+            if($null-ne$Response){$Response.Dispose()};$State.CancelRequest.Dispose();$State.CancelCts.Dispose();$State.CancelTask=$null;$State.CancelRequest=$null;$State.CancelCts=$null
+        }
+    }
+    if($State.Cancelled){FinishUnifiedCandidateCancel $State}
+    if(-not$State.Closed){UpdateUnifiedCandidateButtons $State}
+}
+function ShowUnifiedCandidates{
+    if(UnifiedAsyncBusy){Log 'Candidate measurement refused: another Router VPN action is still running.';return}
+    $Entry=[string]$MultihopEntryCombo.SelectedValue;$Names=[ordered]@{};$EntryName=$Entry
+    foreach($Node in @($MultihopExitCombo.ItemsSource)){$ID=[string](UnifiedMultihopValue $Node 'id' '');if($ID-eq$Entry){$EntryName=[string](UnifiedMultihopValue $Node 'name' $ID)}elseif($ID -and -not$Names.Contains($ID)){$Names[$ID]=[string](UnifiedMultihopValue $Node 'name' $ID)}}
+    if(-not$Entry -or $Names.Count-eq0){Log 'Choose a Router entry and add at least one different Router exit before measuring candidates.';return}
+    if($Names.Count-gt64){Log 'A routed candidate comparison supports up to 64 exits. Reduce the Router node list before measuring.';return}
+    [xml]$X=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Exits via selected entry" Width="850" Height="530" MinWidth="620" MinHeight="360" WindowStartupLocation="CenterOwner" Background="#101B2C" Foreground="#EFF4FF"><Grid Margin="18"><Grid.RowDefinitions><RowDefinition Height="Auto"/><RowDefinition Height="*"/><RowDefinition Height="Auto"/><RowDefinition Height="Auto"/></Grid.RowDefinitions><TextBlock Name="Heading" TextWrapping="Wrap" FontSize="18" Margin="0,0,0,12"/><ListView Name="Candidates" Grid.Row="1" Background="#142237" Foreground="#EFF4FF"><ListView.View><GridView><GridViewColumn Header="Exit" DisplayMemberBinding="{Binding name}" Width="160"/><GridViewColumn Header="Routed measurement" DisplayMemberBinding="{Binding response}" Width="590"/></GridView></ListView.View></ListView><TextBlock Name="Status" Grid.Row="2" TextWrapping="Wrap" Margin="0,12,0,12"/><WrapPanel Grid.Row="3" HorizontalAlignment="Right"><Button Name="Retest" Content="Retest" Padding="10,7" Margin="4"/><Button Name="Cancel" Content="Cancel measurement" Padding="10,7" Margin="4"/><Button Name="Select" Content="Select exit" Padding="10,7" Margin="4"/><Button Name="Fastest" Content="Select fastest" Padding="10,7" Margin="4"/><Button Name="Close" Content="Close" Padding="10,7" Margin="4"/></WrapPanel></Grid></Window>
+"@
+    $Reader=New-Object System.Xml.XmlNodeReader $X;$Dialog=[Windows.Markup.XamlReader]::Load($Reader);$Dialog.Owner=$Window
+    $Handler=[System.Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false;$Handler.AllowAutoRedirect=$false
+    $Client=[System.Net.Http.HttpClient]::new($Handler);$Client.Timeout=[System.Threading.Timeout]::InfiniteTimeSpan;$Client.MaxResponseContentBufferSize=2097152
+    $State=@{Dialog=$Dialog;EntryID=$Entry;EntryName=$EntryName;Names=$Names;RequestID='';Receipt=$null;Expires=[DateTimeOffset]::MinValue;Rows=@();Eligible=@{};FastestID='';PendingExit='';Operation='';Action='';LastError='';Cancelled=$false;CancelAck=$false;Closed=$false;AllowClose=$false;CloseOwner=$false;Client=$Client;Task=$null;Request=$null;Cts=$null;CancelTask=$null;CancelRequest=$null;CancelCts=$null;Timer=(New-Object Windows.Threading.DispatcherTimer)}
+    foreach($N in @('Candidates','Status','Select','Fastest','Retest','Cancel')){$State[$(if($N-eq'Candidates'){'List'}else{$N})]=$Dialog.FindName($N);$Dialog.FindName($N).Tag=$State}
+    $Dialog.Tag=$State;$Dialog.FindName('Close').Tag=$State;$Dialog.FindName('Heading').Text='Candidate exits via '+$EntryName+' · WireGuard entry'
+    $State.Retest.Add_Click({param($Sender,$Event)$S=$Sender.Tag;if($S.RequestID){StopUnifiedCandidates $S 'retest'}else{StartUnifiedCandidates $S}})
+    $State.Cancel.Add_Click({param($Sender,$Event)StopUnifiedCandidates $Sender.Tag 'cancel'})
+    $State.Select.Add_Click({param($Sender,$Event)$S=$Sender.Tag;if($null-ne$S.List.SelectedItem){SelectUnifiedCandidate $S ([string]$S.List.SelectedItem.id)}})
+    $State.Fastest.Add_Click({param($Sender,$Event)SelectUnifiedCandidate $Sender.Tag ([string]$Sender.Tag.FastestID)})
+    $State.List.Add_SelectionChanged({param($Sender,$Event)UpdateUnifiedCandidateButtons $Sender.Tag})
+    $Dialog.FindName('Close').Add_Click({param($Sender,$Event)StopUnifiedCandidates $Sender.Tag 'close'})
+    $Dialog.Add_Closing({param($Sender,$Event)$S=$Sender.Tag;if(-not$S.AllowClose){$Event.Cancel=$true;StopUnifiedCandidates $S 'close'}})
+    $State.Timer.Interval=[TimeSpan]::FromMilliseconds(100);$State.Timer.Tag=$State;$State.Timer.Add_Tick({param($Sender,$Event)PollUnifiedCandidates $Sender.Tag})
+    [void](CancelUnifiedRefreshAsync);if(Get-Command CancelUnifiedTelemetryRefreshAsync -ErrorAction SilentlyContinue){[void](CancelUnifiedTelemetryRefreshAsync)}
+    # Own the same mutation reservation as every other long native action.
+    $script:UnifiedCandidates=$State;$script:UnifiedAsyncActive=$true;SetUnifiedAsyncUI $true 'Measuring exits…'
+    try{$State.Timer.Start();StartUnifiedCandidates $State;[void]$Dialog.ShowDialog()}finally{
+        $State.Closed=$true;$State.Timer.Stop();$Client.Dispose();$script:UnifiedCandidates=$null;$script:UnifiedAsyncActive=$false;SetUnifiedAsyncUI $false
+    }
+    if($State.CloseOwner){$Window.Close()}else{RefreshProduct}
+}
+
 function ShowUnifiedCustomBuilder{
  try{$Raw=@(Api '/api/logical-modes' -Timeout 12);$Layers=New-Object 'System.Collections.Generic.HashSet[string]';foreach($M in $Raw){foreach($V in @($M.variants.PSObject.Properties)){if($V.Value -and $V.Value.mode){foreach($L in @($V.Value.mode.layers)){if($L){[void]$Layers.Add([string]$L)}}}}};$LayerList=@($Layers|Sort-Object);if(-not $LayerList){throw 'No mode layers are available.'}
  [xml]$X=@"
@@ -556,6 +733,13 @@ $DnsButton.Add_Click({if(UnifiedAsyncBusy){Log 'DNS Retest refused: another Rout
     if (-not $ProductSource.Contains($beforeShow)) { throw 'Windows unified shell: startup marker drifted.' }
     $handlers = @'
 (Control 'UnifiedConnectButton').Add_Click({UnifiedConnect})
+(Control 'UnifiedCandidatesButton').Add_Click({ShowUnifiedCandidates})
+$MultihopEntryCombo.Add_DropDownOpened({BeginUnifiedCandidateEntryChoice})
+$MultihopEntryCombo.Add_SelectionChanged({MarkUnifiedCandidateEntryChoice})
+$MultihopEntryCombo.Add_DropDownClosed({CommitUnifiedCandidateEntryChoice})
+$MultihopEntryCombo.Add_PreviewKeyDown({param($Sender,$Event)if(-not$Sender.IsDropDownOpen -and [string]$Event.Key-in@('Up','Down','Home','End','PageUp','PageDown')){BeginUnifiedCandidateEntryChoice}})
+$MultihopEntryCombo.Add_KeyUp({param($Sender,$Event)if(-not$Sender.IsDropDownOpen -and [string]$Event.Key-in@('Up','Down','Home','End','PageUp','PageDown')){CommitUnifiedCandidateEntryChoice}})
+$Window.Add_Closing({param($Sender,$Event)if($null-ne$script:UnifiedCandidates){$Event.Cancel=$true;$script:UnifiedCandidates.CloseOwner=$true;StopUnifiedCandidates $script:UnifiedCandidates 'close'}})
 (Control 'UnifiedProofButton').Add_Click({try{$R=Api '/api/home-summary/prove-exit' 'POST' @{} 15;if([string]$R.actual_exit_status -ne 'proved' -or -not [string]$R.actual_exit_ip){throw 'Current-session public-exit proof did not return proved.'};$ProofText.Text="Actual public VPN exit: $($R.actual_exit_ip) • current session proved";Log ("Actual public VPN exit proved: "+[string]$R.actual_exit_ip)}catch{Log ('Exit proof failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedEmergencyButton').Add_Click({try{[void](Api '/api/emergency-stop' 'POST' @{} 20);Log 'Emergency disconnect completed'}catch{Log ('Emergency disconnect failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedNodesButton').Add_Click({OpenUnifiedDetail 1})

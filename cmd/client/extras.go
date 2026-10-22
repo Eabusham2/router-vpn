@@ -544,6 +544,10 @@ func (a *app) emergencyStop(w http.ResponseWriter, r *http.Request) {
 	a.cancelConnectionOperation()
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	if err := finishViaEntryCancellation(a); err != nil {
+		http.Error(w, err.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	if err := a.stopMode(); err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

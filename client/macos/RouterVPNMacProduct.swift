@@ -10,7 +10,9 @@ final class ProductAPI {
     init() {
         let c = URLSessionConfiguration.ephemeral
         c.timeoutIntervalForRequest = 8
-        c.timeoutIntervalForResource = 15
+        // Candidate/connection transactions use bounded 180–240 second calls;
+        // each request and perform() still enforce their explicit deadline.
+        c.timeoutIntervalForResource = 300
         c.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
         c.connectionProxyDictionary = [:]
         session = URLSession(configuration: c)
@@ -216,6 +218,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         task.resume()
     }
     func configureMultihopExecution() {
+        multihopEntryPopup.target = self
+        multihopEntryPopup.action = #selector(unifiedEntryCandidatesChanged)
         if multihopExecutionPopup.numberOfItems == 0 {
             multihopExecutionPopup.addItems(withTitles: ["Local — exit runs on device", "Server — exit runs on entry node", "Compare both — lowest valid average"])
             let saved = UserDefaults.standard.string(forKey: "routervpn.multihop.execution.v1") ?? "auto"

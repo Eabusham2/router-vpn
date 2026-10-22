@@ -83,6 +83,9 @@ func registerTelemetryRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/connection/live-latency", a.connectionLiveLatency)
 	h.HandleFunc("/api/connection/speed-test", a.connectionSpeedTest)
 	h.HandleFunc("/api/multihop/live-latency", a.multihopLiveLatency)
+	h.HandleFunc("/api/multihop/candidates", a.viaEntryCandidates)
+	h.HandleFunc("/api/multihop/candidates/cancel", a.viaEntryCandidatesCancel)
+	h.HandleFunc("/api/multihop/candidates/validate", a.viaEntryCandidatesValidate)
 }
 
 func clampLiveSamples(value, fallback int) int {
