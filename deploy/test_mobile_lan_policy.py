@@ -43,15 +43,17 @@ class Tests(unittest.TestCase):
         preflights=re.findall(r'guard (\(provider\["engine"\].+?) else \{ throw tunnelError\(5,',provider,re.S)
         self.assertEqual(len(preflights),1,'one owned Apple early LAN preflight must be present')
         preflight=preflights[0]
+        capturedEntryCondition=' && (provider["tor_entry_bundle"] != nil || provider["external_entry_bundle"] != nil)'
+        self.assertIn(capturedEntryCondition,preflight)
         externalBody=provider.split('private func startExternalLibbox(',1)[1].split('private func ',1)[0]
         intersection='tunnelProtocol.excludeLocalNetworks == ((entry["home_lan_access"] as? Bool ?? true) && (selectedProfile["home_lan_access"] as? Bool ?? true))'
         self.assertIn(intersection,externalBody)
         self.assertLess(externalBody.index(intersection),externalBody.index('engine.start('))
         source='''import Foundation
 struct TunnelProtocol { var excludeLocalNetworks: Bool }
-func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool, _ capturedEntry: Bool) -> Bool {
+func preflight(_ engine: String, _ allowLAN: Bool, _ exclusion: Bool, _ capturedEntry: String?) -> Bool {
     var provider: [String: Any] = ["engine":engine]
-    if capturedEntry { provider["tor_entry_bundle"] = Data([1]) }
+    if let capturedEntry { provider[capturedEntry] = Data([1]) }
     let tunnelProtocol = TunnelProtocol(excludeLocalNetworks:exclusion)
     return PREFLIGHT
 }
@@ -75,8 +77,8 @@ for strict in [false,true] {for home: Bool? in [nil,false,true] {
 }}
 for home in [false,true] { for exclusion in [false,true] {
     for engine in ["multihop-libbox","libbox","wireguard","multihop","external-libbox","unknown"] {
-        for capturedEntry in [false,true] {
-            let deferred = engine == "multihop-libbox" || (engine == "external-libbox" && capturedEntry)
+        for capturedEntry: String? in [nil,"tor_entry_bundle","external_entry_bundle"] {
+            let deferred = engine == "multihop-libbox" || (engine == "external-libbox" && capturedEntry != nil)
             precondition(preflight(engine,home,exclusion,capturedEntry) == (deferred || home == exclusion));checks += 1
         }
     }
@@ -87,7 +89,9 @@ print("Shipping Apple LAN exclusion: PASS (\\(checks) checks)")
             tmp=Path(tmp)
             changes=[('shipping',preflight,appRule,externalExpr,True),
                      ('inverted-exclusion',preflight.replace('excludeLocalNetworks == allowLAN','excludeLocalNetworks != allowLAN'),appRule,externalExpr,False),
-                     ('uncaptured-external-bypass',preflight.replace(' && provider["tor_entry_bundle"] != nil',''),appRule,externalExpr,False),
+                     ('uncaptured-external-bypass',preflight.replace(capturedEntryCondition,'',1),appRule,externalExpr,False),
+                     ('missing-tor-entry-capture',preflight.replace('provider["tor_entry_bundle"] != nil || ','',1),appRule,externalExpr,False),
+                     ('missing-ordinary-entry-capture',preflight.replace(' || provider["external_entry_bundle"] != nil','',1),appRule,externalExpr,False),
                      ('entry-policy-bypass',preflight,appRule,externalExpr.replace(' && (capturedEntryProfile?.homeLANAccess ?? true)',''),False),
                      ('captured-entry-policy-bypass',preflight,appRule.replace(' && entryAllowsLAN',''),externalExpr,False),
                      ('captured-exclusion-inversion',preflight,appRule.replace('proto.excludeLocalNetworks = capturedLANExclusion','proto.excludeLocalNetworks = !capturedLANExclusion'),externalExpr,False)]
@@ -100,6 +104,6 @@ print("Shipping Apple LAN exclusion: PASS (\\(checks) checks)")
                 if accepted:
                     self.assertEqual(result.returncode,0,result.stderr);print(result.stdout.strip())
                 else:self.assertNotEqual(result.returncode,0,name+' bypass must fail the executed policy matrix')
-            print('Five compiled Apple LAN-policy bypass controls rejected')
+            print('Seven compiled Apple LAN-policy negative controls rejected')
         self.assertNotIn('excludeLocalNetworks == !allowLAN',(ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text())
 if __name__=='__main__':unittest.main()
