@@ -1,0 +1,174 @@
+package routervpnamnezia
+
+import (
+	"fmt"
+	"net"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing/common/buf"
+	B "github.com/sagernet/sing/common/bufio"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// Only the network transport is doubled. Reads, writes, and the optimized
+// read waiter exercise the same pinned sing server endpoint used by SOCKS5.
+type packetConcurrencyTransport struct {
+	addresses [2]M.Socksaddr
+	reads     atomic.Uint64
+	writes    atomic.Uint64
+	block     <-chan struct{}
+	entered   chan struct{}
+	once      sync.Once
+}
+
+func (c *packetConcurrencyTransport) next() M.Socksaddr {
+	return c.addresses[c.reads.Add(1)%2]
+}
+func (c *packetConcurrencyTransport) ReadFrom(p []byte) (int, net.Addr, error) {
+	return copy(p, "packet"), c.next().UDPAddr(), nil
+}
+func (c *packetConcurrencyTransport) ReadPacket(p *buf.Buffer) (M.Socksaddr, error) {
+	_, err := p.WriteString("packet")
+	return c.next(), err
+}
+func (c *packetConcurrencyTransport) WriteTo(p []byte, address net.Addr) (int, error) {
+	if c.block != nil {
+		c.once.Do(func() { close(c.entered) })
+		<-c.block
+	}
+	a := M.SocksaddrFromNet(address)
+	if a != c.addresses[0] && a != c.addresses[1] {
+		return 0, fmt.Errorf("reply has a torn or foreign session endpoint: %v", a)
+	}
+	c.writes.Add(1)
+	return len(p), nil
+}
+func (c *packetConcurrencyTransport) WritePacket(p *buf.Buffer, address M.Socksaddr) error {
+	defer p.Release()
+	_, err := c.WriteTo(p.Bytes(), address.UDPAddr())
+	return err
+}
+func (c *packetConcurrencyTransport) Close() error                     { return nil }
+func (c *packetConcurrencyTransport) LocalAddr() net.Addr              { return c.addresses[0].UDPAddr() }
+func (c *packetConcurrencyTransport) SetDeadline(time.Time) error      { return nil }
+func (c *packetConcurrencyTransport) SetReadDeadline(time.Time) error  { return nil }
+func (c *packetConcurrencyTransport) SetWriteDeadline(time.Time) error { return nil }
+func (c *packetConcurrencyTransport) CreateReadWaiter() (N.PacketReadWaiter, bool) {
+	return c, true
+}
+func (c *packetConcurrencyTransport) InitializeReadWaiter(N.ReadWaitOptions) bool { return false }
+func (c *packetConcurrencyTransport) WaitReadPacket() (*buf.Buffer, M.Socksaddr, error) {
+	return buf.As([]byte("packet")), c.next(), nil
+}
+
+func TestServerPacketConcurrentEndpoint(t *testing.T) {
+	for _, method := range []string{"Read", "ReadBuffer", "ReadWaiter"} {
+		t.Run(method, func(t *testing.T) {
+			t.Parallel()
+			for owner := 1; owner <= 2; owner++ {
+				transport := &packetConcurrencyTransport{addresses: [2]M.Socksaddr{
+					M.ParseSocksaddr(fmt.Sprintf("203.0.113.%d:3000", owner)),
+					M.ParseSocksaddr(fmt.Sprintf("[2001:db8::%d]:4000", owner)),
+				}}
+				c := B.NewServerPacketConn(transport)
+				read := func() error {
+					if method == "Read" {
+						var p [16]byte
+						_, err := c.Read(p[:])
+						return err
+					}
+					if method == "ReadBuffer" {
+						p := buf.NewSize(16)
+						defer p.Release()
+						return c.ReadBuffer(p)
+					}
+					waiter, ok := B.CreateReadWaiter(c)
+					if !ok {
+						return fmt.Errorf("server packet read waiter disappeared")
+					}
+					waiter.InitializeReadWaiter(N.ReadWaitOptions{})
+					p, err := waiter.WaitReadBuffer()
+					if p != nil {
+						p.Release()
+					}
+					return err
+				}
+				if err := read(); err != nil {
+					t.Fatal(err)
+				}
+				start := make(chan struct{})
+				var workers sync.WaitGroup
+				workers.Add(2)
+				go func() {
+					defer workers.Done()
+					<-start
+					for i := 0; i < 4096; i++ {
+						if err := read(); err != nil {
+							t.Error(err)
+							return
+						}
+						runtime.Gosched()
+					}
+				}()
+				go func() {
+					defer workers.Done()
+					<-start
+					for i := 0; i < 4096; i++ {
+						if _, err := c.Write([]byte("reply")); err != nil {
+							t.Error(err)
+							return
+						}
+						if err := c.WriteBuffer(buf.As([]byte("reply"))); err != nil {
+							t.Error(err)
+							return
+						}
+						a := M.SocksaddrFromNet(c.RemoteAddr())
+						if a != transport.addresses[0] && a != transport.addresses[1] {
+							t.Errorf("getter returned a torn or foreign session endpoint: %v", a)
+							return
+						}
+						runtime.Gosched()
+					}
+				}()
+				close(start)
+				workers.Wait()
+				if transport.writes.Load() != 8192 {
+					t.Fatalf("reply packets were lost: %d", transport.writes.Load())
+				}
+			}
+		})
+	}
+}
+
+func TestServerPacketBlockedReplyDoesNotBlockReceive(t *testing.T) {
+	release := make(chan struct{})
+	transport := &packetConcurrencyTransport{
+		addresses: [2]M.Socksaddr{M.ParseSocksaddr("127.0.0.1:3000"), M.ParseSocksaddr("127.0.0.1:3001")},
+		block:     release, entered: make(chan struct{}),
+	}
+	c := B.NewServerPacketConn(transport)
+	var packet [16]byte
+	_, _ = c.Read(packet[:])
+	written := make(chan error, 1)
+	go func() { _, err := c.Write([]byte("reply")); written <- err }()
+	<-transport.entered
+	read := make(chan error, 1)
+	go func() { _, err := c.Read(packet[:]); read <- err }()
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Error(err)
+		}
+	case <-time.After(time.Second):
+		t.Error("blocked packet IO retained the endpoint lock")
+	}
+	close(release)
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}

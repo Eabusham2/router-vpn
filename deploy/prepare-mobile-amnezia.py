@@ -15,9 +15,12 @@ SUM='h1:l2AhBD+sFycU8Im81n/bZORMxW7fWtlZJEuJ4Hh0+z0='
 _scheduler_spec=importlib.util.spec_from_file_location('routervpn_gvisor_scheduler', ROOT/'deploy/prepare-gvisor-scheduler.py')
 SCHEDULER=importlib.util.module_from_spec(_scheduler_spec)
 _scheduler_spec.loader.exec_module(SCHEDULER)
+_packet_spec=importlib.util.spec_from_file_location('routervpn_sing_packet_concurrency', ROOT/'deploy/prepare-sing-packet-concurrency.py')
+PACKET=importlib.util.module_from_spec(_packet_spec)
+_packet_spec.loader.exec_module(PACKET)
 
 def inputs():
-    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))
+    return [Path(__file__).resolve(),ROOT/'deploy/prepare-gvisor-scheduler.py',ROOT/'deploy/prepare-sing-packet-concurrency.py']+sorted((ROOT/'mobile/amnezia').glob('*.tmpl'))
 def digest():
     h=hashlib.sha256()
     for path in inputs():h.update(str(path.relative_to(ROOT)).encode()+b'\0'+path.read_bytes())
@@ -27,6 +30,7 @@ def prepare(vendor):
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=CORE:
         raise ValueError('native AWG requires the exact pinned core')
     SCHEDULER.prepare(vendor)
+    PACKET.prepare(vendor)
     registry=vendor/'include/registry.go';text=registry.read_text()
     for old,extra in [('"github.com/sagernet/sing-box/protocol/tor"','\n\t"github.com/sagernet/sing-box/protocol/routervpnamnezia"'),
                       ('\tregisterWireGuardEndpoint(registry)','\n\troutervpnamnezia.RegisterEndpoint(registry)')]:
@@ -41,6 +45,7 @@ def prepare(vendor):
     print('Native AmneziaWG endpoint:',VERSION,digest())
 def verify(vendor):
     SCHEDULER.verify(vendor)
+    PACKET.verify(vendor)
     result=json.loads(subprocess.check_output(['go','list','-m','-json',MODULE],cwd=vendor,text=True))
     if result.get('Version')!=VERSION or result.get('Sum')!=SUM or result.get('Replace'):
         raise ValueError('native AmneziaWG backend does not match its exact pinned checksum')

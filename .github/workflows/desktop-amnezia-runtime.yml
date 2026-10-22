@@ -29,6 +29,8 @@ on:
       - 'deploy/package-macos-native.sh'
       - 'deploy/prepare-relay-core.py'
       - 'deploy/prepare-mobile-amnezia.py'
+      - 'deploy/prepare-sing-packet-concurrency.py'
+      - 'deploy/test_sing_packet_preparation.py'
       - 'deploy/test_desktop_amnezia_runtime.py'
       - 'deploy/test_desktop_amnezia_forms.py'
       - '.github/workflows/desktop-amnezia-runtime.yml'
@@ -63,6 +65,7 @@ jobs:
         shell: bash
         run: |
           set -o pipefail
+          python3 deploy/test_sing_packet_preparation.py
           python3 deploy/test_desktop_amnezia_runtime.py 2>&1 | tee "$RUNNER_TEMP/desktop-amnezia-runtime.log"
       - uses: actions/upload-artifact@v4
         if: always()
