@@ -25,7 +25,7 @@ enum Failure { static var error:NSError {NSError(domain:"SpeedLabFixture",code:1
 }
 @MainActor enum IOSMTUMeasurementGate { static var held=false;static let current="captured-mtu-owner" }
 @MainActor enum IOSMTUControl {
- static func withHold<T>(model:RouterVPNModel,operation:()async throws->T)async throws->T {
+ static func withHold<T>(model:RouterVPNModel,operation:@MainActor ()async throws->T)async throws->T {
   Trace.values.append("mtu-hold");IOSMTUMeasurementGate.held=true
   defer{IOSMTUMeasurementGate.held=false;Trace.values.append("mtu-release")}
   return try await operation()
