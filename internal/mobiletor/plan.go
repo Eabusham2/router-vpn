@@ -99,7 +99,7 @@ func torArguments(directory, useBridges, socks string) ([]string, error) {
 	torrc := filepath.Join(directory, "routervpn-empty-torrc")
 	return []string{"tor", "--quiet", "--defaults-torrc", torrc, "-f", torrc,
 		"--DataDirectory", directory, "--ClientOnly", "1", "--AvoidDiskWrites", "1",
-		"--__DisableSignalHandlers", "1",
+		"--__DisableSignalHandlers", "1", "--__ReloadTorrcOnSIGHUP", "0",
 		"--SafeLogging", "1", "--Log", "err stderr", "--UseBridges", useBridges,
 		"--ClientUseIPv6", "1", "--SocksPort", socks,
 		"--ControlPort", "0", "--DNSPort", "0", "--TransPort", "0",

@@ -46,7 +46,11 @@ func sessionFixture(t *testing.T, exchanges []exchange) *Control {
 }
 
 const emptyProxyReply = "250-HTTPProxy\r\n250-HTTPProxyAuthenticator\r\n250-HTTPSProxy\r\n250-HTTPSProxyAuthenticator\r\n250-Socks4Proxy\r\n250-Socks5Proxy\r\n250-Socks5ProxyUsername\r\n250-Socks5ProxyPassword\r\n250 TCPProxy\r\n"
-const idleConfigReply = "250-DisableNetwork=1\r\n250-SocksPort=0\r\n250-UseBridges=0\r\n250-Bridge\r\n250-ClientTransportPlugin\r\n" + emptyProxyReply
+const idleConfigReply = "250-DisableNetwork=1\r\n250-__ReloadTorrcOnSIGHUP=0\r\n250-SocksPort=0\r\n250-UseBridges=0\r\n250-Bridge\r\n250-ClientTransportPlugin\r\n" + emptyProxyReply
+
+func bridgeConfigReply() string {
+	return "250-DisableNetwork=1\r\n250-__ReloadTorrcOnSIGHUP=0\r\n250-SocksPort=auto IsolateSOCKSAuth\r\n250-UseBridges=1\r\n250-Bridge=" + obfs4Bridge + "\r\n250-ClientTransportPlugin=obfs4 socks5 127.0.0.1:18443\r\n" + emptyProxyReply
+}
 
 func inventoryReply(busy string) string {
 	var reply strings.Builder
@@ -77,7 +81,9 @@ func TestResidentConfigureReadbackAndReleaseClearPreviousSession(t *testing.T) {
 	sequence := idleExchanges(inventoryReply(""))
 	sequence = append(sequence,
 		exchange{`SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=1 ClientTransportPlugin="obfs4 socks5 127.0.0.1:18443" Bridge="` + obfs4Bridge + `"`, "250 OK\r\n"},
-		exchange{"GETCONF " + configurationKeys, "250-DisableNetwork=1\r\n250-SocksPort=auto IsolateSOCKSAuth\r\n250-UseBridges=1\r\n250-Bridge=" + obfs4Bridge + "\r\n250-ClientTransportPlugin=obfs4 socks5 127.0.0.1:18443\r\n" + emptyProxyReply},
+		exchange{"GETCONF " + configurationKeys, bridgeConfigReply()},
+		exchange{"SIGNAL RELOAD", "250 OK\r\n"},
+		exchange{"GETCONF " + configurationKeys, bridgeConfigReply()},
 		exchange{"SETCONF DisableNetwork=0", "250 OK\r\n"},
 	)
 	sequence = append(sequence, idleExchanges(inventoryReply(""))...)
@@ -108,6 +114,7 @@ func TestQuiesceRejectsStaleCredentialsAndAmbiguousReadback(t *testing.T) {
 	for _, reply := range []string{
 		strings.Replace(idleConfigReply, "250-Bridge\r\n", "250-Bridge="+obfs4Bridge+"\r\n", 1),
 		strings.Replace(idleConfigReply, "DisableNetwork=1", "DisableNetwork=0", 1),
+		strings.Replace(idleConfigReply, "__ReloadTorrcOnSIGHUP=0", "__ReloadTorrcOnSIGHUP=1", 1),
 		strings.Replace(idleConfigReply, "250-SocksPort=0\r\n", "250-SocksPort=0\r\n250-SocksPort=9050\r\n", 1),
 		strings.Replace(idleConfigReply, "250-ClientTransportPlugin\r\n", "", 1),
 	} {
@@ -155,6 +162,8 @@ func TestPlainConfigurationUsesOnlyItsLivePrivateProxyAndClearsCredentials(t *te
 	sequence = append(sequence,
 		exchange{`SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=0 Socks5Proxy="` + address + `" Socks5ProxyUsername="` + user + `" Socks5ProxyPassword="` + password + `"`, "250 OK\r\n"},
 		exchange{"GETCONF " + configurationKeys, reply},
+		exchange{"SIGNAL RELOAD", "250 OK\r\n"},
+		exchange{"GETCONF " + configurationKeys, reply},
 	)
 	sequence = append(sequence, idleExchanges(inventoryReply(""))...)
 	control := sessionFixture(t, sequence)
@@ -172,6 +181,46 @@ func TestPlainConfigurationUsesOnlyItsLivePrivateProxyAndClearsCredentials(t *te
 	}
 	if err := control.ConfigurePlain(context.Background(), nil); err == nil {
 		t.Fatal("missing ordinary Tor proxy could be configured")
+	}
+}
+
+func TestBootstrapRestartRequiresDisabledNetworkingAndPreservesCapturedConfiguration(t *testing.T) {
+	plan, err := NewPlan(common.ExternalTorBridgeConfig{Bridges: []string{obfs4Bridge}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, test := range []struct {
+		name, before, reload, after string
+	}{
+		{name: "startup torrc reload forbidden", before: strings.Replace(bridgeConfigReply(), "__ReloadTorrcOnSIGHUP=0", "__ReloadTorrcOnSIGHUP=1", 1)},
+		{name: "enabled network forbidden", before: strings.Replace(bridgeConfigReply(), "DisableNetwork=1", "DisableNetwork=0", 1)},
+		{name: "rejected reload retires resident", before: bridgeConfigReply(), reload: "552 Unrecognized signal\r\n"},
+		{name: "reload may not enable network", before: bridgeConfigReply(), reload: "250 OK\r\n", after: strings.Replace(bridgeConfigReply(), "DisableNetwork=1", "DisableNetwork=0", 1)},
+		{name: "reload may not remove bridge", before: bridgeConfigReply(), reload: "250 OK\r\n", after: strings.Replace(bridgeConfigReply(), "250-Bridge="+obfs4Bridge, "250-Bridge", 1)},
+		{name: "reload may not restore stale proxy", before: bridgeConfigReply(), reload: "250 OK\r\n", after: strings.Replace(bridgeConfigReply(), "250-Socks5ProxyUsername\r\n", "250-Socks5ProxyUsername=stale-private-value\r\n", 1)},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			sequence := idleExchanges(inventoryReply(""))
+			sequence = append(sequence,
+				exchange{`SETCONF DisableNetwork=1 SocksPort="auto IsolateSOCKSAuth" UseBridges=1 ClientTransportPlugin="obfs4 socks5 127.0.0.1:18443" Bridge="` + obfs4Bridge + `"`, "250 OK\r\n"},
+				exchange{"GETCONF " + configurationKeys, test.before},
+			)
+			if test.reload != "" {
+				sequence = append(sequence, exchange{"SIGNAL RELOAD", test.reload})
+			}
+			if test.after != "" {
+				sequence = append(sequence, exchange{"GETCONF " + configurationKeys, test.after})
+			}
+			control := sessionFixture(t, sequence)
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			if err := control.Configure(ctx, plan, map[string]string{"obfs4": "127.0.0.1:18443"}); err == nil || strings.Contains(err.Error(), "stale-private-value") {
+				t.Fatal("invalid bootstrap reset succeeded or disclosed captured credentials")
+			}
+			if err := control.EnableNetwork(ctx); !errors.Is(err, io.ErrClosedPipe) {
+				t.Fatalf("failed bootstrap reset retained reusable control: %v", err)
+			}
+		})
 	}
 }
 
@@ -224,7 +273,7 @@ func TestResidentArgumentsDoNotRetainSessionSecretsOrListeners(t *testing.T) {
 		t.Fatal(err)
 	}
 	joined := strings.Join(arguments, "\x00")
-	for _, required := range []string{"--DisableNetwork\x001", "--SocksPort\x000", "--UseBridges\x000", "--ControlPort\x000"} {
+	for _, required := range []string{"--DisableNetwork\x001", "--__ReloadTorrcOnSIGHUP\x000", "--SocksPort\x000", "--UseBridges\x000", "--ControlPort\x000"} {
 		if !strings.Contains(joined, required) {
 			t.Fatal("resident core starts with live networking or listeners")
 		}

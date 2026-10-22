@@ -9,8 +9,8 @@ import (
 )
 
 const proxyKeys = "HTTPProxy HTTPProxyAuthenticator HTTPSProxy HTTPSProxyAuthenticator Socks4Proxy Socks5Proxy Socks5ProxyUsername Socks5ProxyPassword TCPProxy"
-const configurationKeys = "DisableNetwork SocksPort UseBridges Bridge ClientTransportPlugin " + proxyKeys
-const clearConfiguration = "SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin " + proxyKeys
+const configurationKeys = "DisableNetwork __ReloadTorrcOnSIGHUP SocksPort UseBridges Bridge ClientTransportPlugin " + proxyKeys
+const clearConfiguration = "SETCONF DisableNetwork=1 __ReloadTorrcOnSIGHUP=0 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin " + proxyKeys
 
 var idleInventories = []string{
 	"orconn-status", "circuit-status", "stream-status", "address-mappings/cache",
@@ -49,7 +49,7 @@ func (c *Control) quiesce(ctx context.Context) error {
 		return err
 	}
 	if err := c.configuration(ctx, withEmptyProxies(map[string][]string{
-		"DisableNetwork": {"1"}, "SocksPort": {"0"}, "UseBridges": {"0"},
+		"DisableNetwork": {"1"}, "__ReloadTorrcOnSIGHUP": {"0"}, "SocksPort": {"0"}, "UseBridges": {"0"},
 		"Bridge": {""}, "ClientTransportPlugin": {""},
 	})); err != nil {
 		return err
@@ -114,8 +114,8 @@ func (c *Control) Configure(ctx context.Context, plan Plan, listeners map[string
 	if err := c.change(ctx, command); err != nil {
 		return err
 	}
-	return c.configuration(ctx, withEmptyProxies(map[string][]string{
-		"DisableNetwork": {"1"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"1"},
+	return c.restartBootstrap(ctx, withEmptyProxies(map[string][]string{
+		"DisableNetwork": {"1"}, "__ReloadTorrcOnSIGHUP": {"0"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"1"},
 		"Bridge": bridges, "ClientTransportPlugin": plugins,
 	}))
 }
@@ -148,12 +148,30 @@ func (c *Control) ConfigurePlain(ctx context.Context, proxy *TCPProxy) (failure 
 		return err
 	}
 	expected := withEmptyProxies(map[string][]string{
-		"DisableNetwork": {"1"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"0"},
+		"DisableNetwork": {"1"}, "__ReloadTorrcOnSIGHUP": {"0"}, "SocksPort": {"auto IsolateSOCKSAuth"}, "UseBridges": {"0"},
 		"Bridge": {""}, "ClientTransportPlugin": {""},
 	})
 	expected["Socks5Proxy"] = []string{address}
 	expected["Socks5ProxyUsername"] = []string{username}
 	expected["Socks5ProxyPassword"] = []string{password}
+	return c.restartBootstrap(ctx, expected)
+}
+
+// DisableNetwork closes a session's sockets but leaves the resident Tor's
+// consensus-download attempt/backoff schedules intact. A new captured path
+// must not inherit a previous canceled session's bootstrap delay. Tor's reload
+// operation resets those schedules without discarding persistent guard state.
+// Verify the controller-only reload policy before signaling it, so Tor cannot
+// reload the empty startup torrc and replace the newly captured proxy/bridges.
+// Networking remains disabled and the complete session is checked again before
+// the caller may enable it. Failures are retired by the enclosing Configure.
+func (c *Control) restartBootstrap(ctx context.Context, expected map[string][]string) error {
+	if err := c.configuration(ctx, expected); err != nil {
+		return err
+	}
+	if err := c.change(ctx, "SIGNAL RELOAD"); err != nil {
+		return err
+	}
 	return c.configuration(ctx, expected)
 }
 
