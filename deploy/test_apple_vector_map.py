@@ -120,19 +120,29 @@ import MapKit
   precondition(overlay.canReplaceMapContent())
   let renderer = RouterVPNVectorMapRenderer(overlay: overlay)
   let size = 1024
-  let space = CGColorSpaceCreateDeviceRGB()
+  // The shipping palette is Generic RGB. A DeviceRGB bitmap may convert
+  // those colors, so its raw bytes are not the palette's component values.
+  let space = RouterVPNVectorMapRenderer.land.colorSpace!
   let bitmap = CGBitmapInfo.byteOrder32Big.rawValue | CGImageAlphaInfo.premultipliedLast.rawValue
   let context = CGContext(data: nil, width: size, height: size, bitsPerComponent: 8,
                           bytesPerRow: size * 4, space: space, bitmapInfo: bitmap)!
-  let scale = Double(size) / MKMapRect.world.size.width
-  context.scaleBy(x: scale, y: scale)
+  let drawingBounds = renderer.rect(for: .world)
+  let scale = CGFloat(size) / drawingBounds.width
+  // A standalone Quartz bitmap starts at the lower left, unlike the
+  // downward-Y map drawing context. Reproduce MapKit's drawing transform.
+  context.translateBy(x: 0, y: CGFloat(size))
+  context.scaleBy(x: scale, y: -scale)
+  context.translateBy(x: -drawingBounds.minX, y: -drawingBounds.minY)
   renderer.draw(.world, zoomScale: scale, in: context)
+  context.flush()
   let bytes = context.data!.assumingMemoryBound(to: UInt8.self)
   for pixel in stride(from: 3, to: size * size * 4, by: 4) { precondition(bytes[pixel] == 255, "basemap must cover stock geography opaquely") }
   func rgb(_ latitude: Double, _ longitude: Double) -> [UInt8] {
-   let p = RouterVPNMapGeometry.project(latitude: latitude, longitude: longitude)!
-   let x = min(size - 1, Int(p.x * Double(size)))
-   let y = min(size - 1, Int(p.y * Double(size)))
+   // Use MapKit's own coordinate projection, independently of the shipping
+   // geometry projector, to locate the expected geographic sample.
+   let p = renderer.point(for: MKMapPoint(CLLocationCoordinate2D(latitude: latitude, longitude: longitude)))
+   let x = min(size - 1, max(0, Int((p.x - drawingBounds.minX) * scale)))
+   let y = min(size - 1, max(0, Int((p.y - drawingBounds.minY) * scale)))
    let offset = (y * size + x) * 4
    return [bytes[offset], bytes[offset + 1], bytes[offset + 2]]
   }
@@ -140,10 +150,12 @@ import MapKit
    zip(actual, expected).allSatisfy { abs(Int($0.0) - $0.1) <= 2 }
   }
   for (latitude, longitude) in [(40.0,-105.0), (50,10), (-25,135), (5,25)] {
-   precondition(near(rgb(latitude, longitude), [27,51,68]), "known inland coordinate missing from native vector rendering")
+   let actual = rgb(latitude, longitude)
+   precondition(near(actual, [27,51,68]), "known inland coordinate \(latitude),\(longitude) missing from native vector rendering: \(actual)")
   }
   for (latitude, longitude) in [(10.0,-35.0), (-15,-135)] {
-   precondition(near(rgb(latitude, longitude), [9,17,31]), "known ocean coordinate was fabricated as land")
+   let actual = rgb(latitude, longitude)
+   precondition(near(actual, [9,17,31]), "known ocean coordinate \(latitude),\(longitude) was fabricated as land: \(actual)")
   }
   let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 640, height: 480))
   RouterVPNVectorMap.install(on: map)
@@ -225,6 +237,19 @@ def main():
             subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete", "-parse-as-library", "-sdk", sdk,
                             "-framework", "AppKit", "-framework", "MapKit", str(GEOMETRY), str(RENDERER), str(source), "-o", str(binary)], check=True, timeout=120)
             subprocess.run([str(binary), str(ASSET)], check=True, timeout=30)
+            # The same real bitmap must reject vertically mirrored shipping
+            # land. This guards against accidentally sampling our own wrong
+            # projection or compensating for a production rendering error.
+            mirrored = renderer.replace("y: first.y * world", "y: (1 - first.y) * world").replace("y: p.y * world", "y: (1 - p.y) * world")
+            assert mirrored != renderer
+            wrong_renderer = work / "RouterVPNVectorMap.swift"
+            wrong_renderer.write_text(mirrored)
+            negative = work / "mirrored-native-renderer"
+            subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete", "-parse-as-library", "-sdk", sdk,
+                            "-framework", "AppKit", "-framework", "MapKit", str(GEOMETRY), str(wrong_renderer), str(source), "-o", str(negative)], check=True, timeout=120)
+            rejected = subprocess.run([str(negative), str(ASSET)], capture_output=True, text=True, timeout=30)
+            assert rejected.returncode != 0 and "known inland coordinate" in rejected.stderr, "vertically mirrored native land negative control was not rejected"
+            print("Apple VPN map native renderer: vertically mirrored land negative control rejected")
             ios_sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True).strip()
             subprocess.run(["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
                             "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER)], check=True, timeout=120)

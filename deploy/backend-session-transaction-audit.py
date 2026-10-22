@@ -85,7 +85,16 @@ for rel, markers in {
     ),
     "cmd/client/multihop_native_routes.go": (
         "beginConnectionOperation()", "checkConnectionOperation()", "previousStore := cloneRouterProfileStore(a.profiles)",
-        "a.rollbackProfilesLocked(previousStore)", "proofErr := a.proveMultihopExit", "http.StatusConflict",
+        "a.rollbackProfilesLocked(previousStore)", "captureNativeMultihopForApp(a, sel, []string{sel.ExitMode})",
+        "proofErr := a.proveNativeMultihop(sel, cmd)", "http.StatusConflict",
+    ),
+    "cmd/client/multihop_native_capture.go": (
+        "func (a *app) proveNativeMultihop", "connectionOperationContextOrBackground()",
+        "func proveNativeMultihopCapture", "a.ownsConnectionRuntime(command)",
+        "!owns() || sel.Native == nil || sel.Native.validate(sel) != nil",
+        "prove(ctx, sel.Entry, multihopEntryProofProxy)",
+        "prove(ctx, sel.Exit, multihopProofProxy)",
+        "err == nil && ctx.Err() == nil && owns() && sel.Native.validate(sel) == nil",
     ),
     "cmd/client/external_profile_connect.go": (
         "beginConnectionOperation()", "startedCmd", "checkConnectionOperation()",
@@ -189,6 +198,11 @@ require(
     "cmd/client/connection_exit_proof_test.go",
     "TestProveExpectedPublicExitCancellationInterruptsRequest",
     "TestStopTimerWithoutBlockingAfterDelivery",
+)
+require(
+    "cmd/client/multihop_native_capture_test.go",
+    "TestNativeMultihopCaptureRejectsChangedBaseAssetsAndPolicies",
+    "TestNativeMultihopProofCannotAdoptRetiredEntryOrExit",
 )
 
 require("cmd/client/forwarding_master.go", "beginNodeBoundOperation()", "active Router VPN graph changed while forwarding master was being verified")

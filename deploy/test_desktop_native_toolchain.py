@@ -7,6 +7,7 @@ import importlib.util
 import io
 import json
 import os
+import shlex
 import stat
 import subprocess
 import tarfile
@@ -190,6 +191,85 @@ class NativeSetup(unittest.TestCase):
                     G.export_environment(values, paths, env)
                 self.assertFalse((root/'env').exists())
                 self.assertFalse((root/'path').exists())
+
+
+class DarwinPQEnvironment(unittest.TestCase):
+    def test_both_architectures_use_the_selected_sdk_and_product_minimum(self):
+        for target, arch in [('darwin/amd64', 'x86_64'), ('darwin/arm64', 'arm64')]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                sdk = root/'Xcode Selected.app/SDKs/MacOSX.sdk'
+                file(sdk/'usr/include/stdio.h', b'/* selected SDK C header */\n')
+                triple = G.PQ.TARGETS[target]
+                compiler = str(root/'Xcode Selected.app/bin/clang')
+                inherited = {'PATH': str(root/'bin'), 'LIBCLANG_PATH': str(root/'libclang.dylib'),
+                             'SDKROOT': '/stale-ios-sdk', 'MACOSX_DEPLOYMENT_TARGET': '15.5',
+                             'BINDGEN_EXTRA_CLANG_ARGS': '-isysroot /stale-generic',
+                             'BINDGEN_EXTRA_CLANG_ARGS_'+triple: '-isysroot /stale-hyphen',
+                             'BINDGEN_EXTRA_CLANG_ARGS_'+triple.replace('-', '_'): '-isysroot /stale-underscore',
+                             'CC_'+triple.replace('-', '_'): compiler}
+                queried_env = {}
+
+                def query_sdk(command, *, env, merge_stderr):
+                    queried_env.update(env)
+                    return str(sdk)+'\n'
+
+                with patch.dict(os.environ, inherited, clear=True), \
+                     patch.object(G.PQ.shutil, 'which', return_value='/usr/bin/xcrun') as lookup, \
+                     patch.object(G.PQ, 'run', side_effect=query_sdk) as command:
+                    env = G.PQ.environment(target, root/'cargo-cache')
+                lookup.assert_called_once_with('xcrun', path=inherited['PATH'])
+                self.assertEqual(command.call_args.args[0], ['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'])
+                self.assertFalse(command.call_args.kwargs['merge_stderr'])
+                self.assertNotIn('SDKROOT', queried_env)
+                self.assertEqual(env['SDKROOT'], str(sdk))
+                self.assertEqual(env['MACOSX_DEPLOYMENT_TARGET'], '13.0')
+                expected = ['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)]
+                for key in ('BINDGEN_EXTRA_CLANG_ARGS', 'BINDGEN_EXTRA_CLANG_ARGS_'+triple,
+                            'BINDGEN_EXTRA_CLANG_ARGS_'+triple.replace('-', '_')):
+                    self.assertEqual(shlex.split(env[key]), expected)
+                for key in ('PATH', 'LIBCLANG_PATH', 'CC_'+triple.replace('-', '_')):
+                    self.assertEqual(env[key], inherited[key])
+                self.assertEqual(env['CARGO_TARGET_DIR'], str(root/'cargo-cache'))
+
+    def test_missing_xcrun_never_uses_an_ambient_sdk(self):
+        with patch.dict(os.environ, {'PATH': '/no-tools', 'SDKROOT': '/ambient-sdk'}, clear=True), \
+             patch.object(G.PQ.shutil, 'which', return_value=None), patch.object(G.PQ, 'run') as command:
+            with self.assertRaisesRegex(ValueError, 'selected Xcode macOS SDK'):
+                G.PQ.environment('darwin/arm64', Path('/unused-cache'))
+            command.assert_not_called()
+
+    def test_sdk_lookup_failure_is_propagated_without_an_ambient_fallback(self):
+        failure = subprocess.CalledProcessError(1, ['xcrun'])
+        with patch.dict(os.environ, {'PATH': '/tools', 'SDKROOT': '/ambient-sdk'}, clear=True), \
+             patch.object(G.PQ.shutil, 'which', return_value='/usr/bin/xcrun'), \
+             patch.object(G.PQ, 'run', side_effect=failure):
+            with self.assertRaises(subprocess.CalledProcessError) as caught:
+                G.PQ.environment('darwin/amd64', Path('/unused-cache'))
+            self.assertIs(caught.exception, failure)
+
+    def test_sdk_output_must_be_one_absolute_existing_path_with_c_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sdk = root/'complete.sdk'
+            file(sdk/'usr/include/stdio.h')
+            incomplete = root/'without-headers.sdk'
+            incomplete.mkdir()
+            for selected in ('', '\n', 'relative.sdk', str(root/'missing.sdk'), str(incomplete),
+                             str(sdk)+'\n/other.sdk', str(sdk)+'\r/other.sdk', str(sdk)+'\0'):
+                with self.subTest(selected=selected), \
+                     patch.object(G.PQ.shutil, 'which', return_value='/usr/bin/xcrun'), \
+                     patch.object(G.PQ, 'run', return_value=selected):
+                    with self.assertRaisesRegex(ValueError, 'does not contain its C headers'):
+                        G.PQ.environment('darwin/arm64', root/'cargo-cache')
+
+    def test_linux_build_does_not_discover_or_require_an_apple_sdk(self):
+        with patch.dict(os.environ, {'PATH': '/tools', 'SDKROOT': '/ambient-sdk'}, clear=True), \
+             patch.object(G.PQ.shutil, 'which') as lookup, patch.object(G.PQ, 'run') as command:
+            env = G.PQ.environment('linux/amd64', Path('/cargo-cache'))
+            self.assertNotIn('SDKROOT', env)
+            lookup.assert_not_called()
+            command.assert_not_called()
 
 
 class Response(io.BytesIO):

@@ -12,6 +12,7 @@ import importlib.util
 import json
 import os
 import re
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -39,15 +40,20 @@ TARGETS = {
 MAX_LIBRARY = 384 * 1024 * 1024
 
 
-def run(command, *, env=None, capture=True):
+def run(command, *, env=None, capture=True, merge_stderr=True):
+    # Cargo emits UTF-8 on every host. Keep the pipes binary so a Windows
+    # locale decoder cannot discard output in subprocess's reader thread.
+    # Compiler output stays combined: native-static-libs is reported on stderr.
+    stderr = subprocess.STDOUT if merge_stderr else subprocess.PIPE
     result = subprocess.run([str(arg) for arg in command], env=env,
-                            text=True, stdout=subprocess.PIPE if capture else None,
-                            stderr=subprocess.STDOUT if capture else None, timeout=1800)
+                            stdout=subprocess.PIPE if capture else None,
+                            stderr=stderr if capture else None, timeout=1800)
     if result.returncode:
-        if result.stdout:
-            print(result.stdout[-24000:], flush=True)
+        for output in (result.stdout, result.stderr):
+            if output:
+                print(output[-24000:].decode('utf-8', errors='replace'), flush=True)
         result.check_returncode()
-    return result.stdout or ''
+    return (result.stdout or b'').decode('utf-8')
 
 
 def digest():
@@ -119,12 +125,33 @@ def environment(target, cache):
         env['CC_'+triple.replace('-', '_')] = cc
         env['AR_'+triple.replace('-', '_')] = ar
         env['CARGO_TARGET_'+triple.replace('-', '_').upper()+'_LINKER'] = cc
+    elif target.startswith('darwin/'):
+        xcrun = shutil.which('xcrun', path=env.get('PATH', ''))
+        if not xcrun:
+            raise ValueError('macOS native PQ requires the selected Xcode macOS SDK')
+        selected = run([xcrun, '--sdk', 'macosx', '--show-sdk-path'],
+                       env=env, merge_stderr=False).strip()
+        sdk = Path(selected)
+        if (not selected or any(c in selected for c in '\r\n\0') or
+                not sdk.is_absolute() or not sdk.is_dir() or
+                not (sdk/'usr/include/stdio.h').is_file()):
+            raise ValueError('The selected Xcode macOS SDK does not contain its C headers')
+        # CMake can discover an SDK while libclang still searches the host root.
+        # Give both OQS compilation and bindgen the same SDK and product minimum.
+        arch = 'x86_64' if target.endswith('/amd64') else 'arm64'
+        args = shlex.join(['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)])
+        env.update(SDKROOT=str(sdk), MACOSX_DEPLOYMENT_TARGET='13.0',
+                   BINDGEN_EXTRA_CLANG_ARGS=args)
+        # bindgen checks both target-specific spellings before the generic value.
+        for name in (triple, triple.replace('-', '_')):
+            env['BINDGEN_EXTRA_CLANG_ARGS_'+name] = args
     return env
 
 
 def locked_metadata(env):
     return json.loads(run(['cargo', 'metadata', '--locked', '--format-version=1',
-                           '--manifest-path', ROOT/'mobile/rosenpass/Cargo.toml'], env=env))
+                           '--manifest-path', ROOT/'mobile/rosenpass/Cargo.toml'],
+                          env=env, merge_stderr=False))
 
 
 def windows_import(target, metadata):

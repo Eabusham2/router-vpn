@@ -6,6 +6,7 @@ import gzip
 import importlib.util
 import io
 import json
+import os
 import platform
 import shutil
 import struct
@@ -81,11 +82,14 @@ def checkout_bytes_test():
             path.parent.mkdir(parents=True, exist_ok=True)
             path.write_bytes(raw)
         (source/'.gitattributes').write_bytes(attributes)
+        trace = root/'git-processes.jsonl'
 
         def git(*args):
             subprocess.run(['git', '-c', 'core.longpaths=true',
+                            '-c', 'gc.auto=0', '-c', 'maintenance.auto=false', '-c', 'gc.autoDetach=false',
                             '-c', 'user.name=Native checkout fixture', '-c', 'user.email=native-fixture@example.invalid',
                             '-c', 'commit.gpgsign=false', *map(str, args)],
+                           env={**os.environ, 'GIT_TRACE2_EVENT': str(trace)},
                            check=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=60)
 
         git('init', '-q', source)
@@ -108,6 +112,14 @@ def checkout_bytes_test():
         changed = [name for name, raw in inputs.items() if (without/name).read_bytes() != raw]
         check(bool(changed) and any(b'\r\n' in (without/name).read_bytes() for name in changed),
               'Missing-attributes negative control did not expose actual Git CRLF drift')
+        # git commit otherwise starts detached auto-maintenance, which can
+        # recreate the temporary source while TemporaryDirectory removes it.
+        # Inspect Git's real child launches rather than suppress cleanup errors.
+        children = [event.get('argv', []) for event in
+                    (json.loads(line) for line in trace.read_text(encoding='utf-8').splitlines())
+                    if event.get('event') == 'child_start']
+        check(not any('maintenance' in command or '--detach' in command for command in children),
+              'Checkout fixture launched detached or automatic Git maintenance')
     print(f'Actual Git autocrlf=true checkout preserved all {len(inputs)} native inputs; omitted attributes exposed CRLF drift', flush=True)
 
 

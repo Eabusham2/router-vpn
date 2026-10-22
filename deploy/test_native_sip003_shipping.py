@@ -8,6 +8,19 @@ spec=importlib.util.spec_from_file_location('prepare',ROOT/'deploy/prepare-mobil
 PREPARE=importlib.util.module_from_spec(spec);spec.loader.exec_module(PREPARE)
 class Shipping(unittest.TestCase):
     def test_compiler_and_bridge_are_copied_byte_exactly(self):
+        self.assert_compiler_and_bridge_are_copied_byte_exactly()
+    def test_windows_text_translation_cannot_rewrite_native_source(self):
+        # Exercise Windows' newline=None behavior on every host. The source
+        # checkout is canonical LF; generated copies must preserve those bytes.
+        def windows_write_text(path,text,encoding=None,errors=None,newline=None):
+            with path.open('w',encoding=encoding,errors=errors,newline='\r\n' if newline is None else newline) as stream:
+                return stream.write(text)
+        with mock.patch.object(Path,'write_text',windows_write_text):
+            with tempfile.TemporaryDirectory() as temp:
+                probe=Path(temp)/'windows-text.txt';probe.write_text('first\nsecond\n',encoding='utf-8')
+                self.assertEqual(probe.read_bytes(),b'first\r\nsecond\r\n')
+            self.assert_compiler_and_bridge_are_copied_byte_exactly()
+    def assert_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
             with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:

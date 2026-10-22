@@ -56,6 +56,7 @@ The further October 22 continuation has published these source changes:
 | `b2ae0257` | Repeated native preparation composes packet concurrency and UDP capacity fixes in one checksum-verified `sing` copy, including default/low-memory builds and verified upgrade of the earlier owned copy. |
 | `f29b6d2d` | Android and Apple DNS comparison runs through the captured native external/Tor path, validates complete source-bound receipts, and retains cancellation ownership until actual native drain. |
 | `1394ec8f` | Standalone native runners prepare their complete Tor/AWG policy dependency closure. Windows source checks normalize CRLF; TLS denial fixtures use real joined TCP connections; mobile MTU/proof fixtures include the owned DNS activation boundary. |
+| `34fb6128` | Native vector maps, mobile telemetry/startup/update controls, captured desktop WG/AWG profiles and complete six-target runtime delivery are wired into the native application and release paths. The full Linux runtime producers passed on both architectures; the first cross-platform run exposed the preparation and fixture failures described below. |
 
 This native UI continuation replaces the visible Apple stock map with a
 shared opaque vector basemap. Both application packages ship the same pinned
@@ -121,13 +122,31 @@ macOS signs a verified staged bundle and seals only its own signed result;
 Windows/Linux installation and the same-image Windows download fallback carry
 all required runtimes. The actual Linux engine passed 28 receipt/relocation
 checks plus the graph gate, and its payload survived artifact extraction and
-installed/Portable archive roundtrips. Delivery/signing boundary tests pass 358
+installed/Portable archive roundtrips. Delivery/signing boundary tests pass 359
 checks. Windows runtime installation passes 202 filesystem checks and two
 rollback mutation controls. Linux passes 15 transaction checks and actual
 first-install and upgrade verification of all three built engines. These
 transactions cover runtime directories, not every outer installer action.
 A six-target packaged result still requires the new commit's CI.
 See [NATIVE-DESKTOP-DELIVERY.md](NATIVE-DESKTOP-DELIVERY.md).
+
+The `34fb6128` CI built, validated and uploaded the complete native Linux
+runtime for both x64 and ARM64. Its first Windows and Apple runs exposed
+platform-specific preparation and test boundaries: Windows text-mode source
+copies changed canonical line endings, Cargo output was decoded with the host
+code page and mixed progress into JSON, macOS bindgen lacked its SDK sysroot,
+and the standalone Apple bitmap fixture used Quartz coordinates and a different
+color space from the native map. The corrective continuation preserves copied
+source bytes, separates strict UTF-8 metadata from compiler diagnostics,
+supplies the macOS SDK explicitly, and gives the bitmap fixture the real map
+transform and palette. The renderer itself is unchanged; a mirrored-land
+negative control remains subject to the actual Apple SDK gate. Source audits
+now follow the captured multihop proof implementation and require both owned
+proof lanes at their current call sites. These corrections retain their
+verification gates. The real Git checkout fixture also prevents detached
+maintenance from racing its temporary-directory cleanup and verifies the
+actual child-process trace. Windows/macOS packages and the downstream image/release
+chain still require the corrected commit's native CI results.
 
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;

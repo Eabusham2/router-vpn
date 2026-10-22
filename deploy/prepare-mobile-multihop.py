@@ -68,10 +68,12 @@ def prepare(vendor):
                 parent_test.unlink()
         for source in (ROOT/'internal'/package).glob('*.go'):
             if source.name=='core_config_test.go' or (package=='applexray' and source.name=='preparation_test.go'):continue
-            text=source.read_text()
+            # Preserve source bytes across hosts. Text-mode writes expand LF
+            # to CRLF on Windows and invalidate the copied policy identity.
+            content=source.read_bytes()
             for name in PACKAGES:
-                text=text.replace('"router-vpn/internal/'+name+'"','"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"')
-            (output/source.name).write_text(text)
+                content=content.replace(('"router-vpn/internal/'+name+'"').encode(),('"github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name+'"').encode())
+            (output/source.name).write_bytes(content)
     (root/'routervpn_multihop_bridge.go').write_bytes((ROOT/'mobile/routervpn_multihop_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_policy_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl').read_bytes())
     (root/'routervpn_external_measurement_bridge.go').write_bytes((ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl').read_bytes())

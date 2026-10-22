@@ -9,6 +9,7 @@ AUDIT = runpy.run_path(str(Path(__file__).with_name("speed-lab-shipping-audit.py
 CHECK = AUDIT["need_go_map_entry"]
 IOS_CHECK = AUDIT["need_ios_topology_routes"]
 ANDROID_CHECK = AUDIT["need_android_captured_transaction"]
+NATIVE_CHECK = AUDIT["need_native_multihop_lanes"]
 
 
 class SpeedLabResponseAuditTests(unittest.TestCase):
@@ -97,6 +98,43 @@ class SpeedLabAndroidTransactionAuditTests(unittest.TestCase):
                 changed = self.source.replace(marker, "removed")
                 self.assertTrue(self.check_source(changed))
                 self.assertTrue(self.check_source(changed + "\n// " + marker))
+
+
+class SpeedLabNativeMultihopLaneAuditTests(unittest.TestCase):
+    source = (Path(__file__).resolve().parents[1]/"cmd/client/multihop_native_capture.go").read_text()
+
+    def check_source(self, source):
+        errors = []
+        with patch.dict(NATIVE_CHECK.__globals__, {"read": lambda _: source, "errors": errors}):
+            NATIVE_CHECK("fixture.go")
+        return errors
+
+    def test_shipping_captured_graph_installs_both_proof_lanes(self):
+        self.assertEqual([], self.check_source(self.source))
+
+    def test_capture_call_both_listeners_and_routing_are_required(self):
+        for marker in ('nativeMultihopProofConfig(config, sel.Entry)',
+                       'nativeEntryPrivateOutbound(',
+                       'graph["outbounds"] = append(outs, private)',
+                       'graph["inbounds"] = append(ins,',
+                       '"tag": "multihop-entry-proof"',
+                       '"listen_port": nativeMultihopEntryProofPort',
+                       '"tag": "multihop-proof"',
+                       '"listen_port": nativeMultihopExitProofPort',
+                       'route["rules"] = append([]any{',
+                       '"inbound": []any{"multihop-entry-proof"}',
+                       '"outbound": "entry-private"',
+                       '"inbound": []any{"multihop-proof"}',
+                       '"outbound": "proxy"'):
+            with self.subTest(marker=marker):
+                self.assertTrue(self.check_source(self.source.replace(marker, "removed")))
+
+    def test_comments_and_raw_fixtures_cannot_supply_a_proof_lane(self):
+        marker = '"inbound": []any{"multihop-entry-proof"}'
+        changed = self.source.replace(marker, "removed")
+        for replacement in ('\n// '+marker, '\n/* '+marker+' */', '\nvar fixture = `'+marker+'`'):
+            with self.subTest(replacement=replacement):
+                self.assertTrue(self.check_source(changed+replacement))
 
 
 if __name__ == "__main__":

@@ -76,6 +76,26 @@ def need_android_captured_transaction(path: str) -> None:
             errors.append(f"{path}: captured Android transaction lost {marker!r}")
 
 
+def need_native_multihop_lanes(path: str) -> None:
+    body = re.sub(r'("(?:\\.|[^"\\])*")|`[^`]*`|//[^\n]*|/\*.*?\*/',
+                  lambda match: match.group(1) or "", read(path), flags=re.S)
+    for marker in ('nativeMultihopProofConfig(config, sel.Entry)',
+                   'private, err := nativeEntryPrivateOutbound(',
+                   'graph["outbounds"] = append(outs, private)',
+                   'graph["inbounds"] = append(ins,',
+                   '"tag": "multihop-entry-proof"',
+                   '"listen_port": nativeMultihopEntryProofPort',
+                   '"tag": "multihop-proof"',
+                   '"listen_port": nativeMultihopExitProofPort',
+                   'route["rules"] = append([]any{',
+                   '"inbound": []any{"multihop-entry-proof"}',
+                   '"outbound": "entry-private"',
+                   '"inbound": []any{"multihop-proof"}',
+                   '"outbound": "proxy"'):
+        if marker not in body:
+            errors.append(f"{path}: captured native proof lanes lost {marker!r}")
+
+
 # Shared desktop controller: current path is identity-bound, temporary paths are
 # transactional/non-persistent, and real Mbps + idle/loaded latency are distinct.
 need(
@@ -180,15 +200,8 @@ need(
     "nativeMultihopExitProofPort  = 1099",
     '"tag": "entry-private"',
     '"detour": "entry-wg"',
-    '"tag": "multihop-entry-proof"',
-    '"listen_port": nativeMultihopEntryProofPort',
-    '"tag": "multihop-proof"',
-    '"listen_port": nativeMultihopExitProofPort',
-    '"inbound": []any{"multihop-entry-proof"}',
-    '"outbound": "entry-private"',
-    '"inbound": []any{"multihop-proof"}',
-    '"outbound": "proxy"',
 )
+need_native_multihop_lanes("cmd/client/multihop_native_capture.go")
 need(
     "cmd/client/speed_lab_persistence_guard.go",
     "speedLabTemporaryPersistenceSuppressed",
