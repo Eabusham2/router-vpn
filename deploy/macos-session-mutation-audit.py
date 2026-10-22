@@ -25,7 +25,8 @@ need(product,
     'opening node pairing', 'redeeming the one-time pairing code', 'importing a linked node',
     'selecting another Router VPN node', 'committing the lowest-latency node selection',
     'removing a linked node', 'committing linked-node removal', 'saving DNS policy',
-    'starting multihop', 'starting an external connection', 'starting AUTO', 'starting the selected mode')
+    'starting multihop', 'starting an external connection', 'starting AUTO', 'starting the selected mode',
+    'body: ["profile_id": exitID, "direct": true]')
 need(unified,
     'Disconnect already in progress.', 'Disconnect requested.', 'Disconnecting…', 'Checking…',
     'changing the selected mode', 'editing CUSTOM presets', 'saving a CUSTOM preset', 'deleting a CUSTOM preset',
