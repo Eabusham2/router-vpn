@@ -55,12 +55,11 @@ need(
 need(
     "cmd/client/external_profile_create_policy_test.go",
     "TestTypedExternalBuilderAdoptsRuntimeDNSPolicyBeforePersistence",
-    'p.DNSMode != "rescue"',
+    'p.DNSMode != "home"',
     'p.RouterAPI != ""',
 )
-# Raw/bundle imports must persist the same normalized external DNS/runtime policy
-# Connect will actually use, rather than saving an inherited Home/blank policy and
-# substituting Rescue DNS only at runtime.
+# Raw/bundle imports persist the Home default or the explicit resolver choice.
+# Runtime path resolution must not silently substitute a public resolver.
 need(
     "cmd/client/external_profile_import.go",
     "policy, policyErr := externalRuntimePolicy(p)",
@@ -70,7 +69,7 @@ need(
 need(
     "cmd/client/external_profile_import_policy_test.go",
     "TestExternalProfileImportPersistsRuntimeDNSPolicy",
-    'p.DNSMode != "rescue"',
+    'p.DNSMode != "home"',
     'p.RouterAPI != ""',
 )
 

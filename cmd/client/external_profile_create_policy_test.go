@@ -9,7 +9,7 @@ func TestTypedExternalBuilderAdoptsRuntimeDNSPolicyBeforePersistence(t *testing.
 			if err != nil {
 				t.Fatal(err)
 			}
-			if p.DNSMode != "rescue" || p.DNSProtocol != "https" || p.DNSHost != "1.1.1.1" || p.DNSPort != 443 || p.DNSServerName != "cloudflare-dns.com" || p.DNSPath != "/dns-query" {
+			if p.DNSMode != "home" || p.DNSProtocol != "udp" || p.DNSHost != "" || p.DNSPort != 53 || p.DNSServerName != "" || p.DNSPath != "" {
 				t.Fatalf("typed %s node did not persist its real external runtime DNS policy: %+v", protocol, p)
 			}
 			if p.RouterAPI != "" || p.AdGuardIPv4 != "" || p.AdGuardIPv6 != "" || p.SocksHost != "" || p.SocksUsername != "" || p.SocksPassword != "" {

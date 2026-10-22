@@ -46,7 +46,7 @@ function ShowUnifiedExternalNodeBuilder{
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Add external node" Width="820" Height="760" MinWidth="680" MinHeight="600" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Add external node" FontSize="26" FontWeight="Bold"/>
-    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Create a validated full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Secrets stay in the private controller store. Relevant fields depend on the selected protocol and the controller validates the final profile before persistence."/>
+    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Create a full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."/>
     <TextBlock Text="Protocol"/><ComboBox Name="ExtProtocol" Margin="0,4,0,10"><ComboBoxItem Content="WireGuard" Tag="wireguard"/><ComboBoxItem Content="AmneziaWG" Tag="amneziawg"/><ComboBoxItem Content="SOCKS5" Tag="socks5"/><ComboBoxItem Content="HTTP CONNECT" Tag="http-connect"/><ComboBoxItem Content="HTTPS CONNECT" Tag="https-connect"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
     <TextBlock Text="Display name"/><TextBox Name="ExtName" Margin="0,4,0,8" Padding="7"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="Server IP / hostname"/><TextBox Name="ExtServer" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Port"/><TextBox Name="ExtPort" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
@@ -96,7 +96,7 @@ function ShowUnifiedExternalNodeBuilder{
                 $KeepaliveText=[string]$D.FindName('ExtWGKeepalive').Text;if($KeepaliveText.Trim()){$Keepalive=[int]$KeepaliveText;if($Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Keepalive must be 0–65535 seconds.'};$Body.wg_keepalive=$Keepalive}
                 if($ID -eq 'amneziawg'){$Body.awg_parameters=ParseUnifiedExternalAmneziaParameters ([string]$D.FindName('ExtAWGParameters').Text)}
             }
-            $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct
+            $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected. Use a Router entry for Home AdGuard, or choose a resolver in DNS for Direct.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct
         }catch{$Status.Text='External node rejected: '+$_.Exception.Message}
     })
     [void]$D.ShowDialog()
@@ -134,7 +134,7 @@ function ShowUnifiedTorBridgeBuilder{
     </Grid>
     <TextBlock Text="Tor bridge lines — one per line" FontWeight="SemiBold"/>
     <TextBox Name="TorLines" Height="230" Margin="0,4,0,8" Padding="8" AcceptsReturn="True" AcceptsTab="False" VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas"/>
-    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Bridge profile data cannot inject ClientTransportPlugin commands, executable paths, or arbitrary torrc directives."/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Paste current lines from Tor or a trusted bridge source. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice."/>
     <TextBlock Name="TorCapability" Margin="0,10,0,4" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Checking Tor transport support…"/>
     <TextBlock Name="TorStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="TorRefresh" Content="Refresh support" Padding="12,7"/><Button Name="TorSave" Content="Save Tor node" Margin="8,0,0,0" Padding="12,7"/><Button Name="TorClose" Content="Close" Margin="8,0,0,0" Padding="12,7"/></StackPanel>
@@ -167,7 +167,7 @@ function ShowUnifiedTorBridgeBuilder{
             $ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag);$C=$Caps[$ID]
             if($C -and -not[bool]$C.strict_kill_switch -and $KillID -ne 'off'){throw 'This dynamic Tor transport requires Kill switch Off until Router VPN owns process-scoped PT egress.'}
             $R=Api '/api/tor-bridge/import' 'POST' @{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID} 25
-            $Status.Text='Tor node saved and selected. Connect availability follows the live Tor capability result shown above; Windows x64 can connect when the pinned Tor/Lyrebird runtime is present, while unsupported platforms stay unavailable with their exact reason.'
+            $Status.Text='Tor node saved and selected. Before connecting, choose Custom TCP, DoT, DoH or Rescue in DNS. Transport availability is shown above.'
             Log ('Tor bridge profile saved: '+[string]$R.profile.name);RefreshProduct
         }catch{$Status.Text='Tor node rejected: '+$_.Exception.Message}
     })

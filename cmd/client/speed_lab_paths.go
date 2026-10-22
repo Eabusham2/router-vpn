@@ -221,6 +221,7 @@ func (a *app) startSpeedLabExternalPath(q speedLabRequest) (speedLabPath, error)
 	exit, err := standardExitFromExternalProfile(external); if err != nil { return speedLabPath{}, err }
 	a.mu.Lock(); profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...); a.mu.Unlock()
 	entry, entryKind, direct, err := speedLabExternalEntry(profiles, external, q); if err != nil { return speedLabPath{}, err }
+	policy, err = externalDNSPolicyForPath(policy, entry, direct); if err != nil { return speedLabPath{}, err }
 	if exit.Protocol == "openvpn" { capability := openVPNRuntimeCapability(); if runtime.GOOS == "windows" { capability = windowsOpenVPNRuntimeCapability() }; if !capability.Supported { return speedLabPath{}, errors.New(capability.Reason) }; if !direct && !openVPNProtocolIsTCP(exit.Method) { return speedLabPath{}, errors.New("hopped OpenVPN Speed Lab tests require TCP OpenVPN; UDP remains fail-closed") } }
 	sessionBase := "external"; if !direct && entryKind == "router-vpn" { sessionBase = "wg" }
 	sessionTrackerFor(a).declareRequest("speed-lab:external", sessionBase)

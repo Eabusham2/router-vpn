@@ -77,7 +77,7 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         bridgeText.isEditable = true; bridgeText.isSelectable = true; bridgeText.font = .monospacedSystemFont(ofSize: 12, weight: .regular); bridgeText.textContainerInset = NSSize(width: 8, height: 8)
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.autohidesScrollers = true; scroll.borderType = .bezelBorder; scroll.documentView = bridgeText; scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 190).isActive = true
         root.addArrangedSubview(scroll)
-        let hint = NSTextField(wrappingLabelWithString: "Paste current bridge lines from Tor / your trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax; profile data cannot inject ClientTransportPlugin commands, executable paths, or arbitrary torrc directives.")
+        let hint = NSTextField(wrappingLabelWithString: "Paste current bridge lines from Tor or your trusted bridge source. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice.")
         hint.textColor = .secondaryLabelColor
         root.addArrangedSubview(hint)
         capabilityText.textColor = .secondaryLabelColor

@@ -41,8 +41,8 @@ func torBridgeUpdateIntentFor(q torBridgeImportRequest) torBridgeUpdateIntent {
 		Name:      strings.TrimSpace(q.Name) != "",
 		Transport: strings.TrimSpace(q.Transport) != "",
 		SocksPort: q.SocksPort != 0,
-		DNS: strings.TrimSpace(q.DNSMode) != "" || strings.TrimSpace(q.DNSProtocol) != "" || strings.TrimSpace(q.DNSHost) != "" || q.DNSPort != 0 || strings.TrimSpace(q.DNSServerName) != "" || strings.TrimSpace(q.DNSPath) != "",
-		Location: strings.TrimSpace(q.Location) != "" || q.Latitude != 0 || q.Longitude != 0,
+		DNS:       strings.TrimSpace(q.DNSMode) != "" || strings.TrimSpace(q.DNSProtocol) != "" || strings.TrimSpace(q.DNSHost) != "" || q.DNSPort != 0 || strings.TrimSpace(q.DNSServerName) != "" || strings.TrimSpace(q.DNSPath) != "",
+		Location:  strings.TrimSpace(q.Location) != "" || q.Latitude != 0 || q.Longitude != 0,
 	}
 }
 
@@ -111,12 +111,8 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		Longitude:        q.Longitude,
 	}
 	if profile.DNSMode == "" {
-		profile.DNSMode = "rescue"
-		profile.DNSProtocol = "https"
-		profile.DNSHost = "1.1.1.1"
-		profile.DNSPort = 443
-		profile.DNSServerName = "cloudflare-dns.com"
-		profile.DNSPath = "/dns-query"
+		profile.DNSMode, profile.DNSProtocol, profile.DNSPort = "home", "udp", 53
+		profile.DNSHost, profile.DNSServerName, profile.DNSPath = "", "", ""
 	}
 	// Normalize with kill switch disabled first so the canonical PT parser can
 	// decide whether this graph owns one exact literal obfs4 bootstrap endpoint.

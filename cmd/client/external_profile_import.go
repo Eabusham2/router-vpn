@@ -43,8 +43,8 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	// Persist the same normalized DNS/kill-switch/runtime policy that Connect
-	// will use. Otherwise an imported node could appear saved with blank/home
-	// policy while the live runtime silently substitutes Rescue DNS later.
+	// will use. Home AdGuard remains the default, resolved only through a
+	// captured Router entry; direct paths require an explicit DNS alternative.
 	policy, policyErr := externalRuntimePolicy(p)
 	if policyErr != nil {
 		http.Error(w, "external profile policy is not runnable: "+policyErr.Error(), http.StatusBadRequest)

@@ -61,7 +61,7 @@ extension ProductWindowController {
 
         let panel = NSAlert()
         panel.messageText = "Add external node"
-        panel.informativeText = "Create a validated full-device external node. OpenVPN uses Import; Tor uses Tor Bridges. Secrets are stored only in the private controller store."
+        panel.informativeText = "Create a full-device external node. OpenVPN uses Import; Tor uses Tor Bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."
         panel.addButton(withTitle: "Save node")
         panel.addButton(withTitle: "Cancel")
 
@@ -208,7 +208,7 @@ extension ProductWindowController {
         asyncAction {
             let data = try self.api.request("/api/external-profile/create", method: "POST", body: body, timeout: 20)
             let response = String(data: data, encoding: .utf8) ?? "External node saved"
-            return "External node saved and selected. \(response)"
+            return "External node saved and selected. Use a Router entry for Home AdGuard, or choose a resolver in DNS for Direct. \(response)"
         }
     }
 }

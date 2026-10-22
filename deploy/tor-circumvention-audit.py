@@ -263,7 +263,7 @@ need(
     "torBridgeImportRequest",
     "/api/external-profile/import",
     "common.NormalizeRouterProfile",
-    'profile.DNSMode = "rescue"',
+    'profile.DNSMode, profile.DNSProtocol, profile.DNSPort = "home", "udp", 53',
     "strictLiteralObfs4",
     "dynamic bootstrap egress can be scoped safely",
     "standardExitFromExternalProfile(profile)",
@@ -437,7 +437,7 @@ need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
      "torProfileJSON: String(decoding: source, as: UTF8.self)",
      'tor["session_id"] as? String == sessionID', 'tor["detour"] as? String == predecessorTag')
 need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
-     'provider["tor_entry_bundle"]', "RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile)",
+     'provider["tor_entry_bundle"]', "RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile",
      "engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile",
      "guard let profile = runtime.torProfileJSON", "engine.activateTorMTU()", "self.currentPathProofGuard() === externalPathGuard")
 need("ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",

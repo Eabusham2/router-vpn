@@ -51,7 +51,7 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 }
 
 func externalRuntimePolicy(profile common.RouterProfile) (common.RouterProfile, error) {
-	policy := profile
+	policy := cloneRouterProfile(profile)
 	if err := common.NormalizeRouterProfile(&policy); err != nil {
 		return common.RouterProfile{}, err
 	}
@@ -59,12 +59,38 @@ func externalRuntimePolicy(profile common.RouterProfile) (common.RouterProfile, 
 		return common.RouterProfile{}, errors.New("selected profile is not an external node")
 	}
 	if strings.TrimSpace(policy.DNSMode) == "" {
-		policy.DNSMode = "rescue"
-		policy.DNSProtocol = "https"
-		policy.DNSHost = "1.1.1.1"
-		policy.DNSPort = 443
-		policy.DNSServerName = "cloudflare-dns.com"
-		policy.DNSPath = "/dns-query"
+		// A missing choice is the product's Home AdGuard default. Reachability
+		// is resolved against the captured entry before starting a runtime;
+		// never turn an absent choice into an unrequested public resolver.
+		policy.DNSMode, policy.DNSProtocol, policy.DNSPort = "home", "udp", 53
+		policy.DNSHost, policy.DNSServerName, policy.DNSPath = "", "", ""
+	}
+	return policy, nil
+}
+
+func externalDNSPolicyForPath(policy, entry common.RouterProfile, direct bool) (common.RouterProfile, error) {
+	policy = cloneRouterProfile(policy)
+	if policy.NodeKind != "external" || policy.External == nil {
+		return common.RouterProfile{}, errors.New("external DNS policy requires the captured external node")
+	}
+	routerEntry := !direct && entry.ID != "" && (entry.NodeKind == "" || entry.NodeKind == "router-vpn") && entry.External == nil
+	if policy.DNSMode == "home" || strings.TrimSpace(policy.DNSMode) == "" {
+		if !routerEntry {
+			return common.RouterProfile{}, errors.New("Home AdGuard is selected; choose a Router VPN entry or explicitly choose another DNS policy in DNS settings before connecting this external path")
+		}
+		policy.AdGuardIPv4, policy.AdGuardIPv6 = entry.AdGuardIPv4, entry.AdGuardIPv6
+	}
+	var err error
+	switch policy.External.Protocol {
+	case "openvpn":
+		_, err = openVPNDNSLines(policy, direct)
+	case "tor-bridge":
+		_, err = selectedTorBridgeDNS(policy)
+	default:
+		_, err = selectedStandardExitDNS(policy, !routerEntry)
+	}
+	if err != nil {
+		return common.RouterProfile{}, err
 	}
 	return policy, nil
 }
@@ -215,6 +241,11 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	policy, err = externalDNSPolicyForPath(policy, entry, direct)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	sessionBase := "external"
 	if !direct && entryKind == "router-vpn" {
 		sessionBase = "wg"

@@ -181,7 +181,7 @@ static gboolean linux_tor_save_v13(LinuxTorBridgeV13 *state) {
         return FALSE;
     }
     gboolean updating = state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected));
-    linux_tor_status_v13(state, updating ? "Selected Tor bridge node updated. Replacement bridge lines remain private." : "Tor bridge node saved. Connect remains governed by the live platform/runtime capability result.");
+    linux_tor_status_v13(state, updating ? "Selected Tor bridge node updated. Its DNS choice is preserved." : "Tor bridge node saved. Before connecting, choose Custom TCP, DoT, DoH or Rescue in DNS.");
     append_diag(state->app, updating ? "Updated selected Tor censorship bridge profile without exposing prior private relay lines." : "Saved validated Tor censorship bridge profile (obfs4/meek/Snowflake/WebTunnel/Custom).");
     refresh_all(state->app);
     g_free(err);
@@ -219,7 +219,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_label_set_markup(GTK_LABEL(title), "<span size='xx-large' weight='bold'>Tor bridges</span>");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
-    GtkWidget *intro = gtk_label_new("Choose how Tor gets through censorship. obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles ordinary HTTPS traffic. Auto / Custom accepts validated Tor-issued bridge sets. Tor's proved circuit—not homemade XOR—is the encrypted final path.");
+    GtkWidget *intro = gtk_label_new("Choose how Tor gets through censorship. obfs4 disguises bridge traffic; meek uses HTTPS fronts; Snowflake uses volunteer proxies; WebTunnel resembles HTTPS traffic. Auto / Custom accepts Tor-issued bridge sets. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice.");
     gtk_label_set_line_wrap(GTK_LABEL(intro), TRUE);
     gtk_label_set_xalign(GTK_LABEL(intro), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), intro, FALSE, FALSE, 0);

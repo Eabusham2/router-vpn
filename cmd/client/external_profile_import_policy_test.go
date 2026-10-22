@@ -26,7 +26,7 @@ func testExternalProfileImportDNSPolicy(t *testing.T, selection string) {
 	}
 	// A modern explicit Home choice survives import. A direct connection must
 	// reject it without an owned Router VPN entry instead of changing the user's
-	// selection. An absent policy retains the documented Rescue migration.
+	// selection. An absent policy uses Home without inventing a resolver.
 	payload := `{
 	  "schema_version":4,
 	  "id":"ext-socks",
@@ -69,7 +69,7 @@ func testExternalProfileImportDNSPolicy(t *testing.T, selection string) {
 	}
 	for _, p := range []common.RouterProfile{profiles[0], persisted.Profiles[0]} {
 		if selection == "absent" {
-			if p.DNSMode != "rescue" || p.DNSProtocol != "https" || p.DNSHost != "1.1.1.1" || p.DNSPort != 443 || p.DNSServerName != "cloudflare-dns.com" || p.DNSPath != "/dns-query" {
+			if p.DNSMode != "home" || p.DNSProtocol != "udp" || p.DNSHost != "" || p.DNSPort != 53 || p.DNSServerName != "" || p.DNSPath != "" {
 				t.Fatalf("external import persisted the wrong absent-policy migration: %+v", p)
 			}
 		} else {

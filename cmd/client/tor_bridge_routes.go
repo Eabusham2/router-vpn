@@ -77,6 +77,11 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	policy, err = externalDNSPolicyForPath(policy, common.RouterProfile{}, true)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	sessionTrackerFor(a).declareRequest("external-node", "tor")
 	if err = a.stopMode(); err != nil {
@@ -179,6 +184,8 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 			a.profiles.Profiles[i].UseCount++
 			a.profiles.Profiles[i].LastUsedAt = now
 			a.profiles.Profiles[i].PublicIP = actualIP
+			a.profiles.Profiles[i].MultihopEnabled = false
+			a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = "", ""
 			found = true
 			break
 		}

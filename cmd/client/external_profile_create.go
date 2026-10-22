@@ -137,8 +137,9 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		return common.RouterProfile{}, err
 	}
 	// Adopt the same external-only DNS/runtime policy that Connect will use so a
-	// newly-created node cannot be saved with blank/Home policy and silently
-	// change behavior only after the user presses Connect.
+	// newly-created node records the Home AdGuard default. A direct external
+	// connection needs an explicit alternative in DNS settings, never a hidden
+	// public-resolver substitution after Connect.
 	policy, err := externalRuntimePolicy(p)
 	if err != nil {
 		return common.RouterProfile{}, err

@@ -16,9 +16,9 @@ const torImportSnowflakeBridge = "Bridge snowflake 192.0.2.3:80 2B280B23E1107BB6
 func torImportTestApp(t *testing.T, profilesFile string) *app {
 	t.Helper()
 	return &app{
-		cfg: common.ClientConfig{ProfilesFile: profilesFile},
+		cfg:      common.ClientConfig{ProfilesFile: profilesFile},
 		profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileSchemaVersion},
-		state: state{Mode: "off", Phase: "off", RouterID: "previous"},
+		state:    state{Mode: "off", Phase: "off", RouterID: "previous"},
 	}
 }
 
@@ -65,7 +65,7 @@ func TestTorBridgeImportDefaultsSingleObfs4Safely(t *testing.T) {
 		t.Fatalf("saved Tor profiles=%d", len(a.profiles.Profiles))
 	}
 	p := a.profiles.Profiles[0]
-	if p.KillSwitchPolicy != "on-connect" || p.DNSMode != "rescue" || p.DNSProtocol != "https" || p.DNSHost != "1.1.1.1" || p.DNSPort != 443 || p.DNSServerName != "cloudflare-dns.com" || p.DNSPath != "/dns-query" {
+	if p.KillSwitchPolicy != "on-connect" || p.DNSMode != "home" || p.DNSProtocol != "udp" || p.DNSHost != "" || p.DNSPort != 53 || p.DNSServerName != "" || p.DNSPath != "" {
 		t.Fatalf("unsafe Tor defaults: %+v", p)
 	}
 	if p.External == nil || p.External.TorBridge == nil || p.External.TorBridge.Transport != "obfs4" {
