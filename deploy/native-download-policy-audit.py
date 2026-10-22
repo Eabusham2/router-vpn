@@ -246,9 +246,14 @@ forbid("server/rosenpass/Dockerfile", "AWGTOOLS_TAG=", "refs/tags/${AWG")
 need("server/aux-proxies/Dockerfile", "SSR_COMMIT=227127c4bc5a6555e0556693d084c96860e75b5e")
 forbid("server/aux-proxies/Dockerfile", "SSR_TAG=", '--branch "${SSR_TAG}"')
 
+cleanup = load("routervpn_native_download_cleanup", "modes/cleanup-private-runtime.py")
+if cleanup is None or cleanup.ALLOWED_ROOTS != {
+    "native-node", "multihop", "native-multihop", "native-standard-exit", "openvpn-standard-exit"
+}:
+    errors.append("private runtime cleanup must retain the exact owned native runtime roots")
+
 need(
     "modes/cleanup-private-runtime.py",
-    'ALLOWED_ROOTS = {"multihop", "native-multihop", "native-standard-exit", "openvpn-standard-exit"}',
     'relative_to(run_root)',
     'O_NOFOLLOW',
     'follow_symlinks=False',

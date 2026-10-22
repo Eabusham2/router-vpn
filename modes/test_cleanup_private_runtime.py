@@ -34,13 +34,21 @@ def main() -> int:
         CLEAN.cleanup(str(root), str(session))
         assert not session.exists()
 
-        for category in ("native-standard-exit", "openvpn-standard-exit"):
+        for category in ("native-node", "native-standard-exit", "openvpn-standard-exit"):
             standard = run / category / "session-1"
             standard.mkdir(parents=True)
             (standard / "secret").write_text("private\n", encoding="utf-8")
             assert CLEAN.verify_directory(str(root), str(standard)) == standard
             CLEAN.cleanup(str(root), str(standard))
             assert not standard.exists()
+
+        # The single-node native launcher owns the category directory itself.
+        native_node = run / "native-node"
+        (native_node / "profile.json").write_text("private\n", encoding="utf-8")
+        assert CLEAN.verify_directory(str(root), str(native_node)) == native_node
+        CLEAN.cleanup(str(root), str(native_node))
+        assert not native_node.exists()
+        assert (run / "native-standard-exit").is_dir(), "another runtime owner was removed"
 
         # First launch with no run directory is an intentional no-op.
         fresh = root / "fresh"
