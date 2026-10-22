@@ -173,7 +173,7 @@ need(
     'case httpsConnect = "https-connect"',
     'Set(["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor", "tor-bridge"])',
     'case tor', 'case torBridge = "tor-bridge"',
-    'LibboxRouterCompileTorProfile',
+    'LibboxRouterValidateTorProfile',
     'external["http_connect"] = block',
     'external["https_connect"] = block',
     "HTTPS CONNECT requires a safe TLS server name/SNI",
@@ -290,7 +290,8 @@ need(
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
     'endpoint["detour"] == nil',
-    "LibboxRouterCompileTorProfile", "torPredecessorProfile: proofProfile",
+    'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
+    "torPredecessorProfile: proofProfile",
     'tor["session_id"] as? String == sessionID',
 )
 

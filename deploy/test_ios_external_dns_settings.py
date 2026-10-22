@@ -3,6 +3,7 @@
 
 The separate external-policy gate calls the real Go compiler. This gate proves
 the visible sheet saves the exact selected node and retains bootstrap options.
+Tor settings execute the real native idle validator without starting a VPN.
 """
 from pathlib import Path
 import importlib.util
@@ -15,6 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 spec = importlib.util.spec_from_file_location('external_profiles', ROOT / 'deploy/test_ios_external_connection_profiles.py')
 P = importlib.util.module_from_spec(spec); spec.loader.exec_module(P)
+spec = importlib.util.spec_from_file_location('tor_dns_native_bridge', ROOT / 'deploy/test_ios_tor_profile.py')
+T = importlib.util.module_from_spec(spec); spec.loader.exec_module(T)
 
 
 def method(source, signature):
@@ -31,6 +34,8 @@ def method(source, signature):
 SWIFT = r'''
 import Foundation
 import Network
+import Libbox
+// SHIPPING_PRESET
 enum IOSDNSRuntimePolicy {
  // SELECTED_PROFILE
  static func resolve(_ p:RouterProfile)throws->Int{1}
@@ -46,6 +51,8 @@ enum IOSDNSRuntimePolicy {
  let model:RouterVPNModel
  var mode="home",protocolName="udp",host="",port="53",serverName="",path="/dns-query",status=""
  var useHostnameBootstrap=false,results:[DNSBenchmarkResult]=[]
+ var loadedTorDNS:[String]?
+ var loadedTorProfile:RouterProfile?
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
  init(_ model:RouterVPNModel){self.model=model}
  // SHIPPING_SETTINGS
@@ -119,10 +126,54 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
   }
   for raw:Any in [true,"53",1.5] {var value=original,server=value["server"] as! [String:Any];server["server_port"]=raw;value["server"]=server;try reject("invalid saved port type"){_ = try JSONDecoder().decode(ExternalDNSBootstrap.self,from:json(value))}}
  }
+ static func tor()throws {
+  var original=profile("tor")
+  original.endpoint="tor";original.apiToken="";original.socksPassword="";original.external!.expectedPublicIP=""
+  original.dnsMode=nil;original.dnsProtocol=nil;original.dnsHost=nil;original.dnsPort=nil;original.dnsServerName=nil;original.dnsPath=nil
+  for mode:String? in [nil,"","home"] {
+   var p=original;p.dnsMode=mode
+   let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+   try check("missing and blank saved Tor DNS remains exact Home draft: "+editor.status,model.imports==1 && model.bundle!.routerProfiles[0]==p && editor.mode=="home")
+  }
+  for transport in ["udp","tcp","tls","https","h3","dot","doh","doh3"] {
+   var p=original;p.dnsMode="home";p.dnsProtocol=transport;p.dnsHost="fd12:3456::53";p.dnsPort=5453;p.dnsServerName="adguard.home.example";p.dnsPath="/captured-query?policy=home"
+   let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+   try check("Tor Home keeps the complete saved selection "+transport+": "+editor.status,model.imports==1 && model.bundle!.routerProfiles[0]==p)
+   editor.host="10.77.0.53";editor.savePolicy()
+   let saved=model.bundle!.routerProfiles[0]
+   let canonical=["dot":"tls","doh":"https","doh3":"h3"][transport] ?? transport
+   try check("Tor Home edits keep port, TLS identity, HTTP path and selected transport",model.imports==2 && saved.dnsMode=="home" && saved.dnsProtocol==canonical && saved.dnsHost=="10.77.0.53" && saved.dnsPort==5453 && saved.dnsServerName==p.dnsServerName && saved.dnsPath==p.dnsPath)
+   try check("Tor DNS editor preserves private transport and all non-DNS policies",saved.external==p.external && saved.manualMTU==p.manualMTU && saved.homeLANAccess==p.homeLANAccess && saved.ipv6Mode==p.ipv6Mode && model.bundle!.profiles==bundle(p).profiles)
+   editor.host="1.1.1.1";editor.savePolicy()
+   try check("Home never silently changes to a public resolver",model.imports==2 && model.bundle!.routerProfiles[0]==saved)
+   editor.load();editor.port="-1";editor.savePolicy();try check("invalid Tor DNS port does not save",model.imports==2)
+   editor.load();model.profileMutationBlocked=true;editor.savePolicy();try check("Tor DNS edits respect live session ownership",model.imports==2)
+  }
+  for mode in ["rescue","custom","dot","doh"] {
+   var p=original;p.dnsMode=mode;p.dnsProtocol=mode=="dot" ? "tls":mode=="doh" ? "https":"tcp";p.dnsHost="9.9.9.9";p.dnsPort=5453;p.dnsServerName="dns.quad9.net";p.dnsPath="/selected-query"
+   let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+   try check("explicit saved Tor DNS is never rewritten as Home: "+editor.status,model.imports==1 && model.bundle!.routerProfiles[0]==p)
+  }
+  for fault in ["udp","h3","hostname","bootstrap","fastest"] {
+   var p=original;p.dnsMode="custom";p.dnsProtocol="tcp";p.dnsHost="9.9.9.9"
+   if fault=="hostname"{p.dnsHost="dns.quad9.net"}
+   else if fault=="bootstrap"{p.dnsBootstrap=boot()}
+   else if fault=="fastest"{p.dnsMode="fastest"}
+   else {p.dnsProtocol=fault}
+   let model=RouterVPNModel();model.bundle=bundle(p);let editor=Settings(model);editor.load();editor.savePolicy()
+   try check("unsupported Tor DNS remains rejected without fallback "+fault,model.imports==0 && model.bundle!.routerProfiles[0]==p && editor.status.hasPrefix("DNS policy rejected:"))
+  }
+  let model=RouterVPNModel();model.bundle=bundle(original);let editor=Settings(model);editor.load()
+  editor.usePreset(IOSDNSPreset(id:"q4a",name:"Quad9",address:"9.9.9.9",serverName:"dns.quad9.net"));editor.savePolicy()
+  try check("explicit public Tor preset selects reachable TCP",model.imports==1 && model.bundle!.routerProfiles[0].dnsMode=="custom" && model.bundle!.routerProfiles[0].dnsProtocol=="tcp" && model.bundle!.routerProfiles[0].dnsHost=="9.9.9.9")
+  model.bundle!.routerProfiles[0].name="Updated elsewhere";editor.host="149.112.112.112";editor.savePolicy()
+  try check("an open Tor sheet cannot overwrite a newer node capture",model.imports==1 && model.bundle!.routerProfiles[0].name=="Updated elsewhere" && model.bundle!.routerProfiles[0].dnsHost=="9.9.9.9")
+ }
  static func main() {
+  defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try hostileCodable()
-   print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; storage and Network boundary substituted)")
+   try settings();try home();try hostileCodable();try tor()
+   print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; Tor uses real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
 }
@@ -130,19 +181,28 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
 
 
 def main():
-    swift = shutil.which('swiftc')
-    if not swift: raise RuntimeError('swiftc is required')
+    swift, go = shutil.which('swiftc'), shutil.which('go')
+    if not swift or not go: raise RuntimeError('swiftc and go are required')
     view = (APP / 'IOSDNSPolicyView.swift').read_text()
     methods = '\n'.join(method(view, signature) for signature in [
-        'private var ordinaryExternal:', 'private func selectedProfile()', 'private func load()',
-        'private func savePolicy()', 'private func defaultPort(', 'private func sorted('
+        'private var ordinaryExternal:', 'private var torExternal:', 'private var nativeExternal:', 'private var torDNSFields:',
+        'private func selectedProfile()', 'private func load()', 'private func savePolicy()',
+        'private func usePreset(', 'private func defaultPort(', 'private func sorted('
     ])
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
-    source = SWIFT.replace(' // SELECTED_PROFILE', selected).replace(' // SHIPPING_SETTINGS', methods)
-    with tempfile.TemporaryDirectory(prefix='ios-external-dns-settings-') as temporary:
+    preset = view[view.index('private struct IOSDNSPreset:'):view.index('struct IOSDNSPolicyView:')].replace('private struct ', 'struct ', 1)
+    source = SWIFT.replace(' // SELECTED_PROFILE', selected).replace(' // SHIPPING_SETTINGS', methods).replace('// SHIPPING_PRESET', preset)
+    with tempfile.TemporaryDirectory(prefix='ios-external-dns-settings-') as temporary, tempfile.TemporaryDirectory(prefix='.ios-tor-dns-go-', dir=ROOT) as go_dir:
         work = Path(temporary)
+        compiler_source = Path(go_dir) / 'main.go'; compiler_source.write_text(T.GO)
+        compiler = work / 'compiler'
+        subprocess.run([go, 'build', '-o', str(compiler), str(compiler_source)], cwd=ROOT, check=True, timeout=120)
         options = [swift, '-swift-version', '6', '-module-cache-path', str(work / 'modules')]
+        libbox = work / 'Libbox.swift'; libbox.write_text(T.LIBBOX)
+        suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
+        subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Libbox', str(libbox), '-emit-module-path', str(work / 'Libbox.swiftmodule'), '-o', str(work / ('libLibbox' + suffix))], check=True, timeout=90)
+        options += ['-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         if platform.system() != 'Darwin':
             network = work / 'Network.swift'; network.write_text(P.NETWORK)
             subprocess.run(options + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network), '-emit-module-path', str(work / 'Network.swiftmodule'), '-o', str(work / 'libNetwork.so')], check=True, timeout=60)
@@ -150,7 +210,7 @@ def main():
         code = work / 'Tests.swift'; code.write_text(source)
         binary = work / 'tests'
         subprocess.run(options + [str(APP / 'Models.swift'), str(APP / 'IOSExternalDNSPolicy.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
-        subprocess.run([str(binary)], check=True, timeout=30)
+        subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
 
 
 if __name__ == '__main__':

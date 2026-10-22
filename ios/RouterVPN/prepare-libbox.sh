@@ -95,7 +95,8 @@ for header in headers:
         assert signature in request.group(1), 'Generated MAX request signature changed: '+signature
     for symbol in ('LibboxRouterTorNativeABI', 'LibboxRouterTorNativeVersion', 'LibboxRouterTorSourceNotices'):
         assert symbol in header.read_text(), str(header)
-    for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterTorSetStateDirectory',
+    for symbol in ('LibboxRouterCompileTorProfile', 'LibboxRouterValidateTorProfile',
+                   'LibboxRouterCompileTorProfileWithPredecessor', 'LibboxRouterTorSetStateDirectory',
                    'LibboxRouterTorCreateProof', 'LibboxRouterTorCreateProofWithPredecessor',
                    'LibboxRouterTorProofRequest'):
         assert symbol in header.read_text(), str(header)

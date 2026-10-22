@@ -35,7 +35,7 @@ def populate(folder):
             (entry/'trust.pem').write_text('exact test-only trust asset')
         if mode in ('reality-vision', 'reality-pq-vision', 'reality-xhttp'):
             (entry/'xray.json').write_text('{}')
-    report = dict(schema=1, graphs=348, profile_policy_combinations=320, public_tor_traffic=False,
+    report = dict(schema=1, graphs=348, home_dns_combinations=285, profile_policy_combinations=320, public_tor_traffic=False,
                   native_handles='boundary doubles',
                   sources={str(path.relative_to(ROOT)): GATE.sha(path) for path in GATE.host_sources()})
     (folder/'source-evidence.json').write_text(json.dumps(report))
@@ -44,7 +44,7 @@ def populate(folder):
 class AppleTorNativeGate(unittest.TestCase):
     def test_exact_matrix_asset_and_session_ownership(self):
         mutations = ('missing', 'extra', 'renamed', 'empty', 'oversized', 'linked-root',
-                     'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'stale-source')
+                     'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'missing-home-dns', 'stale-source')
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); folder = root/'graphs'; folder.mkdir(); populate(folder)
@@ -69,6 +69,9 @@ class AppleTorNativeGate(unittest.TestCase):
                 elif mutation == 'wrong-mode':
                     data = json.loads((entry/'fixture.json').read_text()); data['mode'] = 'wg'
                     (entry/'fixture.json').write_text(json.dumps(data))
+                elif mutation == 'missing-home-dns':
+                    data = json.loads((folder/'source-evidence.json').read_text()); del data['home_dns_combinations']
+                    (folder/'source-evidence.json').write_text(json.dumps(data))
                 else:
                     data = json.loads((folder/'source-evidence.json').read_text())
                     data['sources']['deploy/test_ios_tor_profile.py'] = '0'*64

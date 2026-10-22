@@ -51,7 +51,7 @@ PIN = TOR.CORE
 def host_sources() -> list[Path]:
     # This is the exact source list recorded by the executable Swift fixture.
     return [FIXTURE, APP/'IOSExternalNodeBuilderView.swift', TUN/'PacketTunnelProvider.swift',
-            *[APP/(name+'.swift') for name in ('Models', 'IOSDNSRuntimePolicy',
+            *[APP/(name+'.swift') for name in ('Models', 'IOSExternalExecution', 'IOSMultihopExecution', 'IOSDNSRuntimePolicy',
                 'IOSNativeXrayProfile', 'IOSNativePQProfile', 'IOSMultihopStartLayer', 'IOSRuntimeSelection')],
             *[TUN/(name+'.swift') for name in ('WireGuardQuickConfig', 'RouterVPNMultihopGraph',
                 'RouterVPNMTUPolicy', 'IOSStartLayer', 'IOSXrayDevicePolicy', 'RouterVPNExternalExit')]]
@@ -104,6 +104,7 @@ def require_matrix(folder: Path) -> dict[str, str]:
     report = json.loads(regular(folder/'source-evidence.json'))
     hashes = {str(path.relative_to(ROOT)): sha(path) for path in host_sources()}
     if (report.get('schema') != 1 or report.get('graphs') != 348
+            or report.get('home_dns_combinations') != 285
             or report.get('profile_policy_combinations') != 320
             or report.get('public_tor_traffic') is not False
             or report.get('native_handles') != 'boundary doubles' or report.get('sources') != hashes):

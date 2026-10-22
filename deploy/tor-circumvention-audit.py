@@ -433,7 +433,8 @@ need(
     "current circuit exit verified",
 )
 need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-     "LibboxRouterCompileTorProfile", "torPredecessorProfile: proofProfile",
+     'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
+     "torPredecessorProfile: proofProfile",
      "torProfileJSON: String(decoding: source, as: UTF8.self)",
      'tor["session_id"] as? String == sessionID', 'tor["detour"] as? String == predecessorTag')
 need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",

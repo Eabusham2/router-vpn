@@ -155,7 +155,7 @@ need(
     "LibboxRouterOpenVPNEndpoint",
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
-    "LibboxRouterCompileTorProfile",
+    'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
     'tor["session_id"] as? String == sessionID',
     'tor["detour"] as? String == predecessorTag',
     'torPredecessorProfile: proofProfile',

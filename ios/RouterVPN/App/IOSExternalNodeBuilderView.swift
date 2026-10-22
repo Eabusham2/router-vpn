@@ -210,14 +210,14 @@ extension RouterVPNModel {
             "mtu_policy": "auto",
             "startup_mode": "manual",
             "kill_switch_policy": "off",
-            "dns_mode": "rescue",
+            "dns_mode": tor ? "home" : "rescue",
         ]
         if tor {
             let captured = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
             var failure: NSError?
-            let compiled = LibboxRouterCompileTorProfile(String(decoding: captured, as: UTF8.self), UUID().uuidString.lowercased(), "", &failure)
+            let valid = LibboxRouterValidateTorProfile(String(decoding: captured, as: UTF8.self), &failure)
             if let failure { throw failure }
-            guard !compiled.isEmpty else { throw NSError(domain: "RouterVPN.ExternalNode", code: 35, userInfo: [NSLocalizedDescriptionKey: "Tor profile validation did not complete."]) }
+            guard valid else { throw NSError(domain: "RouterVPN.ExternalNode", code: 35, userInfo: [NSLocalizedDescriptionKey: "Tor profile validation did not complete."]) }
         }
         if protocolName == "amneziawg", let block = external[protocolName] as? [String: Any] {
             // Validate the imported node before storage with the same native
@@ -348,7 +348,7 @@ struct IOSExternalNodeBuilderView: View {
                 }
                 if selected.isTor {
                     Section("Tor connection") {
-                        Text("The app builds a circuit and verifies its current Tor exit before showing Connected. The initial DNS choice is Rescue DoH; you can choose a TCP, DoT or DoH resolver in Settings.")
+                        Text("The app builds a circuit and verifies its current Tor exit before showing Connected. Home AdGuard is the default and uses your paired Router VPN entry. For Tor without an entry, choose a public TCP, DoT, DoH or Rescue resolver in DNS settings.")
                             .font(.caption).foregroundStyle(.secondary)
                         if selected == .torBridge {
                             Picker("Bridge transport", selection: $torTransport) {

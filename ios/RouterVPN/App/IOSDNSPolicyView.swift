@@ -1,4 +1,5 @@
 import Foundation
+import Libbox
 @preconcurrency import Network
 import SwiftUI
 
@@ -24,6 +25,8 @@ struct IOSDNSPolicyView: View {
     @State private var status = ""
     @State private var benchmarking = false
     @State private var benchmarkSessionInvalidated = false
+    @State private var loadedTorDNS: [String]?
+    @State private var loadedTorProfile: RouterProfile?
 
     private let modeValues = [
         ("Home AdGuard", "home"), ("Fastest measured", "fastest"), ("Custom UDP/TCP", "custom"),
@@ -48,29 +51,41 @@ struct IOSDNSPolicyView: View {
         guard let profile = selectedProfile() else { return false }
         return profile.normalizedNodeKind == "external" && IOSExternalDNSPolicy.protocols.contains(profile.external?.protocolName ?? "")
     }
+    private var torExternal: Bool {
+        guard let profile = selectedProfile() else { return false }
+        return profile.normalizedNodeKind == "external" && ["tor", "tor-bridge"].contains(profile.external?.protocolName ?? "")
+    }
+    private var nativeExternal: Bool { ordinaryExternal || torExternal }
+    private var torDNSFields: [String] { [mode, protocolName, host, port, serverName, path] }
     private var encryptedDNS: Bool {
-        ["dot", "doh", "doh3"].contains(mode) || (ordinaryExternal && ["custom", "home"].contains(mode) && ["tls", "https", "h3"].contains(protocolName))
+        ["dot", "doh", "doh3"].contains(mode) || (nativeExternal && ["custom", "home"].contains(mode) && ["tls", "https", "h3"].contains(protocolName))
     }
     private var httpDNS: Bool {
-        ["doh", "doh3"].contains(mode) || (ordinaryExternal && ["custom", "home"].contains(mode) && ["https", "h3"].contains(protocolName))
+        ["doh", "doh3"].contains(mode) || (nativeExternal && ["custom", "home"].contains(mode) && ["https", "h3"].contains(protocolName))
     }
 
     var body: some View {
         NavigationStack {
             Form {
                 Section("Selected DNS policy") {
-                    Picker("DNS", selection: $mode) {
-                        ForEach(modeValues, id: \.1) { Text(ordinaryExternal && $0.1 == "custom" ? "Custom transport" : $0.0).tag($0.1) }
-                    }
-                    .onChange(of: mode) { value in applyModeDefaults(value) }
-                    if mode == "custom" || (ordinaryExternal && mode == "home") {
-                        Picker("Transport", selection: $protocolName) {
-                            Text("UDP").tag("udp"); Text("TCP").tag("tcp")
-                            if ordinaryExternal { Text("TLS").tag("tls"); Text("HTTPS").tag("https"); Text("HTTP/3").tag("h3") }
+                    Picker("DNS", selection: Binding(get: { mode }, set: { value in mode = value; applyModeDefaults(value) })) {
+                        ForEach(modeValues, id: \.1) {
+                            Text(nativeExternal && $0.1 == "custom" ? "Custom transport" : $0.0).tag($0.1)
+                                .disabled(torExternal && ["fastest", "doh3"].contains($0.1))
                         }
                     }
-                    if ["custom", "dot", "doh", "doh3"].contains(mode) || (ordinaryExternal && mode == "home") {
-                        TextField("Resolver IP or hostname", text: $host)
+                    if mode == "custom" || (nativeExternal && mode == "home") {
+                        Picker("Transport", selection: $protocolName) {
+                            Text("UDP").tag("udp").disabled(torExternal && mode != "home")
+                            Text("TCP").tag("tcp")
+                            if nativeExternal {
+                                Text("TLS").tag("tls"); Text("HTTPS").tag("https")
+                                Text("HTTP/3").tag("h3").disabled(torExternal && mode != "home")
+                            }
+                        }
+                    }
+                    if ["custom", "dot", "doh", "doh3"].contains(mode) || (nativeExternal && mode == "home") {
+                        TextField(torExternal && mode == "home" ? "Home AdGuard IP (blank uses entry)" : torExternal ? "Resolver IP" : "Resolver IP or hostname", text: $host)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Port", text: $port).keyboardType(.numberPad)
                     }
@@ -121,7 +136,9 @@ struct IOSDNSPolicyView: View {
                 }
 
                 Section("Runtime truth") {
-                    Text(ordinaryExternal
+                    Text(torExternal
+                         ? "Home AdGuard uses the selected paired Router VPN entry and supports UDP, TCP, TLS, HTTPS and HTTP/3. Its address must belong to that entry. Without an entry, choose a public TCP, TLS, HTTPS or Rescue resolver; those queries travel through Tor. Connection completes after the entry, DNS and current Tor exit pass their live checks."
+                         : ordinaryExternal
                          ? "The selected DNS transport runs inside the external VPN. Home AdGuard uses the paired Router VPN entry, whose identity is checked separately. Connection completes after the selected DNS and exit address pass their live checks."
                          : "WireGuardKit can enforce Home/Fastest/Custom UDP when the selected resolver is an IP. Explicit TCP, DoT, DoH and DoH3 require a self-contained Libbox mode. Mode readiness changes with the selected DNS policy instead of pretending WireGuard can provide an encrypted DNS transport it does not own.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -151,8 +168,10 @@ struct IOSDNSPolicyView: View {
                     Button(benchmarking ? "Testing real DNS queries…" : "Retest over active VPN path") {
                         Task { await retest() }
                     }
-                    .disabled(!model.connected || benchmarking)
-                    Text(model.connected
+                    .disabled(!model.connected || benchmarking || torExternal)
+                    Text(torExternal
+                         ? "This resolver comparison uses UDP queries and cannot compare public resolvers through Tor. The selected Home or Tor DNS policy is checked during connection."
+                         : model.connected
                          ? "Retest sends real DNS A queries to each resolver over the device's current route. While Router VPN is connected, that route is the selected VPN path; this is DNS-query RTT, not ICMP ping."
                          : "Connect first so Retest measures from the selected VPN path instead of your unrelated direct network.")
                         .font(.caption).foregroundStyle(.secondary)
@@ -187,16 +206,21 @@ struct IOSDNSPolicyView: View {
     }
 
     private func load() {
-        guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" || ordinaryExternal else { status = "Select a linked node with native DNS policy."; return }
-        mode = (p.dnsMode ?? (ordinaryExternal ? "rescue" : "home")).lowercased()
-        protocolName = (p.dnsProtocol ?? "udp").lowercased()
+        guard let p = selectedProfile(), p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "Select a linked node with native DNS policy."; return }
+        let savedMode = (p.dnsMode ?? "").lowercased()
+        mode = savedMode.isEmpty ? (ordinaryExternal ? "rescue" : "home") : savedMode
+        let savedProtocol = (p.dnsProtocol ?? "").lowercased()
+        protocolName = savedProtocol.isEmpty ? (mode == "dot" ? "tls" : mode == "doh" ? "https" : mode == "doh3" ? "h3" : "udp") : savedProtocol
+        if let transport = ["dot": "tls", "doh": "https", "doh3": "h3"][protocolName] { protocolName = transport }
         host = p.dnsHost ?? ""
-        port = String(p.dnsPort ?? defaultPort(mode))
+        port = String(p.dnsPort ?? defaultPort(["home", "custom"].contains(mode) ? protocolName : mode))
         serverName = p.dnsServerName ?? ""
         path = p.dnsPath ?? "/dns-query"
         useHostnameBootstrap = p.dnsBootstrap != nil
         bootstrap = p.dnsBootstrap ?? ExternalDNSBootstrap(server: .init(type: "tcp", server: "", serverPort: 53))
         results = sorted(p.dnsResults ?? [])
+        loadedTorDNS = torExternal ? torDNSFields : nil
+        loadedTorProfile = torExternal ? p : nil
     }
 
     private func savePolicy() {
@@ -207,16 +231,26 @@ struct IOSDNSPolicyView: View {
             status = "Pair/import a Router VPN node first."; return
         }
         var p = bundle.routerProfiles[index]
-        guard p.normalizedNodeKind == "router-vpn" || ordinaryExternal else { status = "This node uses its protocol-specific DNS settings."; return }
+        guard p.normalizedNodeKind == "router-vpn" || nativeExternal else { status = "This node uses its protocol-specific DNS settings."; return }
+        guard !torExternal || loadedTorProfile == p else { status = "The selected Tor node changed while DNS settings were open. Reopen DNS settings before saving."; return }
         guard let selectedPort = Int(port), (0...65535).contains(selectedPort) else { status = "DNS port must be 1–65535, or 0 for the selected protocol default."; return }
-        p.dnsMode = mode
-        p.dnsProtocol = protocolName
-        p.dnsHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
-        p.dnsPort = selectedPort
-        p.dnsServerName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
-        p.dnsPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        // A displayed Home default must not migrate an untouched saved blank
+        // policy. Explicit edits retain all six captured DNS selection fields.
+        if !torExternal || loadedTorDNS != torDNSFields {
+            p.dnsMode = mode
+            p.dnsProtocol = protocolName
+            p.dnsHost = host.trimmingCharacters(in: .whitespacesAndNewlines)
+            p.dnsPort = selectedPort
+            p.dnsServerName = serverName.trimmingCharacters(in: .whitespacesAndNewlines)
+            p.dnsPath = path.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
         do {
-            if ordinaryExternal {
+            if torExternal {
+                var failure: NSError?
+                let valid = LibboxRouterValidateTorProfile(String(decoding: try JSONEncoder().encode(p), as: UTF8.self), &failure)
+                if let failure { throw failure }
+                guard valid else { throw NSError(domain: "RouterVPN.TorDNS", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor DNS policy validation did not complete."]) }
+            } else if ordinaryExternal {
                 p.dnsBootstrap = useHostnameBootstrap ? bootstrap : nil
                 var selectedBundle = bundle; selectedBundle.routerProfiles[index] = p
                 let entry = p.multihopEnabled == true ? try model.iosMultihopEntryBundle(for: selectedBundle) : nil
@@ -224,12 +258,13 @@ struct IOSDNSPolicyView: View {
             } else { _ = try IOSDNSRuntimePolicy.resolve(p) }
             bundle.routerProfiles[index] = p
             try model.importBundle(JSONEncoder().encode(bundle))
-            status = "DNS policy saved and patched into compatible iOS runtimes for the next connection."
+            status = torExternal ? "DNS policy saved for the next connection. Home AdGuard requires its paired Router VPN entry." : "DNS policy saved and patched into compatible iOS runtimes for the next connection."
             load()
         } catch { status = "DNS policy rejected: \(error.localizedDescription)" }
     }
 
     private func retest() async {
+        guard !torExternal else { status = "The UDP resolver comparison cannot run through Tor. The selected DNS policy is checked during connection."; return }
         guard model.connected else { status = "Connect first so DNS RTT uses the selected VPN path."; return }
         guard let bundle = model.bundle,
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.indices.first else { return }
@@ -296,18 +331,22 @@ struct IOSDNSPolicyView: View {
         host = preset.address
         if ordinaryExternal { useHostnameBootstrap = false }
         serverName = preset.serverName
-        if ["home", "fastest", "rescue"].contains(mode) { mode = "custom"; protocolName = "udp"; port = "53" }
+        if ["home", "fastest", "rescue"].contains(mode) { mode = "custom"; protocolName = torExternal ? "tcp" : "udp"; port = "53" }
     }
 
     private func applyModeDefaults(_ value: String) {
         switch value {
-        case "custom": if port.isEmpty || port == "443" || port == "853" { port = "53" }
-        case "dot": port = "853"
-        case "doh", "doh3": port = "443"; if path.isEmpty { path = "/dns-query" }
+        case "custom":
+            if torExternal && ["udp", "h3"].contains(protocolName) { protocolName = "tcp" }
+            if port.isEmpty || port == "443" || port == "853" { port = String(defaultPort(protocolName)) }
+        case "dot": port = "853"; if torExternal { protocolName = "tls" }
+        case "doh", "doh3":
+            port = "443"; if path.isEmpty { path = "/dns-query" }
+            if torExternal { protocolName = value == "doh" ? "https" : "h3" }
         default: break
         }
     }
-    private func defaultPort(_ value: String) -> Int { value == "dot" ? 853 : (["doh", "doh3"].contains(value) ? 443 : 53) }
+    private func defaultPort(_ value: String) -> Int { ["dot", "tls"].contains(value) ? 853 : (["doh", "doh3", "https", "h3"].contains(value) ? 443 : 53) }
     private func sorted(_ values: [DNSBenchmarkResult]) -> [DNSBenchmarkResult] {
         values.sorted {
             if $0.working != $1.working { return $0.working && !$1.working }

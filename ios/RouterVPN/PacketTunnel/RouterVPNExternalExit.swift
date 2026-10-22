@@ -192,7 +192,7 @@ enum RouterVPNExternalExitBuilder {
             let sessionID = UUID().uuidString.lowercased()
             let source = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
             var failure: NSError?
-            let encoded = LibboxRouterCompileTorProfile(String(decoding: source, as: UTF8.self), sessionID, predecessor, &failure)
+            let encoded = LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)
             if let failure { throw failure }
             guard let data = encoded.data(using: .utf8), !data.isEmpty, data.count <= 4 * 1024 * 1024,
                   let config = try JSONSerialization.jsonObject(with: data) as? [String: Any],
