@@ -32,6 +32,8 @@ GO = GO.replace(' case "compile":', ''' case "max-check":
  case "max-resolve":
   var answer struct{Owner string `json:"owner_id"`};err=json.Unmarshal([]byte(r.Source),&answer)
   if err==nil{var q *mobilemultihop.MAXResolveRequest;q,err=mobilemultihop.NewMAXResolveRequest(context.Background(),r.Mode,r.Files,r.Policy,&capturedResolver{r.Source,answer.Owner});if err==nil{value,err=q.Run();q.Close()}}
+ case "sha256":
+  var raw []byte;raw,err=base64.StdEncoding.DecodeString(r.Source);if err==nil{sum:=sha256.Sum256(raw);value=hex.EncodeToString(sum[:])}
  case "compile":''', 1)
 
 NETWORK = r'''
@@ -146,6 +148,19 @@ SWIFT = P.SWIFT[:P.SWIFT.index('func profile(')] + r'''
 import Network
 import Libbox
 import dnssd
+#if canImport(CryptoKit)
+import CryptoKit
+#else
+// CryptoKit is absent on Linux. Use the real Go SHA-256 implementation rather
+// than substituting a digest or bypassing the shipping restoration receipt.
+enum SHA256 {static func hash(data:Data)->[UInt8]{
+ let digest=try! bridge(["Op":"sha256","Source":data.base64EncodedString()])
+ return stride(from:0,to:digest.count,by:2).map{offset in
+  let start=digest.index(digest.startIndex,offsetBy:offset),end=digest.index(start,offsetBy:2)
+  return UInt8(digest[start..<end],radix:16)!
+ }
+}}
+#endif
 enum RouterVPNPhysicalPath {static func snapshot(_ path:NWPath)->(name:String,signature:String)?{guard path.status == .satisfied,path.availableInterfaces.count==1,let first=path.availableInterfaces.first,!first.name.hasPrefix("utun"),!first.name.hasPrefix("tun"),!first.name.hasPrefix("lo") else{return nil};return(first.name,path.signature)}}
 func checked(_ provider:[String:Any])throws->[String:Any]{var p=provider;p["max_source_sha256"]=try IOSMAXSourceSelection.sourceHashes(provider:p){try bridge(["Op":"max-check","Mode":$0,"Files":$1,"Policy":$2])};return p}
 func fixture(_ base:[String:Any],_ mode:String,_ layer:String,_ hostname:String?)throws->[String:Any]{
@@ -179,6 +194,7 @@ func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
   defer{TestCompiler.shared.close()}
   NativeMAXTest.shared.configure{op,mode,files,metadata,answer in try bridge(["Op":op,"Mode":mode,"Files":files,"Policy":metadata,"Source":answer])}
   let fixtures=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2])))
+  try check("receipt boundary uses SHA-256",SHA256.hash(data:Data("abc".utf8)).map{String(format:"%02x",$0)}.joined()=="ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad")
   var count=0
   for mode in IOSNativeMAXProfile.modeIDs.sorted(){for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"]{for address in ["192.0.2.71","2001:db8::71"]{
    NetworkTest.shared.set();DNSSDTest.shared.configure(addresses:[address])
@@ -241,6 +257,7 @@ func capturedRoutes(_ fixtures:[String:Any])throws->[[String:Any]]{
   try check("OS success waits prestart retirement",completed.done.wait(timeout:.now()+0.03) == .timedOut)
   owned.cancel();release.signal();try check("cancel overrides early successful proof",completed.done.wait(timeout:.now()+5) == .success && !completed.result().1 && completed.result().0==1)
   checks += try providerPrestartTests(good:good,fixtures:object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3]))))
+  checks += try providerExecutionTests(fixtures:object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3]))))
   print("Apple MAX hostname: \(count) real Go launch graphs, \(checks) source/DNS/lifetime checks passed")
  }
 }
@@ -284,6 +301,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private var providerStrategy:PrestartStrategy?,strategyDriver:PrestartDriver?
  let trace=PrestartTrace()
  func configure(_ config:[String:Any]){let p=NETunnelProviderProtocol();p.providerConfiguration=config;protocolConfiguration=p}
+ func executionState()->(IOSMultihopExecution.Source?,String?){(multihopExecutionSource,restoredMultihopExecution)}
  private func currentProviderStrategy()->PrestartStrategy?{providerStrategy}
  private func retireLibboxSettings(epoch:String){}
  private func clearPathProofGuard(){}
@@ -363,6 +381,37 @@ __PRODUCTION__
  try check("sleep retires pending resolver before completion",slept.done.wait(timeout:.now()+5) == .success && sleepStart.done.wait(timeout:.now()+3) == .success && !sleepStart.result().1 && sleeping.trace.counts().0==0 && NetworkTest.shared.counts().1==0)
  return checks
 }
+
+@MainActor func providerExecutionTests(fixtures:[String:Any])throws->Int{
+ var checks=0
+ func check(_ name:String,_ value:@autoclosure ()throws->Bool)throws{guard try value() else{fatalError(name)};checks+=1}
+ let input=try checked(changedBundle(capturedRoutes(fixtures)[1]){_,node in node["multihop_execution"]="auto"})
+ let digest:(Data)->String={SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()}
+ let source=try IOSMultihopExecution.Source(configuration:input,digest:digest),hold=String(repeating:"e",count:32)
+ let capture=try IOSMultihopExecution.Capture(source:source,execution:"server",session:UUID().uuidString,request:String(repeating:"a",count:32))
+ let receipt=String(decoding:try capture.encoded(),as:UTF8.self) as NSString
+ let options:[String:NSObject]=["routervpn_mtu_hold":hold as NSString,IOSMultihopExecution.launchKey:receipt]
+ DNSSDTest.shared.configure();NetworkTest.shared.set()
+ let p=PacketTunnelProvider(),started=Outcome(),stopped=Outcome();p.configure(input);p.startTunnel(options:options){started.receive($0)}
+ try check("actual provider accepts the proved winner before DNS preparation",p.trace.entered.wait(timeout:.now()+5) == .success && p.executionState().0==source && p.executionState().1=="server")
+ let launch=try p.trace.launch(),launchedSource=try IOSMultihopExecution.Source(configuration:launch,digest:digest)
+ try check("receipt retains original hostname sources across private resolution",launchedSource != source && p.executionState().0==source && source.requested=="auto")
+ p.trace.prove();try check("restored startup still needs native proof",started.done.wait(timeout:.now()+5) == .success && started.result().1)
+ p.stopTunnel(with:.userInitiated){stopped.receive(nil)};try check("restored native owner retires",stopped.done.wait(timeout:.now()+5) == .success && p.trace.counts().1==1)
+ for fault in ["exit-source","entry-source","missing-hold","wrong-engine","malformed-receipt"] {
+  var config=input,arguments=options
+  switch fault {
+  case "exit-source":config=try changedBundle(config){_,node in node["api_token"]="replacement-private-token"}
+  case "entry-source":var entry=try object(config["entryBundle"] as! Data);entry["unrelated_saved_field"]="changed";config["entryBundle"]=try json(entry)
+  case "missing-hold":arguments.removeValue(forKey:"routervpn_mtu_hold")
+  case "wrong-engine":config["engine"]="libbox"
+  default:arguments[IOSMultihopExecution.launchKey]="{}" as NSString
+  }
+  let rejected=PacketTunnelProvider(),result=Outcome(),queries=DNSSDTest.shared.counts().0;rejected.configure(config);rejected.startTunnel(options:arguments){result.receive($0)}
+  try check("actual provider rejects invalid restoration before DNS or native start: "+fault,result.done.wait(timeout:.now()+3) == .success && !result.result().1 && rejected.trace.counts().0==0 && DNSSDTest.shared.counts().0==queries)
+ }
+ return checks
+}
 '''
 
 
@@ -371,6 +420,7 @@ def prestart_source():
     def section(begin, end):
         return source[source.index(begin):source.index(end, source.index(begin))]
     parts = [
+        section('    private var multihopExecutionSource:', '    private var forwardingChannel:'),
         section('    private let maxStartOwnerLock', '    override init()'),
         section('    override func startTunnel(', '    private func startWireGuard('),
         section('    override func stopTunnel(', '    override func wake()'),
@@ -406,7 +456,7 @@ def main():
         tests = work / 'Tests.swift'; tests.write_text(SWIFT + prestart_source())
         run(['swiftc', '-swift-version', '6', '-I', str(work), '-L', str(work), *libraries,
              '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'IOSNativePQProfile.swift'),
-             str(APP / 'IOSMultihopStartLayer.swift'), str(TUN / 'RouterVPNMAXDNSOwner.swift'),
+              str(APP / 'IOSMultihopStartLayer.swift'), str(APP / 'IOSMultihopExecution.swift'), str(TUN / 'RouterVPNMAXDNSOwner.swift'),
              str(TUN / 'RouterVPNMAXPreparation.swift'), str(tests), '-o', str(work / 'tests')])
         run([str(work / 'tests'), str(work / 'compiler'), str(fixtures), str(multihop)], timeout=150)
 

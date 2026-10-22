@@ -41,6 +41,7 @@ prepare += '        return Prepared(files: finalFiles, metadata: hopMetadata, en
 PROVIDER = r''' 
 @MainActor final class ProviderPreparation {
  static let maxProfileBytes=4*1024*1024, maxBundleBytes=32*1024*1024, maxLayeredBytes=12*1024*1024
+ var restoredMultihopExecution:String?
  struct Prepared {let files:[String:Data];let metadata:String;let entryLayer:String?;let exitLayer:String?;let mtuProfile:Data}
  func tunnelError(_ code:Int,_ message:String)->NSError{NSError(domain:"ProductionPreparationTest",code:code,userInfo:[NSLocalizedDescriptionKey:message])}
  func multihopWireGuardEndpoint(root:[String:Any],expectedProofID:String,name:String)throws->(endpoint:[String:Any],dns:[String]){throw tunnelError(1,"ordinary raw helper has separate native tests")}
@@ -168,6 +169,13 @@ func maxCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:String)t
      let launchedMTU=try object(Data(bridge(["Op":"mtu-profile","Config":config,"Policy":launchedPolicy]).utf8))
      try check("production MTU metadata preserves the launched profile",text(try object(prepared.mtuProfile))==text(launchedMTU))
      try check("complete MAX layers are not duplicated",prepared.entryLayer==nil && prepared.exitLayer==nil && ac.mode==am && bc.mode==bm)
+      if execution=="auto" {for winner in ["local","server"] {
+       let owner=ProviderPreparation();owner.restoredMultihopExecution=winner
+       let resumed=try owner.prepare(provider:roots.0,root:roots.1,selectedProfile:roots.2)
+       var expected=try object(Data(meta.utf8));expected["execution"]=winner
+       try check("production restoration retains the proved winner",text(try object(Data(resumed.metadata.utf8)))==text(expected))
+       try check("runtime restoration leaves saved Compare policy unchanged",roots.2["multihop_execution"] as? String=="auto")
+      }}
      assemblies+=1
     }
     let planned=try bridge(["Op":"plan","Config":config,"Policy":meta,"Source":text(["Entry":layerA ?? "","Exit":layerB ?? ""])])
