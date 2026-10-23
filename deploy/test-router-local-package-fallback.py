@@ -16,7 +16,12 @@ assert spec and spec.loader
 builder = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(builder)
 ENGINES = builder._desktop_runtime_builders()
+spec = importlib.util.spec_from_file_location("routervpn_local_fallback_pe", ROOT / "deploy" / "test_desktop_native_dependencies.py")
+assert spec and spec.loader
+PE_FIXTURE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(PE_FIXTURE)
 METADATA_READS = []
+METADATA_OVERLAY = b"\nROUTER_VPN_TEST_GO_METADATA\n"
 
 
 def fixture_metadata(command, *, cwd=None, env=None, timeout=None):
@@ -30,7 +35,7 @@ def fixture_metadata(command, *, cwd=None, env=None, timeout=None):
     assert len(command) == 4 and cwd is None, command
     assert env["GOTOOLCHAIN"] == "local" and env["GOPROXY"] == "off", env
     binary = Path(command[3])
-    header = json.loads(binary.read_bytes().split(b"\n", 1)[0])
+    header = json.loads(binary.read_bytes().split(METADATA_OVERLAY, 1)[1].split(b"\n", 1)[0])
     system, arch = header["target"].split("/")
     METADATA_READS.append((str(binary), header["target"]))
     return (str(binary) + ": " + header["toolchain"] + "\n"
@@ -59,11 +64,18 @@ def sealed_runtime_fixtures(root: Path, arch: str) -> None:
                   "amnezia": module.POLICY.AMNEZIA.VERSION,
                   "xray": module.POLICY.XRAY_VERSION}
         binary = "sing-box-routervpn.exe" if kind == "native" else "sing-box-amnezia.exe"
-        write(directory / binary, json.dumps(header) + "\n" + module.marker(policy) + "\n")
+        directory.mkdir(parents=True, exist_ok=True)
+        # Real PE headers and import tables reach the shipping dependency
+        # parser. Only Go's unrelated build-info reader uses this test overlay.
+        (directory / binary).write_bytes(PE_FIXTURE.image(target) + METADATA_OVERLAY
+                                        + (json.dumps(header) + "\n" + module.marker(policy) + "\n").encode())
         raw = (directory / binary).read_bytes()
         if kind == "native":
             for name in module.expected_names(target) - {binary}:
-                write(directory / name, "same-image " + name + "\n")
+                if name == module.library_name(target):
+                    (directory / name).write_bytes(PE_FIXTURE.image(target))
+                else:
+                    write(directory / name, "same-image " + name + "\n")
             files = {name: module.payload((directory / name).read_bytes())
                      for name in module.expected_names(target)}
             receipt = {**module.receipt_fields(target, policy), **files[binary], "files": files}
@@ -145,12 +157,13 @@ def assert_archived_runtimes(root: Path, source: Path, arch: str, work: Path, po
         assert actual == expected, "archived runtime differs from the exact same-image input"
 
 
-def reject_before_compile(work: Path, source: Path, label: str) -> None:
-    with mock.patch.object(builder, "_go_build", side_effect=AssertionError("compiled before native verification")):
+def reject_before_compile(work: Path, source: Path, label: str, expected_error: str | None = None) -> None:
+    with mock.patch.object(builder, "_go_build", side_effect=AssertionError(label + " compiled before native verification")):
         try:
             builder.compile_requested(work / label, "router-vpn-windows-amd64.zip", source)
-        except (ValueError, RuntimeError, OSError):
-            pass
+        except (ValueError, RuntimeError, OSError) as error:
+            if expected_error is not None:
+                assert expected_error in str(error), (label, error)
         else:
             raise AssertionError(label + " runtime was accepted for local fallback")
 
@@ -212,6 +225,32 @@ def runtime_rejection_controls(work: Path, source: Path, base: Path) -> int:
         binary.write_bytes(old_binary)
         receipt_path.write_bytes(old_receipt)
         count += 1
+
+        # Receipts authenticate bytes but cannot make an undeclared compiler
+        # DLL available on the user's host. Exercise both shipped PE payloads
+        # and both kinds of import through the actual router fallback boundary.
+        for filename in ("sing-box-routervpn.exe", "libcronet.dll"):
+            path = native / filename
+            original = path.read_bytes()
+            overlay = METADATA_OVERLAY + original.split(METADATA_OVERLAY, 1)[1] if METADATA_OVERLAY in original else b""
+            try:
+                for delayed in (False, True):
+                    raw = PE_FIXTURE.image("windows/amd64",
+                                           ("KERNEL32.dll",) if delayed else ("libunwind.dll",),
+                                           ("libunwind.dll",) if delayed else ())
+                    path.write_bytes(raw + overlay)
+                    receipt = json.loads(old_receipt)
+                    payload = ENGINES["native"].payload(path.read_bytes())
+                    receipt["files"][filename] = payload
+                    if filename == "sing-box-routervpn.exe":
+                        receipt.update(payload)
+                    receipt_path.write_text(json.dumps(receipt))
+                    reject_before_compile(work, source, "unowned-import-" + filename + str(delayed),
+                                          "imports an unowned DLL: libunwind.dll")
+                    count += 1
+            finally:
+                path.write_bytes(original)
+                receipt_path.write_bytes(old_receipt)
 
         if os.name != "nt":
             original = native.parent / "owned-amd64"

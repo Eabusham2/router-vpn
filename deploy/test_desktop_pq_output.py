@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import tempfile
 import unittest
 from unittest import mock
 
@@ -15,6 +16,9 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('desktop_pq_output', ROOT/'deploy/build-desktop-pq.py')
 PQ = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(PQ)
+spec = importlib.util.spec_from_file_location('desktop_native_output', ROOT/'deploy/build-native-runtime.py')
+NATIVE = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(NATIVE)
 
 
 class CargoOutput(unittest.TestCase):
@@ -101,6 +105,96 @@ class CargoOutput(unittest.TestCase):
 
     def test_uncaptured_command_keeps_inherited_output(self):
         self.assertEqual(PQ.run(self.child(), capture=False), '')
+
+
+class NativeRuntimeOutput(unittest.TestCase):
+    child = CargoOutput.child
+
+    def setUp(self):
+        self.temp = tempfile.TemporaryDirectory(prefix='native-license-output-')
+        self.addCleanup(self.temp.cleanup)
+        self.root = Path(self.temp.name)
+        self.stage = self.root/'bundle'
+        self.stage.mkdir()
+        source = self.root/'pinned-source'
+        (source/'rosenpass').mkdir(parents=True)
+        self.licenses = {'LICENSE-MIT': 'MIT license · \u3041\n'.encode(),
+                         'LICENSE-APACHE': b'Apache license\n'}
+        for name, raw in self.licenses.items():
+            (source/name).write_bytes(raw)
+        self.package = {'name': 'rosenpass', 'description': 'protocol-\u3041',
+                        'source': 'git+https://example.invalid/rosenpass#'+PQ.REVISION,
+                        'manifest_path': str(source/'rosenpass/Cargo.toml')}
+
+    def metadata(self, stdout, stderr=b'', exit_code=0):
+        real_output = subprocess.check_output
+        env = {**os.environ, 'ROUTERVPN_NATIVE_LICENSE_TEST': 'captured'}
+        expected = ['cargo', 'metadata', '--locked', '--format-version=1',
+                    '--manifest-path', str(ROOT/'mobile/rosenpass/Cargo.toml')]
+        calls = []
+
+        def execute(command, **kwargs):
+            self.assertEqual(command, expected)
+            self.assertEqual(kwargs['env'], env)
+            self.assertEqual(kwargs['timeout'], 1800)
+            # Exercise the shipping license collector and real pipe/exit
+            # handling. Only replace the Cargo executable at its boundary.
+            self.assertNotIn('stderr', kwargs)
+            calls.append(command)
+            return real_output(self.child(stdout, stderr, exit_code), **kwargs)
+
+        with mock.patch.object(subprocess, '_text_encoding', return_value='cp1252'), \
+                mock.patch.object(subprocess, 'check_output', side_effect=execute):
+            NATIVE.stage_pq_licenses(self.stage, env)
+        self.assertEqual(len(calls), 1)
+
+    def encoded(self, packages=None):
+        return json.dumps({'packages': [self.package] if packages is None else packages},
+                          ensure_ascii=False).encode('utf-8')
+
+    def test_actual_license_metadata_utf8_and_stderr_on_legacy_codepage(self):
+        metadata = self.encoded()
+        self.assertIn(b'\x81', metadata)
+        self.metadata(metadata, 'Cargo license diagnostic · \u3041\n'.encode())
+        self.assertEqual({p.name: p.read_bytes() for p in self.stage.iterdir()},
+                         {'ROSENPASS-'+name: raw for name, raw in self.licenses.items()})
+
+    def test_invalid_utf8_or_non_json_stdout_cannot_stage_licenses(self):
+        for raw, error in ((b'{"packages":[],"description":"\xff"}', UnicodeDecodeError),
+                           (b'Downloading dependency\n'+self.encoded(), json.JSONDecodeError),
+                           (self.encoded()+b'\n{"packages":[]}', json.JSONDecodeError)):
+            with self.subTest(raw=raw), self.assertRaises(error):
+                self.metadata(raw)
+            self.assertEqual(list(self.stage.iterdir()), [])
+
+    def test_failed_cargo_cannot_stage_valid_looking_license_metadata(self):
+        with self.assertRaises(subprocess.CalledProcessError) as error:
+            self.metadata(self.encoded(), b'license metadata failed\n', 17)
+        self.assertEqual(error.exception.returncode, 17)
+        self.assertEqual(error.exception.output, self.encoded())
+        self.assertEqual(list(self.stage.iterdir()), [])
+
+    def test_license_provenance_stays_exact_and_unambiguous(self):
+        foreign = {**self.package, 'source': 'git+https://example.invalid/rosenpass#'+'0'*40}
+        for packages in ([], [foreign], [self.package, self.package]):
+            with self.subTest(packages=packages), self.assertRaisesRegex(ValueError, 'provenance'):
+                self.metadata(self.encoded(packages))
+            self.assertEqual(list(self.stage.iterdir()), [])
+
+    def test_runtime_command_keeps_cwd_environment_and_strips_utf8_stdout(self):
+        env = {**os.environ, 'ROUTERVPN_NATIVE_OUTPUT_TEST': 'captured-\u3041'}
+        command = [sys.executable, '-c',
+                   'import json, os, sys; '
+                   'raw=json.dumps([os.getcwd(), os.environ["ROUTERVPN_NATIVE_OUTPUT_TEST"]], '
+                   'ensure_ascii=False).encode(); sys.stdout.buffer.write(b" "+raw+b"\\n ")']
+        with mock.patch.object(subprocess, '_text_encoding', return_value='cp1252'):
+            output = NATIVE.run(command, cwd=self.root, env=env, timeout=30)
+        self.assertEqual(json.loads(output), [str(self.root.resolve()), 'captured-\u3041'])
+        self.assertEqual(output, output.strip())
+
+    def test_runtime_stdout_retains_universal_newline_behavior(self):
+        self.assertEqual(NATIVE.run(self.child(b' \r\none\r\ntwo\rthree\n ')),
+                         'one\ntwo\nthree')
 
 
 if __name__ == '__main__':

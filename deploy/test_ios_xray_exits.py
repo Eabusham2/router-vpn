@@ -36,11 +36,16 @@ func main(){
 }
 '''
 TEST = r'''
+import Dispatch
 let nativeEntries = try JSONSerialization.jsonObject(with: Data(contentsOf: URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_ENTRY_FIXTURES"]!))) as! [String:[String:Any]]
 func json(_ value: Any) throws -> String { String(decoding:try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),as:UTF8.self) }
 func object(_ text: String) throws -> [String:Any] { try JSONSerialization.jsonObject(with:Data(text.utf8)) as! [String:Any] }
 func rpc(_ op: String,_ config: String,_ policy: String) throws -> String {
     let child=Process(),input=Pipe(),output=Pipe(),errors=Pipe()
+    // Keep all 538 fresh compiler calls without polling a run loop per exit.
+    let exited=DispatchSemaphore(value:0)
+    child.terminationHandler={_ in _ = exited.signal()}
+    defer { child.terminationHandler=nil }
     child.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_XRAY_EXIT_POLICY"]!)
     child.standardInput=input;child.standardOutput=output;child.standardError=errors
     try child.run()
@@ -48,7 +53,7 @@ func rpc(_ op: String,_ config: String,_ policy: String) throws -> String {
     try input.fileHandleForWriting.close()
     let result=output.fileHandleForReading.readDataToEndOfFile()
     let diagnostic=errors.fileHandleForReading.readDataToEndOfFile()
-    child.waitUntilExit()
+    exited.wait()
     guard child.terminationStatus==0 else { throw P.issue("Production policy rejected input: "+String(decoding:diagnostic,as:UTF8.self)) }
     return String(decoding:result,as:UTF8.self)
 }

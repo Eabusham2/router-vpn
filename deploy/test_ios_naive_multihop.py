@@ -26,16 +26,22 @@ func main(){
 '''
 TEST=r'''
 import Foundation
+import Dispatch
 typealias P = RouterVPNMultihopGraph
 func json(_ value: Any) throws -> String { String(decoding: try JSONSerialization.data(withJSONObject: value, options: [.sortedKeys]), as: UTF8.self) }
 func object(_ text: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(text.utf8)) as! [String: Any] }
 func key(_ n: UInt8) -> String { Data(repeating:n,count:32).base64EncodedString() }
 func rpc(_ operation: String, _ config: String, _ policy: String, _ entrySource: String="", _ exitSource: String="") throws -> String {
  let task=Process(),input=Pipe(),output=Pipe(),errors=Pipe()
+ // This matrix starts 840 short-lived helpers. Foundation's waitUntilExit
+ // polls a run loop for every one; join its actual completion callback instead.
+ let exited=DispatchSemaphore(value:0)
+ task.terminationHandler={_ in _ = exited.signal()}
+ defer { task.terminationHandler=nil }
  task.executableURL=URL(fileURLWithPath:ProcessInfo.processInfo.environment["NAIVE_POLICY"]!)
  task.standardInput=input;task.standardOutput=output;task.standardError=errors;try task.run()
  try input.fileHandleForWriting.write(contentsOf:Data(json(["Operation":operation,"Config":config,"Policy":policy,"EntrySource":entrySource,"ExitSource":exitSource]).utf8));try input.fileHandleForWriting.close()
- let result=output.fileHandleForReading.readDataToEndOfFile(),diagnostic=errors.fileHandleForReading.readDataToEndOfFile();task.waitUntilExit()
+ let result=output.fileHandleForReading.readDataToEndOfFile(),diagnostic=errors.fileHandleForReading.readDataToEndOfFile();exited.wait()
  guard task.terminationStatus==0 else { throw P.issue(String(decoding:diagnostic,as:UTF8.self)) }
  return String(decoding:result,as:UTF8.self)
 }

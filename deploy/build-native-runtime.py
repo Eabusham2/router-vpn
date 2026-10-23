@@ -54,8 +54,11 @@ WINDOWS_SYSTEM_DLLS = frozenset((
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
-    return subprocess.check_output([str(arg) for arg in command], cwd=cwd, env=env,
-                                   text=True, timeout=timeout).strip()
+    # Cargo/Go metadata is UTF-8 even on Windows. Keep stdout binary until the
+    # child is joined; a locale reader thread must not discard its output.
+    output = subprocess.check_output([str(arg) for arg in command], cwd=cwd, env=env,
+                                     timeout=timeout).decode('utf-8')
+    return output.replace('\r\n', '\n').replace('\r', '\n').strip()
 
 
 def inputs():

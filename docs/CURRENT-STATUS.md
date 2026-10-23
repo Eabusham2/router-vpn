@@ -210,6 +210,41 @@ without changing the shipping module files. That check runs immediately
 before gomobile and contributes to the AAR proof/cache identity. The resulting
 APK and native device behavior still require their own build and execution.
 
+The `f71b33fa` native Windows runners passed PQ compilation, final engine
+linking, target metadata and PE dependency verification on both architectures.
+Their next failure was the final builder's license-metadata reader decoding
+Cargo UTF-8 through CP1252. That reader now joins binary stdout and decodes it
+strictly as UTF-8, retaining separate diagnostics and its existing newline
+behavior. Fifteen output tests include the actual license collection boundary,
+legacy-code-page output, process failure and exact provenance.
+The download fallback fixture also now supplies real PE headers and import
+tables to the shipping verifier: all four archived Windows/Portable packages
+pass, and 20 controls include correctly re-sealed ordinary and delay imports
+of an unowned compiler DLL. Removing the dependency check fails the fixture
+before controller compilation. The `f71b33fa` macOS Intel and Apple Silicon
+producers completed their native builds and artifact uploads, confirming the
+final SDK fix. The standalone native AppKit packages then passed their payload,
+package and signature checks for both architectures, and both native GTK app
+jobs passed. Its actual Apple SDK gates also passed the map bitmap/configuration
+checks, including both negative controls, and the native telemetry adapter's
+unsigned read-bound typecheck. Those results precede the final reader correction;
+the resulting commit still needs its complete native/package/image/compose
+release chain and the separately required physical/distribution acceptance.
+
+The same Apple source gate subsequently exposed the Naive graph fixture's
+120-second deadline. Its 178 graphs and 2,151 assertions launch 840 fresh Go
+helpers; Foundation's polling exit wait added substantial per-call overhead.
+The fixture now installs a completion handler before launching each process
+and joins its signal, preserving the full matrix and the existing deadline.
+A controlled local run fell from 46.9 to 5.6 seconds, and the complete edited
+fixture passed in 8.7 seconds including compilation. Large pipe payloads,
+nonzero exit diagnostics and executable-launch failure also pass; this is a
+fixture synchronization correction, with no application or native policy change.
+The later Xray exit fixture uses the same bounded completion join: all 87
+graphs, 1,167 assertions, 538 fresh helper calls and its 90-second deadline
+remain intact. Its measured local execution fell from 29.3 to 3.5 seconds,
+with the full fixture and the same pipe/exit/launch controls passing.
+
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;
 the existing 433-check Speed Lab suite also passes. These tests exercise shipping
