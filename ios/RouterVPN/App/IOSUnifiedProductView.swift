@@ -182,7 +182,7 @@ struct IOSUnifiedMap: UIViewRepresentable {
         weak var map: MKMapView?
         var entry: CLLocationCoordinate2D?
         var exit: CLLocationCoordinate2D?
-        var packet: IOSUnifiedMapAnnotation?
+        fileprivate var packet: IOSUnifiedMapAnnotation?
         var fittedGeometryID = ""
         private var timer: Timer?
         private var phase: Double = 0

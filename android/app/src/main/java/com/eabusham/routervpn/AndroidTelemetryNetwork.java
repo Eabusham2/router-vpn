@@ -70,19 +70,38 @@ final class AndroidTelemetryNetwork {
         if(addresses==null||addresses.isEmpty()||owner==null)throw new IllegalStateException("Native tunnel address readback is unavailable.");
         owner.run();
         Set<String> expected=new HashSet<>();
-        for(String address:addresses)expected.add(new LinkAddress(address).toString());
+        for(String address:addresses)expected.add(literalAddressIdentity(address));
         ConnectivityManager cm=(ConnectivityManager)context.getSystemService(Context.CONNECTIVITY_SERVICE);
         String found=null;
         for(Network candidate:cm.getAllNetworks()){
             NetworkCapabilities caps=cm.getNetworkCapabilities(candidate);LinkProperties lp=cm.getLinkProperties(candidate);
             if(caps==null||lp==null||!caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN))continue;
-            Set<String> actual=new HashSet<>();for(LinkAddress address:lp.getLinkAddresses())actual.add(address.toString());
+            Set<String> actual=new HashSet<>();
+            for(LinkAddress address:lp.getLinkAddresses())
+                actual.add(addressIdentity(address.getAddress().getAddress(),address.getPrefixLength()));
             if(!actual.equals(expected))continue;
             if(found!=null)throw new IllegalStateException("Native tunnel addresses match more than one VPN interface.");
             found=lp.getInterfaceName();
         }
         if(found==null)throw new IllegalStateException("Native tunnel addresses do not match a live VPN interface.");
         return named(context,found,owner);
+    }
+
+    private static String literalAddressIdentity(String value) throws Exception {
+        int slash=value==null?-1:value.indexOf('/');
+        if(slash<=0||!value.substring(slash+1).matches("[0-9]{1,3}"))
+            throw new IllegalArgumentException("Native tunnel address must include a numeric prefix length.");
+        return addressIdentity(AndroidNumericAddress.parse(value.substring(0,slash)).getAddress(),
+                Integer.parseInt(value.substring(slash+1)));
+    }
+
+    private static String addressIdentity(byte[] address,int prefix) {
+        if((address.length!=4&&address.length!=16)||prefix<0||prefix>address.length*8)
+            throw new IllegalArgumentException("Native tunnel address prefix is out of range.");
+        // LinkAddress has no public CIDR-string constructor. Its API21 getters expose the
+        // same exact address/prefix identity without parsing hostnames or
+        // depending on compressed versus expanded IPv6 display formatting.
+        return java.util.Arrays.toString(address)+"/"+prefix;
     }
 
     void check() throws Exception {

@@ -1,7 +1,7 @@
 # Current implementation status
 
-Updated October 23, 2026. This file describes committed source and remaining
-delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
+Updated October 22, 2026 (America/Chicago). This file describes committed source
+and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
@@ -99,7 +99,7 @@ and retain measurement/MTU ownership until native cleanup completes. Only a
 complete 50-sample run replaces a durable record, including minimum, median,
 average, 10% trimmed mean, p90, maximum and measurement date. A partial run or
 failed write leaves the previous record and ranking intact. Android telemetry
-passes 148 checks and eight negative controls; iOS telemetry passes 230 checks
+passes 159 checks and nine negative controls; iOS telemetry passes 230 checks
 and two controls. Its native read adapter additionally passes 21 signed-limit
 and callback checks against the imported unsigned API shape; the historical
 Int-to-UInt call fails compilation as expected. These executable tests double
@@ -210,6 +210,19 @@ without changing the shipping module files. That check runs immediately
 before gomobile and contributes to the AAR proof/cache identity. The resulting
 APK and native device behavior still require their own build and execution.
 
+The four `f71b33fa` Android APK lanes then passed those eight readonly target
+loads and late-preparation controls, completed gomobile into `libbox.aar`, and
+reached Java compilation. The compiler exposed a telemetry network matcher
+using a `LinkAddress(String)` constructor absent from the public Android SDK.
+The matcher now parses numeric CIDRs and compares complete address bytes plus
+prefix lengths through the public address getters, retaining exact address-set
+and unique-interface ownership checks. The corrected source compiles against
+the actual Android 36 SDK; the exact previous source reproduces the reported
+constructor failure against that same SDK. The telemetry fixture no longer
+provides that hidden constructor and includes IPv6 spelling equivalence and
+wrong-address/prefix/extra-interface rejection. Its 159 checks and nine
+mutation controls pass. The full corrected APK remains an exact-commit CI gate.
+
 The `f71b33fa` native Windows runners passed PQ compilation, final engine
 linking, target metadata and PE dependency verification on both architectures.
 Their next failure was the final builder's license-metadata reader decoding
@@ -230,6 +243,16 @@ checks, including both negative controls, and the native telemetry adapter's
 unsigned read-bound typecheck. Those results precede the final reader correction;
 the resulting commit still needs its complete native/package/image/compose
 release chain and the separately required physical/distribution acceptance.
+
+The full `f71b33fa` iOS client lane also completed its pinned Libbox XCFramework
+and project generation. Its Release iPhoneOS build then reached the application
+target and rejected an internal coordinator property exposing the private map
+annotation type. The packet property now has matching file-scoped visibility.
+The existing map gate additionally typechecks the complete shipping iOS map,
+annotations and coordinator against SwiftUI/MapKit, with only the application
+model boundary substituted. A portable Swift compiler check preserves the
+shipping access declarations and reproduces the original error as a negative
+control. Full corrected SDK/app acceptance remains with the next exact commit.
 
 The same Apple source gate subsequently exposed the Naive graph fixture's
 120-second deadline. Its 178 graphs and 2,151 assertions launch 840 fresh Go

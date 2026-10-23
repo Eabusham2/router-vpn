@@ -17,6 +17,8 @@ SHARED = ROOT / "client/shared"
 GEOMETRY = SHARED / "RouterVPNMapGeometry.swift"
 RENDERER = SHARED / "RouterVPNVectorMap.swift"
 ASSET = SHARED / "map/routervpn-land-110m.json"
+IOS_UI = ROOT / "ios/RouterVPN/App/IOSUnifiedProductView.swift"
+IOS_MODELS = ROOT / "ios/RouterVPN/App/Models.swift"
 
 CORE = r'''
 import Foundation
@@ -189,6 +191,50 @@ import MapKit
 }
 '''
 
+IOS_MODEL_BOUNDARY = r'''
+import SwiftUI
+import MapKit
+import Combine
+// Only the application model is substituted. The full shipping map,
+// coordinator, annotations, data models and Apple SDK types compile unchanged.
+@MainActor final class RouterVPNModel: ObservableObject {
+ @Published var connected = false
+ @Published var message = ""
+ var bundle: ClientBundle?
+ var allNodeProfiles: [RouterProfile] = []
+ var profileMutationBlocked = false
+ func selectNode(_ id: String) {}
+}
+'''
+
+
+def ios_map_source():
+    source = IOS_UI.read_text()
+    start = source.index("private final class IOSUnifiedMapAnnotation:")
+    end = source.index("\nstruct IOSUnifiedProductView:", start)
+    return source[start:end]
+
+
+def ios_map_access_check(swift, work, shipping):
+    # Exercise Swift's actual access-control rule even on non-Apple hosts.
+    # Only MKPointAnnotation's empty base is doubled here; the annotation and
+    # packet declaration retain their shipping modifiers and enclosing scope.
+    annotation = shipping.split("\nstruct IOSUnifiedMap:", 1)[0]
+    properties = [line for line in shipping.splitlines() if "var packet: IOSUnifiedMapAnnotation?" in line]
+    assert len(properties) == 1
+    declaration = properties[0]
+    source = work / "MapAccess.swift"
+    code = "import Foundation\nclass MKPointAnnotation {}\n" + annotation + "\nstruct IOSUnifiedMap {\n final class Coordinator {\n" + declaration + "\n }\n func update(_ coordinator: Coordinator) {\n coordinator.packet = IOSUnifiedMapAnnotation(profileID: \"fixture\", role: \"packet\")\n _ = coordinator.packet?.profileID\n }\n}\n"
+    source.write_text(code)
+    command = [swift, "-typecheck", "-swift-version", "6", str(source)]
+    subprocess.run(command, check=True, timeout=45)
+    original = code.replace("fileprivate var packet:", "var packet:", 1)
+    assert original != code
+    source.write_text(original)
+    failed = subprocess.run(command, capture_output=True, text=True, timeout=45)
+    assert failed.returncode != 0 and "property must be declared fileprivate because its type uses a private type" in failed.stderr, "original map annotation visibility failure was not reproduced"
+    print("iOS map annotation access: PASS (shipping declarations; original compiler failure reproduced)")
+
 
 def main():
     assert hashlib.sha256(ASSET.read_bytes()).hexdigest() == "95a1ce95491a21e7623ffc4a0a0e302244d3196f6e553b31b828ff148e51d503", "bundled land asset changed without pinned source conversion review"
@@ -217,6 +263,8 @@ def main():
         raise SystemExit("Swift compiler is required for vector map geometry")
     with tempfile.TemporaryDirectory(prefix="routervpn-map-") as temporary:
         work = Path(temporary)
+        ios_map = ios_map_source()
+        ios_map_access_check(swift, work, ios_map)
         source = work / "main.swift"
         source.write_text(CORE)
         binary = work / "geometry"
@@ -278,8 +326,18 @@ def main():
             assert rejected.returncode != 0 and "VPN map must use flat elevation" in rejected.stderr, "omitted native map configuration negative control was not rejected"
             print("Apple VPN map native renderer: omitted flat configuration negative control rejected")
             ios_sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True).strip()
-            subprocess.run(["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
-                            "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER)], check=True, timeout=120)
+            ios_source = work / "IOSUnifiedMap.swift"
+            ios_source.write_text(IOS_MODEL_BOUNDARY + ios_map)
+            command = ["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
+                       "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER), str(IOS_MODELS), str(ios_source)]
+            subprocess.run(command, check=True, timeout=120)
+            print("iOS complete shipping map/coordinator: actual SwiftUI/MapKit SDK typecheck PASS (application model boundary substituted)")
+            original = ios_map.replace("fileprivate var packet:", "var packet:", 1)
+            assert original != ios_map
+            ios_source.write_text(IOS_MODEL_BOUNDARY + original)
+            failed = subprocess.run(command, capture_output=True, text=True, timeout=120)
+            assert failed.returncode != 0 and "property must be declared fileprivate because its type uses a private type" in failed.stderr, "original full-map SDK visibility failure was not reproduced"
+            print("iOS complete shipping map: original SDK visibility failure reproduced")
         else:
             print("Apple vector renderer SDK/bitmap: SKIP locally (mandatory Darwin shipping gate)")
     print("Apple vector map shipping/resources + short-route negative control: PASS; asset SHA256 " + hashlib.sha256(ASSET.read_bytes()).hexdigest())
