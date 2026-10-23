@@ -161,7 +161,14 @@ try {
         Expect-Failure 'Unsafe runtime installation'
         Require-Payload $script:Old
         Check ($script:Moves -eq 0) 'Linked package source reached adoption.'
-    } finally { Remove-Item -LiteralPath $link -Force }
+    } finally {
+        Check (((Get-Item -LiteralPath $link -Force).Attributes -band [IO.FileAttributes]::ReparsePoint) -ne 0) 'Linked-source fixture lost its directory link.'
+        # The nonrecursive .NET API removes the link itself, avoiding the
+        # Windows PowerShell 5.1 provider's directory-symlink cleanup failure.
+        [IO.Directory]::Delete($link)
+    }
+    Check (-not(Test-Path -LiteralPath $link)) 'Linked-source fixture retained its directory link.'
+    Check ((Get-RouterVPNRuntimeInstallManifest $real 'native') -ceq $script:New['native']) 'Removing the source link changed its real target payload.'
 
     Reset-Fixture 'owner-marker'
     $owned=Join-Path $script:Installed '.runtime-install-fixture'

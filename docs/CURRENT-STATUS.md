@@ -268,6 +268,30 @@ graphs, 1,167 assertions, 538 fresh helper calls and its 90-second deadline
 remain intact. Its measured local execution fell from 29.3 to 3.5 seconds,
 with the full fixture and the same pipe/exit/launch controls passing.
 
+The `94ecb55d` follow-up passed all six authoritative native runtime targets,
+including actual Windows x64/ARM64 license collection, PE verification, receipt
+and relocation checks, captured native connection graphs and archive roundtrips.
+Its full source audit also passed, including all four Windows fallback archives
+and 20 integrity/compile controls and the 159 Android telemetry checks with nine
+negative controls. Both Linux GTK app packages passed actual rendered-layout,
+responsive-dialog, cancellation and installed-runtime upgrade checks. Both macOS
+AppKit packages passed native compilation, sealed-runtime and archive/signature
+verification. The expanded complete iOS map/coordinator SDK check and original
+access-error control passed on Apple runners, as did the unchanged Naive matrix.
+The ARM64 auxiliary workflow built its actual init/proxy images and passed
+authenticated router-local Portable downloads for both Windows architectures,
+private-pairing checks and proxy-service smoke tests.
+
+Both `94ecb55d` Windows Portable consumers passed, including relocation. The
+authoritative installed-package gates then passed the runtime-install fixture's
+202 checks in PowerShell 7 but exposed the same directory-symlink cleanup error
+in Windows PowerShell 5.1. That fixture now uses nonrecursive .NET deletion after
+checking the link identity, then checks that the link is gone and the complete
+target payload is unchanged. All 205 local checks pass; a target-byte mutation
+fails the new retention assertion. Actual Windows PowerShell 5.1 confirmation
+and the next commit's complete release chain remain required. This repair changes
+test cleanup only and retains the production install/rollback ownership checks.
+
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;
 the existing 433-check Speed Lab suite also passes. These tests exercise shipping
