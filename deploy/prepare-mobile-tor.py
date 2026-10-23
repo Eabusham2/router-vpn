@@ -129,6 +129,18 @@ def version_key(version):
     return (int(major), int(minor), int(patch), pre is None, parts)
 
 
+def go_version_key(version):
+    match = re.fullmatch(r'(\d+)\.(\d+)(?:\.(\d+))?', version)
+    if not match:
+        raise ValueError('Unrecognized native Go module directive')
+    major, minor, patch = match.groups()
+    major, minor = int(major), int(minor)
+    # Go 1.21 introduced distinct language and initial release versions:
+    # "1.26" precedes "1.26.0" in the Go module loader's ordering.
+    return (major, minor, int(patch) if patch is not None else
+            (-1 if (major, minor) >= (1, 21) else 0))
+
+
 def prepare_modules(vendor, go):
     if subprocess.check_output([go, 'version'], text=True).split()[2] != 'go1.26.3':
         raise ValueError('Native Tor preparation requires the pinned Go 1.26.3 toolchain')
@@ -153,7 +165,12 @@ def prepare_modules(vendor, go):
         required.append('-require='+name+'@'+version)
     # Keep the native core's newer shared dependencies. Source/traffic tests
     # run against the resulting single MVS graph, not another runtime/module.
-    subprocess.run([go, 'mod', 'edit', '-go=1.26.0', *required], cwd=vendor, check=True)
+    # Android's combined libXray module requires Go 1.26.3. Late host-only
+    # preparation must not lower that requirement merely because the PT source
+    # needs only 1.26.0; host tests do not import the Android-only Xray bridge.
+    existing_go, minimum_go = module.get('Go', '1.0'), pt_module['Go']
+    selected_go = max((existing_go, minimum_go), key=go_version_key)
+    subprocess.run([go, 'mod', 'edit', '-go='+selected_go, *required], cwd=vendor, check=True)
     sum_path = destination(vendor, 'go.sum')
     current = sum_path.read_text().splitlines()
     known = {tuple(line.split()[:2]): line.split()[2] for line in current}

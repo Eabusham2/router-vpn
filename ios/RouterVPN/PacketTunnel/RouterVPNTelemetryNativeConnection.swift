@@ -32,7 +32,14 @@ final class RouterVPNTelemetryNativeConnection: RouterVPNTelemetryConnection, @u
     }
     func write(_ data: Data, completion: @escaping @Sendable (Error?) -> Void) { connection.write(data, completionHandler: completion) }
     func read(_ maximum: Int, completion: @escaping @Sendable (Data?, Error?) -> Void) {
-        connection.readMinimumLength(1, maximumLength: maximum, completionHandler: completion)
+        // The Objective-C boundary imports NSUInteger as UInt. Reject an
+        // invalid signed limit before conversion or issuing a native read.
+        guard maximum > 0, let length = UInt(exactly: maximum) else {
+            completion(nil, NSError(domain: "RouterVPNTelemetryNativeConnection", code: 1,
+                                    userInfo: [NSLocalizedDescriptionKey: "Invalid native telemetry read size"]))
+            return
+        }
+        connection.readMinimumLength(1, maximumLength: length, completionHandler: completion)
     }
     func cancel() { connection.cancel() }
     func retire() { observation?.invalidate(); observation = nil }

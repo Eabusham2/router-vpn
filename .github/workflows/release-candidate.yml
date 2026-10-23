@@ -40,7 +40,11 @@ jobs:
           python3 deploy/test_native_runtime_delivery.py
           python3 deploy/test_linux_runtime_install.py
           python3 deploy/test_desktop_native_toolchain.py
+          python3 deploy/test_desktop_native_dependencies.py
           python3 deploy/test_desktop_pq_output.py
+          python3 deploy/test_desktop_pq_dependencies.py
+          python3 deploy/test_desktop_bindgen.py
+          python3 deploy/test_mobile_tor_module_graph.py
           python3 deploy/test_multihop_execution.py
           python3 deploy/test_native_hop_measurement.py
           python3 deploy/test_mobile_lan_policy.py

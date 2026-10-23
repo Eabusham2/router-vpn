@@ -5,13 +5,18 @@ The pinned upstream crypto/protocol and secret-memory implementations are kept
 byte-for-byte. Only unused Unix daemon exports and descriptor dependencies are
 removed. Filesystem writes are deliberately unavailable inside this packet ABI;
 all key material is supplied by its existing bounded C API.
+
+The optional build-time bindgen copy backports its upstream Clang 22 definition
+lookup fix. It does not alter protocol/crypto sources or disable layout checks.
 """
 from pathlib import Path
 import argparse
 import hashlib
+import io
 import json
 import shutil
 import subprocess
+import tarfile
 import tomllib
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,6 +34,28 @@ FILES = {
     'util/src/lib.rs': '69d76984f19685f5e0f5f92bd1e289b8148188d1',
 }
 DOCUMENT_LINKS = {'.dockerignore': '.gitignore', 'rosenpass/readme.md': 'readme.md'}
+BINDGEN_VERSION = '0.71.1'
+BINDGEN_SOURCE = 'registry+https://github.com/rust-lang/crates.io-index'
+BINDGEN_CHECKSUM = '5f58bf3d7db68cfbac37cfc485a8d711e87e064c3d0fe0435b92f7a407f9d6b3'
+BINDGEN_SIZE = 237785
+BINDGEN_CLANG_SHA256 = '3bd59196c2c37fd3af4c1d59a38aa64a182c1449d1e5e93f5d754458e7ee3291'
+BINDGEN_PATCHED_SHA256 = '2e1e65a56cf7434733dc87e8cc837d64add8358cb3d57f81a1424d7aea4858a5'
+# https://github.com/rust-lang/rust-bindgen/pull/3278
+BINDGEN_BACKPORT = '2426dd68cd12e0ac022bca18efb9c7d0acd27e12'
+BINDGEN_OLD = '''    pub(crate) fn declaration(&self) -> Cursor {
+        unsafe {
+            Cursor {
+                x: clang_getTypeDeclaration(self.x),
+            }
+        }
+    }'''
+BINDGEN_NEW = '''    pub(crate) fn declaration(&self) -> Cursor {
+        let decl = Cursor {
+            x: unsafe { clang_getTypeDeclaration(self.x) },
+        };
+        // Prior to clang 22, the declaration pointed to the definition.
+        decl.definition().unwrap_or(decl)
+    }'''
 
 
 def blob(raw):
@@ -116,7 +143,63 @@ pub enum ProtocolVersion {
     return {name: value.encode() for name, value in output.items()}
 
 
-def verify_lock(before, after):
+def bindgen_pin(lock):
+    matches = [item for item in tomllib.loads(lock.decode('utf-8'))['package']
+               if item['name'] == 'bindgen']
+    if (len(matches) != 1 or matches[0]['version'] != BINDGEN_VERSION or
+            matches[0].get('source') != BINDGEN_SOURCE or
+            matches[0].get('checksum') != BINDGEN_CHECKSUM):
+        raise ValueError('Build-time bindgen backport requires its exact locked registry crate')
+    return matches[0]
+
+
+def prepare_bindgen(archive, output):
+    """Copy only the checksum-verified crate archive; never trust Cargo's src cache."""
+    bindgen_pin((ROOT/'mobile/rosenpass/Cargo.lock').read_bytes())
+    archive, output = Path(archive), Path(output)
+    if (archive.is_symlink() or not archive.is_file() or archive.stat().st_size != BINDGEN_SIZE):
+        raise ValueError('Invalid pinned bindgen crate archive')
+    raw = archive.read_bytes()
+    if hashlib.sha256(raw).hexdigest() != BINDGEN_CHECKSUM:
+        raise ValueError('Bindgen crate checksum differs from Cargo.lock')
+    if output.is_symlink() or output.exists():
+        raise ValueError('Bindgen backport output must be a fresh owned directory')
+    contents = {}
+    prefix = 'bindgen-'+BINDGEN_VERSION+'/'
+    total = 0
+    with tarfile.open(fileobj=io.BytesIO(raw), mode='r:gz') as package:
+        for member in package:
+            if not member.name.startswith(prefix):
+                raise ValueError('Foreign bindgen archive member')
+            name = member.name[len(prefix):]
+            parts = name.split('/')
+            total += member.size
+            if (not member.isfile() or not name or any(part in ('', '.', '..') for part in parts) or
+                    '\\' in name or ':' in name or name in contents or len(contents) >= 256 or
+                    not 0 <= member.size <= 2 << 20 or total > 4 << 20):
+                raise ValueError('Unbounded or linked bindgen archive member')
+            contents[name] = package.extractfile(member).read()
+    original = contents.get('clang.rs', b'')
+    if hashlib.sha256(original).hexdigest() != BINDGEN_CLANG_SHA256:
+        raise ValueError('Pinned bindgen declaration lookup source changed')
+    contents['clang.rs'] = once(original.decode('utf-8'), BINDGEN_OLD, BINDGEN_NEW).encode('utf-8')
+    if hashlib.sha256(contents['clang.rs']).hexdigest() != BINDGEN_PATCHED_SHA256:
+        raise ValueError('Bindgen backport differs from the exact upstream definition fix')
+    manifest = tomllib.loads(contents['Cargo.toml'].decode('utf-8'))
+    if manifest['package']['name'] != 'bindgen' or manifest['package']['version'] != BINDGEN_VERSION:
+        raise ValueError('Pinned bindgen crate identity changed')
+    output.mkdir(parents=True)
+    for name, data in contents.items():
+        destination = output/name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        destination.write_bytes(data)
+    return {'version': BINDGEN_VERSION, 'crate_sha256': BINDGEN_CHECKSUM,
+            'upstream_backport': BINDGEN_BACKPORT,
+            'clang_original_sha256': BINDGEN_CLANG_SHA256,
+            'clang_patched_sha256': hashlib.sha256(contents['clang.rs']).hexdigest()}
+
+
+def verify_lock(before, after, *, bindgen=False):
     """Local source selection may remove dependencies, never upgrade any."""
     old = tomllib.loads(before.decode())['package']
     new = tomllib.loads(after.decode())['package']
@@ -124,8 +207,16 @@ def verify_lock(before, after):
     frozen = {key(item): item.get('checksum') for item in old if item['name'] not in CRATES}
     pinned = {item['name']: item['version'] for item in old if item['name'] in CRATES}
     seen = set()
+    saw_bindgen = False
+    if bindgen:
+        bindgen_pin(before)
     for item in new:
-        if item['name'] in CRATES:
+        if bindgen and item['name'] == 'bindgen':
+            if (saw_bindgen or item['version'] != BINDGEN_VERSION or
+                    'source' in item or 'checksum' in item):
+                raise ValueError('Portable protocol substituted another bindgen build tool')
+            saw_bindgen = True
+        elif item['name'] in CRATES:
             if item.get('source') or item['version'] != pinned[item['name']]:
                 raise ValueError('Portable protocol substituted another crypto crate')
             seen.add(item['name'])
@@ -133,9 +224,11 @@ def verify_lock(before, after):
             raise ValueError('Portable protocol changed a locked registry/Git dependency')
     if seen != set(CRATES):
         raise ValueError('Portable protocol omitted a pinned cryptographic dependency')
+    if bindgen and not saw_bindgen:
+        raise ValueError('Portable protocol omitted its verified bindgen backport')
 
 
-def prepare(source, output):
+def prepare(source, output, *, bindgen_archive=None):
     source, output = Path(source).resolve(), Path(output).absolute()
     if subprocess.check_output(['git', '-C', str(source), 'rev-parse', 'HEAD'], text=True).strip() != REVISION:
         raise ValueError('Packet-only Rosenpass requires the exact upstream revision')
@@ -191,10 +284,13 @@ def prepare(source, output):
     text = manifest.read_text()+'\n[patch."https://github.com/rosenpass/rosenpass"]\n'
     for name, directory in CRATES.items():
         text += name+' = { path = "../upstream/'+directory+'" }\n'
-    manifest.write_text(text)
     receipt = {'schema_version': 1, 'revision': REVISION,
                'upstream_files': hashes,
                'changes': {name: hashlib.sha256(data).hexdigest() for name, data in replacements.items()}}
+    if bindgen_archive is not None:
+        receipt['bindgen'] = prepare_bindgen(bindgen_archive, output/'build-tools/bindgen')
+        text += '\n[patch.crates-io]\nbindgen = { path = "../build-tools/bindgen" }\n'
+    manifest.write_bytes(text.encode('utf-8'))
     (output/'PACKET-PROTOCOL.json').write_text(json.dumps(receipt, sort_keys=True, indent=2)+'\n')
     return manifest
 
@@ -203,5 +299,6 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('source', type=Path)
     parser.add_argument('output', type=Path)
+    parser.add_argument('--bindgen-archive', type=Path)
     args = parser.parse_args()
-    print(prepare(args.source, args.output))
+    print(prepare(args.source, args.output, bindgen_archive=args.bindgen_archive))

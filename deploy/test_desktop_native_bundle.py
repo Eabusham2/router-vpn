@@ -74,7 +74,7 @@ def test(bundle, target):
         # These captured graphs retain both nodes' DNS, cover, authenticated
         # Start Layers and exact WG/AWG parameters. Only the complete shipping
         # runtime owns those registrations; the AWG diagnostic CLI does not.
-        env = BUILD.environment(target)
+        env = BUILD.environment(target, compiler=True)
         env['ROUTERVPN_VIA_ENTRY_NATIVE_CLI'] = str(engine)
         # Go1.26.3 src/internal/platform/supported.go supports the race
         # detector on all six shipping targets except Windows ARM64. `dist

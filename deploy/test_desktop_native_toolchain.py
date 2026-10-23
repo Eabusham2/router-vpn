@@ -8,6 +8,7 @@ import io
 import json
 import os
 import shlex
+import shutil
 import stat
 import subprocess
 import tarfile
@@ -21,6 +22,9 @@ spec = importlib.util.spec_from_file_location('desktop_native_setup_test', ROOT/
 G = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(G)
 W = G.WINDOWS
+spec = importlib.util.spec_from_file_location('desktop_native_build_test', ROOT/'deploy/build-native-runtime.py')
+N = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(N)
 
 
 def file(path, data=b'tool', executable=False):
@@ -270,6 +274,148 @@ class DarwinPQEnvironment(unittest.TestCase):
             self.assertNotIn('SDKROOT', env)
             lookup.assert_not_called()
             command.assert_not_called()
+
+
+class DarwinNativeEnvironment(unittest.TestCase):
+    @staticmethod
+    def sdk(root):
+        sdk = root/'Xcode Selected.app/SDKs/MacOSX.sdk'
+        for header in ('stdio.h', 'stdlib.h', 'pthread.h'):
+            file(sdk/'usr/include'/header, b'#define ROUTERVPN_SELECTED_SDK 1\n')
+        return sdk
+
+    def test_metadata_only_foreign_verification_never_requires_xcode(self):
+        for target in ('darwin/amd64', 'darwin/arm64'):
+            with self.subTest(target=target), patch.dict(os.environ, {'PATH': '/no-apple-tools'}, clear=True), \
+                 patch.object(N.shutil, 'which') as lookup, patch.object(N, 'run') as command:
+                env = N.environment(target)
+                self.assertEqual((env['GOOS'], env['GOARCH']), tuple(target.split('/')))
+                self.assertNotIn('SDKROOT', env)
+                self.assertNotIn('CGO_CFLAGS', env)
+                lookup.assert_not_called()
+                command.assert_not_called()
+
+    def test_both_native_compilers_receive_exact_sdk_architecture_and_minimum(self):
+        for target, arch in [('darwin/amd64', 'x86_64'), ('darwin/arm64', 'arm64')]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                sdk = self.sdk(root)
+                inherited = {'PATH': str(root/'bin'), 'CC': str(root/'bin/clang'),
+                             'SDKROOT': '/ambient-ios-sdk', 'MACOSX_DEPLOYMENT_TARGET': '15.5',
+                             'CGO_CFLAGS': '-isysroot /stale-c-sdk',
+                             'CGO_CXXFLAGS': '-isysroot /stale-cxx-sdk',
+                             'CGO_LDFLAGS': '-isysroot /stale-link-sdk'}
+                queried = {}
+
+                def query(command, *, env):
+                    queried.update(env)
+                    return str(sdk)
+
+                with patch.dict(os.environ, inherited, clear=True), \
+                     patch.object(N.shutil, 'which', return_value='/usr/bin/xcrun') as lookup, \
+                     patch.object(N, 'run', side_effect=query) as command:
+                    env = N.environment(target, compiler=True)
+                lookup.assert_called_once_with('xcrun', path=inherited['PATH'])
+                self.assertEqual(command.call_args.args[0], ['/usr/bin/xcrun', '--sdk', 'macosx', '--show-sdk-path'])
+                self.assertNotIn('SDKROOT', queried)
+                self.assertEqual(env['SDKROOT'], str(sdk))
+                self.assertEqual(env['MACOSX_DEPLOYMENT_TARGET'], '13.0')
+                expected = ['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)]
+                self.assertEqual(shlex.split(env['CGO_LDFLAGS']), expected)
+                for key in ('CGO_CFLAGS', 'CGO_CXXFLAGS'):
+                    self.assertEqual(shlex.split(env[key]), ['-O2', '-g', *expected])
+                self.assertEqual(env['CC'], inherited['CC'])
+
+    def test_invalid_sdk_or_failed_lookup_cannot_use_ambient_headers(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            sdk = self.sdk(root)
+            incomplete = root/'incomplete.sdk'
+            file(incomplete/'usr/include/stdio.h')
+            for selected in ('', 'relative.sdk', str(root/'missing.sdk'), str(incomplete),
+                             str(sdk)+'\n/other.sdk', str(sdk)+'\r/other.sdk', str(sdk)+'\0'):
+                with self.subTest(selected=selected), \
+                     patch.object(N.shutil, 'which', return_value='/usr/bin/xcrun'), \
+                     patch.object(N, 'run', return_value=selected):
+                    with self.assertRaisesRegex(ValueError, 'does not contain its C headers'):
+                        N.environment('darwin/arm64', compiler=True)
+            with patch.object(N.shutil, 'which', return_value=None), patch.object(N, 'run') as command:
+                with self.assertRaisesRegex(ValueError, 'selected Xcode macOS SDK'):
+                    N.environment('darwin/arm64', compiler=True)
+                command.assert_not_called()
+            error = subprocess.CalledProcessError(1, ['xcrun'])
+            with patch.object(N.shutil, 'which', return_value='/usr/bin/xcrun'), \
+                 patch.object(N, 'run', side_effect=error):
+                with self.assertRaises(subprocess.CalledProcessError) as caught:
+                    N.environment('darwin/amd64', compiler=True)
+                self.assertIs(caught.exception, error)
+
+    def test_final_go_build_preserves_sdk_and_verified_pq_link_flags(self):
+        class CompilerBoundary(Exception):
+            pass
+
+        for target, arch in [('darwin/amd64', 'x86_64'), ('darwin/arm64', 'arm64')]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                sdk = self.sdk(root)
+                pq = root/'verified pq'
+                dependencies = ['-lresolv', '-framework', 'Security', '-framework', 'CoreFoundation']
+                commands = []
+
+                def run(command, *, env=None, **kwargs):
+                    args = [str(value) for value in command]
+                    if args[0] == '/usr/bin/xcrun':
+                        self.assertNotIn('SDKROOT', env)
+                        return str(sdk)
+                    if args == ['go', 'env', 'GOVERSION']:
+                        return N.TOOLCHAIN
+                    if args[:2] == ['go', 'build']:
+                        commands.append((args, env.copy()))
+                        raise CompilerBoundary()
+                    self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])
+                    return ''
+
+                with patch.dict(os.environ, {'PATH': '/fixture-tools', 'SDKROOT': '/ambient-sdk'}, clear=True), \
+                     patch.object(N.shutil, 'which', return_value='/usr/bin/xcrun'), \
+                     patch.object(N, 'run', side_effect=run), patch.object(N, 'pristine'), \
+                     patch.object(N.PQ, 'verify', return_value={'native_static_libs': dependencies}), \
+                     patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
+                     patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
+                     patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet'):
+                    with self.assertRaises(CompilerBoundary):
+                        N.build(target, root/'output', source=root/'core', xray=root/'xray', pq=pq)
+                self.assertEqual(len(commands), 1)
+                _, env = commands[0]
+                expected = ['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)]
+                self.assertEqual(shlex.split(env['CGO_LDFLAGS']), [*expected, '-L'+str(pq), *dependencies])
+                self.assertEqual(shlex.split(env['CGO_CFLAGS']), ['-O2', '-g', *expected])
+                self.assertEqual(shlex.split(env['CGO_CXXFLAGS']), ['-O2', '-g', *expected])
+
+    def test_actual_clang_uses_selected_headers_and_target_with_missing_sdk_control(self):
+        clang = shutil.which('clang')
+        if not clang:
+            self.skipTest('Clang is not installed on this fixture host')
+        for target, machine in [('darwin/amd64', '__x86_64__'), ('darwin/arm64', '__arm64__')]:
+            with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                sdk = self.sdk(root)
+                source = file(root/'sdk.c', (
+                    '#include <stdio.h>\n'
+                    '#if !defined(__APPLE__) || !defined('+machine+')\n#error wrong target\n#endif\n'
+                    '#if __ENVIRONMENT_MAC_OS_X_VERSION_MIN_REQUIRED__ != 130000\n#error wrong minimum\n#endif\n'
+                    '#if ROUTERVPN_SELECTED_SDK != 1\n#error missing selected SDK\n#endif\n'
+                    '_Static_assert(sizeof(void*) == 8, "64-bit ABI");\n').encode())
+                with patch.object(N.shutil, 'which', return_value='/usr/bin/xcrun'), \
+                     patch.object(N, 'run', return_value=str(sdk)):
+                    env = N.environment(target, compiler=True)
+                flags = shlex.split(env['CGO_CFLAGS'])
+                command = [clang, *flags, '-std=c11', '-fsyntax-only', str(source)]
+                result = subprocess.run(command, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                self.assertEqual(result.returncode, 0, result.stderr.decode(errors='replace'))
+                without_sdk = flags[:-2]
+                result = subprocess.run([clang, *without_sdk, '-std=c11', '-fsyntax-only', str(source)],
+                                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=30)
+                self.assertNotEqual(result.returncode, 0, 'Missing SDK control compiled without the selected header')
 
 
 class Response(io.BytesIO):

@@ -55,6 +55,8 @@ ANDROID_TOR_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_android_tor_pinned.py" --d
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_TOR_GRAPH_SHA")
 APPLE_TOR_GRAPH_SHA=$(python3 "$ROOT/../deploy/test_ios_tor_pinned.py" --digest)
 OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$APPLE_TOR_GRAPH_SHA")
+ANDROID_MODULE_SHA=$(python3 "$ROOT/../deploy/test_mobile_tor_module_graph.py" --digest)
+OPENVPN_SHA=$(python3 -c 'import hashlib,sys;print(hashlib.sha256((sys.argv[1]+"+"+sys.argv[2]).encode()).hexdigest())' "$OPENVPN_SHA" "$ANDROID_MODULE_SHA")
 EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_POLICY_SHA+$NATIVE_XRAY_SHA"
 
 verify_aar() {
@@ -324,6 +326,9 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
   # Install only the verified C dependency into the existing Go module after
   # host graph gates, before the sole gomobile build of the combined runtime.
   python3 "$ROOT/../deploy/prepare-mobile-torpack.py" "$VENDOR" --native-package "$TOR_PACKAGE"
+  # Recheck the actual Android-only Xray import after every host preparation.
+  # Host tests cannot detect a lowered Go directive on that platform-only edge.
+  python3 "$ROOT/../deploy/test_mobile_tor_module_graph.py" --vendor "$VENDOR" --libxray "$XRAY_VENDOR" --go "$(command -v go)"
   go_retry run ./cmd/internal/build_libbox -target android
 )
 

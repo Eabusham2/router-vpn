@@ -158,6 +158,11 @@ import MapKit
    precondition(near(actual, [9,17,31]), "known ocean coordinate \(latitude),\(longitude) was fabricated as land: \(actual)")
   }
   let map = MKMapView(frame: CGRect(x: 0, y: 0, width: 640, height: 480))
+  let previous = MKStandardMapConfiguration(elevationStyle: .realistic, emphasisStyle: .default)
+  previous.showsTraffic = true
+  previous.pointOfInterestFilter = .includingAll
+  map.preferredConfiguration = previous
+  map.isPitchEnabled = true
   RouterVPNVectorMap.install(on: map)
   RouterVPNVectorMap.install(on: map)
   precondition(map.overlays.filter { $0 is RouterVPNVectorMapOverlay }.count == 1)
@@ -167,7 +172,18 @@ import MapKit
   RouterVPNVectorMap.clearRoutes(on: map)
   precondition(map.overlays.count == 1 && map.overlays[0] is RouterVPNVectorMapOverlay,
                "status refresh must not reveal stock map underneath")
-  precondition(!map.showsBuildings && !map.showsTraffic && !map.isPitchEnabled)
+  // showsBuildings is a documented no-op when overlays are present on
+  // iOS 16/macOS 13+. Verify the supported installed configuration instead.
+  guard let installed = map.preferredConfiguration as? MKStandardMapConfiguration else {
+   fatalError("VPN map must install its standard flat configuration")
+  }
+  precondition(installed.elevationStyle == .flat, "VPN map must use flat elevation")
+  precondition(installed.emphasisStyle == .muted, "VPN map must use muted emphasis")
+  precondition(!installed.showsTraffic, "VPN map must disable traffic content")
+  for category in [MKPointOfInterestCategory.airport, .restaurant, .hotel] {
+   precondition(installed.pointOfInterestFilter?.excludes(category) == true, "VPN map must exclude stock points of interest")
+  }
+  precondition(!map.isPitchEnabled, "VPN map must disable camera pitch")
   print("Apple VPN map native renderer: PASS (opaque bitmap, land/ocean pixels, date line, refresh persistence)")
  }
 }
@@ -250,6 +266,17 @@ def main():
             rejected = subprocess.run([str(negative), str(ASSET)], capture_output=True, text=True, timeout=30)
             assert rejected.returncode != 0 and "known inland coordinate" in rejected.stderr, "vertically mirrored native land negative control was not rejected"
             print("Apple VPN map native renderer: vertically mirrored land negative control rejected")
+            # Start from a real non-flat map, then omit the shipping install
+            # assignment. The actual SDK must reject that retained stock state.
+            unconfigured = renderer.replace("map.preferredConfiguration = configuration", "// omitted configuration")
+            assert unconfigured != renderer
+            wrong_renderer.write_text(unconfigured)
+            negative = work / "unconfigured-native-renderer"
+            subprocess.run(["xcrun", "swiftc", "-swift-version", "6", "-strict-concurrency=complete", "-parse-as-library", "-sdk", sdk,
+                            "-framework", "AppKit", "-framework", "MapKit", str(GEOMETRY), str(wrong_renderer), str(source), "-o", str(negative)], check=True, timeout=120)
+            rejected = subprocess.run([str(negative), str(ASSET)], capture_output=True, text=True, timeout=30)
+            assert rejected.returncode != 0 and "VPN map must use flat elevation" in rejected.stderr, "omitted native map configuration negative control was not rejected"
+            print("Apple VPN map native renderer: omitted flat configuration negative control rejected")
             ios_sdk = subprocess.check_output(["xcrun", "--sdk", "iphoneos", "--show-sdk-path"], text=True).strip()
             subprocess.run(["xcrun", "swiftc", "-typecheck", "-swift-version", "6", "-strict-concurrency=complete",
                             "-target", "arm64-apple-ios17.0", "-sdk", ios_sdk, str(GEOMETRY), str(RENDERER)], check=True, timeout=120)

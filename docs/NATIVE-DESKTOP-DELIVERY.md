@@ -22,6 +22,41 @@ native preparation, compiler setup and download pins, and transport/performance
 patches. Git checks out text inputs with LF endings on every host, so Windows
 and Unix producers calculate the same source identity from the same commit.
 
+Windows also retains the pinned `oqs-sys` build's static `liboqs.a` beside the
+Rust ABI archive. The builder selects it from that invocation's successful
+Cargo build-script event, checks the exact locked package and owned target
+directory, and validates the archive's actual x64 or ARM64 COFF code. Its size,
+digest and dependency identity are part of the PQ receipt. Cargo's declared
+linkage must agree with Rust's final link requirements: native Windows leaves
+OQS external, while a Linux cross build bundles it. DLL import archives,
+foreign-target objects, ambiguous cached copies and altered receipts fail.
+
+The final Windows link selects static compiler runtimes. Bundle verification
+also reads ordinary and delay-loaded DLL imports from both the executable and
+the exact bundled Cronet library. It checks bounded PE32+ headers, target
+architecture, section/RVA bounds and DLL names without executing a foreign
+program or requiring a compiler on the packaging host. Only the named Windows
+system libraries, versioned Windows API sets and the explicit owned Cronet
+payload are accepted. A matching receipt cannot make an unstaged compiler DLL
+such as `libunwind.dll` acceptable. Both pinned Cronet architectures are checked;
+the producer's environment cannot stand in for a missing installed dependency.
+
+The pinned bindgen 0.71.1 has an upstream declaration-resolution bug with
+Clang 22 that can turn `OQS_SIG` into a one-byte opaque type. Windows preparation
+applies the upstream fix to a private copy of the exact checksum-verified
+crate archive. It verifies the original and patched file hashes, records the
+backport, and permits only that one exact build-tool substitution in the
+otherwise pinned Cargo lock. The shared registry cache, crypto headers and
+generated layout assertions remain unchanged. A real Clang 22 / Windows ARM64
+binding passes the original Rust size, alignment and offset assertions with
+the backport; the original binding fails under the same target compiler.
+
+macOS compilation uses the selected Xcode macOS SDK for both Rust bindgen and
+the final Go C/C++ compilation and link. All stages use the requested target
+architecture and macOS 13 minimum; the final link retains the SDK flags when
+adding the verified PQ dependencies. Metadata-only inspection of a foreign
+macOS bundle does not require Xcode on a Linux or Windows packaging host.
+
 The reusable `desktop-native-runtime.yml` workflow builds each target on its
 matching host architecture. It runs the executable receipt/relocation tests
 and the captured WG/AWG graph tests before uploading an artifact. The graph
@@ -103,6 +138,10 @@ Useful local gates are:
 python3 deploy/test_native_runtime_delivery.py
 python3 deploy/test_linux_runtime_install.py
 python3 deploy/test_desktop_native_toolchain.py
+python3 deploy/test_desktop_native_dependencies.py
+python3 deploy/test_desktop_pq_output.py
+python3 deploy/test_desktop_pq_dependencies.py
+python3 deploy/test_desktop_bindgen.py
 python3 deploy/test_desktop_native_bundle.py /path/to/bundle linux/amd64
 python3 deploy/test_native_runtime_delivery.py --bundle /path/to/bundle --target linux/amd64
 python3 deploy/test_linux_runtime_install.py --package /path/to/extracted/linux/package

@@ -520,6 +520,74 @@ def portable(text):
     return text.replace("import Combine\n", "").replace("@preconcurrency import NetworkExtension\n", "")
 
 
+def native_read_check(swift):
+    # This is an explicit API-shape boundary double, not an Apple SDK claim.
+    # sdk_check below imports the actual Objective-C header and full adapter.
+    source = (TUNNEL / "RouterVPNTelemetryNativeConnection.swift").read_text()
+    read = method(source, "    func read(_ maximum: Int,")
+    fixture = r'''
+import Foundation
+final class Socket {
+ var requests:[(UInt,UInt)]=[]
+ func readMinimumLength(_ minimum:UInt,maximumLength:UInt,
+                        completionHandler:@escaping @Sendable(Data?,Error?)->Void){
+  requests.append((minimum,maximumLength));completionHandler(Data([7]),nil)
+ }
+}
+final class Adapter {
+ let connection=Socket()
+ __READ__
+}
+final class Reply:@unchecked Sendable {
+ private let lock=NSLock()
+ private var count=0,data:Data?,failed=false
+ func record(_ data:Data?,_ error:Error?){
+  lock.lock();defer{lock.unlock()};count+=1;self.data=data;failed=error != nil
+ }
+ func snapshot()->(Int,Data?,Bool){lock.lock();defer{lock.unlock()};return(count,data,failed)}
+}
+@main struct Test {
+ static func main(){
+  var checks=0
+  func check(_ label:String,_ ok:Bool){precondition(ok,label);checks+=1}
+  let adapter=Adapter(),reply=Reply()
+  for maximum in [1,64<<10,Int.max] {
+   let count=reply.snapshot().0
+   adapter.read(maximum){reply.record($0,$1)}
+   let response=reply.snapshot(),request=adapter.connection.requests.last!
+   check("native read minimum stays one byte",request.0==1)
+   check("native read limit retains every signed bit",request.1==UInt(maximum))
+   check("valid read delivers exactly one callback",response.0==count+1)
+   check("native read preserves data/error",response.1==Data([7]) && !response.2)
+  }
+  for maximum in [0,-1,Int.min] {
+   let count=reply.snapshot().0,reads=adapter.connection.requests.count
+   adapter.read(maximum){reply.record($0,$1)}
+   let response=reply.snapshot()
+   check("invalid signed limit never reaches native socket",adapter.connection.requests.count==reads)
+   check("invalid read delivers exactly one callback",response.0==count+1)
+   check("invalid read has an explicit error and no bytes",response.1==nil && response.2)
+  }
+  print("iOS telemetry native read adapter: PASS (\(checks) shipping method checks; UInt API boundary doubled)")
+ }
+}
+'''.replace("__READ__", read)
+    with tempfile.TemporaryDirectory(prefix="routervpn-telemetry-read-") as folder:
+        work = Path(folder)
+        path, binary = work / "Read.swift", work / "read"
+        path.write_text(fixture)
+        command = [swift, "-swift-version", "6", "-strict-concurrency=complete", "-parse-as-library", str(path), "-o", str(binary)]
+        subprocess.run(command, check=True, timeout=90)
+        subprocess.run([str(binary)], check=True, timeout=15)
+        historical = fixture.replace("maximumLength: length", "maximumLength: maximum", 1)
+        assert historical != fixture
+        path.write_text(historical)
+        rejected = subprocess.run(command, capture_output=True, text=True, timeout=90)
+        assert rejected.returncode != 0 and "cannot convert value of type 'Int' to expected argument type 'UInt'" in rejected.stderr, \
+            "historical signed native API call was not rejected by the Swift compiler"
+        print("iOS telemetry native read adapter: historical Int-to-UInt compile failure reproduced")
+
+
 def sdk_check(swift):
     if platform.system() != "Darwin":
         print("iOS telemetry real-SDK check: SKIP (required in Darwin native lane)")
@@ -549,6 +617,7 @@ def main():
     swift = shutil.which("swiftc")
     if not swift:
         raise SystemExit("swiftc required")
+    native_read_check(swift)
     capture = (APP / "IOSDNSMeasurementClient.swift").read_text()
     capture = capture[capture.index("@MainActor struct IOSDNSMeasurementCapture"):capture.index("private final class IOSDNSMeasurementReply")]
     sources = [

@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated October 22, 2026. This file describes committed source and remaining
+Updated October 23, 2026. This file describes committed source and remaining
 delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
@@ -100,7 +100,10 @@ complete 50-sample run replaces a durable record, including minimum, median,
 average, 10% trimmed mean, p90, maximum and measurement date. A partial run or
 failed write leaves the previous record and ranking intact. Android telemetry
 passes 148 checks and eight negative controls; iOS telemetry passes 230 checks
-and two controls. These executable tests double the declared OS boundaries;
+and two controls. Its native read adapter additionally passes 21 signed-limit
+and callback checks against the imported unsigned API shape; the historical
+Int-to-UInt call fails compilation as expected. These executable tests double
+the declared OS boundaries;
 physical routing, endpoint throughput and network transitions remain separate.
 
 The desktop candidate backend uses a private authenticated userspace lane with
@@ -122,7 +125,7 @@ macOS signs a verified staged bundle and seals only its own signed result;
 Windows/Linux installation and the same-image Windows download fallback carry
 all required runtimes. The actual Linux engine passed 28 receipt/relocation
 checks plus the graph gate, and its payload survived artifact extraction and
-installed/Portable archive roundtrips. Delivery/signing boundary tests pass 359
+installed/Portable archive roundtrips. Delivery/signing boundary tests pass 375
 checks. Windows runtime installation passes 202 filesystem checks and two
 rollback mutation controls. Linux passes 15 transaction checks and actual
 first-install and upgrade verification of all three built engines. These
@@ -139,14 +142,73 @@ and the standalone Apple bitmap fixture used Quartz coordinates and a different
 color space from the native map. The corrective continuation preserves copied
 source bytes, separates strict UTF-8 metadata from compiler diagnostics,
 supplies the macOS SDK explicitly, and gives the bitmap fixture the real map
-transform and palette. The renderer itself is unchanged; a mirrored-land
-negative control remains subject to the actual Apple SDK gate. Source audits
+transform and palette. The corrected geographic bitmap checks passed on the
+`55c6a903` Apple runners. The next native check exposed the ineffective
+`showsBuildings` setting with custom overlays, so the map now installs the supported
+flat/muted MapKit configuration with traffic and points of interest excluded.
+The opaque geometry renderer is unchanged; mirrored-land and omitted-map-policy
+negative controls remain subject to the actual Apple SDK gate. Source audits
 now follow the captured multihop proof implementation and require both owned
 proof lanes at their current call sites. These corrections retain their
 verification gates. The real Git checkout fixture also prevents detached
 maintenance from racing its temporary-directory cleanup and verifies the
 actual child-process trace. Windows/macOS packages and the downstream image/release
 chain still require the corrected commit's native CI results.
+
+The `55c6a903` run passed both complete Linux runtime producers, the Windows
+native source contract, the full source/release audit and the native Xray,
+MTU, Rosenpass and SIP003 interoperability gates. Its native Windows x64 link
+then exposed a missing external `liboqs.a`; Windows ARM64 exposed the pinned
+bindgen declaration bug under Clang 22. The corrective source stages only the
+locked Cargo invocation's target-checked static OQS archive, including its
+content receipt, and applies the upstream bindgen fix to a checksum-verified
+private build-tool copy. The original ARM64 bindings reproduce the exact
+one-byte-versus-88-byte layout failure locally. The fixed bindings pass the
+unchanged Rust ARM64 layout assertions; independent C compilation confirms
+the same size, alignment and callback offsets. These checks do not substitute
+for the resulting native Windows package and installer runs.
+
+The corrected desktop policy builds the complete Windows x64 engine locally
+with the pinned cross compiler. An explicit `-loqs` link against its staged
+archive succeeds; removing only that archive reproduces the CI linker error.
+The complete Linux x64 engine also passes its native captured-graph/race gate,
+28 receipt/relocation checks, 375 delivery/signing boundaries and actual
+artifact/installed/Portable archive roundtrips with the corrected policy.
+The Windows cross build does not claim execution on a Windows host.
+
+That Windows link also exposed an undeclared `libunwind.dll` dependency that
+the compiler's PATH could mask. The final build links its compiler runtime
+statically and verifies ordinary and delay imports from both the engine and
+the pinned Cronet DLL, including during foreign-host package inspection.
+The rebuilt x64 engine has 18 OS/API-set imports and no `libunwind.dll` import;
+both pinned Cronet architectures have 15 accepted OS/API-set dependencies.
+Actual PE metadata from the compiler tools agrees with the new verifier.
+
+The same run advanced macOS through Rust/PQ compilation and exposed missing
+SDK flags in the final Go C compilation. The corrective source supplies the
+selected macOS SDK to both C/C++ and the external link, preserves those flags
+when adding the verified PQ libraries, and keeps foreign-bundle metadata
+verification independent of Xcode. Actual macOS engine and package acceptance
+remains with the corrected source's native runners.
+
+The surviving `34fb6128` Apple producer completed the pinned Libbox
+XCFramework and generated-API verification, then the full app compile caught
+the telemetry adapter passing `Int` to an Objective-C `NSUInteger` parameter.
+The adapter now checks and converts that bound to `UInt`, rejects nonpositive
+limits before issuing a read, and preserves the callback. The existing real
+iOS header/adapter typecheck remains mandatory alongside the full app build.
+
+The `55c6a903` authoritative Android job reached gomobile after all 570 Android
+and 570 iOS native graph cases passed, and
+exposed a late Tor preparation step lowering the combined module's Go version
+from 1.26.3 to 1.26.0. Host tests did not import the Android-only libXray bridge,
+whose pinned module requires 1.26.3. Preparation now preserves the greater of
+the existing Go requirement and the PT module's minimum. A replay against the
+exact native core and libXray passes eight readonly Android target/build-tag
+loads, repeated preparation and the original downgrade negative control
+without changing the shipping module files. That check runs immediately
+before gomobile and contributes to the AAR proof/cache identity. The resulting
+APK and native device behavior still require their own build and execution.
 
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;

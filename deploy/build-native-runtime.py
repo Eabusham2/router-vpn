@@ -13,8 +13,10 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shlex
 import shutil
+import struct
 import subprocess
 import tempfile
 
@@ -41,6 +43,14 @@ MAX_BINARY, MAX_LIBRARY, MAX_LICENSE = 384*1024*1024, 128*1024*1024, 2*1024*1024
 CRONET_VERSION = 'v0.0.0-20260912104006-c10c03c318db'
 LICENSES = ('SING-BOX-LICENSE', 'AMNEZIA-LICENSE', 'XRAY-LICENSE',
             'ROSENPASS-LICENSE-MIT', 'ROSENPASS-LICENSE-APACHE', 'CRONET-LICENSE')
+# Windows supplies these libraries and its versioned API-set contracts. Every
+# other DLL must be an explicitly owned payload, never a compiler PATH entry.
+WINDOWS_SYSTEM_DLLS = frozenset((
+    'advapi32.dll', 'bcrypt.dll', 'bcryptprimitives.dll', 'crypt32.dll',
+    'dbghelp.dll', 'iphlpapi.dll', 'kernel32.dll', 'kernelbase.dll', 'ntdll.dll',
+    'ole32.dll', 'secur32.dll', 'shell32.dll', 'shlwapi.dll', 'user32.dll',
+    'userenv.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll',
+))
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
@@ -75,7 +85,7 @@ def marker(policy):
     return VERSION+'-routervpn-native.'+policy
 
 
-def environment(target):
+def environment(target, *, compiler=False):
     if target not in TARGETS:
         raise ValueError('Unsupported native desktop target')
     system, arch = target.split('/')
@@ -83,9 +93,31 @@ def environment(target):
     env.update(GOTOOLCHAIN=TOOLCHAIN, GOWORK='off', GOFLAGS='', CGO_ENABLED='1',
                GOOS=system, GOARCH=arch, GOAMD64='v1', GOARM64='v8.0', GOSUMDB='sum.golang.org')
     if system == 'windows':
-        compiler = shutil.which(('x86_64' if arch == 'amd64' else 'aarch64')+'-w64-mingw32-clang')
-        if compiler:
-            env['CC'] = compiler
+        cc = shutil.which(('x86_64' if arch == 'amd64' else 'aarch64')+'-w64-mingw32-clang')
+        if cc:
+            env['CC'] = cc
+    elif system == 'darwin' and compiler:
+        # Receipt inspection also uses this environment on foreign hosts. Only
+        # an actual compilation needs Xcode; metadata-only verification does not.
+        xcrun = shutil.which('xcrun', path=env.get('PATH', ''))
+        if not xcrun:
+            raise ValueError('macOS native compilation requires the selected Xcode macOS SDK')
+        env.pop('SDKROOT', None)
+        selected = run([xcrun, '--sdk', 'macosx', '--show-sdk-path'], env=env).strip()
+        sdk = Path(selected)
+        if (not selected or any(c in selected for c in '\r\n\0') or
+                not sdk.is_absolute() or not sdk.is_dir() or
+                any(not (sdk/'usr/include'/name).is_file()
+                    for name in ('stdio.h', 'stdlib.h', 'pthread.h'))):
+            raise ValueError('The selected Xcode macOS SDK does not contain its C headers')
+        machine = 'x86_64' if arch == 'amd64' else 'arm64'
+        flags = ['-target', machine+'-apple-macosx13.0', '-isysroot', str(sdk)]
+        # Non-Apple Clang does not infer this SDK from its executable location.
+        # Keep the C/C++ compiler and the final external linker on the same SDK.
+        env.update(SDKROOT=str(sdk), MACOSX_DEPLOYMENT_TARGET='13.0',
+                   CGO_CFLAGS=shlex.join(['-O2', '-g', *flags]),
+                   CGO_CXXFLAGS=shlex.join(['-O2', '-g', *flags]),
+                   CGO_LDFLAGS=shlex.join(flags))
     return env
 
 
@@ -125,6 +157,115 @@ def binary_name(target):
     return 'sing-box-routervpn'+('.exe' if target.startswith('windows/') else '')
 
 
+def pe_dependencies(raw, target):
+    """Read bounded ordinary and delay imports without host tools or execution.
+
+    This handles the PE32+ images emitted by our two pinned Windows targets.
+    All directory pointers are RVAs; legacy pointer-based delay descriptors are
+    rejected. Layout: https://learn.microsoft.com/en-us/windows/win32/debug/pe-format
+    """
+    machine = {'windows/amd64': 0x8664, 'windows/arm64': 0xaa64}.get(target)
+    if machine is None:
+        raise ValueError('PE dependency inspection requires an exact Windows target')
+
+    def bounded(offset, size):
+        if offset < 0 or size < 0 or offset+size > len(raw):
+            raise ValueError('Truncated Windows native PE structure')
+        return raw[offset:offset+size]
+
+    def fields(fmt, offset):
+        return struct.unpack(fmt, bounded(offset, struct.calcsize(fmt)))
+
+    if bounded(0, 2) != b'MZ':
+        raise ValueError('Windows native payload has no DOS image signature')
+    pe, = fields('<I', 0x3c)
+    if pe < 64 or bounded(pe, 4) != b'PE\0\0':
+        raise ValueError('Windows native payload has no PE image signature')
+    actual, count, _, _, _, optional_size, characteristics = fields('<HHIIIHH', pe+4)
+    if actual != machine or not characteristics & 2 or not 1 <= count <= 96:
+        raise ValueError('Windows native PE target or section count differs')
+    optional = pe+24
+    bounded(optional, optional_size)
+    if optional_size < 112 or fields('<H', optional)[0] != 0x20b:
+        raise ValueError('Windows native payload is not a bounded PE32+ image')
+    image_size, header_size = fields('<II', optional+56)
+    directories, = fields('<I', optional+108)
+    section_table = optional+optional_size
+    if (not 14 <= directories <= 16 or 112+8*directories > optional_size or
+            not section_table+40*count <= header_size <= len(raw) or
+            not header_size < image_size <= 0x80000000):
+        raise ValueError('Invalid Windows native PE directories or headers')
+    sections = []
+    for index in range(count):
+        virtual_size, address, raw_size, offset = fields('<IIII', section_table+40*index+8)
+        extent = max(virtual_size, raw_size)
+        if (not extent or address < header_size or address+extent > image_size or
+                (raw_size and (offset < header_size or offset+raw_size > len(raw)))):
+            raise ValueError('Invalid Windows native PE section bounds')
+        for other_address, other_extent, other_offset, other_size in sections:
+            if (max(address, other_address) < min(address+extent, other_address+other_extent) or
+                    (raw_size and other_size and
+                     max(offset, other_offset) < min(offset+raw_size, other_offset+other_size))):
+                raise ValueError('Overlapping Windows native PE sections')
+        sections.append((address, extent, offset, raw_size))
+
+    def location(rva, size):
+        if rva > 0 and rva < header_size and rva+size <= header_size:
+            return rva, header_size-rva
+        for address, _, offset, raw_size in sections:
+            delta = rva-address
+            if delta >= 0 and delta+size <= raw_size:
+                return offset+delta, raw_size-delta
+        raise ValueError('Unmapped Windows native PE dependency RVA')
+
+    def dll_name(rva):
+        offset, available = location(rva, 1)
+        end = raw.find(b'\0', offset, offset+min(available, 256))
+        name = raw[offset:end] if end >= 0 else b''
+        if not re.fullmatch(rb'[A-Za-z0-9][A-Za-z0-9_-]*\.dll', name, re.IGNORECASE):
+            raise ValueError('Invalid or unterminated Windows native DLL name')
+        return name.decode('ascii').lower()
+
+    dependencies = set()
+    for directory, record_size in ((1, 20), (13, 32)):
+        rva, size = fields('<II', optional+112+8*directory)
+        if rva == size == 0:
+            continue
+        if not rva or not record_size <= size <= 1024*1024:
+            raise ValueError('Invalid Windows native PE dependency directory')
+        offset, _ = location(rva, size)
+        for index in range(min(size//record_size, 257)):
+            values = fields('<'+'I'*(record_size//4), offset+index*record_size)
+            if not any(values):
+                break
+            if index == 256:
+                raise ValueError('Windows native PE has too many imported DLLs')
+            if directory == 13 and values[0] != 1:
+                raise ValueError('Unsupported Windows native PE delay-import attributes')
+            dependencies.add(dll_name(values[3 if directory == 1 else 1]))
+        else:
+            raise ValueError('Unterminated Windows native PE dependency directory')
+    if not dependencies:
+        raise ValueError('Windows native PE dependency directories are missing or stripped')
+    return dependencies
+
+
+def check_windows_dependencies(directory, target):
+    # Cronet is loaded explicitly rather than through the engine's import table,
+    # so inspect it even when the executable has no import naming that library.
+    owned = {library_name(target)}
+    inspected = {}
+    for name in (binary_name(target), *sorted(owned)):
+        raw = regular(directory/name, MAX_BINARY if name == binary_name(target) else MAX_LIBRARY)
+        dependencies = pe_dependencies(raw, target)
+        for dependency in dependencies:
+            api_set = re.fullmatch(r'(?:api|ext)-ms-win-[a-z0-9-]+-l\d+-\d+-\d+\.dll', dependency)
+            if dependency not in WINDOWS_SYSTEM_DLLS and not api_set and dependency not in owned:
+                raise ValueError('Windows native payload '+name+' imports an unowned DLL: '+dependency)
+        inspected[name] = dependencies
+    return inspected
+
+
 def check_target(binary, target, env):
     metadata = run(['go', 'version', '-m', binary], env=env)
     system, arch = target.split('/')
@@ -137,6 +278,8 @@ def check_target(binary, target, env):
                     if line.strip().startswith('build\t-tags=')), '')
     if set(setting.split(',')) != set(tags(target)):
         raise ValueError('Native runtime omitted an exact required transport build tag')
+    if system == 'windows':
+        check_windows_dependencies(binary.parent, target)
 
 
 def receipt_fields(target, policy):
@@ -217,7 +360,7 @@ def stage_pq_licenses(stage, env):
 
 
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
-    env, policy = environment(target), digest()
+    env, policy = environment(target, compiler=True), digest()
     destination = Path(destination).absolute()
     if destination.is_symlink():
         raise ValueError('Refusing a linked native runtime destination')
@@ -253,7 +396,12 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         POLICY.AMNEZIA.verify(source)
         # Only the verified build-owned archive and rustc's bounded native
         # dependency names enter the linker command. No user profile does.
-        env['CGO_LDFLAGS'] = ' '.join([shlex.quote('-L'+str(pq)), *pq_receipt['native_static_libs']])
+        platform_flags = shlex.split(env['CGO_LDFLAGS']) if target.startswith('darwin/') else []
+        if target.startswith('windows/'):
+            # LLVM-MinGW also ships libunwind.dll.a. Select its static compiler
+            # runtime so the delivered engine cannot depend on the build PATH.
+            platform_flags.append('-static')
+        env['CGO_LDFLAGS'] = shlex.join([*platform_flags, '-L'+str(pq), *pq_receipt['native_static_libs']])
         stage = temp/'bundle'
         stage.mkdir()
         binary = stage/binary_name(target)

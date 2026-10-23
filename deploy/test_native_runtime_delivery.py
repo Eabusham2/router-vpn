@@ -28,6 +28,7 @@ def load(name, relative):
 
 DELIVERY = load('native_delivery', 'deploy/native-runtime-bundle.py')
 SIGN = load('native_sign', 'deploy/seal-native-runtime.py')
+PE_FIXTURE = load('native_pe_fixture', 'deploy/test_desktop_native_dependencies.py')
 BUILD = DELIVERY.BUILD
 checks = 0
 
@@ -52,10 +53,21 @@ def fixture(directory, target):
     directory.mkdir(parents=True)
     for name in BUILD.expected_names(target):
         raw = (BUILD.marker(BUILD.digest()) if name == BUILD.binary_name(target) else 'fixture '+name).encode()
+        if target.startswith('windows/') and name in (BUILD.binary_name(target), BUILD.library_name(target)):
+            raw = PE_FIXTURE.image(target)+raw
         (directory/name).write_bytes(raw)
+    fixture_receipt(directory, target)
+
+
+def fixture_receipt(directory, target):
     files = {name: BUILD.payload((directory/name).read_bytes()) for name in BUILD.expected_names(target)}
     receipt = {**BUILD.receipt_fields(target, BUILD.digest()), **files[BUILD.binary_name(target)], 'files': files}
     (directory/'NATIVE-RUNTIME.json').write_text(json.dumps(receipt))
+
+
+def object_metadata(command, *, env):
+    assert len(command) == 4 and command[:3] == ['go', 'version', '-m'], command
+    return PE_FIXTURE.metadata(env['GOOS']+'/'+env['GOARCH'])
 
 
 def package_archive(package, output, kind):
@@ -273,12 +285,37 @@ def signing_promotion_boundaries(root):
                 raise AssertionError('accepted failed native signing promotion')
 
 
+def windows_dependency_boundaries(root):
+    for target in ('windows/amd64', 'windows/arm64'):
+        for name in (BUILD.binary_name(target), BUILD.library_name(target)):
+            for delay in (False, True):
+                label = DELIVERY.slug(target)+'-'+name+('-delay' if delay else '-ordinary')
+                directory = root/('dependency-'+label)
+                fixture(directory, target)
+                raw = PE_FIXTURE.image(target, ('KERNEL32.dll',) if delay else ('libunwind.dll',),
+                                       ('libunwind.dll',) if delay else ())
+                if name == BUILD.binary_name(target):
+                    raw += BUILD.marker(BUILD.digest()).encode()
+                (directory/name).write_bytes(raw)
+                # A receipt that faithfully hashes every byte still cannot
+                # authorize an unstaged compiler dependency in either payload.
+                fixture_receipt(directory, target)
+                archive = root/(label+'.tar.gz')
+                with tarfile.open(archive, 'w:gz') as output:
+                    output.add(directory, arcname=DELIVERY.slug(target))
+                restored = root/('rejected-'+label)
+                rejected(lambda: DELIVERY.extract_bundle(target, archive, restored),
+                         'actual PE parser ignored '+label)
+                check(not restored.exists(), 'unowned DLL dependency became a published bundle')
+
+
 def boundary_tests():
-    # Only executable object metadata and the external codesign process are
-    # doubled here. Production bounds, receipts, hashes, paths, copies and
-    # atomic replacement all execute. --bundle below uses an actual engine.
+    # Only Go's executable build metadata and the external codesign process are
+    # doubled here. The production PE parser, bounds, receipts, hashes, paths,
+    # copies and atomic replacement execute. --bundle uses an actual engine.
     with tempfile.TemporaryDirectory(prefix='native-delivery-boundaries-') as temporary, \
-            patch.object(BUILD, 'check_target'), patch.object(SIGN.BUILD, 'check_target'):
+            patch.object(BUILD, 'run', side_effect=object_metadata), \
+            patch.object(SIGN.BUILD, 'run', side_effect=object_metadata):
         root = Path(temporary)
         for target in BUILD.TARGETS:
             slug = DELIVERY.slug(target)
@@ -364,6 +401,7 @@ def boundary_tests():
         rejected(lambda: SIGN.seal(signed, 'linux/amd64'), 'foreign target reseal')
         archive_boundaries(root)
         signing_promotion_boundaries(root)
+        windows_dependency_boundaries(root)
     checkout_bytes_test()
     print(f'{checks} native delivery/signing boundary checks passed', flush=True)
 

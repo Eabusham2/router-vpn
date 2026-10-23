@@ -82,9 +82,13 @@ enum RouterVPNVectorMap {
     @MainActor
     static func install(on map: MKMapView) {
         guard !map.overlays.contains(where: { $0 is RouterVPNVectorMapOverlay }) else { return }
-        map.showsBuildings = false
-        map.showsTraffic = false
-        map.pointOfInterestFilter = .excludingAll
+        // With overlays, showsBuildings is ignored on iOS 16/macOS 13 and
+        // later. Configure the supported flat presentation explicitly; the
+        // opaque base below supplies all visible land, water and grid content.
+        let configuration = MKStandardMapConfiguration(elevationStyle: .flat, emphasisStyle: .muted)
+        configuration.showsTraffic = false
+        configuration.pointOfInterestFilter = .excludingAll
+        map.preferredConfiguration = configuration
         map.isPitchEnabled = false
         map.setCameraZoomRange(MKMapView.CameraZoomRange(minCenterCoordinateDistance: 350_000,
                                                         maxCenterCoordinateDistance: 40_000_000), animated: false)

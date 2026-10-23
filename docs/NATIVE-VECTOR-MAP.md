@@ -9,6 +9,14 @@ installed above stock map labels; VPN routes and node annotations remain above
 the base. A status refresh removes route overlays only, preserving the custom
 base even with an empty catalog or disconnected VPN.
 
+The underlying MapKit view uses an explicit `MKStandardMapConfiguration` with
+flat elevation, muted emphasis, traffic disabled and stock points of interest
+excluded. Camera pitch is disabled. This uses the supported configuration API;
+Apple documents that the older
+[`showsBuildings` property](https://developer.apple.com/documentation/mapkit/mkmapview/showsbuildings)
+has no effect with overlays on iOS 16/macOS 13 and later. Visible geography
+continues to come from the opaque bundled renderer.
+
 ## Geography and coordinates
 
 Both application packages include the same 87,951-byte land asset: 128 closed
@@ -49,8 +57,13 @@ must fail the same executable checks.
 On Apple build hosts the same gate must compile both shared sources with the
 real iOS SDK and render a bitmap with the real macOS MapKit/Core Graphics
 renderer. The bitmap check requires every pixel to be opaque and checks known
-inland/ocean positions. A real `MKMapView` test verifies idempotent installation
-and route removal that preserves the base. The macOS builder and iOS runtime
+inland/ocean positions using MapKit's projection, the renderer's color space
+and the downward-Y map drawing transform. Vertically mirrored land must fail
+the same native bitmap check. A real `MKMapView` test starts with a non-flat,
+traffic-enabled configuration and verifies the installed flat/muted policy,
+excluded points of interest, disabled pitch, idempotent installation and route
+removal that preserves the base. Omitting the configuration assignment must
+also fail. The macOS builder and iOS runtime
 contract both invoke this gate; Linux explicitly reports the native portion
 as unavailable rather than counting a mock renderer as SDK evidence.
 
