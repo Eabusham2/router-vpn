@@ -37,6 +37,8 @@ targets:
     postBuildScripts:
       - name: Stamp exact source provenance
         basedOnDependencyAnalysis: false
+        inputFiles:
+          - "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"
         script: |
           set -euo pipefail
           ROUTER_VPN_ARTIFACT_FAMILY=ios-app bash "$SRCROOT/stamp-provenance.sh"
@@ -110,6 +112,8 @@ targets:
     postBuildScripts:
       - name: Stamp exact source provenance
         basedOnDependencyAnalysis: false
+        inputFiles:
+          - "$(TARGET_BUILD_DIR)/$(INFOPLIST_PATH)"
         script: |
           set -euo pipefail
           ROUTER_VPN_ARTIFACT_FAMILY=ios-packet-tunnel bash "$SRCROOT/stamp-provenance.sh"

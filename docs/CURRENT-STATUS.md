@@ -306,7 +306,14 @@ The later authoritative `94ecb55d` iOS build exposed a separate ordering race:
 its provenance script ran before Xcode generated the app's `Info.plist`, then
 the plist-generation task immediately followed the failure. The successful
 client build and verified IPA remain valid evidence for their actual artifact;
-the source-stamping dependency must also be made deterministic.
+both target stamp phases now declare the generated plist as an input. The
+stamper remains unchanged and still rejects missing plists or invalid source
+identity; it does not claim a second plist producer. All 34 portable checks pass,
+including four missing/wrong dependency controls. Before framework preparation,
+each full-app CI lane must also build a small actual Xcode app and embedded
+extension using the shipping stamp phases, verify clean and changed-SHA
+incremental ordering, and reject invalid source identity. That native scheduler
+check and the full corrected packages remain requirements of the next commit.
 
 Both `94ecb55d` Windows Portable consumers passed, including relocation. The
 authoritative installed-package gates then passed the runtime-install fixture's

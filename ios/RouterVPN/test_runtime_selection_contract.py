@@ -113,6 +113,7 @@ runpy.run_path(str(Path(__file__).with_name('test_connection_profiles_contract.p
 import platform
 import subprocess
 import sys
+subprocess.run([sys.executable, str(root / 'deploy/test_ios_provenance_order.py')], check=True, timeout=30)
 if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_apple_vector_map.py')], check=True, timeout=300)
     for external_test in ('test_ios_external_policy.py', 'test_ios_external_entry_selection.py', 'test_ios_external_execution_owner.py',

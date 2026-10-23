@@ -258,7 +258,9 @@ jobs:
           go-version: '1.26.3'
           cache: false
       - name: Install XcodeGen
-        run: brew install xcodegen autoconf automake libtool pkg-config
+        run: |
+          brew install xcodegen autoconf automake libtool pkg-config
+          python3 deploy/test_ios_provenance_order.py --native
       - name: Prepare exact WireGuardKit checkout
         working-directory: ios/RouterVPN
         run: sh prepare-wireguard-kit.sh
