@@ -208,28 +208,34 @@ def run_native(phases: dict, work: Path) -> None:
         return log
 
     def verify(sha: str, log: str) -> None:
-        for target, path in built.items():
-            plist = plistlib.loads(path.read_bytes())
-            check(plist.get("RouterVPNSourceSHA") == sha, "Exact built SHA: " + target)
-            check(plist.get("RouterVPNSourceRepository") == "Eabusham2/router-vpn", "Exact repository: " + target)
-            check(plist.get("RouterVPNArtifactFamily") == FAMILIES[target], "Exact family: " + target)
-            processing = [index for index, line in enumerate(log.splitlines())
-                          if line.startswith("ProcessInfoPlistFile ") and str(path) in line]
-            stamping = [index for index, line in enumerate(log.splitlines())
-                        if line.startswith("PhaseScriptExecution Stamp\\ exact\\ source\\ provenance ")
-                        and f"(in target '{target}' " in line]
-            check(len(processing) == 1 and len(stamping) == 1 and processing[0] < stamping[0],
-                  "Generated plist must precede its stamp: " + target)
-        package = plistlib.loads(embedded.read_bytes())
-        check(package.get("RouterVPNSourceSHA") == sha, "Embedded extension must carry the current SHA")
-        check(package.get("RouterVPNArtifactFamily") == "ios-packet-tunnel", "Embedded extension family")
+        try:
+            for target, path in built.items():
+                plist = plistlib.loads(path.read_bytes())
+                check(plist.get("RouterVPNSourceSHA") == sha, "Exact built SHA: " + target)
+                check(plist.get("RouterVPNSourceRepository") == "Eabusham2/router-vpn", "Exact repository: " + target)
+                check(plist.get("RouterVPNArtifactFamily") == FAMILIES[target], "Exact family: " + target)
+            package = plistlib.loads(embedded.read_bytes())
+            check(package.get("RouterVPNSourceSHA") == sha, "Embedded extension must carry the current SHA")
+            check(package.get("RouterVPNSourceRepository") == "Eabusham2/router-vpn", "Embedded extension repository")
+            check(package.get("RouterVPNArtifactFamily") == "ios-packet-tunnel", "Embedded extension family")
+        except Exception as exc:
+            tasks = [line for line in log.splitlines()
+                     if "ProcessInfoPlistFile " in line or "PhaseScriptExecution " in line]
+            raise AssertionError(str(exc) + "\nXcode plist/stamp tasks:\n" + "\n".join(tasks)
+                                 + "\nFinal Xcode context:\n" + log[-8000:]) from exc
 
+    # The unchanged shipping stamper fails if its generated input is absent.
+    # A successful real build starting without these files, with the checked PBX
+    # dependency edges, proves ordering without interpreting Xcode's log layout.
+    for path in (*built.values(), embedded):
+        check(not path.exists(), "Clean build must begin without a generated plist: " + str(path))
     first = build(SHA_ONE, "clean", True)
     verify(SHA_ONE, first)
     # Force the producers to run again while preserving the real incremental
     # build graph; a stale pre-existing plist cannot mask the ordering defect.
     for path in (*built.values(), embedded):
         path.unlink()
+        check(not path.exists(), "Incremental build must regenerate its plist: " + str(path))
     second = build(SHA_TWO, "incremental", True)
     verify(SHA_TWO, second)
     failed = build("not-an-exact-sha", "invalid-sha", False)
