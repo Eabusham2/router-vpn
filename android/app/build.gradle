@@ -93,6 +93,7 @@ tasks.register('prepareAmneziaWgTunnel', Exec) {
 }
 
 tasks.register('prepareSingBoxLibbox', Exec) {
+    dependsOn 'testNativeTorNdkSelection'
     workingDir rootProject.projectDir
     // The canonical pinned builder owns its verifier. Do not rewrite it at
     // Gradle execution time: source-level sed patches can drift and mutate an
@@ -103,6 +104,7 @@ tasks.register('prepareSingBoxLibbox', Exec) {
     inputs.file rootProject.file('../deploy/prepare-mobile-pq.py')
     inputs.files rootProject.file('../deploy/build-mobile-tor-package.py'), rootProject.file('../deploy/prepare-mobile-torpack.py'), rootProject.file('../deploy/prepare-mobile-tor.py'), rootProject.file('../deploy/stage-mobile-tor-notices.py'), rootProject.file('../deploy/verify-mobile-tor-link.py')
     inputs.files rootProject.file('../deploy/test_mobile_tor_loader.py'), rootProject.file('../deploy/test_mobile_tor_package_policy.py')
+    inputs.file rootProject.file('../deploy/test_android_tor_ndk_selection.py')
     inputs.file rootProject.file('../deploy/test_mobile_tor_packaged_link.py')
     inputs.files rootProject.file('../deploy/build-mobile-tor.py'), rootProject.file('../deploy/test-mobile-tor-outbound.py'), rootProject.file('../deploy/test_mobile_tor_module_graph.py'), rootProject.file('../deploy/test_mobile_tor_package_runtime.py'), rootProject.file('../deploy/test_mobile_tor_thread_signals.py'), rootProject.fileTree('../internal/mobiletor')
     inputs.file rootProject.file('../deploy/prepare-gvisor-scheduler.py')
@@ -180,8 +182,26 @@ tasks.matching { it.name == 'assembleDebug' }.configureEach {
 tasks.register('verifyDebugNativeTor', Exec) {
     dependsOn 'packageDebug'
     workingDir rootProject.projectDir
-    commandLine 'python3', '../deploy/verify-mobile-tor-link.py', '--native-package',
-        nativeTorPackage.absolutePath, '--android-apk', file("$buildDir/outputs/apk/debug/app-debug.apk").absolutePath
+    doFirst {
+        // The builder's NDK exports belong to its child shell. Resolve the same
+        // pinned SDK location explicitly instead of inheriting a runner default.
+        def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+        if (!sdkRoot) {
+            throw new GradleException('Android SDK is missing from ANDROID_HOME/ANDROID_SDK_ROOT')
+        }
+        def torSources = new groovy.json.JsonSlurper().parse(rootProject.file('../mobile/torpack/sources.json'))
+        def pinnedNdk = new File(rootProject.file(sdkRoot), "ndk/${torSources.android_ndk}")
+        commandLine 'python3', '../deploy/verify-mobile-tor-link.py', '--native-package',
+            nativeTorPackage.absolutePath, '--android-apk', file("$buildDir/outputs/apk/debug/app-debug.apk").absolutePath,
+            '--ndk', pinnedNdk.absolutePath
+    }
+}
+
+tasks.register('testNativeTorNdkSelection', Exec) {
+    workingDir rootProject.projectDir
+    commandLine 'python3', '../deploy/test_android_tor_ndk_selection.py', '--gradle',
+        new File(gradle.gradleHomeDir, 'bin/gradle').absolutePath
+    timeout = java.time.Duration.ofMinutes(8)
 }
 
 tasks.matching { it.name == 'assembleDebug' }.configureEach {

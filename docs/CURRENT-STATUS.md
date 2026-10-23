@@ -126,7 +126,7 @@ Windows/Linux installation and the same-image Windows download fallback carry
 all required runtimes. The actual Linux engine passed 28 receipt/relocation
 checks plus the graph gate, and its payload survived artifact extraction and
 installed/Portable archive roundtrips. Delivery/signing boundary tests pass 375
-checks. Windows runtime installation passes 202 filesystem checks and two
+checks. Windows runtime installation passes 205 filesystem checks and two
 rollback mutation controls. Linux passes 15 transaction checks and actual
 first-install and upgrade verification of all three built engines. These
 transactions cover runtime directories, not every outer installer action.
@@ -281,6 +281,32 @@ access-error control passed on Apple runners, as did the unchanged Naive matrix.
 The ARM64 auxiliary workflow built its actual init/proxy images and passed
 authenticated router-local Portable downloads for both Windows architectures,
 private-pairing checks and proxy-service smoke tests.
+
+The same `94ecb55d` client iOS lane completed the full Release iPhoneOS app and
+PacketTunnel compile/link, native runtime checks and unsigned re-signable IPA.
+The downloaded finished IPA passed the shipping archive-provenance verifier
+for the exact commit, repository and both app/extension families. This confirms
+the previous map visibility and telemetry binding repairs in the actual app;
+Apple distribution signing and physical-device networking remain separate.
+Its Android native runtime, Java compilation and APK assembly also passed,
+then the final Tor verification task rejected the runner's ambient NDK revision.
+The native builder had selected the correct pinned NDK in its child shell, but
+that selection was not supplied to the separate Gradle verification task.
+The finalizer now resolves that same SDK's NDK from the canonical Tor source
+lock and passes it explicitly; the AAR verifier also receives the selected path.
+Seven actual Gradle task checks pass, including conflicting ambient NDKs, SDK
+precedence/fallback, paths with spaces and missing/wrong revision or compiler
+rejection. The exact previous task reproduces the CI failure. Eight fast native
+contract tests also pass, including the real AAR shell call and its omitted-NDK
+negative control. The Gradle regression runs before native preparation in every
+APK build; it doubles payload inspection while retaining the shipping verifier
+CLI and actual NDK validation.
+
+The later authoritative `94ecb55d` iOS build exposed a separate ordering race:
+its provenance script ran before Xcode generated the app's `Info.plist`, then
+the plist-generation task immediately followed the failure. The successful
+client build and verified IPA remain valid evidence for their actual artifact;
+the source-stamping dependency must also be made deterministic.
 
 Both `94ecb55d` Windows Portable consumers passed, including relocation. The
 authoritative installed-package gates then passed the runtime-install fixture's

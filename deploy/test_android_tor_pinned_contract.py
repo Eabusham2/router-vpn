@@ -76,6 +76,30 @@ else:
         self.assertEqual(result.returncode,23,result.stderr)
         self.assertFalse(any(call['name']=='python3' and Path(call['args'][0]).name=='build-mobile-tor-package.py' for call in calls))
 
+    def test_aar_verifier_explicitly_receives_the_builder_ndk(self):
+        shell=(ROOT/'android/build-sing-box-libbox.sh').read_text()
+        body=shell.split('verify_aar() {',1)[1].split('  python3 "$ROOT/../deploy/stage-mobile-tor-notices.py"',1)[0]
+        helper='''import os,sys
+from pathlib import Path
+args=sys.argv[1:]
+assert Path(args[0]).name=='verify-mobile-tor-link.py',args
+assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',os.environ['AAR'],'--ndk',os.environ['ANDROID_NDK_HOME']],args
+'''
+        with tempfile.TemporaryDirectory(prefix='routervpn-aar-ndk-') as temporary:
+            root=Path(temporary);binary=root/'tools';binary.mkdir()
+            python=binary/'python3';python.write_text('#!'+sys.executable+'\n'+helper);python.chmod(0o755)
+            aar=root/'libbox.aar';aar.write_bytes(b'fixture')
+            license=root/'LICENSE';license.write_bytes(b'fixture')
+            env=dict(os.environ,PATH=str(binary)+os.pathsep+os.environ['PATH'],ROOT=str(ROOT/'android'),
+                     AAR=str(aar),AMNEZIA_LICENSE_OUT=str(license),TOR_PACKAGE=str(root/'native tor'),
+                     ANDROID_NDK_HOME=str(root/'sdk with spaces/ndk/28.0.13004108'),ANDROID_NDK_ROOT=str(root/'foreign'))
+            result=subprocess.run(['bash','-c','set -euo pipefail\n'+body],env=env,text=True,capture_output=True,timeout=15)
+            self.assertEqual(result.returncode,0,result.stderr)
+            self.assertIn(' --ndk "$ANDROID_NDK_HOME"',body)
+            original=body.replace(' --ndk "$ANDROID_NDK_HOME"','')
+            result=subprocess.run(['bash','-c','set -euo pipefail\n'+original],env=env,text=True,capture_output=True,timeout=15)
+            self.assertNotEqual(result.returncode,0,'Missing explicit AAR NDK argument was accepted')
+
     def populate(self,root):
         for kind,mode,layer in itertools.product(GATE.KINDS,GATE.MODES,GATE.LAYERS):
             (root/f'{kind}-{mode}-{layer}.json').write_text('{}')
@@ -156,6 +180,13 @@ else:
                        'java.lang.String execution();','void close() throws java.lang.Exception;'):
             self.assertIn(symbol,shell)
         gradle=(ROOT/'android/app/build.gradle').read_text()
+        preparation=gradle.split("tasks.register('prepareSingBoxLibbox', Exec) {",1)[1].split('\n}\n',1)[0]
+        self.assertIn("dependsOn 'testNativeTorNdkSelection'",preparation)
+        self.assertIn("rootProject.file('../deploy/test_android_tor_ndk_selection.py')",preparation)
+        regression=gradle.split("tasks.register('testNativeTorNdkSelection', Exec) {",1)[1].split('\n}\n',1)[0]
+        self.assertIn("'../deploy/test_android_tor_ndk_selection.py', '--gradle'",regression)
+        self.assertIn("new File(gradle.gradleHomeDir, 'bin/gradle').absolutePath",regression)
+        self.assertIn('timeout = java.time.Duration.ofMinutes(8)',regression)
         self.assertIn("rootProject.file('../deploy/test_android_tor_pinned.py')",gradle)
         self.assertIn("rootProject.file('test_android_tor_profile.py')",gradle)
         for path in ('native_tor_graph_host.py','test_native_tor_graph_host.py'):

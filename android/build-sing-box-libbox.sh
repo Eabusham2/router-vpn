@@ -62,7 +62,7 @@ EXPECTED_STAMP="$COMMIT+$LIBXRAY_COMMIT+$XRAY_CORE_VERSION+$GO_TOOLCHAIN+$XRAY_P
 verify_aar() {
   test -s "$AAR"
   test -s "$AMNEZIA_LICENSE_OUT"
-  python3 "$ROOT/../deploy/verify-mobile-tor-link.py" --native-package "$TOR_PACKAGE" --android-aar "$AAR"
+  python3 "$ROOT/../deploy/verify-mobile-tor-link.py" --native-package "$TOR_PACKAGE" --android-aar "$AAR" --ndk "$ANDROID_NDK_HOME"
   python3 "$ROOT/../deploy/stage-mobile-tor-notices.py" --package "$TOR_PACKAGE" --output "$TOR_NOTICES" --verify
   unzip -tq "$AAR" >/dev/null
 
