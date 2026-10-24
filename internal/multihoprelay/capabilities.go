@@ -53,7 +53,7 @@ func (c Capabilities) Validate(expectedNode string) error {
 		if !ident.MatchString(e.ID) || !ident.MatchString(e.Mode) || (!external && (!proofID.MatchString(e.NodeID) || e.NodeID == expectedNode)) || e.Layer != "" && !ValidLayerMode(e.Layer) {
 			return bad
 		}
-		if external && (e.NodeID != "" || e.Mode != "shadowsocks" || e.Layer != "" || e.PublicKey != "" || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
+		if external && (e.NodeID != "" || !ExternalMode(e.Mode) || e.PublicKey != "" || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
 			return bad
 		}
 		identity := e.ID + "/" + e.Mode + "/" + e.Layer

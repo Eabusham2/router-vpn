@@ -10,15 +10,15 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
-	"unicode/utf8"
 
 	"router-vpn/internal/applexray"
 )
 
 // ExternalExit identifies a third-party transport by its exact public endpoint
 // and separately proved egress address. It never claims a Router API identity.
-// The first server-execution transport is native Shadowsocks. Other external
-// families need their own real last-node response and credential contracts.
+// Credential-bearing proxy families share this exact last-node response and
+// session authentication contract. Packet peers need independent server keys
+// before they can participate in Local/Server comparison.
 type ExternalExit struct {
 	ExpectedPublicIP string        `json:"expected_public_ip"`
 	ResponseProbe    ResponseProbe `json:"response_probe"`
@@ -58,39 +58,37 @@ func externalPublicIP(raw string) bool {
 // ExternalFingerprint includes only public transport/proof parameters. Private
 // passwords are neither hashed into the public catalog nor returned from it.
 func ExternalFingerprint(exit Exit) (string, error) {
-	bad := errors.New("external relay requires its exact native transport and public proof address")
-	if exit.External == nil || exit.NodeID != "" || exit.Mode != "shadowsocks" || exit.StartLayer != nil || !externalPublicIP(exit.External.ExpectedPublicIP) {
-		return "", bad
-	}
-	transport, err := validateTransport(exit)
+	transport, err := externalTransport(exit)
 	if err != nil {
-		return "", bad
+		return "", err
 	}
-	host, _ := transport["server"].(string)
-	password, _ := transport["password"].(string)
-	if !externalPublicIP(host) || password == "" || !utf8.ValidString(password) || len(password) > 4096 {
-		return "", bad
-	}
-	if exit.External.ResponseProbe.Validate(host) != nil {
-		return "", bad
-	}
-	// A bounded exact native profile, not a second opaque configuration owner.
-	for key := range transport {
-		switch key {
-		case "type", "tag", "server", "server_port", "method", "password":
-		default:
-			return "", bad
+	var value any
+	if exit.Mode == "shadowsocks" && exit.StartLayer == nil {
+		// Preserve the published v1 identity for already-paired Shadowsocks nodes.
+		value = []any{"routervpn-external-relay-v1", exit.Mode, transport["server"], transport["server_port"], transport["method"], exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
+	} else {
+		public, _ := copyMap(transport)
+		delete(public, "password")
+		delete(public, "username")
+		delete(public, "tag")
+		var layer any
+		if exit.StartLayer != nil {
+			outer, _ := copyMap(exit.StartLayer.Transport)
+			delete(outer, "password")
+			delete(outer, "tag")
+			layer = []any{exit.StartLayer.Mode, exit.StartLayer.API, outer}
 		}
+		value = []any{"routervpn-external-relay-v2", exit.Mode, public, layer, exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
 	}
-	encoded, err := json.Marshal([]any{"routervpn-external-relay-v1", exit.Mode, host, transport["server_port"], transport["method"], exit.External.ExpectedPublicIP, exit.External.ResponseProbe})
+	encoded, err := json.Marshal(value)
 	if err != nil {
-		return "", bad
+		return "", errors.New("external public transport identity could not be encoded")
 	}
 	digest := sha256.Sum256(encoded)
 	return hex.EncodeToString(digest[:]), nil
 }
 
-// AuthenticateExternalRequest binds proof of the captured Shadowsocks password
+// AuthenticateExternalRequest binds proof of the captured private credentials
 // to this one random session, paired entry, exit and listener proposal. The
 // password stays in the private registry and captured client profile. A digest
 // of it is never published as a reusable capability or accepted as a Router ID.
@@ -99,7 +97,7 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	if request.ExitID != exit.ID || request.ExitMode != exit.Mode || request.ExitStartLayer != "" ||
+	if request.ExitID != exit.ID || request.ExitMode != exit.Mode || request.ExitStartLayer != LayerMode(exit.StartLayer) ||
 		!nonce.MatchString(request.SessionID) || !proofID.MatchString(request.EntryNodeID) ||
 		request.Port < 1024 || request.Port > 65535 || !listenerSecret.MatchString(request.Username) || !listenerSecret.MatchString(request.Password) || request.Username == request.Password {
 		return Request{}, ErrOwnership
@@ -109,8 +107,20 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	if err != nil {
 		return Request{}, ErrOwnership
 	}
-	mac := hmac.New(sha256.New, []byte(exit.Transport["password"].(string)))
-	_, _ = mac.Write([]byte("routervpn-external-relay-auth-v1\x00"))
+	key, domain := []byte(exit.Transport["password"].(string)), "routervpn-external-relay-auth-v1\x00"
+	if exit.Mode != "shadowsocks" || exit.StartLayer != nil {
+		var outerSecret any
+		if exit.StartLayer != nil {
+			outerSecret = exit.StartLayer.Transport["password"]
+		}
+		key, err = json.Marshal([]any{exit.Mode, exit.Transport["username"], exit.Transport["password"], outerSecret})
+		if err != nil {
+			return Request{}, err
+		}
+		domain = "routervpn-external-relay-auth-v2\x00"
+	}
+	mac := hmac.New(sha256.New, key)
+	_, _ = mac.Write([]byte(domain))
 	_, _ = mac.Write(encoded)
 	request.ExternalAuthentication = hex.EncodeToString(mac.Sum(nil))
 	return request, nil

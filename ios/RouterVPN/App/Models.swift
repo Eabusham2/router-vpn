@@ -193,7 +193,7 @@ struct ExternalShadowsocksConfig: Codable, Hashable {
 }
 
 /// A node-owned HTTPS response target. The literal destination remains the
-/// imported Shadowsocks server; the optional name only verifies its TLS cert.
+/// imported external server; the optional name only verifies its TLS cert.
 struct ExternalResponseProbe: Codable, Hashable {
     var url: String
     var serverName: String?
@@ -246,6 +246,61 @@ struct ExternalTorBridgeConfig: Codable, Hashable {
     }
 }
 
+private struct ExternalLayerKey: CodingKey {
+    let stringValue: String
+    let intValue: Int? = nil
+    init?(stringValue: String) { self.stringValue = stringValue }
+    init?(intValue: Int) { return nil }
+}
+
+/// Provisioned credentials remain in the private node. Connection profiles
+/// capture only the separately selected Start Layer mode.
+struct ExternalStartLayerTransport: Codable, Hashable {
+    var type: String
+    var tag: String
+    var server: String
+    var serverPort: Int
+    var method: String
+    var password: String
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case type, tag, server, method, password
+        case serverPort = "server_port"
+    }
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+        guard Set(raw.allKeys.map(\.stringValue)) == Set(CodingKeys.allCases.map(\.rawValue)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "External Start Layer transport requires its exact provisioned fields."))
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type); tag = try c.decode(String.self, forKey: .tag)
+        server = try c.decode(String.self, forKey: .server); serverPort = try c.decode(Int.self, forKey: .serverPort)
+        method = try c.decode(String.self, forKey: .method); password = try c.decode(String.self, forKey: .password)
+    }
+}
+
+struct ExternalStartLayer: Codable, Hashable {
+    var mode: String
+    var api: String
+    var transport: ExternalStartLayerTransport
+    enum CodingKeys: String, CodingKey, CaseIterable { case mode, api, transport }
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+        guard Set(raw.allKeys.map(\.stringValue)) == Set(CodingKeys.allCases.map(\.rawValue)) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "External Start Layer requires mode, API and transport together."))
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        mode = try c.decode(String.self, forKey: .mode); api = try c.decode(String.self, forKey: .api)
+        transport = try c.decode(ExternalStartLayerTransport.self, forKey: .transport)
+    }
+}
+
+struct ExternalStartLayerUpdate {
+    let expectedMode: String
+    let mode: String
+    let layer: ExternalStartLayer?
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -259,6 +314,62 @@ struct ExternalNodeConfig: Codable, Hashable {
     var hysteria2: ExternalHysteria2Config?
     var torBridge: ExternalTorBridgeConfig?
     var responseProbe: ExternalResponseProbe?
+    var startLayer: ExternalStartLayer?
+
+    static let serverExecutionProtocols: Set<String> = ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"]
+    var serverExecutionHost: String? {
+        switch protocolName {
+        case "shadowsocks": return shadowsocks?.server
+        case "hysteria2": return hysteria2?.server
+        case "socks5": return socks5?.host
+        case "http-connect": return httpConnect?.host
+        case "https-connect": return httpsConnect?.host
+        default: return nil
+        }
+    }
+    var authenticatedServerExecution: Bool {
+        switch protocolName {
+        case "shadowsocks": return !(shadowsocks?.password ?? "").isEmpty
+        case "hysteria2": return !(hysteria2?.password ?? "").isEmpty
+        case "socks5": return !(socks5?.username ?? "").isEmpty && !(socks5?.password ?? "").isEmpty
+        case "http-connect": return !(httpConnect?.username ?? "").isEmpty && !(httpConnect?.password ?? "").isEmpty
+        case "https-connect": return !(httpsConnect?.username ?? "").isEmpty && !(httpsConnect?.password ?? "").isEmpty
+        default: return false
+        }
+    }
+
+    func matchesStartLayer(_ selected: String?) -> Bool {
+        let mode = selected ?? "off"
+        if mode.isEmpty || mode == "off" { return startLayer == nil }
+        guard Self.serverExecutionProtocols.contains(protocolName), let host = serverExecutionHost,
+              let layer = startLayer, ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(mode),
+              layer.mode == mode, !layer.api.isEmpty, layer.api.utf8.count <= 4096,
+              layer.transport.type == "shadowsocks", layer.transport.server == host,
+              layer.transport.method == "2022-blake3-aes-256-gcm", !layer.transport.tag.isEmpty,
+              (1...65535).contains(layer.transport.serverPort), !layer.transport.password.isEmpty,
+              layer.transport.password.utf8.count <= 4096, !layer.transport.password.contains("\0") else { return false }
+        // The shared compiler validates the private API, canonical key and
+        // exact wrapped endpoint before granting a runnable native graph.
+        return true
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        protocolName = try c.decode(String.self, forKey: .protocolName)
+        expectedPublicIP = try c.decode(String.self, forKey: .expectedPublicIP)
+        wireGuard = try c.decodeIfPresent(ExternalWireGuardConfig.self, forKey: .wireGuard)
+        amneziaWG = try c.decodeIfPresent(ExternalAmneziaWGConfig.self, forKey: .amneziaWG)
+        openVPN = try c.decodeIfPresent(ExternalOpenVPNConfig.self, forKey: .openVPN)
+        shadowsocks = try c.decodeIfPresent(ExternalShadowsocksConfig.self, forKey: .shadowsocks)
+        socks5 = try c.decodeIfPresent(ExternalSOCKS5Config.self, forKey: .socks5)
+        httpConnect = try c.decodeIfPresent(ExternalHTTPConnectConfig.self, forKey: .httpConnect)
+        httpsConnect = try c.decodeIfPresent(ExternalHTTPConnectConfig.self, forKey: .httpsConnect)
+        hysteria2 = try c.decodeIfPresent(ExternalHysteria2Config.self, forKey: .hysteria2)
+        torBridge = try c.decodeIfPresent(ExternalTorBridgeConfig.self, forKey: .torBridge)
+        responseProbe = try c.decodeIfPresent(ExternalResponseProbe.self, forKey: .responseProbe)
+        // Explicit null must not turn a rejected imported layer into absence.
+        startLayer = c.contains(.startLayer) ? try c.decode(ExternalStartLayer.self, forKey: .startLayer) : nil
+    }
 
     enum CodingKeys: String, CodingKey {
         case wireGuard = "wireguard"
@@ -269,6 +380,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case shadowsocks, socks5, hysteria2
         case torBridge = "tor_bridge"
         case responseProbe = "response_probe"
+        case startLayer = "start_layer"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

@@ -128,7 +128,10 @@ func prepareWindowsOpenVPNRuntime(root string, control, entry common.RouterProfi
 func windowsOpenVPNStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	useAmnezia := !direct && entry.External != nil && entry.External.Protocol == "amneziawg"
-	if useAmnezia {
+	useNative := !direct && entry.External != nil && entry.External.StartLayer != nil
+	if useNative {
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+	} else if useAmnezia {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err
 		}
@@ -154,7 +157,7 @@ func windowsOpenVPNStandardExitCommand(a *app, control, entry common.RouterProfi
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", dir, "-Endpoint", endpoint, "-OpenVPNBin", binary)
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+runtimeProfileID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
-	cmd.Env = desktopStandardEngineEnvironment(cmd.Env, useAmnezia)
+	cmd.Env = desktopExternalEngineEnvironment(cmd.Env, useNative, useAmnezia)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil

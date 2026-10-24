@@ -23,6 +23,36 @@ type StartLayer struct {
 	Transport map[string]any `json:"transport"`
 }
 
+// UnmarshalJSON preserves the complete private layer contract. Unknown or
+// duplicate members must not disappear during typed import before the captured
+// graph is validated. Pointer absence still means no selected layer.
+func (layer *StartLayer) UnmarshalJSON(raw []byte) error {
+	bad := errors.New("Start Layer requires its exact private mode, API and transport object")
+	if len(raw) > 16384 {
+		return bad
+	}
+	object, err := applexray.Object(raw)
+	if err != nil || len(object) != 3 {
+		return bad
+	}
+	if _, ok := object["mode"].(string); !ok {
+		return bad
+	}
+	if _, ok := object["api"].(string); !ok {
+		return bad
+	}
+	if transport, ok := object["transport"].(map[string]any); !ok || len(transport) == 0 {
+		return bad
+	}
+	type startLayerJSON StartLayer
+	var decoded startLayerJSON
+	if json.Unmarshal(raw, &decoded) != nil {
+		return bad
+	}
+	*layer = StartLayer(decoded)
+	return nil
+}
+
 func LayerMode(layer *StartLayer) string {
 	if layer == nil {
 		return ""
@@ -61,6 +91,11 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 	port, pe := strconv.Atoi(api.Port())
 	if e != nil || pe != nil || port < 1 || port > 65535 || address.Is4In6() || address.Zone() != "" || !address.IsPrivate() || !literalServer(address.String()) {
 		return nil, nil, bad
+	}
+	if mode == "socks5" || mode == "http-connect" || mode == "https-connect" {
+		if err := validateExternalProxyCredentials(transport); err != nil {
+			return nil, nil, err
+		}
 	}
 	inner, e := copyMap(transport)
 	if e != nil || len(inner) == 0 {

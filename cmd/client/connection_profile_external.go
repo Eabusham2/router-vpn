@@ -15,6 +15,7 @@ import (
 // A separate field preserves schema-v4 external records that were selection-only.
 type connectionProfileExternalCapture struct {
 	Protocol         string   `json:"protocol"`
+	StartLayer       string   `json:"start_layer,omitempty"`
 	ExpectedPublicIP string   `json:"expected_public_ip"`
 	HomeLANAccess    bool     `json:"home_lan_access"`
 	HomeLANCIDRs     []string `json:"home_lan_cidrs"`
@@ -71,6 +72,9 @@ func (p *connectionProfileExternalCapture) UnmarshalJSON(data []byte) error {
 }
 
 func (p connectionProfileExternalCapture) validate() error {
+	if mode, err := common.NormalizeStartLayerMode(p.StartLayer); err != nil || p.StartLayer != "" && mode != p.StartLayer {
+		return errors.New("saved external Start Layer selection is invalid")
+	}
 	switch p.Protocol {
 	case "wireguard", "amneziawg", "openvpn", "shadowsocks", "socks5", "http-connect", "https-connect", "hysteria2", "tor-bridge":
 	default:
@@ -143,6 +147,7 @@ func snapshotExternalConnectionPolicy(node common.RouterProfile) (*connectionPro
 		p.MultihopEntryID, p.MultihopExitID = "", ""
 	}
 	c := &connectionProfileExternalCapture{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID}
+	c.StartLayer = p.StartLayer
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -158,6 +163,9 @@ func (p connectionProfileExternalCapture) apply(node common.RouterProfile) (comm
 		return node, errors.New("linked external protocol or public identity changed; update the saved connection profile")
 	}
 	c := p.policy()
+	if p.StartLayer != "" {
+		updated.StartLayer = p.StartLayer
+	}
 	updated.HomeLANAccess, updated.HomeLANCIDRs = c.HomeLANAccess, c.HomeLANCIDRs
 	updated.KillSwitchPolicy, updated.IPv6Mode = c.KillSwitchPolicy, c.IPv6Mode
 	updated.StartupMode, updated.AutoConnect = c.StartupMode, c.AutoConnect

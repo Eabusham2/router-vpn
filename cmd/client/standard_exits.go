@@ -43,6 +43,8 @@ type standardExit struct {
 	WGKeepalive      int               `json:"wg_keepalive,omitempty"`
 	AWGParameters    map[string]string `json:"awg_parameters,omitempty"`
 	OpenVPNConfig    string            `json:"openvpn_config,omitempty"`
+	ResponseProbe    *common.ExternalResponseProbe `json:"response_probe,omitempty"`
+	StartLayer       *common.ExternalStartLayer `json:"start_layer,omitempty"`
 }
 
 type standardExitStore struct {
@@ -257,6 +259,11 @@ func validateStandardExit(e *standardExit) error {
 		}
 	case "openvpn":
 		// Sanitization and structured auth validation were already performed.
+	}
+	if e.ResponseProbe != nil || e.StartLayer != nil {
+		profile, err := desktopExternalCaptureUnchecked(common.RouterProfile{}, *e)
+		if err != nil { return err }
+		if err = common.NormalizeRouterProfile(&profile); err != nil { return err }
 	}
 	return nil
 }

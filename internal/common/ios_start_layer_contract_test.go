@@ -22,7 +22,11 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		`outbounds[proxyIndex]["server"] = "127.0.0.1"`,
 		`outbounds[proxyIndex]["detour"] = aesTag`,
 		`result["sing-box.json"] = composed`,
-		"External nodes own their own transport security",
+		`guard external["start_layer"] == nil else`,
+		`layer["mode"] as? String == mode`,
+		`Set(layer.keys) == Set(["mode", "api", "transport"])`,
+		`Set(transport.keys) == Set(["type", "tag", "server", "server_port", "method", "password"])`,
+		"External Start Layer requires its exact selected mode and private provisioned transport",
 		"Start Layer will not overwrite it",
 	} {
 		if !strings.Contains(composer, required) {
@@ -31,6 +35,19 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	}
 	if strings.Contains(composer, "XORWhitening = true") || strings.Contains(composer, "xor_counts_as_encryption") {
 		t.Fatal("iOS Start Layer must not score XOR whitening as encryption")
+	}
+	// External wrappers are composed by the shared compiler after the host
+	// captures the original transport. Both import and runtime must retain that
+	// owner; the executable host fixtures cover wrong modes/keys and servers.
+	external := repoFile(t, "ios/RouterVPN/App/IOSExternalExecution.swift")
+	for _, required := range []string{
+		"external.matchesStartLayer(profile.startLayer)",
+		"if external.startLayer != nil { try validateLayerDraft(profile) }",
+		"LibboxRouterValidateExternalTransport(source, capture, &failure)",
+	} {
+		if !strings.Contains(external, required) {
+			t.Fatalf("external Start Layer bypasses the native captured transport validation: %q", required)
+		}
 	}
 
 	provider := repoFile(t, "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift")

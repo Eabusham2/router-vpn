@@ -19,7 +19,7 @@ One external HTTPS test endpoint is randomly selected from the approved literal
 IP endpoints at the beginning of the round and reused for both candidates and
 the final recheck. These are bounded routed HTTP response-time probes, not a
 claim to be ICMP measurements. For Router VPN exits, the last-node probe verifies
-the exact private agent identity. The external Shadowsocks extension below uses
+the exact private agent identity. The external proxy extension below uses
 its explicitly configured HTTPS endpoint on the captured exit server. The
 external request carries no node token. Requests use the
 candidate's actual exit path with no ordinary-interface/proxy fallback.
@@ -82,18 +82,19 @@ exact readback of deletion; expiry removes abandoned sessions. A Linux agent
 crash terminates its owned child engines. Exit credentials remain in private
 operator files; they are not returned in capability or progress responses.
 
-## Router entry to an external Shadowsocks exit
+## Router entry to a paired external proxy exit
 
-The shared native execution path also supports a privately paired third-party
-Shadowsocks exit behind an existing captured Router VPN predecessor graph. Its
+The shared native execution path supports privately paired third-party
+Shadowsocks, Hysteria2, authenticated SOCKS5, HTTP CONNECT and HTTPS CONNECT
+exits behind an existing captured Router VPN predecessor graph. Its
 supported native entry mode, entry Start Layer, helpers and bootstrap policy
-stay in that same graph. Apple captures this path in its ordinary external
-PacketTunnel owner. The client
+stay in that same graph. Android captures this path in its existing VpnService;
+Apple captures it in the ordinary external PacketTunnel owner. The client
 keeps the external server identity separate from Router VPN node identities:
 an external provider does not need, and is never assumed to expose, a Router
 administration API.
 
-An eligible Server or Compare profile needs its exact external Shadowsocks
+An eligible Server or Compare profile needs its exact external proxy
 configuration, expected public exit address, and a node-response endpoint
 configured in the external node editor or imported profile. This endpoint is
 optional for an ordinary Local connection:
@@ -107,7 +108,7 @@ optional for an ordinary Local connection:
 
 Place this member inside the node's `external` object. The example address and
 name are placeholders. The URL must use the same public literal IP as the
-captured Shadowsocks server, with HTTPS and a successful bounded response.
+captured protocol server, with HTTPS and a successful bounded response.
 `server_name` is optional when the certificate already verifies the literal IP;
 otherwise it selects and verifies the server's HTTPS virtual host. The socket
 still dials only the captured literal address. Query strings, credentials in
@@ -116,17 +117,19 @@ The optional endpoint does not change ordinary Local connection eligibility.
 
 Pair this exact external node bundle on the Router entry with the same
 `router-vpn-relay-pair` command above and its actual client exit ID. The private
-registry retains the Shadowsocks credentials and response-endpoint parameters.
+registry retains the protocol credentials and response-endpoint parameters.
 The native offline check validates the resulting relay graph before atomic
 publication. Its public capability catalog contains the public endpoint/proof
 fingerprint and expected egress IP; it contains no password digest or private
 credential. A per-session keyed proof binds the client's captured credentials
 to the particular entry, exit and random listener proposal before a server
-engine can start.
+engine can start. SOCKS5 and CONNECT Server/Compare require a nonempty paired
+username/password. Ordinary Local use may retain a deliberately anonymous
+provider; an absent credential is never invented for server authentication.
 
 Each trial measures a complete **HTTPS response time** from that configured
 last node and the same randomly selected external HTTPS endpoint. Merely opening
-the Shadowsocks stream is insufficient: native early connection establishment
+the proxy stream is insufficient: native early connection establishment
 does not prove that the requested final destination answered. The trial also
 proves the selected DNS policy and the expected public exit independently. The
 lower valid average wins only after both measurement probes pass again. A
@@ -143,9 +146,35 @@ teardown. Restoring a proved winner for a saved Compare profile directly
 reopens that local/server choice without changing the saved preference or
 starting another comparison.
 
-This extension is bounded to the graph above. Other external exit transports,
-external-entry server execution, external exit Start Layers and devices without the
-host integration remain open requirements. Operator pairing and device/off-LAN
+### Imported entry and exit Start Layers
+
+An external proxy can retain an independently provisioned Start Layer. The
+profile's `start_layer` selects `aes-256-gcm` or
+`aes-256-gcm+xor-whitening`; its private `external.start_layer` contains exactly
+`mode`, `api` and `transport`. The mode must match the selection. `api` names the
+private inner target with an explicit port. `transport` is the complete
+Shadowsocks 2022 AES-256-GCM outer transport on the same captured public server,
+with its actual private key. The native compiler owns the inner rewrite and
+outer detour; the XOR variant uses the provisioned whitening port 8389.
+
+Entry and exit layers have distinct owners. An ordinary external entry's outer
+transport owns the physical path; the exit's outer transport traverses the
+captured entry. Neither layer substitutes credentials, TLS identities, DNS or
+LAN/IPv6 policy. Saved connection profiles store the selected layer mode and
+refer to the current private node provision; they do not copy the key. Changing
+that provision incompatibly requires updating the saved setup.
+
+The desktop ordinary-path builders also apply these imported layers, including
+the controlled upstream proxy for a native OpenVPN final exit. Layered desktop
+paths require the verified complete native runtime, which includes the XOR
+adapter. The shared generated native graph tests remain separate from physical
+device acceptance.
+
+This extension is bounded to the graph above. WireGuard/AmneziaWG/OpenVPN server
+comparison needs distinct session credentials and corresponding peer ownership;
+it must not reuse a roaming packet peer. External-entry server execution and
+desktop external Server/Compare host adoption remain open requirements.
+Operator pairing and device/off-LAN
 acceptance still require their own evidence; no private deployment occurs when
 these sources or tests are updated.
 

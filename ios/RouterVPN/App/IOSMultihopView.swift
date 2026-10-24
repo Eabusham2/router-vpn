@@ -81,19 +81,19 @@ extension RouterVPNModel {
             throw iosMultihopError("The captured entry bundle no longer selects exactly one linked node.")
         }
         try IOSExternalExecution.require(selection: exit.multihopExecution ?? "local", entry: profile, exit: exit)
-        let capturedExit = try JSONSerialization.jsonObject(with: JSONEncoder().encode(exit)) as! [String: Any]
         let capturedEntry = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile)) as! [String: Any]
-        guard try IOSMultihopStartLayer.selected(capturedExit) == "off" else {
-            throw iosMultihopError("An ordinary external exit retains its imported native transport; select entry encryption on the entry.")
+        guard exit.external?.matchesStartLayer(exit.startLayer) == true else {
+            throw iosMultihopError("The selected external exit layer no longer matches its private provisioned transport.")
         }
         entry.selectedRouterID = entryID
         entry.endpoint = profile.endpoint
         if profile.normalizedNodeKind == "external" {
             guard Self.ordinaryExternalHopProtocols.contains(mode), profile.external?.protocolName == mode,
                   profile.external?.expectedPublicIP.isEmpty == false,
-                  try IOSMultihopStartLayer.selected(capturedEntry) == "off" else {
+                  profile.external?.matchesStartLayer(profile.startLayer) == true else {
                 throw iosMultihopError("Choose the external entry's exact imported protocol and public proof address.")
             }
+            if profile.external?.startLayer != nil { try IOSExternalExecution.validateLayerDraft(profile) }
             entry.nodeProofID = ""
             entry.routerAPI = ""; entry.apiToken = ""; entry.adGuardIPv4 = ""; entry.adGuardIPv6 = ""
         } else {
@@ -267,10 +267,10 @@ struct IOSMultihopView: View {
                             }
                         }
                         if externalExecutionEligible {
-                            Text("Compare measures routed HTTPS responses from this node and the same random external endpoint through each candidate: (node response + external response) / 2. Both probes repeat before keeping the lowest valid result. Server uses a private expiring relay on the entry; this Shadowsocks exit must already be paired there.")
+                            Text("Compare measures routed HTTPS responses from this node and the same random external endpoint through each candidate: (node response + external response) / 2. Both probes repeat before keeping the lowest valid result. Server uses a private expiring relay on the entry; this authenticated exit must already be paired there.")
                                 .font(.caption).foregroundStyle(.secondary)
                         } else {
-                            Text("Server and Compare currently require a Router VPN entry and a paired Shadowsocks exit with an HTTPS response endpoint. Add that endpoint in Edit Node. Other external paths use Local.")
+                            Text("Server and Compare currently require a Router VPN entry and a paired authenticated Shadowsocks, Hysteria2 or SOCKS5/HTTP(S) exit with an HTTPS response endpoint. Add that endpoint in Edit Node. Other external paths use Local.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                         Text("The imported exit connects through the selected entry. The native tunnel proves both nodes and the selected DNS before Connected. Home AdGuard requires a paired Router VPN entry; HTTP CONNECT paths require TCP, DoT or DoH DNS.")

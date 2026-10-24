@@ -479,36 +479,116 @@ def pair(bundle, alias, selected=None):
         for item in exits: item['start_layer'] = copy.deepcopy(layer)
     return exits
 
-def pair_external(profile, alias):
-    """Privately pair exact external SS credentials; never invent a Router ID."""
-    ext = profile.get('external')
-    bad = ValueError('external server execution requires one captured Shadowsocks profile and public proof address')
-    if not isinstance(ext, dict) or set(ext) != {'protocol', 'expected_public_ip', 'shadowsocks', 'response_probe'} or ext.get('protocol') != 'shadowsocks':
-        raise bad
-    if profile.get('node_proof_id') or profile.get('router_api') or profile.get('api_token') or profile.get('start_layer', 'off') not in ('', 'off'):
-        raise bad
-    ss = ext.get('shadowsocks')
-    probe = ext.get('response_probe')
-    if not isinstance(probe, dict) or set(probe) - {'url', 'server_name'} or not isinstance(probe.get('url'), str) or not isinstance(probe.get('server_name', ''), str):
-        raise bad
-    if not isinstance(ss, dict) or set(ss) != {'server', 'port', 'method', 'password'} or type(ss['port']) is not int or not 1 <= ss['port'] <= 65535:
-        raise bad
-    for key in ('server', 'method', 'password'):
-        if not isinstance(ss[key], str) or not ss[key] or len(ss[key].encode('utf-8')) > 4096:
-            raise bad
+def external_private_text(value, limit=4096):
+    """Do not normalize authentication material or include it in an error."""
     try:
-        host, expected = literal(ss['server']), literal(ext.get('expected_public_ip', ''))
+        return isinstance(value, str) and 0 < len(value.encode('utf-8')) <= limit and not any(c in value for c in '\x00\r\n')
+    except UnicodeEncodeError:
+        return False
+
+def external_public_literal(value):
+    if not isinstance(value, str): raise ValueError('external relay requires a public literal address')
+    address = ipaddress.ip_address(literal(value))
+    # Python calls documentation ranges private, unlike Go's netip.IsPrivate.
+    # Match the runtime's explicit local/CGN exclusions and allow offline fixtures.
+    if address in ipaddress.ip_network('10.0.0.0/8') or address in ipaddress.ip_network('172.16.0.0/12') or address in ipaddress.ip_network('192.168.0.0/16') or address in ipaddress.ip_network('100.64.0.0/10') or (address.version == 6 and (address.ipv4_mapped is not None or address in ipaddress.ip_network('fc00::/7'))):
+        raise ValueError('external relay requires a public literal address')
+    return str(address)
+
+def external_tls_name(value):
+    if not external_private_text(value, 253) or value != value.strip() or value.endswith('.'):
+        return False
+    try:
+        address = ipaddress.ip_address(value)
+        return '%' not in value and not (address.version == 6 and address.ipv4_mapped is not None) and not (address.is_loopback or address.is_link_local or address.is_multicast or address.is_unspecified)
+    except ValueError:
+        return value.lower() != 'localhost' and all(re.fullmatch(r'[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?', label) for label in value.split('.'))
+
+def external_start_layer(profile, ext, host):
+    selected = profile.get('start_layer', 'off')
+    if selected in ('', 'off'):
+        if 'start_layer' in ext: raise ValueError('external Start Layer does not match its captured selection')
+        return None
+    bad = ValueError('external Start Layer requires exact private credentials and same-server ownership')
+    layer = ext.get('start_layer')
+    if selected not in ('aes-256-gcm', 'aes-256-gcm+xor-whitening') or not isinstance(layer, dict) or set(layer) != {'mode', 'api', 'transport'} or layer.get('mode') != selected:
+        raise bad
+    if not external_private_text(layer.get('api'), 2048): raise bad
+    try:
+        api = urlsplit(layer['api'])
+        address = ipaddress.ip_address(literal(api.hostname))
+        private = any(address in ipaddress.ip_network(network) for network in ('10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', 'fc00::/7'))
+        if not private or api.scheme not in ('http', 'https') or api.username is not None or api.password is not None or api.query or api.fragment or api.path not in ('', '/') or not api.port or not 1 <= api.port <= 65535:
+            raise bad
     except (ValueError, TypeError):
         raise bad from None
-    for raw in (host, expected):
-        address = ipaddress.ip_address(raw)
-        if address.is_loopback or address.is_multicast or address.is_link_local or address.is_unspecified or address in ipaddress.ip_network('10.0.0.0/8') or address in ipaddress.ip_network('172.16.0.0/12') or address in ipaddress.ip_network('192.168.0.0/16') or address in ipaddress.ip_network('100.64.0.0/10') or (address.version == 6 and (address.ipv4_mapped is not None or address in ipaddress.ip_network('fc00::/7'))):
-            raise bad
-    # Runtime validation repeats the native cipher/key and exact public identity
-    # checks before the private registry can be installed. No hostname resolver
-    # is configured on this relay; selected DNS remains owned by the client.
-    transport = dict(type='shadowsocks', tag='exit', server=host, server_port=ss['port'], method=ss['method'], password=ss['password'])
-    return [dict(id=alias, mode='shadowsocks', node_id='', dns_server='', transport=transport, external=dict(expected_public_ip=expected, response_probe=copy.deepcopy(probe)))]
+    outer = layer['transport']
+    if not isinstance(outer, dict) or set(outer) != {'type', 'tag', 'server', 'server_port', 'method', 'password'} or outer['type'] != 'shadowsocks' or outer['method'] != '2022-blake3-aes-256-gcm' or type(outer['server_port']) is not int or not 1 <= outer['server_port'] <= 65535:
+        raise bad
+    try:
+        if external_public_literal(outer['server']) != host: raise bad
+    except (ValueError, TypeError):
+        raise bad from None
+    if not isinstance(outer['tag'], str) or not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', outer['tag']) or not external_private_text(outer['password']):
+        raise bad
+    try:
+        for part in outer['password'].split(':'):
+            key = base64.b64decode(part, validate=True)
+            if len(key) != 32 or base64.b64encode(key).decode() != part: raise bad
+    except (ValueError, TypeError):
+        raise bad from None
+    return copy.deepcopy(layer)
+
+def pair_external(profile, alias):
+    """Privately pair native authenticated proxy credentials and selected layer."""
+    ext = profile.get('external')
+    bad = ValueError('external server execution requires an exact authenticated proxy and public response endpoint')
+    if not isinstance(ext, dict): raise bad
+    protocol = ext.get('protocol')
+    if protocol not in ('shadowsocks', 'hysteria2', 'socks5', 'http-connect', 'https-connect'):
+        # Packet and OpenVPN session identities need independently provisioned
+        # server credentials; they cannot reuse a local roaming client key.
+        raise bad
+    block = protocol.replace('-', '_')
+    if set(ext) - {'protocol', 'expected_public_ip', block, 'response_probe', 'start_layer'} or not {'protocol', 'expected_public_ip', block, 'response_probe'} <= set(ext):
+        raise bad
+    if profile.get('node_proof_id') or profile.get('router_api') or profile.get('api_token'):
+        raise bad
+    proxy, probe = ext[block], ext['response_probe']
+    if not isinstance(probe, dict) or set(probe) - {'url', 'server_name'} or not external_private_text(probe.get('url'), 2048) or not isinstance(probe.get('server_name', ''), str):
+        raise bad
+    fields = {'server', 'port', 'password'} if protocol in ('shadowsocks', 'hysteria2') else {'host', 'port', 'username', 'password'}
+    if protocol == 'shadowsocks': fields.add('method')
+    if protocol in ('hysteria2', 'https-connect'): fields.add('tls_server_name')
+    optional = {'tls_server_name'} if protocol == 'http-connect' else set()
+    if not isinstance(proxy, dict) or not fields <= set(proxy) or set(proxy) - fields - optional or type(proxy.get('port')) is not int or not 1 <= proxy['port'] <= 65535 or not external_private_text(proxy.get('password'), 255 if protocol == 'socks5' else 4096):
+        raise bad
+    host_key = 'server' if protocol in ('shadowsocks', 'hysteria2') else 'host'
+    try:
+        host, expected = external_public_literal(proxy[host_key]), external_public_literal(ext['expected_public_ip'])
+    except (ValueError, TypeError):
+        raise bad from None
+    transport = dict(type=protocol, tag='exit', server=host, server_port=proxy['port'], password=proxy['password'])
+    if protocol == 'shadowsocks':
+        if proxy['method'] not in ('2022-blake3-aes-128-gcm', '2022-blake3-aes-256-gcm', '2022-blake3-chacha20-poly1305', 'aes-128-gcm', 'aes-256-gcm', 'chacha20-ietf-poly1305'): raise bad
+        transport['method'] = proxy['method']
+    elif protocol in ('socks5', 'http-connect', 'https-connect'):
+        if not external_private_text(proxy['username'], 255) or protocol != 'socks5' and ':' in proxy['username']: raise bad
+        transport['username'] = proxy['username']
+        transport['type'] = 'socks' if protocol == 'socks5' else 'http'
+        if protocol == 'socks5': transport['version'] = '5'
+    if protocol in ('hysteria2', 'https-connect'):
+        if not external_tls_name(proxy['tls_server_name']): raise bad
+        transport['tls'] = dict(enabled=True, server_name=proxy['tls_server_name'])
+    if protocol == 'http-connect' and proxy.get('tls_server_name', '') != '': raise bad
+    layer = external_start_layer(profile, ext, host)
+    # The actual native registry checker repeats cipher, TLS, response-probe and
+    # layer ownership validation before atomic publication. Selected DNS stays
+    # in the client; no resolver or global tunnel is installed by this command.
+    result = dict(id=alias, mode=protocol, node_id='', dns_server='', transport=transport,
+                  external=dict(expected_public_ip=expected, response_probe=copy.deepcopy(probe)))
+    if layer is not None: result['start_layer'] = layer
+    return [result]
 
 def registry_bytes(registry):
     body = (json.dumps(registry, indent=2, allow_nan=False)+'\n').encode('utf-8')

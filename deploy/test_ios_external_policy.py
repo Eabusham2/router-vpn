@@ -264,9 +264,14 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
   var input=profile("wireguard");input["manual_mtu"]=1500
   let predecessor=try RouterVPNExternalExitBuilder.build(profile:input).policy!.config.replacingOccurrences(of:"custom-exit",with:"proxy")
   let files=["sing-box.json":Data(predecessor.utf8)]
-  var profile=profile("shadowsocks"),external=profile["external"] as! [String:Any]
+  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] {
+  let nativeType=kind=="socks5" ? "socks" : (kind=="http-connect" || kind=="https-connect") ? "http" : kind
+  for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  var profile=profile(kind),external=profile["external"] as! [String:Any]
+  profile["start_layer"]=layer
+  if layer != "off" { external["start_layer"]=["mode":layer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key(7)]] }
   external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"node.example.test"];profile["external"]=external
-  profile["multihop_enabled"]=true;profile["multihop_entry_id"]="paired-home";profile["multihop_entry_mode"]="wg";profile["multihop_exit_id"]="saved-exit";profile["multihop_exit_mode"]="shadowsocks"
+  profile["multihop_enabled"]=true;profile["multihop_entry_id"]="paired-home";profile["multihop_entry_mode"]="wg";profile["multihop_exit_id"]="saved-exit";profile["multihop_exit_mode"]=kind
   for requested in ["local","server","auto"] {
    profile["multihop_execution"]=requested
    let before=try json(profile),runtime=try RouterVPNExternalExitBuilder.build(profile:profile,predecessorFiles:files,predecessorProfile:router),policy=runtime.policy!
@@ -275,11 +280,15 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
    let recompiled=try bridge(["Op":"external-policy","Config":policy.sourceConfig,"Policy":policy.capture]),envelope=try object(Data(recompiled.utf8))
    try check("frozen proposal deterministically owns compile and proof graph",envelope["config_json"] as? String==policy.config && envelope["source_sha256"] as? String==policy.sourceSHA256)
    let all=graph["outbounds"] as! [[String:Any]],final=all.first{$0["tag"] as? String=="custom-exit"}!
+   if layer != "off" {
+    let raw=all.first{$0["tag"] as? String==(requested=="local" ? "custom-exit" : "routervpn-execution-local")}!,wrapper=all.first{$0["tag"] as? String=="routervpn-exit-start-layer"}!
+    try check("exit Start Layer keeps independent native ownership",raw["server"] as? String=="10.99.0.1" && raw["detour"] as? String=="routervpn-exit-start-layer" && wrapper["server"] as? String=="198.51.100.8" && wrapper["type"] as? String==(layer=="aes-256-gcm" ? "shadowsocks" : "routervpn-aes-xor"))
+   }
    if requested=="local" {
-    try check("ordinary Local has no relay/selector owner",captured["execution"]==nil && policy.executionRequested==nil && final["type"] as? String=="shadowsocks")
+    try check("ordinary Local has no relay/selector owner",captured["execution"]==nil && policy.executionRequested==nil && final["type"] as? String==nativeType)
     continue
    }
-   try check("execution has a real native selector and exact transport",final["type"] as? String=="selector" && all.first{$0["tag"] as? String=="routervpn-execution-local"}?["type"] as? String=="shadowsocks")
+   try check("execution has a real native selector and exact transport",final["type"] as? String=="selector" && all.first{$0["tag"] as? String=="routervpn-execution-local"}?["type"] as? String==nativeType)
    let server=all.first{$0["tag"] as? String=="routervpn-execution-server"}!,proposal=(captured["execution"] as! [String:Any])["request"] as! [String:Any]
    try check("server leg uses captured entry and its private per-session listener",server["type"] as? String=="socks" && server["detour"] as? String=="external-entry" && server["server"] as? String=="10.8.0.1" && server["username"] as? String==proposal["listener_username"] as? String && server["password"] as? String==proposal["listener_password"] as? String)
    try check("DNS and node proofs remain independent requirements",metadata["dns_proof"] as? String=="required" && metadata["public_exit_proof"] as? String=="required" && metadata["entry_proof"] as? String=="required" && metadata["dns_detour"] as? String=="custom-exit")
@@ -304,13 +313,15 @@ enum IOSNativeMAXProfile { static let modeIDs:Set<String>=[] }
    }
    for fault in ["host","http","missing","protocol","entry","layer","unpaired"] {
     var wrong=profile,e=external,predecessor=router
-    switch fault {case "host":e["response_probe"]=["url":"https://203.0.113.7/response"];case "http":e["response_probe"]=["url":"http://198.51.100.8/response"];case "missing":e.removeValue(forKey:"response_probe");case "protocol":e["protocol"]="socks5";case "entry":predecessor["node_kind"]="external";case "layer":wrong["start_layer"]="aes-256-gcm";default:predecessor["node_proof_id"]="wrong"}
+    switch fault {case "host":e["response_probe"]=["url":"https://203.0.113.7/response"];case "http":e["response_probe"]=["url":"http://198.51.100.8/response"];case "missing":e.removeValue(forKey:"response_probe");case "protocol":e["protocol"]="wireguard";case "entry":predecessor["node_kind"]="external";case "layer":wrong["start_layer"]="aes-256-gcm";e.removeValue(forKey:"start_layer");default:predecessor["node_proof_id"]="wrong"}
     wrong["external"]=e
     // The provider validates the external Start Layer before invoking this
     // builder. Exercise that actual validator rather than expecting a lower
     // graph compiler to repeat a check owned by the native startup path.
     try reject("unowned server graph is rejected before startup "+fault){try IOSStartLayer.validateExternal(profile:wrong);_ = try RouterVPNExternalExitBuilder.build(profile:wrong,predecessorFiles:files,predecessorProfile:predecessor)}
    }
+  }
+  }
   }
  }
  static func main() {

@@ -32,10 +32,24 @@ enum IOSStartLayer {
     }
 
     static func validateExternal(profile: [String: Any]) throws {
-        let mode = try selectedMode(profile: profile)
-        guard mode == off else {
-            throw error("External nodes own their own transport security; iOS refuses to apply or silently ignore Router VPN Start Layer \(mode).")
+        guard let external = profile["external"] as? [String: Any] else { throw error("External Start Layer has no captured private node.") }
+        let raw = profile["start_layer"]
+        guard raw == nil || raw is String else { throw error("External Start Layer selection must be text.") }
+        let mode = raw as? String ?? off
+        if mode.isEmpty || mode == off {
+            guard external["start_layer"] == nil else { throw error("The provisioned external Start Layer needs its exact selected mode.") }
+            return
         }
+        guard [aes, aesXOR].contains(mode),
+              ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(external["protocol"] as? String ?? ""),
+              let layer = external["start_layer"] as? [String: Any], Set(layer.keys) == Set(["mode", "api", "transport"]),
+              layer["mode"] as? String == mode, layer["api"] is String,
+              let transport = layer["transport"] as? [String: Any],
+              Set(transport.keys) == Set(["type", "tag", "server", "server_port", "method", "password"]) else {
+            throw error("External Start Layer requires its exact selected mode and private provisioned transport.")
+        }
+        // Keep the original graph intact here. The shared compiler validates
+        // and owns the exit wrapper for Local, Server and Compare together.
     }
 
     static func apply(

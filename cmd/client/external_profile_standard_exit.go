@@ -18,6 +18,7 @@ import (
 // but fixed expected-public-IP validation is intentionally replaced later by
 // Tor Project IsTor + observed-exit proof on the running circuit.
 func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit, error) {
+	profile = cloneRouterProfile(profile)
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		return standardExit{}, err
 	}
@@ -25,7 +26,7 @@ func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit
 		return standardExit{}, errors.New("profile is not an external custom node")
 	}
 	ext := profile.External
-	exit := standardExit{ID: profile.ID, Name: profile.Name, Protocol: ext.Protocol, ExpectedPublicIP: ext.ExpectedPublicIP}
+	exit := standardExit{ID: profile.ID, Name: profile.Name, Protocol: ext.Protocol, ExpectedPublicIP: ext.ExpectedPublicIP, ResponseProbe: ext.ResponseProbe, StartLayer: ext.StartLayer}
 
 	switch ext.Protocol {
 	case "wireguard", "amneziawg":

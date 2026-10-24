@@ -148,7 +148,7 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   let edited=edit.bundle!.routerProfiles[0]
   try check("response edit never replaces transport credentials or private assets",edited.external?.shadowsocks==savedExternal.shadowsocks && edit.bundle!.profiles==savedAssets && IOSNodeBundleStore.shared.nodes["other-node"]==Data("unrelated private node bytes".utf8))
   try check("response edit is retained in the private linked node",(try JSONDecoder().decode(ClientBundle.self,from:IOSNodeBundleStore.shared.nodes[ss.id]!)).routerProfiles[0].external?.responseProbe?.url=="https://198.51.100.8:9443/new-response")
-  try reject("imported response cannot move to another protocol"){var imported=edit.bundle!;imported.routerProfiles[0].external?.protocolName="socks5";try IOSExternalExecution.validateImported(imported)}
+  try reject("imported response cannot move to another protocol"){var imported=edit.bundle!;imported.routerProfiles[0].external?.protocolName="wireguard";try IOSExternalExecution.validateImported(imported)}
   try IOSExternalExecution.validateImported(edit.bundle!);checks+=1
   let current=edit.bundle!.routerProfiles[0].external!
   let before=try encoded(edit.bundle!),store=IOSNodeBundleStore.shared.nodes
@@ -174,6 +174,39 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try check("active session editor is idle-only",!edit.updateNodeMetadata(id:ss.id,name:"Active",location:"",latitudeText:"",longitudeText:"",expectedExternal:edit.bundle!.routerProfiles[0].external))
   model.profileMutationBlocked=true
   try reject("active graph cannot be edited"){try model.saveIOSMultihop(enabled:true,entryID:"entry",exitID:"exit",exitMode:"socks5",entryMode:"wg")}
+  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   var node=try profile("paired-"+kind,"external",kind)
+   switch kind {
+   case "shadowsocks":node.external?.shadowsocks=ExternalShadowsocksConfig(server:"198.51.100.8",port:8388,method:"aes-256-gcm",password:" exact secret ")
+   case "hysteria2":node.external?.hysteria2=ExternalHysteria2Config(server:"198.51.100.8",port:443,password:" exact secret ",tlsServerName:"exit.example.test")
+   case "http-connect":node.external?.httpConnect=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8080,username:" exact user ",password:" exact secret ",tlsServerName:nil)
+   case "https-connect":node.external?.httpsConnect=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8443,username:" exact user ",password:" exact secret ",tlsServerName:"exit.example.test")
+   default:break
+   }
+   let editor=RouterVPNModel();editor.bundle=bundle(node);IOSNodeBundleStore.shared.nodes=[node.id:try JSONEncoder().encode(editor.bundle!),"entry":try JSONEncoder().encode(entry)]
+   let original=node.external!,layerKey=Data(repeating:7,count:32).base64EncodedString()
+   try check("every supported native editor retains provisioned response/layer settings "+kind+layer,editor.updateNodeMetadata(id:node.id,name:"Layered",location:"",latitudeText:"",longitudeText:"",expectedExternal:original,responseProbeURL:"https://198.51.100.8:9443/response",responseProbeServerName:"node.example.test",expectedStartLayer:"off",exitStartLayer:layer,exitLayerAPI:layer=="off" ? "":"http://10.99.0.1:8787",exitLayerPort:layer=="off" ? 0:8388,exitLayerKey:layer=="off" ? "":layerKey))
+   node=editor.bundle!.routerProfiles[0]
+   try check("layer editor preserves exact primary credentials",node.external?.shadowsocks==original.shadowsocks && node.external?.hysteria2==original.hysteria2 && node.external?.socks5==original.socks5 && node.external?.httpConnect==original.httpConnect && node.external?.httpsConnect==original.httpsConnect)
+   try IOSExternalExecution.validateImported(editor.bundle!);checks+=1
+   for execution in ["local","server","auto"] {
+    try editor.saveIOSMultihop(enabled:true,entryID:"entry",exitID:node.id,exitMode:kind,execution:execution,entryMode:"wg")
+    try check("each protocol and layer retains its exact saved execution",editor.bundle!.routerProfiles[0].multihopExecution==execution && editor.bundle!.routerProfiles[0].external==node.external)
+   }
+   if layer != "off" {
+    var wrong=editor.bundle!;wrong.routerProfiles[0].startLayer="off"
+    try reject("an imported layer cannot be silently ignored"){try IOSExternalExecution.validateImported(wrong)}
+    let saved=try encoded(editor.bundle!),stored=IOSNodeBundleStore.shared.nodes
+    try check("wrong AES key cannot replace a valid private node",!editor.updateNodeMetadata(id:node.id,name:"Invalid",location:"",latitudeText:"",longitudeText:"",expectedExternal:node.external,responseProbeURL:"https://198.51.100.8:9443/response",expectedStartLayer:layer,exitStartLayer:layer,exitLayerAPI:"http://10.99.0.1:8787",exitLayerPort:8388,exitLayerKey:"wrong-key"))
+    try check("invalid wrapper edit remains transactional",encoded(editor.bundle!)==saved && IOSNodeBundleStore.shared.nodes==stored)
+    for fault in ["extra","null","unknown-transport"] {
+     var profile=try JSONSerialization.jsonObject(with:JSONEncoder().encode(node)) as! [String:Any],ext=profile["external"] as! [String:Any],wrapper=ext["start_layer"] as! [String:Any]
+     if fault=="null" {ext["start_layer"]=NSNull()} else if fault=="extra" {wrapper["unowned"]=true;ext["start_layer"]=wrapper} else {var transport=wrapper["transport"] as! [String:Any];transport["detour"]="unowned";wrapper["transport"]=transport;ext["start_layer"]=wrapper}
+     profile["external"]=ext
+     try reject("typed import rejects discarded layer field "+fault){_ = try JSONDecoder().decode(RouterProfile.self,from:encoded(profile))}
+    }
+   }
+  }}
   print("Apple external entry selection: PASS (\(checks) shipping Swift checks; storage/native-readiness boundaries doubled)")
  }
 }

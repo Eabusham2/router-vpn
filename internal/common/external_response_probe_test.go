@@ -76,7 +76,11 @@ func TestExternalResponseProbeImportRoundTripAndCaptureAreIndependent(t *testing
 	p.External.Protocol = "socks5"
 	p.External.Shadowsocks = nil
 	p.External.SOCKS5 = &ExternalSOCKS5Config{Host: "203.0.113.20", Port: 1080}
+	if _, err := json.Marshal(p); err != nil {
+		t.Fatal("supported SOCKS graph lost its explicit response endpoint", err)
+	}
+	p.External.SOCKS5.Host = "203.0.113.21"
 	if _, err := json.Marshal(p); err == nil {
-		t.Fatal("unsupported external graph silently retained comparison endpoint")
+		t.Fatal("changed transport server silently retained another node's response endpoint")
 	}
 }

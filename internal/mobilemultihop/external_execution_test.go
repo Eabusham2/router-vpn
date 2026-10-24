@@ -20,11 +20,7 @@ import (
 
 func externalExecutionFixture(t *testing.T, selection string) (string, string) {
 	t.Helper()
-	graph, capture := externalTestFixture(t, "shadowsocks", "router-wg")
-	profile := capture["profile"].(map[string]any)
-	profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"], profile["multihop_exit_mode"], profile["multihop_execution"] = true, "saved-entry", "saved-exit", "shadowsocks", selection
-	profile["external"].(map[string]any)["response_probe"] = map[string]any{"url": "https://203.0.113.20/node-response", "server_name": "example.com"}
-	return externalTestJSON(t, graph), externalTestJSON(t, capture)
+	return externalExecutionProtocolFixture(t, "shadowsocks", selection, "")
 }
 
 func TestExternalExecutionCapturePreservesPolicyAndRestoresProvedWinner(t *testing.T) {
@@ -338,6 +334,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 func externalExecutionRequest(t *testing.T, selection, restored string) (*ExternalProofRequest, *externalExecutionEngine) {
 	t.Helper()
 	source, capture := externalExecutionFixture(t, selection)
+	return externalExecutionCapturedRequest(t, source, capture, restored)
+}
+
+func externalExecutionCapturedRequest(t *testing.T, source, capture, restored string) (*ExternalProofRequest, *externalExecutionEngine) {
+	t.Helper()
 	prepared, err := PrepareExternalExecutionCapture(source, capture, restored)
 	if err != nil {
 		t.Fatal(err)
@@ -546,36 +547,39 @@ func TestExternalExecutionFailedLastNodeDNSOrExitGetsNoScore(t *testing.T) {
 	previous := Targets
 	Targets = []string{"http://1.1.1.1/public"}
 	defer func() { Targets = previous }()
-	for _, failure := range []string{"node-response", "dns", "exit", "tls"} {
-		t.Run(failure, func(t *testing.T) {
-			r, e := externalExecutionRequest(t, "auto", "")
-			switch failure {
-			case "node-response":
-				e.badNode[ServerTag] = true
-			case "dns":
-				e.badDNS[ServerTag] = true
-			case "exit":
-				e.badPublic[ServerTag] = true
-			case "tls":
-				r.execution.externalResponseTLS = &tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12}
-			}
-			_, err := r.Run()
-			if failure == "tls" {
-				if err == nil || r.Healthy() {
-					t.Fatal("unverified TLS node endpoint won")
+	for _, protocol := range externalExecutionProtocols {
+		for _, failure := range []string{"node-response", "dns", "exit", "tls"} {
+			t.Run(protocol+"/"+failure, func(t *testing.T) {
+				source, capture := externalExecutionProtocolFixture(t, protocol, "auto", "aes-256-gcm+xor-whitening")
+				r, e := externalExecutionCapturedRequest(t, source, capture, "")
+				switch failure {
+				case "node-response":
+					e.badNode[ServerTag] = true
+				case "dns":
+					e.badDNS[ServerTag] = true
+				case "exit":
+					e.badPublic[ServerTag] = true
+				case "tls":
+					r.execution.externalResponseTLS = &tls.Config{RootCAs: x509.NewCertPool(), MinVersion: tls.VersionTLS12}
 				}
-				return
-			}
-			if err != nil || r.Execution() != "local" {
-				t.Fatal("valid local not retained after rejected server", err, r.ProgressJSON())
-			}
-			var p Progress
-			_ = json.Unmarshal([]byte(r.ProgressJSON()), &p)
-			for _, m := range p.Measurements {
-				if m.Candidate.Execution == "server" && (m.Eligible || m.ScoreMS != nil) {
-					t.Fatal("failed candidate received a score")
+				_, err := r.Run()
+				if failure == "tls" {
+					if err == nil || r.Healthy() || r.Execution() != "" {
+						t.Fatal("unverified TLS node endpoint won")
+					}
+				} else if err != nil || r.Execution() != "local" {
+					t.Fatal("valid local not retained after rejected server", err, r.ProgressJSON())
 				}
-			}
-		})
+				var p Progress
+				if json.Unmarshal([]byte(r.ProgressJSON()), &p) != nil || len(p.Measurements) != 2 {
+					t.Fatal("rejected candidates lost their truthful progress record")
+				}
+				for _, m := range p.Measurements {
+					if (m.Candidate.Execution == "server" || failure == "tls") && (m.Eligible || m.ScoreMS != nil) {
+						t.Fatal("failed candidate received a score")
+					}
+				}
+			})
+		}
 	}
 }

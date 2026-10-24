@@ -6,6 +6,7 @@ import (
 	"maps"
 	"net"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 
@@ -45,9 +46,17 @@ func desktopExternalCapture(control common.RouterProfile, e standardExit) (commo
 	if err := validateStandardExit(&e); err != nil {
 		return common.RouterProfile{}, err
 	}
+	return desktopExternalCaptureUnchecked(control, e)
+}
+
+func desktopExternalCaptureUnchecked(control common.RouterProfile, e standardExit) (common.RouterProfile, error) {
 	profile := control
 	profile.ID, profile.Name, profile.NodeKind, profile.Endpoint = e.ID, e.Name, "external", e.Server
-	profile.External = &common.ExternalNodeConfig{Protocol: e.Protocol, ExpectedPublicIP: e.ExpectedPublicIP}
+	profile.External = &common.ExternalNodeConfig{Protocol: e.Protocol, ExpectedPublicIP: e.ExpectedPublicIP, ResponseProbe: e.ResponseProbe, StartLayer: e.StartLayer}
+	profile.StartLayer = common.StartLayerOff
+	if e.StartLayer != nil {
+		profile.StartLayer = e.StartLayer.Mode
+	}
 	wireGuard := common.ExternalWireGuardConfig{PrivateKey: e.WGPrivateKey, Addresses: append([]string(nil), e.WGAddresses...), PeerPublicKey: e.WGPeerPublicKey, PresharedKey: e.WGPreSharedKey, Endpoint: net.JoinHostPort(e.Server, strconv.Itoa(e.ServerPort)), AllowedIPs: append([]string(nil), e.WGAllowedIPs...), MTU: e.WGMTU, PersistentKeepalive: e.WGKeepalive}
 	switch e.Protocol {
 	case "amneziawg":
@@ -64,14 +73,16 @@ func desktopExternalCapture(control common.RouterProfile, e standardExit) (commo
 		profile.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: e.Server, Port: e.ServerPort, Method: e.Method, Password: e.Secret}
 	case "hysteria2":
 		profile.External.Hysteria2 = &common.ExternalHysteria2Config{Server: e.Server, Port: e.ServerPort, Password: e.Secret, TLSServerName: e.TLSServerName}
+	case "openvpn":
+		profile.External.OpenVPN = &common.ExternalOpenVPNConfig{Config: e.OpenVPNConfig, Username: e.Username, Password: e.Password}
 	default:
-		return common.RouterProfile{}, errors.New("desktop AmneziaWG policy requires a native ordinary graph")
+		return common.RouterProfile{}, errors.New("desktop external policy requires a native ordinary graph")
 	}
-	return profile, nil
+	return cloneRouterProfile(profile), nil
 }
 
 func compileDesktopAmneziaPolicy(graph map[string]any, control common.RouterProfile, entry *common.RouterProfile, exit standardExit) (map[string]any, error) {
-	if exit.Protocol != "amneziawg" && (entry == nil || entry.External == nil || entry.External.Protocol != "amneziawg") {
+	if exit.Protocol != "amneziawg" && exit.StartLayer == nil && (entry == nil || entry.External == nil || entry.External.Protocol != "amneziawg" && entry.External.StartLayer == nil) {
 		return graph, nil
 	}
 	profile, err := desktopExternalCapture(control, exit)
@@ -114,6 +125,21 @@ func compileDesktopAmneziaPolicy(graph map[string]any, control common.RouterProf
 }
 
 func desktopStandardEngineEnvironment(environment []string, amnezia bool) []string {
+	engine := "stock"
+	if amnezia {
+		engine = "amnezia"
+	}
+	return desktopSelectedStandardEngineEnvironment(environment, engine)
+}
+
+func desktopExternalEngineEnvironment(environment []string, native, amnezia bool) []string {
+	if native {
+		return desktopSelectedStandardEngineEnvironment(environment, "native")
+	}
+	return desktopStandardEngineEnvironment(environment, amnezia)
+}
+
+func desktopSelectedStandardEngineEnvironment(environment []string, engine string) []string {
 	result := make([]string, 0, len(environment)+1)
 	for _, value := range environment {
 		upper := strings.ToUpper(value)
@@ -121,15 +147,19 @@ func desktopStandardEngineEnvironment(environment []string, amnezia bool) []stri
 			result = append(result, value)
 		}
 	}
-	engine := "stock"
-	if amnezia {
-		engine = "amnezia"
-	}
 	result = append(result, "HOMEVPN_STANDARD_ENGINE="+engine)
-	if amnezia {
+	if engine == "amnezia" {
 		executable, err := os.Executable()
 		if err == nil {
 			result = append(result, "HOMEVPN_AMNEZIA_CONTROLLER="+executable, "HOMEVPN_AMNEZIA_PACKAGE="+desktopAmneziaPackageRoot())
+		}
+	}
+	if engine == "native" {
+		executable, err := os.Executable()
+		if err == nil {
+			root := desktopAmneziaPackageRoot()
+			result = append(result, "HOMEVPN_NATIVE_CONTROLLER="+executable, "HOMEVPN_NATIVE_PACKAGE="+root)
+			result = nativeLibraryEnvironment(result, filepath.Join(root, "runtime", "native"))
 		}
 	}
 	return result

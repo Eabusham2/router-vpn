@@ -26,7 +26,12 @@ extension RouterVPNModel {
         longitudeText: String,
         expectedExternal: ExternalNodeConfig? = nil,
         responseProbeURL: String = "",
-        responseProbeServerName: String = ""
+        responseProbeServerName: String = "",
+        expectedStartLayer: String = "off",
+        exitStartLayer: String? = nil,
+        exitLayerAPI: String = "",
+        exitLayerPort: Int = 0,
+        exitLayerKey: String = ""
     ) -> Bool {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before editing node metadata."; return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -51,12 +56,30 @@ extension RouterVPNModel {
         let trimmedLocation = location.trimmingCharacters(in: .whitespacesAndNewlines)
         do {
             let probe: ExternalResponseProbe?
+            let layerUpdate: ExternalStartLayerUpdate?
             if let expectedExternal {
-                guard expectedExternal.protocolName == "shadowsocks", let transport = expectedExternal.shadowsocks else { throw IOSExternalExecution.issue() }
-                probe = try IOSExternalExecution.responseProbe(host: transport.server, url: responseProbeURL, serverName: responseProbeServerName)
+                guard let host = expectedExternal.serverExecutionHost else { throw IOSExternalExecution.issue() }
+                probe = try IOSExternalExecution.responseProbe(host: host, url: responseProbeURL, serverName: responseProbeServerName)
             } else {
                 guard responseProbeURL.isEmpty && responseProbeServerName.isEmpty else { throw IOSExternalExecution.issue() }
                 probe = nil
+            }
+            if let exitStartLayer {
+                guard let expectedExternal, let host = expectedExternal.serverExecutionHost else { throw IOSExternalExecution.issue() }
+                let layer: ExternalStartLayer?
+                if exitStartLayer == "off" {
+                    guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
+                    layer = nil
+                } else {
+                    let raw: [String: Any] = ["mode": exitStartLayer, "api": exitLayerAPI,
+                        "transport": ["type": "shadowsocks", "tag": expectedExternal.startLayer?.transport.tag ?? "provisioned-exit-layer",
+                            "server": host, "server_port": exitLayerPort, "method": "2022-blake3-aes-256-gcm", "password": exitLayerKey]]
+                    layer = try JSONDecoder().decode(ExternalStartLayer.self, from: JSONSerialization.data(withJSONObject: raw))
+                }
+                layerUpdate = ExternalStartLayerUpdate(expectedMode: expectedStartLayer, mode: exitStartLayer, layer: layer)
+            } else {
+                guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
+                layerUpdate = nil
             }
             let replacement = try IOSNodeBundleStore.shared.updateMetadata(
                 profileID: id,
@@ -66,7 +89,8 @@ extension RouterVPNModel {
                 latitude: latitude,
                 longitude: longitude,
                 expectedExternal: expectedExternal,
-                responseProbe: probe
+                responseProbe: probe,
+                startLayerUpdate: layerUpdate
             )
             if bundle?.routerProfiles.contains(where: { $0.id == id }) == true {
                 try importBundle(replacement)

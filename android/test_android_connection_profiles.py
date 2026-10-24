@@ -82,7 +82,7 @@ final class AndroidTorProfile {
  static void validate(AndroidStandardExitStore.Entry exit)throws Exception{AndroidConnectionProfilePolicy.external(exit.torPolicy,exit.protocol);if("tor-bridge".equals(exit.protocol)&&exit.torBridges.isEmpty())throw new IllegalArgumentException("missing bridge");}
 }
 final class AndroidExternalPolicy {
- private static final Set<String> POLICY=new HashSet<>(Arrays.asList("dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","effective_mtu"));
+ private static final Set<String> POLICY=new HashSet<>(Arrays.asList("dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","effective_mtu","start_layer"));
  static final int MAX_CAPTURE=8*1024*1024;static boolean bounded(String value,int max){return value!=null&&!value.isEmpty()&&value.length()<=max;}
  EXTERNAL_METHODS
 }
@@ -174,13 +174,18 @@ public final class ConnectionProfilesHarness {
   f.store.selectExternalPath(f.exits.get(exit),null,"wg");f.store.update(r.id,"Direct "+exit);check(f.store.list().size()==1&&f.store.list().get(0).name.equals("Direct "+exit),"Update preserves profile ID/count");f.otherSelection();f.store.load(r.id);check(f.store.currentExternalPath(exit).direct()&&!f.prefs.getBoolean("multihop_on",true),"direct Update/Load clears old hops");surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.direct&&surface.connection.entry==null&&surface.connection.exit.id.equals(exit),"shipping map Connect dispatches direct saved external path");f.store.delete(r.id);check(f.store.list().isEmpty(),"Delete external profile");
  }
  static void externalExecution(Path root)throws Exception{
-  for(String execution:List.of("server","auto")){
-   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("paired-ss",false);exit.protocol="shadowsocks";exit.method="2022-blake3-aes-256-gcm";exit.secret=Base64.getEncoder().encodeToString(new byte[32]);exit.responseProbe=new JSONObject().put("url","https://198.51.100.8:8443/response").put("server_name","paired.example.test");f.exits.save(exit);
+  for(String protocol:List.of("shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String execution:List.of("local","server","auto")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("paired-"+protocol,false);exit.protocol=protocol;exit.tlsServerName="exit.example.test";exit.method="2022-blake3-aes-256-gcm";exit.secret=Base64.getEncoder().encodeToString(new byte[32]);exit.responseProbe=new JSONObject().put("url","https://198.51.100.8:8443/response").put("server_name","paired.example.test");if(!layer.equals("off")){exit.policy.put("start_layer",layer);exit.startLayer=new JSONObject().put("mode",layer).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",exit.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",Base64.getEncoder().encodeToString("L".repeat(32).getBytes(StandardCharsets.UTF_8))));}f.exits.save(exit);
    f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("paired execution");String secret=exit.secret;check(!text(f.rows).contains(secret)&&!text(f.rows).contains("response_probe"),"connection choices duplicated private node material");
+   if(!layer.equals("off"))check(!text(f.rows).contains(exit.startLayer.getJSONObject("transport").getString("password"))&&!text(f.rows).contains("10.99.0.1")&&f.store.list().get(0).startLayer.equals(layer),"saved layer choice leaked its private provisioned transport");
    f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);check(selected.execution.equals(execution)&&selected.entry.id.equals(f.first.id),"profile load discarded external execution choice");
    ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution),"main Connect discarded external execution");
    AndroidStandardExitStore.Entry copied=AndroidStandardExitStore.copy(exit);copied.responseProbe.put("url","https://198.51.100.8/changed");check(!copied.responseProbe.toString().equals(exit.responseProbe.toString()),"response endpoint aliases saved credentials");
-   State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg",execution),"direct path server owner");before.same(f,"direct execution rejection");
+   if(!execution.equals("local")){State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg",execution),"direct path server owner");before.same(f,"direct execution rejection");}
+   if(!layer.equals("off")){
+    AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(exit);String other=layer.equals("aes-256-gcm")?"aes-256-gcm+xor-whitening":"aes-256-gcm";changed.policy.put("start_layer",other);changed.startLayer.put("mode",other);f.exits.save(changed);
+    State before=new State(f);rejected(()->f.store.load(saved.id),"saved choice cannot replace a different provisioned private layer");before.same(f,"mismatched layer profile restoration");
+   }
   }
  }
  static void externalDefaultHome(Path root)throws Exception{

@@ -34,7 +34,89 @@ def external_fixture():
         response_probe=dict(url='https://203.0.113.20/response',server_name='node.example')))
     return dict(selectedRouterID=profile['id'],routerProfiles=[profile])
 
+def external_proxy_fixture(protocol, layer=''):
+    source = external_fixture();profile = source['routerProfiles'][0]
+    ext = profile['external'];del ext['shadowsocks'];ext['protocol'] = protocol
+    if protocol == 'shadowsocks':
+        proxy = dict(server='203.0.113.20',port=8388,method='aes-256-gcm',password='captured-private-key')
+    elif protocol == 'hysteria2':
+        proxy = dict(server='203.0.113.20',port=443,password='captured-private-key',tls_server_name='node.example')
+    else:
+        proxy = dict(host='203.0.113.20',port=1080,username='private-proxy-user',password='captured-private-key')
+        if protocol == 'https-connect':proxy['tls_server_name']='node.example'
+    ext[protocol.replace('-','_')]=proxy
+    if layer:
+        profile['start_layer']=layer
+        ext['start_layer']=dict(mode=layer,api='http://10.88.0.1:8787',transport=dict(
+            type='shadowsocks',tag='saved-layer',server='203.0.113.20',server_port=8388,
+            method='2022-blake3-aes-256-gcm',password=base64.b64encode(b's'*32).decode()))
+    return source
+
 class ExecutionTests(unittest.TestCase):
+    def test_all_external_proxy_and_exit_layer_pairings_preserve_private_capture(self):
+        for protocol in ('shadowsocks','hysteria2','socks5','http-connect','https-connect'):
+            for layer in ('','aes-256-gcm','aes-256-gcm+xor-whitening'):
+                with self.subTest(protocol=protocol,layer=layer):
+                    source=external_proxy_fixture(protocol,layer);before=copy.deepcopy(source)
+                    paired=pairing.pair(source,'external-exit')
+                    self.assertEqual(source,before);self.assertEqual(len(paired),1)
+                    result=paired[0];transport=result['transport']
+                    self.assertEqual(result['mode'],protocol)
+                    self.assertEqual(result['node_id'],'');self.assertEqual(result['dns_server'],'')
+                    self.assertEqual(result['external']['expected_public_ip'],'203.0.113.88')
+                    self.assertEqual(transport['password'],'captured-private-key')
+                    self.assertEqual(transport['server'],'203.0.113.20')
+                    if protocol in ('socks5','http-connect','https-connect'):
+                        self.assertEqual(transport['username'],'private-proxy-user')
+                        self.assertEqual(transport['type'],'socks' if protocol=='socks5' else 'http')
+                    if protocol in ('hysteria2','https-connect'):
+                        self.assertEqual(transport['tls'],dict(enabled=True,server_name='node.example'))
+                    else:self.assertNotIn('tls',transport)
+                    if layer:
+                        self.assertEqual(result['start_layer'],source['routerProfiles'][0]['external']['start_layer'])
+                        result['start_layer']['transport']['password']='changed-after-pairing'
+                    else:self.assertNotIn('start_layer',result)
+                    result['external']['response_probe']['url']='changed-after-pairing'
+                    transport['password']='changed-after-pairing'
+                    self.assertEqual(source,before)
+
+    def test_external_proxy_pairing_refuses_empty_or_malformed_authentication(self):
+        for protocol in ('shadowsocks','hysteria2','socks5','http-connect','https-connect'):
+            for secret in ('','a\x00b','a\nb','a\rb','x'*4097,'\ud800',None,True):
+                source=external_proxy_fixture(protocol)
+                source['routerProfiles'][0]['external'][protocol.replace('-','_')]['password']=secret
+                with self.subTest(protocol=protocol),self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+        for protocol in ('socks5','http-connect','https-connect'):
+            source=external_proxy_fixture(protocol)
+            proxy=source['routerProfiles'][0]['external'][protocol.replace('-','_')]
+            del proxy['username'];del proxy['password']
+            with self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+        for protocol in ('hysteria2','https-connect'):
+            for value in ('','localhost','node.example.','node.example\n','fe80::1%en0'):
+                source=external_proxy_fixture(protocol)
+                source['routerProfiles'][0]['external'][protocol.replace('-','_')]['tls_server_name']=value
+                with self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+        for protocol in ('socks5','http-connect','https-connect'):
+            for field,value in [('username','x'*256),('password','x'*256 if protocol=='socks5' else 'bad\nsecret'),('detour','direct'),('tls_server_name','node.example' if protocol=='http-connect' else None)]:
+                source=external_proxy_fixture(protocol)
+                source['routerProfiles'][0]['external'][protocol.replace('-','_')][field]=value
+                with self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+
+    def test_external_pairing_refuses_unselected_or_foreign_exit_layers(self):
+        for protocol in ('shadowsocks','hysteria2','socks5','http-connect','https-connect'):
+            for mutate in (
+                lambda p:p.update(start_layer='off'),
+                lambda p:p.update(start_layer='aes-256-gcm+xor-whitening'),
+                lambda p:p['external'].update(start_layer=None),
+                lambda p:p['external']['start_layer'].update(helper='opaque'),
+                lambda p:p['external']['start_layer'].update(api='http://203.0.113.20:8787'),
+                lambda p:p['external']['start_layer']['transport'].update(server='203.0.113.21'),
+                lambda p:p['external']['start_layer']['transport'].update(password='not-a-captured-aes-key'),
+                lambda p:p['external']['start_layer']['transport'].update(detour='foreign'),
+            ):
+                source=external_proxy_fixture(protocol,'aes-256-gcm');mutate(source['routerProfiles'][0])
+                with self.subTest(protocol=protocol),self.assertRaises(ValueError):pairing.pair(source,'external-exit')
+
     def test_external_pair_keeps_transport_credentials_and_independent_identity(self):
         source=external_fixture();before=copy.deepcopy(source)
         result=pairing.pair(source,'external-exit')

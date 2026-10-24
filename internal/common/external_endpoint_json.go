@@ -1,6 +1,7 @@
 package common
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -89,6 +90,11 @@ func normalizeExternalJSONWireGuardEndpoint(value string) (string, error) {
 }
 
 func (e *ExternalNodeConfig) UnmarshalJSON(data []byte) error {
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(data, &fields); err != nil { return err }
+	if raw, exists := fields["start_layer"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("external Start Layer must be an explicit private provision or absent")
+	}
 	var decoded externalNodeConfigJSON
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err

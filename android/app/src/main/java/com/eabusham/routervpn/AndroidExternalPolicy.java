@@ -22,7 +22,7 @@ final class AndroidExternalPolicy {
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
             "fastest_dns_host", "fastest_dns_latency_ms", "dns_results", "dns_bootstrap", "ipv6_mode", "home_lan_access",
-            "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu"));
+            "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu", "start_layer"));
 
     static boolean supports(String protocol) {
         return Arrays.asList("wireguard", "amneziawg", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn").contains(protocol);
@@ -51,7 +51,7 @@ final class AndroidExternalPolicy {
         for (int i = 0; keys != null && i < keys.length(); i++) {
             if (!POLICY.contains(keys.getString(i))) throw new IllegalArgumentException("External settings contain an unowned policy field.");
         }
-        for (String key : new String[]{"dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "fastest_dns_host", "ipv6_mode", "mtu_policy"}) {
+        for (String key : new String[]{"dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "fastest_dns_host", "ipv6_mode", "mtu_policy", "start_layer"}) {
             if (policy.has(key) && (!(policy.get(key) instanceof String) || policy.getString(key).length() > 4096)) throw new IllegalArgumentException("External settings require a bounded text value for " + key + ".");
         }
         if (!Arrays.asList("", "home", "rescue", "custom", "fastest", "dot", "doh", "doh3").contains(policy.optString("dns_mode", ""))) throw new IllegalArgumentException("Choose the exact saved DNS policy.");
@@ -63,6 +63,7 @@ final class AndroidExternalPolicy {
             Object raw = policy.get("dns_port");
             if (!(raw instanceof Number) || ((Number) raw).doubleValue() != ((Number) raw).intValue() || ((Number) raw).intValue() < 0 || ((Number) raw).intValue() > 65535) throw new IllegalArgumentException("DNS port must be an integer from 1 through 65535, or zero for the protocol default.");
         }
+        if (!Arrays.asList("", "off", "aes-256-gcm", "aes-256-gcm+xor-whitening").contains(policy.optString("start_layer", "off"))) throw new IllegalArgumentException("Choose the exact provisioned external Start Layer.");
         String mtu = policy.optString("mtu_policy", "auto");
         if (!Arrays.asList("auto", "fixed", "manual").contains(mtu)) throw new IllegalArgumentException("Choose Auto or Fixed MTU.");
         if (!"auto".equals(mtu)) {
@@ -76,6 +77,7 @@ final class AndroidExternalPolicy {
         if (exit == null || !supports(exit.protocol)) throw new IllegalArgumentException("Choose an ordinary native external exit.");
         JSONObject policy = exit.policy == null ? new JSONObject() : copy(exit.policy);
         checkPolicy(policy);
+        AndroidStandardExitStore.validateStartLayer(exit);
         // The entry supplies Home's private resolver identity during native
         // composition. Its independent DNS selection cannot replace this exit's.
         if (!policy.has("ipv6_mode")) policy.put("ipv6_mode", "on");
@@ -87,6 +89,7 @@ final class AndroidExternalPolicy {
         }
         JSONObject ext = new JSONObject().put("protocol", protocol(exit.protocol)).put("expected_public_ip", exit.expectedPublicIp);
         if(exit.responseProbe!=null&&exit.responseProbe.length()!=0)ext.put("response_probe",copy(exit.responseProbe));
+        if(exit.startLayer!=null)ext.put("start_layer",copy(exit.startLayer));
         JSONObject transport;
         switch (exit.protocol) {
             case "wireguard": case "amneziawg":
@@ -146,7 +149,7 @@ final class AndroidExternalPolicy {
             if(plan!=null){
                 String requested=plan.getString("selection");
                 if(!Arrays.asList("local","server","auto").contains(requested)||!requested.equals(metadata.optString("execution"))
-                        ||!"https-response-time".equals(metadata.optString("last_node_measurement"))||!"shadowsocks".equals(selected.getString("protocol"))||!selected.has("entry"))throw new IllegalStateException("External execution belongs to another captured path.");
+                        ||!"https-response-time".equals(metadata.optString("last_node_measurement"))||!Arrays.asList("shadowsocks","hysteria2","socks5","http-connect","https-connect").contains(selected.getString("protocol"))||!selected.has("entry"))throw new IllegalStateException("External execution belongs to another captured path.");
             }else if(selected.has("execution")||metadata.has("execution")||metadata.has("last_node_measurement"))throw new IllegalStateException("External execution has no captured native owner.");
         }
     }

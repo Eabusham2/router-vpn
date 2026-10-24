@@ -36,6 +36,12 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 		{ID: "fixture", Mode: "wg", DNS: "10.88.0.1", NodeID: strings.Repeat("b", 64), Transport: map[string]any{"type": "wireguard", "private_key": base64.StdEncoding.EncodeToString(key.Bytes()), "address": []string{"10.88.0.2/32"}, "mtu": 1280, "peers": []any{map[string]any{"address": "192.0.2.2", "port": 51820, "public_key": base64.StdEncoding.EncodeToString(peer.PublicKey().Bytes()), "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}},
 	}
 	configurations = append(configurations, awgExit(t, "awg2-fast"), awgExit(t, "awg2-strong"))
+	for _, protocol := range externalProtocols {
+		for _, layer := range externalLayers {
+			exit, _ := externalProxyFixture(t, protocol, layer)
+			configurations = append(configurations, exit)
+		}
+	}
 	for _, exit := range configurations {
 		cfg := config()
 		cfg.Exits = []Exit{exit}
@@ -47,6 +53,16 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 		q := req()
 		q.ExitID = exit.ID
 		q.ExitMode = exit.Mode
+		q.ExitStartLayer = LayerMode(exit.StartLayer)
+		name := exit.Mode
+		if exit.External != nil {
+			name = "external-" + exit.Mode + "-" + strings.ReplaceAll(q.ExitStartLayer, "+", "-")
+			q.Port, q.Username, q.Password = 26240, strings.Repeat("1", 48), strings.Repeat("2", 48)
+			q, e = AuthenticateExternalRequest(exit, q)
+			if e != nil {
+				t.Fatal(e)
+			}
+		}
 		if _, e = m.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), q); e != nil {
 			t.Fatal(e)
 		}
@@ -54,8 +70,33 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 		if e = json.Unmarshal(r.configs[0], &plan); e != nil {
 			t.Fatal(e)
 		}
-		if e = os.WriteFile(filepath.Join(root, exit.Mode+".json"), r.configs[0], 0600); e != nil {
+		if e = os.WriteFile(filepath.Join(root, name+".json"), r.configs[0], 0600); e != nil {
 			t.Fatal(e)
+		}
+	}
+	for _, protocol := range []string{"socks5", "http-connect", "https-connect"} {
+		for _, mode := range externalLayers[1:] {
+			source, layer := externalProxySource(t, protocol, mode)
+			transport, err := ExternalTransport(protocol, source)
+			if err != nil {
+				t.Fatal(err)
+			}
+			delete(transport, "username")
+			delete(transport, "password")
+			inner, outer, err := WrapStartLayer(transport, protocol, layer, ExitStartLayerTag, "")
+			if err != nil {
+				t.Fatal(err)
+			}
+			// Local anonymous proxies remain usable inside their imported layer;
+			// they are never advertised as authenticated Server candidates.
+			plan, err := json.Marshal(map[string]any{"outbounds": []any{inner, outer}, "route": map[string]any{"final": "exit"}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			name := "local-anonymous-" + protocol + "-" + strings.ReplaceAll(mode, "+", "-") + ".json"
+			if err := os.WriteFile(filepath.Join(root, name), plan, 0600); err != nil {
+				t.Fatal(err)
+			}
 		}
 	}
 }

@@ -419,12 +419,21 @@ public final class StandardExitActivity extends Activity {
         EditText lan=field("Private LAN CIDRs, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Fixed MTU 1280–9000 (blank: Auto baseline)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if(!"auto".equals(policy.optString("mtu_policy","auto")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         final ExternalStartupControls startup=new ExternalStartupControls(form,captured);
+        Spinner exitLayer=choice(new String[]{"Off","AES-256-GCM","AES-256-GCM + XOR whitening"});
+        String layerMode=policy.optString("start_layer","off");exitLayer.setSelection("aes-256-gcm".equals(layerMode)?1:"aes-256-gcm+xor-whitening".equals(layerMode)?2:0);
+        EditText layerAPI=field("Provisioned private service API URL",false),layerPort=field("Provisioned AES port",false),layerKey=field("Provisioned AES-256-GCM key",true);layerPort.setInputType(InputType.TYPE_CLASS_NUMBER);
+        if(AndroidStandardExitStore.serverExecutionProtocol(captured.protocol)){
+            form.addView(text("Exit Start Layer",14,true));form.addView(exitLayer);form.addView(layerAPI);form.addView(layerPort);form.addView(layerKey);
+            form.addView(text("Use the AES layer already provisioned on this same external server. Its private service address and key stay with this saved node. XOR whitening adds obfuscation to authenticated AES; it requires the provisioned whitening listener on port 8389.",13,false));
+            if(captured.startLayer!=null){try{JSONObject transport=captured.startLayer.getJSONObject("transport");layerAPI.setText(captured.startLayer.getString("api"));layerPort.setText(Integer.toString(transport.getInt("server_port")));layerKey.setText(transport.getString("password"));}catch(Exception invalid){toast("The saved exit layer could not be restored; its settings were not changed.");return;}}
+            exitLayer.setOnItemSelectedListener(new android.widget.AdapterView.OnItemSelectedListener(){public void onNothingSelected(android.widget.AdapterView<?> parent){}public void onItemSelected(android.widget.AdapterView<?> parent,View view,int position,long id){layerAPI.setEnabled(position!=0);layerPort.setEnabled(position!=0);layerKey.setEnabled(position!=0);}});
+        }
         form.addView(text("Home uses the selected Router VPN entry's private AdGuard and requires that entry's authenticated proof. Direct connections need an explicit reachable resolver. Resolver hostnames use only the bootstrap you save here, through this path. Auto MTU is an unmeasured baseline until this external exit provides an authenticated packet-probe owner; saved measurements are not reused. A TCP-only transport rejects unsupported UDP and DoH3 settings.",13,false));
         EditText responseURL=field("This server's HTTPS response URL (required for Server / Compare both)",false),responseName=field("Response TLS server name (optional)",false);
-        if("shadowsocks".equals(captured.protocol)){
+        if(AndroidStandardExitStore.serverExecutionProtocol(captured.protocol)){
             responseURL.setText(captured.responseProbe.optString("url",""));responseName.setText(captured.responseProbe.optString("server_name",""));
             form.addView(text("Server / Compare both",14,true));form.addView(responseURL);form.addView(responseName);
-            form.addView(text("Enter the HTTPS endpoint provided on this Shadowsocks server's own public address. Its certificate is verified. Server execution also needs this exit paired in the Router VPN entry's private registry; Compare both measures Local and Server before choosing a proved path.",13,false));
+            form.addView(text("Enter the HTTPS endpoint provided on this saved server's own public address. Its certificate is verified. Server execution also needs this exit paired in the Router VPN entry's private registry; Compare both measures Local and Server before choosing a proved path.",13,false));
         }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
@@ -451,7 +460,12 @@ public final class StandardExitActivity extends Activity {
                 }
                 p.put("ipv6_mode",new String[]{"on","auto","off"}[ipv6.getSelectedItemPosition()]).put("home_lan_access",!blockLAN.isChecked()).put("home_lan_cidrs",new JSONArray(csv(lan.getText().toString())));
                 String fixed=mtu.getText().toString().trim();p.put("mtu_policy",fixed.isEmpty()?"auto":"fixed");if(!fixed.isEmpty())p.put("manual_mtu",Integer.parseInt(fixed));AndroidExternalPolicy.checkPolicy(p);next.policy=p;
-                if("shadowsocks".equals(next.protocol)){
+                if(AndroidStandardExitStore.serverExecutionProtocol(next.protocol)){
+                    int selectedLayer=exitLayer.getSelectedItemPosition();String chosenLayer=new String[]{"off","aes-256-gcm","aes-256-gcm+xor-whitening"}[selectedLayer];p.put("start_layer",chosenLayer);next.startLayer=null;
+                    if(selectedLayer!=0){String tag=captured.startLayer==null?"provisioned-exit-layer":captured.startLayer.getJSONObject("transport").getString("tag");JSONObject transport=new JSONObject().put("type","shadowsocks").put("tag",tag).put("server",next.server).put("server_port",Integer.parseInt(layerPort.getText().toString().trim())).put("method","2022-blake3-aes-256-gcm").put("password",layerKey.getText().toString());next.startLayer=new JSONObject().put("mode",chosenLayer).put("api",layerAPI.getText().toString().trim()).put("transport",transport);}
+                    AndroidStandardExitStore.validateStartLayer(next);
+                }
+                if(AndroidStandardExitStore.serverExecutionProtocol(next.protocol)){
                     String url=responseURL.getText().toString().trim(),tls=responseName.getText().toString().trim();next.responseProbe=new JSONObject();
                     if(!url.isEmpty())next.responseProbe.put("url",url);if(!tls.isEmpty())next.responseProbe.put("server_name",tls);AndroidStandardExitStore.validateResponseProbe(next);
                 }
@@ -490,7 +504,7 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void chooseExecution(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String mode){
-        if(!"shadowsocks".equals(exit.protocol)){requestConnect(entry,exit,mode);return;}
+        if(!AndroidStandardExitStore.serverExecutionProtocol(exit.protocol)){requestConnect(entry,exit,mode);return;}
         new AlertDialog.Builder(this).setCustomTitle(choiceHeader("External path execution","Local runs the exit on this device. Server uses an isolated paired session on the entry. Compare both measures both paths and keeps the lower valid average response time."))
                 .setItems(new String[]{"Local","Server","Compare both"},(d,w)->requestConnect(entry,exit,mode,new String[]{"local","server","auto"}[w])).setNegativeButton("Cancel",null).show();
     }

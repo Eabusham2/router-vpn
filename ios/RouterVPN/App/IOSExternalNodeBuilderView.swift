@@ -58,7 +58,11 @@ extension RouterVPNModel {
         wgKeepalive: Int? = nil,
         awgParameters: [String: String] = [:],
         responseProbeURL: String = "",
-        responseProbeServerName: String = ""
+        responseProbeServerName: String = "",
+        exitStartLayer: String = "off",
+        exitLayerAPI: String = "",
+        exitLayerPort: Int = 0,
+        exitLayerKey: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -176,9 +180,6 @@ extension RouterVPNModel {
                 throw NSError(domain: "RouterVPN.ExternalNode", code: 11, userInfo: [NSLocalizedDescriptionKey: "Choose a supported Shadowsocks method and password/PSK."])
             }
             external["shadowsocks"] = ["server": server, "port": port, "method": normalizedMethod, "password": secret]
-            if let probe = try IOSExternalExecution.responseProbe(host: server, url: responseProbeURL, serverName: responseProbeServerName) {
-                external["response_probe"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(probe))
-            }
         case "hysteria2":
             let sni = tlsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !secret.isEmpty, iosExternalSafeHostname(sni) else {
@@ -187,7 +188,22 @@ extension RouterVPNModel {
             external["hysteria2"] = ["server": server, "port": port, "password": secret, "tls_server_name": sni]
         default: fatalError("guarded protocol")
         }
-        guard protocolName == "shadowsocks" || (responseProbeURL.isEmpty && responseProbeServerName.isEmpty) else { throw IOSExternalExecution.issue() }
+        if ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
+            if let probe = try IOSExternalExecution.responseProbe(host: server, url: responseProbeURL, serverName: responseProbeServerName) {
+                external["response_probe"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(probe))
+            }
+        } else {
+            guard responseProbeURL.isEmpty && responseProbeServerName.isEmpty else { throw IOSExternalExecution.issue() }
+        }
+        if exitStartLayer != "off" {
+            guard ExternalNodeConfig.serverExecutionProtocols.contains(protocolName),
+                  ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(exitStartLayer) else { throw IOSExternalExecution.issue() }
+            external["start_layer"] = ["mode": exitStartLayer, "api": exitLayerAPI,
+                "transport": ["type": "shadowsocks", "tag": "provisioned-exit-layer", "server": server,
+                    "server_port": exitLayerPort, "method": "2022-blake3-aes-256-gcm", "password": exitLayerKey]]
+        } else {
+            guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
+        }
 
         let profileID = "ios-ext-" + UUID().uuidString.lowercased()
         let endpoint = tor ? "tor" : iosExternalEndpoint(server: server, port: port)
@@ -211,6 +227,7 @@ extension RouterVPNModel {
             "startup_mode": "manual",
             "kill_switch_policy": "off",
             "dns_mode": "home",
+            "start_layer": exitStartLayer,
         ]
         if tor {
             let captured = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
@@ -258,7 +275,7 @@ extension RouterVPNModel {
             "profiles": [:],
         ]
         let data = try JSONSerialization.data(withJSONObject: bundleJSON, options: [.sortedKeys])
-        _ = try JSONDecoder().decode(ClientBundle.self, from: data)
+        try IOSExternalExecution.validateImported(JSONDecoder().decode(ClientBundle.self, from: data))
         try linkNodeBundle(data)
         message = "Added and selected \(name) • external \(protocolName)."
     }
@@ -312,6 +329,10 @@ struct IOSExternalNodeBuilderView: View {
     @State private var tlsName = ""
     @State private var responseProbeURL = ""
     @State private var responseProbeServerName = ""
+    @State private var exitStartLayer = "off"
+    @State private var exitLayerAPI = ""
+    @State private var exitLayerPort = ""
+    @State private var exitLayerKey = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -383,6 +404,22 @@ struct IOSExternalNodeBuilderView: View {
                 }
                 if selected == .shadowsocks {
                     Section("Shadowsocks") { TextField("Method", text: $method).textInputAutocapitalization(.never); SecureField("Password / PSK", text: $secret) }
+                }
+                if ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) {
+                    Section("Exit Start Layer") {
+                        Picker("Encryption and whitening", selection: $exitStartLayer) {
+                            Text("Off").tag("off")
+                            Text("AES-256-GCM").tag("aes-256-gcm")
+                            Text("AES-256-GCM + XOR whitening").tag("aes-256-gcm+xor-whitening")
+                        }
+                        if exitStartLayer != "off" {
+                            TextField("Provisioned private service API URL", text: $exitLayerAPI).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Provisioned AES port", text: $exitLayerPort).keyboardType(.numberPad)
+                            SecureField("Provisioned AES-256-GCM key", text: $exitLayerKey)
+                            Text("Use the layer already provisioned on this same server. Its private service address and key stay with the saved node. XOR whitening uses authenticated AES and the provisioned listener on port 8389.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Section("Server / Compare response measurement") {
                         TextField("HTTPS URL on this server IP (optional)", text: $responseProbeURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Certificate server name (optional)", text: $responseProbeServerName).textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -460,8 +497,12 @@ struct IOSExternalNodeBuilderView: View {
                 wgAddresses: csv(wgAddresses), wgAllowedIPs: csv(wgAllowed), wgDNS: csv(wgDNS), wgMTU: mtu, openVPNConfig: openVPNConfig,
                 torTransport: torTransport, torBridges: selected == .torBridge ? torBridges.split(whereSeparator: \.isNewline).map { String($0) } : [],
                 wgKeepalive: selected.isWireGuardFamily ? keepalive : nil, awgParameters: selected == .amneziawg ? awgParameters : [:],
-                responseProbeURL: selected == .shadowsocks ? responseProbeURL : "",
-                responseProbeServerName: selected == .shadowsocks ? responseProbeServerName : ""
+                responseProbeURL: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) ? responseProbeURL : "",
+                responseProbeServerName: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) ? responseProbeServerName : "",
+                exitStartLayer: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) ? exitStartLayer : "off",
+                exitLayerAPI: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerAPI : "",
+                exitLayerPort: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
+                exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

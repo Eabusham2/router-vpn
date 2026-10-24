@@ -1,11 +1,35 @@
 # Current implementation status
 
-Updated October 22, 2026 (America/Chicago). This file describes committed source
+Updated October 24, 2026 (America/Chicago). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
+
+The October 24 continuation expands paired external Server/Compare from
+Shadowsocks to Hysteria2 and authenticated SOCKS5/HTTP/HTTPS CONNECT in the shared
+relay, native compiler, Android service and Apple PacketTunnel. Exact protocol
+credentials, TLS identity, response endpoint and separately provisioned entry
+and exit Start Layers remain captured. Private pairing validates the actual
+native relay configuration before its atomic registry update. Missing or
+failed measurements do not receive a score, and restoration retains an already
+proved Local/Server choice. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md).
+
+Desktop ordinary graph builders now apply imported external layers with the
+verified complete engine. Complete external connection profiles retain the
+layer selection without copying private keys. Session copies detach imported
+AWG parameters, layer credentials and response probes from later node edits.
+Desktop external Server/Compare adoption and packet-protocol server credentials
+remain separate work; this source checkpoint does not close those requirements.
+
+Focused validation includes actual loopback HTTP/TLS comparison and negative
+controls under the Go race detector, the real shared native compiler used by
+Java/Swift fixtures, private relay lifecycle and pairing checks, and the common
+and desktop controller regression suites. Generated pinned-core configuration,
+exact-commit native packaging/release, private deployment and device acceptance
+remain distinct evidence. The successful `745b3e41` release predates these
+changes and does not certify their packages.
 
 The source has advanced beyond the old WireGuard-only mobile multihop and
 mobile-Tor exclusions. Those historical restrictions no longer describe the

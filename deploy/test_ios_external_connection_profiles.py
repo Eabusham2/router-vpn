@@ -185,6 +185,20 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try check("saving external policy never rewrites Router selection",UserDefaults.standard.string(forKey:iosConnectionModeKey)==mode && UserDefaults.standard.data(forKey:iosConnectionCustomPresetsKey)==originalPreset)
   }
  }
+ static func missingDNSPreservesHome()throws {
+  for mode:String? in [nil,"","home"] {
+   var p=profile("socks5");p.dnsMode=mode;p.dnsProtocol=nil;p.dnsHost=nil;p.dnsPort=nil
+   let direct=try reset(p)
+   try reject("missing or blank external DNS cannot silently become Rescue"){_ = try IOSConnectionProfileStore.add(model:direct,name:"Unpaired Home")}
+   try check("rejected implicit Home leaves private storage untouched",IOSPrivateJSONStore.writes==0 && direct.imports==0 && direct.selectedNodeProfile?.dnsMode==mode)
+   p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="wg";p.multihopExitID=p.id;p.multihopExitMode="socks5";p.multihopExecution="local"
+   let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Captured Home")
+   try check("implicit Home stays Home in whole connection profile",saved.preferences?.dnsMode=="home" && model.selectedNodeProfile?.dnsMode==mode)
+   var changed=bundle(p);changed.routerProfiles[0].dnsMode="rescue";IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed)
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   try check("profile restore retains paired Home intent",model.selectedNodeProfile?.dnsMode=="home" && model.selectedNodeProfile?.multihopEntryID=="entry")
+  }
+ }
  static func hostnameBootstrapPersistence()throws {
   var p=profile("socks5");p.dnsMode="doh";p.dnsProtocol="https";p.dnsHost="resolver.example.test";p.dnsServerName="resolver.example.test";p.dnsPort=443;p.dnsPath="/captured-query"
   var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"9.9.9.9",serverPort:5353))
@@ -198,14 +212,18 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
   try check("whole-profile load restores exact hostname lookup choices",model.selectedNodeProfile?.dnsBootstrap==bootstrap && model.selectedNodeProfile?.dnsHost==p.dnsHost)
  }
  static func externalExecutionPersistence()throws {
-  for execution in ["server","auto"] {
-   var p=profile("shadowsocks")
+  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
+   var p=profile(kind)
+   if layer != "off" {
+    let raw:[String:Any] = ["mode":layer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:77,count:32).base64EncodedString()]]
+    p.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:data(raw));p.startLayer=layer
+   }
    p.external?.responseProbe=ExternalResponseProbe(url:"https://198.51.100.1:9443/response",serverName:"paired.example.test")
-   p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="max-tls-awg";p.multihopExitID=p.id;p.multihopExitMode="shadowsocks";p.multihopExecution=execution
+   p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="max-tls-awg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution=execution
    let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Saved external execution")
    let record=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
    try check("snapshot retains exact Server/Compare choice and native entry",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopEntryMode=="max-tls-awg")
-   try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe"))
+   try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe") && !record.contains(Data(repeating:77,count:32).base64EncodedString()) && !record.contains("10.99.0.1") && saved.preferences?.startLayer==layer)
    var current=bundle(p);current.routerProfiles[0].multihopExecution="local";current.routerProfiles[0].external?.shadowsocks?.password="replacement private credential"
    current.routerProfiles[0].external?.responseProbe?.url="https://198.51.100.1:9443/new-response"
    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(current)
@@ -220,8 +238,16 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try check("Update retains saved execution record identity",updated.id==saved.id && updated.preferences?.multihopExecution==execution)
    try IOSConnectionProfileStore.delete(model:model,id:saved.id)
    try check("Delete removes only its connection record",IOSConnectionProfileStore.all().isEmpty && model.selectedNodeProfile?.external==current.routerProfiles[0].external)
-  }
-  for kind in IOSConnectionSafePreferences.ordinaryExternalModes.sorted() where kind != "shadowsocks" {
+   if layer != "off" {
+    let again=try IOSConnectionProfileStore.add(model:model,name:"Layer identity");var changed=current
+    changed.routerProfiles[0].external?.startLayer?.mode = layer=="aes-256-gcm" ? "aes-256-gcm+xor-whitening" : "aes-256-gcm"
+    changed.routerProfiles[0].startLayer=changed.routerProfiles[0].external?.startLayer?.mode
+    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(changed);model.bundle=bundle(profile("socks5","unrelated"));let before=try encoded(model.bundle!),writes=model.imports
+    try reject("saved nonsecret choice cannot overwrite changed private layer"){_ = try IOSConnectionProfileStore.load(model:model,id:again.id)}
+    try check("rejected layer restore retains current unrelated selection",encoded(model.bundle!)==before && model.imports==writes)
+   }
+  }}}
+  for kind in IOSConnectionSafePreferences.ordinaryExternalModes.sorted() where !ExternalNodeConfig.serverExecutionProtocols.contains(kind) {
    var p=profile(kind);p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="wg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution="auto"
    let model=try reset(p)
    try reject("unsupported external execution cannot be saved as complete "+kind){_ = try IOSConnectionProfileStore.add(model:model,name:"Unowned execution")}
@@ -230,7 +256,7 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
  }
  static func main()throws {
   defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
-  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try externalExecutionPersistence()
+  try matrix();try legacyAndFailures();try conflictingProtectionAndRouterSelection();try hostnameBootstrapPersistence();try missingDNSPreservesHome();try externalExecutionPersistence()
   print("Apple external whole connection profiles: PASS (\(checks) shipping store/model checks; storage and app boundaries substituted)")
  }
 }

@@ -7,7 +7,7 @@ import java.util.Iterator;
 
 /** Bounded, non-secret choices saved by connection profiles, never runtime proof. */
 final class AndroidConnectionProfilePolicy {
-    private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu"};
+    private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","start_layer"};
     private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu"};
 
     static JSONObject router(JSONObject source,String[] keys)throws Exception{return checked(source,keys,false);}

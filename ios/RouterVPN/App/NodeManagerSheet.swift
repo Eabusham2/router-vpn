@@ -244,6 +244,10 @@ private struct RouterVPNNodeMetadataEditor: View {
     @State private var longitude: String
     @State private var responseProbeURL: String
     @State private var responseProbeServerName: String
+    @State private var exitStartLayer: String
+    @State private var exitLayerAPI: String
+    @State private var exitLayerPort: String
+    @State private var exitLayerKey: String
     @State private var errorText = ""
 
     init(profile: RouterProfile) {
@@ -254,6 +258,10 @@ private struct RouterVPNNodeMetadataEditor: View {
         _longitude = State(initialValue: profile.longitude.map { String(format: "%.8f", $0) } ?? "")
         _responseProbeURL = State(initialValue: profile.external?.responseProbe?.url ?? "")
         _responseProbeServerName = State(initialValue: profile.external?.responseProbe?.serverName ?? "")
+        _exitStartLayer = State(initialValue: profile.startLayer ?? "off")
+        _exitLayerAPI = State(initialValue: profile.external?.startLayer?.api ?? "")
+        _exitLayerPort = State(initialValue: profile.external?.startLayer.map { String($0.transport.serverPort) } ?? "")
+        _exitLayerKey = State(initialValue: profile.external?.startLayer?.transport.password ?? "")
     }
 
     var body: some View {
@@ -276,14 +284,28 @@ private struct RouterVPNNodeMetadataEditor: View {
                         LabeledContent("Protocol", value: profile.external?.protocolName ?? "unknown")
                         LabeledContent("Expected exit", value: profile.external?.expectedPublicIP ?? "missing")
                     }
-                    Text("Protocol credentials, private keys and expected-exit identity are not edited in this metadata sheet. Re-import a validated profile to change security-critical fields.")
+                    Text("Re-import a validated node profile to change its protocol, primary credentials or expected public exit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if profile.normalizedNodeKind == "external", profile.external?.protocolName == "shadowsocks" {
+                if profile.normalizedNodeKind == "external", profile.external?.serverExecutionHost != nil {
+                    Section("Exit Start Layer") {
+                        Picker("Encryption and whitening", selection: $exitStartLayer) {
+                            Text("Off").tag("off")
+                            Text("AES-256-GCM").tag("aes-256-gcm")
+                            Text("AES-256-GCM + XOR whitening").tag("aes-256-gcm+xor-whitening")
+                        }
+                        if exitStartLayer != "off" {
+                            TextField("Provisioned private service API URL", text: $exitLayerAPI).textInputAutocapitalization(.never).autocorrectionDisabled()
+                            TextField("Provisioned AES port", text: $exitLayerPort).keyboardType(.numberPad)
+                            SecureField("Provisioned AES-256-GCM key", text: $exitLayerKey)
+                        }
+                        Text("These settings must match the layer provisioned on this same server. The key remains in this private node. Turning the layer Off removes its provisioned settings from the node.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Section("Server / Compare response measurement") {
                         TextField("HTTPS URL on the saved server IP", text: $responseProbeURL).textInputAutocapitalization(.never).autocorrectionDisabled()
                         TextField("Certificate server name (optional)", text: $responseProbeServerName).textInputAutocapitalization(.never).autocorrectionDisabled()
-                        Text("The HTTPS URL must use this node's exact Shadowsocks server IP. The optional name verifies its TLS certificate. Leave both blank for Local only; switch the saved graph to Local before removing its response endpoint.")
+                        Text("The HTTPS URL must use this node's exact server IP. The optional name verifies its TLS certificate. Leave both blank for Local only; switch the saved graph to Local before removing its response endpoint.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
                 }
@@ -295,10 +317,14 @@ private struct RouterVPNNodeMetadataEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before editing node metadata."; return }
-                        let external = profile.normalizedNodeKind == "external" && profile.external?.protocolName == "shadowsocks" ? profile.external : nil
+                        let external = profile.normalizedNodeKind == "external" && profile.external?.serverExecutionHost != nil ? profile.external : nil
                         if model.updateNodeMetadata(id: profile.id, name: name, location: location, latitudeText: latitude, longitudeText: longitude,
                             expectedExternal: external, responseProbeURL: external == nil ? "" : responseProbeURL,
-                            responseProbeServerName: external == nil ? "" : responseProbeServerName) { dismiss() }
+                            responseProbeServerName: external == nil ? "" : responseProbeServerName,
+                            expectedStartLayer: profile.startLayer ?? "off", exitStartLayer: external == nil ? nil : exitStartLayer,
+                            exitLayerAPI: external != nil && exitStartLayer != "off" ? exitLayerAPI : "",
+                            exitLayerPort: external != nil && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
+                            exitLayerKey: external != nil && exitStartLayer != "off" ? exitLayerKey : "") { dismiss() }
                         else { errorText = model.message }
                     }
                     .disabled(model.profileMutationBlocked)

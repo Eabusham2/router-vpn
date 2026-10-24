@@ -13,6 +13,13 @@ func copyProfileJSONPointer[T any](source *T) *T {
 	return &value
 }
 
+// CloneRouterProfile captures private node credentials and policy without
+// normalization or JSON conversion. Later edits cannot mutate this session's
+// WireGuard/AWG parameters, Start Layer provision or response endpoint.
+func CloneRouterProfile(source RouterProfile) RouterProfile {
+	return copyProfileForJSON(source)
+}
+
 // JSON output normalizes a detached copy. A value receiver alone is not a
 // copy of its slices/pointers: encoding a store or nested external node must
 // never change live routing policy or partially normalize it on an error.
@@ -27,6 +34,10 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 	}
 	e := out.External
 	e.ResponseProbe = copyProfileJSONPointer(e.ResponseProbe)
+	e.StartLayer = copyProfileJSONPointer(e.StartLayer)
+	if e.StartLayer != nil {
+		e.StartLayer.Transport = copyProfileJSONMap(e.StartLayer.Transport)
+	}
 	e.WireGuard = copyProfileJSONPointer(e.WireGuard)
 	if w := e.WireGuard; w != nil {
 		w.Addresses = slices.Clone(w.Addresses)
@@ -51,6 +62,28 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 		e.TorBridge.Bridges = slices.Clone(e.TorBridge.Bridges)
 	}
 	return out
+}
+
+func copyProfileJSONMap(source map[string]any) map[string]any {
+	if source == nil { return nil }
+	out := make(map[string]any, len(source))
+	for key, value := range source { out[key] = copyProfileJSONValue(value) }
+	return out
+}
+
+func copyProfileJSONValue(value any) any {
+	switch value := value.(type) {
+	case map[string]any:
+		return copyProfileJSONMap(value)
+	case []any:
+		out := make([]any, len(value))
+		for i := range value { out[i] = copyProfileJSONValue(value[i]) }
+		return out
+	case []string:
+		return slices.Clone(value)
+	default:
+		return value
+	}
 }
 
 func copyProfileStoreForJSON(source RouterProfileStore) RouterProfileStore {

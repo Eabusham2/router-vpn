@@ -56,12 +56,15 @@ def digest() -> str:
 
 def expected_names(target: str) -> set[str]:
     local = {'-'.join(case)+'.json' for case in itertools.product(MODES, LAYERS, PROTOCOLS[target])}
-    # Both shipping hosts also compile the paired Shadowsocks relay selector.
-    # Requiring these exact names keeps Server and Compare in the same native
-    # constructor and missing-engine gate as every ordinary Local graph.
+    # Paired execution uses the same pinned constructors for all five
+    # supported authenticated transports. Both independent exit layers also
+    # cross every entry-layer choice on the representative native WG entry.
+    supported = tuple(p for p in PROTOCOLS[target] if p not in ('wireguard', 'amneziawg', 'openvpn'))
     paired = {'-'.join(case)+'.json'
-              for case in itertools.product(MODES, LAYERS, ('shadowsocks',), EXECUTIONS)}
-    return local | paired
+              for case in itertools.product(MODES, LAYERS, supported, EXECUTIONS)}
+    layered = {'wg-'+entry+'-'+protocol+'-exit-'+layer+'-'+execution+'.json'
+               for entry, protocol, layer, execution in itertools.product(LAYERS, supported, LAYERS[1:], ('local', *EXECUTIONS))}
+    return local | paired | layered
 
 
 def require_matrix(directory: Path, target: str) -> int:

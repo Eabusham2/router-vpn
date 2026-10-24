@@ -1,6 +1,8 @@
 package libbox
 
 import (
+	"encoding/base64"
+	"encoding/json"
 	"net/netip"
 	"strings"
 	"testing"
@@ -42,17 +44,49 @@ func TestRouterExternalResponseEndpointEditorUsesShippingValidator(t *testing.T)
 }
 
 func TestRouterExternalServerLeaseCompilesInTheActualPinnedCore(t *testing.T) {
-	exit := multihoprelay.Exit{ID: "external-exit", Mode: "shadowsocks", Transport: map[string]any{"type": "shadowsocks", "tag": "exit", "server": "203.0.113.20", "server_port": 8388, "method": "aes-256-gcm", "password": "captured-test-password"}, External: &multihoprelay.ExternalExit{ExpectedPublicIP: "203.0.113.88", ResponseProbe: multihoprelay.ResponseProbe{URL: "https://203.0.113.20/response", ServerName: "node.example"}}}
-	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: strings.Repeat("c", 64), ExitID: exit.ID, ExitMode: exit.Mode, Port: 26240, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)})
-	if err != nil {
-		t.Fatal(err)
-	}
-	lease := multihoprelay.Lease{Request: request, NodeID: request.EntryNodeID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password}
-	body, err := multihoprelay.Build(exit, netip.MustParseAddr("10.77.0.2"), lease)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := CheckConfig(string(body)); err != nil {
-		t.Fatal("actual pinned core rejected external isolated relay", err)
+	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+		for _, layerMode := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(protocol+"/"+layerMode, func(t *testing.T) {
+				external := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}
+				switch protocol {
+				case "shadowsocks":
+					external["shadowsocks"] = map[string]any{"server": "203.0.113.20", "port": float64(8388), "method": "aes-256-gcm", "password": "captured-test-password"}
+				case "hysteria2":
+					external["hysteria2"] = map[string]any{"server": "203.0.113.20", "port": float64(443), "password": "captured-test-password", "tls_server_name": "node.example"}
+				default:
+					transport := map[string]any{"host": "203.0.113.20", "port": float64(8443), "username": "captured-test-user", "password": "captured-test-password"}
+					if protocol == "https-connect" {
+						transport["tls_server_name"] = "node.example"
+					}
+					external[strings.ReplaceAll(protocol, "-", "_")] = transport
+				}
+				var layer *multihoprelay.StartLayer
+				if layerMode != "" {
+					layer = &multihoprelay.StartLayer{Mode: layerMode, API: "http://10.93.0.1:8787", Transport: map[string]any{"type": "shadowsocks", "tag": "provisioned-start", "server": "203.0.113.20", "server_port": float64(8388), "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))}}
+					encoded, _ := json.Marshal(layer)
+					var saved map[string]any
+					if err := json.Unmarshal(encoded, &saved); err != nil {
+						t.Fatal(err)
+					}
+					external["start_layer"] = saved
+				}
+				exit, err := multihoprelay.ExternalSelection("external-exit", protocol, external, layer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: strings.Repeat("c", 64), ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: layerMode, Port: 26240, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)})
+				if err != nil {
+					t.Fatal(err)
+				}
+				lease := multihoprelay.Lease{Request: request, NodeID: request.EntryNodeID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password}
+				body, err := multihoprelay.Build(exit, netip.MustParseAddr("10.77.0.2"), lease)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := CheckConfig(string(body)); err != nil {
+					t.Fatal("actual pinned core rejected external isolated relay", err)
+				}
+			})
+		}
 	}
 }

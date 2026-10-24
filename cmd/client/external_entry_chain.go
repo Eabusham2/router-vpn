@@ -8,6 +8,7 @@ import (
 	"runtime"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/multihoprelay"
 )
 
 // externalEntryGraph converts a validated external node into a single
@@ -95,7 +96,10 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 		return nil, errors.New("external OpenVPN cannot currently be used as an upstream hop; use it as the final exit")
 	}
 	useAmnezia := entryExit.Protocol == "amneziawg" || exit.Protocol == "amneziawg"
-	if useAmnezia {
+	useNative := entryExit.StartLayer != nil || exit.StartLayer != nil
+	if useNative {
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+	} else if useAmnezia {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err
 		}
@@ -142,7 +146,7 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 	}
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+entry.ID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
-	cmd.Env = desktopStandardEngineEnvironment(cmd.Env, useAmnezia)
+	cmd.Env = desktopExternalEngineEnvironment(cmd.Env, useNative, useAmnezia)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil
@@ -156,6 +160,12 @@ func externalEntryBridgeConfig(entry standardExit, listenPort int) (map[string]a
 	endpoints, outbounds, entryTag, err := externalEntryGraph(entry)
 	if err != nil {
 		return nil, err
+	}
+	if entry.StartLayer != nil {
+		if len(endpoints) != 0 || len(outbounds) != 1 { return nil, errors.New("external Start Layer requires its captured native proxy entry") }
+		inner, outer, err := multihoprelay.WrapStartLayer(outbounds[0].(map[string]any), entry.Protocol, (*multihoprelay.StartLayer)(entry.StartLayer), "routervpn-external-entry-start-layer", "")
+		if err != nil { return nil, err }
+		outbounds = []any{inner, outer}
 	}
 	final := entryTag
 	if entry.Protocol != "amneziawg" && len(endpoints) == 1 && len(outbounds) == 0 {

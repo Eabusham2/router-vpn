@@ -245,7 +245,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  func linkNodeBundle(_ data:Data)throws {_ = try JSONDecoder().decode(ClientBundle.self,from:data);saved=data;writes+=1}
 }
 @main struct Tests {
- @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,executionGraphs=0,sessions=Set<String>()
+ @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,executionGraphs=0,externalLayerGraphs=0,sessions=Set<String>()
  static let modes=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"]
  static let kinds=["tor","obfs4","meek_lite","snowflake","webtunnel","custom"]
  static let layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
@@ -565,7 +565,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try importedAmneziaCreation()
   try responseProbeCreation()
   try ordinaryExternalPredecessors(maximum,composite)
-  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
@@ -617,8 +617,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func responseProbeCreation()throws {
   let model=RouterVPNModel()
-  func save(_ url:String,_ name:String="node.example.test",_ kind:String="shadowsocks")throws {
-   try model.createIOSExternalNode(protocolName:kind,name:"Response endpoint",server:"198.51.100.8",port:8388,expectedPublicIP:"203.0.113.88",username:"",password:"",method:"aes-256-gcm",secret:" exact SS secret ",tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:nil,responseProbeURL:url,responseProbeServerName:name)
+  func save(_ url:String,_ name:String="node.example.test",_ kind:String="shadowsocks",_ layer:String="off")throws {
+   try model.createIOSExternalNode(protocolName:kind,name:"Response endpoint",server:"198.51.100.8",port:8388,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact secret ",method:"aes-256-gcm",secret:" exact SS secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:nil,responseProbeURL:url,responseProbeServerName:name,exitStartLayer:layer,exitLayerAPI:layer=="off" ? "":"http://10.99.0.1:8787",exitLayerPort:layer=="off" ? 0:8388,exitLayerKey:layer=="off" ? "":key(7))
   }
   try save("https://198.51.100.8:9443/response")
   let saved=model.saved!,decoded=try JSONDecoder().decode(ClientBundle.self,from:saved),external=decoded.routerProfiles[0].external!
@@ -628,10 +628,17 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let writes=model.writes
   for url in ["http://198.51.100.8/response","https://203.0.113.8/response","https://198.51.100.8/response?secret=x","https://198.51.100.8/response?","https://user:pass@198.51.100.8/response","https://198.51.100.8/%2fresponse"," https://198.51.100.8/response"] {reject("invalid add response is rejected before saving"){try save(url)}}
   reject("IP-dial route cannot replace TLS server-name validation"){try save("https://198.51.100.8/response","localhost")}
-  reject("other protocols cannot silently discard SS response fields"){try save("https://198.51.100.8/response","","socks5")}
+  reject("unsupported protocols cannot silently discard response fields"){try save("https://198.51.100.8/response","","tor")}
   try check("failed creation preserves complete previously saved node",model.saved==saved && model.writes==writes)
   try save("","")
   try check("ordinary Local creation still needs no response endpoint",(try JSONDecoder().decode(ClientBundle.self,from:model.saved!)).routerProfiles[0].external?.responseProbe==nil)
+  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] {for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+   try save("https://198.51.100.8:9443/response","node.example.test",kind,layer)
+   let restored=try JSONDecoder().decode(ClientBundle.self,from:model.saved!),profile=restored.routerProfiles[0]
+   try check("native creation persists every exact external response and Start Layer",profile.external?.responseProbe?.url=="https://198.51.100.8:9443/response" && profile.startLayer==layer && profile.external?.matchesStartLayer(layer)==true)
+   if layer != "off" {try check("typed private layer survives import without changing its key",profile.external?.startLayer?.transport.password==key(7))}
+   try IOSExternalExecution.validateImported(restored);checks+=1
+  }}
  }
  @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
@@ -690,19 +697,19 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      let dns=(graph["dns"] as! [String:Any])["servers"] as! [[String:Any]],selected=dns.first{$0["tag"] as? String=="selected-dns"}!
      try check("DNS selection and IPv6 policy remain captured",selected["type"] as? String=="tcp" && selected["server_port"] as? Int==5353 && selected["detour"] as? String=="custom-exit" && meta["ipv6_mode"] as? String=="off")
      try check("source entry and exit policies stay frozen",json(exit)==frozen && json(capture["entry"]!)==json(profile))
-     if kind=="shadowsocks" {
+     if ExternalNodeConfig.serverExecutionProtocols.contains(kind) {
       for execution in ["server","auto"] {
        var selected=exit,external=selected["external"] as! [String:Any]
        external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"external.example.test"]
        selected["external"]=external;selected["multihop_execution"]=execution
-       var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-shadowsocks"
+       var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-"+kind
        launch["bundle"]=try json(["selectedRouterID":selected["id"]!,"routerProfiles":[selected]])
        owner.multihopExecutionSource=try IOSMultihopExecution.Source(configuration:launch) { SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined() }
        defer {owner.multihopExecutionSource=nil}
        let built=try owner.prepare(provider:launch,selectedProfile:selected,strict:true).runtime.policy!
        let graph=try object(Data(built.config.utf8)),captured=try object(Data(built.capture.utf8))
        try check("Server/Compare retains entire native entry mode and Start Layer",captured["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(captured["entry"]!)==json(profile))
-       try check("Server/Compare owns real local transport and selector",tagged(graph,"routervpn-execution-local")["type"] as? String=="shadowsocks" && tagged(graph,"routervpn-execution-local")["detour"] as? String=="external-entry" && tagged(graph,"custom-exit")["type"] as? String=="selector")
+       try check("Server/Compare owns real local transport and selector",tagged(graph,"routervpn-execution-local")["type"] as? String==(kind=="socks5" ? "socks" : ["http-connect","https-connect"].contains(kind) ? "http" : kind) && tagged(graph,"routervpn-execution-local")["detour"] as? String=="external-entry" && tagged(graph,"custom-exit")["type"] as? String=="selector")
        try check("external execution leaves entry graph cryptography intact",tagged(graph,"external-entry")["type"] as? String==tagged(previous,oldFinal)["type"] as? String && built.executionRequested==execution)
        if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
         let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+"-"+execution+".json")
@@ -710,6 +717,28 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
        }
        executionGraphs+=1
       }
+     }
+     if mode=="wg" && ExternalNodeConfig.serverExecutionProtocols.contains(kind) {
+      for exitLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
+       var selected=exit,external=selected["external"] as! [String:Any]
+       external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"external.example.test"]
+       external["start_layer"]=["mode":exitLayer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key(7)]]
+       selected["external"]=external;selected["start_layer"]=exitLayer;selected["multihop_execution"]=execution
+       let frozen=try json(selected)
+       var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-"+kind
+       launch["bundle"]=try json(["selectedRouterID":selected["id"]!,"routerProfiles":[selected]])
+       owner.multihopExecutionSource = execution=="local" ? nil : try IOSMultihopExecution.Source(configuration:launch) { SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined() }
+       defer {owner.multihopExecutionSource=nil}
+       let built=try owner.prepare(provider:launch,selectedProfile:selected,strict:true).runtime.policy!,graph=try object(Data(built.config.utf8))
+       let local=try tagged(graph,execution=="local" ? "custom-exit" : "routervpn-execution-local"),wrapper=try tagged(graph,"routervpn-exit-start-layer")
+       try check("independent entry and exit layers retain owned routing",local["server"] as? String=="10.99.0.1" && local["detour"] as? String=="routervpn-exit-start-layer" && wrapper["detour"] as? String=="external-entry")
+       try check("the exit layer retains its selected protocol and server",wrapper["type"] as? String==(exitLayer=="aes-256-gcm" ? "shadowsocks" : "routervpn-aes-xor") && wrapper["server"] as? String=="198.51.100.8" && json(selected)==frozen)
+       if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
+        let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+"-exit-"+exitLayer+"-"+execution+".json")
+        try Data(built.config.utf8).write(to:file,options:.withoutOverwriting)
+       }
+       externalLayerGraphs+=1
+      }}
      }
      if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
       let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+".json")
@@ -721,7 +750,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   }}
   if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
   try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==456)
-  try check("every native Router entry and Start Layer has an external execution owner",executionGraphs==114)
+  try check("every native Router entry and Start Layer has an external execution owner",executionGraphs==570 && externalLayerGraphs==90)
  }
 }
 '''
@@ -791,7 +820,7 @@ def main():
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
         if args.output:
             inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 114, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 570, 'external_exit_layer_graphs': 90, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 

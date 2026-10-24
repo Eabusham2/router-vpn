@@ -188,6 +188,7 @@ private enum IOSConnectionProfileStore {
             selection = (mode, try customLayers(for: mode))
         }
         let ordinaryExternal = selected.normalizedNodeKind == "external" && IOSConnectionSafePreferences.ordinaryExternalModes.contains(selected.external?.protocolName ?? "")
+        if ordinaryExternal && selected.external?.matchesStartLayer(selected.startLayer) != true { throw issue("The selected external Start Layer no longer matches its private node settings.") }
         let prefs: IOSConnectionSafePreferences?
         if selected.normalizedNodeKind == "router-vpn" || ordinaryExternal {
             if selected.multihopEnabled == true {
@@ -210,7 +211,7 @@ private enum IOSConnectionProfileStore {
                 jumboTUN: selected.jumboTUN ?? false,
                 startupMode: (selected.startupMode ?? "smart-auto").lowercased(),
                 autoConnect: selected.autoConnect ?? false,
-                dnsMode: (selected.dnsMode ?? (ordinaryExternal ? "rescue" : "home")).lowercased(),
+                dnsMode: (selected.dnsMode ?? "home").lowercased(),
                 dnsProtocol: (selected.dnsProtocol ?? "udp").lowercased(),
                 dnsHost: selected.dnsHost ?? "",
                 dnsPort: selected.dnsPort ?? 0,
@@ -273,6 +274,7 @@ private enum IOSConnectionProfileStore {
                     throw issue("The saved external connection references a different imported exit protocol or public identity.")
                 }
                 profile = applying(prefs, to: profile)
+                guard profile.external?.matchesStartLayer(profile.startLayer) == true else { throw issue("The saved Start Layer no longer matches this private external node. Restore its provisioned layer or update the connection profile.") }
                 bundle.routerProfiles[index] = profile
                 bundle.selectedRouterID = saved.nodeID
                 bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
@@ -398,11 +400,14 @@ private enum IOSConnectionProfileStore {
                         throw issue("External connection profile has no exact imported protocol and public exit identity.")
                     }
                     record.preferences = try validatePreferences(preferences, external: true)
+                    if record.preferences?.startLayer != "off" && !ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
+                        throw issue("Saved external Start Layer requires a supported provisioned exit transport.")
+                    }
                     if preferences.multihopEnabled {
                         guard preferences.multihopExitID == record.nodeID, preferences.multihopExitMode == protocolName,
                               preferences.multihopEntryMode != nil,
                               ["local", "server", "auto"].contains(preferences.multihopExecution ?? "local"),
-                              (preferences.multihopExecution ?? "local") == "local" || protocolName == "shadowsocks" else {
+                              (preferences.multihopExecution ?? "local") == "local" || ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) else {
                             throw issue("Saved external multihop must retain this exact exit and a compatible execution choice.")
                         }
                     }
@@ -449,6 +454,7 @@ private enum IOSConnectionProfileStore {
         guard ["smart-auto", "auto", "last", "manual"].contains(p.startupMode) else { throw issue("Connection profile contains an invalid startup policy.") }
 
         p.dnsMode = p.dnsMode.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        if external && p.dnsMode.isEmpty { p.dnsMode = "home" }
         p.dnsProtocol = p.dnsProtocol.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         p.dnsHost = p.dnsHost.trimmingCharacters(in: .whitespacesAndNewlines)
         p.dnsServerName = p.dnsServerName.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -460,7 +466,6 @@ private enum IOSConnectionProfileStore {
             throw issue("Connection profile DNS host/server name contains invalid characters.")
         }
         if external {
-            guard p.startLayer == "off" else { throw issue("An external connection profile cannot replace the imported transport with a Router-only Start Layer.") }
             guard ["", "udp", "tcp", "tls", "https", "h3", "dot", "doh", "doh3"].contains(p.dnsProtocol),
                   (0...65535).contains(p.dnsPort),
                   p.dnsPath.isEmpty || (p.dnsPath.hasPrefix("/") && !p.dnsPath.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f })) else {

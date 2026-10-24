@@ -23,11 +23,17 @@ type ExternalHTTPConnectConfig struct { Host string `json:"host"`; Port int `jso
 type ExternalHysteria2Config struct { Server string `json:"server"`; Port int `json:"port"`; Password string `json:"password"`; TLSServerName string `json:"tls_server_name"` }
 type ExternalTorBridgeConfig struct { Transport string `json:"transport,omitempty"`; Bridges []string `json:"bridges"`; SocksPort int `json:"socks_port,omitempty"` }
 type ExternalResponseProbe struct { URL string `json:"url"`; ServerName string `json:"server_name,omitempty"` }
+type ExternalStartLayer struct {
+	Mode string `json:"mode"`
+	API string `json:"api"`
+	Transport map[string]any `json:"transport"`
+}
 
 type ExternalNodeConfig struct {
 	Protocol string `json:"protocol"`
 	ExpectedPublicIP string `json:"expected_public_ip"`
 	ResponseProbe *ExternalResponseProbe `json:"response_probe,omitempty"`
+	StartLayer *ExternalStartLayer `json:"start_layer,omitempty"`
 	WireGuard *ExternalWireGuardConfig `json:"wireguard,omitempty"`
 	AmneziaWG *ExternalAmneziaWGConfig `json:"amneziawg,omitempty"`
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`

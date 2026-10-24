@@ -90,7 +90,7 @@ func PrepareExternalExecutionCapture(source, capture, restored string) (string, 
 		return "", err
 	}
 	port := 26240 + int(seed[0])%32
-	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: session, EntryNodeID: entryNode, ExitID: selected.ExitID, ExitMode: "shadowsocks", Port: port, Username: user, Password: password})
+	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: session, EntryNodeID: entryNode, ExitID: selected.ExitID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.LayerMode(exit.StartLayer), Port: port, Username: user, Password: password})
 	if err != nil {
 		return "", err
 	}
@@ -106,35 +106,23 @@ func PrepareExternalExecutionCapture(source, capture, restored string) (string, 
 }
 
 func externalRelaySelection(s externalPolicyCapture) (multihoprelay.Exit, error) {
-	bad := errors.New("external server execution requires a captured Router entry, Shadowsocks exit and verified node response endpoint")
+	bad := errors.New("external server execution requires a captured Router entry, authenticated native exit and verified node response endpoint")
 	entryID, entryIDOK := s.Entry["id"].(string)
 	selectedEntry, selectedEntryOK := s.Profile["multihop_entry_id"].(string)
-	if s.Protocol != "shadowsocks" || s.Profile["node_kind"] != "external" || s.Entry == nil || s.Entry["node_kind"] != "router-vpn" ||
+	if !multihoprelay.ExternalMode(s.Protocol) || s.Profile["node_kind"] != "external" || s.Entry == nil || s.Entry["node_kind"] != "router-vpn" ||
 		s.Profile["multihop_enabled"] != true || !entryIDOK || !selectedEntryOK || !exactID.MatchString(entryID) || selectedEntry != entryID || s.Profile["multihop_exit_id"] != s.ExitID || s.Profile["multihop_exit_mode"] != s.Protocol || entryID == s.ExitID {
 		return multihoprelay.Exit{}, bad
 	}
 	ext, ok := s.Profile["external"].(map[string]any)
-	if !ok {
+	if !ok || ext["protocol"] != s.Protocol || ext["expected_public_ip"] != s.ExpectedPublicIP {
 		return multihoprelay.Exit{}, bad
 	}
-	ss, ok := ext["shadowsocks"].(map[string]any)
-	if !ok {
-		return multihoprelay.Exit{}, bad
-	}
-	probe, ok := ext["response_probe"].(map[string]any)
-	if !ok {
-		return multihoprelay.Exit{}, bad
-	}
-	encoded, err := json.Marshal(probe)
+	layer, err := externalCapturedStartLayer(s)
 	if err != nil {
-		return multihoprelay.Exit{}, bad
+		return multihoprelay.Exit{}, err
 	}
-	var response multihoprelay.ResponseProbe
-	if exactJSON(encoded, &response, 4096) != nil {
-		return multihoprelay.Exit{}, bad
-	}
-	exit := multihoprelay.Exit{ID: s.ExitID, Mode: s.Protocol, External: &multihoprelay.ExternalExit{ExpectedPublicIP: s.ExpectedPublicIP, ResponseProbe: response}, Transport: map[string]any{"type": "shadowsocks", "tag": "exit", "server": ss["server"], "server_port": ss["port"], "method": ss["method"], "password": ss["password"]}}
-	if _, err := multihoprelay.ExternalFingerprint(exit); err != nil {
+	exit, err := multihoprelay.ExternalSelection(s.ExitID, s.Protocol, ext, layer)
+	if err != nil {
 		return multihoprelay.Exit{}, bad
 	}
 	return exit, nil
@@ -166,27 +154,34 @@ func compileExternalExecution(graph map[string]any, selected externalPolicyCaptu
 	if err != nil {
 		return err
 	}
-	values, ok := graph["outbounds"].([]any)
-	if !ok {
-		return errors.New("external execution graph has no owned outbound")
-	}
 	count := 0
-	for _, raw := range values {
-		value, ok := raw.(map[string]any)
+	for _, family := range []string{"outbounds", "endpoints"} {
+		raw, present := graph[family]
+		if !present {
+			continue
+		}
+		values, ok := raw.([]any)
 		if !ok {
-			return errors.New("external execution outbound is invalid")
+			return errors.New("external execution transport family is invalid")
 		}
-		if value["tag"] == LocalTag || value["tag"] == ServerTag {
-			return errors.New("external execution tags already belong to another owner")
-		}
-		if value["tag"] == ExternalFinalTag {
-			value["tag"] = LocalTag
-			count++
+		for _, raw := range values {
+			value, ok := raw.(map[string]any)
+			if !ok {
+				return errors.New("external execution transport is invalid")
+			}
+			if value["tag"] == LocalTag || value["tag"] == ServerTag {
+				return errors.New("external execution tags already belong to another owner")
+			}
+			if value["tag"] == ExternalFinalTag {
+				value["tag"] = LocalTag
+				count++
+			}
 		}
 	}
 	if count != 1 {
 		return errors.New("external execution lost its exact local transport")
 	}
+	values, _ := graph["outbounds"].([]any)
 	values = append(values, map[string]any{"type": "socks", "tag": ServerTag, "server": api.Hostname(), "server_port": plan.Request.Port, "version": "5", "username": plan.Request.Username, "password": plan.Request.Password, "detour": selected.EntryTag})
 	initial := LocalTag
 	if plan.Selection == "server" {
@@ -212,7 +207,7 @@ func newExternalExecution(policy *ExternalPolicy) (*Controller, error) {
 		return nil, errors.New("external entry API invalid")
 	}
 	proposal := s.Execution.Request
-	c := &Controller{meta: Metadata{EntryID: entryID, ExitID: s.ExitID, EntryNodeID: entryNode, EntryAPI: entryAPI, EntryToken: entryToken, EntryTag: s.EntryTag, ExitMode: s.Protocol, Execution: s.Execution.Selection}, config: policy.Config(), proposal: proposal, external: policy,
+	c := &Controller{meta: Metadata{EntryID: entryID, ExitID: s.ExitID, EntryNodeID: entryNode, EntryAPI: entryAPI, EntryToken: entryToken, EntryTag: s.EntryTag, ExitMode: s.Protocol, ExitStartLayer: proposal.ExitStartLayer, Execution: s.Execution.Selection}, config: policy.Config(), proposal: proposal, external: policy,
 		progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}, LastNodeMeasurement: "https-response-time", ExternalMeasurement: "https-response-time"}}
 	c.expected = multihoprelay.Lease{Request: proposal, NodeID: entryNode, Host: api.Hostname(), Port: proposal.Port, Username: proposal.Username, Password: proposal.Password}
 	c.generation.Store(1)

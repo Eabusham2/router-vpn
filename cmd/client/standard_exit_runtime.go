@@ -299,7 +299,10 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 		return torBridgeCommand(a, control, control)
 	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	if exit.Protocol == "amneziawg" {
+	useNative := exit.StartLayer != nil
+	if useNative {
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+	} else if exit.Protocol == "amneziawg" {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err
 		}
@@ -352,7 +355,7 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 	}
 	cmd.Dir = root
 	cmd.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_PROFILE_ID="+runtimeProfileID, "HOMEVPN_POLICY_PROFILE_ID="+control.ID, "HOMEVPN_ENDPOINT="+endpoint)
-	cmd.Env = desktopStandardEngineEnvironment(cmd.Env, exit.Protocol == "amneziawg")
+	cmd.Env = desktopExternalEngineEnvironment(cmd.Env, useNative, exit.Protocol == "amneziawg")
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd, nil

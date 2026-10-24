@@ -49,10 +49,12 @@ type externalPolicyMetadata struct {
 	ExitID              string   `json:"exit_id"`
 	PolicyID            string   `json:"policy_id"`
 	Protocol            string   `json:"protocol"`
+	StartLayer          string   `json:"start_layer,omitempty"`
 	ExpectedPublicIP    string   `json:"expected_public_ip"`
 	EntryID             string   `json:"entry_id,omitempty"`
 	EntryNodeID         string   `json:"entry_node_id,omitempty"`
 	EntryTag            string   `json:"entry_tag,omitempty"`
+	EntryStartLayer     string   `json:"entry_start_layer,omitempty"`
 	PredecessorSHA256   string   `json:"predecessor_sha256,omitempty"`
 	FinalTag            string   `json:"final_tag"`
 	TUNTag              string   `json:"tun_tag"`
@@ -232,6 +234,14 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 			return nil, err
 		}
 	}
+	entryStartLayer, err := externalApplyEntryStartLayer(graph, entry, selection, entryProtocol)
+	if err != nil {
+		return nil, err
+	}
+	startLayer, err := externalApplyStartLayer(graph, exit, selection)
+	if err != nil {
+		return nil, err
+	}
 	body, err := json.Marshal(graph)
 	if err != nil || len(body) > 4<<20 {
 		return nil, errors.New("compiled external graph exceeds its bound")
@@ -239,8 +249,8 @@ func NewExternalPolicy(config, capture string) (*ExternalPolicy, error) {
 	sourceBytes, _ := json.Marshal([]string{"routervpn-external-policy-v1", config, capture})
 	meta := externalPolicyMetadata{
 		Schema: 1, SourceSHA256: externalDigest(sourceBytes), ConfigSHA256: externalDigest(body),
-		ExitID: selection.ExitID, PolicyID: profileID, Protocol: selection.Protocol, ExpectedPublicIP: selection.ExpectedPublicIP,
-		EntryID: entryID, EntryTag: selection.EntryTag, FinalTag: ExternalFinalTag, TUNTag: tunTag,
+		ExitID: selection.ExitID, PolicyID: profileID, Protocol: selection.Protocol, StartLayer: startLayer, ExpectedPublicIP: selection.ExpectedPublicIP,
+		EntryID: entryID, EntryTag: selection.EntryTag, EntryStartLayer: entryStartLayer, FinalTag: ExternalFinalTag, TUNTag: tunTag,
 		DNSMode: dnsMeta.mode, DNSProtocol: dnsMeta.protocol, DNSServer: dnsMeta.host, DNSPort: dnsMeta.port,
 		DNSServerName: dnsMeta.serverName, DNSPath: dnsMeta.path, DNSDetour: dnsMeta.detour,
 		DNSBootstrapSHA256: dnsMeta.bootstrapSHA256, DNSDefaultMigrated: dnsMeta.migrated,

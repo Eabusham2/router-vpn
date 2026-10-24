@@ -495,6 +495,11 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 			return nil, err
 		}
 	}
+	if e.Mode == "socks5" || e.Mode == "http-connect" || e.Mode == "https-connect" {
+		if err := validateExternalProxyCredentials(e.Transport); err != nil {
+			return nil, err
+		}
+	}
 	p, err := copyMap(e.Transport)
 	if err != nil {
 		return nil, err
@@ -516,6 +521,10 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 		keys = []string{"mode", "config_json"}
 	case "hysteria2":
 		keys = []string{"server", "server_port", "password", "tls", "up_mbps", "down_mbps", "obfs"}
+	case "socks5":
+		keys = []string{"server", "server_port", "username", "password", "version"}
+	case "http-connect", "https-connect":
+		keys = []string{"server", "server_port", "username", "password", "tls"}
 	}
 	for _, key := range keys {
 		allowed[key] = true
@@ -533,7 +542,11 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 			return nil, fmt.Errorf("relay transport cannot override %s", k)
 		}
 	}
-	if NaiveMode(e.Mode) {
+	if e.Mode == "socks5" || e.Mode == "http-connect" || e.Mode == "https-connect" {
+		if err := validateExternalProxyTransport(p, e.Mode); err != nil {
+			return nil, err
+		}
+	} else if NaiveMode(e.Mode) {
 		if err := ValidateNaiveTransport(p, e.Mode); err != nil {
 			return nil, err
 		}

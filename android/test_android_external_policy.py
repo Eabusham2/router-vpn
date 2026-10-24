@@ -68,7 +68,7 @@ static boolean sameParams(JSONObject a,JSONObject b)throws Exception{if(a.length
 static JSONObject awgParameters()throws Exception{return new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
 static AndroidStandardExitStore.Entry exit(String kind)throws Exception{AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="saved-"+kind;e.protocol=kind;e.name=kind;e.server="203.0.113.20";e.serverPort=443;e.expectedPublicIp="203.0.113.88";
  if(kind.equals("wireguard")||kind.equals("amneziawg")){e.wgPrivateKey=key('x');e.wgPeerPublicKey=key('p');e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));e.wgPreSharedKey=key('s');e.wgMtu=1380;e.wgKeepalive=25;if(kind.equals("amneziawg"))e.awgParameters=awgParameters();}
- if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exact user";e.password="exact-password";}
+ if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username=" exact user ";e.password=" exact-password ";}
  if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key('s');}
  if(kind.equals("hysteria2"))e.secret="captured-only-secret";e.tlsServerName="selected.example.test";
  if(kind.equals("openvpn")){e.username=" exact user ";e.password=" exact password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.20 443\nremote 203.0.113.21 1194 udp\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n-----BEGIN CERTIFICATE-----\nfixture-only\n-----END CERTIFICATE-----\n</ca>\n";}
@@ -80,6 +80,7 @@ static JSONObject entry()throws Exception{String pub=key('p');String proof=Andro
  JSONObject p=new JSONObject().put("id","entry").put("node_kind","router-vpn").put("node_proof_id",proof).put("router_api","http://10.77.0.1:8787").put("api_token","exact-entry-token").put("adguard_ipv4","10.77.0.1").put("adguard_ipv6","fd77::1").put("dns_mode","home").put("start_layer","off").put("mtu_policy","auto").put("effective_mtu",9000);
  return new JSONObject().put("selectedRouterID","entry").put("routerProfiles",new JSONArray().put(p)).put("profiles",new JSONObject().put("wg",new JSONObject().put("wg.conf",Base64.getEncoder().encodeToString(wg.getBytes(StandardCharsets.UTF_8)))));}
 static void storeValidation(AndroidStandardExitStore.Entry e)throws Exception{AndroidStandardExitStore.validate(e);}
+static void layer(AndroidStandardExitStore.Entry e,String mode)throws Exception{e.policy.put("start_layer",mode);e.startLayer=mode.equals("off")?null:new JSONObject().put("mode",mode).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",e.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",key('l')));}
 static JSONObject copy(JSONObject p)throws Exception{return new JSONObject(p.toString());}
 static JSONObject find(JSONObject g,String tag)throws Exception{for(String f:List.of("outbounds","endpoints")){JSONArray a=g.optJSONArray(f);if(a!=null)for(int i=0;i<a.length();i++)if(tag.equals(a.getJSONObject(i).optString("tag")))return a.getJSONObject(i);}throw new AssertionError(tag);}
 public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libbox.compiler=args[0];Path root=Path.of(args[1]);android.content.Context context=new android.content.Context(root.toFile());
@@ -104,12 +105,16 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
   }
  }
 
- AndroidStandardExitStore.Entry relay=exit("shadowsocks");relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
+ for(String protocol:List.of("shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening")){
+ AndroidStandardExitStore.Entry relay=exit(protocol);layer(relay,layer);AndroidExternalPolicy.validateDraft(relay);relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
  for(String execution:List.of("local","server","auto")){
   JSONObject entry=entry();String saved=AndroidStandardExitStore.snapshot(relay);
   AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,"");JSONObject graph=new JSONObject(c.config),capture=new JSONObject(c.capture);
   check(saved.equals(AndroidStandardExitStore.snapshot(relay)),"execution changed saved private credentials");
   check(capture.getJSONObject("profile").getString("multihop_execution").equals(execution),"execution choice was dropped");
+  JSONObject local=find(graph,execution.equals("local")?"custom-exit":"routervpn-execution-local");
+  if(List.of("socks5","http","https").contains(protocol))check(local.getString("username").equals(" exact user ")&&local.getString("password").equals(" exact-password "),"private credentials were normalized or borrowed");
+  if(!layer.equals("off")){JSONObject wrapper=find(graph,"routervpn-exit-start-layer");check(wrapper.getString("type").equals(layer.equals("aes-256-gcm")?"shadowsocks":"routervpn-aes-xor")&&local.getString("server").equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("server").equals(relay.server),"exit layer lost its exact server or native ownership");}
   if(execution.equals("local")){check(!c.metadata.has("execution"),"local unnecessarily obtained a server lease");continue;}
   check(c.metadata.getString("execution").equals(execution)&&c.metadata.getString("last_node_measurement").equals("https-response-time"),"execution proof contract missing");
   check(find(graph,"custom-exit").getString("type").equals("selector")&&find(graph,"routervpn-execution-server").getString("detour").equals("entry-wg"),"execution bypassed entry or lacks selector");
@@ -123,6 +128,14 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
   JSONObject wrongCapture=new JSONObject(c.capture);wrongCapture.getJSONObject("execution").getJSONObject("request").put("password","foreign-private-password");
   reject(()->new AndroidExternalPolicy.Compiled(c.source,wrongCapture.toString()),"substituted relay credentials accepted");
  }
+ for(String fault:List.of("choice","mode","host","key","api","extra")){
+  AndroidStandardExitStore.Entry bad=AndroidStandardExitStore.copy(relay);layer(bad,"aes-256-gcm");
+  if(fault.equals("choice"))bad.policy.put("start_layer","off");else if(fault.equals("mode"))bad.startLayer.put("mode","aes-256-gcm+xor-whitening");else if(fault.equals("api"))bad.startLayer.put("api","https://203.0.113.20:8787");else bad.startLayer.getJSONObject("transport").put(fault.equals("host")?"server":fault.equals("key")?"password":"detour",fault.equals("host")?"203.0.113.21":"foreign");
+  reject(()->AndroidExternalPolicy.validateDraft(bad),"invalid provisioned exit layer accepted: "+fault);
+ }
+ }
+ AndroidStandardExitStore.Entry relay=exit("shadowsocks");relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
+ for(String kind:List.of("socks5","http","https")){AndroidStandardExitStore.Entry anonymous=exit(kind);anonymous.username="";anonymous.password="";anonymous.responseProbe=new JSONObject(relay.responseProbe.toString());reject(()->AndroidExternalPolicy.compile(anonymous,entry(),"wg",null,"server",""),"anonymous proxy gained Server execution");}
  reject(()->AndroidExternalPolicy.compile(relay,null,"external",null,"server",""),"direct path gained an unowned server relay");
  AndroidStandardExitStore.Entry missing=AndroidStandardExitStore.copy(relay);missing.responseProbe=new JSONObject();reject(()->AndroidExternalPolicy.compile(missing,entry(),"wg",null,"auto",""),"Compare used an invented response endpoint");
  for(String url:List.of("http://203.0.113.20/", "https://203.0.113.21/", "https://203.0.113.20/?secret=hidden", "https://user:pass@203.0.113.20/", "https://203.0.113.20/#fragment")){

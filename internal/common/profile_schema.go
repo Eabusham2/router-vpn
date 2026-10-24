@@ -59,7 +59,6 @@ func NormalizeExpectedPublicIP(value string) (string, error) {
 func normalizeExternalHTTPConnect(c *ExternalHTTPConnectConfig, tls bool) error {
 	if c == nil { return fmt.Errorf("external CONNECT proxy configuration is missing") }
 	c.Host = strings.Trim(strings.TrimSpace(c.Host), "[]")
-	c.Username = strings.TrimSpace(c.Username)
 	c.TLSServerName = strings.TrimSpace(c.TLSServerName)
 	if c.Host == "" || strings.ContainsAny(c.Host, " /\\?#@") { return fmt.Errorf("external CONNECT proxy requires a safe host") }
 	if c.Port < 1 || c.Port > 65535 { return fmt.Errorf("external CONNECT proxy requires a valid port") }
@@ -83,10 +82,6 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	case "tor_bridge", "tor-bridge": ext.Protocol = "tor-bridge"
 	}
 	ext.ExpectedPublicIP = strings.TrimSpace(ext.ExpectedPublicIP)
-	if ext.ResponseProbe != nil {
-		if ext.Protocol != "shadowsocks" || ext.Shadowsocks == nil { return fmt.Errorf("node response probe currently requires an external Shadowsocks node") }
-		if err := ValidateExternalResponseProbe(ext.Shadowsocks.Server, ext.ResponseProbe); err != nil { return err }
-	}
 	if ext.Protocol == "tor-bridge" || ext.Protocol == "tor" {
 		if ext.ExpectedPublicIP != "" { return fmt.Errorf("Tor bridge has a dynamic circuit exit; expected_public_ip must be empty and the runtime must prove/observe the live Tor exit") }
 	} else {
@@ -109,6 +104,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.TorBridge != nil { blocks++ }
 	if ext.Protocol == "tor" {
 		if blocks != 0 { return fmt.Errorf("plain Tor cannot contain another protocol or bridge block") }
+		if ext.ResponseProbe != nil || ext.StartLayer != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint or proxy Start Layer") }
 		return nil
 	}
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
@@ -144,7 +140,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		if s.Server == "" || s.Port < 1 || s.Port > 65535 || !allowed[s.Method] || s.Password == "" { return fmt.Errorf("external shadowsocks requires server, valid port, supported method and password") }
 	case "socks5":
 		if ext.SOCKS5 == nil || ext.WireGuard != nil || ext.OpenVPN != nil || ext.Shadowsocks != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external socks5 requires host and valid port") }
-		s := ext.SOCKS5; s.Host = strings.TrimSpace(s.Host); s.Username = strings.TrimSpace(s.Username)
+		s := ext.SOCKS5; s.Host = strings.TrimSpace(s.Host)
 		if s.Host == "" || s.Port < 1 || s.Port > 65535 { return fmt.Errorf("external socks5 requires host and valid port") }
 		if (s.Username == "") != (s.Password == "") { return fmt.Errorf("external socks5 username/password must be supplied together") }
 	case "http-connect":
@@ -162,6 +158,10 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		if _, err := normalizeExternalTorBridge(ext.TorBridge); err != nil { return err }
 	default:
 		return fmt.Errorf("unsupported external protocol %q", ext.Protocol)
+	}
+	if ext.ResponseProbe != nil {
+		if !externalProxyProtocol(ext.Protocol) { return fmt.Errorf("node response probe requires a supported external proxy protocol") }
+		if err := ValidateExternalResponseProbe(externalNodeEndpoint(ext), ext.ResponseProbe); err != nil { return err }
 	}
 	return nil
 }
@@ -214,7 +214,7 @@ func hasLegacyInjectedExternalHomeDNS(p *RouterProfile) bool {
 func stripInjectedRouterDefaultsFromExternal(p *RouterProfile, legacyHomeDNS bool) error {
 	if strings.TrimSpace(p.NodeProofID) != "" || strings.TrimSpace(p.APIToken) != "" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
 	if v := strings.TrimSpace(p.RouterAPI); v != "" && v != "http://10.77.0.1:8787" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
-	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil; p.StartLayer = ""
+	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil
 	if p.PathProbeURL == "http://10.77.0.1:8787/health" { p.PathProbeURL = "" }
 	if legacyHomeDNS { p.DNSMode = ""; p.DNSHost = "" }
 	if p.DNSMode == "" { p.DNSProtocol = ""; p.DNSPort = 0; p.DNSServerName = ""; p.DNSPath = "" }
@@ -234,6 +234,7 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	default: return fmt.Errorf("invalid node kind %q", p.NodeKind)
 	}
 	startLayer, err := NormalizeStartLayerMode(p.StartLayer); if err != nil { return err }; p.StartLayer = startLayer
+	if p.NodeKind == "external" { if err := validateExternalStartLayer(p); err != nil { return err } }
 	p.NodeProofID = strings.TrimSpace(p.NodeProofID); if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) { return fmt.Errorf("invalid node proof id") }
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy)); if p.KillSwitchPolicy == "" { if p.KillSwitch { p.KillSwitchPolicy = "on-connect" } else { p.KillSwitchPolicy = "off" } }; switch p.KillSwitchPolicy { case "off", "on-connect", "always": default: return fmt.Errorf("invalid kill switch policy %q", p.KillSwitchPolicy) }; p.KillSwitch = p.KillSwitchPolicy != "off"
 	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }

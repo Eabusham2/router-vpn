@@ -82,7 +82,7 @@ struct RouterVPNExternalPolicy: Sendable {
             guard let requested = execution["selection"] as? String, ["local", "server", "auto"].contains(requested),
                   values["execution"] as? String == requested,
                   values["last_node_measurement"] as? String == "https-response-time",
-                  protocolName == "shadowsocks", entryID != nil else { throw issue() }
+                  ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(protocolName), entryID != nil else { throw issue() }
         } else {
             guard selected?["execution"] == nil, values["execution"] == nil, values["last_node_measurement"] == nil else { throw issue() }
         }
@@ -236,10 +236,10 @@ enum RouterVPNExternalExitBuilder {
                 guard predecessorFiles.isEmpty, let imported = predecessorProfile["external"] as? [String: Any],
                       ["", "local"].contains(string(profile["multihop_execution"])), restoredExecution == nil,
                       let kind = imported["protocol"] as? String, ordinaryProtocols.contains(kind),
-                      profile["multihop_entry_mode"] as? String == kind,
-                      ["", "off"].contains(string(predecessorProfile["start_layer"])) else {
+                      profile["multihop_entry_mode"] as? String == kind else {
                     throw error("The external entry must retain its exact native imported protocol.")
                 }
+                try IOSStartLayer.validateExternal(profile: predecessorProfile)
                 _ = try publicLiteralIP(string(imported["expected_public_ip"]), label: "entry public proof IP")
                 var entry = try customExit(external: imported, protocolName: kind); entry["tag"] = tag
                 if ["wireguard", "amneziawg", "openvpn"].contains(kind) { endpoints.append(entry) } else { outbounds.append(entry) }

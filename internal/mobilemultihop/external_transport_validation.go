@@ -34,6 +34,9 @@ func ValidateExternalTransport(config, capture string) error {
 	if _, _, err = externalDevicePolicy(selection.Profile); err != nil {
 		return err
 	}
-	_, _, _, err = externalMTUPolicy(tun, exit, entry, selection.Profile, nil)
+	if _, _, _, err = externalMTUPolicy(tun, exit, entry, selection.Profile, nil); err != nil {
+		return err
+	}
+	_, err = externalApplyStartLayer(graph, exit, selection)
 	return err
 }

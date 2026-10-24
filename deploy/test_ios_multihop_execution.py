@@ -22,11 +22,12 @@ SWIFT = r'''
   let predecessor=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]],"profiles":["private":"exact entry credential bytes"]])
   return ["engine":"multihop-libbox","rawProfileID":exit,"bundle":bundle,"entryBundle":predecessor]
  }
- static func external(_ requested:String="auto")throws->[String:Any]{
-  let profile:[String:Any]=["id":"external-exit","node_kind":"external","external":["protocol":"shadowsocks","shadowsocks":["server":"198.51.100.8","password":"exact captured external credential"],"response_probe":["url":"https://198.51.100.8/response","server_name":"node.example.test"]],"multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"external-exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":"shadowsocks","multihop_execution":requested]
+ static func external(_ requested:String="auto",_ kind:String="shadowsocks",_ layer:String="off")throws->[String:Any]{
+  var profile:[String:Any]=["id":"external-exit","node_kind":"external","external":["protocol":kind,"shadowsocks":["server":"198.51.100.8","password":"exact captured external credential"],"response_probe":["url":"https://198.51.100.8/response","server_name":"node.example.test"]],"multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"external-exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":kind,"multihop_execution":requested]
+  if layer != "off" {var ext=profile["external"] as! [String:Any];ext["start_layer"]=["mode":layer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:7,count:32).base64EncodedString()]];profile["external"]=ext;profile["start_layer"]=layer}
   let root:[String:Any]=["selectedRouterID":"external-exit","routerProfiles":[profile]]
   let predecessor=try source()["entryBundle"] as! Data
-  return ["engine":"external-libbox","mode":"external-shadowsocks","bundle":try JSONSerialization.data(withJSONObject:root),"external_entry_bundle":predecessor,"external_entry_mode":"max-tls-awg"]
+  return ["engine":"external-libbox","mode":"external-"+kind,"bundle":try JSONSerialization.data(withJSONObject:root),"external_entry_bundle":predecessor,"external_entry_mode":"max-tls-awg"]
  }
  static func main()throws{
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)
@@ -97,8 +98,8 @@ SWIFT = r'''
    }
    reject("invalid frozen predecessor roles "+changed){_ = try IOSMultihopExecution.Source(configuration:value,digest:digest)}
   }
-  for requested in ["server","auto"] {
-   let original=try external(requested),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
+  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for requested in ["server","auto"] {
+   let original=try external(requested,kind,layer),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
    let needsReceipt=try IOSMultihopExecution.requiresCapture(configuration:original)
    check("external execution requires captured runtime receipt",needsReceipt)
    for winner in ["local","server"] where requested=="auto" || requested==winner {
@@ -120,7 +121,8 @@ SWIFT = r'''
     changed[mutation]=mutation.hasSuffix("bundle") || mutation=="entryBundle" ? original["external_entry_bundle"] : "foreign"
     reject("external receipt rejects mixed engine/source "+mutation){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
    }
-  }
+  }}}
+  for kind in ["wireguard","amneziawg","openvpn","unknown"] {reject("unsupported external protocol cannot acquire restoration owner"){_ = try IOSMultihopExecution.Source(configuration:external("server",kind),digest:digest)}}
   let local=try external("local"),needsLocal=try IOSMultihopExecution.requiresCapture(configuration:local)
   check("plain external Local does not invent lease ownership",!needsLocal)
   reject("plain external Local cannot adopt an unrelated execution receipt"){_ = try IOSMultihopExecution.Source(configuration:local,digest:digest)}

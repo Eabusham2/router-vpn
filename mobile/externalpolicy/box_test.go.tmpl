@@ -12,6 +12,7 @@ import (
 	"github.com/sagernet/sing-box/adapter/inbound"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
 	"github.com/sagernet/sing-box/include"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
@@ -69,17 +70,51 @@ func externalNativeCapturedFixture(t *testing.T, source, capture string, mutate 
 }
 
 func externalNativeExecutionSource(t *testing.T) (string, string) {
+	return externalNativeExecutionProtocolSource(t, "shadowsocks", "")
+}
+
+func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode string) (string, string) {
 	t.Helper()
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
-	ss := map[string]any{"type": "shadowsocks", "tag": "custom-exit", "server": "203.0.113.20", "server_port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret", "detour": "entry-wg"}
+	external := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}
+	switch protocol {
+	case "shadowsocks":
+		external["shadowsocks"] = map[string]any{"server": "203.0.113.20", "port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret"}
+	case "hysteria2":
+		external["hysteria2"] = map[string]any{"server": "203.0.113.20", "port": 443, "password": "captured-external-secret", "tls_server_name": "node.example"}
+	case "socks5", "http-connect", "https-connect":
+		transport := map[string]any{"host": "203.0.113.20", "port": 8443, "username": "captured-external-user", "password": "captured-external-secret"}
+		if protocol == "https-connect" {
+			transport["tls_server_name"] = "node.example"
+		}
+		external[strings.ReplaceAll(protocol, "-", "_")] = transport
+	default:
+		t.Fatal("unsupported native fixture protocol")
+	}
+	var layer *multihoprelay.StartLayer
+	if layerMode != "" {
+		layer = &multihoprelay.StartLayer{Mode: layerMode, API: "http://10.93.0.1:8787", Transport: map[string]any{"type": "shadowsocks", "tag": "provisioned-start", "server": "203.0.113.20", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": key}}
+		raw, _ := json.Marshal(layer)
+		var saved map[string]any
+		if err := json.Unmarshal(raw, &saved); err != nil {
+			t.Fatal(err)
+		}
+		external["start_layer"] = saved
+	}
+	paired, err := multihoprelay.ExternalSelection("selected-exit", protocol, external, layer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	transport := paired.Transport
+	transport["tag"], transport["detour"] = "custom-exit", "entry-wg"
 	wg := map[string]any{"type": "wireguard", "tag": "entry-wg", "system": false, "listen_port": 51888, "mtu": 1280, "private_key": key, "address": []string{"10.77.0.2/32"}, "peers": []any{map[string]any{"address": "198.51.100.20", "port": 51820, "public_key": key, "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
 	var graph map[string]any
 	if err := json.Unmarshal([]byte(externalFixtureSource), &graph); err != nil {
 		t.Fatal(err)
 	}
-	graph["outbounds"], graph["endpoints"] = []any{ss}, []any{wg}
-	profile := map[string]any{"id": "selected-exit", "node_kind": "external", "dns_mode": "rescue", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "fixed", "manual_mtu": 1280, "multihop_enabled": true, "multihop_entry_id": "paired-entry", "multihop_exit_id": "selected-exit", "multihop_exit_mode": "shadowsocks", "multihop_execution": "auto", "external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{"server": "203.0.113.20", "port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret"}, "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}}
-	capture := map[string]any{"schema": 1, "exit_id": "selected-exit", "protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "entry_tag": "entry-wg", "profile": profile, "entry": map[string]any{"id": "paired-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("c", 64), "router_api": "http://10.77.0.1:8787", "api_token": "captured-entry-token"}}
+	graph["outbounds"], graph["endpoints"] = []any{transport}, []any{wg}
+	profile := map[string]any{"id": "selected-exit", "node_kind": "external", "dns_mode": "rescue", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "fixed", "manual_mtu": 1280, "start_layer": layerMode, "multihop_enabled": true, "multihop_entry_id": "paired-entry", "multihop_exit_id": "selected-exit", "multihop_exit_mode": protocol, "multihop_execution": "auto", "external": external}
+	capture := map[string]any{"schema": 1, "exit_id": "selected-exit", "protocol": protocol, "expected_public_ip": "203.0.113.88", "entry_tag": "entry-wg", "profile": profile, "entry": map[string]any{"id": "paired-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("c", 64), "router_api": "http://10.77.0.1:8787", "api_token": "captured-entry-token"}}
 	source, err := json.Marshal(graph)
 	if err != nil {
 		t.Fatal(err)
@@ -96,7 +131,18 @@ func externalNativeExecutionSource(t *testing.T) (string, string) {
 }
 
 func TestRouterVPNExternalExecutionAdoptsOnlyExactNativeSelectorCandidates(t *testing.T) {
-	source, capture := externalNativeExecutionSource(t)
+	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(protocol+"/"+layer, func(t *testing.T) {
+				source, capture := externalNativeExecutionProtocolSource(t, protocol, layer)
+				exerciseExternalNativeExecution(t, source, capture)
+			})
+		}
+	}
+}
+
+func exerciseExternalNativeExecution(t *testing.T, source, capture string) {
+	t.Helper()
 	engine := externalNativeCapturedFixture(t, source, capture, nil)
 	r, err := engine.RouterVPNExternalCreateProof(source, capture, "owned-session")
 	if err != nil {
@@ -153,6 +199,80 @@ func TestRouterVPNExternalExecutionAdoptsOnlyExactNativeSelectorCandidates(t *te
 				t.Fatal("foreign native execution graph was adopted or exposed", err)
 			}
 		})
+	}
+}
+
+func TestRouterVPNExternalNativeLayersKeepIndependentOrdinaryEntryAndExit(t *testing.T) {
+	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+		for _, entryMode := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, exitMode := range []string{"aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+				t.Run(protocol+"/"+entryMode+"/"+exitMode, func(t *testing.T) {
+					source, capture := externalNativeExecutionProtocolSource(t, protocol, exitMode)
+					var graph, selected map[string]any
+					if json.Unmarshal([]byte(source), &graph) != nil || json.Unmarshal([]byte(capture), &selected) != nil {
+						t.Fatal("invalid captured fixture")
+					}
+					delete(selected, "execution")
+					profile := selected["profile"].(map[string]any)
+					profile["multihop_execution"] = "local"
+					entryBody, _ := json.Marshal(profile)
+					var entry map[string]any
+					if json.Unmarshal(entryBody, &entry) != nil {
+						t.Fatal("invalid copied external entry")
+					}
+					entry["id"], entry["multihop_enabled"], entry["start_layer"] = "paired-entry", false, entryMode
+					ext := entry["external"].(map[string]any)
+					ext["expected_public_ip"] = "198.51.100.88"
+					delete(ext, "response_probe")
+					transport := ext[strings.ReplaceAll(protocol, "-", "_")].(map[string]any)
+					hostField := "server"
+					if protocol == "socks5" || protocol == "http-connect" || protocol == "https-connect" {
+						hostField = "host"
+					}
+					transport[hostField] = "198.51.100.20"
+					layer := ext["start_layer"].(map[string]any)
+					layer["mode"], layer["api"] = entryMode, "http://10.94.0.1:8787"
+					layer["transport"].(map[string]any)["server"] = "198.51.100.20"
+					layer["transport"].(map[string]any)["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("i", 32)))
+					rawEntry, err := multihoprelay.ExternalTransport(protocol, ext)
+					if err != nil {
+						t.Fatal(err)
+					}
+					rawEntry["tag"] = "entry-wg"
+					graph["endpoints"] = []any{}
+					graph["outbounds"] = append([]any{rawEntry}, graph["outbounds"].([]any)...)
+					selected["entry"] = entry
+					raw, _ := json.Marshal(graph)
+					source = string(raw)
+					raw, _ = json.Marshal(selected)
+					capture = string(raw)
+					engine := externalNativeCapturedFixture(t, source, capture, nil)
+					request, err := engine.RouterVPNExternalCreateProof(source, capture, "owned-layer-session")
+					if err != nil {
+						t.Fatal("actual native owners rejected independent ordinary layers", err)
+					}
+					request.Cancel()
+					if raw, err := request.Run(); err == nil || raw != "" || request.Healthy() {
+						t.Fatal("native layer graph manufactured proof after cancellation")
+					}
+					for _, tag := range []string{mobilemultihop.ExternalEntryStartLayerTag, multihoprelay.ExitStartLayerTag} {
+						changed := externalNativeCapturedFixture(t, source, capture, func(g map[string]any) {
+							for _, raw := range g["outbounds"].([]any) {
+								out := raw.(map[string]any)
+								if out["tag"] == tag {
+									out["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 32)))
+									return
+								}
+							}
+							t.Fatal("native layer owner absent")
+						})
+						if _, err := changed.RouterVPNExternalCreateProof(source, capture, "owned-layer-session"); err == nil {
+							t.Fatal("native parser accepted changed layer credentials as the captured owner")
+						}
+					}
+				})
+			}
+		}
 	}
 }
 
