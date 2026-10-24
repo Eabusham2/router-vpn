@@ -255,20 +255,39 @@ func TestNativeMultihopEnvironmentAndStatusKeepExactBase(t *testing.T) {
 }
 
 func TestNativeMultihopProofCannotAdoptRetiredEntryOrExit(t *testing.T) {
-	for _, retire := range []string{"none", "before", "entry", "exit", "cancel", "source", "wrong-entry"} {
+	for _, retire := range []string{"none", "before", "entry", "exit", "cancel", "source", "wrong-entry", "expired"} {
 		t.Run(retire, func(t *testing.T) {
 			root, sel := nativeMultihopCapturedFixture(t, "awg2-strong", "aes-256-gcm+xor-whitening")
 			sel, err := captureNativeMultihopSelection(context.Background(), root, sel, []string{"shadowsocks"}, nil)
 			if err != nil {
 				t.Fatal(err)
 			}
-			ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
+			// Retirement is driven by each scenario, not by the speed of the
+			// real private-source reads under race instrumentation on Windows.
+			// This timer is only a failure watchdog for a stuck proof loop.
+			watchdog := time.AfterFunc(5*time.Second, cancel)
+			defer watchdog.Stop()
+			if retire == "expired" {
+				var expire context.CancelFunc
+				ctx, expire = context.WithDeadline(ctx, time.Unix(0, 0))
+				defer expire()
+			}
 			owned, calls := retire != "before", 0
-			err = proveNativeMultihopCapture(ctx, sel, func() bool { return owned }, func(_ context.Context, p common.RouterProfile, lane string) error {
+			err = proveNativeMultihopCapture(ctx, sel, func() bool { return owned }, func(proofCtx context.Context, p common.RouterProfile, lane string) error {
 				calls++
 				if calls == 1 && (p.ID != sel.Entry.ID || lane != multihopEntryProofProxy) || calls == 2 && (p.ID != sel.Exit.ID || lane != multihopProofProxy) {
 					t.Fatal("proof borrowed the other hop lane")
+				}
+				if retire == "none" && calls == 1 {
+					// A healthy proof may take longer than the former 50ms
+					// fixture deadline without losing either captured owner.
+					select {
+					case <-time.After(75 * time.Millisecond):
+					case <-proofCtx.Done():
+						return proofCtx.Err()
+					}
 				}
 				if retire == "entry" && calls == 1 || retire == "exit" && calls == 2 {
 					owned = false
@@ -291,8 +310,19 @@ func TestNativeMultihopProofCannotAdoptRetiredEntryOrExit(t *testing.T) {
 				if err != nil || calls != 2 {
 					t.Fatal("both captured nodes were not proved", err)
 				}
-			} else if err == nil || retire == "before" && calls != 0 || retire != "before" && retire != "exit" && calls != 1 {
-				t.Fatal("retired or wrong entry proof reached adoption or the next node", retire, calls, err)
+			} else {
+				wantCalls := 1
+				if retire == "before" || retire == "expired" {
+					wantCalls = 0
+				} else if retire == "exit" {
+					wantCalls = 2
+				}
+				if err == nil || calls != wantCalls {
+					t.Fatal("retired or wrong entry proof reached adoption or the next node", retire, calls, err)
+				}
+				if retire == "expired" && !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("already expired proof did not preserve its deadline error", err)
+				}
 			}
 		})
 	}
