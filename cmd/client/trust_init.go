@@ -13,14 +13,12 @@ import (
 const defaultPrivatePathProbeURL = "http://10.77.0.1:8787/health"
 const legacyPublicHealthURL = "https://connectivitycheck.gstatic.com/generate_204"
 
-// init migrates the historical public-Internet health probe before main reads
-// client.json. A generic Internet 2xx must never be enough to claim Router VPN
-// is connected. The default proof target is reachable only through the private
-// Router VPN path. Tests skip the startup write and exercise the helpers below.
-func init() {
-	if strings.HasSuffix(strings.ToLower(os.Args[0]), ".test") {
-		return
-	}
+// prepareClientTrustBeforeMain migrates the historical public-Internet health
+// probe before main reads client.json. A generic Internet 2xx must never be
+// enough to claim Router VPN is connected. The default proof target is reachable
+// only through the private Router VPN path. Standalone package verification
+// returns before this write.
+func prepareClientTrustBeforeMain() {
 	path := os.Getenv("HOMEVPN_CLIENT_CONFIG")
 	if strings.TrimSpace(path) == "" {
 		path = "./client.json"

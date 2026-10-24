@@ -69,6 +69,10 @@ func main() {
 		}
 		return
 	}
+	// Package verification is a read-only utility. Only normal application
+	// startup may migrate client configuration or prepare a Windows catalog.
+	prepareClientTrustBeforeMain()
+	prepareWindowsCatalogBeforeMain()
 	configPath := getenv("HOMEVPN_CLIENT_CONFIG", "./client.json")
 	var c common.ClientConfig
 	b, err := readPrivateRegular(configPath, maxPrivateStoreBytes)

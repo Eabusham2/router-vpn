@@ -103,3 +103,9 @@ jobs:
             Write-Output "::error title=Windows Go contract failure::$message"
             exit $exit
           }
+      - name: Standalone runtime verifier startup isolation
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Continue'
+          & go test -v -count=1 -timeout=180s ./cmd/client -run '^TestRuntimeUtilityStartup$'
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

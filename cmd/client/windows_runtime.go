@@ -8,12 +8,13 @@ import (
 	"runtime"
 )
 
-// prepareWindowsCatalogBeforeMain makes the generic installed Windows package
-// usable without a wrapper. Raw WireGuard maps to the official WireGuard
-// tunnel service. Compatible layered modes map to the pinned native
-// sing-box/Xray TUN adapter; unsupported modes remain fail-closed and WSL is
+// prepareWindowsCatalogBeforeMain runs after standalone utility dispatch and
+// makes the generic installed Windows package usable without a wrapper.
+// Raw WireGuard maps to the official WireGuard tunnel service. Compatible
+// layered modes map to the pinned native sing-box/Xray TUN adapter;
+// unsupported modes remain fail-closed and WSL is
 // never treated as native readiness.
-func init() {
+func prepareWindowsCatalogBeforeMain() {
 	if runtime.GOOS != "windows" {
 		return
 	}

@@ -302,6 +302,14 @@ negative control. The Gradle regression runs before native preparation in every
 APK build; it doubles payload inspection while retaining the shipping verifier
 CLI and actual NDK validation.
 
+The corrected authoritative Android lane on `1a459f4a` completed all seven
+Gradle regressions, actual native compilation, Java compilation, APK assembly
+and the real Tor checks in both the AAR and finished APK. Its downloaded
+artifact matched GitHub's size and SHA-256, and the shipping archive-provenance
+verifier accepted the finished APK for that exact commit and repository.
+This is a debug APK; persistent production signing and a physical-device
+upgrade remain separate requirements.
+
 The later authoritative `94ecb55d` iOS build exposed a separate ordering race:
 its provenance script ran before Xcode generated the app's `Info.plist`, then
 the plist-generation task immediately followed the failure. The successful
@@ -310,10 +318,16 @@ both target stamp phases now declare the generated plist as an input. The
 stamper remains unchanged and still rejects missing plists or invalid source
 identity; it does not claim a second plist producer. All 34 portable checks pass,
 including four missing/wrong dependency controls. Before framework preparation,
-each full-app CI lane must also build a small actual Xcode app and embedded
-extension using the shipping stamp phases, verify clean and changed-SHA
-incremental ordering, and reject invalid source identity. That native scheduler
-check and the full corrected packages remain requirements of the next commit.
+the client, release-candidate and iOS smoke lanes build a small actual Xcode
+app and embedded extension using the shipping stamp phases. All three passed
+on `1a459f4a`: clean and changed-SHA incremental builds verified the actual
+generated and embedded metadata, and invalid source identity was rejected.
+The client lane also completed actual native framework compilation, the full
+iPhoneOS app and PacketTunnel build, and the unsigned re-signable IPA. The
+downloaded finished IPA matched its artifact checksum and passed the unchanged
+shipping verifier for the exact commit, repository and both packaged families.
+These checks establish the corrected build ordering and package identity;
+Apple distribution signing and physical-device networking remain separate.
 
 Both `94ecb55d` Windows Portable consumers passed, including relocation. The
 authoritative installed-package gates then passed the runtime-install fixture's
@@ -321,9 +335,36 @@ authoritative installed-package gates then passed the runtime-install fixture's
 in Windows PowerShell 5.1. That fixture now uses nonrecursive .NET deletion after
 checking the link identity, then checks that the link is gone and the complete
 target payload is unchanged. All 205 local checks pass; a target-byte mutation
-fails the new retention assertion. Actual Windows PowerShell 5.1 confirmation
-and the next commit's complete release chain remain required. This repair changes
-test cleanup only and retains the production install/rollback ownership checks.
+fails the new retention assertion. On `1a459f4a`, the diagnostic and both
+authoritative Windows architecture lanes passed all 205 checks in both
+PowerShell 7 and Windows PowerShell 5.1. That repair changes test cleanup only
+and retains the production install/rollback ownership checks.
+
+The next actual Windows installation step exposed pre-main application hooks:
+standalone runtime verification attempted to prepare an unrelated mode catalog,
+and PowerShell 5.1 treated its stderr as an installation failure. The adjacent
+trust hook could also modify or reject unrelated client configuration before
+verification. Both operations now run explicitly after the two standalone
+utility dispatches, retaining trust validation before catalog preparation for
+normal application startup. A regression builds and executes the complete
+controller for 64 utility invocations, checking exact stdout/stderr and unchanged
+ambient or explicitly selected configuration. Normal-startup controls preserve
+trust migration, malformed-config rejection and actual Windows catalog setup.
+The fixture passes on Go 1.23 and 1.26; the old source fails six ambient-config
+groups. Four actual complete native/AWG verifier calls also pass with malformed
+unrelated configuration, clean stderr and unchanged files. The real Windows
+startup regression now runs in the early native contract workflow; the next
+commit still requires both installed-package consumers and the release chain.
+
+The same `1a459f4a` source audit and all six authoritative native runtime targets
+passed. Both Linux GTK packages passed rendered-layout, responsive-dialog,
+cancellation and actual installed-runtime upgrade checks; both macOS AppKit
+packages passed native compilation and sealed-runtime/archive verification.
+The ARM64 auxiliary lane passed its actual image smoke tests, authenticated
+fallback Portable downloads and private-pairing checks. These are results for
+that exact commit. The new startup repair requires a fresh source-bound release
+run, including the nine images, production compose and complete prerelease;
+physical-device, distribution-signing and private deployment gates remain open.
 
 Apple candidate measurement passed 240 executable Swift checks and two negative
 controls. Persistence and native restoration passed 61 and 85 checks respectively;
