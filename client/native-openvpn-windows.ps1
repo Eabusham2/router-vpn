@@ -34,10 +34,10 @@ function Stop-Owned {
 function Remove-PrivateRuntime {
   if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}
 }
-function Kill([string]$Kind,[string]$Alias='') {
-  $args=@('-Action',$Kind,'-Root',$Root,'-Endpoint',$Endpoint)
-  if(-not[string]::IsNullOrWhiteSpace($Alias)){$args+=@('-TunnelAlias',$Alias)}
-  & $KillSwitch @args
+function Invoke-RouterVPNOpenVPNKillSwitch([string]$Kind,[string]$Alias='') {
+  $RuleArguments=@{Action=$Kind;Root=$Root;Endpoint=$Endpoint}
+  if(-not[string]::IsNullOrWhiteSpace($Alias)){$RuleArguments.TunnelAlias=$Alias}
+  & $KillSwitch @RuleArguments
   if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}
 }
 function Kill-Plan {
@@ -72,7 +72,7 @@ function Find-OpenVPNTunnelAlias([int]$Attempts=120) {
 
 if($Action-eq'down'){
   Stop-Owned
-  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  if(-not$HoldKillSwitch){try{Invoke-RouterVPNOpenVPNKillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
   else{Write-Output 'Windows OpenVPN teardown is holding kill-switch ownership for a fail-closed transition.'}
   Remove-PrivateRuntime
   exit 0
@@ -98,11 +98,11 @@ if(Test-Path -LiteralPath $BridgeConfig -PathType Leaf){
 
 $plan=Kill-Plan
 $strict=([string]$plan.policy-ne'off')
-Kill 'check'
+Invoke-RouterVPNOpenVPNKillSwitch 'check'
 if($Action-eq'check'){Write-Output 'native Windows OpenVPN external runtime ready';exit 0}
 
 Stop-Owned
-Kill 'prepare'
+Invoke-RouterVPNOpenVPNKillSwitch 'prepare'
 $bridge=$null
 $openvpn=$null
 $controllerStopping=$false
@@ -123,7 +123,7 @@ try{
 
   if($strict){
     $alias=Find-OpenVPNTunnelAlias
-    Kill 'tunnel' $alias
+    Invoke-RouterVPNOpenVPNKillSwitch 'tunnel' $alias
     Write-Output "Strict Windows OpenVPN tunnel allowed only on interface '$alias'."
   }
 

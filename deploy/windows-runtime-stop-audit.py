@@ -42,7 +42,7 @@ need(
     "Test-RouterVPNControllerStopping",
     "$controllerStopping=$true;break",
     "Stop-Owned",
-    "Kill 'release'",
+    "Invoke-RouterVPNTorKillSwitch 'release'",
     "Close()",
     "Remove-PrivateRuntime",
 )
@@ -51,7 +51,7 @@ need(
     "Test-RouterVPNControllerStopping",
     "$controllerStopping=$true;break",
     "Stop-Owned",
-    "Kill 'release'",
+    "Invoke-RouterVPNOpenVPNKillSwitch 'release'",
     "Remove-PrivateRuntime",
 )
 need(
@@ -59,7 +59,7 @@ need(
     "Test-RouterVPNControllerStopping",
     "$controllerStopping=$true;break",
     "Stop-Owned",
-    "Kill 'release'",
+    "Invoke-RouterVPNNativeKillSwitch 'release'",
     "Remove-PrivateRuntime",
 )
 mode = need(

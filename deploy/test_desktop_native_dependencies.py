@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Exercise Windows delivery imports and the real native builder link boundary."""
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 import importlib.util
 import json
 import os
@@ -84,6 +84,30 @@ def write_bundle(root, target, *, engine=None, cronet=None):
 
 
 class WindowsDependencyDelivery(unittest.TestCase):
+    def test_complete_source_receipt_is_independent_of_host_path_order(self):
+        expected = N.digest()
+        files = N.inputs()
+        names = [path.relative_to(N.ROOT).as_posix() for path in files]
+        self.assertEqual(names, sorted(names))
+        self.assertTrue(any(name.endswith('AndroidConnectionProfileStore.java') for name in names))
+        self.assertTrue(any(name.endswith('AndroidConnectionProfilesDialog.java') for name in names))
+        # Execute the real nested input collectors under Windows's case-folded
+        # Path ordering. This reproduced the exact failed Windows CI digest
+        # before the producer sealed a canonical final input order.
+        with patch.object(Path, '__lt__', lambda left, right:
+                          PureWindowsPath(str(left)) < PureWindowsPath(str(right))):
+            self.assertEqual(N.inputs(), files)
+            self.assertEqual(N.digest(), expected)
+
+        # Stable discovery must not weaken the exact-byte or filename seal.
+        read = Path.read_bytes
+        changed = next(path for path in files if path.name == 'AndroidConnectionProfileStore.java')
+        with patch.object(Path, 'read_bytes', lambda path:
+                          read(path) + b'\n// changed native source\n' if path == changed else read(path)):
+            self.assertNotEqual(N.digest(), expected)
+        with patch.object(N, 'inputs', return_value=files[:-1]):
+            self.assertNotEqual(N.digest(), expected)
+
     def test_both_targets_read_ordinary_delay_and_case_insensitive_owned_imports(self):
         for target in ('windows/amd64', 'windows/arm64'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:

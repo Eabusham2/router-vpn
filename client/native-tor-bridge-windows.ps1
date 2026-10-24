@@ -118,7 +118,7 @@ function Exact-Executable([string]$Path,[string]$Label) {
   if($resolved -match "[`r`n`0]"){throw "$Label path is unsafe."}
   return $resolved
 }
-function Kill([string]$Kind) {
+function Invoke-RouterVPNTorKillSwitch([string]$Kind) {
   & $KillSwitch -Action $Kind -Root $Root -Endpoint $BridgeEndpoint -TunnelAlias $TunnelAlias
   if($LASTEXITCODE-ne 0){throw "Windows Tor kill-switch $Kind failed."}
 }
@@ -189,7 +189,7 @@ if($Transport -notin @('obfs4','meek_lite','snowflake','webtunnel','custom')){th
 
 if($Action -eq 'down'){
   Stop-Owned
-  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  if(-not$HoldKillSwitch){try{Invoke-RouterVPNTorKillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
   else{Write-Output 'Windows Tor teardown is holding kill-switch ownership for a fail-closed transition.'}
   try{[RouterVpnTorJob]::Close()}catch{Write-Warning $_.Exception.Message}
   Remove-PrivateRuntime
@@ -212,12 +212,12 @@ if(-not $torrcPT.Equals($PTBinary,[StringComparison]::OrdinalIgnoreCase)){throw 
 if($LASTEXITCODE-ne 0){throw 'Tor binary verification failed.'}
 & $SingBoxBinary check -D $RuntimeDir -c $Config | Out-Null
 if($LASTEXITCODE-ne 0){throw 'Pinned sing-box rejected the prepared Windows Tor graph.'}
-Kill 'check'
+Invoke-RouterVPNTorKillSwitch 'check'
 if($Action -eq 'check'){Write-Output "native Windows Tor $Transport bridge graph ready ($PluginTransports)";exit 0}
 
 Stop-Owned
 [RouterVpnTorJob]::Ensure()
-Kill 'prepare'
+Invoke-RouterVPNTorKillSwitch 'prepare'
 $controllerStopping=$false
 try {
   Set-Content -LiteralPath $TorLog -Value '' -Encoding ascii

@@ -63,7 +63,7 @@ def run(command, *, cwd=None, env=None, timeout=1800):
 
 
 def inputs():
-    return list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
+    files = list(dict.fromkeys([Path(__file__).resolve(), ROOT/'deploy/build-desktop-pq.py',
                              ROOT/'deploy/build-mobile-pq.py', ROOT/'deploy/prepare-desktop-rosenpass.py',
                              ROOT/'deploy/setup-desktop-native-toolchain.py',
                              ROOT/'deploy/install-desktop-windows-toolchain.py',
@@ -76,6 +76,11 @@ def inputs():
                              ROOT/'mobile/desktop/native_library.go.tmpl',
                              ROOT/'deploy/prepare-mobile-buffers.py',
                              ROOT/'deploy/mobile_udp_socket_policy.py']))
+    # Path ordering is case-folded on Windows and case-sensitive on POSIX.
+    # Nested preparers include mixed-case Java/Swift filenames, so preserving
+    # their discovery order gives identical bytes different source identities.
+    # Seal the complete set in one explicit, platform-independent order.
+    return sorted(files, key=lambda path: path.relative_to(ROOT).as_posix())
 
 
 def digest():

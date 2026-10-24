@@ -35,17 +35,67 @@ function Test-RouterVPNControllerStopping{
 }
 function Stop-Process{param($InputObject,[switch]$Force,$ErrorAction);[IO.File]::AppendAllText($env:WRAPPER_STOPPED,([string]$InputObject.Id+"`n"));$InputObject.HasExited=$true}
 function Stop-RouterVPNRecordedProcess($Path){[IO.File]::AppendAllText($env:WRAPPER_STOPPED,"replacement-registry-owner`n");return $true}
+# Windows PowerShell resolves this standard alias before a same-named
+# function. Retain that command environment on non-Windows test hosts too.
+Set-Alias -Name kill -Value Stop-Process -Scope Script
 '@
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'Private-RouterVPN-State.ps1'),(". '"+$RealPrivate+"'`n"+$Overrides),[Text.UTF8Encoding]::new($false))
 $Core=Join-Path $TaskRoot 'core.ps1'
 [IO.File]::WriteAllText($Core,'param([string]$Mode); if($Mode-ne''check''){throw ''Unexpected native invocation''}; exit ([int]$env:WRAPPER_CHECK_RESULT)',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'Select-Standard-Engine.ps1'),'function Get-RouterVPNStandardEngine($Root){return $env:WRAPPER_CORE}',[Text.UTF8Encoding]::new($false))
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'windows-kill-switch.ps1'),'param($Action,$Root,$Endpoint,$TunnelAlias);[IO.File]::AppendAllText($env:WRAPPER_POLICY,($Action+"`n"));exit 0',[Text.UTF8Encoding]::new($false))
-$Names=@('HOMEVPN_ROOT','HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','WRAPPER_RUNTIME','WRAPPER_CORE','WRAPPER_POLICY','WRAPPER_STARTED','WRAPPER_STOPPED','WRAPPER_CASE','WRAPPER_CHECK_RESULT')
+$Names=@('HOMEVPN_ROOT','HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','WRAPPER_RUNTIME','WRAPPER_CORE','WRAPPER_POLICY','WRAPPER_STARTED','WRAPPER_STOPPED','WRAPPER_CASE','WRAPPER_CHECK_RESULT','WRAPPER_DISPATCH_LOG','WRAPPER_POLICY_FAIL')
 $Saved=@{};foreach($Name in $Names){$Saved[$Name]=[Environment]::GetEnvironmentVariable($Name,'Process')}
 $Shell=(Get-Process -Id $PID).Path
+
+function Assert-ShippingKillSwitchDispatch([string]$RepositoryRoot,[string]$Relative,[string]$Helper,[string[]]$ExpectedActions){
+    $Body=Get-Content -LiteralPath (Join-Path $RepositoryRoot $Relative) -Raw -Encoding UTF8
+    $Tree=[ScriptBlock]::Create($Body).Ast
+    $Definitions=@($Tree.FindAll({param($Node)$Node-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$Node.Name-eq$Helper},$true))
+    Assert-Wrapper ($Definitions.Count-eq1) ('Shipping kill-switch helper changed: '+$Relative)
+    $Calls=@($Tree.FindAll({param($Node)$Node-is[System.Management.Automation.Language.CommandAst]-and$Node.GetCommandName()-eq$Helper},$true))
+    Assert-Wrapper ($Calls.Count-eq$ExpectedActions.Count) ('Shipping kill-switch call sites changed: '+$Relative)
+    $Root=$TaskRoot;$Endpoint='203.0.113.20';$BridgeEndpoint=$Endpoint;$TunnelAlias='captured-tunnel';$alias='verified-openvpn-tunnel'
+    $KillSwitch=Join-Path $TaskRoot ('dispatch-'+$Helper+'.ps1')
+    $env:WRAPPER_DISPATCH_LOG=Join-Path $TaskRoot ('dispatch-'+$Helper+'.jsonl')
+    $Policy=@'
+param($Action,$Root,$Endpoint,$TunnelAlias)
+[IO.File]::AppendAllText($env:WRAPPER_DISPATCH_LOG,(@{action=$Action;root=$Root;endpoint=$Endpoint;tunnel=$TunnelAlias}|ConvertTo-Json -Compress)+"`n")
+if($env:WRAPPER_POLICY_FAIL-eq'1'){exit 17}
+exit 0
+'@
+    [IO.File]::WriteAllText($KillSwitch,$Policy,[Text.UTF8Encoding]::new($false))
+    function Stop-Process{throw 'Windows kill alias dispatched process teardown instead of the captured firewall helper.'}
+    Set-Alias -Name kill -Value Stop-Process -Scope Local
+    . ([ScriptBlock]::Create($Definitions[0].Extent.Text))
+    $env:WRAPPER_POLICY_FAIL='0'
+    foreach($Call in $Calls){& ([ScriptBlock]::Create($Call.Extent.Text))}
+    $Records=@([IO.File]::ReadAllLines($env:WRAPPER_DISPATCH_LOG)|ForEach-Object{$_|ConvertFrom-Json})
+    Assert-Wrapper ($Records.Count-eq$ExpectedActions.Count) 'A shipping helper did not invoke its captured firewall operation.'
+    for($Index=0;$Index-lt$Records.Count;$Index++){
+        $Record=$Records[$Index]
+        Assert-Wrapper ($Record.action-ceq$ExpectedActions[$Index]-and$Record.root-ceq$Root-and$Record.endpoint-ceq$Endpoint) ('A shipping helper changed the captured firewall operation or owner: '+$Relative+' '+$Index+' '+($Record|ConvertTo-Json -Compress))
+        $ExpectedTunnel=if($Relative-like'*openvpn*'){if($Record.action-eq'tunnel'){$alias}else{''}}else{$TunnelAlias}
+        Assert-Wrapper ([string]$Record.tunnel-ceq$ExpectedTunnel) 'A shipping helper changed the verified tunnel interface.'
+    }
+    $env:WRAPPER_POLICY_FAIL='1'
+    $Failed=$false
+    try{& ([ScriptBlock]::Create($Calls[0].Extent.Text))}catch{$Failed=$_.Exception.Message-like'*kill-switch*failed*'}
+    Assert-Wrapper $Failed 'A failed firewall helper was accepted as successful.'
+    $env:WRAPPER_POLICY_FAIL='0'
+    # Negative control: the former helper spelling resolves to the Windows
+    # alias even when its function body is present. Do not remove the alias.
+    . ([ScriptBlock]::Create($Definitions[0].Extent.Text.Replace($Helper,'Kill')))
+    $Collision=$false
+    try{& ([ScriptBlock]::Create($Calls[0].Extent.Text.Replace($Helper,'Kill')))}catch{$Collision=$_.Exception.Message-like'Windows kill alias dispatched*'}
+    Assert-Wrapper $Collision 'The alias collision regression control did not exercise real PowerShell command resolution.'
+}
+
 $Count=0
 try{
+    Assert-ShippingKillSwitchDispatch $Root 'client/native-multihop-windows.ps1' 'Invoke-RouterVPNNativeKillSwitch' @('release','check','prepare')
+    Assert-ShippingKillSwitchDispatch $Root 'client/native-openvpn-windows.ps1' 'Invoke-RouterVPNOpenVPNKillSwitch' @('release','check','prepare','tunnel')
+    Assert-ShippingKillSwitchDispatch $Root 'client/native-tor-bridge-windows.ps1' 'Invoke-RouterVPNTorKillSwitch' @('release','check','prepare')
     foreach($Case in @('check','failed-check','down','up','changed','early')){
         $PrivateRoot=Join-Path $TaskRoot $Case;$Runtime=Join-Path $PrivateRoot 'run/native-node/one';[void][IO.Directory]::CreateDirectory($Runtime)
         [IO.File]::WriteAllText((Join-Path $Runtime 'sing-box.json'),'{}');[IO.File]::WriteAllText((Join-Path $Runtime 'replacement.marker'),'retained')
@@ -74,7 +124,7 @@ try{
         if($Case-eq'changed'){Assert-Wrapper (-not(Test-Path -LiteralPath $env:WRAPPER_STOPPED)) 'Changed process identity was force-stopped.'}
         $Count++
     }
-    Write-Host ('PASS full shipping Windows native wrapper: '+$Count+' check/failure/owner/replacement cases')
+    Write-Host ('PASS full shipping Windows native wrapper: '+$Count+' check/failure/owner/replacement cases; 10 shipping firewall dispatches and 3 alias/failure negative controls')
 }finally{
     foreach($Name in $Names){[Environment]::SetEnvironmentVariable($Name,$Saved[$Name],'Process')}
     if(Test-Path -LiteralPath $TaskRoot){[IO.Directory]::Delete($TaskRoot,$true)}

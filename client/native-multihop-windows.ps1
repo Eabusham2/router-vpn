@@ -19,7 +19,9 @@ $PidFile=Join-Path $RuntimeDir 'native-multihop.process.json'
 $HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 $ExternalSession=[string]$env:HOMEVPN_EXTERNAL_SESSION
 if($ExternalSession-and(([string]$env:HOMEVPN_STANDARD_ENGINE-ne'native')-or($ExternalSession-cnotmatch'^[a-f0-9]{32}$'))){throw 'Invalid captured external native owner.'}
-function Kill([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
+# A bare `Kill` function loses command resolution to Windows PowerShell's
+# built-in kill -> Stop-Process alias, including during read-only checks.
+function Invoke-RouterVPNNativeKillSwitch([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
 $OwnedProcess=$null;$OwnedIdentity=$null
 function Stop-Owned{
   if($null-eq$OwnedProcess-or$null-eq$OwnedIdentity){return}
@@ -33,7 +35,7 @@ function Remove-PrivateRuntime{if(Test-Path -LiteralPath $RuntimeDir){[IO.Direct
 if($Action-eq'down'){
   if($ExternalSession){Write-Output 'Captured external teardown belongs to the controller after native close acknowledgement.';exit 0}
   [void](Stop-RouterVPNRecordedProcess $PidFile)
-  if(-not$HoldKillSwitch){try{Kill 'release'}catch{Write-Warning $_.Exception.Message}}
+  if(-not$HoldKillSwitch){try{Invoke-RouterVPNNativeKillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
   else{Write-Output 'Windows multihop teardown is holding kill-switch ownership for a fail-closed transition.'}
   Remove-PrivateRuntime
   exit 0
@@ -47,10 +49,10 @@ if(-not(Test-Path -LiteralPath $SingBox -PathType Leaf)){throw 'Pinned native si
 if(-not(Test-Path -LiteralPath $KillSwitch -PathType Leaf)){throw 'Windows kill-switch helper is missing.'}
 & $SingBox check -D $RuntimeDir -c $Config|Out-Null
 if($LASTEXITCODE-ne 0){throw 'Pinned sing-box rejected the prepared Windows multihop graph.'}
-Kill 'check'
+Invoke-RouterVPNNativeKillSwitch 'check'
 if($Action-eq'check'){Write-Output 'native Windows multihop graph ready';exit 0}
 if(-not(Test-Administrator)){throw 'Native Windows multihop requires an elevated Router VPN process.'}
-Kill 'prepare'
+Invoke-RouterVPNNativeKillSwitch 'prepare'
 $controllerStopping=$false
 try{
   $quoted='"'+$Config+'"'

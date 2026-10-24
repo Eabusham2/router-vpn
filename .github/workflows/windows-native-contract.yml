@@ -74,6 +74,8 @@ jobs:
             if (-not (Get-Command $name -ErrorAction SilentlyContinue)) { throw "Missing Windows firewall primitive: $name" }
           }
           ./client/test-windows-kill-switch.ps1
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-kill-switch.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 captured firewall regressions failed' }
           ./client/test-private-router-vpn-state.ps1
       - name: Captured native wrapper ownership
         shell: pwsh
