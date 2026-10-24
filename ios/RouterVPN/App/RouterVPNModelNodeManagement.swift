@@ -31,7 +31,8 @@ extension RouterVPNModel {
         exitStartLayer: String? = nil,
         exitLayerAPI: String = "",
         exitLayerPort: Int = 0,
-        exitLayerKey: String = ""
+        exitLayerKey: String = "",
+        serverPeerJSON: String? = nil
     ) -> Bool {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before editing node metadata."; return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -57,6 +58,11 @@ extension RouterVPNModel {
         do {
             let probe: ExternalResponseProbe?
             let layerUpdate: ExternalStartLayerUpdate?
+            let peerUpdate: ExternalServerPeerUpdate?
+            if let serverPeerJSON {
+                guard let expectedExternal, ExternalNodeConfig.packetProtocols.contains(expectedExternal.protocolName) else { throw IOSExternalExecution.issue() }
+                peerUpdate = ExternalServerPeerUpdate(peer: try IOSExternalExecution.serverPeer(serverPeerJSON))
+            } else { peerUpdate = nil }
             if let expectedExternal {
                 guard let host = expectedExternal.serverExecutionHost else { throw IOSExternalExecution.issue() }
                 probe = try IOSExternalExecution.responseProbe(host: host, url: responseProbeURL, serverName: responseProbeServerName)
@@ -90,7 +96,8 @@ extension RouterVPNModel {
                 longitude: longitude,
                 expectedExternal: expectedExternal,
                 responseProbe: probe,
-                startLayerUpdate: layerUpdate
+                startLayerUpdate: layerUpdate,
+                serverPeerUpdate: peerUpdate
             )
             if bundle?.routerProfiles.contains(where: { $0.id == id }) == true {
                 try importBundle(replacement)

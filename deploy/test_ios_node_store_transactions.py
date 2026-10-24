@@ -44,6 +44,7 @@ enum IOSDNSRuntimePolicy {
 }
 enum IOSExternalExecution {
  static func validateImported(_ value: ClientBundle) throws {}
+ static func issue() -> NSError { NSError(domain: "ExternalValidationBoundary", code: 1) }
 }
 @MainActor final class RouterVPNModel {
  var bundle: ClientBundle?, modes: [VPNMode] = [], logicalModes: [LogicalMode] = []

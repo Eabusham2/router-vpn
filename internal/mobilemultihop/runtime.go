@@ -82,6 +82,9 @@ func (c *Controller) prove(ctx context.Context, tag, api, token, node string) (t
 func (c *Controller) leaseRequest(ctx context.Context, method string, body []byte) ([]byte, error) {
 	target, _ := url.Parse(c.meta.EntryAPI)
 	target.Path = "/api/multihop/lease"
+	if method == "GET" && c.external != nil && multihoprelay.ExternalPacketMode(c.meta.ExitMode) {
+		target.RawQuery = "external_packet=1"
+	}
 	data, _, e := c.exchangeBounded(ctx, c.meta.EntryTag, method, target.String(), c.meta.EntryToken, body, multihoprelay.LeaseResponseLimit(method))
 	return data, e
 }
@@ -114,6 +117,16 @@ func (c *Controller) acquire(ctx context.Context) error {
 			if (multihoprelay.PacketMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (exit.PublicKey == "" || exit.PublicKey == c.localPublicKey) {
 				return errors.New("server WireGuard needs separately paired client credentials to avoid peer roaming")
 			}
+			if c.external != nil && multihoprelay.ExternalPacketMode(c.meta.ExitMode) {
+				paired, err := externalRelaySelection(c.external.capture)
+				if err != nil {
+					return err
+				}
+				_, expectedKey, err := multihoprelay.ExternalPacketIdentities(paired)
+				if err != nil || exit.PublicKey != expectedKey {
+					return errors.New("server packet credentials differ from the captured independently provisioned peer")
+				}
+			}
 			if (IsPQMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (!proofID.MatchString(exit.PQIdentity) || exit.PQIdentity == c.localPQIdentity) {
 				return errors.New("server PQ needs independently paired KEM credentials to avoid cross-session rekeying")
 			}
@@ -130,6 +143,22 @@ func (c *Controller) acquire(ctx context.Context) error {
 	}
 	if err := ctx.Err(); err != nil {
 		return err
+	}
+	if c.external != nil && multihoprelay.ExternalPacketMode(c.meta.ExitMode) {
+		if caps.PacketChallenge == nil {
+			return errors.New("packet relay requires its authenticated entry challenge")
+		}
+		paired, err := externalRelaySelection(c.external.capture)
+		if err != nil {
+			return err
+		}
+		proposal, err := multihoprelay.ChallengeExternalPacketRequest(paired, c.proposal, *caps.PacketChallenge)
+		if err != nil {
+			return err
+		}
+		// Only the request authenticator changes. The immutable final graph,
+		// session/listener credentials and captured comparison paths stay owned.
+		c.proposal, c.expected.Request = proposal, proposal
 	}
 	c.ownsLease = true // An expired HTTP request may nevertheless have created it.
 	if e = c.renewLocked(ctx); e != nil {

@@ -122,10 +122,12 @@ FIXTURE = r'''
  static func check(_ label:String,_ valid:@autoclosure()->Bool){guard valid()else{fatalError("FAIL: "+label)};checks.add()}
  static func reject(_ label:String,_ action:()throws->Void){do{try action();fatalError("ACCEPTED: "+label)}catch{checks.add()}}
  static func json(_ value:Any)throws->String{String(decoding:try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys]),as:UTF8.self)}
- static func capture(_ requested:String="auto",_ entryID:String="entry")throws->(IOSMultihopExecution.Source,RouterVPNExternalPolicy){
-  let exit:[String:Any]=["id":"exit","node_kind":"external","external":["protocol":"shadowsocks","response_probe":["url":"https://198.51.100.8/response"]],"multihop_enabled":true,"multihop_entry_id":entryID,"multihop_exit_id":"exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":"shadowsocks","multihop_execution":requested]
+ static func capture(_ requested:String="auto",_ entryID:String="entry",_ kind:String="shadowsocks")throws->(IOSMultihopExecution.Source,RouterVPNExternalPolicy){
+  var external:[String:Any]=["protocol":kind,"response_probe":["url":"https://198.51.100.8/response"]]
+  if ["wireguard","amneziawg"].contains(kind){external["server_peer"]=["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1360,"persistent_keepalive_interval":25]}
+  let exit:[String:Any]=["id":"exit","node_kind":"external","external":external,"multihop_enabled":true,"multihop_entry_id":entryID,"multihop_exit_id":"exit","multihop_entry_mode":"max-tls-awg","multihop_exit_mode":kind,"multihop_execution":requested]
   let entry:[String:Any]=["id":entryID,"node_kind":"router-vpn"]
-  let config:[String:Any]=["engine":"external-libbox","mode":"external-shadowsocks","bundle":Data(try json(["selectedRouterID":"exit","routerProfiles":[exit]]).utf8),"external_entry_bundle":Data(try json(["selectedRouterID":entryID,"routerProfiles":[entry]]).utf8),"external_entry_mode":"max-tls-awg"]
+  let config:[String:Any]=["engine":"external-libbox","mode":"external-"+kind,"bundle":Data(try json(["selectedRouterID":"exit","routerProfiles":[exit]]).utf8),"external_entry_bundle":Data(try json(["selectedRouterID":entryID,"routerProfiles":[entry]]).utf8),"external_entry_mode":"max-tls-awg"]
   let source=try IOSMultihopExecution.Source(configuration:config){_ in String(repeating:"a",count:64)}
   let policy=RouterVPNExternalPolicy(sourceConfig:"exact compiled graph",capture:try json(["exit_id":"exit","profile":exit,"entry":entry]),executionRequested:requested)
   return(source,policy)
@@ -134,7 +136,8 @@ FIXTURE = r'''
  static func wait(_ event:DispatchSemaphore,_ label:String){check(label,event.wait(timeout:.now()+5) == .success)}
  static func main()throws {
   let request=String(repeating:"d",count:32),sourceAndPolicy=try capture(),source=sourceAndPolicy.0,policy=sourceAndPolicy.1
-  for winner in ["local","server"] {
+  for kind in ["shadowsocks","wireguard","amneziawg"] { for winner in ["local","server"] {
+   let (source,policy)=try capture("auto","entry",kind)
    Trace.shared.reset();let tunnel=PacketTunnelProvider(),native=LibboxCommandServer(),result=ResultBox()
    native.request.winner=winner
    let engine=RouterVPNLibboxEngine(tunnel:tunnel,server:native,policy:policy)
@@ -146,7 +149,7 @@ FIXTURE = r'''
    try engine.enableExternalHopMeasurement(exitID:"exit")
    reject("hop-only adoption cannot grant restoration"){try engine.bindExternalExecutionSource(source)}
    try engine.activateExternalMTU()
-   let other=try capture("auto","other-entry").0
+   let other=try capture("auto","other-entry",kind).0
    reject("wrong captured role cannot bind"){try engine.bindExternalExecutionSource(other)}
    try engine.bindExternalExecutionSource(source)
    guard let bytes=engine.multihopExecutionSnapshot(request:request)else{fatalError("missing proved receipt")}
@@ -162,7 +165,7 @@ FIXTURE = r'''
    check("native resources close after lease confirmation",native.closed && native.released && events.contains("platform-reset"))
    check("stopped proof cannot grant stale receipt",engine.multihopExecutionSnapshot(request:request)==nil && engine.multihopProgress()==nil)
    check("old proof cannot recreate hop or MTU owner after stop",result.results==[false])
-  }
+  }}
   for late in [false,true] {
    Trace.shared.reset();let tunnel=PacketTunnelProvider(),native=LibboxCommandServer(),result=ResultBox()
    native.request.hold=true;native.request.lateSuccess=late

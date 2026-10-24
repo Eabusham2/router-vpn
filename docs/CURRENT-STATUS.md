@@ -20,8 +20,26 @@ Desktop ordinary graph builders now apply imported external layers with the
 verified complete engine. Complete external connection profiles retain the
 layer selection without copying private keys. Session copies detach imported
 AWG parameters, layer credentials and response probes from later node edits.
-Desktop external Server/Compare adoption and packet-protocol server credentials
-remain separate work; this source checkpoint does not close those requirements.
+Desktop external Server/Compare adoption remains separate work; this source
+checkpoint does not close that desktop requirement.
+
+The next paired-execution checkpoint adds WG/AWG Server/Compare to the shared
+relay, Android service and Apple PacketTunnel. Local and Server use separately
+provisioned private keys and preshared keys; the client retains only the public
+descriptor of the server peer. X25519 agreement authenticates the captured graph,
+and acquisition binds the authenticated source peer, a manager epoch, a bounded
+deadline and a fresh attempt. Retired attempts cannot reacquire after cleanup;
+failed cleanup retains the process and canonical packet/PQ identity ownership,
+including complete MAX bases. Compare repeats the winning measurements, and
+restoration retains the already-proved execution without another comparison.
+
+The shipping Android and Apple producers each supplied 1,380 captured graphs to
+the actual pinned native runtime, with all WG/AWG, QUIC, gVisor, OpenVPN, Naive
+and Tor registrations. Both sets passed native construction and the matching
+1,380 missing-engine controls. Real local encrypted WG/AWG traffic also passed
+IPv4/IPv6 TCP/UDP, Start Layer, wrong-key and teardown cases. These Linux native
+tests do not establish APK/Xcode packaging, physical-device networking or a
+private deployment. OpenVPN Server/Compare remains implementation work.
 
 Focused validation includes actual loopback HTTP/TLS comparison and negative
 controls under the Go race detector, the real shared native compiler used by

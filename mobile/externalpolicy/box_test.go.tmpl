@@ -2,6 +2,7 @@ package box_test
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"strings"
@@ -78,6 +79,14 @@ func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode str
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
 	external := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}
 	switch protocol {
+	case "wireguard", "amneziawg":
+		serverPrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("v", 32)))
+		remotePrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("r", 32)))
+		external[protocol] = map[string]any{"private_key": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("l", 32))), "addresses": []string{"10.93.0.2/32", "fd93::2/128"}, "peer_public_key": base64.StdEncoding.EncodeToString(remotePrivate.PublicKey().Bytes()), "endpoint": "203.0.113.20:51820", "allowed_ips": []string{"0.0.0.0/0", "::/0"}, "mtu": 1280}
+		if protocol == "amneziawg" {
+			external[protocol].(map[string]any)["parameters"] = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10-19", "h2": "20-29", "h3": "30-39", "h4": "40-49"}
+		}
+		external["server_peer"] = map[string]any{"public_key": base64.StdEncoding.EncodeToString(serverPrivate.PublicKey().Bytes()), "addresses": []string{"10.93.0.3/32", "fd93::3/128"}, "mtu": 1360, "persistent_keepalive_interval": 25}
 	case "shadowsocks":
 		external["shadowsocks"] = map[string]any{"server": "203.0.113.20", "port": 8388, "method": "aes-256-gcm", "password": "captured-external-secret"}
 	case "hysteria2":
@@ -113,6 +122,10 @@ func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode str
 		t.Fatal(err)
 	}
 	graph["outbounds"], graph["endpoints"] = []any{transport}, []any{wg}
+	if multihoprelay.ExternalPacketMode(protocol) {
+		wg["mtu"] = 1500
+		graph["outbounds"], graph["endpoints"] = []any{}, []any{wg, transport}
+	}
 	profile := map[string]any{"id": "selected-exit", "node_kind": "external", "dns_mode": "rescue", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "fixed", "manual_mtu": 1280, "start_layer": layerMode, "multihop_enabled": true, "multihop_entry_id": "paired-entry", "multihop_exit_id": "selected-exit", "multihop_exit_mode": protocol, "multihop_execution": "auto", "external": external}
 	capture := map[string]any{"schema": 1, "exit_id": "selected-exit", "protocol": protocol, "expected_public_ip": "203.0.113.88", "entry_tag": "entry-wg", "profile": profile, "entry": map[string]any{"id": "paired-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("c", 64), "router_api": "http://10.77.0.1:8787", "api_token": "captured-entry-token"}}
 	source, err := json.Marshal(graph)
@@ -131,7 +144,7 @@ func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode str
 }
 
 func TestRouterVPNExternalExecutionAdoptsOnlyExactNativeSelectorCandidates(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
 		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(protocol+"/"+layer, func(t *testing.T) {
 				source, capture := externalNativeExecutionProtocolSource(t, protocol, layer)
@@ -143,6 +156,14 @@ func TestRouterVPNExternalExecutionAdoptsOnlyExactNativeSelectorCandidates(t *te
 
 func exerciseExternalNativeExecution(t *testing.T, source, capture string) {
 	t.Helper()
+	var selected map[string]any
+	if json.Unmarshal([]byte(capture), &selected) != nil {
+		t.Fatal("invalid native capture")
+	}
+	credentialField, credentialValue := "password", "foreign-private-secret"
+	if protocol, _ := selected["protocol"].(string); multihoprelay.ExternalPacketMode(protocol) {
+		credentialField, credentialValue = "private_key", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("f", 32)))
+	}
 	engine := externalNativeCapturedFixture(t, source, capture, nil)
 	r, err := engine.RouterVPNExternalCreateProof(source, capture, "owned-session")
 	if err != nil {
@@ -180,17 +201,20 @@ func exerciseExternalNativeExecution(t *testing.T, source, capture string) {
 	}{
 		{"listener credential", mobilemultihop.ServerTag, "password", "foreign-private-secret"},
 		{"listener entry detour", mobilemultihop.ServerTag, "detour", mobilemultihop.LocalTag},
-		{"external credential", mobilemultihop.LocalTag, "password", "foreign-private-secret"},
+		{"external credential", mobilemultihop.LocalTag, credentialField, credentialValue},
 		{"selector candidate", mobilemultihop.ExternalFinalTag, "outbounds", []string{mobilemultihop.LocalTag}},
 		{"selector initial owner", mobilemultihop.ExternalFinalTag, "default", mobilemultihop.ServerTag},
 	} {
 		t.Run(change.name, func(t *testing.T) {
 			changed := externalNativeCapturedFixture(t, source, capture, func(g map[string]any) {
-				for _, raw := range g["outbounds"].([]any) {
-					item := raw.(map[string]any)
-					if item["tag"] == change.tag {
-						item[change.field] = change.value
-						return
+				for _, family := range []string{"outbounds", "endpoints"} {
+					rows, _ := g[family].([]any)
+					for _, raw := range rows {
+						item := raw.(map[string]any)
+						if item["tag"] == change.tag {
+							item[change.field] = change.value
+							return
+						}
 					}
 				}
 				t.Fatal("test lost captured native outbound")

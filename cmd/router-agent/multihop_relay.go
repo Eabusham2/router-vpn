@@ -17,6 +17,7 @@ const multihopRelayPath = "/api/multihop/lease"
 const multihopRelayConfig = "/etc/router-vpn/multihop-relays.json"
 
 var relayExternalDigest = regexp.MustCompile(`^[0-9a-f]{64}$`)
+var relayExternalAttempt = regexp.MustCompile(`^[0-9a-f]{32}$`)
 
 func (s *server) initializeMultihopRelay() error {
 	path := getenv("ROUTER_VPN_MULTIHOP_CONFIG", multihopRelayConfig)
@@ -74,6 +75,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 	fields := map[string]string{}
 	seen := map[string]bool{}
 	port := 0
+	var packetExpires *int64
 	for d.More() {
 		key, e := d.Token()
 		name, ok := key.(string)
@@ -84,6 +86,12 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			return q, bad
 		}
 		seen[name] = true
+		if name == "external_expires_at" {
+			if d.Decode(&packetExpires) != nil || packetExpires == nil || *packetExpires <= 0 {
+				return q, bad
+			}
+			continue
+		}
 		if name == "listen_port" {
 			if d.Decode(&port) != nil || port < 26240 || port > 26271 {
 				return q, bad
@@ -91,7 +99,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			continue
 		}
 		switch name {
-		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password", "external_fingerprint", "external_authentication":
+		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password", "external_fingerprint", "external_authentication", "external_epoch", "external_peer", "external_attempt":
 		default:
 			return q, bad
 		}
@@ -127,10 +135,27 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 		(!relayExternalDigest.MatchString(fields["external_fingerprint"]) || !relayExternalDigest.MatchString(fields["external_authentication"])) {
 		return q, bad
 	}
+	packet := multihoprelay.ExternalPacketMode(fields["exit_mode"])
+	for _, key := range []string{"external_epoch", "external_peer", "external_expires_at", "external_attempt"} {
+		if seen[key] != packet {
+			return q, bad
+		}
+	}
+	var expires int64
+	if packet {
+		if !seen["external_fingerprint"] || !seen["listen_port"] || packetExpires == nil || !relayExternalAttempt.MatchString(fields["external_attempt"]) {
+			return q, bad
+		}
+		expires = *packetExpires
+		if (multihoprelay.ExternalPacketChallenge{Epoch: fields["external_epoch"], Peer: fields["external_peer"], ExpiresAt: expires}).Validate() != nil {
+			return q, bad
+		}
+	}
 	q = multihoprelay.Request{
 		Port: port, Username: fields["listener_username"], Password: fields["listener_password"],
 		SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"], ExitStartLayer: fields["exit_start_layer"],
 		ExternalFingerprint: fields["external_fingerprint"], ExternalAuthentication: fields["external_authentication"],
+		ExternalEpoch: fields["external_epoch"], ExternalPeer: fields["external_peer"], ExternalExpiresAt: expires, ExternalAttempt: fields["external_attempt"],
 	}
 	return q, nil
 }
@@ -154,18 +179,33 @@ func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "server-side multihop has no provisioned exit registry", 503)
 		return
 	}
+	peer, err := netip.ParseAddr(ip.String())
+	if err != nil {
+		http.Error(w, "invalid peer", 403)
+		return
+	}
 	if r.Method == http.MethodGet {
-		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": s.cfg.NodeID, "execution": "server", "exits": s.relay.Available()})
+		result := map[string]any{"node_id": s.cfg.NodeID, "execution": "server", "exits": s.relay.Available()}
+		if r.URL.RawQuery != "" {
+			// Preserve the exact catalog shape for existing strict native clients.
+			// New packet clients explicitly request a fresh peer-bound challenge.
+			if r.URL.RawQuery != "external_packet=1" {
+				http.Error(w, "invalid capability query", 400)
+				return
+			}
+			challenge, err := s.relay.PacketChallenge(peer)
+			if err != nil {
+				http.Error(w, "relay unavailable", 503)
+				return
+			}
+			result["external_packet_challenge"] = challenge
+		}
+		_ = json.NewEncoder(w).Encode(result)
 		return
 	}
 	q, err := decodeRelayRequest(http.MaxBytesReader(w, r.Body, 4096))
 	if err != nil {
 		http.Error(w, "invalid relay request", 400)
-		return
-	}
-	peer, err := netip.ParseAddr(ip.String())
-	if err != nil {
-		http.Error(w, "invalid peer", 403)
 		return
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)

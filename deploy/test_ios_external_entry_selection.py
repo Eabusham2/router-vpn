@@ -50,7 +50,12 @@ enum IOSDNSRuntimePolicy {
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?,profileMutationBlocked=false,message="",writes=0
  func importBundle(_ data:Data)throws{bundle=try JSONDecoder().decode(ClientBundle.self,from:data);writes+=1}
- func linkNodeBundle(_ data:Data)throws{try importBundle(data)}
+ func linkNodeBundle(_ data:Data)throws{
+  if IOSNodeBundleStore.shared.failWrite {throw NSError(domain:"StoreWriteBoundary",code:1)}
+  let incoming=try JSONDecoder().decode(ClientBundle.self,from:data)
+  IOSNodeBundleStore.shared.nodes[incoming.selectedRouterID]=data
+  try importBundle(data)
+ }
 }
 func encoded(_ value:Any)throws->Data{try JSONSerialization.data(withJSONObject:value,options:[.sortedKeys])}
 func encoded(_ value:ClientBundle)throws->Data{let encoder=JSONEncoder();encoder.outputFormatting=[.sortedKeys];return try encoder.encode(value)}
@@ -64,10 +69,11 @@ func profile(_ id:String,_ kind:String,_ protocolName:String="socks5")throws->Ro
 }
 func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.selectedRouterID=p.id;value.routerProfiles=[p];value.profiles=["wg":["wg.conf":Data("exact private config".utf8).base64EncodedString()]];return value}
 @MainActor @main struct Tests {
- static var checks=0
- static func check(_ name:String,_ result:@autoclosure ()throws->Bool)throws{guard try result()else{throw NSError(domain:"ExternalSelection",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
- static func reject(_ name:String,_ operation:()throws->Void)throws{do{try operation()}catch{checks+=1;return};throw NSError(domain:"ExternalRejection",code:1,userInfo:[NSLocalizedDescriptionKey:name])}
- static func main()throws {
+ static var checks=0;static var latest="startup"
+ static func check(_ name:String,_ result:@autoclosure ()throws->Bool)throws{latest=name;guard try result()else{throw NSError(domain:"ExternalSelection",code:1,userInfo:[NSLocalizedDescriptionKey:name])};checks+=1}
+ static func reject(_ name:String,_ operation:()throws->Void)throws{latest=name;do{try operation()}catch{checks+=1;return};throw NSError(domain:"ExternalRejection",code:1,userInfo:[NSLocalizedDescriptionKey:name])}
+ static func main() { do { try run() } catch { FileHandle.standardError.write(Data(("FAIL after "+String(checks)+" checks at "+latest+": "+error.localizedDescription+"\n").utf8));exit(1) } }
+ static func run()throws {
   defer { RouterVPNTorTestClose() }
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   for entryProtocol in protocols {for exitProtocol in protocols {
@@ -174,9 +180,14 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   try check("active session editor is idle-only",!edit.updateNodeMetadata(id:ss.id,name:"Active",location:"",latitudeText:"",longitudeText:"",expectedExternal:edit.bundle!.routerProfiles[0].external))
   model.profileMutationBlocked=true
   try reject("active graph cannot be edited"){try model.saveIOSMultihop(enabled:true,entryID:"entry",exitID:"exit",exitMode:"socks5",entryMode:"wg")}
-  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
+  for kind in ["wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] {
    var node=try profile("paired-"+kind,"external",kind)
    switch kind {
+   case "wireguard","amneziawg":
+    node.external?.socks5=nil
+    var block:[String:Any]=["private_key":Data(repeating:11,count:32).base64EncodedString(),"peer_public_key":Data(repeating:12,count:32).base64EncodedString(),"preshared_key":Data(repeating:13,count:32).base64EncodedString(),"addresses":["10.91.0.2/32","fd91::2/128"],"endpoint":"198.51.100.8:51820","allowed_ips":["0.0.0.0/0","::/0"],"mtu":1380,"persistent_keepalive_interval":29]
+    if kind=="wireguard" {node.external?.wireGuard=try JSONDecoder().decode(ExternalWireGuardConfig.self,from:encoded(block))}
+    else {block["parameters"]=["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"];node.external?.amneziaWG=try JSONDecoder().decode(ExternalAmneziaWGConfig.self,from:encoded(block))}
    case "shadowsocks":node.external?.shadowsocks=ExternalShadowsocksConfig(server:"198.51.100.8",port:8388,method:"aes-256-gcm",password:" exact secret ")
    case "hysteria2":node.external?.hysteria2=ExternalHysteria2Config(server:"198.51.100.8",port:443,password:" exact secret ",tlsServerName:"exit.example.test")
    case "http-connect":node.external?.httpConnect=ExternalHTTPConnectConfig(host:"198.51.100.8",port:8080,username:" exact user ",password:" exact secret ",tlsServerName:nil)
@@ -185,13 +196,35 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
    }
    let editor=RouterVPNModel();editor.bundle=bundle(node);IOSNodeBundleStore.shared.nodes=[node.id:try JSONEncoder().encode(editor.bundle!),"entry":try JSONEncoder().encode(entry)]
    let original=node.external!,layerKey=Data(repeating:7,count:32).base64EncodedString()
-   try check("every supported native editor retains provisioned response/layer settings "+kind+layer,editor.updateNodeMetadata(id:node.id,name:"Layered",location:"",latitudeText:"",longitudeText:"",expectedExternal:original,responseProbeURL:"https://198.51.100.8:9443/response",responseProbeServerName:"node.example.test",expectedStartLayer:"off",exitStartLayer:layer,exitLayerAPI:layer=="off" ? "":"http://10.99.0.1:8787",exitLayerPort:layer=="off" ? 0:8388,exitLayerKey:layer=="off" ? "":layerKey))
+   try check("every supported native editor retains provisioned response/layer settings "+kind+layer,editor.updateNodeMetadata(id:node.id,name:"Layered",location:"",latitudeText:"",longitudeText:"",expectedExternal:original,responseProbeURL:"https://198.51.100.8:9443/response",responseProbeServerName:"node.example.test",expectedStartLayer:"off",exitStartLayer:layer,exitLayerAPI:layer=="off" ? "":"http://10.99.0.1:8787",exitLayerPort:layer=="off" ? 0:8388,exitLayerKey:layer=="off" ? "":layerKey,serverPeerJSON:ExternalNodeConfig.packetProtocols.contains(kind) ? String(decoding:try encoded(["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1380,"persistent_keepalive_interval":25]),as:UTF8.self):nil))
    node=editor.bundle!.routerProfiles[0]
-   try check("layer editor preserves exact primary credentials",node.external?.shadowsocks==original.shadowsocks && node.external?.hysteria2==original.hysteria2 && node.external?.socks5==original.socks5 && node.external?.httpConnect==original.httpConnect && node.external?.httpsConnect==original.httpsConnect)
+   try check("layer editor preserves exact primary credentials",node.external?.packetConfiguration==original.packetConfiguration && node.external?.shadowsocks==original.shadowsocks && node.external?.hysteria2==original.hysteria2 && node.external?.socks5==original.socks5 && node.external?.httpConnect==original.httpConnect && node.external?.httpsConnect==original.httpsConnect)
    try IOSExternalExecution.validateImported(editor.bundle!);checks+=1
    for execution in ["local","server","auto"] {
+    latest="packet execution "+kind+" / "+layer+" / "+execution
+    if ExternalNodeConfig.packetProtocols.contains(kind) {
+     var trial=editor.bundle!.routerProfiles[0];trial.multihopExecution=execution
+     try check("packet descriptor retained before selection "+execution,trial.external?.serverPeer != nil)
+     try check("packet auth retained before selection "+execution,trial.external?.authenticatedServerExecution==true)
+     try check("packet host retained before selection "+execution,trial.external?.serverExecutionHost=="198.51.100.8")
+     try IOSExternalExecution.validate(trial.external!.responseProbe!, host: "198.51.100.8")
+     try IOSExternalExecution.validateLayerDraft(trial)
+     try check("packet candidate eligible before selection "+execution,IOSExternalExecution.eligible(entry:entry.routerProfiles[0],exit:trial))
+    }
     try editor.saveIOSMultihop(enabled:true,entryID:"entry",exitID:node.id,exitMode:kind,execution:execution,entryMode:"wg")
     try check("each protocol and layer retains its exact saved execution",editor.bundle!.routerProfiles[0].multihopExecution==execution && editor.bundle!.routerProfiles[0].external==node.external)
+   }
+   if ExternalNodeConfig.packetProtocols.contains(kind) {
+    try check("packet editor retains public descriptor without replacing local peer",node.external?.serverPeer?.publicKey=="bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=" && node.external?.packetConfiguration==original.packetConfiguration)
+    let saved=try encoded(editor.bundle!),stored=IOSNodeBundleStore.shared.nodes
+    try check("Server graph cannot lose separate server peer",!editor.updateNodeMetadata(id:node.id,name:"Clear",location:"",latitudeText:"",longitudeText:"",expectedExternal:node.external,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:""))
+    try check("rejected descriptor removal preserves complete graph and private store",encoded(editor.bundle!)==saved && IOSNodeBundleStore.shared.nodes==stored)
+    let malformed="{\"public_key\":\"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=\",\"addresses\":[\"10.91.0.2/32\",\"fd94::3/128\"],\"mtu\":1360}"
+    try check("editor cannot reuse Local assigned address",!editor.updateNodeMetadata(id:node.id,name:"Borrowed",location:"",latitudeText:"",longitudeText:"",expectedExternal:node.external,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:malformed))
+    try check("failed native descriptor validation preserves old source",encoded(editor.bundle!)==saved && IOSNodeBundleStore.shared.nodes==stored)
+    var smaller=try JSONSerialization.jsonObject(with:JSONEncoder().encode(node.external!.serverPeer!)) as! [String:Any];smaller["mtu"]=1280
+    try check("fixed MTU cannot exceed the independently provisioned server interface",!editor.updateNodeMetadata(id:node.id,name:"Too small",location:"",latitudeText:"",longitudeText:"",expectedExternal:node.external,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:String(decoding:try encoded(smaller),as:UTF8.self)))
+    try check("invalid server MTU leaves saved execution and private node unchanged",encoded(editor.bundle!)==saved && IOSNodeBundleStore.shared.nodes==stored)
    }
    if layer != "off" {
     var wrong=editor.bundle!;wrong.routerProfiles[0].startLayer="off"
@@ -205,6 +238,21 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
      profile["external"]=ext
      try reject("typed import rejects discarded layer field "+fault){_ = try JSONDecoder().decode(RouterProfile.self,from:encoded(profile))}
     }
+   }
+   if ExternalNodeConfig.packetProtocols.contains(kind) {
+    try editor.saveIOSMultihop(enabled:true,entryID:"entry",exitID:node.id,exitMode:kind,execution:"local",entryMode:"wg")
+    let oldExternal=editor.bundle!.routerProfiles[0].external!
+    var replacement=oldExternal.serverPeer!;replacement.persistentKeepaliveInterval=30
+    try check("Local can update its public server descriptor",editor.updateNodeMetadata(id:node.id,name:"Changed peer",location:"",latitudeText:"",longitudeText:"",expectedExternal:oldExternal,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:IOSExternalExecution.serverPeerText(replacement)))
+    let changed=try encoded(editor.bundle!),stored=IOSNodeBundleStore.shared.nodes
+    try check("old editor cannot overwrite a changed packet descriptor",!editor.updateNodeMetadata(id:node.id,name:"Stale",location:"",latitudeText:"",longitudeText:"",expectedExternal:oldExternal,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:IOSExternalExecution.serverPeerText(oldExternal.serverPeer)))
+    try check("stale peer edit leaves the new source unchanged",encoded(editor.bundle!)==changed && IOSNodeBundleStore.shared.nodes==stored)
+    let current=editor.bundle!.routerProfiles[0].external!
+    try check("Local can explicitly remove the optional server descriptor",editor.updateNodeMetadata(id:node.id,name:"Local",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,responseProbeURL:"https://198.51.100.8:9443/response",serverPeerJSON:""))
+    try check("removing server descriptor preserves local peer and Start Layer",editor.bundle!.routerProfiles[0].external?.serverPeer==nil && editor.bundle!.routerProfiles[0].external?.packetConfiguration==current.packetConfiguration && editor.bundle!.routerProfiles[0].external?.startLayer==current.startLayer)
+    let local=try encoded(editor.bundle!)
+    try reject("packet Server requires its separate descriptor"){try editor.saveIOSMultihop(enabled:true,entryID:"entry",exitID:node.id,exitMode:kind,execution:"server",entryMode:"wg")}
+    try check("rejected packet Server keeps the valid Local configuration",encoded(editor.bundle!)==local)
    }
   }}
   print("Apple external entry selection: PASS (\(checks) shipping Swift checks; storage/native-readiness boundaries doubled)")

@@ -1,6 +1,7 @@
 package libbox
 
 import (
+	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
 	"net/netip"
@@ -44,11 +45,26 @@ func TestRouterExternalResponseEndpointEditorUsesShippingValidator(t *testing.T)
 }
 
 func TestRouterExternalServerLeaseCompilesInTheActualPinnedCore(t *testing.T) {
-	for _, protocol := range []string{"shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
+	for _, protocol := range []string{"wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"} {
 		for _, layerMode := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(protocol+"/"+layerMode, func(t *testing.T) {
 				external := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}
+				var serverProfile map[string]any
 				switch protocol {
+				case "wireguard", "amneziawg":
+					serverPrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("v", 32)))
+					remotePrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("r", 32)))
+					block := map[string]any{"private_key": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("l", 32))), "addresses": []string{"10.93.0.2/32", "fd93::2/128"}, "peer_public_key": base64.StdEncoding.EncodeToString(remotePrivate.PublicKey().Bytes()), "endpoint": "203.0.113.20:51820", "allowed_ips": []string{"0.0.0.0/0", "::/0"}, "mtu": 1280}
+					if protocol == "amneziawg" {
+						block["parameters"] = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10-19", "h2": "20-29", "h3": "30-39", "h4": "40-49"}
+					}
+					external[protocol] = block
+					external["server_peer"] = map[string]any{"public_key": base64.StdEncoding.EncodeToString(serverPrivate.PublicKey().Bytes()), "addresses": []string{"10.93.0.3/32", "fd93::3/128"}, "mtu": 1360, "persistent_keepalive_interval": 25}
+					encoded, _ := json.Marshal(block)
+					var serverBlock map[string]any
+					_ = json.Unmarshal(encoded, &serverBlock)
+					serverBlock["private_key"], serverBlock["addresses"], serverBlock["mtu"], serverBlock["persistent_keepalive_interval"] = base64.StdEncoding.EncodeToString(serverPrivate.Bytes()), []string{"10.93.0.3/32", "fd93::3/128"}, 1360, 25
+					serverProfile = map[string]any{"protocol": protocol, protocol: serverBlock}
 				case "shadowsocks":
 					external["shadowsocks"] = map[string]any{"server": "203.0.113.20", "port": float64(8388), "method": "aes-256-gcm", "password": "captured-test-password"}
 				case "hysteria2":
@@ -77,6 +93,12 @@ func TestRouterExternalServerLeaseCompilesInTheActualPinnedCore(t *testing.T) {
 				request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: strings.Repeat("c", 64), ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: layerMode, Port: 26240, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)})
 				if err != nil {
 					t.Fatal(err)
+				}
+				if serverProfile != nil {
+					exit, err = multihoprelay.PairExternalPacket(exit.ID, protocol, external, serverProfile, layer)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
 				lease := multihoprelay.Lease{Request: request, NodeID: request.EntryNodeID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password}
 				body, err := multihoprelay.Build(exit, netip.MustParseAddr("10.77.0.2"), lease)

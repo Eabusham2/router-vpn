@@ -78,6 +78,7 @@ final class AndroidExternalPolicy {
         JSONObject policy = exit.policy == null ? new JSONObject() : copy(exit.policy);
         checkPolicy(policy);
         AndroidStandardExitStore.validateStartLayer(exit);
+        AndroidStandardExitStore.validateServerPeer(exit);
         // The entry supplies Home's private resolver identity during native
         // composition. Its independent DNS selection cannot replace this exit's.
         if (!policy.has("ipv6_mode")) policy.put("ipv6_mode", "on");
@@ -90,6 +91,7 @@ final class AndroidExternalPolicy {
         JSONObject ext = new JSONObject().put("protocol", protocol(exit.protocol)).put("expected_public_ip", exit.expectedPublicIp);
         if(exit.responseProbe!=null&&exit.responseProbe.length()!=0)ext.put("response_probe",copy(exit.responseProbe));
         if(exit.startLayer!=null)ext.put("start_layer",copy(exit.startLayer));
+        if(exit.serverPeer!=null)ext.put("server_peer",copy(exit.serverPeer));
         JSONObject transport;
         switch (exit.protocol) {
             case "wireguard": case "amneziawg":
@@ -149,7 +151,7 @@ final class AndroidExternalPolicy {
             if(plan!=null){
                 String requested=plan.getString("selection");
                 if(!Arrays.asList("local","server","auto").contains(requested)||!requested.equals(metadata.optString("execution"))
-                        ||!"https-response-time".equals(metadata.optString("last_node_measurement"))||!Arrays.asList("shadowsocks","hysteria2","socks5","http-connect","https-connect").contains(selected.getString("protocol"))||!selected.has("entry"))throw new IllegalStateException("External execution belongs to another captured path.");
+                        ||!"https-response-time".equals(metadata.optString("last_node_measurement"))||!Arrays.asList("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect").contains(selected.getString("protocol"))||!selected.has("entry"))throw new IllegalStateException("External execution belongs to another captured path.");
             }else if(selected.has("execution")||metadata.has("execution")||metadata.has("last_node_measurement"))throw new IllegalStateException("External execution has no captured native owner.");
         }
     }

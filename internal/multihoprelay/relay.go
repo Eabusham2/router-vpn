@@ -62,6 +62,10 @@ type Request struct {
 	ExitStartLayer         string `json:"exit_start_layer,omitempty"`
 	ExternalFingerprint    string `json:"external_fingerprint,omitempty"`
 	ExternalAuthentication string `json:"external_authentication,omitempty"`
+	ExternalEpoch          string `json:"external_epoch,omitempty"`
+	ExternalPeer           string `json:"external_peer,omitempty"`
+	ExternalExpiresAt      int64  `json:"external_expires_at,omitempty"`
+	ExternalAttempt        string `json:"external_attempt,omitempty"`
 	// Optional client-generated listener proposal allows the client to prepare
 	// its final graph before acquiring a lease, without restarting its TUN.
 	Port     int    `json:"listen_port,omitempty"`
@@ -90,17 +94,20 @@ type Runner interface {
 }
 type live struct {
 	Lease
-	peer netip.Addr
-	p    Process
+	peer    netip.Addr
+	p       Process
+	retired bool
 }
 type Manager struct {
-	mu     sync.Mutex
-	cfg    Config
-	node   string
-	runner Runner
-	leases map[string]*live
-	now    func() time.Time
-	closed bool
+	mu             sync.Mutex
+	cfg            Config
+	node           string
+	runner         Runner
+	leases         map[string]*live
+	now            func() time.Time
+	closed         bool
+	packetEpoch    string
+	packetAttempts map[string]int64
 }
 
 func New(c Config, node string, r Runner) (*Manager, error) {
@@ -120,10 +127,16 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	}
 	seen := map[string]bool{}
 	for _, e := range c.Exits {
+		if ExternalPacketMode(e.Mode) && e.External == nil {
+			return nil, errors.New("external packet mode requires its explicit paired identity")
+		}
 		if !ident.MatchString(e.ID) || (e.External == nil && (!proofID.MatchString(e.NodeID) || e.NodeID == node)) || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
 			return nil, errors.New("relay exits require distinct paired identities and unique modes")
 		}
 		if e.External != nil {
+			if ExternalPacketMode(e.Mode) && (e.External.Packet == nil || e.External.Packet.Owner != "server") {
+				return nil, errors.New("private packet registry requires only its separately provisioned server credential owner")
+			}
 			if _, err := ExternalFingerprint(e); err != nil {
 				return nil, err
 			}
@@ -155,7 +168,12 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if err := json.Unmarshal(raw, &frozen); err != nil {
 		return nil, err
 	}
-	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now}, nil
+	epochBytes := make([]byte, 32)
+	if _, err := rand.Read(epochBytes); err != nil {
+		return nil, errors.New("relay ownership epoch could not be generated")
+	}
+	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
+		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}}, nil
 }
 func PeerKey(peer netip.Addr) string { return peer.Unmap().String() }
 func (m *Manager) Available() []map[string]string {
@@ -192,6 +210,12 @@ func (m *Manager) Available() []map[string]string {
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
+	if err := validatePacketRequestShape(q, false); err != nil {
+		return err
+	}
+	if ExternalPacketMode(q.ExitMode) && (q.ExternalEpoch != m.packetEpoch || q.ExternalPeer != PeerKey(peer)) {
+		return ErrOwnership
+	}
 	if (q.ExternalFingerprint == "") != (q.ExternalAuthentication == "") || q.ExternalFingerprint != "" && (!proofID.MatchString(q.ExternalFingerprint) || !proofID.MatchString(q.ExternalAuthentication)) {
 		return ErrOwnership
 	}
@@ -242,7 +266,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		if old.Request != q {
 			return Lease{}, ErrBusy
 		}
-		if !old.p.Alive() {
+		if old.retired || !old.p.Alive() {
 			return Lease{}, errors.New("relay engine is not alive")
 		}
 		old.ExpiresAt = m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)
@@ -262,25 +286,28 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if err := ValidateExternalRequest(*exit, q); err != nil {
 		return Lease{}, err
 	}
-	if PacketMode(exit.Mode) {
+	if err := m.validateNewPacketAttemptLocked(q); err != nil {
+		return Lease{}, err
+	}
+	if PacketMode(exit.Mode) || CompleteMAXMode(exit.Mode) {
 		// A WireGuard peer key identifies one roaming endpoint. Two independent
 		// processes using that key would steal each other's reply endpoint.
 		// X25519 clamps scalar bits: distinct private-key encodings can be the
 		// same peer. Use the public identity already advertised to clients, not
 		// private-key text or the remote server's public key.
-		identity, err := clientIdentity(exit.Transport)
+		identity, err := clientIdentity(relayPacketTransport(*exit))
 		if err != nil {
 			return Lease{}, err
 		}
 		for _, active := range m.leases {
-			if !PacketMode(active.ExitMode) {
+			if !PacketMode(active.ExitMode) && !CompleteMAXMode(active.ExitMode) {
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || !PacketMode(paired.Mode) {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || (!PacketMode(paired.Mode) && !CompleteMAXMode(paired.Mode)) {
 					continue
 				}
-				other, err := clientIdentity(paired.Transport)
+				other, err := clientIdentity(relayPacketTransport(paired))
 				if err != nil {
 					return Lease{}, err
 				}
@@ -290,20 +317,20 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 			}
 		}
 	}
-	if mobilepq.IsMode(exit.Mode) {
-		identity, err := pqIdentity(exit.Transport)
+	if mobilepq.IsMode(exit.Mode) || CompleteMAXMode(exit.Mode) {
+		identity, err := pqIdentity(relayPacketTransport(*exit))
 		if err != nil {
 			return Lease{}, err
 		}
 		for _, active := range m.leases {
-			if !mobilepq.IsMode(active.ExitMode) {
+			if !mobilepq.IsMode(active.ExitMode) && !CompleteMAXMode(active.ExitMode) {
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
 				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer {
 					continue
 				}
-				other, err := pqIdentity(paired.Transport)
+				other, err := pqIdentity(relayPacketTransport(paired))
 				if err != nil {
 					return Lease{}, err
 				}
@@ -349,6 +376,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if err := ctx.Err(); err != nil {
 		return Lease{}, err
 	}
+	if err := m.rememberPacketAttemptLocked(q); err != nil {
+		return Lease{}, err
+	}
 	process, err := m.runner.Start(ctx, config, lease)
 	if err != nil || process == nil || ctx.Err() != nil || !process.Alive() {
 		if process != nil {
@@ -372,6 +402,24 @@ func (m *Manager) Delete(ctx context.Context, peer netip.Addr, q Request) error 
 	key := PeerKey(peer)
 	s := m.leases[key]
 	if s == nil {
+		if ExternalPacketMode(q.ExitMode) {
+			var paired *Exit
+			for i := range m.cfg.Exits {
+				e := &m.cfg.Exits[i]
+				if e.ID == q.ExitID && e.Mode == q.ExitMode && LayerMode(e.StartLayer) == q.ExitStartLayer {
+					paired = e
+					break
+				}
+			}
+			if paired == nil || ValidateExternalRequest(*paired, q) != nil {
+				return ErrOwnership
+			}
+			// A cancelled PUT may not have arrived yet. Its signed attempt is
+			// retired even when no process exists, so it cannot start after DELETE.
+			if err := m.rememberPacketAttemptLocked(q); err != nil {
+				return err
+			}
+		}
 		return nil
 	}
 	if s.Request != q {
@@ -384,6 +432,9 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 	if s == nil {
 		return nil
 	}
+	// Revocation precedes cleanup. A failed Stop retains process/key ownership,
+	// but never permits this exact attempt to renew or resurrect the path.
+	s.retired = true
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := s.p.Stop(ctx); err != nil || s.p.Alive() {
@@ -393,6 +444,7 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 	return nil
 }
 func (m *Manager) reapLocked(ctx context.Context) error {
+	m.sweepPacketAttemptsLocked()
 	for key, s := range m.leases {
 		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() {
 			if err := m.stopLocked(ctx, key); err != nil {
@@ -427,6 +479,16 @@ func copyMap(v map[string]any) (map[string]any, error) {
 	var out map[string]any
 	err = json.Unmarshal(b, &out)
 	return out, err
+}
+
+// Complete MAX owns a packet/PQ base inside its validated chain. Labels and
+// wrappers cannot create a second roaming owner for the same underlying key.
+func relayPacketTransport(exit Exit) map[string]any {
+	if CompleteMAXMode(exit.Mode) {
+		value, _ := exit.Transport["endpoint"].(map[string]any)
+		return value
+	}
+	return exit.Transport
 }
 func literalServer(raw any) bool {
 	s, ok := raw.(string)
@@ -507,9 +569,9 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 	allowed := map[string]bool{"type": true, "tag": true}
 	var keys []string
 	switch e.Mode {
-	case "wg":
+	case "wg", "wireguard":
 		keys = []string{"private_key", "address", "mtu", "peers", "workers", "udp_timeout"}
-	case "awg2-fast", "awg2-strong":
+	case "awg2-fast", "awg2-strong", "amneziawg":
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia"}
 	case "wg-pq", "awg2-pq":
 		keys = []string{"private_key", "address", "mtu", "peers", "amnezia", "mode", "node_id", "pq"}
@@ -562,9 +624,9 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 		if err := validatePQTransport(p, e.Mode, e.NodeID); err != nil {
 			return nil, err
 		}
-	} else if awgpolicy.WireGuardFamily(e.Mode) {
+	} else if awgpolicy.WireGuardFamily(e.Mode) || ExternalPacketMode(e.Mode) {
 		expectedType := "wireguard"
-		if awgpolicy.IsMode(e.Mode) {
+		if awgpolicy.IsMode(e.Mode) || e.Mode == "amneziawg" {
 			expectedType = awgpolicy.Type
 		}
 		if p["type"] != expectedType || !key32(p["private_key"]) {
@@ -578,8 +640,12 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 		if !ok || !literalServer(peer["address"]) || !key32(peer["public_key"]) || !validPort(peer["port"]) {
 			return nil, errors.New("invalid relay WireGuard peer")
 		}
-		if awgpolicy.IsMode(e.Mode) {
+		if awgpolicy.IsMode(e.Mode) || e.Mode == "amneziawg" {
 			if err := validateAmnezia(p, peer); err != nil {
+				return nil, err
+			}
+		} else if ExternalPacketMode(e.Mode) {
+			if err := validatePacketPeer(p, peer); err != nil {
 				return nil, err
 			}
 		}
@@ -616,6 +682,9 @@ func validPort(v any) bool {
 }
 func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 	if exit.External != nil {
+		if ExternalPacketMode(exit.Mode) && (exit.External.Packet == nil || exit.External.Packet.Owner != "server") {
+			return nil, errors.New("external packet relay cannot run the client's local credentials")
+		}
 		if err := ValidateExternalRequest(exit, lease.Request); err != nil {
 			return nil, err
 		}

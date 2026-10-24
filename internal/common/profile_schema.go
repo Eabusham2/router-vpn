@@ -104,7 +104,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.TorBridge != nil { blocks++ }
 	if ext.Protocol == "tor" {
 		if blocks != 0 { return fmt.Errorf("plain Tor cannot contain another protocol or bridge block") }
-		if ext.ResponseProbe != nil || ext.StartLayer != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint or proxy Start Layer") }
+		if ext.ResponseProbe != nil || ext.StartLayer != nil || ext.ServerPeer != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint, packet server peer or proxy Start Layer") }
 		return nil
 	}
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
@@ -159,8 +159,9 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	default:
 		return fmt.Errorf("unsupported external protocol %q", ext.Protocol)
 	}
+	if err := validateExternalServerPeer(ext); err != nil { return err }
 	if ext.ResponseProbe != nil {
-		if !externalProxyProtocol(ext.Protocol) { return fmt.Errorf("node response probe requires a supported external proxy protocol") }
+		if !externalExecutionProtocol(ext.Protocol) { return fmt.Errorf("node response probe requires a supported external execution protocol") }
 		if err := ValidateExternalResponseProbe(externalNodeEndpoint(ext), ext.ResponseProbe); err != nil { return err }
 	}
 	return nil
@@ -235,6 +236,7 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	}
 	startLayer, err := NormalizeStartLayerMode(p.StartLayer); if err != nil { return err }; p.StartLayer = startLayer
 	if p.NodeKind == "external" { if err := validateExternalStartLayer(p); err != nil { return err } }
+	switch p.MultihopExecution { case "", "local", "server", "auto": default: return fmt.Errorf("multihop execution must be local, server, or auto") }
 	p.NodeProofID = strings.TrimSpace(p.NodeProofID); if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) { return fmt.Errorf("invalid node proof id") }
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy)); if p.KillSwitchPolicy == "" { if p.KillSwitch { p.KillSwitchPolicy = "on-connect" } else { p.KillSwitchPolicy = "off" } }; switch p.KillSwitchPolicy { case "off", "on-connect", "always": default: return fmt.Errorf("invalid kill switch policy %q", p.KillSwitchPolicy) }; p.KillSwitch = p.KillSwitchPolicy != "off"
 	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }

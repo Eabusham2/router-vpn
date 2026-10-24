@@ -56,10 +56,10 @@ def digest() -> str:
 
 def expected_names(target: str) -> set[str]:
     local = {'-'.join(case)+'.json' for case in itertools.product(MODES, LAYERS, PROTOCOLS[target])}
-    # Paired execution uses the same pinned constructors for all five
-    # supported authenticated transports. Both independent exit layers also
+    # Paired execution uses the same pinned constructors for seven supported
+    # authenticated transports, including distinct WG/AWG client peers. Both exit layers also
     # cross every entry-layer choice on the representative native WG entry.
-    supported = tuple(p for p in PROTOCOLS[target] if p not in ('wireguard', 'amneziawg', 'openvpn'))
+    supported = tuple(p for p in PROTOCOLS[target] if p != 'openvpn')
     paired = {'-'.join(case)+'.json'
               for case in itertools.product(MODES, LAYERS, supported, EXECUTIONS)}
     layered = {'wg-'+entry+'-'+protocol+'-exit-'+layer+'-'+execution+'.json'

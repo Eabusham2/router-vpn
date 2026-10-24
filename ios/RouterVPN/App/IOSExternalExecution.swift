@@ -8,7 +8,7 @@ enum IOSExternalExecution {
         for profile in bundle.routerProfiles {
             guard let external = profile.external else { continue }
             guard profile.normalizedNodeKind == "external", external.matchesStartLayer(profile.startLayer) else { throw issue() }
-            if external.startLayer != nil { try validateLayerDraft(profile) }
+            if external.startLayer != nil || external.serverPeer != nil { try validateLayerDraft(profile) }
             guard let probe = external.responseProbe else { continue }
             guard let host = external.serverExecutionHost else { throw issue() }
             try validate(probe, host: host)
@@ -20,6 +20,18 @@ enum IOSExternalExecution {
         let probe = ExternalResponseProbe(url: url, serverName: serverName.isEmpty ? nil : serverName)
         try validate(probe, host: host)
         return probe
+    }
+
+    static func serverPeer(_ text: String) throws -> ExternalServerPeer? {
+        guard text.utf8.count <= 4096 else { throw issue() }
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        return try JSONDecoder().decode(ExternalServerPeer.self, from: Data(text.utf8))
+    }
+
+    static func serverPeerText(_ peer: ExternalServerPeer?) -> String {
+        guard let peer else { return "" }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return (try? String(decoding: encoder.encode(peer), as: UTF8.self)) ?? ""
     }
 
     static func validate(_ probe: ExternalResponseProbe, host: String) throws {
@@ -36,7 +48,22 @@ enum IOSExternalExecution {
         guard let external = profile.external, let host = external.serverExecutionHost,
               external.matchesStartLayer(profile.startLayer) else { throw issue() }
         var exit: [String: Any] = ["tag": "custom-exit", "server": host]
+        let packet = ExternalNodeConfig.packetProtocols.contains(external.protocolName)
         switch external.protocolName {
+        case "wireguard", "amneziawg":
+            guard let value = external.packetConfiguration, let endpoint = external.packetEndpoint else { throw issue() }
+            var peer: [String: Any] = ["address": endpoint.host, "port": endpoint.port,
+                "public_key": value.peerPublicKey, "allowed_ips": value.allowedIPs]
+            if let key = value.presharedKey, !key.isEmpty { peer["pre_shared_key"] = key }
+            if let keepalive = value.persistentKeepaliveInterval { peer["persistent_keepalive_interval"] = keepalive }
+            exit = ["type": external.protocolName == "amneziawg" ? "routervpn-amneziawg" : "wireguard",
+                "tag": "custom-exit", "address": value.addresses, "private_key": value.privateKey, "peers": [peer]]
+            if let mtu = value.mtu { exit["mtu"] = mtu }
+            if external.protocolName == "amneziawg" {
+                guard let parameters = external.amneziaWG?.parameters else { throw issue() }
+                exit["amnezia"] = parameters
+                if exit["mtu"] == nil { exit["mtu"] = 1280 }
+            }
         case "shadowsocks":
             guard let value = external.shadowsocks else { throw issue() }
             exit.merge(["type": "shadowsocks", "server_port": value.port, "method": value.method, "password": value.password]) { _, new in new }
@@ -56,7 +83,7 @@ enum IOSExternalExecution {
         default: throw issue()
         }
         let native: [String: Any] = ["inbounds": [["type": "tun", "tag": "tun-in", "address": ["172.29.94.1/30", "fd29:94::1/126"],
-            "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"]], "endpoints": [], "outbounds": [exit],
+            "mtu": 1280, "auto_route": true, "strict_route": true, "stack": "system"]], "endpoints": packet ? [exit] : [], "outbounds": packet ? [] : [exit],
             "route": ["final": "custom-exit", "auto_detect_interface": true]]
         let frozen = try JSONSerialization.jsonObject(with: JSONEncoder().encode(profile))
         let selected: [String: Any] = ["schema": 1, "exit_id": profile.id, "protocol": external.protocolName,
@@ -70,23 +97,28 @@ enum IOSExternalExecution {
     }
 
     static func eligible(entry: RouterProfile, exit: RouterProfile) -> Bool {
+        do { try validatePair(entry: entry, exit: exit); return true }
+        catch { return false }
+    }
+
+    private static func validatePair(entry: RouterProfile, exit: RouterProfile) throws {
         guard entry.id != exit.id, entry.normalizedNodeKind == "router-vpn",
               entry.nodeProofID?.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
               !entry.routerAPI.isEmpty, !entry.apiToken.isEmpty,
               exit.normalizedNodeKind == "external", let external = exit.external,
               let host = external.serverExecutionHost, external.authenticatedServerExecution, let probe = external.responseProbe,
-              external.matchesStartLayer(exit.startLayer) else { return false }
-        do { try validate(probe, host: host); return true }
-        catch { return false }
+              external.matchesStartLayer(exit.startLayer) else { throw issue() }
+        try validate(probe, host: host)
+        if external.serverPeer != nil { try validateLayerDraft(exit) }
     }
 
     static func require(selection: String, entry: RouterProfile, exit: RouterProfile) throws {
-        guard ["local", "server", "auto"].contains(selection),
-              selection == "local" || eligible(entry: entry, exit: exit) else { throw issue() }
+        guard ["local", "server", "auto"].contains(selection) else { throw issue() }
+        if selection != "local" { try validatePair(entry: entry, exit: exit) }
     }
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ExternalExecution", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated Shadowsocks, Hysteria2 or SOCKS5/HTTP(S) exit with an HTTPS response URL on its exact server IP. Configure this exit in the entry's private relay registry before connecting."])
+            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated external exit with an HTTPS response URL on its exact server IP. WireGuard and AmneziaWG also require the public descriptor of a separately provisioned server peer, with distinct client identity and assigned addresses. Configure this exit in the entry's private relay registry before connecting."])
     }
 }

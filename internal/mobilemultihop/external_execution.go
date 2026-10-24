@@ -210,6 +210,17 @@ func newExternalExecution(policy *ExternalPolicy) (*Controller, error) {
 	c := &Controller{meta: Metadata{EntryID: entryID, ExitID: s.ExitID, EntryNodeID: entryNode, EntryAPI: entryAPI, EntryToken: entryToken, EntryTag: s.EntryTag, ExitMode: s.Protocol, ExitStartLayer: proposal.ExitStartLayer, Execution: s.Execution.Selection}, config: policy.Config(), proposal: proposal, external: policy,
 		progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}, LastNodeMeasurement: "https-response-time", ExternalMeasurement: "https-response-time"}}
 	c.expected = multihoprelay.Lease{Request: proposal, NodeID: entryNode, Host: api.Hostname(), Port: proposal.Port, Username: proposal.Username, Password: proposal.Password}
+	if multihoprelay.ExternalPacketMode(s.Protocol) {
+		exit, err := externalRelaySelection(s)
+		if err != nil {
+			return nil, err
+		}
+		local, _, err := multihoprelay.ExternalPacketIdentities(exit)
+		if err != nil {
+			return nil, err
+		}
+		c.localPublicKey = local
+	}
 	c.generation.Store(1)
 	return c, nil
 }

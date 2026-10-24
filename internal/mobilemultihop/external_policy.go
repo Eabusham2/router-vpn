@@ -11,6 +11,8 @@ import (
 	"reflect"
 	"sort"
 	"strings"
+
+	"router-vpn/internal/multihoprelay"
 )
 
 const ExternalFinalTag = "custom-exit"
@@ -702,6 +704,9 @@ func externalCapturedTransport(out, profile map[string]any) error {
 		return bad
 	}
 	protocol, _ := ext["protocol"].(string)
+	if err := multihoprelay.ValidateExternalServerPeer(protocol, ext); err != nil {
+		return err
+	}
 	key := strings.ReplaceAll(protocol, "-", "_")
 	source, ok := ext[key].(map[string]any)
 	if !ok {
@@ -999,6 +1004,11 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 				}
 				overhead += runtime.TransportPadding
 			}
+			layerOverhead, failure := externalPacketLayerOverhead(profile)
+			if failure != nil {
+				return 0, 0, "", failure
+			}
+			overhead += layerOverhead
 			limit := (entryMTU - overhead) / 16 * 16
 			if limit < 1280 {
 				return 0, 0, "", errors.New("entry MTU cannot carry the dual-stack nested WireGuard packet")
@@ -1013,6 +1023,21 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 		exit["mtu"] = exitMTU
 		if fixed == 0 && mtu > exitMTU {
 			mtu = exitMTU
+		}
+		if selection, _ := externalSavedExecution(profile); selection != "local" {
+			ext, _ := profile["external"].(map[string]any)
+			if captured, ok := ext["server_peer"].(map[string]any); ok {
+				serverMTU, failure := mtuNumber(captured["mtu"])
+				if failure != nil {
+					return 0, 0, "", failure
+				}
+				if fixed > serverMTU {
+					return 0, 0, "", errors.New("fixed MTU exceeds the captured independent server peer interface")
+				}
+				if fixed == 0 && mtu > serverMTU {
+					mtu = serverMTU
+				}
+			}
 		}
 	}
 	if exit["type"] == externalOpenVPNType {

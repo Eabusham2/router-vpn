@@ -301,6 +301,45 @@ struct ExternalStartLayerUpdate {
     let layer: ExternalStartLayer?
 }
 
+/// Public identity of the independently provisioned client peer on the entry
+/// server. Its private key and preshared key never belong in a client bundle.
+struct ExternalServerPeer: Codable, Hashable {
+    var publicKey: String
+    var addresses: [String]
+    var mtu: Int
+    var persistentKeepaliveInterval: Int?
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case addresses, mtu
+        case publicKey = "public_key"
+        case persistentKeepaliveInterval = "persistent_keepalive_interval"
+    }
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+        let keys = Set(raw.allKeys.map(\.stringValue))
+        guard Set(["public_key", "addresses", "mtu"]).isSubset(of: keys),
+              keys.isSubset(of: Set(CodingKeys.allCases.map(\.rawValue))) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Server peer accepts only its public key, addresses, MTU and optional keepalive."))
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        publicKey = try c.decode(String.self, forKey: .publicKey)
+        addresses = try c.decode([String].self, forKey: .addresses)
+        mtu = try c.decode(Int.self, forKey: .mtu)
+        persistentKeepaliveInterval = c.contains(.persistentKeepaliveInterval) ? try c.decode(Int.self, forKey: .persistentKeepaliveInterval) : nil
+        guard let key = Data(base64Encoded: publicKey), key.count == 32, key.base64EncodedString() == publicKey,
+              (1...2).contains(addresses.count), addresses.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 128 }),
+              (1280...9000).contains(mtu), (0...65535).contains(persistentKeepaliveInterval ?? 0) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "Server peer requires a canonical public key, assigned addresses and explicit valid MTU."))
+        }
+        // The shared native compiler proves distinct X25519 identities and
+        // canonical, disjoint assigned addresses before save or connection.
+    }
+}
+
+struct ExternalServerPeerUpdate {
+    let peer: ExternalServerPeer?
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -315,10 +354,37 @@ struct ExternalNodeConfig: Codable, Hashable {
     var torBridge: ExternalTorBridgeConfig?
     var responseProbe: ExternalResponseProbe?
     var startLayer: ExternalStartLayer?
+    var serverPeer: ExternalServerPeer?
 
-    static let serverExecutionProtocols: Set<String> = ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"]
+    static let packetProtocols: Set<String> = ["wireguard", "amneziawg"]
+    static let serverExecutionProtocols: Set<String> = ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"]
+    var packetConfiguration: ExternalWireGuardConfig? {
+        if protocolName == "wireguard" { return wireGuard }
+        guard protocolName == "amneziawg", let value = amneziaWG else { return nil }
+        return ExternalWireGuardConfig(privateKey: value.privateKey, addresses: value.addresses, peerPublicKey: value.peerPublicKey,
+            presharedKey: value.presharedKey, endpoint: value.endpoint, allowedIPs: value.allowedIPs, dns: value.dns,
+            mtu: value.mtu, persistentKeepaliveInterval: value.persistentKeepaliveInterval)
+    }
+    var packetEndpoint: (host: String, port: Int)? {
+        guard let text = packetConfiguration?.endpoint, !text.isEmpty,
+              text == text.trimmingCharacters(in: .whitespacesAndNewlines) else { return nil }
+        let host: String, portText: String
+        if text.hasPrefix("[") {
+            guard let end = text.firstIndex(of: "]") else { return nil }
+            host = String(text[text.index(after: text.startIndex)..<end])
+            let suffix = String(text[text.index(after: end)...])
+            guard suffix.isEmpty || suffix.hasPrefix(":") else { return nil }
+            portText = suffix.isEmpty ? "51820" : String(suffix.dropFirst())
+        } else if text.filter({ $0 == ":" }).count == 1, let colon = text.firstIndex(of: ":") {
+            host = String(text[..<colon]); portText = String(text[text.index(after: colon)...])
+        } else { host = text; portText = "51820" }
+        guard !host.isEmpty, host.rangeOfCharacter(from: CharacterSet.whitespacesAndNewlines.union(.controlCharacters).union(CharacterSet(charactersIn: "[]/%?#@"))) == nil,
+              let port = Int(portText), (1...65535).contains(port) else { return nil }
+        return (host, port)
+    }
     var serverExecutionHost: String? {
         switch protocolName {
+        case "wireguard", "amneziawg": return packetEndpoint?.host
         case "shadowsocks": return shadowsocks?.server
         case "hysteria2": return hysteria2?.server
         case "socks5": return socks5?.host
@@ -329,6 +395,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     }
     var authenticatedServerExecution: Bool {
         switch protocolName {
+        case "wireguard", "amneziawg": return serverPeer != nil && !(packetConfiguration?.privateKey ?? "").isEmpty && !(packetConfiguration?.peerPublicKey ?? "").isEmpty
         case "shadowsocks": return !(shadowsocks?.password ?? "").isEmpty
         case "hysteria2": return !(hysteria2?.password ?? "").isEmpty
         case "socks5": return !(socks5?.username ?? "").isEmpty && !(socks5?.password ?? "").isEmpty
@@ -369,6 +436,10 @@ struct ExternalNodeConfig: Codable, Hashable {
         responseProbe = try c.decodeIfPresent(ExternalResponseProbe.self, forKey: .responseProbe)
         // Explicit null must not turn a rejected imported layer into absence.
         startLayer = c.contains(.startLayer) ? try c.decode(ExternalStartLayer.self, forKey: .startLayer) : nil
+        serverPeer = c.contains(.serverPeer) ? try c.decode(ExternalServerPeer.self, forKey: .serverPeer) : nil
+        guard serverPeer == nil || Self.packetProtocols.contains(protocolName) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "A server peer belongs only to its saved WireGuard or AmneziaWG node."))
+        }
     }
 
     enum CodingKeys: String, CodingKey {
@@ -381,6 +452,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case torBridge = "tor_bridge"
         case responseProbe = "response_probe"
         case startLayer = "start_layer"
+        case serverPeer = "server_peer"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

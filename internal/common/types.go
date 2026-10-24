@@ -28,12 +28,22 @@ type ExternalStartLayer struct {
 	API string `json:"api"`
 	Transport map[string]any `json:"transport"`
 }
+// ServerPeer is a public descriptor of independently provisioned relay-side
+// packet credentials. The server private key and preshared key are never part
+// of a client profile or connection-profile export.
+type ExternalServerPeer struct {
+	PublicKey string `json:"public_key"`
+	Addresses []string `json:"addresses"`
+	MTU int `json:"mtu"`
+	PersistentKeepalive int `json:"persistent_keepalive_interval,omitempty"`
+}
 
 type ExternalNodeConfig struct {
 	Protocol string `json:"protocol"`
 	ExpectedPublicIP string `json:"expected_public_ip"`
 	ResponseProbe *ExternalResponseProbe `json:"response_probe,omitempty"`
 	StartLayer *ExternalStartLayer `json:"start_layer,omitempty"`
+	ServerPeer *ExternalServerPeer `json:"server_peer,omitempty"`
 	WireGuard *ExternalWireGuardConfig `json:"wireguard,omitempty"`
 	AmneziaWG *ExternalAmneziaWGConfig `json:"amneziawg,omitempty"`
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`
@@ -51,7 +61,7 @@ type RouterProfile struct {
 	Endpoint string `json:"endpoint"`; RouterAPI string `json:"router_api"`; APIToken string `json:"api_token"`; AdGuardIPv4 string `json:"adguard_ipv4"`; AdGuardIPv6 string `json:"adguard_ipv6"`; SocksHost string `json:"socks_host"`; SocksPort int `json:"socks_port"`; SocksUsername string `json:"socks_username"`; SocksPassword string `json:"socks_password"`; DAITAHost string `json:"daita_host"`; DAITAPort int `json:"daita_port"`; DAITARateKbps int `json:"daita_rate_kbps"`; BaseTunnel string `json:"base_tunnel,omitempty"`; BaseFallback bool `json:"base_fallback,omitempty"`; CustomLayers []string `json:"custom_layers,omitempty"`; StartLayer string `json:"start_layer,omitempty"`
 	HomeLANAccess bool `json:"home_lan_access,omitempty"`; HomeLANCIDRs []string `json:"home_lan_cidrs,omitempty"`; KillSwitch bool `json:"kill_switch,omitempty"`; KillSwitchPolicy string `json:"kill_switch_policy,omitempty"`; IPv6Mode string `json:"ipv6_mode,omitempty"`; StartupMode string `json:"startup_mode,omitempty"`; AutoConnect bool `json:"auto_connect,omitempty"`; AutoRequireEncrypted bool `json:"auto_require_encrypted,omitempty"`; AutoRequireObfuscation bool `json:"auto_require_obfuscation,omitempty"`
 	DAITAEnabled bool `json:"daita_enabled,omitempty"`; JumboTUN bool `json:"jumbo_tun,omitempty"`; SocksEnabled bool `json:"socks_enabled,omitempty"`
-	MultihopEnabled bool `json:"multihop_enabled,omitempty"`; MultihopEntryID string `json:"multihop_entry_id,omitempty"`; MultihopExitID string `json:"multihop_exit_id,omitempty"`
+	MultihopEnabled bool `json:"multihop_enabled,omitempty"`; MultihopEntryID string `json:"multihop_entry_id,omitempty"`; MultihopExitID string `json:"multihop_exit_id,omitempty"`; MultihopExecution string `json:"multihop_execution,omitempty"`
 	MTUPolicy string `json:"mtu_policy,omitempty"`; ManualMTU int `json:"manual_mtu,omitempty"`; EffectiveMTU int `json:"effective_mtu,omitempty"`; EffectiveMTUSource string `json:"effective_mtu_source,omitempty"`; EffectiveMTUPathKey string `json:"effective_mtu_path_key,omitempty"`; EffectiveUnderlayPMTU int `json:"effective_underlay_pmtu,omitempty"`; EffectiveMTUTestedAt string `json:"effective_mtu_tested_at,omitempty"`; EffectiveMTUNetworkFingerprint string `json:"effective_mtu_network_fingerprint,omitempty"`; EffectiveMTUProfileFingerprint string `json:"effective_mtu_profile_fingerprint,omitempty"`; EffectiveMTUMbps float64 `json:"effective_mtu_mbps,omitempty"`; EffectiveMTUMedianRTTMs float64 `json:"effective_mtu_median_rtt_ms,omitempty"`; EffectiveMTUSuccessRatio float64 `json:"effective_mtu_success_ratio,omitempty"`
 	DiagnosticsEnabled bool `json:"diagnostics_enabled,omitempty"`; DiagnosticsRetentionDays int `json:"diagnostics_retention_days,omitempty"`; ShareDiagnostics bool `json:"share_diagnostics,omitempty"`; TelemetryEnabled bool `json:"telemetry_enabled,omitempty"`
 	PathProbeURL string `json:"path_probe_url,omitempty"`

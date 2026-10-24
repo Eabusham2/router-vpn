@@ -20,8 +20,9 @@ import (
 // session authentication contract. Packet peers need independent server keys
 // before they can participate in Local/Server comparison.
 type ExternalExit struct {
-	ExpectedPublicIP string        `json:"expected_public_ip"`
-	ResponseProbe    ResponseProbe `json:"response_probe"`
+	ExpectedPublicIP string              `json:"expected_public_ip"`
+	ResponseProbe    ResponseProbe       `json:"response_probe"`
+	Packet           *ExternalPacketPair `json:"packet,omitempty"`
 }
 
 type ResponseProbe struct {
@@ -63,7 +64,9 @@ func ExternalFingerprint(exit Exit) (string, error) {
 		return "", err
 	}
 	var value any
-	if exit.Mode == "shadowsocks" && exit.StartLayer == nil {
+	if ExternalPacketMode(exit.Mode) {
+		value = []any{"routervpn-external-packet-v3", exit.Mode, exit.External.Packet.Local, exit.External.Packet.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
+	} else if exit.Mode == "shadowsocks" && exit.StartLayer == nil {
 		// Preserve the published v1 identity for already-paired Shadowsocks nodes.
 		value = []any{"routervpn-external-relay-v1", exit.Mode, transport["server"], transport["server_port"], transport["method"], exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
 	} else {
@@ -93,6 +96,9 @@ func ExternalFingerprint(exit Exit) (string, error) {
 // password stays in the private registry and captured client profile. A digest
 // of it is never published as a reusable capability or accepted as a Router ID.
 func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
+	if err := validatePacketRequestShape(request, true); err != nil {
+		return Request{}, err
+	}
 	fingerprint, err := ExternalFingerprint(exit)
 	if err != nil {
 		return Request{}, err
@@ -107,8 +113,19 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	if err != nil {
 		return Request{}, ErrOwnership
 	}
-	key, domain := []byte(exit.Transport["password"].(string)), "routervpn-external-relay-auth-v1\x00"
-	if exit.Mode != "shadowsocks" || exit.StartLayer != nil {
+	var key []byte
+	domain := "routervpn-external-relay-auth-v1\x00"
+	if ExternalPacketMode(exit.Mode) {
+		key, err = externalPacketAuthKey(exit, fingerprint)
+		if err != nil {
+			return Request{}, err
+		}
+		defer clear(key)
+		domain = "routervpn-external-packet-auth-v3\x00"
+	} else {
+		key = []byte(exit.Transport["password"].(string))
+	}
+	if !ExternalPacketMode(exit.Mode) && (exit.Mode != "shadowsocks" || exit.StartLayer != nil) {
 		var outerSecret any
 		if exit.StartLayer != nil {
 			outerSecret = exit.StartLayer.Transport["password"]
@@ -126,9 +143,19 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	return request, nil
 }
 
+func externalPublicLayer(layer *StartLayer) any {
+	if layer == nil {
+		return nil
+	}
+	outer, _ := copyMap(layer.Transport)
+	delete(outer, "password")
+	delete(outer, "tag")
+	return []any{layer.Mode, layer.API, outer}
+}
+
 func ValidateExternalRequest(exit Exit, request Request) error {
 	if exit.External == nil {
-		if request.ExternalFingerprint != "" || request.ExternalAuthentication != "" {
+		if request.ExternalFingerprint != "" || request.ExternalAuthentication != "" || validatePacketRequestShape(request, false) != nil {
 			return ErrOwnership
 		}
 		return nil

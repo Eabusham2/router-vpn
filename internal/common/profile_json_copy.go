@@ -34,6 +34,10 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 	}
 	e := out.External
 	e.ResponseProbe = copyProfileJSONPointer(e.ResponseProbe)
+	e.ServerPeer = copyProfileJSONPointer(e.ServerPeer)
+	if e.ServerPeer != nil {
+		e.ServerPeer.Addresses = slices.Clone(e.ServerPeer.Addresses)
+	}
 	e.StartLayer = copyProfileJSONPointer(e.StartLayer)
 	if e.StartLayer != nil {
 		e.StartLayer.Transport = copyProfileJSONMap(e.StartLayer.Transport)
@@ -65,9 +69,13 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 }
 
 func copyProfileJSONMap(source map[string]any) map[string]any {
-	if source == nil { return nil }
+	if source == nil {
+		return nil
+	}
 	out := make(map[string]any, len(source))
-	for key, value := range source { out[key] = copyProfileJSONValue(value) }
+	for key, value := range source {
+		out[key] = copyProfileJSONValue(value)
+	}
 	return out
 }
 
@@ -77,7 +85,9 @@ func copyProfileJSONValue(value any) any {
 		return copyProfileJSONMap(value)
 	case []any:
 		out := make([]any, len(value))
-		for i := range value { out[i] = copyProfileJSONValue(value[i]) }
+		for i := range value {
+			out[i] = copyProfileJSONValue(value[i])
+		}
 		return out
 	case []string:
 		return slices.Clone(value)

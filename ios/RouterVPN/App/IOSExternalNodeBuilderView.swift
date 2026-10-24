@@ -62,7 +62,8 @@ extension RouterVPNModel {
         exitStartLayer: String = "off",
         exitLayerAPI: String = "",
         exitLayerPort: Int = 0,
-        exitLayerKey: String = ""
+        exitLayerKey: String = "",
+        serverPeerJSON: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -187,6 +188,10 @@ extension RouterVPNModel {
             }
             external["hysteria2"] = ["server": server, "port": port, "password": secret, "tls_server_name": sni]
         default: fatalError("guarded protocol")
+        }
+        if let serverPeer = try IOSExternalExecution.serverPeer(serverPeerJSON) {
+            guard ExternalNodeConfig.packetProtocols.contains(protocolName) else { throw IOSExternalExecution.issue() }
+            external["server_peer"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(serverPeer))
         }
         if ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
             if let probe = try IOSExternalExecution.responseProbe(host: server, url: responseProbeURL, serverName: responseProbeServerName) {
@@ -333,6 +338,7 @@ struct IOSExternalNodeBuilderView: View {
     @State private var exitLayerAPI = ""
     @State private var exitLayerPort = ""
     @State private var exitLayerKey = ""
+    @State private var serverPeerJSON = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -404,6 +410,15 @@ struct IOSExternalNodeBuilderView: View {
                 }
                 if selected == .shadowsocks {
                     Section("Shadowsocks") { TextField("Method", text: $method).textInputAutocapitalization(.never); SecureField("Password / PSK", text: $secret) }
+                }
+                if selected.isWireGuardFamily {
+                    Section("Server / Compare peer") {
+                        TextEditor(text: $serverPeerJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 110)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityLabel("Provisioned server peer public descriptor JSON")
+                        Text("Paste the public descriptor supplied when a separate client peer is provisioned on the Router VPN entry: public_key, addresses, mtu and optional persistent_keepalive_interval. Its client public key and assigned addresses must differ from this device's peer. Keep the server private key and preshared key on the entry. Leave this blank for Local only.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
                 if ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) {
                     Section("Exit Start Layer") {
@@ -502,7 +517,8 @@ struct IOSExternalNodeBuilderView: View {
                 exitStartLayer: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) ? exitStartLayer : "off",
                 exitLayerAPI: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerAPI : "",
                 exitLayerPort: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
-                exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : ""
+                exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : "",
+                serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

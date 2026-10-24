@@ -397,7 +397,8 @@ public final class StandardExitActivity extends Activity {
         if(activeOrTransitioning()){toast("Disconnect before editing external-node settings.");return;}
         final AndroidStandardExitStore.Entry captured;
         final JSONObject policy;
-        try{captured=draft==null?AndroidStandardExitStore.copy(saved):draft.apply(saved);policy=AndroidExternalPolicy.editorPolicy(captured);}
+        final String storedSource;
+        try{captured=draft==null?AndroidStandardExitStore.copy(saved):draft.apply(saved);policy=AndroidExternalPolicy.editorPolicy(captured);storedSource=exitStore.storedSnapshot(captured.id);if(saved.wasPersisted&&storedSource.isEmpty()||!storedSource.isEmpty()&&!storedSource.equals(AndroidStandardExitStore.snapshot(saved)))throw new IllegalStateException("The saved external node changed or was removed before opening its settings.");}
         catch(Exception invalid){toast("The saved external policy could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
         Spinner dns=choice(new String[]{"Home AdGuard through captured Router VPN entry","Rescue DoH (Cloudflare)","Custom UDP DNS","Custom TCP DNS","Custom DoT","Custom DoH","Custom DoH3","Previously saved legacy Fastest setting"});
@@ -435,6 +436,14 @@ public final class StandardExitActivity extends Activity {
             form.addView(text("Server / Compare both",14,true));form.addView(responseURL);form.addView(responseName);
             form.addView(text("Enter the HTTPS endpoint provided on this saved server's own public address. Its certificate is verified. Server execution also needs this exit paired in the Router VPN entry's private registry; Compare both measures Local and Server before choosing a proved path.",13,false));
         }
+        EditText serverPeer=field("Public Server peer descriptor JSON (optional for Local)",false);
+        if(AndroidStandardExitStore.packetExecutionProtocol(captured.protocol)){
+            serverPeer.setSingleLine(false);serverPeer.setMinLines(4);
+            serverPeer.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            if(captured.serverPeer!=null)serverPeer.setText(captured.serverPeer.toString());
+            form.addView(text("Separate WireGuard / AmneziaWG Server peer",14,true));form.addView(serverPeer);
+            form.addView(text("Paste the public descriptor supplied when pairing this exit: public_key, addresses, mtu and optional persistent_keepalive_interval. This is the server-side client's identity, with different keys and assigned addresses from this device. Its private key and PSK stay on the Router entry. A matching HTTPS response probe is also required for Server / Compare.",13,false));
+        }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
@@ -469,11 +478,15 @@ public final class StandardExitActivity extends Activity {
                     String url=responseURL.getText().toString().trim(),tls=responseName.getText().toString().trim();next.responseProbe=new JSONObject();
                     if(!url.isEmpty())next.responseProbe.put("url",url);if(!tls.isEmpty())next.responseProbe.put("server_name",tls);AndroidStandardExitStore.validateResponseProbe(next);
                 }
+                if(AndroidStandardExitStore.packetExecutionProtocol(next.protocol)){
+                    next.serverPeer=AndroidStandardExitStore.parseServerPeer(serverPeer.getText().toString());
+                    AndroidStandardExitStore.validateServerPeer(next);
+                }
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
                 startup.apply(next);
                 AndroidExternalPolicy.validateDraft(next);
-                exitStore.save(next);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
+                exitStore.saveIfUnchanged(next,storedSource);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
             }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}
         }));dialog.show();
     }

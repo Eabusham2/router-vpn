@@ -212,8 +212,9 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
   try check("whole-profile load restores exact hostname lookup choices",model.selectedNodeProfile?.dnsBootstrap==bootstrap && model.selectedNodeProfile?.dnsHost==p.dnsHost)
  }
  static func externalExecutionPersistence()throws {
-  for kind in ["shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
+  for kind in ["wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
    var p=profile(kind)
+   if ExternalNodeConfig.packetProtocols.contains(kind) { p.external?.serverPeer=try JSONDecoder().decode(ExternalServerPeer.self,from:data(["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1360,"persistent_keepalive_interval":25])) }
    if layer != "off" {
     let raw:[String:Any] = ["mode":layer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:77,count:32).base64EncodedString()]]
     p.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:data(raw));p.startLayer=layer
@@ -223,7 +224,7 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Saved external execution")
    let record=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
    try check("snapshot retains exact Server/Compare choice and native entry",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopEntryMode=="max-tls-awg")
-   try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe") && !record.contains(Data(repeating:77,count:32).base64EncodedString()) && !record.contains("10.99.0.1") && saved.preferences?.startLayer==layer)
+   try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe") && !record.contains("server_peer") && !record.contains("bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=") && !record.contains(Data(repeating:77,count:32).base64EncodedString()) && !record.contains("10.99.0.1") && saved.preferences?.startLayer==layer)
    var current=bundle(p);current.routerProfiles[0].multihopExecution="local";current.routerProfiles[0].external?.shadowsocks?.password="replacement private credential"
    current.routerProfiles[0].external?.responseProbe?.url="https://198.51.100.1:9443/new-response"
    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(current)

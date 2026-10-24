@@ -248,6 +248,7 @@ private struct RouterVPNNodeMetadataEditor: View {
     @State private var exitLayerAPI: String
     @State private var exitLayerPort: String
     @State private var exitLayerKey: String
+    @State private var serverPeerJSON: String
     @State private var errorText = ""
 
     init(profile: RouterProfile) {
@@ -262,6 +263,7 @@ private struct RouterVPNNodeMetadataEditor: View {
         _exitLayerAPI = State(initialValue: profile.external?.startLayer?.api ?? "")
         _exitLayerPort = State(initialValue: profile.external?.startLayer.map { String($0.transport.serverPort) } ?? "")
         _exitLayerKey = State(initialValue: profile.external?.startLayer?.transport.password ?? "")
+        _serverPeerJSON = State(initialValue: IOSExternalExecution.serverPeerText(profile.external?.serverPeer))
     }
 
     var body: some View {
@@ -288,6 +290,15 @@ private struct RouterVPNNodeMetadataEditor: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 if profile.normalizedNodeKind == "external", profile.external?.serverExecutionHost != nil {
+                    if ExternalNodeConfig.packetProtocols.contains(profile.external?.protocolName ?? "") {
+                        Section("Server / Compare peer") {
+                            TextEditor(text: $serverPeerJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 110)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityLabel("Provisioned server peer public descriptor JSON")
+                            Text("Use the independently provisioned server client's public_key, addresses, mtu and optional persistent_keepalive_interval. Its identity and assigned addresses must differ from this device's peer. Server private keys stay on the Router VPN entry. Choose Local before removing this descriptor.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
                     Section("Exit Start Layer") {
                         Picker("Encryption and whitening", selection: $exitStartLayer) {
                             Text("Off").tag("off")
@@ -324,7 +335,8 @@ private struct RouterVPNNodeMetadataEditor: View {
                             expectedStartLayer: profile.startLayer ?? "off", exitStartLayer: external == nil ? nil : exitStartLayer,
                             exitLayerAPI: external != nil && exitStartLayer != "off" ? exitLayerAPI : "",
                             exitLayerPort: external != nil && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
-                            exitLayerKey: external != nil && exitStartLayer != "off" ? exitLayerKey : "") { dismiss() }
+                            exitLayerKey: external != nil && exitStartLayer != "off" ? exitLayerKey : "",
+                            serverPeerJSON: ExternalNodeConfig.packetProtocols.contains(external?.protocolName ?? "") ? serverPeerJSON : nil) { dismiss() }
                         else { errorText = model.message }
                     }
                     .disabled(model.profileMutationBlocked)

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/tls"
 	"crypto/x509"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -163,6 +164,8 @@ type externalExecutionEngine struct {
 	closeFailure               bool
 	errors                     []string
 	trust                      *tls.Config
+	leaseRequests              []multihoprelay.Request
+	badPacketChallenge         string
 }
 
 func (e *externalExecutionEngine) Identity() string {
@@ -229,6 +232,14 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 	if err != nil {
 		t.Fatal(err)
 	}
+	if multihoprelay.ExternalPacketMode(policy.capture.Protocol) {
+		ext := policy.capture.Profile["external"].(map[string]any)
+		server := externalPacketServerProfile(t, policy.capture.Protocol, ext)
+		exit, err = multihoprelay.PairExternalPacket(policy.capture.ExitID, policy.capture.Protocol, ext, server, exit.StartLayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	runner := &externalExecutionRunner{}
 	m, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.77.0.1", FirstPort: 26240, LastPort: 26271, TTLSeconds: 90, Exits: []multihoprelay.Exit{exit}}, policy.capture.Execution.Request.EntryNodeID, runner)
 	if err != nil {
@@ -250,7 +261,41 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			return
 		}
 		if r.Method == "GET" {
-			_ = json.NewEncoder(w).Encode(map[string]any{"node_id": node, "execution": "server", "exits": m.Available()})
+			result := map[string]any{"node_id": node, "execution": "server", "exits": m.Available()}
+			if r.URL.RawQuery == "external_packet=1" {
+				challenge, err := m.PacketChallenge(netip.MustParseAddr("10.77.0.2"))
+				if err != nil {
+					w.WriteHeader(503)
+					return
+				}
+				e.mu.Lock()
+				bad := e.badPacketChallenge
+				e.mu.Unlock()
+				if bad == "peer" {
+					challenge.Peer = "10.77.0.99"
+				}
+				if bad == "epoch" {
+					challenge.Epoch = strings.Repeat("f", 64)
+				}
+				if bad == "expired" {
+					challenge.ExpiresAt = time.Now().Add(-time.Second).Unix()
+				}
+				if bad == "future" {
+					challenge.ExpiresAt = time.Now().Add(time.Hour).Unix()
+				}
+				if bad != "missing" {
+					result["external_packet_challenge"] = challenge
+				}
+				if bad == "server-key" {
+					catalog := result["exits"].([]map[string]string)
+					catalog[0]["client_public_key"] = exit.External.Packet.Local["client_public_key"].(string)
+				}
+				if bad == "substitute-server-key" {
+					catalog := result["exits"].([]map[string]string)
+					catalog[0]["client_public_key"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("q", 32)))
+				}
+			}
+			_ = json.NewEncoder(w).Encode(result)
 			return
 		}
 		var q multihoprelay.Request
@@ -260,6 +305,9 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		}
 		peer := netip.MustParseAddr("10.77.0.2")
 		if r.Method == "PUT" {
+			e.mu.Lock()
+			e.leaseRequests = append(e.leaseRequests, q)
+			e.mu.Unlock()
 			lease, err := m.Create(r.Context(), peer, q)
 			if err != nil {
 				w.WriteHeader(409)

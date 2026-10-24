@@ -93,7 +93,7 @@ extension RouterVPNModel {
                   profile.external?.matchesStartLayer(profile.startLayer) == true else {
                 throw iosMultihopError("Choose the external entry's exact imported protocol and public proof address.")
             }
-            if profile.external?.startLayer != nil { try IOSExternalExecution.validateLayerDraft(profile) }
+            if profile.external?.startLayer != nil || profile.external?.serverPeer != nil { try IOSExternalExecution.validateLayerDraft(profile) }
             entry.nodeProofID = ""
             entry.routerAPI = ""; entry.apiToken = ""; entry.adGuardIPv4 = ""; entry.adGuardIPv6 = ""
         } else {

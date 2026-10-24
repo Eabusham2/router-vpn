@@ -12,7 +12,9 @@ import (
 )
 
 // PacketMode includes PQ only when the independent negotiation is retained.
-func PacketMode(mode string) bool { return awgpolicy.WireGuardFamily(mode) || mobilepq.IsMode(mode) }
+func PacketMode(mode string) bool {
+	return awgpolicy.WireGuardFamily(mode) || mobilepq.IsMode(mode) || ExternalPacketMode(mode)
+}
 
 func pqConfig(transport map[string]any) (mobilepq.Config, error) {
 	var config mobilepq.Config

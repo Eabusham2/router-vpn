@@ -170,13 +170,101 @@ paths require the verified complete native runtime, which includes the XOR
 adapter. The shared generated native graph tests remain separate from physical
 device acceptance.
 
-This extension is bounded to the graph above. WireGuard/AmneziaWG/OpenVPN server
-comparison needs distinct session credentials and corresponding peer ownership;
-it must not reuse a roaming packet peer. External-entry server execution and
-desktop external Server/Compare host adoption remain open requirements.
-Operator pairing and device/off-LAN
-acceptance still require their own evidence; no private deployment occurs when
-these sources or tests are updated.
+### External WireGuard and AmneziaWG peers
+
+An external WG/AWG Server or Compare path uses **two independently provisioned
+client peers on the same provider**. The normal `external.wireguard` or
+`external.amneziawg` block retains the Local client's private key and PSK. The
+entry server receives a separate private peer profile. It must use the same
+remote protocol, endpoint, provider public key, routes and AWG parameters,
+with a different canonical client public key and different assigned addresses.
+The remote provider must authorize both peers. Different spellings of one
+clamped X25519 private key do not count as independent peers.
+
+Only this public descriptor of the server-side client goes into the client
+node's `external.server_peer` member:
+
+```json
+{
+  "public_key": "BASE64_SERVER_SIDE_CLIENT_PUBLIC_KEY",
+  "addresses": ["10.93.0.3/32", "fd93::3/128"],
+  "mtu": 1360,
+  "persistent_keepalive_interval": 25
+}
+```
+
+This is the relay-side **client** public key, not the remote provider's key.
+The assigned addresses must be real addresses provisioned by that provider,
+one per family, matching the Local peer's address families and differing from
+its assigned IPs. MTU is explicit, 1280–9000. Keepalive is optional, 0–65535;
+omitted and zero both disable it. Private keys, PSKs, unknown fields, duplicate
+fields, noncanonical public encodings and low-order X25519 identities are
+rejected. The same-host HTTPS `response_probe` and expected public exit IP
+remain required for Server/Compare. A Local-only node may omit both its server
+descriptor and comparison response endpoint.
+
+Prepare a separate private `server-peer.json` with exactly `protocol` and the
+complete matching `wireguard` or `amneziawg` block. That block contains the
+**server-side client's** private key, assigned addresses, remote provider key,
+endpoint, allowed routes, MTU, optional PSK/keepalive and the exact AWG
+parameters where applicable. It is not a second copy of the Local bundle.
+The offline agent can derive the public descriptor without exporting the
+private key or PSK:
+
+```sh
+router-vpn-agent describe-external-packet-peer \
+  < /private/server-peer.json > /private/server-peer.public.json
+```
+
+Import that public result as the node's `external.server_peer`. Then pair the
+complete client bundle and the independent private server profile on the
+intended Router entry:
+
+```sh
+router-vpn-relay-pair \
+  --bundle /private/exit/router-vpn-bundle.json \
+  --server-peer-profile /private/server-peer.json \
+  --exit-id EXIT_ID_AS_STORED_IN_THE_CLIENT \
+  --agent-config /etc/router-vpn/router-agent.json \
+  --registry /etc/router-vpn/multihop-relays.json \
+  --listen-ip ENTRY_PRIVATE_TUNNEL_IP
+```
+
+The offline Go compiler checks both identities and exact public parameters.
+Only the Server private key/PSK and both **public** descriptions survive in
+the resulting server registry; the Local private key/PSK is not copied into
+it. No server private key/PSK goes into the client profile. The existing native
+checker validates the generated engine graph before atomic registry
+publication. This command does not start a tunnel or modify the live router.
+
+For packet leases, X25519 agreement between these two client keys derives a
+domain-separated HKDF-SHA256 authentication key. Public fingerprints bind the
+two public configurations, expected egress, response endpoint and optional
+outer layer, without publishing a digest of either PSK. Runtime packet and
+exit/DNS proofs still have to succeed; possession of a lease is insufficient.
+Each acquisition signs the entry's fresh boot epoch, observed tunnel peer,
+60-second acquisition expiry and a random attempt ID. Renewals keep the same
+already-owned process. Cancellation or teardown retires that attempt, including
+a DELETE that reaches the entry before its delayed PUT. Failed cleanup keeps
+the process, port and canonical key reserved but cannot renew a retired path.
+A Compare winner's repeat proof gets a fresh attempt while keeping the
+captured session, listener and graph. Restart changes the epoch and rejects
+old signed acquisitions.
+
+The Local and Server transports retain their own interface MTUs and keepalive
+settings. A shared client TUN cannot exceed the captured Server interface in
+Server/Compare; incompatible fixed values fail validation. Packet exits with
+an imported AES or AES+XOR layer account for the SS2022 request/response headers,
+per-key identity headers and inner destination address before fitting into a
+packet entry. These are configured bounds; current-path MTU evidence still
+comes from the owned measurement and proof lifecycle. Canonical packet/PQ
+ownership also includes the packet base inside complete MAX chains.
+
+External OpenVPN Server/Compare still needs an independently authenticated
+session pairing. External-entry Server execution also requires its own
+administrative/runtime owner. Operator pairing and device/off-LAN acceptance
+remain distinct evidence; no private deployment occurs when sources or tests
+are updated.
 
 ## Mobile LAN-Off enforcement
 

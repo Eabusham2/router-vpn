@@ -143,11 +143,12 @@ final class IOSNodeBundleStore {
         longitude: Double?,
         expectedExternal: ExternalNodeConfig? = nil,
         responseProbe: ExternalResponseProbe? = nil,
-        startLayerUpdate: ExternalStartLayerUpdate? = nil
+        startLayerUpdate: ExternalStartLayerUpdate? = nil,
+        serverPeerUpdate: ExternalServerPeerUpdate? = nil
     ) throws -> Data {
         try ensureStorageReady()
         let available = readableRecords(current: current)
-        guard startLayerUpdate == nil || expectedExternal != nil else { throw IOSExternalExecution.issue() }
+        guard (startLayerUpdate == nil && serverPeerUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
@@ -164,6 +165,14 @@ final class IOSNodeBundleStore {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 7, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the response endpoint used by Server or Compare."])
                 }
                 bundle.routerProfiles[index].external?.responseProbe = responseProbe
+                if let serverPeerUpdate {
+                    guard ExternalNodeConfig.packetProtocols.contains(expectedExternal.protocolName) else { throw IOSExternalExecution.issue() }
+                    if serverPeerUpdate.peer == nil, bundle.routerProfiles[index].multihopEnabled == true,
+                       ["server", "auto"].contains(bundle.routerProfiles[index].multihopExecution ?? "local") {
+                        throw NSError(domain: "RouterVPN.NodeStore", code: 8, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the separate server peer used by Server or Compare."])
+                    }
+                    bundle.routerProfiles[index].external?.serverPeer = serverPeerUpdate.peer
+                }
                 if let startLayerUpdate {
                     guard (bundle.routerProfiles[index].startLayer ?? "off") == startLayerUpdate.expectedMode else {
                         throw NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "The external Start Layer changed while its editor was open. Reopen Edit Node before saving."])

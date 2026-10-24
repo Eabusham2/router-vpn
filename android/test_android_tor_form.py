@@ -394,6 +394,33 @@ public final class TorFormHarness {
   Path directory=Files.createTempDirectory(root,"external-execution-select-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node entry=node(directory);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);picker.intent.putExtra(StandardExitActivity.EXTRA_SELECT_PATH,true);invoke(picker,"chooseExecution",entry,exit,"wg");AlertDialog.last.clickItem(2);
   check(picker.finished&&AndroidRuntimeRegistry.get(picker).standardExit.starts==0&&"auto".equals(AndroidConnectionProfileStore.executions.get(directory.toString())),"selection-only Compare did not persist without starting VPN");
  }
+ static JSONObject packetServerPeer()throws Exception{return new JSONObject().put("public_key","bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=").put("addresses",new JSONArray().put("10.94.0.3/32").put("fd94::3/128")).put("mtu",1360).put("persistent_keepalive_interval",25);}
+ static void packetExecutionForms()throws Exception{
+  String hint="Public Server peer descriptor JSON (optional for Local)",urlHint="This server's HTTPS response URL (required for Server / Compare both)";
+  for(String protocol:new String[]{"wireguard","amneziawg"})for(int layer=0;layer<3;layer++){
+   Path directory=Files.createTempDirectory(root,"packet-form-");StandardExitActivity editor=activity(directory,null);AndroidStandardExitStore.Entry original=ordinary(protocol);original.wgMtu=1280;original.policy=AndroidExternalPolicy.editorPolicy(null);store(editor).save(original);String originalSnapshot=AndroidStandardExitStore.snapshot(original);
+   invoke(editor,"showExternalPolicyForm",original);AlertDialog form=AlertDialog.last;field(form,hint).setText(packetServerPeer().toString());field(form,urlHint).setText("https://203.0.113.20:8443/response");field(form,"Response TLS server name (optional)").setText("external.example.test");spinner(form,"Off").setSelection(layer);
+   if(layer!=0){field(form,"Provisioned private service API URL").setText("http://10.99.0.1:8787");field(form,"Provisioned AES port").setText("8388");field(form,"Provisioned AES-256-GCM key").setText(Base64.getEncoder().encodeToString("l".repeat(32).getBytes(StandardCharsets.UTF_8)));}
+   form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"packet descriptor form failed actual native validation: "+protocol+" "+displayed(form.view));AndroidStandardExitStore.Entry selected=store(editor).get(original.id);String saved=AndroidStandardExitStore.snapshot(selected);
+   check(selected.serverPeer.getString("public_key").equals(packetServerPeer().getString("public_key"))&&selected.serverPeer.getInt("mtu")==1360&&selected.wgPrivateKey.equals(original.wgPrivateKey),"packet editor mixed Local and Server peer ownership");check(originalSnapshot.equals(AndroidStandardExitStore.snapshot(original)),"packet editor mutated its input capture");
+   invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;check(field(form,hint).getText().toString().equals(selected.serverPeer.toString()),"packet descriptor missing after reopening");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"packet descriptor or selected Start Layer changed on settings roundtrip");
+   for(String invalid:new String[]{"null",packetServerPeer().put("private_key","forbidden server secret").toString(),packetServerPeer().put("mtu",JSONObject.NULL).toString(),packetServerPeer().put("addresses",new JSONArray().put("10.93.0.2/24").put("fd94::3/128")).toString()}){
+    invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;field(form,hint).setText(invalid);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"invalid public packet descriptor changed saved private node");form.dismiss();
+   }
+   for(int execution=0;execution<3;execution++){
+    Path target=Files.createTempDirectory(root,"packet-permission-");StandardExitActivity picker=activity(target,null);AndroidNodeStore.Node entry=node(target);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);invoke(picker,"chooseExecution",entry,exit,"wg");AlertDialog menu=AlertDialog.last;check(menu.itemsVisible()&&menu.items.length==3,"packet execution menu unavailable");menu.clickItem(execution);Bundle state=new Bundle();picker.onSaveInstanceState(state);StandardExitActivity restored=activity(target,state);restored.onActivityResult(2101,Activity.RESULT_OK,null);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(restored).standardExit;
+    check(runtime.starts==1&&runtime.execution.equals(new String[]{"local","server","auto"}[execution])&&runtime.exit.serverPeer.toString().equals(exit.serverPeer.toString())&&runtime.exit.wgPrivateKey.equals(exit.wgPrivateKey),"permission restoration substituted packet descriptor, private key or execution");
+   }
+  }
+  for(String change:new String[]{"replacement","deletion","new-conflict","before-open"}){
+   StandardExitActivity editor=activity(Files.createTempDirectory(root,"packet-stale-form-"),null);AndroidStandardExitStore.Entry selected=ordinary("wireguard");selected.policy=AndroidExternalPolicy.editorPolicy(null);selected.serverPeer=packetServerPeer();
+   if(!change.equals("new-conflict"))store(editor).save(selected);
+   if(change.equals("before-open")){store(editor).remove(selected.id);AlertDialog previous=AlertDialog.last;invoke(editor,"showExternalPolicyForm",selected);check(AlertDialog.last==previous&&store(editor).list().isEmpty(),"stale external editor resurrected a node deleted before opening");continue;}
+   invoke(editor,"showExternalPolicyForm",selected);AlertDialog form=AlertDialog.last;
+   AndroidStandardExitStore otherStore=new AndroidStandardExitStore(editor);if(change.equals("deletion"))otherStore.remove(selected.id);else{AndroidStandardExitStore.Entry newer=AndroidStandardExitStore.copy(selected);newer.serverPeer.put("mtu",1400);otherStore.save(newer);}
+   String current=otherStore.storedSnapshot(selected.id);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&current.equals(otherStore.storedSnapshot(selected.id)),"stale external editor overwrote another owner or resurrected deletion: "+change);form.dismiss();
+  }
+ }
  static void ordinaryPolicies()throws Exception{
   int ordinaryRoundtrips=0;
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
@@ -422,7 +449,7 @@ public final class TorFormHarness {
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"ordinary-mode-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node owned=node(directory);AndroidStandardExitStore.Entry e=ordinary(kind);e.policy.put("dns_mode","rescue");store(picker).save(e);
    invoke(picker,"chooseEntry",e);AlertDialog.last.clickItem(0);AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"ordinary external mode picker omitted a captured entry");int index=-1;for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"ordinary entry mode unavailable: "+mode);modes.clickItem(index);
-   if(kind.equals("shadowsocks")){AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"external execution choices disappeared");execution.clickItem(0);}
+   if(List.of("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http","https").contains(kind)){AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"external execution choices disappeared");execution.clickItem(0);}
    picker.onActivityResult(2101,Activity.RESULT_OK,null);
    AndroidStandardExitRuntime run=AndroidRuntimeRegistry.get(picker).standardExit;check(run.starts==1&&run.mode.equals(mode)&&run.entry.equals(owned.file)&&run.exit.protocol.equals(kind),"ordinary permission handoff changed selected mode or exit");
   }
@@ -536,7 +563,7 @@ public final class TorFormHarness {
   java.lang.reflect.Method parse=AndroidStandardExitStore.class.getDeclaredMethod("fromJson",JSONObject.class);parse.setAccessible(true);JSONObject old=new JSONObject(AndroidStandardExitStore.snapshot(ordinary("socks5")));old.remove("startup_mode");old.remove("auto_connect");AndroidStandardExitStore.Entry legacy=(AndroidStandardExitStore.Entry)parse.invoke(null,old);check(legacy.startupMode.equals("smart-auto")&&!legacy.autoConnect,"legacy external node gained automatic startup");
   for(String kind:List.of("string-bool","null-bool","number-mode","unknown","manual-on")){JSONObject malformed=new JSONObject(old.toString());malformed.put("startup_mode",kind.equals("number-mode")?3:kind.equals("unknown")?"random":kind.equals("manual-on")?"manual":"auto");malformed.put("auto_connect",kind.equals("string-bool")?"true":kind.equals("null-bool")?JSONObject.NULL:true);boolean rejected=false;try{parse.invoke(null,malformed);}catch(Exception expected){rejected=true;}check(rejected,"invalid external startup metadata accepted: "+kind);}
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -640,6 +667,10 @@ def main():
              'AndroidExternalPolicy.validateDraft(next);',
              '// omitted idle native validation',
              "Home draft bypassed native transport validation"),
+            ("external-settings-owner", "AndroidStandardExitStore.java",
+             'if(entry==null||expected==null||entry.wasPersisted&&expected.isEmpty()||!expected.equals(storedSnapshot(entry.id)))',
+             'if(false)',
+             "stale external editor overwrote another owner or resurrected deletion"),
             ("dns-source-draft", "AndroidDNSSelectionDraft.java",
              'if(!nodeID.equals(current.id)||!source.equals(AndroidStandardExitStore.snapshot(current)))',
              'if(false)',

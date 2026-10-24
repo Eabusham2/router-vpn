@@ -15,6 +15,10 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 
+GO = r'''package main
+import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop")
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil&&len(args)==2{result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1])}else if err==nil{panic("invalid fixture request")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
+
 
 def method(name, signature):
     source = (JAVA / name).read_text()
@@ -56,15 +60,19 @@ public final class MemoryPreferences implements SharedPreferences {
     "android/util/Base64.java": r'''package android.util;public final class Base64 {public static final int DEFAULT=0;
  public static byte[] decode(String value,int flags){return java.util.Base64.getMimeDecoder().decode(value);}
 }''',
+    "io/nekohasekai/libbox/Libbox.java": r'''package io.nekohasekai.libbox;import org.json.JSONArray;import java.nio.charset.StandardCharsets;
+public final class Libbox {public static String routerCompileAmneziaProfile(String profile,String identity)throws Exception{
+ Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();process.getOutputStream().write(new JSONArray(java.util.Arrays.asList(profile,identity)).toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
+}}''',
 }
 
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import org.json.*;import java.util.*;import java.io.*;import java.nio.file.*;
 final class AndroidPrivateFileStore {
- static String failPath="";static int failures;static int writes;
+ static String failPath="";static int failures;static int writes;static volatile Runnable beforeWrite;
  static void ensurePrivateDirectory(File file)throws Exception{Files.createDirectories(file.toPath());}
  static byte[] read(File file,int max)throws Exception{byte[] bytes=Files.readAllBytes(file.toPath());if(bytes.length==0||bytes.length>max)throw new IOException("bad size");return bytes;}
- static void write(File file,byte[] bytes,int max)throws Exception{if(bytes.length==0||bytes.length>max)throw new IOException("bad size");Files.createDirectories(file.getParentFile().toPath());Files.write(file.toPath(),bytes);writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}}
+ static void write(File file,byte[] bytes,int max)throws Exception{if(bytes.length==0||bytes.length>max)throw new IOException("bad size");Runnable hook=beforeWrite;if(hook!=null)hook.run();Files.createDirectories(file.getParentFile().toPath());Files.write(file.toPath(),bytes);writes++;if(failures>0&&file.getAbsolutePath().equals(failPath)){failures--;throw new IOException("injected post-publication failure");}}
  static void remove(File file,int max)throws Exception{Files.deleteIfExists(file.toPath());}
 }
 final class AndroidStartupPolicy {static void cancelPending(){}}
@@ -75,9 +83,9 @@ final class AndroidRuntimeRegistry {
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
 }
 final class AndroidOpenVPN {static JSONObject endpoint(AndroidStandardExitStore.Entry entry,String detour){throw new AssertionError("OpenVPN compiler is outside the persistence fixture");}}
-final class AndroidExternalAmnezia {static JSONObject endpoint(AndroidStandardExitStore.Entry entry){throw new AssertionError("AWG compiler is outside the persistence fixture");}}
 final class AndroidTorProfile {
  static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}
+ static String digest(byte[] bytes)throws Exception{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
  // Compiler boundary only. The actual Tor form/profile tests exercise shared Go validation.
  static void validate(AndroidStandardExitStore.Entry exit)throws Exception{AndroidConnectionProfilePolicy.external(exit.torPolicy,exit.protocol);if("tor-bridge".equals(exit.protocol)&&exit.torBridges.isEmpty())throw new IllegalArgumentException("missing bridge");}
 }
@@ -174,13 +182,17 @@ public final class ConnectionProfilesHarness {
   f.store.selectExternalPath(f.exits.get(exit),null,"wg");f.store.update(r.id,"Direct "+exit);check(f.store.list().size()==1&&f.store.list().get(0).name.equals("Direct "+exit),"Update preserves profile ID/count");f.otherSelection();f.store.load(r.id);check(f.store.currentExternalPath(exit).direct()&&!f.prefs.getBoolean("multihop_on",true),"direct Update/Load clears old hops");surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.direct&&surface.connection.entry==null&&surface.connection.exit.id.equals(exit),"shipping map Connect dispatches direct saved external path");f.store.delete(r.id);check(f.store.list().isEmpty(),"Delete external profile");
  }
  static void externalExecution(Path root)throws Exception{
-  for(String protocol:List.of("shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String execution:List.of("local","server","auto")){
-   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("paired-"+protocol,false);exit.protocol=protocol;exit.tlsServerName="exit.example.test";exit.method="2022-blake3-aes-256-gcm";exit.secret=Base64.getEncoder().encodeToString(new byte[32]);exit.responseProbe=new JSONObject().put("url","https://198.51.100.8:8443/response").put("server_name","paired.example.test");if(!layer.equals("off")){exit.policy.put("start_layer",layer);exit.startLayer=new JSONObject().put("mode",layer).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",exit.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",Base64.getEncoder().encodeToString("L".repeat(32).getBytes(StandardCharsets.UTF_8))));}f.exits.save(exit);
+  for(String protocol:List.of("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening"))for(String execution:List.of("local","server","auto")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("paired-"+protocol,false);exit.protocol=protocol;exit.tlsServerName="exit.example.test";exit.method="2022-blake3-aes-256-gcm";exit.secret=Base64.getEncoder().encodeToString(new byte[32]);exit.responseProbe=new JSONObject().put("url","https://198.51.100.8:8443/response").put("server_name","paired.example.test");
+   boolean packet=AndroidStandardExitStore.packetExecutionProtocol(protocol);if(packet){exit.wgPrivateKey=Base64.getEncoder().encodeToString("x".repeat(32).getBytes(StandardCharsets.UTF_8));exit.wgPeerPublicKey=Base64.getEncoder().encodeToString("p".repeat(32).getBytes(StandardCharsets.UTF_8));exit.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));exit.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));exit.wgMtu=1280;exit.wgKeepalive=25;exit.serverPeer=new JSONObject().put("public_key","bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=").put("addresses",new JSONArray().put("10.94.0.3/32").put("fd94::3/128")).put("mtu",1360).put("persistent_keepalive_interval",25);if(protocol.equals("amneziawg"))exit.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
+   if(!layer.equals("off")){exit.policy.put("start_layer",layer);exit.startLayer=new JSONObject().put("mode",layer).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",exit.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",Base64.getEncoder().encodeToString("L".repeat(32).getBytes(StandardCharsets.UTF_8))));}f.exits.save(exit);
    f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("paired execution");String secret=exit.secret;check(!text(f.rows).contains(secret)&&!text(f.rows).contains("response_probe"),"connection choices duplicated private node material");
    if(!layer.equals("off"))check(!text(f.rows).contains(exit.startLayer.getJSONObject("transport").getString("password"))&&!text(f.rows).contains("10.99.0.1")&&f.store.list().get(0).startLayer.equals(layer),"saved layer choice leaked its private provisioned transport");
    f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);check(selected.execution.equals(execution)&&selected.entry.id.equals(f.first.id),"profile load discarded external execution choice");
+   if(packet)check(selected.exit.serverPeer.toString().equals(exit.serverPeer.toString())&&selected.exit.wgPrivateKey.equals(exit.wgPrivateKey)&&!text(f.rows).contains("server_peer")&&!text(f.rows).contains(exit.wgPrivateKey),"connection profile changed packet descriptor or duplicated private node material");
    ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution),"main Connect discarded external execution");
    AndroidStandardExitStore.Entry copied=AndroidStandardExitStore.copy(exit);copied.responseProbe.put("url","https://198.51.100.8/changed");check(!copied.responseProbe.toString().equals(exit.responseProbe.toString()),"response endpoint aliases saved credentials");
+   if(packet){copied.serverPeer.put("mtu",1400);check(exit.serverPeer.getInt("mtu")==1360&&f.exits.get(exit.id).serverPeer.getInt("mtu")==1360,"saved packet peer aliases temporary profile owner");}
    if(!execution.equals("local")){State before=new State(f);rejected(()->f.store.selectExternalPath(exit,null,"wg",execution),"direct path server owner");before.same(f,"direct execution rejection");}
    if(!layer.equals("off")){
     AndroidStandardExitStore.Entry changed=AndroidStandardExitStore.copy(exit);String other=layer.equals("aes-256-gcm")?"aes-256-gcm+xor-whitening":"aes-256-gcm";changed.policy.put("start_layer",other);changed.startLayer.put("mode",other);f.exits.save(changed);
@@ -254,7 +266,20 @@ public final class ConnectionProfilesHarness {
   f.prefs.values.put("custom_presets",42);before=new State(f);rejected(()->f.store.selectExternalPath(f.exits.get("external-a"),f.first,"wg"),"wrong preference key type");before.same(f,"typed preference preflight");f.prefs.values.remove("custom_presets");
   var home=f.exits.get("external-a");home.policy.put("dns_mode","home");f.exits.save(home);before=new State(f);final var selectedHome=home;rejected(()->f.store.selectExternalPath(selectedHome,null,"wg"),"direct Home without entry");before.same(f,"Home rejection");f.store.selectExternalPath(home,f.first,"wg");check(!f.store.currentExternalPath(home.id).direct(),"Home keeps captured Router entry");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ static void concurrentExternalEditors(Path root)throws Exception{
+  Fixture fixture=new Fixture(root);AndroidStandardExitStore first=new AndroidStandardExitStore(fixture.context),second=new AndroidStandardExitStore(fixture.context);
+  AndroidStandardExitStore.Entry original=first.get("external-a"),one=AndroidStandardExitStore.copy(original),two=AndroidStandardExitStore.copy(original);String source=first.storedSnapshot(original.id);one.password="first private owner";two.password="second private owner";
+  var entered=new java.util.concurrent.CountDownLatch(1);var release=new java.util.concurrent.CountDownLatch(1);var firstWrite=new java.util.concurrent.atomic.AtomicBoolean(true);var firstError=new java.util.concurrent.atomic.AtomicReference<Throwable>();var secondError=new java.util.concurrent.atomic.AtomicReference<Throwable>();
+  AndroidPrivateFileStore.beforeWrite=()->{if(firstWrite.compareAndSet(true,false)){entered.countDown();try{if(!release.await(5,java.util.concurrent.TimeUnit.SECONDS))throw new IllegalStateException("publication fixture did not release");}catch(InterruptedException error){Thread.currentThread().interrupt();throw new IllegalStateException(error);}}};
+  Thread a=new Thread(()->{try{first.saveIfUnchanged(one,source);}catch(Throwable error){firstError.set(error);}},"captured-external-writer");Thread b=new Thread(()->{try{second.saveIfUnchanged(two,source);}catch(Throwable error){secondError.set(error);}},"stale-external-writer");a.setDaemon(true);b.setDaemon(true);
+  try{
+   a.start();check(entered.await(5,java.util.concurrent.TimeUnit.SECONDS),"first external writer never reached publication");b.start();long deadline=System.nanoTime()+java.util.concurrent.TimeUnit.SECONDS.toNanos(5);boolean decided=false;
+   while(System.nanoTime()<deadline){var info=java.lang.management.ManagementFactory.getThreadMXBean().getThreadInfo(b.getId());if(!b.isAlive()||info!=null&&info.getThreadState()==Thread.State.BLOCKED&&info.getLockOwnerId()==a.getId()){decided=true;break;}Thread.yield();}
+   check(decided,"second external writer neither waited for the transaction nor completed");release.countDown();a.join(5000);b.join(5000);
+   check(!a.isAlive()&&!b.isAlive()&&firstError.get()==null&&secondError.get() instanceof IllegalStateException,"independent store instances both adopted the same obsolete editor source");check(first.get(original.id).password.equals(one.password),"concurrent stale editor replaced the retained private credential owner");
+  }finally{release.countDown();AndroidPrivateFileStore.beforeWrite=null;a.join(5000);b.join(5000);}
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
@@ -263,8 +288,14 @@ def main():
     jar = Path(os.environ.get("ANDROID_JSON_JAR", "/usr/share/java/com.android.json.jar"))
     if not jar.is_file():
         raise RuntimeError("Real Android JSON implementation required")
-    with tempfile.TemporaryDirectory(prefix="android-connection-profiles-") as work:
+    if not shutil.which("go"):
+        raise RuntimeError("Go is required for actual AWG profile validation")
+    with tempfile.TemporaryDirectory(prefix="android-connection-profiles-", dir=ROOT) as work:
         work = Path(work)
+        module = next(line.split()[1] for line in (ROOT / "go.mod").read_text().splitlines() if line.startswith("module "))
+        compiler = work / "compiler"
+        (work / "main.go").write_text(GO.replace("router-vpn/internal/", module + "/internal/"))
+        subprocess.run(["go", "build", "-o", str(compiler), str(work / "main.go")], cwd=ROOT, check=True, timeout=120)
         src = work / "src"
         for name, content in STUBS.items():
             target = src / name
@@ -272,7 +303,7 @@ def main():
             target.write_text(content)
         app = src / "com/eabusham/routervpn"
         app.mkdir(parents=True)
-        for name in ("AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress"):
+        for name in ("AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static void checkPolicy("))
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods))
@@ -282,7 +313,24 @@ def main():
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
-        subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)], check=True, timeout=60)
+        env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler)
+        subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)], env=env, check=True, timeout=180)
+        # A per-instance transaction can still lose an update between separate
+        # Activities. Reproduce that defect only in isolated compiled classes.
+        original = (app / "AndroidStandardExitStore.java").read_text()
+        if original.count("synchronized(STORE_LOCK)") != 5:
+            raise AssertionError("Shared private-store transaction boundary changed")
+        mutation = work / "negative-source" / "AndroidStandardExitStore.java"
+        mutation.parent.mkdir()
+        mutation.write_text(original.replace("synchronized(STORE_LOCK)", "synchronized(new Object())"))
+        negative = work / "negative-classes"; shutil.copytree(classes, negative)
+        classpath = str(negative) + os.pathsep + str(jar)
+        subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
+        negative_data = work / "negative-data"; negative_data.mkdir()
+        rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(negative_data)], env=env, capture_output=True, text=True, timeout=180)
+        if rejected.returncode == 0 or "independent store instances both adopted the same obsolete editor source" not in rejected.stderr:
+            raise AssertionError("Lost-update negative control did not reject the broken transaction\n" + rejected.stderr)
+        print("Android private-store concurrency: independent-Activity lost-update negative control rejected")
 
 
 if __name__ == "__main__":

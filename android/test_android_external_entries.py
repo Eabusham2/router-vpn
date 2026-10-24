@@ -36,11 +36,15 @@ T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
  case "tor-profile":''', 1)
 T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  static boolean sameParams(JSONObject a,JSONObject b)throws Exception{if(a.length()!=11||b.length()!=11)return false;for(String key:AndroidExternalAmnezia.PARAMETERS)if(!a.get(key).equals(b.get(key)))return false;return true;}
+ static void paired(AndroidStandardExitStore.Entry exit)throws Exception{
+  exit.responseProbe=new JSONObject().put("url","https://203.0.113.50:8443/response").put("server_name","external.example.test");
+  if(AndroidStandardExitStore.packetExecutionProtocol(exit.protocol))exit.serverPeer=new JSONObject().put("public_key","bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=").put("addresses",new JSONArray().put("10.94.0.3/32").put("fd94::3/128")).put("mtu",1360).put("persistent_keepalive_interval",25);
+ }
  static String externalCertificate;static int executionGraphs,layerGraphs;
  static AndroidStandardExitStore.Entry external(String kind,String dns)throws Exception{
   AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="ordinary-"+kind;e.name="Captured "+kind;e.protocol=kind;e.server="203.0.113.50";e.serverPort=443;e.expectedPublicIp="8.8.4.4";e.tlsServerName="exit.example.test";
   String key=MultihopGraphHarness.key('v');
-  if(kind.equals("wireguard")||kind.equals("amneziawg")){e.wgPrivateKey=key;e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;e.wgKeepalive=25;if(kind.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
+  if(kind.equals("wireguard")||kind.equals("amneziawg")){e.wgPrivateKey=MultihopGraphHarness.key('x');e.wgPeerPublicKey=MultihopGraphHarness.key('w');e.wgAddresses.addAll(java.util.List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(java.util.List.of("0.0.0.0/0","::/0"));e.wgMtu=1280;e.wgKeepalive=25;if(kind.equals("amneziawg"))e.awgParameters=new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
   if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username="exit-only-user";e.password="exit-only-password";}
   if(kind.equals("shadowsocks")){e.method="2022-blake3-aes-256-gcm";e.secret=key;}if(kind.equals("hysteria2"))e.secret="exit-only-hy2";
   if(kind.equals("openvpn")){e.username=" exit-only user ";e.password=" exit-only password ";e.openVPNConfig="client\ndev tun\nproto udp\nremote 203.0.113.50 443\nremote 203.0.113.51 1194 udp\nremote-random\nauth-user-pass\nremote-cert-tls server\ntun-mtu 1380\nfragment 1200\n<ca>\n"+externalCertificate+"\n</ca>\n";}
@@ -53,6 +57,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   // The final external interface owns its policy; the entry keeps its own
   // measured-independent transport sizing and authenticated performance owner.
   profile(selected).put("mtu_policy","auto").remove("manual_mtu");
+  if(mode.equals("wg")&&AndroidStandardExitStore.packetExecutionProtocol(kind))profile(selected).put("mtu_policy","fixed").put("manual_mtu",1500);
   File file=save(directory,selected);byte[] frozen=Files.readAllBytes(file.toPath());AndroidStandardExitStore.Entry exit=external(kind,graphs%2==0?"custom":"home");String frozenExit=AndroidStandardExitStore.snapshot(exit);
   NativeSingBoxController.SessionInfo info=AndroidExternalPolicy.prepare(context,file,exit,mode);Path folder=app.resolve("layered-sessions").resolve(info.sessionId);
   String config=Files.readString(folder.resolve("sing-box.json")),metadata=Files.readString(folder.resolve(AndroidExternalPolicy.SESSION_FILE));JSONObject session=AndroidExternalPolicy.session(config,metadata,info.sessionId,info.modeId),capture=new JSONObject(session.getString("capture_json")),graph=new JSONObject(config),proof=new JSONObject(session.getString("metadata_json"));
@@ -73,7 +78,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   String export=System.getenv("ROUTERVPN_ANDROID_EXTERNAL_GRAPHS");if(export!=null)Files.writeString(Path.of(export).resolve(mode+"-"+layer+"-"+kind+".json"),config);
   if(info.maxPreparation!=null)info.maxPreparation.close();graphs++;
   if(AndroidStandardExitStore.serverExecutionProtocol(kind))for(String execution:new String[]{"server","auto"}){
-   AndroidStandardExitStore.Entry paired=AndroidStandardExitStore.copy(exit);paired.responseProbe=new JSONObject().put("url","https://203.0.113.50:8443/response").put("server_name","external.example.test");
+   AndroidStandardExitStore.Entry paired=AndroidStandardExitStore.copy(exit);paired(paired);
    NativeSingBoxController.SessionInfo executionInfo=AndroidExternalPolicy.prepare(context,file,paired,mode,execution,"");Path owned=app.resolve("layered-sessions").resolve(executionInfo.sessionId);
    String executable=Files.readString(owned.resolve("sing-box.json")),details=Files.readString(owned.resolve(AndroidExternalPolicy.SESSION_FILE));
    JSONObject executionSession=AndroidExternalPolicy.session(executable,details,executionInfo.sessionId,executionInfo.modeId),executionGraph=new JSONObject(executable),executionMeta=new JSONObject(executionSession.getString("metadata_json"));
@@ -81,15 +86,23 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
    check(byTag(executionGraph,"custom-exit").getString("type").equals("selector")&&byTag(executionGraph,"routervpn-execution-server").getString("detour").equals("external-entry"),"server relay escaped complete captured entry");
    check(byTag(executionGraph,"external-entry").getString("type").equals(entryOutput.getString("type")),"server execution changed entry family");
    check(executionMeta.getString("dns_server").equals(proof.getString("dns_server"))&&executionMeta.getString("dns_detour").equals(proof.getString("dns_detour")),"server execution changed selected DNS owner");
+   if(AndroidStandardExitStore.packetExecutionProtocol(kind)){
+    JSONObject local=byTag(executionGraph,"routervpn-execution-local"),peer=local.getJSONArray("peers").getJSONObject(0);
+    check(local.getString("private_key").equals(paired.wgPrivateKey)&&local.getJSONArray("address").toString().equals(new JSONArray(paired.wgAddresses).toString())&&peer.getString("public_key").equals(paired.wgPeerPublicKey),"packet execution substituted Server credentials into Local endpoint");
+    JSONObject descriptor=new JSONObject(executionSession.getString("capture_json")).getJSONObject("profile").getJSONObject("external").getJSONObject("server_peer");
+    check(descriptor.getString("public_key").equals(paired.serverPeer.getString("public_key"))&&descriptor.getJSONArray("addresses").toString().equals(paired.serverPeer.getJSONArray("addresses").toString()),"packet execution lost separately provisioned Server identity");
+    if(kind.equals("amneziawg"))check(local.getString("type").equals("routervpn-amneziawg")&&sameParams(local.getJSONObject("amnezia"),paired.awgParameters),"Server/Compare changed captured AWG parameters");
+   }
    if(export!=null)Files.writeString(Path.of(export).resolve(mode+"-"+layer+"-"+kind+"-"+execution+".json"),executable);
    if(executionInfo.maxPreparation!=null)executionInfo.maxPreparation.close();executionGraphs++;
   }
   if(mode.equals("wg")&&AndroidStandardExitStore.serverExecutionProtocol(kind))for(String exitLayer:new String[]{"aes-256-gcm","aes-256-gcm+xor-whitening"})for(String execution:new String[]{"local","server","auto"}){
-   AndroidStandardExitStore.Entry paired=AndroidStandardExitStore.copy(exit);paired.responseProbe=new JSONObject().put("url","https://203.0.113.50:8443/response").put("server_name","external.example.test");paired.policy.put("start_layer",exitLayer);
+   AndroidStandardExitStore.Entry paired=AndroidStandardExitStore.copy(exit);paired(paired);paired.policy.put("start_layer",exitLayer);
    paired.startLayer=new JSONObject().put("mode",exitLayer).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",paired.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",MultihopGraphHarness.key('l')));
    String originalExit=AndroidStandardExitStore.snapshot(paired);NativeSingBoxController.SessionInfo layered=AndroidExternalPolicy.prepare(context,file,paired,mode,execution,"");Path owned=app.resolve("layered-sessions").resolve(layered.sessionId);
    String executable=Files.readString(owned.resolve("sing-box.json"));JSONObject layeredGraph=new JSONObject(executable),local=byTag(layeredGraph,execution.equals("local")?"custom-exit":"routervpn-execution-local"),wrapper=byTag(layeredGraph,"routervpn-exit-start-layer");
-   check(local.getString("server").equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("detour").equals("external-entry"),"independent entry and exit layers lost routing ownership");
+   String localServer=AndroidStandardExitStore.packetExecutionProtocol(kind)?local.getJSONArray("peers").getJSONObject(0).getString("address"):local.getString("server");
+   check(localServer.equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("detour").equals("external-entry"),"independent entry and exit layers lost routing ownership");
    check(wrapper.getString("type").equals(exitLayer.equals("aes-256-gcm")?"shadowsocks":"routervpn-aes-xor")&&wrapper.getString("server").equals(paired.server),"exit layer changed its selected protocol or server");
    check(originalExit.equals(AndroidStandardExitStore.snapshot(paired))&&Arrays.equals(frozen,Files.readAllBytes(file.toPath())),"layered execution mutated private node capture");
    if(export!=null)Files.writeString(Path.of(export).resolve(mode+"-"+layer+"-"+kind+"-exit-"+exitLayer+"-"+execution+".json"),executable);
@@ -110,11 +123,17 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
    boolean rejected=false;try{AndroidExternalPolicy.prepare(new Context(app.toFile()),file,exit,"hysteria2");}catch(Exception expected){rejected=true;}finally{Thread.interrupted();io.nekohasekai.libbox.Libbox.afterCheck=null;io.nekohasekai.libbox.Libbox.rejectConfig=false;RouterPQNative.fail=false;AndroidPrivateFileStore.failName=null;}
    check(rejected&&sessions(app)==0,"invalid or cancelled complete entry staged files: "+fault);
   }
+  for(String protocol:new String[]{"wireguard","amneziawg"})for(String fault:new String[]{"server-peer-change","packet-private-change"}){
+   Path app=Files.createTempDirectory(directory,"packet-stale-");JSONObject source=entry("wg","off",certificate);File file=save(directory,source);AndroidStandardExitStore.Entry exit=external(protocol,"custom");paired(exit);
+   io.nekohasekai.libbox.Libbox.afterCheck=()->{try{if(fault.equals("server-peer-change"))exit.serverPeer.put("mtu",1400);else exit.wgPrivateKey=MultihopGraphHarness.key('z');}catch(Exception invalid){throw new RuntimeException(invalid);}};
+   boolean rejected=false;try{AndroidExternalPolicy.prepare(new Context(app.toFile()),file,exit,"wg","auto","");}catch(Exception expected){rejected=true;}finally{io.nekohasekai.libbox.Libbox.afterCheck=null;}
+   check(rejected&&sessions(app)==0,"changed packet ownership staged an obsolete graph: "+fault);
+  }
  }
  public static void main(String[] args)throws Exception{
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");externalCertificate=io.nekohasekai.libbox.Libbox.testCertificate("external-openvpn.example.test").trim();
   for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})ordinary(dir,mode,layer,kind,certificate);
-  check(graphs==456&&executionGraphs==570&&layerGraphs==90,"ordinary encrypted entry and execution matrix incomplete");ordinaryRejections(dir,certificate);
+  check(graphs==456&&executionGraphs==798&&layerGraphs==126,"ordinary encrypted entry and execution matrix incomplete");ordinaryRejections(dir,certificate);
   System.out.println("Android ordinary external entries: PASS "+graphs+" local and "+executionGraphs+" Server/Compare and "+layerGraphs+" independent exit-layer shipping Java/Go graphs, "+checks+" checks; all19 native entry modes and saved Start Layers");
  }
 }

@@ -11,13 +11,11 @@ import (
 	"router-vpn/internal/applexray"
 )
 
-// ExternalMode is the set with an authenticated, stateless proxy credential
-// that can be shared by isolated local/server trials. WG/AWG peers and OpenVPN
-// sessions require separate server credentials; reusing a roaming peer is not
-// an implementation of comparison.
+// ExternalMode identifies native external execution families. Packet families
+// additionally require an independently provisioned public server-peer capture.
 func ExternalMode(mode string) bool {
 	switch mode {
-	case "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
+	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
 		return true
 	}
 	return false
@@ -82,6 +80,13 @@ func ExternalSelection(id, protocol string, external map[string]any, layer *Star
 		return Exit{}, bad
 	}
 	exit := Exit{ID: id, Mode: protocol, Transport: transport, StartLayer: layer, External: &ExternalExit{ExpectedPublicIP: expected, ResponseProbe: ResponseProbe{URL: probeURL, ServerName: probeName}}}
+	if ExternalPacketMode(protocol) {
+		pair, err := externalPacketSelection(protocol, external, transport)
+		if err != nil {
+			return Exit{}, err
+		}
+		exit.External.Packet = pair
+	}
 	validated, err := externalTransport(exit)
 	if err != nil {
 		return Exit{}, err
@@ -104,6 +109,9 @@ func ExternalTransport(protocol string, external map[string]any) (map[string]any
 	bad := errors.New("external native proxy configuration is invalid")
 	if !ExternalMode(protocol) || external["protocol"] != protocol {
 		return nil, bad
+	}
+	if ExternalPacketMode(protocol) {
+		return externalPacketTransport(protocol, external)
 	}
 	block := protocol
 	if protocol == "http-connect" {
@@ -266,6 +274,12 @@ func validateExternalProxyTransport(p map[string]any, mode string) error {
 func externalTransport(exit Exit) (map[string]any, error) {
 	bad := errors.New("external relay requires its exact native transport and public proof address")
 	if exit.External == nil || exit.NodeID != "" || !ExternalMode(exit.Mode) || !externalPublicIP(exit.External.ExpectedPublicIP) {
+		return nil, bad
+	}
+	if ExternalPacketMode(exit.Mode) {
+		return validateExternalPacket(exit)
+	}
+	if exit.External.Packet != nil {
 		return nil, bad
 	}
 	// Reject invalid bytes before JSON copying can replace them with U+FFFD.

@@ -274,7 +274,14 @@ func TestExternalProxyAuthenticationAndTransportCannotBeDowngraded(t *testing.T)
 			}
 		}
 	}
-	for _, protocol := range []string{"wireguard", "amneziawg", "openvpn", "unknown"} {
+	for _, protocol := range []string{"wireguard", "amneziawg"} {
+		source, _, _ := externalPacketSource(t, protocol, "")
+		delete(source, "server_peer")
+		if _, err := ExternalSelection("exit", protocol, source, nil); err == nil {
+			t.Fatal("packet credentials reused without independently provisioned server peer")
+		}
+	}
+	for _, protocol := range []string{"openvpn", "unknown"} {
 		if ExternalMode(protocol) {
 			t.Fatal("packet/session credentials cannot be reused as proxy credentials")
 		}

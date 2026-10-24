@@ -42,6 +42,14 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 			configurations = append(configurations, exit)
 		}
 	}
+	packetClients := map[string]Exit{}
+	for _, protocol := range []string{"wireguard", "amneziawg"} {
+		for _, layer := range externalLayers {
+			client, server, _ := packetPair(t, protocol, layer)
+			configurations = append(configurations, server)
+			packetClients[protocol+"/"+layer] = client
+		}
+	}
 	for _, exit := range configurations {
 		cfg := config()
 		cfg.Exits = []Exit{exit}
@@ -61,6 +69,16 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 			q, e = AuthenticateExternalRequest(exit, q)
 			if e != nil {
 				t.Fatal(e)
+			}
+			if ExternalPacketMode(exit.Mode) {
+				challenge, err := m.PacketChallenge(netip.MustParseAddr("10.77.0.2"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				q, e = ChallengeExternalPacketRequest(packetClients[exit.Mode+"/"+q.ExitStartLayer], q, challenge)
+				if e != nil {
+					t.Fatal(e)
+				}
 			}
 		}
 		if _, e = m.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), q); e != nil {

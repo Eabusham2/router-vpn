@@ -13,9 +13,9 @@ import (
 	"unicode/utf8"
 )
 
-func externalProxyProtocol(protocol string) bool {
+func externalExecutionProtocol(protocol string) bool {
 	switch protocol {
-	case "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
+	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
 		return true
 	}
 	return false
@@ -94,7 +94,7 @@ func validateExternalStartLayer(profile *RouterProfile) error {
 		}
 		return nil
 	}
-	if layer == nil || layer.Mode != profile.StartLayer || !externalProxyProtocol(profile.External.Protocol) {
+	if layer == nil || layer.Mode != profile.StartLayer || !externalExecutionProtocol(profile.External.Protocol) {
 		return errors.New("external Start Layer requires matching imported mode, private target and transport credentials")
 	}
 	bad := errors.New("external Start Layer target, cipher or private credentials are invalid")

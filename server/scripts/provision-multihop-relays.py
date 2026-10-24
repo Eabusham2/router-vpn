@@ -397,7 +397,7 @@ def paired_start_layer(bundle, profile, endpoint):
         raise ValueError('Native layer compiler changed the selected exit transport')
     return layer
 
-def pair(bundle, alias, selected=None):
+def pair(bundle, alias, selected=None, server_peer_profile=None):
     if not re.fullmatch(r'[A-Za-z0-9_.-]{1,128}', alias):
         raise ValueError('invalid paired exit ID')
     profiles = bundle.get('routerProfiles', [])
@@ -405,7 +405,9 @@ def pair(bundle, alias, selected=None):
     matches = [p for p in profiles if p.get('id') == selected]
     profile = matches[0] if len(matches) == 1 else None
     if isinstance(profile, dict) and profile.get('node_kind') == 'external':
-        return pair_external(profile, alias)
+        return pair_external(profile, alias, server_peer_profile)
+    if server_peer_profile is not None:
+        raise ValueError('A separate server peer profile belongs only to an external WG/AWG pairing')
     if not isinstance(profile, dict) or profile.get('node_kind', 'router-vpn') != 'router-vpn':
         raise ValueError('select one Router VPN exit bundle profile')
     node = profile.get('node_proof_id') or bundle.get('nodeProofId')
@@ -539,15 +541,41 @@ def external_start_layer(profile, ext, host):
         raise bad from None
     return copy.deepcopy(layer)
 
-def pair_external(profile, alias):
-    """Privately pair native authenticated proxy credentials and selected layer."""
+def pair_external_packet(profile, alias, server_peer_profile):
+    """The shared Go compiler derives identities and checks key separation."""
+    bad = ValueError('External packet pairing requires its separately provisioned server peer profile')
+    ext = profile.get('external')
+    if not isinstance(server_peer_profile, dict) or not isinstance(ext, dict) or profile.get('node_proof_id') or profile.get('router_api') or profile.get('api_token'):
+        raise bad
+    payload = json.dumps(dict(alias=alias, external=ext, server_peer_profile=server_peer_profile,
+                              selected_layer=profile.get('start_layer', 'off')), allow_nan=False).encode('utf-8')
+    if len(payload) > 256 << 10: raise bad
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-external-packet-pair'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise bad from None
+    if not result.stdout or len(result.stdout) > (256 << 10) + 1: raise bad
+    paired = decode(result.stdout)
+    if not isinstance(paired, dict) or paired.get('id') != alias or paired.get('mode') != ext.get('protocol') or paired.get('node_id') != '' or paired.get('dns_server') != '': raise bad
+    external = paired.get('external')
+    if not isinstance(external, dict) or not isinstance(external.get('packet'), dict) or external['packet'].get('owner') != 'server': raise bad
+    # The native registry validator subsequently parses the actual engine graph
+    # before atomic publication. No input profile or new client key is persisted.
+    return [paired]
+
+def pair_external(profile, alias, server_peer_profile=None):
+    """Privately pair native exit credentials and the exact selected layer."""
     ext = profile.get('external')
     bad = ValueError('external server execution requires an exact authenticated proxy and public response endpoint')
     if not isinstance(ext, dict): raise bad
     protocol = ext.get('protocol')
+    if protocol in ('wireguard', 'amneziawg'):
+        return pair_external_packet(profile, alias, server_peer_profile)
+    if server_peer_profile is not None: raise bad
     if protocol not in ('shadowsocks', 'hysteria2', 'socks5', 'http-connect', 'https-connect'):
-        # Packet and OpenVPN session identities need independently provisioned
-        # server credentials; they cannot reuse a local roaming client key.
+        # OpenVPN session identities need a separately authenticated pairing.
         raise bad
     block = protocol.replace('-', '_')
     if set(ext) - {'protocol', 'expected_public_ip', block, 'response_probe', 'start_layer'} or not {'protocol', 'expected_public_ip', block, 'response_probe'} <= set(ext):
@@ -601,12 +629,14 @@ def main():
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--exit-id', required=True, help='ID used for this exit in client profiles')
     parser.add_argument('--bundle-profile')
+    parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG server peer JSON; never a client bundle')
     parser.add_argument('--agent-config', type=Path, default=Path('/etc/router-vpn/router-agent.json'))
     parser.add_argument('--registry', type=Path, default=Path('/etc/router-vpn/multihop-relays.json'))
     parser.add_argument('--listen-ip', required=True, help='entry tunnel IP used by clients for the Router API')
     args = parser.parse_args()
     read, write, _ = helpers()
-    entries = pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile)
+    server_peer = decode(read(args.server_peer_profile, 256 << 10)) if args.server_peer_profile is not None else None
+    entries = pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
     agent = decode(read(args.agent_config, 1 << 20))
     listen = ipaddress.ip_address(literal(args.listen_ip))
     if not listen.is_private or not any(listen in ipaddress.ip_network(n) for n in agent.get('tunnel_cidrs', [])):

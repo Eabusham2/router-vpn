@@ -42,6 +42,24 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && os.Args[1] == "describe-external-packet-peer" {
+		if len(os.Args) != 2 {
+			log.Fatal("describe-external-packet-peer accepts only bounded private stdin")
+		}
+		if err := describeExternalPacketPeer(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
+	if len(os.Args) > 1 && os.Args[1] == "compile-external-packet-pair" {
+		if len(os.Args) != 2 {
+			log.Fatal("compile-external-packet-pair accepts only bounded private stdin")
+		}
+		if err := compileExternalPacketPair(os.Stdin, os.Stdout); err != nil {
+			log.Fatal(err)
+		}
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "compile-max-relay-profile" {
 		if len(os.Args) != 6 {
 			log.Fatal("compile-max-relay-profile requires the captured complete mode, node, endpoint and private API")

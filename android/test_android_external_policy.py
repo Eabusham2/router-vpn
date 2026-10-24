@@ -66,6 +66,7 @@ static int checks;interface Action{void run()throws Exception;}static void check
 static JSONObject profile(JSONObject b)throws Exception{return b.getJSONArray("routerProfiles").getJSONObject(0);}static String key(char c){byte[]b=new byte[32];Arrays.fill(b,(byte)c);return Base64.getEncoder().encodeToString(b);}
 static boolean sameParams(JSONObject a,JSONObject b)throws Exception{if(a.length()!=11||b.length()!=11)return false;for(String key:AndroidExternalAmnezia.PARAMETERS)if(!a.get(key).equals(b.get(key)))return false;return true;}
 static JSONObject awgParameters()throws Exception{return new JSONObject().put("jc","3").put("jmin","40").put("jmax","900").put("s1","15").put("s2","16").put("s3","32").put("s4","32").put("h1","100-110").put("h2","200-210").put("h3","300-310").put("h4","400-410");}
+static JSONObject serverPeer()throws Exception{return new JSONObject().put("public_key","bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=").put("addresses",new JSONArray().put("10.94.0.3/32").put("fd94::3/128")).put("mtu",1360).put("persistent_keepalive_interval",25);}
 static AndroidStandardExitStore.Entry exit(String kind)throws Exception{AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.id="saved-"+kind;e.protocol=kind;e.name=kind;e.server="203.0.113.20";e.serverPort=443;e.expectedPublicIp="203.0.113.88";
  if(kind.equals("wireguard")||kind.equals("amneziawg")){e.wgPrivateKey=key('x');e.wgPeerPublicKey=key('p');e.wgAddresses.addAll(List.of("10.93.0.2/32","fd93::2/128"));e.wgAllowedIps.addAll(List.of("0.0.0.0/0","::/0"));e.wgPreSharedKey=key('s');e.wgMtu=1380;e.wgKeepalive=25;if(kind.equals("amneziawg"))e.awgParameters=awgParameters();}
  if(kind.equals("socks5")||kind.equals("http")||kind.equals("https")){e.username=" exact user ";e.password=" exact-password ";}
@@ -105,16 +106,22 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
   }
  }
 
- for(String protocol:List.of("shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening")){
- AndroidStandardExitStore.Entry relay=exit(protocol);layer(relay,layer);AndroidExternalPolicy.validateDraft(relay);relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
+ for(String protocol:List.of("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http","https"))for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening")){
+ AndroidStandardExitStore.Entry relay=exit(protocol);boolean packet=AndroidStandardExitStore.packetExecutionProtocol(protocol);if(packet){relay.serverPeer=serverPeer();relay.wgMtu=1280;}layer(relay,layer);AndroidExternalPolicy.validateDraft(relay);relay.responseProbe=new JSONObject().put("url","https://203.0.113.20:8443/response").put("server_name","exit.example.test");
  for(String execution:List.of("local","server","auto")){
   JSONObject entry=entry();String saved=AndroidStandardExitStore.snapshot(relay);
   AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(relay,entry,"wg",null,execution,"");JSONObject graph=new JSONObject(c.config),capture=new JSONObject(c.capture);
   check(saved.equals(AndroidStandardExitStore.snapshot(relay)),"execution changed saved private credentials");
   check(capture.getJSONObject("profile").getString("multihop_execution").equals(execution),"execution choice was dropped");
   JSONObject local=find(graph,execution.equals("local")?"custom-exit":"routervpn-execution-local");
+  if(packet){
+   check(local.getString("private_key").equals(relay.wgPrivateKey)&&local.getJSONArray("address").toString().equals(new JSONArray(relay.wgAddresses).toString()),"Local packet keys or addresses were replaced by Server credentials");
+   JSONObject selectedPeer=capture.getJSONObject("profile").getJSONObject("external").getJSONObject("server_peer");check(selectedPeer.getString("public_key").equals(relay.serverPeer.getString("public_key"))&&selectedPeer.getJSONArray("addresses").toString().equals(relay.serverPeer.getJSONArray("addresses").toString())&&selectedPeer.getInt("mtu")==1360&&selectedPeer.getInt("persistent_keepalive_interval")==25&&!c.config.contains(key('v')),"public Server descriptor lost or Server private key entered client graph");
+   check(local.getJSONArray("peers").getJSONObject(0).getString("public_key").equals(relay.wgPeerPublicKey),"Server identity replaced provider remote key");
+   if(protocol.equals("amneziawg"))check(local.getString("type").equals("routervpn-amneziawg")&&sameParams(local.getJSONObject("amnezia"),relay.awgParameters),"packet execution dropped AWG parameters");
+  }
   if(List.of("socks5","http","https").contains(protocol))check(local.getString("username").equals(" exact user ")&&local.getString("password").equals(" exact-password "),"private credentials were normalized or borrowed");
-  if(!layer.equals("off")){JSONObject wrapper=find(graph,"routervpn-exit-start-layer");check(wrapper.getString("type").equals(layer.equals("aes-256-gcm")?"shadowsocks":"routervpn-aes-xor")&&local.getString("server").equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("server").equals(relay.server),"exit layer lost its exact server or native ownership");}
+  if(!layer.equals("off")){JSONObject wrapper=find(graph,"routervpn-exit-start-layer");String localServer=packet?local.getJSONArray("peers").getJSONObject(0).getString("address"):local.getString("server");check(wrapper.getString("type").equals(layer.equals("aes-256-gcm")?"shadowsocks":"routervpn-aes-xor")&&localServer.equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("server").equals(relay.server),"exit layer lost its exact server or native ownership");}
   if(execution.equals("local")){check(!c.metadata.has("execution"),"local unnecessarily obtained a server lease");continue;}
   check(c.metadata.getString("execution").equals(execution)&&c.metadata.getString("last_node_measurement").equals("https-response-time"),"execution proof contract missing");
   check(find(graph,"custom-exit").getString("type").equals("selector")&&find(graph,"routervpn-execution-server").getString("detour").equals("entry-wg"),"execution bypassed entry or lacks selector");
@@ -141,6 +148,33 @@ public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libb
  for(String url:List.of("http://203.0.113.20/", "https://203.0.113.21/", "https://203.0.113.20/?secret=hidden", "https://user:pass@203.0.113.20/", "https://203.0.113.20/#fragment")){
   AndroidStandardExitStore.Entry bad=AndroidStandardExitStore.copy(relay);bad.responseProbe.put("url",url);reject(()->storeValidation(bad),"unowned response endpoint accepted");
  }
+
+ for(String protocol:List.of("wireguard","amneziawg")){
+  AndroidStandardExitStore.Entry paired=exit(protocol);paired.wgMtu=1280;paired.serverPeer=serverPeer();paired.responseProbe=new JSONObject(relay.responseProbe.toString());
+  AndroidExternalPolicy.validateDraft(paired);AndroidStandardExitStore packetStore=new AndroidStandardExitStore(context);packetStore.save(paired);
+  check(AndroidStandardExitStore.snapshot(paired).equals(AndroidStandardExitStore.snapshot(packetStore.get(paired.id))),"Server peer descriptor changed in private store roundtrip");
+  check(!paired.summary().has("server_peer")&&!paired.summary().toString().contains(paired.wgPrivateKey),"packet public summary exposed private capture");
+  JSONObject capturedProfile=AndroidExternalPolicy.profile(paired);AndroidStandardExitStore.Entry detachedPeer=AndroidStandardExitStore.copy(paired);detachedPeer.serverPeer.put("mtu",1400);paired.serverPeer.getJSONArray("addresses").put(0,"10.94.0.4/32");
+  check(detachedPeer.serverPeer.getInt("mtu")==1400&&capturedProfile.getJSONObject("external").getJSONObject("server_peer").getInt("mtu")==1360&&capturedProfile.getJSONObject("external").getJSONObject("server_peer").getJSONArray("addresses").getString(0).equals("10.94.0.3/32"),"captured Server descriptor aliases a mutable node");paired.serverPeer=serverPeer();
+  AndroidStandardExitStore.Entry unpaired=AndroidStandardExitStore.copy(paired);unpaired.serverPeer=null;AndroidExternalPolicy.validateDraft(unpaired);reject(()->AndroidExternalPolicy.compile(unpaired,entry(),"wg",null,"server",""),"packet Server accepted missing independent peer descriptor");
+  for(String fault:List.of("private-key","psk","unknown","null","mtu-type","mtu-small","mtu-large","keepalive-type","keepalive-large","addresses-type","family","overlap","duplicate-family","noncanonical-ip","borrowed-key","clamped-key","low-order","noncanonical-key","missing-local-key","missing-probe")){
+   AndroidStandardExitStore.Entry bad=AndroidStandardExitStore.copy(paired);
+   switch(fault){
+    case "private-key":bad.serverPeer.put("private_key",key('v'));break;case "psk":bad.serverPeer.put("preshared_key",key('p'));break;case "unknown":bad.serverPeer.put("endpoint","203.0.113.21:443");break;
+    case "null":bad.serverPeer.put("mtu",JSONObject.NULL);break;case "mtu-type":bad.serverPeer.put("mtu","1360");break;case "mtu-small":bad.serverPeer.put("mtu",1279);break;case "mtu-large":bad.serverPeer.put("mtu",9001);break;
+    case "keepalive-type":bad.serverPeer.put("persistent_keepalive_interval",25.5);break;case "keepalive-large":bad.serverPeer.put("persistent_keepalive_interval",65536);break;case "addresses-type":bad.serverPeer.put("addresses","10.94.0.3/32");break;
+    case "family":bad.serverPeer.put("addresses",new JSONArray().put("10.94.0.3/32"));break;case "overlap":bad.serverPeer.getJSONArray("addresses").put(0,"10.93.0.2/24");break;case "duplicate-family":bad.serverPeer.getJSONArray("addresses").put(1,"10.94.0.4/32");break;case "noncanonical-ip":bad.serverPeer.getJSONArray("addresses").put(1,"fd94:0::3/128");break;
+    case "borrowed-key":bad.wgPrivateKey=key('v');break;case "clamped-key":byte[] aliasKey=Base64.getDecoder().decode(key('v'));aliasKey[0]^=7;aliasKey[31]^=(byte)128;bad.wgPrivateKey=Base64.getEncoder().encodeToString(aliasKey);break;
+    case "low-order":bad.serverPeer.put("public_key",key('\0'));break;case "noncanonical-key":bad.serverPeer.put("public_key",key('\377'));break;case "missing-local-key":bad.wgPrivateKey="";break;case "missing-probe":bad.responseProbe=new JSONObject();break;
+   }
+   reject(()->AndroidExternalPolicy.compile(bad,entry(),"wg",null,"auto",""),"invalid packet Server capture accepted: "+fault);
+   if(!fault.equals("missing-probe"))reject(()->AndroidExternalPolicy.validateDraft(bad),"invalid packet descriptor passed actual shared idle validation: "+fault);
+  }
+  JSONObject edited=AndroidStandardExitStore.parseServerPeer(paired.serverPeer.toString());check(edited.getString("public_key").equals(paired.serverPeer.getString("public_key")),"descriptor editor changed key");
+  String descriptor=paired.serverPeer.toString();for(String invalid:List.of("null","[]","{}",descriptor+" {}",descriptor.replace("\"mtu\":1360","\"mtu\":1360,\"mtu\":1400"),descriptor.replace("\"mtu\":1360","\"private_key\":\"secret\""),descriptor.replace("\"mtu\":1360","\"mtu\":null"),descriptor.replace("\"mtu\":1360","\"mtu\":1360.0"),descriptor.replace("\"mtu\":1360","\"mtu\":01360"),descriptor.replace("\"mtu\":1360","mtu:1360"),descriptor+" ".repeat(2048))){reject(()->AndroidStandardExitStore.parseServerPeer(invalid),"descriptor editor accepted non-strict or secret-bearing JSON");}
+  check(AndroidStandardExitStore.parseServerPeer("  ")==null,"empty optional descriptor became an invented Server identity");
+ }
+ AndroidStandardExitStore.Entry foreignDescriptor=exit("shadowsocks");foreignDescriptor.serverPeer=serverPeer();reject(()->storeValidation(foreignDescriptor),"proxy silently discarded a packet Server descriptor");
 
  for(String kind:kinds){AndroidStandardExitStore.Entry e=exit(kind);e.server="2001:DB8:0:0:0:0:0:20";e.expectedPublicIp="2606:4700:0:0:0:0:0:1111";e.policy.put("dns_host","2001:4860:4860:0:0:0:0:8888");AndroidExternalPolicy.Compiled c=AndroidExternalPolicy.compile(e,null,"external");check(c.metadata.getString("expected_public_ip").equals("2606:4700::1111"),"IPv6 public exit rejected or not canonical");check(c.metadata.getString("dns_server").equals("2001:4860:4860::8888"),"IPv6 selected DNS was replaced");}
  for(String[] pair:new String[][]{{"0:0:0:0:0:0:0:0","::"},{"0:0:1:0:0:2:3:4","::1:0:0:2:3:4"},{"1:2:3:4:5:6:0:0","1:2:3:4:5:6::"},{"1:2:3:4:5:6:0:8","1:2:3:4:5:6:0:8"}})check(AndroidNumericAddress.canonical(pair[0]).equals(pair[1]),"IPv6 canonical compression changed identity");

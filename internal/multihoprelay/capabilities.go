@@ -34,9 +34,10 @@ type Capability struct {
 }
 
 type Capabilities struct {
-	NodeID    string       `json:"node_id"`
-	Execution string       `json:"execution"`
-	Exits     []Capability `json:"exits"`
+	NodeID          string                   `json:"node_id"`
+	Execution       string                   `json:"execution"`
+	Exits           []Capability             `json:"exits"`
+	PacketChallenge *ExternalPacketChallenge `json:"external_packet_challenge,omitempty"`
 }
 
 // Validate checks public shape/identity, not possession of the private keys.
@@ -47,13 +48,16 @@ func (c Capabilities) Validate(expectedNode string) error {
 	if !proofID.MatchString(expectedNode) || c.NodeID != expectedNode || c.Execution != "server" || c.Exits == nil || len(c.Exits) > MaxPairedExits {
 		return bad
 	}
+	if c.PacketChallenge != nil && c.PacketChallenge.Validate() != nil {
+		return bad
+	}
 	seen := make(map[string]bool, len(c.Exits))
 	for _, e := range c.Exits {
 		external := e.ExternalFingerprint != "" || e.ExpectedPublicIP != ""
 		if !ident.MatchString(e.ID) || !ident.MatchString(e.Mode) || (!external && (!proofID.MatchString(e.NodeID) || e.NodeID == expectedNode)) || e.Layer != "" && !ValidLayerMode(e.Layer) {
 			return bad
 		}
-		if external && (e.NodeID != "" || !ExternalMode(e.Mode) || e.PublicKey != "" || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
+		if external && (e.NodeID != "" || !ExternalMode(e.Mode) || (ExternalPacketMode(e.Mode) && !canonicalPacketPublic(e.PublicKey)) || (!ExternalPacketMode(e.Mode) && e.PublicKey != "") || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
 			return bad
 		}
 		identity := e.ID + "/" + e.Mode + "/" + e.Layer

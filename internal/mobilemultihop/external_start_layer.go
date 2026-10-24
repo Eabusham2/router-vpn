@@ -3,11 +3,45 @@ package mobilemultihop
 import (
 	"encoding/json"
 	"errors"
+	"net/url"
+	"strings"
 
 	"router-vpn/internal/multihoprelay"
 )
 
 const ExternalEntryStartLayerTag = "routervpn-external-entry-start-layer"
+
+// SS2022 UDP wraps the already-accounted packet datagram. Include the larger
+// of request/response authenticated headers plus every EIH key, and the private
+// destination's SOCKS address. XOR preserves length. This is an overhead bound,
+// not a claim of measured physical path MTU.
+func externalPacketLayerOverhead(profile map[string]any) (int, error) {
+	ext, _ := profile["external"].(map[string]any)
+	protocol, _ := ext["protocol"].(string)
+	layer, err := externalCapturedStartLayer(externalPolicyCapture{Profile: profile, Protocol: protocol})
+	if err != nil || layer == nil {
+		return 0, err
+	}
+	transport, err := multihoprelay.ExternalTransport(protocol, ext)
+	if err != nil {
+		return 0, err
+	}
+	if _, _, err = multihoprelay.WrapStartLayer(transport, protocol, layer, multihoprelay.ExitStartLayerTag, ""); err != nil {
+		return 0, err
+	}
+	api, _ := url.Parse(layer.API)
+	addressBytes := 7
+	if strings.Contains(api.Hostname(), ":") {
+		addressBytes = 19
+	}
+	keys := len(strings.Split(layer.Transport["password"].(string), ":"))
+	request := 43 + addressBytes + 16*(keys-1)
+	response := 51 + addressBytes
+	if response > request {
+		return response, nil
+	}
+	return request, nil
+}
 
 // The selected mode and operator-provisioned transport are separate captured
 // values. Neither can implicitly enable, disable or replace the other. The

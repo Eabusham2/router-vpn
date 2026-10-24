@@ -19,6 +19,9 @@ def module(name, path):
     value = importlib.util.module_from_spec(spec);spec.loader.exec_module(value);return value
 linux = module('linux_execution', ROOT/'modes/multihop-execution.py')
 pairing = module('relay_pairing', ROOT/'server/scripts/provision-multihop-relays.py')
+# Keep the new exact private packet pairing gate in the existing release
+# workflow's executable entry point; fixture generation uses real X25519 Go.
+PacketPairing = module('packet_pairing_tests', ROOT/'deploy/test_external_packet_pairing.py').PacketPairing
 
 def fixture():
     transport = dict(type='shadowsocks',tag='proxy',server='192.0.2.2',server_port=8388,
