@@ -29,6 +29,12 @@ type desktopNodeLaunch struct {
 	directory, profileID, mode string
 	root, endpoint             string
 	config, metadata           []byte
+	configSHA256               string
+	policyProfileID            string
+	external                   *desktopExternalRuntime
+	directoryInfo              os.FileInfo
+	directoryRoot              *os.Root
+	workspaceMu                sync.Mutex
 }
 
 var desktopNodeOwners sync.Map // map[*app]*desktopNodeLaunch; retained until checked cleanup
@@ -350,21 +356,43 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	if err := a.checkConnectionOperation(); err != nil {
 		return err
 	}
+	if launch.external != nil && (launch.external.network == "" || launch.external.network != physicalNetworkIdentity()) {
+		return errors.New("external connection network changed before native staging")
+	}
+	var receipt struct {
+		ConfigSHA256 string `json:"config_sha256"`
+	}
+	sum := sha256.Sum256(launch.config)
+	configSHA256 := hex.EncodeToString(sum[:])
+	if json.Unmarshal(launch.metadata, &receipt) != nil || receipt.ConfigSHA256 != configSHA256 {
+		return errors.New("native launch graph differs from its captured configuration digest")
+	}
+	launch.configSHA256 = configSHA256
 	root, endpoint := launch.root, launch.endpoint
 	directory, err := newPrivateRuntimeDir(root, "native-node")
 	if err != nil {
 		return err
 	}
+	if err = captureDesktopRuntimeDirectory(launch, directory); err != nil {
+		return err
+	}
 	owned := false
 	defer func() {
 		if !owned {
-			_ = os.RemoveAll(directory)
+			_ = cleanupDesktopNodeLaunch(launch)
 		}
 	}()
-	if err = writePrivateRuntimeFile(filepath.Join(directory, "sing-box.json"), launch.config); err != nil {
+	if err = writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false); err != nil {
 		return err
 	}
-	if err = writePrivateRuntimeFile(filepath.Join(directory, "capture.json"), launch.metadata); err != nil {
+	capture := launch.metadata
+	if launch.external != nil {
+		capture = launch.external.capture
+		if err = writeDesktopRuntimeFile(launch, "source.json", launch.external.source, false); err != nil {
+			return err
+		}
+	}
+	if err = writeDesktopRuntimeFile(launch, "capture.json", capture, false); err != nil {
 		return err
 	}
 	var args []string
@@ -381,6 +409,16 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = root
 	cmd.Env = desktopNativeEnvironment(os.Environ(), root, launch.profileID, endpoint)
+	if launch.external != nil {
+		clean := cmd.Env[:0]
+		for _, value := range cmd.Env {
+			name, _, _ := strings.Cut(value, "=")
+			if !strings.EqualFold(name, "HOMEVPN_POLICY_PROFILE_ID") && !strings.EqualFold(name, "HOMEVPN_EXTERNAL_SESSION") {
+				clean = append(clean, value)
+			}
+		}
+		cmd.Env = append(clean, "HOMEVPN_POLICY_PROFILE_ID="+launch.policyProfileID, "HOMEVPN_EXTERNAL_SESSION="+launch.external.session)
+	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	stop := append([]string(nil), args...)
@@ -388,6 +426,9 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 		stop[7] = "down"
 	} else {
 		stop[2] = "down"
+	}
+	if launch.external != nil && launch.external.network != physicalNetworkIdentity() {
+		return errors.New("external connection network changed during native staging")
 	}
 	owned = true
 	launch.command, launch.stop, launch.directory = cmd, stop, directory
@@ -408,6 +449,11 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 		return true, errors.New("native desktop cleanup lost its captured owner")
 	}
 	if _, err := os.Lstat(owner.directory); err == nil {
+		if owner.external != nil {
+			if err := desktopExternalDirectoryCurrent(owner); err != nil {
+				return true, err
+			}
+		}
 		ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 		defer cancel()
 		stop := exec.CommandContext(ctx, owner.stop[0], owner.stop[1:]...)
@@ -415,6 +461,17 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 		stop.Env = append(append([]string(nil), owner.command.Env...), "HOMEVPN_KILLSWITCH_HOLD=1")
 		if output, err := stop.CombinedOutput(); err != nil {
 			return true, fmt.Errorf("native owned teardown failed: %w: %s", err, boundedMTUDetail(output))
+		}
+		if owner.external != nil {
+			owner.external.mu.Lock()
+			acknowledged := owner.external.stopAcknowledged
+			owner.external.mu.Unlock()
+			if !acknowledged || !desktopExternalProcessExited(owner) {
+				return true, errors.New("native external cleanup has no closed process and lease acknowledgement")
+			}
+			if err := cleanupDesktopNodeLaunch(owner); err != nil {
+				return true, err
+			}
 		}
 		if _, err := os.Lstat(owner.directory); !errors.Is(err, os.ErrNotExist) {
 			return true, errors.New("native cleanup did not retire its captured private workspace")
@@ -445,6 +502,13 @@ func finishDesktopNodeRuntime(a *app) error {
 	}
 	if !desktopNodeOwners.CompareAndDelete(a, owner) {
 		return errors.New("native desktop owner changed before stop committed")
+	}
+	if owner.external != nil {
+		clear(owner.external.source)
+		clear(owner.external.capture)
+	}
+	if owner.directoryRoot != nil {
+		_ = owner.directoryRoot.Close()
 	}
 	clearActiveDNSRuntimeConfig(a)
 	return nil

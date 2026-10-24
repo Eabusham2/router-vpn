@@ -43,10 +43,10 @@ def mapping_source():
     header=proto[:proto.index('\npackage pprof')]
     return header+'\n// Adapted from checksum-pinned Go 1.26.3 pprof sources; see GO-LICENSE.\n//go:build linux || android\n\npackage oomprofile\n\nimport ("bytes";"encoding/binary";"errors";"fmt";"os";"strconv";"strings")\n\n'+parser+'\n'+elf
 
-def prepare(vendor):
+def prepare(vendor, *, mobile=True):
     vendor=vendor.resolve()
     if subprocess.check_output(['git','-C',str(vendor),'rev-parse','HEAD'],text=True).strip()!=PIN:raise ValueError('MTU core pin changed')
-    mappings=mapping_source()
+    mappings=mapping_source() if mobile else ''
     RETAINED.prepare(vendor)
     changes={
       'protocol/tun/inbound.go':[
@@ -66,13 +66,18 @@ def prepare(vendor):
         ('\t\tisDefault := netInterface.Name != w.myTunName && w.defaultInterface != nil && int(netInterface.Index) == w.defaultInterface.Index','\t\tw.routervpnTunAccess.RLock()\n\t\tisDefault := netInterface.Name != w.myTunName && w.defaultInterface != nil && int(netInterface.Index) == w.defaultInterface.Index\n\t\tw.routervpnTunAccess.RUnlock()'),
       ],
     }
+    if not mobile:
+        # Desktop owns the same Box/TUN transaction without a Libbox daemon or
+        # mobile platform adapter. Do not install a partial mobile binding.
+        del changes['experimental/libbox/internal/oomprofile/linkname.go']
+        del changes['experimental/libbox/service.go']
     for signature in ['func (t *Inbound) InterfaceUpdated(ctx context.Context) {','func (t *Inbound) Close() error {']:
         tail='\n\tif !t.routervpnReady { return }' if 'InterfaceUpdated' in signature else '\n\tt.routervpnReady = false'
         changes['protocol/tun/inbound.go'].append((signature,signature+'\n\tt.routervpnLifecycle.Lock()\n\tdefer t.routervpnLifecycle.Unlock()'+tail))
     writes={
         vendor/'experimental/libbox/internal/oomprofile/routervpn_maps.go':mappings,
         vendor/'experimental/libbox/internal/oomprofile/GO-LICENSE':(ROOT/'mobile/mtu/GO-LICENSE').read_text(),
-    }
+    } if mobile else {}
     for name,pairs in changes.items():
         path=vendor/name
         if path.is_symlink():raise ValueError('symlink at MTU patch boundary')
@@ -82,9 +87,11 @@ def prepare(vendor):
             if text.count(old)!=1:raise ValueError('native MTU boundary changed: '+name)
             text=text.replace(old,new)
         writes[path]=text
-    targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go','pprof_maps_test.go':'experimental/libbox/internal/oomprofile/routervpn_maps_test.go'}
-    for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test']:
-        targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
+    targets={'tun.go':'protocol/tun/routervpn_mtu.go','box.go':'routervpn_mtu.go','box_test.go':'routervpn_mtu_test.go'}
+    if mobile:
+        targets['pprof_maps_test.go']='experimental/libbox/internal/oomprofile/routervpn_maps_test.go'
+        for name in ['bridge','external_owner','interface','socket_linux','socket_darwin','socket_other','bridge_test']:
+            targets[name+'.go']='experimental/libbox/routervpn_mtu_'+name+'.go'
     for source,dest in targets.items():writes[vendor/dest]=(ROOT/'mobile/mtu'/(source+'.tmpl')).read_text()
     for package in PACKAGES:
         dest=vendor/'experimental/libbox/routervpn'/package

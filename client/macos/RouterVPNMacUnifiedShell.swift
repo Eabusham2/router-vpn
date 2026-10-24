@@ -325,6 +325,9 @@ extension ProductWindowController {
         let executionRow = unifiedLabeledRow(title: "Execution")
         executionRow.addArrangedSubview(multihopExecutionPopup); controls.addArrangedSubview(executionRow)
         controls.addArrangedSubview(multihopComparisonLabel)
+        let externalRow = unifiedLabeledRow(title: "External path")
+        externalRow.addArrangedSubview(button("Direct / entry · Local / Server / Compare…", #selector(openExternalPath)))
+        controls.addArrangedSubview(externalRow)
 
         let settingsRow = unifiedLabeledRow(title: "Settings")
         let settingsButton = NSButton(title: "Open settings", target: self, action: #selector(openUnifiedSettings)); settingsButton.bezelStyle = .rounded; settingsRow.addArrangedSubview(settingsButton)
@@ -410,15 +413,20 @@ extension ProductWindowController {
     }
 
     private func startUnifiedSelectedMode() {
-        if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) { connectMultihop(); return }
         let selectedIndex = routerPopup.indexOfSelectedItem
+        guard selectedIndex >= 0 && selectedIndex < profiles.count, let selectedID = profiles[selectedIndex]["id"] as? String, !selectedID.isEmpty else { appendHelp("The selected node is unavailable. Refresh the node list before connecting."); return }
+        guard ["", "router-vpn", "external"].contains((profiles[selectedIndex]["node_kind"] as? String ?? "router-vpn").lowercased()) else { appendHelp("The selected node type is invalid."); return }
         if selectedIndex >= 0 && selectedIndex < profiles.count {
             let profile = profiles[selectedIndex]
-            if (profile["node_kind"] as? String ?? "router-vpn").lowercased() == "external", let id = profile["id"] as? String {
-                asyncAction { String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: ["profile_id": id], timeout: 180), encoding: .utf8) ?? "External exit connected" }
+            if (profile["node_kind"] as? String ?? "router-vpn").lowercased() == "external" {
+                do {
+                    let body = try externalConnectBody(profile: profile, execution: externalSavedExecution(profile))
+                    asyncAction { try self.requireMutationIdle("starting an external saved path"); return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "External exit connected" }
+                } catch { appendHelp(error.localizedDescription) }
                 return
             }
         }
+        if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) { connectMultihop(); return }
         guard let popup = findUnifiedView("unified-mode-popup") as? NSPopUpButton else { return }
         let id = popup.selectedItem?.representedObject as? String ?? "smart-auto"; UserDefaults.standard.set(id, forKey: unifiedSelectedModeKey)
         switch id {
@@ -451,7 +459,7 @@ extension ProductWindowController {
         let note = NSTextField(wrappingLabelWithString: "One node is selected for normal connections. Router nodes and Custom / external exits share the catalog; nodes without real coordinates stay list-only and never receive a fabricated map pin."); note.textColor = .secondaryLabelColor; content.addArrangedSubview(note)
         content.addArrangedSubview(scroll(nodesText)); content.addArrangedSubview(nodePopup)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
-        row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectNode))); row.addArrangedSubview(button("Remove", #selector(removeNode))); row.addArrangedSubview(button("50-sample latency", #selector(latencySelected))); content.addArrangedSubview(row)
+        row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectNode))); row.addArrangedSubview(button("External direct", #selector(connectExternalDirect))); row.addArrangedSubview(button("External via entry…", #selector(connectExternalViaEntry))); row.addArrangedSubview(button("Remove", #selector(removeNode))); row.addArrangedSubview(button("50-sample latency", #selector(latencySelected))); content.addArrangedSubview(row)
         presentUnifiedDetail(title: "Nodes", view: content, width: 820, height: 560)
     }
 

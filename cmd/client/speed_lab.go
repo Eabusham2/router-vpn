@@ -108,7 +108,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			"temporary_external": runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
 			"external_protocols": externalProfileProtocolCapabilities(),
 		},
-		"semantics": "current tests never substitute the mutable selected node; temporary tests hold the connection/settings transaction owner, suppress durable ranking/startup side effects, prove the requested path, restore the prior private profile store before measurement, tear the path down, and restore the prior disconnected state",
+		"semantics": "current tests follow the captured runtime and physical network; temporary tests capture the complete previous connection, prove the requested path, suppress durable side effects, and restore the previous private configuration with a fresh path proof and the already-proved execution choice; explicit Disconnect suppresses reconnection",
 	})
 }
 
@@ -179,7 +179,7 @@ func speedLabRestoreAfterFailure(a *app, snapshot speedLabTemporarySnapshot, cau
 	if cause == nil {
 		return errors.New("temporary Speed Lab rollback failed: " + cleanupErr.Error())
 	}
-	return errors.New(cause.Error() + "; temporary-path rollback also failed: " + cleanupErr.Error())
+	return errors.Join(cause, errors.New("temporary-path rollback also failed: "+cleanupErr.Error()))
 }
 
 // Link request cancellation and Disconnect to this operation only. Capturing
@@ -192,6 +192,13 @@ func (a *app) speedLabRequestContext(r *http.Request, owner context.Context) (*h
 		return nil, nil, errors.New("temporary Speed Lab connection owner changed before measurement")
 	}
 	cancelOwner := a.connectionCancel
+	if raw, exists := speedLabTemporaryOwners.Load(a); exists {
+		if temporary, ok := raw.(*speedLabTemporaryOwner); ok && temporary.test == owner && a.speedLabOwnerCurrentLocked(temporary) {
+			// A cancelled HTTP test requests restoration. Disconnect alone owns
+			// the parent intent cancellation that suppresses that restoration.
+			cancelOwner = temporary.cancelTest
+		}
+	}
 	a.mu.Unlock()
 	ctx, cancel := context.WithCancel(r.Context())
 	stopOperation := context.AfterFunc(owner, cancel)
@@ -204,11 +211,12 @@ func (a *app) speedLabRequestContext(r *http.Request, owner context.Context) (*h
 }
 
 func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
-	if strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct") {
-		path, measurement, err := a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "temporary")
-		return path, measurement, nil, err
+	switch strings.ToLower(strings.TrimSpace(q.Topology)) {
+	case "", "router", "direct", "multihop", "external", "system-direct":
+	default:
+		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("unsupported temporary Speed Lab topology")
 	}
-	operationCtx, finish, err := a.beginConnectionOperation()
+	operationCtx, snapshot, finish, err := a.beginSpeedLabTemporaryOperation()
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
@@ -218,49 +226,90 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	defer endPersistenceGuard()
-
 	r, releaseContext, err := a.speedLabRequestContext(r, operationCtx)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
 	defer releaseContext()
+	if err := r.Context().Err(); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, err
+	}
+	if strings.EqualFold(strings.TrimSpace(q.Topology), "external") {
+		q.preparedExternal, err = a.prepareSpeedLabExternalPath(q, nil)
+		if err != nil {
+			return speedLabPath{}, speedLabMeasurement{}, nil, err
+		}
+		defer q.preparedExternal.releaseUnused()
+	}
+	if err := a.speedLabSuspendPrevious(snapshot, strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct")); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
+	}
 
-	snapshot := a.speedLabSnapshotTemporary()
-	path, startErr := a.startSpeedLabTemporaryPath(q)
-	if startErr != nil {
-		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, startErr)
+	var path speedLabPath
+	var identity speedLabPathIdentity
+	var validate func() error
+	if strings.EqualFold(strings.TrimSpace(q.Topology), "system-direct") {
+		path = speedLabPath{Scope: "temporary", Topology: "system-direct", Temporary: true, Description: "temporary system Internet path; the captured previous VPN is restored after measurement"}
+		validate = func() error {
+			if err := a.speedLabCheckOwner(snapshot.Owner); err != nil {
+				return err
+			}
+			a.mu.Lock()
+			st, command := a.state, a.cmd
+			a.mu.Unlock()
+			if command != nil || st.Connected || st.Mode != "off" || st.Phase != "off" || physicalNetworkIdentity() != snapshot.Owner.network {
+				return errors.New("system-direct Speed Lab path changed during the temporary test")
+			}
+			return nil
+		}
+	} else {
+		var startErr error
+		path, startErr = a.startSpeedLabTemporaryPath(q)
+		if startErr != nil {
+			return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, startErr)
+		}
+		identity, _, err = captureSpeedLabIdentity(a)
+		if err != nil {
+			return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
+		}
+		validate = func() error {
+			if err := a.speedLabCheckOwner(snapshot.Owner); err != nil {
+				return err
+			}
+			return validateSpeedLabIdentity(a, identity)
+		}
+	}
+	if err := validate(); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	if err := a.speedLabWriteStore(snapshot.Profiles); err != nil {
 		cause := errors.New("temporary path was proven but prior durable profile state could not be restored before measurement: " + err.Error())
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, cause)
 	}
-	identity, _, err := captureSpeedLabIdentity(a)
-	if err != nil {
-		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
-	}
-	pathCtx, stopPath, err := speedLabPathContext(r.Context(), func() error { return validateSpeedLabIdentity(a, identity) })
+	pathCtx, stopPath, err := speedLabPathContext(r.Context(), validate)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	defer stopPath()
-	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
+	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, validate)
 	var hops []speedLabHopMeasurement
 	if measureErr == nil && path.Topology == "multihop" {
 		hops, measureErr = measureSpeedLabMultihopHopsContext(pathCtx, a, identity)
 	}
-	measureErr = speedLabPathResultError(pathCtx, errors.Join(measureErr, validateSpeedLabIdentity(a, identity)))
-	// Stop and join the path observer before intentional temporary teardown.
-	// Cleanup must not turn a completed test into its own stale-path event.
+	measureErr = speedLabPathResultError(pathCtx, errors.Join(measureErr, validate()))
+	// Join all requests/observers before intentional teardown. Their cancellation
+	// cannot retire a replacement runtime or turn restoration into a stale test.
 	stopPath()
+	releaseContext()
 	cleanupErr := a.speedLabRestoreTemporary(snapshot)
 	if measureErr != nil {
 		if cleanupErr != nil {
-			return speedLabPath{}, speedLabMeasurement{}, nil, errors.New(measureErr.Error() + "; temporary-path cleanup also failed: " + cleanupErr.Error())
+			return speedLabPath{}, speedLabMeasurement{}, nil, errors.Join(measureErr, errors.New("temporary-path cleanup also failed: "+cleanupErr.Error()))
 		}
 		return speedLabPath{}, speedLabMeasurement{}, nil, measureErr
 	}
 	if cleanupErr != nil {
-		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("Speed Lab measurement completed but temporary-path cleanup failed: " + cleanupErr.Error())
+		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("Speed Lab measurement completed but previous-path restoration failed: " + cleanupErr.Error())
 	}
 	return path, measurement, hops, nil
 }
@@ -304,7 +353,7 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		status := http.StatusBadGateway
 		lower := strings.ToLower(err.Error())
-		if strings.Contains(lower, "disconnect") || strings.Contains(lower, "changed") || strings.Contains(lower, "transaction") || errors.Is(err, context.Canceled) {
+		if strings.Contains(lower, "disconnect") || strings.Contains(lower, "changed") || strings.Contains(lower, "transaction") || errors.Is(err, context.Canceled) || errors.Is(err, errConnectionOperationCancelled) {
 			status = http.StatusConflict
 		}
 		http.Error(w, err.Error(), status)

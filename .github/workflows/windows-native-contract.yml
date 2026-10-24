@@ -15,7 +15,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
-          go-version: '1.23.x'
+          go-version: '1.26.3'
           cache: false
       - name: Parse native PowerShell
         shell: pwsh
@@ -75,6 +75,13 @@ jobs:
           }
           ./client/test-windows-kill-switch.ps1
           ./client/test-private-router-vpn-state.ps1
+      - name: Captured native wrapper ownership
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          ./client/test-windows-native-wrapper-ownership.ps1
+          & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-native-wrapper-ownership.ps1
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 native wrapper ownership regressions failed' }
       - name: Assert no current WSL dependency
         shell: pwsh
         run: |

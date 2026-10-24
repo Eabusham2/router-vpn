@@ -28,6 +28,7 @@ func liveMeasurementProfileToken(p common.RouterProfile) string {
 		SocksEnabled: p.SocksEnabled, SocksHost: p.SocksHost, SocksPort: p.SocksPort,
 		SocksUsername: p.SocksUsername, SocksPassword: p.SocksPassword,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,
+		MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode,
 	}
 	// The selected fields and external configuration consist only of JSON-safe
 	// strings, integers, booleans and slices. Measured floating-point data is

@@ -1,0 +1,542 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"regexp"
+	"runtime"
+	"sync"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
+)
+
+var routerVPNExternalSession = regexp.MustCompile(`^[0-9a-f]{32}$`)
+var routerVPNExternalFailure = errors.New("captured desktop external runtime failed; private credentials were not logged")
+
+func init() {
+	var directory, session string
+	command := &cobra.Command{Use: "routervpn-external", Short: "Run one captured Router VPN external session", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return routerVPNRunExternal(ctx, directory, session, routerVPNNewExternalNative)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
+	command.Flags().StringVar(&session, "session", "", "captured session identity")
+	mainCommand.AddCommand(command)
+}
+
+// A directory handle fixes the session workspace even if its parent pathname
+// later changes. Every input and output is a fixed basename; no imported path
+// can name a configuration, script, log, socket or another session's file.
+type routerVPNExternalFiles struct {
+	root  *os.Root
+	owned map[string]os.FileInfo
+}
+
+func routerVPNOpenExternalFiles(directory string) (*routerVPNExternalFiles, error) {
+	if !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return nil, routerVPNExternalFailure
+	}
+	resolved, err := filepath.EvalSymlinks(directory)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return nil, routerVPNExternalFailure
+	}
+	// Windows short/long aliases and macOS's system temp-directory alias can
+	// name the same owned directory. Compare file identities, not path text.
+	canonical, err := os.Lstat(resolved)
+	if err != nil || !os.SameFile(info, canonical) || !canonical.IsDir() || canonical.Mode()&os.ModeSymlink != 0 {
+		return nil, routerVPNExternalFailure
+	}
+	root, err := os.OpenRoot(resolved)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	actual, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, actual) {
+		_ = root.Close()
+		return nil, routerVPNExternalFailure
+	}
+	return &routerVPNExternalFiles{root: root, owned: map[string]os.FileInfo{}}, nil
+}
+
+func (f *routerVPNExternalFiles) read(name string, limit int64) ([]byte, error) {
+	info, err := f.root.Lstat(name)
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > limit || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return nil, routerVPNExternalFailure
+	}
+	file, err := f.root.Open(name)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, routerVPNExternalFailure
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
+	after, statErr := f.root.Lstat(name)
+	if err != nil || statErr != nil || !os.SameFile(opened, after) || int64(len(raw)) != info.Size() || int64(len(raw)) > limit {
+		return nil, routerVPNExternalFailure
+	}
+	return raw, nil
+}
+
+func (f *routerVPNExternalFiles) current(name string) bool {
+	actual, err := f.root.Lstat(name)
+	owned := f.owned[name]
+	return owned == nil && errors.Is(err, os.ErrNotExist) || owned != nil && err == nil && actual.Mode().IsRegular() && os.SameFile(owned, actual)
+}
+
+func (f *routerVPNExternalFiles) publish(name string, value any) error {
+	if !f.current(name) {
+		return routerVPNExternalFailure
+	}
+	raw, err := json.Marshal(value)
+	if err != nil || len(raw) > 64<<10 {
+		return routerVPNExternalFailure
+	}
+	temporary := "." + name + ".pending"
+	file, err := f.root.OpenFile(temporary, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	info, err := file.Stat()
+	defer func() {
+		if actual, e := f.root.Lstat(temporary); e == nil && info != nil && os.SameFile(info, actual) {
+			_ = f.root.Remove(temporary)
+		}
+	}()
+	if err == nil {
+		_, err = file.Write(raw)
+	}
+	if err == nil {
+		err = file.Sync()
+	}
+	closeErr := file.Close()
+	if err != nil || closeErr != nil || !f.current(name) {
+		return routerVPNExternalFailure
+	}
+	if err := f.root.Rename(temporary, name); err != nil {
+		return routerVPNExternalFailure
+	}
+	actual, err := f.root.Lstat(name)
+	if err != nil || !os.SameFile(info, actual) {
+		return routerVPNExternalFailure
+	}
+	f.owned[name] = actual
+	return nil
+}
+
+func (f *routerVPNExternalFiles) remove(name string) error {
+	if f.owned[name] == nil {
+		return nil
+	}
+	if !f.current(name) || f.root.Remove(name) != nil {
+		return routerVPNExternalFailure
+	}
+	delete(f.owned, name)
+	return nil
+}
+
+type routerVPNExternalStop struct {
+	Schema       int    `json:"schema"`
+	Session      string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
+func (f *routerVPNExternalFiles) stopRequested(session, source string) bool {
+	raw, err := f.read("stop.json", 1024)
+	if err != nil {
+		return false
+	}
+	object, err := applexray.Object(raw)
+	if err != nil || len(object) != 3 {
+		return false
+	}
+	var request routerVPNExternalStop
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(&request) == nil && request.Schema == 1 && request.Session == session && request.SourceSHA256 == source
+}
+
+type routerVPNExternalOwner interface {
+	Start() error
+	Run() (string, error)
+	Cancel()
+	Healthy() bool
+	ProgressJSON() string
+	Close() error
+}
+
+type routerVPNExternalFactory func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error)
+
+type routerVPNExternalNative struct {
+	mu           sync.Mutex
+	box          *box.Box
+	proof        *box.RouterVPNExternalProofRequest
+	cancel       context.CancelFunc
+	source       string
+	capture      string
+	session      string
+	boxClosed    bool
+	boxCloseFail error
+	partial      []io.Closer
+}
+
+// Box.New registers each constructed component before constructing the next.
+// Retain those exact private managers if construction fails before a Box is
+// returned; a parser/startup error must not strand an unacknowledged owner.
+func routerVPNExternalConstructed(ctx context.Context) []any {
+	return []any{
+		service.FromContext[adapter.ServiceManager](ctx),
+		service.FromContext[adapter.InboundManager](ctx),
+		service.FromContext[adapter.CertificateProviderManager](ctx),
+		service.FromContext[adapter.EndpointManager](ctx),
+		service.FromContext[adapter.OutboundManager](ctx),
+		service.FromContext[adapter.Router](ctx),
+		service.FromContext[adapter.ConnectionManager](ctx),
+		service.FromContext[adapter.DNSRouter](ctx),
+		service.FromContext[adapter.DNSTransportManager](ctx),
+		service.FromContext[adapter.NetworkManager](ctx),
+		service.FromContext[adapter.HTTPClientManager](ctx),
+		service.FromContext[adapter.NetworkNamespaceManager](ctx),
+		service.FromContext[adapter.CertificateStore](ctx),
+		service.FromContext[log.Factory](ctx),
+	}
+}
+
+func routerVPNNewExternalNative(ctx context.Context, policy *mobilemultihop.ExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	// Logging is excluded from the shared configuration digest. The command
+	// never sends private imported endpoint/credential failures to its parent.
+	options.Log = &option.LogOptions{Disabled: true}
+	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(ctx)))
+	for _, previous := range routerVPNExternalConstructed(owned) {
+		if previous != nil {
+			cancel()
+			return nil, routerVPNExternalFailure
+		}
+	}
+	native := &routerVPNExternalNative{cancel: cancel, source: source, capture: capture, session: session}
+	instance, err := box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		for _, partial := range routerVPNExternalConstructed(owned) {
+			if closer, ok := partial.(io.Closer); ok {
+				native.partial = append(native.partial, closer)
+			}
+		}
+		return native, routerVPNExternalFailure
+	}
+	native.box = instance
+	return native, nil
+}
+
+func (n *routerVPNExternalNative) Start() error {
+	if n.box == nil {
+		return routerVPNExternalFailure
+	}
+	if err := n.box.RouterVPNStrategyStart(); err != nil {
+		return routerVPNExternalFailure
+	}
+	proof, err := n.box.RouterVPNExternalCreateProof(n.source, n.capture, n.session)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	n.mu.Lock()
+	n.proof = proof
+	n.mu.Unlock()
+	return nil
+}
+func (n *routerVPNExternalNative) Run() (string, error) {
+	n.mu.Lock()
+	proof := n.proof
+	n.mu.Unlock()
+	if proof == nil {
+		return "", routerVPNExternalFailure
+	}
+	return proof.Run()
+}
+func (n *routerVPNExternalNative) Cancel() {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.proof != nil {
+		n.proof.Cancel()
+	} else {
+		// No relay lease exists during native startup. Cancel its context so
+		// partial-start teardown can complete without creating a new proof.
+		n.cancel()
+	}
+}
+func (n *routerVPNExternalNative) Healthy() bool {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.proof != nil && n.proof.Healthy()
+}
+func (n *routerVPNExternalNative) ProgressJSON() string {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.proof == nil {
+		return ""
+	}
+	return n.proof.ProgressJSON()
+}
+func (n *routerVPNExternalNative) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.box == nil {
+		n.cancel()
+		pending := n.partial[:0]
+		for _, partial := range n.partial {
+			if partial.Close() != nil {
+				pending = append(pending, partial)
+			}
+		}
+		n.partial = pending
+		if len(pending) != 0 {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}
+	if n.proof != nil {
+		// Preserve the active Box for authenticated remote lease deletion.
+		// Failed deletion retains this owner and is retried by the command.
+		if err := n.proof.Close(); err != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	if !n.boxClosed {
+		n.cancel()
+		n.boxCloseFail = n.box.Close()
+		n.boxClosed = true
+	}
+	return n.boxCloseFail
+}
+
+type routerVPNExternalProofRecord struct {
+	mobilemultihop.ExternalProofResult
+	Healthy     bool                    `json:"healthy"`
+	HeartbeatAt int64                   `json:"heartbeat_at"`
+	Progress    mobilemultihop.Progress `json:"progress"`
+}
+
+type routerVPNExternalProgressRecord struct {
+	Schema       int                     `json:"schema"`
+	Session      string                  `json:"session_id"`
+	SourceSHA256 string                  `json:"source_sha256"`
+	ConfigSHA256 string                  `json:"config_sha256"`
+	Stage        string                  `json:"stage"`
+	Progress     mobilemultihop.Progress `json:"progress"`
+}
+
+func routerVPNExternalProgress(owner routerVPNExternalOwner) mobilemultihop.Progress {
+	var result mobilemultihop.Progress
+	if raw := owner.ProgressJSON(); len(raw) <= 64<<10 {
+		_ = json.Unmarshal([]byte(raw), &result)
+	}
+	if result.Failure != "" {
+		result.Failure = "captured path verification failed"
+	}
+	for i := range result.Measurements {
+		if result.Measurements[i].Failure != "" {
+			result.Measurements[i].Failure = "candidate could not be proved"
+		}
+	}
+	return result
+}
+
+// routerVPNRunExternal owns one process/Box/proof, with no reload endpoint. The
+// parent replaces the whole session on a network or profile generation change.
+// It may report Connected only after matching proof.json and this child owner.
+func routerVPNRunExternal(parent context.Context, directory, session string, factory routerVPNExternalFactory) (failure error) {
+	if parent == nil || parent.Err() != nil || !routerVPNExternalSession.MatchString(session) || factory == nil {
+		return routerVPNExternalFailure
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	defer files.root.Close()
+	for _, name := range []string{"proof.json", "progress.json", "stopped.json"} {
+		if !files.current(name) {
+			return routerVPNExternalFailure
+		}
+	}
+	source, err := files.read("source.json", 4<<20)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	capture, err := files.read("capture.json", 8<<20)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	policy, err := mobilemultihop.NewExternalPolicy(string(source), string(capture))
+	if err != nil {
+		// No native constructor was called. Bind this no-resource acknowledgement
+		// to the same raw source/capture identity used by the shared compiler.
+		identity, _ := json.Marshal([]string{"routervpn-external-policy-v1", string(source), string(capture)})
+		digest := sha256.Sum256(identity)
+		_ = files.publish("stopped.json", map[string]any{"schema": 1, "session_id": session, "source_sha256": hex.EncodeToString(digest[:]), "closed": true})
+		return routerVPNExternalFailure
+	}
+	configDigest := sha256.Sum256([]byte(policy.Config()))
+	configSHA := hex.EncodeToString(configDigest[:])
+	var metadata struct {
+		ExitID      string `json:"exit_id"`
+		EntryID     string `json:"entry_id"`
+		EntryNodeID string `json:"entry_node_id"`
+		ExpectedIP  string `json:"expected_public_ip"`
+		Execution   string `json:"execution"`
+	}
+	if json.Unmarshal([]byte(policy.Metadata()), &metadata) != nil {
+		return routerVPNExternalFailure
+	}
+	closed := struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256()}, true}
+	progress := routerVPNExternalProgressRecord{Schema: 1, Session: session, SourceSHA256: policy.SourceSHA256(), ConfigSHA256: configSHA, Stage: "starting"}
+	if files.publish("progress.json", progress) != nil {
+		return routerVPNExternalFailure
+	}
+	if parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
+		progress.Stage = "closed"
+		_ = files.publish("progress.json", progress)
+		return files.publish("stopped.json", closed)
+	}
+	// Parent cancellation is handled by the captured proof first. Canceling the
+	// Box context prematurely would prevent it deleting its authenticated lease.
+	ctx := globalCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
+	owner, factoryErr := factory(ctx, policy, string(source), string(capture), session)
+	if owner == nil {
+		// Factory errors with partial native ownership must return that owner.
+		// A nil owner means native parsing failed before any construction.
+		_ = files.publish("stopped.json", closed)
+		return routerVPNExternalFailure
+	}
+	type result struct {
+		raw string
+		err error
+	}
+	done := make(chan result, 1)
+	go func() {
+		if factoryErr != nil {
+			done <- result{err: factoryErr}
+			return
+		}
+		if err := owner.Start(); err != nil {
+			done <- result{err: err}
+			return
+		}
+		raw, err := owner.Run()
+		done <- result{raw: raw, err: err}
+	}()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	finished, connected, stopping := false, false, false
+	var receipt routerVPNExternalProofRecord
+	var heartbeat time.Time
+	for !stopping {
+		select {
+		case outcome := <-done:
+			finished = true
+			if outcome.err != nil || parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) || !owner.Healthy() {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
+			var result mobilemultihop.ExternalProofResult
+			if json.Unmarshal([]byte(outcome.raw), &result) != nil || result.Schema != 1 || result.SessionID != session || result.SourceSHA256 != policy.SourceSHA256() || result.ConfigSHA256 != configSHA || !result.DNSProven ||
+				result.IP != metadata.ExpectedIP || result.ExitID != metadata.ExitID || result.EntryID != metadata.EntryID || result.EntryNodeID != metadata.EntryNodeID || result.EntryProven != (metadata.EntryID != "") || result.CheckedAt <= 0 ||
+				metadata.Execution != "" && (result.Execution != "local" && result.Execution != "server") || metadata.Execution == "" && result.Execution != "" {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
+			heartbeat = time.Now()
+			receipt = routerVPNExternalProofRecord{ExternalProofResult: result, Healthy: true, HeartbeatAt: heartbeat.UnixMilli(), Progress: routerVPNExternalProgress(owner)}
+			if files.publish("proof.json", receipt) != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
+			connected, progress.Stage = true, "connected"
+		case <-parent.Done():
+			stopping = true
+		case <-ticker.C:
+			if parent.Err() != nil || files.stopRequested(session, policy.SourceSHA256()) {
+				stopping = true
+				break
+			}
+			if connected && !owner.Healthy() {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
+			if !connected {
+				progress.Stage = "proving"
+			} else if time.Since(heartbeat) >= 500*time.Millisecond {
+				heartbeat = time.Now()
+				receipt.HeartbeatAt, receipt.Progress = heartbeat.UnixMilli(), routerVPNExternalProgress(owner)
+				if files.publish("proof.json", receipt) != nil {
+					failure, stopping = routerVPNExternalFailure, true
+					break
+				}
+			}
+			progress.Progress = routerVPNExternalProgress(owner)
+			if files.publish("progress.json", progress) != nil {
+				failure, stopping = routerVPNExternalFailure, true
+			}
+		}
+	}
+	owner.Cancel()
+	if files.remove("proof.json") != nil {
+		failure = routerVPNExternalFailure
+	}
+	progress.Stage = "stopping"
+	_ = files.publish("progress.json", progress)
+	if !finished {
+		// Actual proof cancellation is bounded by the shared native request.
+		// Retain the process and owner until it joins, even if a host times out.
+		<-done
+	}
+	for owner.Close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-ticker.C
+	}
+	progress.Stage, progress.Progress = "closed", mobilemultihop.Progress{}
+	_ = files.publish("progress.json", progress)
+	if files.publish("stopped.json", closed) != nil {
+		return routerVPNExternalFailure
+	}
+	return failure
+}

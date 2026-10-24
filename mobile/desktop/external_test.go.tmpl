@@ -1,0 +1,408 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+)
+
+const desktopExternalSource = `{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","address":["172.29.93.1/30","fd29:93::1/126"],"mtu":1280,"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"socks","tag":"custom-exit","version":"5","server":"203.0.113.20","server_port":443,"username":"private-proxy-user","password":"private-proxy-secret"}],"route":{"final":"custom-exit","auto_detect_interface":true}}`
+const desktopExternalCapture = `{"schema":1,"exit_id":"selected-exit","protocol":"socks5","expected_public_ip":"203.0.113.88","profile":{"id":"selected-exit","node_kind":"external","external":{"protocol":"socks5","expected_public_ip":"203.0.113.88","socks5":{"host":"203.0.113.20","port":443,"username":"private-proxy-user","password":"private-proxy-secret"}},"dns_mode":"rescue","mtu_policy":"fixed","manual_mtu":1280,"home_lan_access":false,"ipv6_mode":"off"}}`
+const desktopExternalSession = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+
+func desktopExternalWorkspace(t *testing.T) (string, *mobilemultihop.ExternalPolicy) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	for name, data := range map[string]string{"source.json": desktopExternalSource, "capture.json": desktopExternalCapture} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(data), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	policy, err := mobilemultihop.NewExternalPolicy(desktopExternalSource, desktopExternalCapture)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, policy
+}
+
+type desktopExternalFixture struct {
+	result        string
+	gate          chan struct{}
+	cancel        chan struct{}
+	once          sync.Once
+	healthy       atomic.Bool
+	starts        atomic.Int32
+	closes        atomic.Int32
+	closeFailures int32
+}
+
+func desktopExternalOwner(t *testing.T, policy *mobilemultihop.ExternalPolicy, blocked bool) *desktopExternalFixture {
+	t.Helper()
+	digest := sha256.Sum256([]byte(policy.Config()))
+	result := mobilemultihop.ExternalProofResult{Schema: 1, SessionID: desktopExternalSession, SourceSHA256: policy.SourceSHA256(), ConfigSHA256: hex.EncodeToString(digest[:]), ExitID: "selected-exit", IP: "203.0.113.88", DNSProven: true, CheckedAt: time.Now().UnixMilli()}
+	raw, _ := json.Marshal(result)
+	owner := &desktopExternalFixture{result: string(raw), gate: make(chan struct{}), cancel: make(chan struct{})}
+	if !blocked {
+		close(owner.gate)
+	}
+	return owner
+}
+func (f *desktopExternalFixture) Start() error { f.starts.Add(1); return nil }
+func (f *desktopExternalFixture) Run() (string, error) {
+	select {
+	case <-f.cancel:
+		return "", errors.New("private-proxy-secret")
+	case <-f.gate:
+		select {
+		case <-f.cancel:
+			return "", errors.New("private-proxy-secret")
+		default:
+		}
+		f.healthy.Store(true)
+		return f.result, nil
+	}
+}
+func (f *desktopExternalFixture) Cancel() {
+	f.once.Do(func() { f.healthy.Store(false); close(f.cancel) })
+}
+func (f *desktopExternalFixture) Healthy() bool { return f.healthy.Load() }
+func (f *desktopExternalFixture) ProgressJSON() string {
+	return `{"stage":"probing","failure":"private-proxy-secret","measurements":[]}`
+}
+func (f *desktopExternalFixture) Close() error {
+	select {
+	case <-f.cancel:
+	default:
+		return errors.New("proof must close before native engine")
+	}
+	if f.closes.Add(1) <= f.closeFailures {
+		return errors.New("cleanup-pending")
+	}
+	return nil
+}
+
+func desktopExternalRun(t *testing.T, ctx context.Context, directory string, owner *desktopExternalFixture) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunExternal(ctx, directory, desktopExternalSession, func(_ context.Context, _ *mobilemultihop.ExternalPolicy, source, capture, session string) (routerVPNExternalOwner, error) {
+			if source != desktopExternalSource || capture != desktopExternalCapture || session != desktopExternalSession {
+				return nil, errors.New("changed captured input")
+			}
+			return owner, nil
+		})
+	}()
+	return done
+}
+func desktopExternalWaitFile(t *testing.T, directory, name string) []byte {
+	t.Helper()
+	deadline := time.After(3 * time.Second)
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-deadline:
+			t.Fatal("missing owned record: " + name)
+		case <-ticker.C:
+			if raw, err := os.ReadFile(filepath.Join(directory, name)); err == nil {
+				return raw
+			}
+		}
+	}
+}
+func desktopExternalWait(t *testing.T, done <-chan error) error {
+	t.Helper()
+	select {
+	case err := <-done:
+		return err
+	case <-time.After(3 * time.Second):
+		t.Fatal("captured native owner did not join")
+		return nil
+	}
+}
+func desktopExternalStopFile(t *testing.T, directory, session, source string) {
+	t.Helper()
+	raw, _ := json.Marshal(routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: source})
+	path := filepath.Join(directory, "stop.json.pending")
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, filepath.Join(directory, "stop.json")); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopExternalProofAndPrivateStopOwnExactSession(t *testing.T) {
+	directory, policy := desktopExternalWorkspace(t)
+	owner := desktopExternalOwner(t, policy, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := desktopExternalRun(t, ctx, directory, owner)
+	var proof routerVPNExternalProofRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &proof) != nil || !proof.Healthy || proof.SessionID != desktopExternalSession || proof.SourceSHA256 != policy.SourceSHA256() || !proof.DNSProven {
+		t.Fatal("unproved or foreign connection published")
+	}
+	desktopExternalStopFile(t, directory, strings.Repeat("b", 32), policy.SourceSHA256())
+	select {
+	case <-done:
+		t.Fatal("stale stop retired another session")
+	case <-time.After(650 * time.Millisecond):
+	}
+	if !owner.Healthy() {
+		t.Fatal("stale cancellation reached current owner")
+	}
+	var heartbeat routerVPNExternalProofRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &heartbeat) != nil || heartbeat.HeartbeatAt <= proof.HeartbeatAt || heartbeat.CheckedAt != proof.CheckedAt {
+		t.Fatal("native heartbeat failed to preserve original proof time")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	var stopped struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.Session != desktopExternalSession || stopped.SourceSHA256 != policy.SourceSHA256() {
+		t.Fatal("cleanup was not acknowledged for the captured owner")
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("retired proof remained publishable")
+	}
+	if owner.closes.Load() != 1 || owner.Healthy() {
+		t.Fatal("owned proof/native teardown did not complete")
+	}
+	for _, name := range []string{"progress.json", "stopped.json"} {
+		raw, err := os.ReadFile(filepath.Join(directory, name))
+		if err != nil || strings.Contains(string(raw), "private-proxy-") {
+			t.Fatal("private material entered nonsecret receipt")
+		}
+	}
+	if raw, err := os.ReadFile(filepath.Join(directory, "source.json")); err != nil || string(raw) != desktopExternalSource {
+		t.Fatal("cleanup removed or modified private input")
+	}
+}
+
+func TestRouterVPNDesktopExternalCancelJoinsProofAndRetainsFailedCleanup(t *testing.T) {
+	directory, policy := desktopExternalWorkspace(t)
+	owner := desktopExternalOwner(t, policy, true)
+	owner.closeFailures = 2
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := desktopExternalRun(t, ctx, directory, owner)
+	desktopExternalWaitFile(t, directory, "progress.json")
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	if owner.closes.Load() != 3 {
+		t.Fatal("unconfirmed cleanup was discarded")
+	}
+	if _, err := os.Lstat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("cancelled proof published Connected")
+	}
+	desktopExternalWaitFile(t, directory, "stopped.json")
+}
+
+func TestRouterVPNDesktopExternalStopBeforeStartupDoesNotCreateEngine(t *testing.T) {
+	directory, policy := desktopExternalWorkspace(t)
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	calls := 0
+	if err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+		calls++
+		return nil, errors.New("must not create")
+	}); err != nil || calls != 0 {
+		t.Fatal("cancelled captured start created an engine", err)
+	}
+	desktopExternalWaitFile(t, directory, "stopped.json")
+}
+
+func TestRouterVPNDesktopExternalFactoryFailureAcknowledgesOnlyDrainedOwnership(t *testing.T) {
+	for _, partial := range []bool{false, true} {
+		directory, policy := desktopExternalWorkspace(t)
+		owner := desktopExternalOwner(t, policy, true)
+		owner.closeFailures = 1
+		err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+			if partial {
+				return owner, errors.New("private partial construction")
+			}
+			return nil, errors.New("private parser failure")
+		})
+		if err == nil || strings.Contains(err.Error(), "private parser") || owner.starts.Load() != 0 {
+			t.Fatal("failed constructor was started or exposed its private error")
+		}
+		if partial && owner.closes.Load() != 2 {
+			t.Fatal("partial factory ownership was acknowledged without draining")
+		}
+		desktopExternalWaitFile(t, directory, "stopped.json")
+		if _, err := os.Lstat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("failed construction published proof")
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalInvalidCaptureAcknowledgesNoNativeResources(t *testing.T) {
+	directory, _ := desktopExternalWorkspace(t)
+	if err := os.WriteFile(filepath.Join(directory, "capture.json"), []byte(`{"schema":1,"private":"invalid"}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	calls := 0
+	err := routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+		calls++
+		return nil, errors.New("must not construct")
+	})
+	if err == nil || calls != 0 {
+		t.Fatal("invalid capture reached native constructor")
+	}
+	var ack struct {
+		Closed  bool   `json:"closed"`
+		Session string `json:"session_id"`
+	}
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "stopped.json"), &ack) != nil || !ack.Closed || ack.Session != desktopExternalSession {
+		t.Fatal("no-resource parse failure lacks closed acknowledgement")
+	}
+}
+
+func TestRouterVPNDesktopExternalRejectsWrongOrIncompleteProof(t *testing.T) {
+	for _, field := range []string{"session_id", "source_sha256", "config_sha256", "exit_id", "ip", "dns_proven", "entry_proven", "execution"} {
+		t.Run(field, func(t *testing.T) {
+			directory, policy := desktopExternalWorkspace(t)
+			owner := desktopExternalOwner(t, policy, false)
+			var result map[string]any
+			_ = json.Unmarshal([]byte(owner.result), &result)
+			if field == "dns_proven" {
+				result[field] = false
+			} else if field == "entry_proven" {
+				result[field] = true
+			} else {
+				result[field] = "private-proxy-secret"
+			}
+			raw, _ := json.Marshal(result)
+			owner.result = string(raw)
+			err := desktopExternalWait(t, desktopExternalRun(t, context.Background(), directory, owner))
+			if err == nil || strings.Contains(err.Error(), "private-proxy-secret") {
+				t.Fatal("invalid proof accepted or exposed credentials")
+			}
+			if _, err := os.Lstat(filepath.Join(directory, "proof.json")); !errors.Is(err, os.ErrNotExist) {
+				t.Fatal("invalid proof published")
+			}
+			if owner.closes.Load() != 1 {
+				t.Fatal("invalid proof discarded native owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalFilesRejectReplacementAndLinkedInputs(t *testing.T) {
+	directory, _ := desktopExternalWorkspace(t)
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.root.Close()
+	if files.publish("proof.json", map[string]bool{"healthy": true}) != nil {
+		t.Fatal("private atomic publication failed")
+	}
+	if err := os.Rename(filepath.Join(directory, "proof.json"), filepath.Join(directory, "retired.json")); err != nil {
+		t.Fatal(err)
+	}
+	foreign := []byte(`{"replacement":true}`)
+	if err := os.WriteFile(filepath.Join(directory, "proof.json"), foreign, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if files.remove("proof.json") == nil || files.publish("proof.json", map[string]bool{"healthy": false}) == nil {
+		t.Fatal("old command changed replacement output")
+	}
+	if raw, _ := os.ReadFile(filepath.Join(directory, "proof.json")); string(raw) != string(foreign) {
+		t.Fatal("foreign file changed")
+	}
+	other := filepath.Join(t.TempDir(), "source.json")
+	if err := os.WriteFile(other, []byte(desktopExternalSource), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(directory, "source.json")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(other, filepath.Join(directory, "source.json")); err != nil {
+		t.Skip("symlink creation unavailable on this test host")
+	}
+	if _, err := files.read("source.json", 4<<20); err == nil {
+		t.Fatal("linked private input accepted")
+	}
+}
+
+type desktopExternalTUN struct{ inbound.Adapter }
+
+func (*desktopExternalTUN) Start(adapter.StartStage) error { return nil }
+func (*desktopExternalTUN) Close() error                   { return nil }
+
+func TestRouterVPNDesktopExternalFactoryUsesActualBoxAndProofOwnership(t *testing.T) {
+	_, policy := desktopExternalWorkspace(t)
+	registry := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &desktopExternalTUN{inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	owner, err := routerVPNNewExternalNative(ctx, policy, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
+	if err != nil {
+		t.Fatal("actual native Box factory", err)
+	}
+	native := owner.(*routerVPNExternalNative)
+	defer native.Close()
+	proof, err := native.box.RouterVPNExternalCreateProof(desktopExternalSource, desktopExternalCapture, desktopExternalSession)
+	if err != nil {
+		t.Fatal("actual shared proof constructor", err)
+	}
+	proof.Cancel()
+	if proof.Close() != nil {
+		t.Fatal("unstarted proof did not close")
+	}
+	changed := strings.Replace(desktopExternalSource, "private-proxy-secret", "wrong-private-key", 1)
+	if _, err := native.box.RouterVPNExternalCreateProof(changed, desktopExternalCapture, desktopExternalSession); err == nil {
+		t.Fatal("actual Box accepted another native credential owner")
+	}
+	if owner.Healthy() {
+		t.Fatal("native construction was mislabeled as network proof")
+	}
+}
+
+func TestRouterVPNDesktopExternalActualConstructorFailureRetainsPartialManagers(t *testing.T) {
+	_, policy := desktopExternalWorkspace(t)
+	registry := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, option.TunInboundOptions) (adapter.Inbound, error) {
+		return nil, errors.New("private constructor sentinel")
+	})
+	ctx := box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	owner, err := routerVPNNewExternalNative(ctx, policy, desktopExternalSource, desktopExternalCapture, desktopExternalSession)
+	if err == nil || owner == nil || strings.Contains(err.Error(), "sentinel") {
+		t.Fatal("partial actual Box ownership was discarded")
+	}
+	if native := owner.(*routerVPNExternalNative); native.box != nil || len(native.partial) == 0 {
+		t.Fatal("failed actual constructor did not capture its managers")
+	}
+	owner.Cancel()
+	if err := owner.Close(); err != nil {
+		t.Fatal("actual unstarted native managers did not close", err)
+	}
+}

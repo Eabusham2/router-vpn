@@ -11,6 +11,8 @@ import (
 type publicExternalNode struct {
 	Protocol         string `json:"protocol"`
 	ExpectedPublicIP string `json:"expected_public_ip,omitempty"`
+	HasResponseProbe bool `json:"has_response_probe"`
+	HasServerPeer bool `json:"has_server_peer"`
 }
 
 type publicProfile struct {
@@ -38,6 +40,9 @@ type publicProfile struct {
 	MultihopEnabled bool   `json:"multihop_enabled,omitempty"`
 	MultihopEntryID string `json:"multihop_entry_id,omitempty"`
 	MultihopExitID  string `json:"multihop_exit_id,omitempty"`
+	MultihopExecution string `json:"multihop_execution,omitempty"`
+	MultihopEntryMode string `json:"multihop_entry_mode,omitempty"`
+	StartLayer string `json:"start_layer,omitempty"`
 	MTUPolicy       string `json:"mtu_policy,omitempty"`
 	ManualMTU       int    `json:"manual_mtu,omitempty"`
 	EffectiveMTU    int    `json:"effective_mtu,omitempty"`
@@ -116,6 +121,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		CustomLayers:append([]string(nil),p.CustomLayers...), HomeLANAccess:p.HomeLANAccess, HomeLANCIDRs:append([]string(nil),p.HomeLANCIDRs...),
 		KillSwitchPolicy:p.KillSwitchPolicy, IPv6Mode:p.IPv6Mode, StartupMode:p.StartupMode, AutoConnect:p.AutoConnect,
 		MultihopEnabled:p.MultihopEnabled, MultihopEntryID:p.MultihopEntryID, MultihopExitID:p.MultihopExitID,
+		MultihopExecution:p.MultihopExecution, MultihopEntryMode:p.MultihopEntryMode, StartLayer:p.StartLayer,
 		MTUPolicy:p.MTUPolicy, ManualMTU:p.ManualMTU, EffectiveMTU:p.EffectiveMTU, EffectiveMTUSource:p.EffectiveMTUSource,
 		EffectiveMTUPathKey:p.EffectiveMTUPathKey, EffectiveUnderlayPMTU:p.EffectiveUnderlayPMTU, EffectiveMTUTestedAt:p.EffectiveMTUTestedAt,
 		EffectiveMTUMbps:p.EffectiveMTUMbps, EffectiveMTUMedianRTTMs:p.EffectiveMTUMedianRTTMs, EffectiveMTUSuccessRatio:p.EffectiveMTUSuccessRatio,
@@ -128,7 +134,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		RuntimeImplemented:true, RuntimeSupported:true, Editable:kind=="router-vpn",
 	}
 	if kind == "external" && p.External != nil {
-		out.External=&publicExternalNode{Protocol:p.External.Protocol,ExpectedPublicIP:p.External.ExpectedPublicIP}
+		out.External=&publicExternalNode{Protocol:p.External.Protocol,ExpectedPublicIP:p.External.ExpectedPublicIP,HasResponseProbe:p.External.ResponseProbe!=nil,HasServerPeer:p.External.ServerPeer!=nil}
 		out.RouterAPI="";out.AdGuardIPv4="";out.AdGuardIPv6="";out.SocksHost="";out.SocksPort=0;out.BaseTunnel="";out.BaseFallback=false;out.CustomLayers=nil
 		cap, ok := publicCapabilityForProfile(p, caps)
 		if !ok {

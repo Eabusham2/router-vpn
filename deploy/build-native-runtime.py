@@ -35,6 +35,7 @@ PQ = load('desktop_native_pq', 'build-desktop-pq.py')
 BUFFERS = load('desktop_native_buffers', 'prepare-mobile-buffers.py')
 PERFORMANCE = load('desktop_native_performance', 'prepare-mobile-performance.py')
 OPENVPN = load('desktop_native_openvpn', 'mobile_openvpn_close_policy.py')
+EXTERNAL = load('desktop_native_external', 'prepare-desktop-external.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
@@ -71,7 +72,7 @@ def inputs():
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
                              *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs')),
                              *POLICY.inputs(),
-                             *PERFORMANCE.inputs(), *OPENVPN.inputs(),
+                             *PERFORMANCE.inputs(), *OPENVPN.inputs(), *EXTERNAL.inputs(),
                              ROOT/'mobile/desktop/native_library.go.tmpl',
                              ROOT/'deploy/prepare-mobile-buffers.py',
                              ROOT/'deploy/mobile_udp_socket_policy.py']))
@@ -393,6 +394,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         POLICY.prepare_native(source, xray)
         PERFORMANCE.prepare(source)
         OPENVPN.prepare(source)
+        EXTERNAL.prepare(source)
         BUFFERS.prepare(source)
         run(['go', 'mod', 'tidy'], cwd=source, env=env)
         run(['go', 'mod', 'verify'], cwd=source, env=env)
@@ -409,6 +411,15 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         stage.mkdir()
         binary = stage/binary_name(target)
         stage_cronet(source, stage, target, env)
+        host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
+            'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
+        if target == host:
+            # These execute the actual command owner and Box proof factory.
+            # Run before installing the executable-only Cronet loader, whose
+            # sealed adjacent library belongs to the final package location.
+            run(['go', 'test', '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPNDesktopExternal',
+                 '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if library_name(target):
             library = payload(regular(stage/library_name(target), MAX_LIBRARY))
@@ -432,12 +443,13 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         (stage/'NATIVE-RUNTIME.json').write_text(json.dumps(receipt, sort_keys=True, indent=2)+'\n')
         binary.chmod(0o755)
         reuse(stage, target, policy, env)
-        host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
-            'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
         if target == host:
             output = run([binary, 'version'], env=env, timeout=20)
             if not output.startswith('sing-box version '+marker(policy)+'\n'):
                 raise ValueError('Actual native engine failed the exact source version command')
+            help_output = run([binary, 'routervpn-external', '--help'], env=env, timeout=20)
+            if '--runtime-dir' not in help_output or '--session' not in help_output:
+                raise ValueError('Actual native engine omitted its captured external owner command')
         if destination.exists():
             destination.rmdir()
         os.replace(stage, destination)

@@ -178,7 +178,7 @@ function PollUnifiedComparisonProgress {
 $script:UnifiedComparisonPoller.Add_Tick({PollUnifiedComparisonProgress})
 function SetUnifiedAsyncUI([bool]$Busy,[string]$Label=''){
     if($script:UnifiedAsyncClosed){return}
-    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton')){
+    foreach($N in @('UnifiedMtuButton','UnifiedSettingsButton','UnifiedPresetsButton','UnifiedNodesButton','UnifiedModeCombo','UnifiedMultihop','UnifiedEntryCombo','UnifiedExitCombo','UnifiedExitMode','UnifiedExecution','UnifiedBaseCombo','UnifiedCandidatesButton','UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton','MtuRetestButton','MultihopConnectButton','AutoButton','ConnectButton','ExternalDirectButton','ExternalViaEntryButton','LatencyButton','DnsButton','UnifiedNodeCombo','UnifiedDnsCombo','UnifiedKillSwitch','UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton')){
         $C=Control $N;if($null-ne$C){$C.IsEnabled=-not$Busy}
     }
     $B=Control 'UnifiedConnectButton';if($null-ne$B){$B.IsEnabled=$true;if($Busy){$B.Content=if($Label-match'(?i)connect|auto|custom|multihop|external'){'Cancel / Disconnect'}else{$Label}}}
@@ -427,7 +427,7 @@ function SaveUnifiedPresets($Values){[void](New-Item -ItemType Directory -Force 
 function GetUnifiedModeID{if(Test-Path -LiteralPath $script:UnifiedModeStateFile){$v=(Get-Content -LiteralPath $script:UnifiedModeStateFile -Raw -Encoding UTF8).Trim();if($v){return $v}};return 'smart-auto'}
 function SaveUnifiedModeID([string]$Value){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedModeStateFile));Set-Content -LiteralPath $script:UnifiedModeStateFile -Value $Value -Encoding UTF8}
 function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='smart-auto';display='SMART AUTO — recommended';available=$true});[void]$Values.Add([pscustomobject]@{id='auto';display='AUTO — first proven path';available=$true});foreach($M in @($Modes)){$Reason=[string]$M.reason_text;$Label=if([bool]$M.available){[string]$M.name}else{"$($M.name) — unavailable: $Reason"};[void]$Values.Add([pscustomobject]@{id=[string]$M.id;display=$Label;available=[bool]$M.available})};foreach($P in @(GetUnifiedPresets)){[void]$Values.Add([pscustomobject]@{id=('custom:'+[string]$P.name);display=('CUSTOM • '+[string]$P.name);available=$true})};[void]$Values.Add([pscustomobject]@{id='custom:new';display='New CUSTOM preset…';available=$true});$script:UnifiedModeChoices=@($Values);$ModeCombo.ItemsSource=$script:UnifiedModeChoices;$ModeCombo.SelectedValue=$Wanted;if(-not$ModeCombo.SelectedItem){$ModeCombo.SelectedValue='smart-auto';SaveUnifiedModeID 'smart-auto'}}
-function UnifiedSelectedProfile{try{$S=Api '/api/profiles' -Timeout 4;return @($S.profiles|Where-Object{[string]$_.id -eq [string]$S.selected_id}|Select-Object -First 1)}catch{return $null}}
+function UnifiedSelectedProfile{try{$S=Api '/api/profiles' -Timeout 4;if(-not[string]$S.selected_id){return $null};$Matches=@($S.profiles|Where-Object{[string]$_.id -ceq [string]$S.selected_id});if($Matches.Count-ne1){return $null};return $Matches[0]}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
 function BackUnifiedMap{(Control 'LegacyDetailTabs').Visibility='Collapsed';(Control 'UnifiedBackButton').Visibility='Collapsed';(Control 'UnifiedShell').Visibility='Visible';RefreshProduct}
 function UnifiedConnect{
@@ -443,15 +443,16 @@ function UnifiedConnect{
             return
         }
         $Path='';$Body=@{};$Timeout=180;$Label='Connecting…'
-        if((Control 'UnifiedMultihop').IsChecked){
+        $P=UnifiedSelectedProfile
+        if(-not$P-or-not[string]$P.id){throw 'The selected node is unavailable. Refresh the node list before connecting.'}
+        if(([string]$P.node_kind).ToLowerInvariant()-cnotin@('','router-vpn','external')){throw 'The selected node type is invalid.'}
+        if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
+            $Path='/api/external-profile/connect';$Body=(NewUnifiedExternalConnectBody $P '' (GetUnifiedExternalSavedExecution $P) $false);$Timeout=180;$Label='Connecting external exit…'
+        }elseif((Control 'UnifiedMultihop').IsChecked){
             $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
             if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}
             $Path='/api/multihop/connect';$Body=@{entry_id=$Entry;exit_id=$Exit;base=(BaseChoice);exit_mode=(MultihopExitModeChoice)};$Body.execution=[string](Control 'UnifiedExecution').SelectedItem.Tag;$Timeout=200;$Label='Connecting multihop…'
         }else{
-            $P=UnifiedSelectedProfile
-            if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
-                $Path='/api/external-profile/connect';$Body=@{profile_id=[string]$P.id};$Timeout=180;$Label='Connecting external exit…'
-            }else{
                 $ID=[string]$ModeCombo.SelectedValue;if(-not$ID){$ID='smart-auto'}
                 if($ID-eq'custom:new'){ShowUnifiedCustomBuilder;return}
                 if($ID-eq'smart-auto'){$Path='/api/strategy/smart-auto';$Timeout=240;$Label='SMART AUTO…'}
@@ -465,7 +466,6 @@ function UnifiedConnect{
                     if($Choice-and-not[bool]$Choice.available){throw [string]$Choice.display}
                     $Path='/api/connect-logical';$Body=@{mode=$ID;base=(BaseChoice)};$Timeout=180;$Label='Connecting…'
                 }
-            }
         }
         $Success={param($R)
             if($null-ne$R.runtime_mode){Log ('Connected winner: '+[string]$R.runtime_mode)}

@@ -66,10 +66,54 @@ def _pairs_for(mode: str):
     ]
     return current
 
+def _external_path_pairs(pairs, mode):
+    if mode == "unified":
+        result = []
+        count = 0
+        for old64, new64 in pairs:
+            old, new = [base64.b64decode(value).decode("utf-8") for value in (old64, new64)]
+            if "private func startUnifiedSelectedMode()" in old:
+                line = '        if UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) { connectMultihop(); return }\n'
+                if old.count(line) != 1 or new.count(line) != 1:
+                    raise SystemExit("external primary priority mutation anchor drifted")
+                old, new = old.replace(line, ""), new.replace(line, "")
+                count += 1
+            result.append([base64.b64encode(old.encode()).decode(), base64.b64encode(new.encode()).decode()])
+        if count != 1:
+            raise SystemExit("external primary priority mutation count drifted")
+        return result
+    if mode != "product":
+        return pairs
+    result = []
+    direct = via = 0
+    for old64, new64 in pairs:
+        old = base64.b64decode(old64).decode("utf-8")
+        new = base64.b64decode(new64).decode("utf-8")
+        if "@objc func connectExternalDirect()" in old:
+            direct += 1
+            previous = 'body: ["profile_id": exitID, "direct": true], timeout: 180)'
+            current = 'body: ["profile_id": exitID, "direct": true, "execution": "local"], timeout: 180)'
+            ending = '        let i = externalEntryPopup.indexOfSelectedItem\n'
+            replacement = '        showExternalPath(profileID: exitID, requireEntry: true)\n    }\n'
+            for source in (old, new):
+                if source.count(previous) != 1 or source.count(ending) != 1:
+                    raise SystemExit("external path callback guard anchors drifted")
+            old = old.replace(previous, current).replace(ending, replacement)
+            new = new.replace(previous, current).replace(ending, replacement)
+        elif 'body: ["profile_id": exitID, "entry_id": entryID]' in old:
+            # The via-entry body moved into the captured native dialog. It keeps
+            # opening, confirmation and asynchronous request idle checks there.
+            via += 1
+            continue
+        result.append([base64.b64encode(old.encode()).decode(), base64.b64encode(new.encode()).decode()])
+    if direct != 1 or via != 1:
+        raise SystemExit("external path callback guard pair count drifted")
+    return result
+
 def transform(source: str, mode: str) -> str:
     if mode not in PAIRS:
         raise SystemExit(f"unknown transform mode: {mode}")
-    for old64, new64 in _pairs_for(mode):
+    for old64, new64 in _external_path_pairs(_pairs_for(mode), mode):
         old=base64.b64decode(old64).decode('utf-8')
         new=base64.b64decode(new64).decode('utf-8')
         count=source.count(old)

@@ -237,6 +237,8 @@ func NormalizeRouterProfile(p *RouterProfile) error {
 	startLayer, err := NormalizeStartLayerMode(p.StartLayer); if err != nil { return err }; p.StartLayer = startLayer
 	if p.NodeKind == "external" { if err := validateExternalStartLayer(p); err != nil { return err } }
 	switch p.MultihopExecution { case "", "local", "server", "auto": default: return fmt.Errorf("multihop execution must be local, server, or auto") }
+	if len(p.MultihopEntryMode) > 64 { return fmt.Errorf("multihop entry mode is oversized") }
+	for _, c := range p.MultihopEntryMode { if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-') { return fmt.Errorf("multihop entry mode requires a canonical runtime identifier") } }
 	p.NodeProofID = strings.TrimSpace(p.NodeProofID); if p.NodeProofID != "" && !ValidNodeProofID(p.NodeProofID) { return fmt.Errorf("invalid node proof id") }
 	p.KillSwitchPolicy = strings.ToLower(strings.TrimSpace(p.KillSwitchPolicy)); if p.KillSwitchPolicy == "" { if p.KillSwitch { p.KillSwitchPolicy = "on-connect" } else { p.KillSwitchPolicy = "off" } }; switch p.KillSwitchPolicy { case "off", "on-connect", "always": default: return fmt.Errorf("invalid kill switch policy %q", p.KillSwitchPolicy) }; p.KillSwitch = p.KillSwitchPolicy != "off"
 	p.StartupMode = strings.ToLower(strings.TrimSpace(p.StartupMode)); if p.StartupMode == "" { p.StartupMode = "smart-auto" }; switch p.StartupMode { case "manual", "auto", "smart-auto", "last": default: return fmt.Errorf("invalid startup mode %q", p.StartupMode) }

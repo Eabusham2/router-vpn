@@ -11,16 +11,17 @@ import (
 // base, AUTO filters, mode, or graph if the process dies before normal cleanup.
 // operationMu already serializes one connection/settings owner; this guard is a
 // second explicit invariant consumed by background/durable writers.
-var speedLabTemporaryPersistenceOwners sync.Map // map[*app]struct{}
+var speedLabTemporaryPersistenceOwners sync.Map // map[*app]*sync.Once
 
 func beginSpeedLabTemporaryPersistenceGuard(a *app) (func(), error) {
 	if a == nil {
 		return nil, errors.New("Speed Lab temporary persistence guard requires an app owner")
 	}
-	if _, loaded := speedLabTemporaryPersistenceOwners.LoadOrStore(a, struct{}{}); loaded {
+	owner := new(sync.Once)
+	if _, loaded := speedLabTemporaryPersistenceOwners.LoadOrStore(a, owner); loaded {
 		return nil, errors.New("another temporary Speed Lab persistence guard is already active")
 	}
-	return func() { speedLabTemporaryPersistenceOwners.Delete(a) }, nil
+	return func() { owner.Do(func() { speedLabTemporaryPersistenceOwners.CompareAndDelete(a, owner) }) }, nil
 }
 
 func speedLabTemporaryPersistenceSuppressed(a *app) bool {

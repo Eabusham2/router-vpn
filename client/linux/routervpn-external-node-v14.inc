@@ -23,6 +23,12 @@ typedef struct {
     GtkWidget *method;
     GtkWidget *secret;
     GtkWidget *tls_name;
+    GtkWidget *response_url;
+    GtkWidget *response_name;
+    GtkWidget *start_layer;
+    GtkWidget *layer_api;
+    GtkWidget *layer_port;
+    GtkWidget *layer_key;
     GtkWidget *wg_private;
     GtkWidget *wg_peer;
     GtkWidget *wg_psk;
@@ -32,6 +38,10 @@ typedef struct {
     GtkWidget *wg_mtu;
     GtkWidget *wg_keepalive;
     GtkWidget *awg_parameters;
+    GtkWidget *server_peer_public;
+    GtkWidget *server_peer_addresses;
+    GtkWidget *server_peer_mtu;
+    GtkWidget *server_peer_keepalive;
     GtkWidget *status;
 } LinuxExternalNodeV14;
 
@@ -114,6 +124,70 @@ static gboolean linux_external_coordinates_v14(LinuxExternalNodeV14 *state, Json
     g_free(lat_text);g_free(lon_text);return TRUE;
 }
 
+static gboolean linux_external_server_peer_v14(LinuxExternalNodeV14 *state, JsonBuilder *builder, const char *protocol, char **validation_error) {
+    g_autofree char *key=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->server_peer_public)));
+    g_autofree char *addresses=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->server_peer_addresses)));
+    g_autofree char *mtu=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->server_peer_mtu)));
+    g_autofree char *keepalive=g_strdup(gtk_entry_get_text(GTK_ENTRY(state->server_peer_keepalive)));
+    g_strstrip(key);g_strstrip(addresses);g_strstrip(mtu);g_strstrip(keepalive);
+    if(!key[0]&&!addresses[0]&&!mtu[0]&&!keepalive[0])return TRUE;
+    const char *message=NULL;
+    if(g_strcmp0(protocol,"wireguard")!=0&&g_strcmp0(protocol,"amneziawg")!=0)message="Server peer fields apply only to WireGuard or AmneziaWG.";
+    char *end=NULL;gint64 value=g_ascii_strtoll(mtu,&end,10);
+    if(message==NULL&&(end==mtu||*end!='\0'||value<1280||value>9000))message="Server peer MTU is required with a descriptor and must be 1280..9000.";
+    gint64 seconds=0;
+    if(keepalive[0]){seconds=g_ascii_strtoll(keepalive,&end,10);if(message==NULL&&(end==keepalive||*end!='\0'||seconds<0||seconds>65535))message="Server peer keepalive must be 0..65535 seconds.";}
+    gsize size=0;guchar *decoded=g_base64_decode(key,&size);char *canonical=g_base64_encode(decoded,size);
+    if(message==NULL&&(size!=32||g_strcmp0(canonical,key)!=0))message="Server peer public key must be canonical 32-byte Base64.";
+    g_free(decoded);g_free(canonical);
+    gchar **parts=g_strsplit(addresses,",",-1);guint count=0;
+    for(guint i=0;parts[i]!=NULL;i++)if(g_strstrip(parts[i])[0])count++;
+    g_strfreev(parts);
+    if(message==NULL&&(count<1||count>2))message="Supply one server peer CIDR per IP family, up to two addresses.";
+    if(message!=NULL){if(validation_error!=NULL)*validation_error=g_strdup(message);return FALSE;}
+    json_builder_set_member_name(builder,"server_peer");json_builder_begin_object(builder);
+    json_builder_set_member_name(builder,"public_key");json_builder_add_string_value(builder,key);
+    linux_external_csv_v14(builder,"addresses",addresses);
+    json_builder_set_member_name(builder,"mtu");json_builder_add_int_value(builder,value);
+    if(keepalive[0]){json_builder_set_member_name(builder,"persistent_keepalive_interval");json_builder_add_int_value(builder,seconds);}
+    json_builder_end_object(builder);return TRUE;
+}
+
+static gboolean linux_external_transport_fields_v14(LinuxExternalNodeV14 *state, JsonBuilder *builder, const char *protocol, char **validation_error) {
+    const char *probe=gtk_entry_get_text(GTK_ENTRY(state->response_url));
+    const char *name=gtk_entry_get_text(GTK_ENTRY(state->response_name));
+    const char *layer=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->start_layer));
+    const char *api=gtk_entry_get_text(GTK_ENTRY(state->layer_api));
+    const char *port=gtk_entry_get_text(GTK_ENTRY(state->layer_port));
+    const char *key=gtk_entry_get_text(GTK_ENTRY(state->layer_key));
+    const char *message=NULL;
+    gboolean supported=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0||g_strcmp0(protocol,"shadowsocks")==0||g_strcmp0(protocol,"hysteria2")==0||g_strcmp0(protocol,"socks5")==0||g_strcmp0(protocol,"http-connect")==0||g_strcmp0(protocol,"https-connect")==0;
+    gboolean off=g_strcmp0(layer,"off")==0;
+    if(!off&&g_strcmp0(layer,"aes-256-gcm")!=0&&g_strcmp0(layer,"aes-256-gcm+xor-whitening")!=0)message="Choose a supported external Start Layer.";
+    else if(!supported&&(probe[0]||name[0]||!off||api[0]||port[0]||key[0]))message="Response probes and external Start Layers require a supported external transport.";
+    else if(name[0]&&!probe[0])message="Supply the HTTPS response URL with its certificate server name.";
+    else if(off&&(api[0]||port[0]||key[0]))message="Select a Start Layer before supplying its provisioned credentials.";
+    char *end=NULL;long value=off?0:g_ascii_strtoll(port,&end,10);
+    if(message==NULL&&!off&&(!api[0]||!key[0]||end==port||(end!=NULL&&*end!='\0')||value<1||value>65535))message="An active Start Layer requires its private API, AES port (1..65535), and key.";
+    if(message!=NULL){if(validation_error!=NULL)*validation_error=g_strdup(message);return FALSE;}
+    if(probe[0]){json_builder_set_member_name(builder,"response_probe");json_builder_begin_object(builder);json_builder_set_member_name(builder,"url");json_builder_add_string_value(builder,probe);json_builder_set_member_name(builder,"server_name");json_builder_add_string_value(builder,name);json_builder_end_object(builder);}
+    json_builder_set_member_name(builder,"start_layer");json_builder_add_string_value(builder,layer);
+    if(!off){
+        json_builder_set_member_name(builder,"start_layer_provision");json_builder_begin_object(builder);
+        json_builder_set_member_name(builder,"mode");json_builder_add_string_value(builder,layer);
+        json_builder_set_member_name(builder,"api");json_builder_add_string_value(builder,api);
+        json_builder_set_member_name(builder,"transport");json_builder_begin_object(builder);
+        json_builder_set_member_name(builder,"type");json_builder_add_string_value(builder,"shadowsocks");
+        json_builder_set_member_name(builder,"tag");json_builder_add_string_value(builder,"provisioned-exit-layer");
+        json_builder_set_member_name(builder,"server");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->server)));
+        json_builder_set_member_name(builder,"server_port");json_builder_add_int_value(builder,value);
+        json_builder_set_member_name(builder,"method");json_builder_add_string_value(builder,"2022-blake3-aes-256-gcm");
+        json_builder_set_member_name(builder,"password");json_builder_add_string_value(builder,key);
+        json_builder_end_object(builder);json_builder_end_object(builder);
+    }
+    return TRUE;
+}
+
 static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **validation_error) {
     if(validation_error!=NULL)*validation_error=NULL;
     const char *protocol=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->protocol));
@@ -157,6 +231,7 @@ static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **vali
             if(!valid){g_object_unref(builder);return NULL;}
         }
     }
+    if(!linux_external_server_peer_v14(state,builder,protocol,validation_error)||!linux_external_transport_fields_v14(state,builder,protocol,validation_error)){g_object_unref(builder);return NULL;}
     json_builder_end_object(builder);JsonNode *root=json_builder_get_root(builder);JsonGenerator *generator=json_generator_new();json_generator_set_root(generator,root);char *payload=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(root);g_object_unref(builder);return payload;
 }
 
@@ -180,9 +255,17 @@ static void on_linux_external_node_v14(GtkButton *button, gpointer data) {
     state.name=linux_external_field_v14("Display name",FALSE);state.server=linux_external_field_v14("Server IP / hostname",FALSE);state.port=linux_external_field_v14("Port",FALSE);state.expected=linux_external_field_v14("Expected public exit IP",FALSE);state.location=linux_external_field_v14("Location label (optional, e.g. Austin, TX)",FALSE);state.latitude=linux_external_field_v14("Latitude -90..90 (optional)",FALSE);state.longitude=linux_external_field_v14("Longitude -180..180 (optional)",FALSE);state.username=linux_external_field_v14("Username (proxy only)",FALSE);state.password=linux_external_field_v14("Password / proxy credential",TRUE);state.method=linux_external_field_v14("Shadowsocks method",FALSE);state.secret=linux_external_field_v14("Shadowsocks / Hysteria2 secret",TRUE);state.tls_name=linux_external_field_v14("TLS server name / SNI",FALSE);state.wg_private=linux_external_field_v14("WG private key",TRUE);state.wg_peer=linux_external_field_v14("WG peer public key",FALSE);state.wg_psk=linux_external_field_v14("WG preshared key (optional)",TRUE);state.wg_addresses=linux_external_field_v14("WG addresses, comma-separated CIDRs",FALSE);state.wg_allowed=linux_external_field_v14("WG AllowedIPs, comma-separated CIDRs",FALSE);state.wg_dns=linux_external_field_v14("WG DNS IPs, comma-separated",FALSE);state.wg_mtu=linux_external_field_v14("WG MTU (optional)",FALSE);
     state.wg_keepalive=linux_external_field_v14("WG / AWG keepalive seconds 0..65535 (blank means disabled)",FALSE);
     GtkWidget *fields[]={state.name,state.server,state.port,state.expected,state.location,state.latitude,state.longitude,state.username,state.password,state.method,state.secret,state.tls_name,state.wg_private,state.wg_peer,state.wg_psk,state.wg_addresses,state.wg_allowed,state.wg_dns,state.wg_mtu,state.wg_keepalive};for(guint i=0;i<G_N_ELEMENTS(fields);i++)gtk_box_pack_start(GTK_BOX(box),fields[i],FALSE,FALSE,0);
+    GtkWidget *external_note=gtk_label_new("Optional Server / Compare: use a Router entry and an HTTPS response probe on this external server's public IP. WireGuard, AmneziaWG, Shadowsocks, Hysteria2 and authenticated SOCKS5 / HTTP(S) are supported. Start Layers require matching server provisioning; AES + XOR keeps authenticated encryption.");gtk_label_set_line_wrap(GTK_LABEL(external_note),TRUE);gtk_label_set_xalign(GTK_LABEL(external_note),0.0f);gtk_box_pack_start(GTK_BOX(box),external_note,FALSE,FALSE,0);
+    state.response_url=linux_external_field_v14("HTTPS response URL on this external server",FALSE);state.response_name=linux_external_field_v14("Response certificate server name (when needed)",FALSE);
+    state.start_layer=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.start_layer),"off","External Start Layer: Off");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.start_layer),"aes-256-gcm","AES-256-GCM");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.start_layer),"aes-256-gcm+xor-whitening","AES-256-GCM + XOR whitening");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.start_layer),"off");
+    state.layer_api=linux_external_field_v14("Provisioned layer private API URL",FALSE);state.layer_port=linux_external_field_v14("Provisioned AES transport port",FALSE);state.layer_key=linux_external_field_v14("Provisioned AES key (32-byte Base64)",TRUE);
+    GtkWidget *transport_fields[]={state.response_url,state.response_name,state.start_layer,state.layer_api,state.layer_port,state.layer_key};for(guint i=0;i<G_N_ELEMENTS(transport_fields);i++)gtk_box_pack_start(GTK_BOX(box),transport_fields[i],FALSE,FALSE,0);
     GtkWidget *awg_note=gtk_label_new("AmneziaWG: copy all 11 provider values as key=value, one per line or separated by semicolons. Required: Jc, Jmin, Jmax, S1-S4 and H1-H4. Header ranges are preserved.");gtk_label_set_line_wrap(GTK_LABEL(awg_note),TRUE);gtk_label_set_xalign(GTK_LABEL(awg_note),0.0f);gtk_box_pack_start(GTK_BOX(box),awg_note,FALSE,FALSE,0);
     state.awg_parameters=gtk_text_view_new();gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(state.awg_parameters),GTK_WRAP_WORD_CHAR);
     GtkWidget *awg_scroll=gtk_scrolled_window_new(NULL,NULL);gtk_widget_set_size_request(awg_scroll,-1,100);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(awg_scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(awg_scroll),state.awg_parameters);gtk_box_pack_start(GTK_BOX(box),awg_scroll,FALSE,FALSE,0);
+    GtkWidget *peer_note=gtk_label_new("WireGuard / AmneziaWG Server and Compare: copy the public descriptor of the separate client peer provisioned on the Router entry. Its public identity and addresses must differ from this device. Keep its private key and preshared key on the server. The WG peer public key above still identifies the remote provider. Leave all descriptor fields blank for Local-only use.");gtk_label_set_line_wrap(GTK_LABEL(peer_note),TRUE);gtk_label_set_xalign(GTK_LABEL(peer_note),0.0f);gtk_box_pack_start(GTK_BOX(box),peer_note,FALSE,FALSE,0);
+    state.server_peer_public=linux_external_field_v14("Separate server-side client public key",FALSE);state.server_peer_addresses=linux_external_field_v14("Server peer CIDRs, one per family, comma separated",FALSE);state.server_peer_mtu=linux_external_field_v14("Server peer MTU — required with descriptor, 1280..9000",FALSE);state.server_peer_keepalive=linux_external_field_v14("Server peer keepalive seconds — optional, 0..65535",FALSE);
+    GtkWidget *peer_fields[]={state.server_peer_public,state.server_peer_addresses,state.server_peer_mtu,state.server_peer_keepalive};for(guint i=0;i<G_N_ELEMENTS(peer_fields);i++)gtk_box_pack_start(GTK_BOX(box),peer_fields[i],FALSE,FALSE,0);
     GtkWidget *note=gtk_label_new("Optional coordinates must be real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker cannot inject executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
     state.status=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(state.status),TRUE);gtk_label_set_xalign(GTK_LABEL(state.status),0.0f);gtk_box_pack_start(GTK_BOX(box),state.status,FALSE,FALSE,0);
     GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(scroll),box);gtk_box_pack_start(GTK_BOX(content),scroll,TRUE,TRUE,0);gtk_widget_show_all(state.dialog);

@@ -967,7 +967,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 			clear(native.config)
 			clear(native.metadata)
 			if native.directory != "" {
-				_ = os.RemoveAll(native.directory)
+				_ = cleanupDesktopNodeLaunch(native)
 			}
 			if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
 				if identity, ok := raw.(activeDNSRuntimeIdentity); ok && identity.Config == filepath.Join(native.directory, "sing-box.json") {
@@ -1042,6 +1042,9 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.state.Phase = "starting"
 	a.state.LastError = ""
 	a.mu.Unlock()
+	if err := a.speedLabOwnRuntime(cmd); err != nil {
+		return err
+	}
 	if err = a.checkConnectionOperation(); err != nil {
 		a.stopOwnedConnectionRuntime(cmd)
 		return err
@@ -1110,8 +1113,26 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	a.mu.Lock()
 	relayOwner := a.cmd
 	a.mu.Unlock()
+	if err := prepareDesktopExternalStop(a, relayOwner); err != nil {
+		a.mu.Lock()
+		a.state.Connected = false
+		a.state.Phase = "failed"
+		a.state.LastError = err.Error()
+		a.mu.Unlock()
+		return err
+	}
+	a.mu.Lock()
+	unchangedOwner := a.cmd == relayOwner
+	a.mu.Unlock()
+	if !unchangedOwner {
+		return errors.New("connection owner changed while native cleanup was pending; replacement retained")
+	}
 	relayErr := releaseDesktopRelay(a, relayOwner)
 	a.mu.Lock()
+	if a.cmd != relayOwner {
+		a.mu.Unlock()
+		return errors.New("connection owner changed before teardown; replacement retained")
+	}
 	cmd := a.cmd
 	modeID := a.state.Mode
 	logicalMode := a.state.LogicalMode
@@ -1133,8 +1154,7 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 	}
 	if cmd != nil && cmd.Process != nil {
 		_ = cmd.Process.Signal(os.Interrupt)
-		done := make(chan error, 1)
-		go func() { done <- cmd.Wait() }()
+		done := desktopConnectionProcessDone(a, cmd)
 		select {
 		case <-done:
 		case <-time.After(3 * time.Second):

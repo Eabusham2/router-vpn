@@ -234,7 +234,7 @@ class Executable(unittest.TestCase):
             for name in ('mobilepq','mobilemultihop'):
                 bridge=bridge.replace('github.com/sagernet/sing-box/experimental/libbox/routervpn/'+name,'router-vpn/internal/'+name)
             # An internal import must remain inside its owning module namespace.
-            (work/'go.mod').write_text('module router-vpn/deploy/pq-executable\n\ngo 1.23\n\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n')
+            (work/'go.mod').write_text('module router-vpn/deploy/pq-executable\n\ngo 1.24.13\n\nrequire router-vpn v0.0.0\nreplace router-vpn => '+str(ROOT)+'\n')
             (work/'bridge.go').write_text(bridge)
             (work/'bridge_test.go').write_text(BRIDGE_TEST.replace('github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilepq','router-vpn/internal/mobilepq'))
             max_bridge=(ROOT/'mobile/routervpn_max_resolve_bridge.go.tmpl').read_text().replace('github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop','router-vpn/internal/mobilemultihop')

@@ -7,6 +7,13 @@ import (
 	"router-vpn/internal/common"
 )
 
+// Candidate filtering follows the same complete-engine selection as Connect.
+// The launch still verifies every bundled payload and proves the captured path;
+// a capability check never creates a Connected result.
+func desktopStartLayerSupportsRawMode(mode string) bool {
+	return common.StartLayerSupportsRawMode(mode) || desktopNodeNativeSelected(mode)
+}
+
 // modeMeetsAutoRequirements is intentionally used only by AUTO/SMART AUTO.
 // Manual logical modes and CUSTOM remain explicit user choices and are not
 // silently rewritten by these convenience filters.
@@ -15,13 +22,13 @@ func modeMeetsAutoRequirements(mode common.Mode, profile common.RouterProfile) (
 	if err != nil {
 		return false, fmt.Sprintf("%s filtered: invalid Start Layer preference: %v", mode.ID, err)
 	}
-	if startLayer != common.StartLayerOff && !common.StartLayerSupportsRawMode(mode.ID) {
+	if startLayer != common.StartLayerOff && !desktopStartLayerSupportsRawMode(mode.ID) {
 		return false, fmt.Sprintf("%s filtered: Start Layer %s is enabled and this runtime has no proved AES pre-tunnel composition path", mode.ID, startLayer)
 	}
 	if profile.AutoRequireEncrypted && !modeHasEncryptedTransport(mode) {
 		return false, fmt.Sprintf("%s filtered: Require encrypted is enabled and this runtime has no recognized encrypted tunnel/transport layer", mode.ID)
 	}
-	if profile.AutoRequireObfuscation && !modeHasObfuscation(mode) {
+	if profile.AutoRequireObfuscation && !modeHasObfuscation(mode) && !common.StartLayerHasXORWhitening(startLayer) {
 		return false, fmt.Sprintf("%s filtered: Require obfuscation is enabled and this runtime has no recognized camouflage/obfuscation layer", mode.ID)
 	}
 	return true, ""

@@ -46,11 +46,14 @@ func routeExecution(q multihopConnectRequest) (routechoice.Execution, error) {
 }
 
 type routeComparisonProgress struct {
-	ID           string                    `json:"id"`
-	Stage        string                    `json:"stage"`
-	Measurements []routechoice.Measurement `json:"measurements"`
-	Complete     bool                      `json:"complete"`
-	Failure      string                    `json:"failure,omitempty"`
+	ID                  string                    `json:"id"`
+	Stage               string                    `json:"stage"`
+	Measurements        []routechoice.Measurement `json:"measurements"`
+	Complete            bool                      `json:"complete"`
+	Failure             string                    `json:"failure,omitempty"`
+	LastNodeMeasurement string                    `json:"last_node_measurement,omitempty"`
+	ExternalMeasurement string                    `json:"external_measurement,omitempty"`
+	Execution           string                    `json:"execution,omitempty"`
 }
 type comparisonOwner struct {
 	mu    sync.Mutex

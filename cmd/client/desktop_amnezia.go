@@ -10,9 +10,25 @@ import (
 	"strconv"
 	"strings"
 
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
+
+// Import validation can accept a bounded outer hostname while checking every
+// actual AWG parameter and peer field. This disposable address is never saved
+// or executed; only the captured bootstrap path may produce a runnable literal
+// endpoint, and desktopAmneziaEndpoint still rejects unresolved hostnames.
+func validateDesktopAmneziaProfile(e standardExit) error {
+	if net.ParseIP(e.Server) == nil {
+		if !applexray.ValidNodeHostname(e.Server) {
+			return errors.New("AmneziaWG outer hostname is invalid")
+		}
+		e.Server = "192.0.2.254"
+	}
+	_, err := desktopAmneziaEndpoint(e, "")
+	return err
+}
 
 // An imported AWG policy contains the peer's actual obfuscation parameters.
 // Never infer Fast/Strong, strip them, or route this through the stock WG core.
@@ -143,7 +159,7 @@ func desktopSelectedStandardEngineEnvironment(environment []string, engine strin
 	result := make([]string, 0, len(environment)+1)
 	for _, value := range environment {
 		upper := strings.ToUpper(value)
-		if !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_PACKAGE=") {
+		if !strings.HasPrefix(upper, "HOMEVPN_STANDARD_ENGINE=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_AMNEZIA_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_CONTROLLER=") && !strings.HasPrefix(upper, "HOMEVPN_NATIVE_PACKAGE=") && !strings.HasPrefix(upper, "HOMEVPN_EXTERNAL_SESSION=") {
 			result = append(result, value)
 		}
 	}

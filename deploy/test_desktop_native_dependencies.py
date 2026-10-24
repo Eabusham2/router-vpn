@@ -245,6 +245,10 @@ class WindowsDependencyDelivery(unittest.TestCase):
                     if args[:2] == ['go', 'build']:
                         builds.append((args, env.copy()))
                         raise CompilerBoundary()
+                    if args[:2] == ['go', 'test']:
+                        self.assertIn('^TestRouterVPNDesktopExternal', args)
+                        self.assertIn('./cmd/sing-box', args)
+                        return ''
                     self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])
                     return ''
 
@@ -257,9 +261,11 @@ class WindowsDependencyDelivery(unittest.TestCase):
                      patch.object(N.PQ, 'verify', return_value={'native_static_libs': dependencies}), \
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
+                     patch.object(N.EXTERNAL, 'prepare') as external_prepare, \
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet', side_effect=cronet):
                     with self.assertRaises(CompilerBoundary):
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=pq)
+                    external_prepare.assert_called_once_with(source.resolve())
                 self.assertEqual(len(builds), 1)
                 self.assertEqual(shlex.split(builds[0][1]['CGO_LDFLAGS']), ['-static', '-L'+str(pq), *dependencies])
 

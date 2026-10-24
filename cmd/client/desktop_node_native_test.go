@@ -208,7 +208,12 @@ func TestDesktopNativeStagingOwnsExactDirectoryAndEnvironment(t *testing.T) {
 	root := t.TempDir()
 	t.Setenv("HOMEVPN_ROOT", root)
 	a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
-	launch := &desktopNodeLaunch{root: root, endpoint: "198.51.100.8", profileID: "captured", mode: "wg", config: []byte(`{"owned":true}`), metadata: []byte(`{"schema":1}`)}
+	profile, files := desktopNodeFixture(t, "198.51.100.8")
+	compiled, _, err := compileDesktopNode(context.Background(), profile, "wg", files, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	launch := &desktopNodeLaunch{root: root, endpoint: "198.51.100.8", profileID: "captured", mode: "wg", config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata())}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
 		t.Fatal(err)
 	}

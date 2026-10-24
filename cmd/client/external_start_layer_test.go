@@ -195,9 +195,13 @@ func TestPublicExternalLayerNeverExposesPrivateProvision(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, secret := range []string{testWGKey('l'), testWGKey('s'), "10.77.0.1:8787", "transport", "response_probe"} {
+	for _, secret := range []string{testWGKey('l'), testWGKey('s'), "10.77.0.1:8787", `"transport":`, `"response_probe":`, `"server_peer":`} {
 		if strings.Contains(string(raw), secret) {
 			t.Fatal("public node view exposed a private layer, transport or endpoint credential")
 		}
+	}
+	public := publicProfileFor(p)
+	if public.External == nil || !public.External.HasResponseProbe || public.External.HasServerPeer {
+		t.Fatal("public proxy readiness is inconsistent with its captured private provisioning")
 	}
 }

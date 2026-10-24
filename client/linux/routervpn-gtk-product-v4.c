@@ -188,6 +188,8 @@ static void on_connect_external_node(GtkButton *button, gpointer data) {
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "profile_id");
     json_builder_add_string_value(builder, id);
+    json_builder_set_member_name(builder, "execution");
+    json_builder_add_string_value(builder, "local");
     json_builder_set_member_name(builder, "direct");
     json_builder_add_boolean_value(builder, TRUE);
     json_builder_end_object(builder);
@@ -204,75 +206,198 @@ static void on_connect_external_node(GtkButton *button, gpointer data) {
     refresh_all(app);
 }
 
-static char *json_external_hop_body(const char *profile_id, const char *entry_id) {
-    JsonBuilder *builder = json_builder_new();
-    json_builder_begin_object(builder);
-    json_builder_set_member_name(builder, "profile_id");
-    json_builder_add_string_value(builder, profile_id != NULL ? profile_id : "");
-    json_builder_set_member_name(builder, "entry_id");
-    json_builder_add_string_value(builder, entry_id != NULL ? entry_id : "");
-    json_builder_end_object(builder);
-    JsonNode *root = json_builder_get_root(builder);
-    JsonGenerator *generator = json_generator_new();
-    json_generator_set_root(generator, root);
-    char *body = json_generator_to_data(generator, NULL);
-    json_node_free(root);
-    g_object_unref(generator);
-    g_object_unref(builder);
+static const char *external_saved_execution_v4(JsonObject *profile) {
+    const char *saved=obj_string(profile,"multihop_execution");
+    if(saved[0]=='\0')return "local";
+    return g_strcmp0(saved,"local")==0||g_strcmp0(saved,"server")==0||g_strcmp0(saved,"auto")==0?saved:NULL;
+}
+
+static char *json_external_hop_body(const char *profile_id, const char *entry_id, const char *execution, gboolean direct) {
+    if(profile_id==NULL||!profile_id[0]||g_strcmp0(profile_id,entry_id)==0||execution==NULL||
+       (g_strcmp0(execution,"local")!=0&&g_strcmp0(execution,"server")!=0&&g_strcmp0(execution,"auto")!=0))return NULL;
+    JsonBuilder *builder=json_builder_new();json_builder_begin_object(builder);
+    json_builder_set_member_name(builder,"profile_id");json_builder_add_string_value(builder,profile_id);
+    json_builder_set_member_name(builder,"execution");json_builder_add_string_value(builder,direct?"local":execution);
+    if(direct){json_builder_set_member_name(builder,"direct");json_builder_add_boolean_value(builder,TRUE);}
+    else if(entry_id!=NULL&&entry_id[0]){json_builder_set_member_name(builder,"entry_id");json_builder_add_string_value(builder,entry_id);}
+    json_builder_end_object(builder);JsonNode *root=json_builder_get_root(builder);
+    JsonGenerator *generator=json_generator_new();json_generator_set_root(generator,root);
+    char *body=json_generator_to_data(generator,NULL);json_node_free(root);g_object_unref(generator);g_object_unref(builder);return body;
+}
+
+static const char *external_path_string_v4(JsonObject *object,const char *key) {
+    JsonNode *node=object!=NULL&&json_object_has_member(object,key)?json_object_get_member(object,key):NULL;
+    return node!=NULL&&JSON_NODE_HOLDS_VALUE(node)&&json_node_get_value_type(node)==G_TYPE_STRING?json_node_get_string(node):"";
+}
+
+static gboolean external_path_flag_v4(JsonObject *object,const char *key) {
+    JsonNode *node=object!=NULL&&json_object_has_member(object,key)?json_object_get_member(object,key):NULL;
+    return node!=NULL&&JSON_NODE_HOLDS_VALUE(node)&&json_node_get_value_type(node)==G_TYPE_BOOLEAN&&json_node_get_boolean(node);
+}
+
+static JsonObject *external_path_object_v4(JsonObject *object,const char *key) {
+    JsonNode *node=object!=NULL&&json_object_has_member(object,key)?json_object_get_member(object,key):NULL;
+    return node!=NULL&&JSON_NODE_HOLDS_OBJECT(node)?json_node_get_object(node):NULL;
+}
+
+static char *external_path_current_body_v4(JsonObject *captured,JsonNode *current,const char *entry_id,const char *execution,gboolean direct,char **error) {
+    const char *message=NULL;JsonObject *found=NULL,*entry=NULL;guint matches=0,entries=0;
+    JsonObject *store=current!=NULL&&JSON_NODE_HOLDS_OBJECT(current)?json_node_get_object(current):NULL;
+    JsonNode *list=store!=NULL&&json_object_has_member(store,"profiles")?json_object_get_member(store,"profiles"):NULL;
+    JsonArray *catalog=list!=NULL&&JSON_NODE_HOLDS_ARRAY(list)?json_node_get_array(list):NULL;
+    const char *id=external_path_string_v4(captured,"id");
+    for(guint i=0;catalog!=NULL&&i<json_array_get_length(catalog);i++){
+        JsonNode *item=json_array_get_element(catalog,i);
+        if(item==NULL||!JSON_NODE_HOLDS_OBJECT(item)){message="The current node catalog is invalid.";break;}
+        JsonObject *node=json_node_get_object(item);const char *node_id=external_path_string_v4(node,"id");
+        if(g_strcmp0(node_id,id)==0){found=node;matches++;}
+        if(g_strcmp0(node_id,entry_id)==0){entry=node;entries++;}
+    }
+    if(message==NULL&&(!id[0]||matches!=1||g_strcmp0(external_path_string_v4(found,"node_kind"),"external")!=0))message="The external node changed while this dialog was open. Reopen its path settings.";
+    JsonObject *before=external_path_object_v4(captured,"external"),*after=external_path_object_v4(found,"external");
+    const char *identity[]={"id","node_kind","endpoint","start_layer","multihop_entry_mode"},*transport[]={"protocol","expected_public_ip"},*flags[]={"has_response_probe","has_server_peer"};
+    for(guint i=0;message==NULL&&i<G_N_ELEMENTS(identity);i++)if(g_strcmp0(external_path_string_v4(captured,identity[i]),external_path_string_v4(found,identity[i]))!=0)message="The external node changed while this dialog was open. Reopen its path settings.";
+    for(guint i=0;message==NULL&&i<G_N_ELEMENTS(transport);i++)if(g_strcmp0(external_path_string_v4(before,transport[i]),external_path_string_v4(after,transport[i]))!=0)message="The external transport changed while this dialog was open. Reopen its path settings.";
+    for(guint i=0;message==NULL&&i<G_N_ELEMENTS(flags);i++)if(external_path_flag_v4(before,flags[i])!=external_path_flag_v4(after,flags[i]))message="The external provisioning changed while this dialog was open. Reopen its path settings.";
+    if(message==NULL&&!direct&&(entry_id==NULL||!entry_id[0]||entries!=1))message="The selected entry is missing or ambiguous. Choose it again.";
+    if(message==NULL&&g_strcmp0(execution,"local")!=0){
+        const char *protocol=external_path_string_v4(after,"protocol"),*kind=external_path_string_v4(entry,"node_kind");
+        gboolean packet=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0;
+        if(!packet&&g_strcmp0(protocol,"shadowsocks")!=0&&g_strcmp0(protocol,"hysteria2")!=0&&g_strcmp0(protocol,"socks5")!=0&&g_strcmp0(protocol,"http-connect")!=0&&g_strcmp0(protocol,"https-connect")!=0)message="Server / Compare requires a supported authenticated external transport.";
+        else if(!external_path_flag_v4(after,"has_response_probe"))message="Server / Compare requires this external node's HTTPS response probe.";
+        else if(packet&&!external_path_flag_v4(after,"has_server_peer"))message="WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.";
+        else if(direct||(kind[0]&&g_strcmp0(kind,"router-vpn")!=0))message="Server / Compare requires a Router VPN entry.";
+    }
+    if(message!=NULL){if(error!=NULL)*error=g_strdup(message);return NULL;}
+    char *body=json_external_hop_body(id,entry_id,execution,direct);
+    if(body==NULL&&error!=NULL)*error=g_strdup("The captured external path is invalid.");
     return body;
 }
 
+static char *external_entry_mode_v4(JsonObject *captured,JsonObject *entry,const char *selected,JsonArray *modes,char **error) {
+    const char *message=NULL,*kind=external_path_string_v4(entry,"node_kind");
+    if(entry==NULL||(kind[0]&&g_strcmp0(kind,"router-vpn")!=0)){
+        if(selected!=NULL&&selected[0])message="An entry mode applies only to a Router VPN entry.";
+        else return g_strdup("");
+    }
+    const char *mode=selected!=NULL?selected:"";
+    if(message==NULL&&!mode[0]){
+        const char *base=external_path_string_v4(entry,"base_tunnel");
+        if(g_strcmp0(base,"wg")!=0&&g_strcmp0(base,"awg")!=0)base=external_path_string_v4(captured,"base_tunnel");
+        mode=g_strcmp0(base,"awg")==0?"awg2-fast":"wg";
+    }
+    guint matches=0;
+    for(guint i=0;message==NULL&&modes!=NULL&&i<json_array_get_length(modes);i++){
+        JsonNode *item=json_array_get_element(modes,i);
+        if(item!=NULL&&JSON_NODE_HOLDS_OBJECT(item)&&g_strcmp0(external_path_string_v4(json_node_get_object(item),"id"),mode)==0)matches++;
+    }
+    if(message==NULL&&matches!=1)message="Choose an exact Router entry mode from the current native catalog.";
+    if(message!=NULL){if(error!=NULL)*error=g_strdup(message);return NULL;}
+    return g_strdup(mode);
+}
+
+static char *external_path_mode_body_v4(JsonObject *captured,JsonNode *current,const char *entry_id,const char *execution,gboolean direct,const char *entry_mode,JsonArray *entry_modes,char **error) {
+    char *body=external_path_current_body_v4(captured,current,entry_id,execution,direct,error);
+    if(body==NULL)return NULL;
+    JsonObject *entry=NULL;JsonArray *catalog=json_object_get_array_member(json_node_get_object(current),"profiles");
+    for(guint i=0;!direct&&i<json_array_get_length(catalog);i++){
+        JsonObject *item=json_array_get_object_element(catalog,i);
+        if(g_strcmp0(external_path_string_v4(item,"id"),entry_id)==0)entry=item;
+    }
+    char *mode=external_entry_mode_v4(captured,entry,entry_mode,entry_modes,error);
+    if(mode==NULL){g_free(body);return NULL;}
+    if(mode[0]){
+        JsonNode *root=parse_json(body);JsonObject *object=json_node_get_object(root);
+        json_object_set_string_member(object,"entry_mode",mode);
+        JsonGenerator *generator=json_generator_new();json_generator_set_root(generator,root);
+        g_free(body);body=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(root);
+    }
+    g_free(mode);return body;
+}
+
+typedef struct {JsonArray *profiles;GtkWidget *mode;GtkWidget *execution;} LinuxExternalEntryModeV4;
+static void external_entry_changed_v4(GtkComboBox *combo,gpointer data) {
+    LinuxExternalEntryModeV4 *state=data;const char *id=gtk_combo_box_get_active_id(combo);JsonObject *entry=NULL;
+    for(guint i=0;id!=NULL&&id[0]&&i<json_array_get_length(state->profiles);i++){
+        JsonObject *item=json_array_get_object_element(state->profiles,i);
+        if(g_strcmp0(external_path_string_v4(item,"id"),id)==0)entry=item;
+    }
+    const char *kind=external_path_string_v4(entry,"node_kind");
+    gboolean router=entry!=NULL&&(!kind[0]||g_strcmp0(kind,"router-vpn")==0),direct=id==NULL||!id[0];
+    gtk_widget_set_sensitive(state->mode,router);
+    if(!router)gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->mode),"");
+    gtk_widget_set_sensitive(state->execution,!direct);
+    if(direct)gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->execution),"local");
+}
+
+static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
+    if(!routervpn_require_mutation_idle(app,"starting an external via-entry connection"))return;
+    g_autofree char *exit_id=g_strdup(active_router_id(app));
+    if(exit_id==NULL||!exit_id[0]){append_diag(app,"Select an external node first.");return;}
+    Buffer out={0};char *err=NULL;
+    if(!api_request("/api/nodes","GET",NULL,5000,&out,&err)){append_diag(app,"External path catalog unavailable.");g_free(err);free(out.data);return;}
+    JsonNode *root=parse_json(out.data);g_free(err);free(out.data);
+    if(root==NULL||!JSON_NODE_HOLDS_OBJECT(root)){if(root!=NULL)json_node_free(root);append_diag(app,"External path catalog is invalid.");return;}
+    JsonObject *store=json_node_get_object(root),*captured=NULL;
+    JsonArray *profiles=json_object_has_member(store,"profiles")?json_object_get_array_member(store,"profiles"):NULL;
+    guint captured_count=0;for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){JsonObject *p=json_array_get_object_element(profiles,i);if(p!=NULL&&g_strcmp0(obj_string(p,"id"),exit_id)==0){captured=p;captured_count++;}}
+    if(captured==NULL||captured_count!=1||g_strcmp0(obj_string(captured,"node_kind"),"external")!=0){append_diag(app,"Select an external node first.");json_node_free(root);return;}
+    const char *saved=external_saved_execution_v4(captured);
+    if(saved==NULL){append_diag(app,"The external node has an invalid saved execution choice.");json_node_free(root);return;}
+    const char *saved_entry=json_object_has_member(captured,"multihop_enabled")&&json_object_get_boolean_member(captured,"multihop_enabled")?obj_string(captured,"multihop_entry_id"):"";
+    Buffer capability_data={0};char *capability_error=NULL;
+    if(!api_request("/api/external-profile/capabilities","GET",NULL,5000,&capability_data,&capability_error)){append_diag(app,"The native Router entry mode catalog is unavailable.");g_free(capability_error);free(capability_data.data);json_node_free(root);return;}
+    g_autoptr(JsonNode) capability_root=parse_json(capability_data.data);g_free(capability_error);free(capability_data.data);
+    JsonObject *capabilities=capability_root!=NULL&&JSON_NODE_HOLDS_OBJECT(capability_root)?json_node_get_object(capability_root):NULL;
+    JsonNode *mode_list=capabilities!=NULL&&json_object_has_member(capabilities,"router_vpn_entry_modes")?json_object_get_member(capabilities,"router_vpn_entry_modes"):NULL;
+    JsonArray *entry_modes=mode_list!=NULL&&JSON_NODE_HOLDS_ARRAY(mode_list)?json_node_get_array(mode_list):NULL;
+    if(entry_modes==NULL){append_diag(app,"The native Router entry mode catalog is invalid.");json_node_free(root);return;}
+    JsonObject *external=json_object_has_member(captured,"external")?json_object_get_object_member(captured,"external"):NULL;
+    gboolean has_probe=external!=NULL&&json_object_has_member(external,"has_response_probe")&&json_object_get_boolean_member(external,"has_response_probe");
+    GtkWidget *dialog=gtk_dialog_new_with_buttons("External path",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,"Connect selected path",GTK_RESPONSE_ACCEPT,NULL);
+    GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,10);gtk_container_set_border_width(GTK_CONTAINER(box),16);gtk_window_set_default_size(GTK_WINDOW(dialog),640,420);
+    GtkWidget *title=gtk_label_new(obj_string(captured,"name"));gtk_label_set_xalign(GTK_LABEL(title),0.0f);gtk_box_pack_start(GTK_BOX(box),title,FALSE,FALSE,0);
+    GtkWidget *entry=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(entry),"","Direct — no entry");
+    for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){
+        JsonObject *p=json_array_get_object_element(profiles,i);if(p==NULL||g_strcmp0(obj_string(p,"id"),exit_id)==0)continue;
+        gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(entry),obj_string(p,"id"),obj_string(p,"display_name")[0]?obj_string(p,"display_name"):obj_string(p,"name"));
+    }
+    if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(entry),saved_entry)){append_diag(app,"The saved external entry is missing. Relink it or use External direct explicitly.");gtk_widget_destroy(dialog);json_node_free(root);return;}
+    GtkWidget *execution=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(execution),"local","Local — exit runs on this device");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(execution),"server","Server — exit runs on Router entry");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(execution),"auto","Compare both — lowest valid average");gtk_combo_box_set_active_id(GTK_COMBO_BOX(execution),saved_entry[0]?saved:"local");
+    GtkWidget *entry_mode=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(entry_mode),"","Use selected entry's saved base");
+    for(guint i=0;i<json_array_get_length(entry_modes);i++){
+        JsonNode *item=json_array_get_element(entry_modes,i);if(item==NULL||!JSON_NODE_HOLDS_OBJECT(item))continue;
+        JsonObject *mode=json_node_get_object(item);const char *id=external_path_string_v4(mode,"id"),*name=external_path_string_v4(mode,"name");
+        if(id[0])gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(entry_mode),id,name[0]?name:id);
+    }
+    if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(entry_mode),external_path_string_v4(captured,"multihop_entry_mode"))){append_diag(app,"The saved Router entry mode is missing from the current native catalog.");gtk_widget_destroy(dialog);json_node_free(root);return;}
+    LinuxExternalEntryModeV4 mode_state={.profiles=profiles,.mode=entry_mode,.execution=execution};
+    g_signal_connect(entry,"changed",G_CALLBACK(external_entry_changed_v4),&mode_state);external_entry_changed_v4(GTK_COMBO_BOX(entry),&mode_state);
+    GtkWidget *mode_note=gtk_label_new("The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected.");gtk_label_set_line_wrap(GTK_LABEL(mode_note),TRUE);gtk_label_set_xalign(GTK_LABEL(mode_note),0.0f);
+    GtkWidget *note=gtk_label_new("Server / Compare requires a Router entry, an authenticated external exit, and its saved HTTPS response probe. WireGuard / AmneziaWG also needs a separately provisioned server peer. Pairing and actual path proof are checked when connecting. Direct uses Local. A successful connection saves this node's choice.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);
+    GtkWidget *probe=gtk_label_new(has_probe?"HTTPS response probe saved; server pairing and native proof remain pending.":"No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.");gtk_label_set_line_wrap(GTK_LABEL(probe),TRUE);gtk_label_set_xalign(GTK_LABEL(probe),0.0f);
+    GtkWidget *error=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(error),TRUE);gtk_label_set_xalign(GTK_LABEL(error),0.0f);
+    gtk_box_pack_start(GTK_BOX(box),gtk_label_new("Entry"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),entry,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),gtk_label_new("Router entry mode"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),entry_mode,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),mode_note,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),gtk_label_new("External execution"),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),execution,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),probe,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),error,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(gtk_dialog_get_content_area(GTK_DIALOG(dialog))),box,TRUE,TRUE,0);gtk_widget_show_all(dialog);
+    while(gtk_dialog_run(GTK_DIALOG(dialog))==GTK_RESPONSE_ACCEPT){
+        if(!routervpn_require_mutation_idle(app,"committing an external via-entry connection"))break;
+        const char *entry_id=gtk_combo_box_get_active_id(GTK_COMBO_BOX(entry));const char *choice=gtk_combo_box_get_active_id(GTK_COMBO_BOX(execution));
+        if(entry_id==NULL||choice==NULL){gtk_label_set_text(GTK_LABEL(error),"Choose an entry or Direct and an execution choice.");continue;}
+        gboolean direct=!entry_id[0];
+        if(require_entry&&direct){gtk_label_set_text(GTK_LABEL(error),"Choose an entry for this via-entry connection.");continue;}
+        if(direct&&g_strcmp0(choice,"local")!=0){gtk_label_set_text(GTK_LABEL(error),"Direct uses Local. Choose an entry for Server / Compare.");continue;}
+        Buffer fresh={0};char *fresh_error=NULL;
+        if(!api_request("/api/nodes","GET",NULL,5000,&fresh,&fresh_error)){gtk_label_set_text(GTK_LABEL(error),"The current node catalog is unavailable. Nothing was connected.");g_free(fresh_error);free(fresh.data);continue;}
+        JsonNode *current=parse_json(fresh.data);g_free(fresh_error);free(fresh.data);fresh_error=NULL;
+        char *body=external_path_mode_body_v4(captured,current,entry_id,choice,direct,gtk_combo_box_get_active_id(GTK_COMBO_BOX(entry_mode)),entry_modes,&fresh_error);if(current!=NULL)json_node_free(current);
+        if(body==NULL){gtk_label_set_text(GTK_LABEL(error),fresh_error!=NULL?fresh_error:"The captured external path is invalid.");g_free(fresh_error);continue;}
+        post_and_log(app,"/api/external-profile/connect",body,180000,"External selected path (exact public-exit proof required)");g_free(body);refresh_all(app);break;
+    }
+    gtk_widget_destroy(dialog);json_node_free(root);
+}
+
 static void on_connect_external_via_entry(GtkButton *button, gpointer data) {
-    (void)button;
-    App *app = data;
-    const char *exit_id = active_router_id(app);
-    if (exit_id == NULL || exit_id[0] == '\0') {
-        append_diag(app, "External hop failed: select the external exit node first.");
-        return;
-    }
-
-    GtkWidget *dialog = gtk_dialog_new_with_buttons(
-        "Connect external exit through an entry", GTK_WINDOW(app->window), GTK_DIALOG_MODAL,
-        "_Cancel", GTK_RESPONSE_CANCEL, "_Connect", GTK_RESPONSE_ACCEPT, NULL);
-    GtkWidget *content = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
-    GtkWidget *box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 8);
-    gtk_container_set_border_width(GTK_CONTAINER(box), 14);
-    GtkWidget *note = gtk_label_new(
-        "Exit is the currently selected node. Choose a different Router VPN or supported external entry. "
-        "External WireGuard, SOCKS5, Shadowsocks and Hysteria2 can be upstream entries; OpenVPN remains final-exit only.");
-    gtk_label_set_xalign(GTK_LABEL(note), 0.0f);
-    gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
-    GtkWidget *combo = gtk_combo_box_text_new();
-    guint choices = 0;
-    for (guint i = 0; i < app->router_ids->len; i++) {
-        const char *candidate = g_ptr_array_index(app->router_ids, i);
-        if (candidate == NULL || candidate[0] == '\0' || g_strcmp0(candidate, exit_id) == 0) continue;
-        gtk_combo_box_text_append_text(GTK_COMBO_BOX_TEXT(combo), candidate);
-        choices++;
-    }
-    if (choices > 0) gtk_combo_box_set_active(GTK_COMBO_BOX(combo), 0);
-    gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), gtk_label_new("Entry node"), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(box), combo, FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
-    gtk_widget_show_all(dialog);
-
-    if (choices == 0) {
-        append_diag(app, "External hop failed: link/import a second node to use as the entry.");
-    } else if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_ACCEPT) {
-        gchar *entry_id = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(combo));
-        if (entry_id == NULL || entry_id[0] == '\0') {
-            append_diag(app, "External hop failed: select an entry node.");
-        } else {
-            char *body = json_external_hop_body(exit_id, entry_id);
-            post_and_log(app, "/api/external-profile/connect", body, 180000,
-                         "External exit via selected entry (exact public-exit proof required)");
-            g_free(body);
-            refresh_all(app);
-        }
-        g_free(entry_id);
-    }
-    gtk_widget_destroy(dialog);
+    (void)button;linux_external_path_dialog_v4(data,TRUE);
 }
 
 static GtkWidget *build_nodes_page_v4(App *app) {

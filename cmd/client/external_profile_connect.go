@@ -5,11 +5,13 @@ import (
 	"errors"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"runtime"
 	"strings"
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 func (a *app) externalProfileStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
@@ -22,8 +24,10 @@ func (a *app) externalProfileStopFailure(cmd *exec.Cmd, cause string) (string, b
 type externalProfileConnectRequest struct {
 	ProfileID string `json:"profile_id"`
 	EntryID   string `json:"entry_id"`
+	EntryMode string `json:"entry_mode,omitempty"`
 	Base      string `json:"base"`
 	Direct    *bool  `json:"direct,omitempty"`
+	Execution string `json:"execution,omitempty"`
 }
 
 func registerExternalProfileRoutes(h *http.ServeMux, a *app) {
@@ -38,6 +42,12 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 		return
 	}
 	w.Header().Set("content-type", "application/json")
+	entryModes := []map[string]string{}
+	for _, mode := range a.modes {
+		if mobilemultihop.NodeProfileMode(mode.ID) {
+			entryModes = append(entryModes, map[string]string{"id": mode.ID, "name": mode.Name})
+		}
+	}
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"node_kind":                "external",
 		"desktop_runtime":          runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
@@ -46,7 +56,8 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 		"router_vpn_entry_hop":     true,
 		"external_entry_hop":       true,
 		"external_entry_protocols": []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"},
-		"entry_requirement":        "Router VPN WireGuard or supported external standard entry; OpenVPN and Tor bridge remain fail-closed as upstream entry hops",
+		"router_vpn_entry_modes":   entryModes,
+		"entry_requirement":        "captured native Router VPN entry with its selected mode, base and Start Layer, or a supported external standard entry",
 	})
 }
 
@@ -124,7 +135,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	externalProfile, ok := a.profileByIDLocked(profileID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	externalProfile = cloneRouterProfile(externalProfile)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	a.mu.Unlock()
 	if !ok {
 		http.Error(w, "external profile not found", http.StatusNotFound)
@@ -173,6 +185,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	entry := common.RouterProfile{}
 	entryKind := ""
+	if direct && q.EntryMode != "" {
+		http.Error(w, "direct external connection cannot apply an entry mode", http.StatusBadRequest)
+		return
+	}
+	if direct {
+		policy.MultihopEntryMode = ""
+	}
 	if !direct {
 		entryID := strings.TrimSpace(q.EntryID)
 		if entryID == "" {
@@ -197,16 +216,22 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		}
 		switch entryKind {
 		case "router-vpn":
-			base := normalizeBase(q.Base)
-			if base != "" && base != "auto" && base != "wg" {
-				http.Error(w, "Router VPN entry hopping currently requires a standard WireGuard entry", http.StatusBadRequest)
+			mode, modeErr := desktopExternalEntryMode(policy, entry, q.EntryMode, q.Base)
+			if modeErr != nil {
+				http.Error(w, modeErr.Error(), http.StatusBadRequest)
 				return
 			}
+			policy.MultihopEntryMode = mode
 			if strings.TrimSpace(entry.Endpoint) == "" {
 				http.Error(w, "entry Router VPN node has no public endpoint", http.StatusBadRequest)
 				return
 			}
 		case "external":
+			if q.EntryMode != "" {
+				http.Error(w, "an ordinary external entry uses its saved protocol, not a Router entry mode", http.StatusBadRequest)
+				return
+			}
+			policy.MultihopEntryMode = ""
 			if entry.External != nil && entry.External.Protocol == "tor-bridge" {
 				http.Error(w, "Tor bridge is not yet supported as an upstream external entry hop; refusing an unproved nested Tor graph", http.StatusNotImplemented)
 				return
@@ -246,12 +271,29 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	execution, err := externalExecutionChoice(externalProfile, q.Execution, direct)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	policy.MultihopExecution = execution
+	var native *desktopNodeLaunch
+	if desktopExternalNativeProtocol(exit.Protocol) {
+		native, err = prepareDesktopExternalLaunch(a, policy, entry, exit, direct, "")
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	} else if execution != "local" {
+		http.Error(w, "this external protocol needs a paired server credential adapter before Server/Compare can execute", http.StatusBadRequest)
+		return
+	}
 	sessionBase := "external"
 	if !direct && entryKind == "router-vpn" {
-		sessionBase = "wg"
+		sessionBase = desktopExternalEntryBase(policy.MultihopEntryMode)
 	}
 	sessionTrackerFor(a).declareRequest("external-node", sessionBase)
-	if err = a.stopMode(); err != nil {
+	if err = a.stopModeWithIntent(true); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -315,7 +357,10 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	} else {
 		var realCmd *exec.Cmd
 		var realCmdErr error
-		if !direct && entryKind == "external" {
+		if native != nil {
+			realCmdErr = stageDesktopNodeLaunch(a, native)
+			realCmd = native.command
+		} else if !direct && entryKind == "external" {
 			realCmd, realCmdErr = nativeExternalEntryStandardExitCommand(a, policy, entry, exit)
 		} else {
 			realCmd, realCmdErr = nativeStandardExitCommand(a, policy, entry, exit, direct)
@@ -326,16 +371,26 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if err = a.checkConnectionOperation(); err != nil {
+			if native != nil && native.directory != "" {
+				_ = cleanupDesktopNodeLaunch(native)
+			}
 			sessionTrackerFor(a).markRequestFailure(err.Error())
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 		if err = realCmd.Start(); err != nil {
+			if native != nil && native.directory != "" {
+				_ = cleanupDesktopNodeLaunch(native)
+			}
 			sessionTrackerFor(a).markRequestFailure(err.Error())
 			http.Error(w, err.Error(), http.StatusInternalServerError)
 			return
 		}
 		startedCmd = realCmd
+		if native != nil {
+			native.external.started = time.Now()
+			desktopNodeOwners.Store(a, native)
+		}
 		a.mu.Lock()
 		a.cmd = realCmd
 		a.state.Mode = "external-node"
@@ -357,7 +412,14 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, message, status)
 			return
 		}
-		proofErr = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
+		if native != nil {
+			_, proofErr = a.waitDesktopExternalProof(a.connectionOperationContextOrBackground(), native)
+			if proofErr == nil {
+				proofErr = registerActiveDNSRuntimeConfig(a, externalProfile.ID, "external-"+exit.Protocol, filepath.Join(native.directory, "sing-box.json"))
+			}
+		} else {
+			proofErr = a.proveStandardExitForOperation(exit.ExpectedPublicIP)
+		}
 		if proofErr == nil {
 			a.mu.Lock()
 			if a.cmd != realCmd {
@@ -398,12 +460,31 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if native != nil {
+		if _, err := a.readDesktopExternalProof(native); err != nil {
+			message, _ := a.externalProfileStopFailure(startedCmd, err.Error())
+			http.Error(w, message, http.StatusConflict)
+			return
+		}
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
 	if a.cmd != startedCmd || startedCmd == nil {
 		a.mu.Unlock()
 		sessionTrackerFor(a).markRequestFailure("external-node runtime changed before result adoption")
 		http.Error(w, "external-node runtime changed before result adoption", http.StatusConflict)
+		return
+	}
+	current, stillLinked := a.profileByIDLocked(externalProfile.ID)
+	unchanged := stillLinked && desktopExternalProfilesUnchanged(current, externalProfile)
+	if !direct {
+		currentEntry, stillLinked := a.profileByIDLocked(entry.ID)
+		unchanged = unchanged && stillLinked && desktopExternalProfilesUnchanged(currentEntry, entry)
+	}
+	if !unchanged {
+		a.mu.Unlock()
+		message, _ := a.externalProfileStopFailure(startedCmd, "captured external node or entry changed before result adoption")
+		http.Error(w, message, http.StatusConflict)
 		return
 	}
 	previousStore := cloneRouterProfileStore(a.profiles)
@@ -416,6 +497,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 			a.profiles.Profiles[i].LastUsedAt = now
 			a.profiles.Profiles[i].PublicIP = exit.ExpectedPublicIP
 			a.profiles.Profiles[i].MultihopEnabled = !direct
+			a.profiles.Profiles[i].MultihopExecution = execution
+			a.profiles.Profiles[i].MultihopEntryMode = policy.MultihopEntryMode
 			a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = "", ""
 			if !direct {
 				a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = entry.ID, externalProfile.ID
@@ -440,6 +523,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
+	chosenExecution := "local"
+	if native != nil {
+		native.external.mu.Lock()
+		chosenExecution = native.external.execution
+		native.external.mu.Unlock()
+		a.monitorDesktopExternalRuntime(native)
+	}
 
 	route := "client TUN -> direct external " + exit.Protocol + " node -> Internet"
 	entryID, entryName := "", ""
@@ -447,7 +537,10 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		if entryKind == "external" {
 			route = "client TUN -> external " + entry.External.Protocol + " entry -> external " + exit.Protocol + " exit -> Internet"
 		} else {
-			route = "client TUN -> Router VPN WireGuard entry -> external " + exit.Protocol + " exit -> Internet"
+			route = "client TUN -> Router VPN " + policy.MultihopEntryMode + " entry -> external " + exit.Protocol + " exit -> Internet"
+			if chosenExecution == "server" {
+				route = "client TUN -> Router VPN " + policy.MultihopEntryMode + " entry -> owned server relay -> external " + exit.Protocol + " exit -> Internet"
+			}
 		}
 		entryID = entry.ID
 		entryName = entry.Name
@@ -456,5 +549,6 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "mode": "external-node", "profile_id": externalProfile.ID, "profile_name": externalProfile.Name, "protocol": exit.Protocol, "direct": direct,
 		"entry_id": entryID, "entry_name": entryName, "entry_kind": entryKind, "expected_public_ip": exit.ExpectedPublicIP, "actual_exit_proof": "expected-public-ip-passed", "dns_mode": policy.DNSMode, "route": route,
+		"execution": chosenExecution, "execution_preference": execution, "entry_mode": policy.MultihopEntryMode,
 	})
 }

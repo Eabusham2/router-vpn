@@ -17,7 +17,7 @@ def digest():
         value.update(str(source.relative_to(ROOT)).encode() + b'\0' + source.read_bytes())
     return value.hexdigest()
 
-def prepare(vendor):
+def prepare(vendor, *, mobile=True):
     vendor = vendor.resolve()
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
         raise ValueError('provider strategy requires the exact pinned native core')
@@ -77,6 +77,8 @@ def prepare(vendor):
         'network_test.go': 'route/routervpn_strategy_test.go',
         'bridge.go': 'experimental/libbox/routervpn_strategy.go',
     }.items():
+        if not mobile and (target.startswith('experimental/libbox/') or target.startswith('daemon/')):
+            continue
         (vendor / target).write_bytes((ROOT / 'mobile/strategy' / (name + '.tmpl')).read_bytes())
     print('Owned provider strategy source:', digest())
 

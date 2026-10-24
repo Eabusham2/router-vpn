@@ -22,24 +22,32 @@ CONFIG="$RUNTIME_DIR/sing-box.json"
 PID_REGISTRY="$SCRIPT_DIR/runtime-pids.py"
 PID_MODE=native-standard-exit-linux
 KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
+OWNER_HELPER="$SCRIPT_DIR/native-wrapper-owner.py"
+CHILD_TOKEN=''
+EXTERNAL_SESSION=${HOMEVPN_EXTERNAL_SESSION:-}
+if [[ -n "$EXTERNAL_SESSION" ]]; then
+  [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$EXTERNAL_SESSION" =~ ^[a-f0-9]{32}$ ]] || { echo 'Invalid captured external native owner' >&2; exit 1; }
+  # The controller has already required the native lease-close acknowledgement.
+  # Its pinned directory/process owner performs final cleanup, including retries.
+  if [[ "$ACTION" == down ]]; then exit 0; fi
+fi
 [[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared standard exit sing-box.json is missing or unsafe' >&2; exit 1; }
 [[ -f "$KILL_SWITCH" && ! -L "$KILL_SWITCH" ]] || { echo 'Linux kill-switch dispatcher is missing or unsafe' >&2; exit 1; }
 [[ -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'verified Router VPN PID registry is missing or unsafe' >&2; exit 1; }
+[[ -f "$OWNER_HELPER" && ! -L "$OWNER_HELPER" ]] || { echo 'native child ownership helper is missing or unsafe' >&2; exit 1; }
 [[ "$TUNNEL_ALIAS" == "router-vpn" ]] || { echo 'Linux strict kill switch permits only the owned router-vpn TUN alias' >&2; exit 1; }
 
 stop_owned() {
-  local pid
-  while IFS= read -r pid; do
-    [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || continue
-    kill -INT "$pid" 2>/dev/null || true
-    for _ in 1 2 3 4 5 6 7 8 9 10; do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  done < <(python3 "$PID_REGISTRY" verified-mode "$ROOT" "$PID_MODE" 2>/dev/null || true)
-  python3 "$PID_REGISTRY" init "$ROOT" "$PID_MODE" >/dev/null 2>&1 || true
+  [[ -n "$CHILD_TOKEN" ]] || return 0
+  python3 "$OWNER_HELPER" stop "$CHILD_TOKEN"
+}
+stop_legacy_down() {
+  local captured tokens
+  tokens=$(python3 "$OWNER_HELPER" recorded "$ROOT" "$PID_MODE") || return 1
+  while IFS= read -r captured; do
+    [[ -n "$captured" ]] || continue
+    python3 "$OWNER_HELPER" stop "$captured" || return 1
+  done <<< "$tokens"
 }
 release_guard() {
   HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" python3 "$KILL_SWITCH" release >/dev/null 2>&1 || true
@@ -47,37 +55,43 @@ release_guard() {
 cleanup() {
   status=$?
   trap - EXIT INT TERM HUP
-  stop_owned
+  stop_owned || status=1
   # Unexpected child/wrapper failure must not release on-connect/always policy.
   # The Go controller owns normal Disconnect and releases only after teardown;
   # AUTO/SMART/watchdog failure can therefore hold protection without a gap.
-  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
+  # Never delete from an asynchronous wrapper trap: the path may now belong to
+  # a replacement. Explicit controller teardown owns private workspace cleanup.
   exit "$status"
 }
-trap cleanup EXIT INT TERM HUP
 
 if [[ "$ACTION" == "down" ]]; then
+  stop_legacy_down
   if [[ ${HOMEVPN_KILLSWITCH_HOLD:-0} != 1 ]]; then release_guard; fi
-  cleanup
+  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR"
+  exit 0
 fi
 [[ -f "$SCRIPT_DIR/select-standard-engine.sh" && ! -L "$SCRIPT_DIR/select-standard-engine.sh" ]] || { echo 'Owned engine selector is missing' >&2; exit 1; }
 source "$SCRIPT_DIR/select-standard-engine.sh"
 SING_BOX=$(router_vpn_standard_engine) || { echo 'The selected standard-node engine is unavailable' >&2; exit 1; }
 [[ -n "$SING_BOX" && -x "$SING_BOX" ]] || { echo 'sing-box is required for Linux standard exit' >&2; exit 1; }
 "$SING_BOX" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
-if [[ "$ACTION" == "check" ]]; then echo 'native Linux standard exit graph ready'; trap - EXIT INT TERM HUP; exit 0; fi
+if [[ "$ACTION" == "check" ]]; then echo 'native Linux standard exit graph ready'; exit 0; fi
+trap cleanup EXIT INT TERM HUP
 
 # Install fail-closed nftables policy before the full-device TUN starts. Only
 # loopback, the physical Router VPN entry endpoint and the owned router-vpn TUN
 # are permitted by the existing Linux policy.
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$ENDPOINT" python3 "$KILL_SWITCH" apply
-stop_owned
-"$SING_BOX" run -D "$RUNTIME_DIR" -c "$CONFIG" &
+python3 "$OWNER_HELPER" prune "$ROOT" "$PID_MODE"
+if [[ -n ${HOMEVPN_EXTERNAL_SESSION:-} ]]; then
+  [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$HOMEVPN_EXTERNAL_SESSION" =~ ^[a-f0-9]{32}$ ]] || { echo 'Invalid captured external native owner' >&2; exit 1; }
+  "$SING_BOX" routervpn-external --runtime-dir "$RUNTIME_DIR" --session "$HOMEVPN_EXTERNAL_SESSION" &
+else
+  "$SING_BOX" run -D "$RUNTIME_DIR" -c "$CONFIG" &
+fi
 child=$!
+CHILD_TOKEN=$(python3 "$OWNER_HELPER" capture "$child") || { echo 'could not capture native Linux child identity' >&2; exit 1; }
 if ! python3 "$PID_REGISTRY" record "$ROOT" "$PID_MODE" "$child"; then
-  kill -TERM "$child" 2>/dev/null || true
-  wait "$child" 2>/dev/null || true
-  child=''
   echo 'could not prove ownership of native Linux standard-exit process' >&2
   exit 1
 fi

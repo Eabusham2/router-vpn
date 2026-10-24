@@ -128,7 +128,8 @@ require(
 require(
     "modes/native-standard-exit-linux.sh",
     'cleanup-private-runtime.py" verify-dir',
-    'verified-mode "$ROOT" "$PID_MODE"',
+    'recorded "$ROOT" "$PID_MODE"',
+    'stop "$CHILD_TOKEN"',
     'record "$ROOT" "$PID_MODE" "$child"',
     'cleanup-private-runtime.py" "$RUNTIME_DIR"',
 )

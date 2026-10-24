@@ -29,8 +29,18 @@ func startLayerProfileState(profile common.RouterProfile, found bool, missingRea
 	if kind == "" {
 		kind = "router-vpn"
 	}
+	if kind == "external" {
+		if profile.External == nil || !desktopExternalNativeProtocol(profile.External.Protocol) {
+			return common.StartLayerOff, false, "This external protocol does not have a captured native Start Layer."
+		}
+		captured := cloneRouterProfile(profile)
+		if common.NormalizeRouterProfile(&captured) != nil {
+			return common.StartLayerOff, false, "The external Start Layer does not match this node's private provision."
+		}
+		return captured.StartLayer, true, ""
+	}
 	if kind != "router-vpn" {
-		return common.StartLayerOff, false, "Start Layer is owned by Router VPN home-node profiles; external nodes keep their own transport security."
+		return common.StartLayerOff, false, "The selected node has no owned Start Layer profile."
 	}
 	normalized, err := common.NormalizeStartLayerMode(profile.StartLayer)
 	if err != nil {
@@ -48,6 +58,8 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	selectedID := strings.TrimSpace(a.profiles.SelectedID)
 	st := a.state
+	command := a.cmd
+	modesSnapshot := append([]common.Mode(nil), a.modes...)
 	effectiveID := selectedID
 	active := profileSettingsBusy(st.Connected, st.Phase)
 	if active {
@@ -69,6 +81,15 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	a.mu.Unlock()
+	var externalOwner *desktopNodeLaunch
+	if active {
+		if value, ok := desktopNodeOwners.Load(a); ok {
+			if launch, ok := value.(*desktopNodeLaunch); ok && launch.command == command && launch.external != nil && launch.external.profile.ID == effectiveID {
+				externalOwner = launch
+				effective, effectiveFound = cloneRouterProfile(launch.external.profile), true
+			}
+		}
+	}
 
 	selectedLayer, selectedNodeSupported, selectedNodeReason := startLayerProfileState(selected, selectedFound, "Select a Router VPN home node to use Start Layer.")
 	effectiveMissing := "No effective Router VPN node is available to evaluate Start Layer."
@@ -81,7 +102,10 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 	runtimeSupported := false
 	runtimeReason := "No active raw runtime is available to evaluate."
 	if runtimeMode != "" && runtimeMode != "off" {
-		runtimeSupported = common.StartLayerSupportsRawMode(runtimeMode)
+		runtimeSupported = desktopStartLayerSupportsRawMode(runtimeMode)
+		if externalOwner != nil && runtimeMode == externalOwner.mode {
+			runtimeSupported = true
+		}
 		if runtimeSupported {
 			runtimeReason = ""
 		} else {
@@ -89,6 +113,24 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	provedConnected := st.Connected && strings.EqualFold(strings.TrimSpace(st.Phase), "connected")
+	if effective.NodeKind == "external" && provedConnected {
+		if externalOwner == nil {
+			provedConnected = false
+			runtimeReason = "The external Start Layer has no matching active native owner."
+		} else if _, err := a.readDesktopExternalProof(externalOwner); err != nil {
+			provedConnected = false
+			runtimeReason = "The captured external path has no current native proof."
+		}
+	}
+	supportedRawModes := append([]string(nil), common.StartLayerSupportedRawModes...)
+	seenModes := make(map[string]bool, len(supportedRawModes))
+	for _, mode := range supportedRawModes { seenModes[mode] = true }
+	for _, mode := range modesSnapshot {
+		if !seenModes[mode.ID] && desktopStartLayerSupportsRawMode(mode.ID) {
+			supportedRawModes = append(supportedRawModes, mode.ID)
+			seenModes[mode.ID] = true
+		}
+	}
 
 	modes := []startLayerModeCapability{
 		{
@@ -113,7 +155,7 @@ func (a *app) startLayerCapabilities(w http.ResponseWriter, r *http.Request) {
 		"ok":                              true,
 		"modes":                           modes,
 		"aes_transport":                   common.StartLayerAES256GCMTransport,
-		"supported_raw_modes":             append([]string(nil), common.StartLayerSupportedRawModes...),
+		"supported_raw_modes":             supportedRawModes,
 		"selected_profile_id":             selectedID,
 		"selected_start_layer":            selectedLayer,
 		"selected_node_supported":         selectedNodeSupported,

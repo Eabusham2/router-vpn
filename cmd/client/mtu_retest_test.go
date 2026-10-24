@@ -124,6 +124,54 @@ func TestMTUProfileSnapshotTokenSeparatesIdentityFromMeasurementFields(t *testin
 	}
 }
 
+func TestMTURetestRejectsChangedCredentialAndPolicyBeforePersistence(t *testing.T) {
+	for name, change := range map[string]func(*common.RouterProfile){
+		"credential":  func(p *common.RouterProfile) { p.APIToken = "rotated-token" },
+		"dns":         func(p *common.RouterProfile) { p.AdGuardIPv4 = "10.78.0.53" },
+		"lan":         func(p *common.RouterProfile) { p.HomeLANAccess = true },
+		"ipv6":        func(p *common.RouterProfile) { p.IPv6Mode = "off" },
+		"start-layer": func(p *common.RouterProfile) { p.StartLayer = "aes-256-gcm-xor" },
+		"execution":   func(p *common.RouterProfile) { p.MultihopExecution = "server" },
+		"entry-mode":  func(p *common.RouterProfile) { p.MultihopEntryMode = "max" },
+	} {
+		t.Run(name, func(t *testing.T) {
+			a, snapshot := newMTUTransactionFixture(t)
+			a.mu.Lock()
+			change(&a.profiles.Profiles[0])
+			a.mu.Unlock()
+			if _, err := persistMTUMeasurement(a, snapshot, testMTUMeasurement()); err == nil {
+				t.Fatal("MTU persisted a result captured before " + name + " changed")
+			}
+			a.mu.Lock()
+			mtu := a.profiles.Profiles[0].EffectiveMTU
+			a.mu.Unlock()
+			if mtu != snapshot.Profile.EffectiveMTU {
+				t.Fatal("stale result mutated the saved MTU")
+			}
+		})
+	}
+}
+
+func TestMTURetestSnapshotDetachesPolicySlices(t *testing.T) {
+	a, _ := newMTUTransactionFixture(t)
+	a.mu.Lock()
+	a.profiles.Profiles[0].HomeLANCIDRs = []string{"192.168.50.0/24"}
+	a.mu.Unlock()
+	snapshot, err := captureMTURetestSnapshot(a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.mu.Lock()
+	a.profiles.Profiles[0].HomeLANCIDRs[0] = "192.168.60.0/24"
+	a.mu.Unlock()
+	if snapshot.Profile.HomeLANCIDRs[0] != "192.168.50.0/24" {
+		t.Fatal("in-place profile edit mutated the captured MTU rollback policy")
+	}
+	if err := validateMTURetestSnapshot(a, snapshot); err == nil {
+		t.Fatal("changed LAN policy survived MTU validation")
+	}
+}
+
 func TestDecodeMTUMeasurementRequiresDeferredSafeWinner(t *testing.T) {
 	good := []byte(`{"ok":true,"interface":"tun0","family":4,"original_mtu":1420,"winner":{"mtu":1380,"working":true,"success_ratio":1.0,"mbps":900.0,"median_rtt_ms":8.5},"results":[],"path_key":"0123456789abcdef01234567","network_fingerprint":"net","profile_fingerprint":"prof","adopted":false}`)
 	result, _, err := decodeMTUMeasurement(good)
@@ -165,7 +213,7 @@ func newMTUTransactionFixture(t *testing.T) (*app, mtuRetestSnapshot) {
 func testMTUMeasurement() mtuMeasurementResult {
 	return mtuMeasurementResult{
 		OK: true, Interface: "tun0", Family: 4, OriginalMTU: 1420,
-		Winner: mtuWinner{MTU: 1380, Working: true, SuccessRatio: 1, Mbps: 900, MedianRTTMs: 8.5},
+		Winner:  mtuWinner{MTU: 1380, Working: true, SuccessRatio: 1, Mbps: 900, MedianRTTMs: 8.5},
 		PathKey: "0123456789abcdef01234567", NetworkFingerprint: "network", ProfileFingerprint: "generated",
 	}
 }

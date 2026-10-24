@@ -26,7 +26,10 @@ need(product,
     'selecting another Router VPN node', 'committing the lowest-latency node selection',
     'removing a linked node', 'committing linked-node removal', 'saving DNS policy',
     'starting multihop', 'starting an external connection', 'starting AUTO', 'starting the selected mode',
-    'body: ["profile_id": exitID, "direct": true]')
+    'body: ["profile_id": exitID, "direct": true, "execution": "local"]')
+need((ROOT/'client/macos/RouterVPNMacExternalNode.swift').read_text(),
+    'ensureMutationIdle("choosing an external path")', 'ensureMutationIdle("committing an external path")',
+    'requireMutationIdle("starting an external selected path")', 'externalConnectBody(profile: captured')
 need(unified,
     'Disconnect already in progress.', 'Disconnect requested.', 'Disconnecting…', 'Checking…',
     'changing the selected mode', 'editing CUSTOM presets', 'saving a CUSTOM preset', 'deleting a CUSTOM preset',

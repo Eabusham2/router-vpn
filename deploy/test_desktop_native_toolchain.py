@@ -372,6 +372,10 @@ class DarwinNativeEnvironment(unittest.TestCase):
                     if args[:2] == ['go', 'build']:
                         commands.append((args, env.copy()))
                         raise CompilerBoundary()
+                    if args[:2] == ['go', 'test']:
+                        self.assertIn('^TestRouterVPNDesktopExternal', args)
+                        self.assertIn('./cmd/sing-box', args)
+                        return ''
                     self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])
                     return ''
 
@@ -381,9 +385,11 @@ class DarwinNativeEnvironment(unittest.TestCase):
                      patch.object(N.PQ, 'verify', return_value={'native_static_libs': dependencies}), \
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
+                     patch.object(N.EXTERNAL, 'prepare') as external_prepare, \
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet'):
                     with self.assertRaises(CompilerBoundary):
                         N.build(target, root/'output', source=root/'core', xray=root/'xray', pq=pq)
+                    external_prepare.assert_called_once_with((root/'core').resolve())
                 self.assertEqual(len(commands), 1)
                 _, env = commands[0]
                 expected = ['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)]

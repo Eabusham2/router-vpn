@@ -73,4 +73,16 @@ elif source.count(new_stop_test) == 1:
 else:
     raise SystemExit("durable audit overlay failed: stop-mode PID ownership test predicate is unknown")
 
+# Native wrappers now keep a birth-bound token captured at launch instead of
+# treating the current mode registry as authority during asynchronous teardown.
+old_native_stop = '    \'verified-mode "$ROOT" "$PID_MODE"\',\n'
+new_native_stop = '    \'recorded "$ROOT" "$PID_MODE"\',\n    \'stop "$CHILD_TOKEN"\',\n'
+if source.count(old_native_stop) != 1:
+    raise SystemExit("durable audit overlay failed: native child ownership predicate is unknown")
+source = source.replace(old_native_stop, new_native_stop, 1)
+old_native_tests = '    "modes/test_runtime_pids.py",\n    "modes/test_stop_mode_pid_ownership.py",\n'
+if source.count(old_native_tests) != 1:
+    raise SystemExit("durable audit overlay failed: native process behavior test list is unknown")
+source = source.replace(old_native_tests, '    "modes/test_runtime_pids.py",\n    "modes/test_native_wrapper_ownership.py",\n    "modes/test_stop_mode_pid_ownership.py",\n', 1)
+
 exec(compile(source, str(V1), "exec"), {"__name__": "__main__", "__file__": str(V1)})

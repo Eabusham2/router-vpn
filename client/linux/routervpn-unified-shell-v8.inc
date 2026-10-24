@@ -86,6 +86,7 @@ static void linux_unified_dns_detail_v8(GtkButton *button, gpointer data) { (voi
 static void linux_unified_settings_v8(GtkButton *button, gpointer data) { on_profile_settings_v7(button, ((LinuxUnifiedV8 *)data)->app); }
 static void linux_unified_auto_requirements_v8(GtkButton *button, gpointer data) { LinuxUnifiedV8 *state=data; if(state!=NULL)on_linux_auto_requirements_v11(button,state->app); }
 static void linux_unified_multihop_v8(GtkButton *button, gpointer data) { on_linux_multihop_v7(button, ((LinuxUnifiedV8 *)data)->app); }
+static void linux_unified_external_path_v8(GtkButton *button, gpointer data) { (void)button;linux_external_path_dialog_v4(((LinuxUnifiedV8 *)data)->app,FALSE); }
 static void linux_unified_mtu_v8(GtkButton *button, gpointer data) { (void)button; post_and_log(((LinuxUnifiedV8 *)data)->app, "/api/mtu/retest", "{}", 130000, "MTU Retest for current config/path"); }
 
 static char *linux_unified_custom_layers_for_mode_v8(const char *mode) {
@@ -169,17 +170,35 @@ static void linux_unified_mode_changed_v8(GtkComboBox *combo, gpointer data) {
 }
 static void linux_unified_custom_button_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_custom_builder_v8(data); }
 
-static gboolean linux_unified_selected_external_v8(char **profile_id) {
-    Buffer out={0};char *err=NULL;gboolean external=FALSE;*profile_id=NULL;
-    if (api_request("/api/profiles","GET",NULL,5000,&out,&err)) { JsonNode *root=parse_json(out.data); if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *selected=obj_string(obj,"selected_id");JsonArray *profiles=json_object_has_member(obj,"profiles")?json_object_get_array_member(obj,"profiles"):NULL;for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){JsonObject *p=json_array_get_object_element(profiles,i);if(p!=NULL&&g_strcmp0(obj_string(p,"id"),selected)==0){external=g_ascii_strcasecmp(obj_string(p,"node_kind"),"external")==0;if(external)*profile_id=g_strdup(selected);break;}}json_node_free(root);}}
-    g_free(err);free(out.data);return external;
+static int linux_unified_selected_external_v8(char **profile_id,char **execution) {
+    Buffer out={0};char *err=NULL;int result=-1;*profile_id=NULL;*execution=NULL;
+    if(api_request("/api/profiles","GET",NULL,5000,&out,&err)) {
+        JsonNode *root=parse_json(out.data);
+        if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *obj=json_node_get_object(root);JsonNode *selected_node=json_object_get_member(obj,"selected_id"),*profiles_node=json_object_get_member(obj,"profiles");
+            if(selected_node!=NULL&&JSON_NODE_HOLDS_VALUE(selected_node)&&json_node_get_value_type(selected_node)==G_TYPE_STRING&&profiles_node!=NULL&&JSON_NODE_HOLDS_ARRAY(profiles_node)) {
+                const char *selected=json_node_get_string(selected_node);JsonArray *profiles=json_node_get_array(profiles_node);JsonObject *matched=NULL;guint matches=0;
+                for(guint i=0;selected!=NULL&&selected[0]!='\0'&&i<json_array_get_length(profiles);i++) {
+                    JsonNode *item=json_array_get_element(profiles,i);if(item==NULL||!JSON_NODE_HOLDS_OBJECT(item))continue;JsonObject *profile=json_node_get_object(item);JsonNode *id=json_object_get_member(profile,"id");
+                    if(id!=NULL&&JSON_NODE_HOLDS_VALUE(id)&&json_node_get_value_type(id)==G_TYPE_STRING&&g_strcmp0(json_node_get_string(id),selected)==0){matched=profile;matches++;}
+                }
+                if(matches==1) {
+                    JsonNode *kind=json_object_get_member(matched,"node_kind");const char *value=kind==NULL?"router-vpn":JSON_NODE_HOLDS_VALUE(kind)&&json_node_get_value_type(kind)==G_TYPE_STRING?json_node_get_string(kind):NULL;
+                    if(value!=NULL&&(value[0]=='\0'||g_ascii_strcasecmp(value,"router-vpn")==0))result=0;
+                    else if(value!=NULL&&g_ascii_strcasecmp(value,"external")==0){result=1;*profile_id=g_strdup(selected);*execution=g_strdup(external_saved_execution_v4(matched));}
+                }
+            }
+        }
+        if(root!=NULL)json_node_free(root);
+    }
+    g_free(err);free(out.data);return result;
 }
 static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
     (void)button; LinuxUnifiedV8 *state=data; Buffer out={0};char *err=NULL;gboolean active=FALSE;
     if(api_request("/api/status","GET",NULL,4000,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");active=connected||g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;json_node_free(root);}}g_free(err);free(out.data);
     if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}
+    char *external_id=NULL,*external_execution=NULL;int selected_kind=linux_unified_selected_external_v8(&external_id,&external_execution);if(selected_kind<0){append_diag(state->app,"The selected node is unavailable. Refresh the node list before connecting.");return;}if(selected_kind==1){char *body=json_external_hop_body(external_id,"",external_execution,FALSE);if(body!=NULL){post_and_log(state->app,"/api/external-profile/connect",body,180000,"Custom/external exit");g_free(body);}else append_diag(state->app,"The external node has an invalid saved execution choice.");g_free(external_execution);g_free(external_id);return;}g_free(external_execution);g_free(external_id);
     if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->multihop))){on_linux_multihop_v7(NULL,state->app);return;}
-    char *external_id=NULL;if(linux_unified_selected_external_v8(&external_id)){char *body=json_string_body("profile_id",external_id);post_and_log(state->app,"/api/external-profile/connect",body,180000,"Custom/external exit");g_free(body);g_free(external_id);return;}g_free(external_id);
     const char *mode=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));if(mode==NULL||mode[0]=='\0')mode="smart-auto";
     if(strcmp(mode,"smart-auto")==0)post_and_log(state->app,"/api/strategy/smart-auto","{}",240000,"SMART AUTO");
     else if(strcmp(mode,"auto")==0)post_and_log(state->app,"/api/strategy/auto","{}",200000,"AUTO");
@@ -217,6 +236,7 @@ static void build_ui_v5(App *app) {
     GtkWidget *dock=gtk_frame_new(NULL);GtkWidget *dock_box=gtk_box_new(GTK_ORIENTATION_VERTICAL,7);gtk_container_set_border_width(GTK_CONTAINER(dock_box),12);gtk_container_add(GTK_CONTAINER(dock),dock_box);
     GtkWidget *connect_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);state->connect=make_button("Connect",G_CALLBACK(linux_unified_connect_v8),state);gtk_widget_set_hexpand(state->connect,TRUE);gtk_box_pack_start(GTK_BOX(connect_row),state->connect,TRUE,TRUE,0);state->kill_switch=gtk_check_button_new_with_label("Kill switch");g_signal_connect(state->kill_switch,"toggled",G_CALLBACK(linux_unified_kill_changed_v8),state);gtk_box_pack_start(GTK_BOX(connect_row),state->kill_switch,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),connect_row,FALSE,FALSE,0);
     GtkWidget *multi_box=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);state->multihop=gtk_check_button_new_with_label("Multihop");gtk_box_pack_start(GTK_BOX(multi_box),state->multihop,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(multi_box),gtk_label_new("Entry → Exit → Internet • color-coded real-coordinate map in hop editor"),TRUE,TRUE,0);gtk_box_pack_end(GTK_BOX(multi_box),make_button("Choose hops",G_CALLBACK(linux_unified_multihop_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),multi_box,FALSE,FALSE,0);
+    gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("External path",make_button("Direct / entry · Local / Server / Compare…",G_CALLBACK(linux_unified_external_path_v8),state)),FALSE,FALSE,0);
     GtkWidget *settings_buttons=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Open settings",G_CALLBACK(linux_unified_settings_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("AUTO requirements",G_CALLBACK(linux_unified_auto_requirements_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(settings_buttons),make_button("Retest MTU",G_CALLBACK(linux_unified_mtu_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("Settings",settings_buttons),FALSE,FALSE,0);state->settings_summary=gtk_label_new("AUTO requirements: Off • Off by default • SMART never simplifies below enabled requirements");gtk_label_set_xalign(GTK_LABEL(state->settings_summary),0.0f);gtk_label_set_ellipsize(GTK_LABEL(state->settings_summary),PANGO_ELLIPSIZE_END);gtk_widget_set_tooltip_text(state->settings_summary,"Enabled AUTO requirements filter candidates before attempts and bound SMART simplification.");gtk_box_pack_start(GTK_BOX(dock_box),state->settings_summary,FALSE,FALSE,0);
     GtkWidget *mode_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);state->mode=gtk_combo_box_text_new();gtk_widget_set_hexpand(state->mode,TRUE);gtk_box_pack_start(GTK_BOX(mode_row),state->mode,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(mode_row),make_button("Presets / CUSTOM",G_CALLBACK(linux_unified_custom_button_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(mode_row),make_button("Details",G_CALLBACK(linux_unified_modes_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("Mode",mode_row),FALSE,FALSE,0);
     state->dns=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"home","Home AdGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"fastest","Fastest measured");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"custom","Custom…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"dot","DoT…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"doh","DoH…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"doh3","DoH3…");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->dns),"rescue","Rescue");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->dns),"home");GtkWidget *dns_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,6);gtk_box_pack_start(GTK_BOX(dns_row),state->dns,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(dns_row),make_button("DNS details",G_CALLBACK(linux_unified_dns_detail_v8),state),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(dock_box),linux_unified_row_v8("DNS",dns_row),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(main),dock,FALSE,FALSE,0);

@@ -23,28 +23,28 @@ const (
 )
 
 type standardExit struct {
-	ID               string            `json:"id"`
-	Name             string            `json:"name"`
-	Protocol         string            `json:"protocol"`
-	Server           string            `json:"server"`
-	ServerPort       int               `json:"server_port"`
-	ExpectedPublicIP string            `json:"expected_public_ip"`
-	Username         string            `json:"username,omitempty"`
-	Password         string            `json:"password,omitempty"`
-	Method           string            `json:"method,omitempty"`
-	Secret           string            `json:"secret,omitempty"`
-	TLSServerName    string            `json:"tls_server_name,omitempty"`
-	WGAddresses      []string          `json:"wg_addresses,omitempty"`
-	WGPrivateKey     string            `json:"wg_private_key,omitempty"`
-	WGPeerPublicKey  string            `json:"wg_peer_public_key,omitempty"`
-	WGPreSharedKey   string            `json:"wg_pre_shared_key,omitempty"`
-	WGAllowedIPs     []string          `json:"wg_allowed_ips,omitempty"`
-	WGMTU            int               `json:"wg_mtu,omitempty"`
-	WGKeepalive      int               `json:"wg_keepalive,omitempty"`
-	AWGParameters    map[string]string `json:"awg_parameters,omitempty"`
-	OpenVPNConfig    string            `json:"openvpn_config,omitempty"`
+	ID               string                        `json:"id"`
+	Name             string                        `json:"name"`
+	Protocol         string                        `json:"protocol"`
+	Server           string                        `json:"server"`
+	ServerPort       int                           `json:"server_port"`
+	ExpectedPublicIP string                        `json:"expected_public_ip"`
+	Username         string                        `json:"username,omitempty"`
+	Password         string                        `json:"password,omitempty"`
+	Method           string                        `json:"method,omitempty"`
+	Secret           string                        `json:"secret,omitempty"`
+	TLSServerName    string                        `json:"tls_server_name,omitempty"`
+	WGAddresses      []string                      `json:"wg_addresses,omitempty"`
+	WGPrivateKey     string                        `json:"wg_private_key,omitempty"`
+	WGPeerPublicKey  string                        `json:"wg_peer_public_key,omitempty"`
+	WGPreSharedKey   string                        `json:"wg_pre_shared_key,omitempty"`
+	WGAllowedIPs     []string                      `json:"wg_allowed_ips,omitempty"`
+	WGMTU            int                           `json:"wg_mtu,omitempty"`
+	WGKeepalive      int                           `json:"wg_keepalive,omitempty"`
+	AWGParameters    map[string]string             `json:"awg_parameters,omitempty"`
+	OpenVPNConfig    string                        `json:"openvpn_config,omitempty"`
 	ResponseProbe    *common.ExternalResponseProbe `json:"response_probe,omitempty"`
-	StartLayer       *common.ExternalStartLayer `json:"start_layer,omitempty"`
+	StartLayer       *common.ExternalStartLayer    `json:"start_layer,omitempty"`
 }
 
 type standardExitStore struct {
@@ -253,7 +253,7 @@ func validateStandardExit(e *standardExit) error {
 			return errors.New("WireGuard/AmneziaWG keepalive must be 0..65535")
 		}
 		if e.Protocol == "amneziawg" {
-			if _, err := desktopAmneziaEndpoint(*e, ""); err != nil {
+			if err := validateDesktopAmneziaProfile(*e); err != nil {
 				return err
 			}
 		}
@@ -262,8 +262,12 @@ func validateStandardExit(e *standardExit) error {
 	}
 	if e.ResponseProbe != nil || e.StartLayer != nil {
 		profile, err := desktopExternalCaptureUnchecked(common.RouterProfile{}, *e)
-		if err != nil { return err }
-		if err = common.NormalizeRouterProfile(&profile); err != nil { return err }
+		if err != nil {
+			return err
+		}
+		if err = common.NormalizeRouterProfile(&profile); err != nil {
+			return err
+		}
 	}
 	return nil
 }

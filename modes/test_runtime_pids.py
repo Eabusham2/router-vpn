@@ -190,13 +190,15 @@ def main() -> int:
     # raw numeric PID files are not an ownership boundary.
     native_multihop = (HERE / "native-multihop-darwin.sh").read_text(encoding="utf-8")
     assert 'runtime-pids.py' in native_multihop
-    assert 'verified-mode "$ROOT" "$PID_MODE"' in native_multihop
+    assert 'recorded "$ROOT" "$PID_MODE"' in native_multihop
+    assert 'stop "$CHILD_TOKEN"' in native_multihop
     assert 'record "$ROOT" "$PID_MODE" "$child"' in native_multihop
     assert "native-multihop.pid" not in native_multihop
     assert "PID_FILE" not in native_multihop
 
     linux_standard = (HERE / "native-standard-exit-linux.sh").read_text(encoding="utf-8")
-    assert 'verified-mode "$ROOT" "$PID_MODE"' in linux_standard
+    assert 'recorded "$ROOT" "$PID_MODE"' in linux_standard
+    assert 'stop "$CHILD_TOKEN"' in linux_standard
     assert 'record "$ROOT" "$PID_MODE" "$child"' in linux_standard
     assert "native-standard-exit.pid" not in linux_standard
     assert "PID_FILE" not in linux_standard

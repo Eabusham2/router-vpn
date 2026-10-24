@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // This is a non-secret policy snapshot. Credentials, certificates, bridge
@@ -38,6 +39,8 @@ type connectionProfileExternalCapture struct {
 	MultihopEnabled  bool     `json:"multihop_enabled"`
 	MultihopEntryID  string   `json:"multihop_entry_id"`
 	MultihopExitID   string   `json:"multihop_exit_id"`
+	MultihopExecution string `json:"multihop_execution,omitempty"`
+	MultihopEntryMode string `json:"multihop_entry_mode,omitempty"`
 }
 
 type connectionProfileExternalWire connectionProfileExternalCapture
@@ -72,6 +75,9 @@ func (p *connectionProfileExternalCapture) UnmarshalJSON(data []byte) error {
 }
 
 func (p connectionProfileExternalCapture) validate() error {
+	if _, err := routeExecution(multihopConnectRequest{Execution: p.MultihopExecution}); err != nil { return err }
+	if !p.MultihopEnabled && p.MultihopExecution != "" && p.MultihopExecution != "local" { return errors.New("direct external profile cannot request server execution") }
+	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode)) { return errors.New("saved external entry requires an exact supported Router VPN mode") }
 	if mode, err := common.NormalizeStartLayerMode(p.StartLayer); err != nil || p.StartLayer != "" && mode != p.StartLayer {
 		return errors.New("saved external Start Layer selection is invalid")
 	}
@@ -135,7 +141,7 @@ func (p connectionProfileExternalCapture) validate() error {
 }
 
 func (p connectionProfileExternalCapture) policy() common.RouterProfile {
-	return common.RouterProfile{HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID}
+	return common.RouterProfile{HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID, MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode}
 }
 
 func snapshotExternalConnectionPolicy(node common.RouterProfile) (*connectionProfileExternalCapture, error) {
@@ -145,9 +151,13 @@ func snapshotExternalConnectionPolicy(node common.RouterProfile) (*connectionPro
 	}
 	if !p.MultihopEnabled {
 		p.MultihopEntryID, p.MultihopExitID = "", ""
+		p.MultihopEntryMode = ""
 	}
-	c := &connectionProfileExternalCapture{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID}
+	c := &connectionProfileExternalCapture{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID, MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode}
 	c.StartLayer = p.StartLayer
+	c.MultihopExecution = p.MultihopExecution
+	c.MultihopEntryMode = p.MultihopEntryMode
+	if c.MultihopExecution == "" { c.MultihopExecution = "local" }
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -163,6 +173,9 @@ func (p connectionProfileExternalCapture) apply(node common.RouterProfile) (comm
 		return node, errors.New("linked external protocol or public identity changed; update the saved connection profile")
 	}
 	c := p.policy()
+	updated.MultihopExecution = p.MultihopExecution
+	updated.MultihopEntryMode = p.MultihopEntryMode
+	if updated.MultihopExecution == "" { updated.MultihopExecution = "local" }
 	if p.StartLayer != "" {
 		updated.StartLayer = p.StartLayer
 	}

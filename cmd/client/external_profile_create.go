@@ -18,28 +18,32 @@ import (
 // paths, arbitrary sing-box JSON, torrc directives, or OpenVPN text. Those
 // richer imports keep their dedicated hardened import paths.
 type externalProfileCreateRequest struct {
-	Name             string            `json:"name"`
-	Protocol         string            `json:"protocol"`
-	ExpectedPublicIP string            `json:"expected_public_ip"`
-	Server           string            `json:"server"`
-	Port             int               `json:"port"`
-	Username         string            `json:"username,omitempty"`
-	Password         string            `json:"password,omitempty"`
-	Method           string            `json:"method,omitempty"`
-	Secret           string            `json:"secret,omitempty"`
-	TLSServerName    string            `json:"tls_server_name,omitempty"`
-	WGPrivateKey     string            `json:"wg_private_key,omitempty"`
-	WGAddresses      []string          `json:"wg_addresses,omitempty"`
-	WGPeerPublicKey  string            `json:"wg_peer_public_key,omitempty"`
-	WGPresharedKey   string            `json:"wg_preshared_key,omitempty"`
-	WGAllowedIPs     []string          `json:"wg_allowed_ips,omitempty"`
-	WGDNS            []string          `json:"wg_dns,omitempty"`
-	WGMTU            int               `json:"wg_mtu,omitempty"`
-	WGKeepalive      int               `json:"wg_keepalive,omitempty"`
-	AWGParameters    map[string]string `json:"awg_parameters,omitempty"`
-	Location         string            `json:"location,omitempty"`
-	Latitude         *float64          `json:"latitude,omitempty"`
-	Longitude        *float64          `json:"longitude,omitempty"`
+	Name                string                        `json:"name"`
+	Protocol            string                        `json:"protocol"`
+	ExpectedPublicIP    string                        `json:"expected_public_ip"`
+	Server              string                        `json:"server"`
+	Port                int                           `json:"port"`
+	Username            string                        `json:"username,omitempty"`
+	Password            string                        `json:"password,omitempty"`
+	Method              string                        `json:"method,omitempty"`
+	Secret              string                        `json:"secret,omitempty"`
+	TLSServerName       string                        `json:"tls_server_name,omitempty"`
+	WGPrivateKey        string                        `json:"wg_private_key,omitempty"`
+	WGAddresses         []string                      `json:"wg_addresses,omitempty"`
+	WGPeerPublicKey     string                        `json:"wg_peer_public_key,omitempty"`
+	WGPresharedKey      string                        `json:"wg_preshared_key,omitempty"`
+	WGAllowedIPs        []string                      `json:"wg_allowed_ips,omitempty"`
+	WGDNS               []string                      `json:"wg_dns,omitempty"`
+	WGMTU               int                           `json:"wg_mtu,omitempty"`
+	WGKeepalive         int                           `json:"wg_keepalive,omitempty"`
+	AWGParameters       map[string]string             `json:"awg_parameters,omitempty"`
+	Location            string                        `json:"location,omitempty"`
+	Latitude            *float64                      `json:"latitude,omitempty"`
+	Longitude           *float64                      `json:"longitude,omitempty"`
+	ResponseProbe       *common.ExternalResponseProbe `json:"response_probe,omitempty"`
+	StartLayer          string                        `json:"start_layer,omitempty"`
+	StartLayerProvision *common.ExternalStartLayer    `json:"start_layer_provision,omitempty"`
+	ServerPeer          *common.ExternalServerPeer    `json:"server_peer,omitempty"`
 }
 
 func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.RouterProfile, error) {
@@ -70,13 +74,14 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		return common.RouterProfile{}, errors.New("AmneziaWG parameters require the AmneziaWG protocol")
 	}
 	p := common.RouterProfile{
-		ID:        newID(),
-		Name:      q.Name,
-		NodeKind:  "external",
-		External:  &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP)},
-		Location:  q.Location,
-		Latitude:  latitude,
-		Longitude: longitude,
+		ID:         newID(),
+		Name:       q.Name,
+		NodeKind:   "external",
+		External:   &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP), ResponseProbe: q.ResponseProbe, StartLayer: q.StartLayerProvision, ServerPeer: q.ServerPeer},
+		StartLayer: q.StartLayer,
+		Location:   q.Location,
+		Latitude:   latitude,
+		Longitude:  longitude,
 	}
 
 	// A typed node is persisted only after its endpoint is normalized through

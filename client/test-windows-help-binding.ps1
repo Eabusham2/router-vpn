@@ -95,7 +95,7 @@ $ExpectedControls=@(
     'UnifiedSettingsButton','UnifiedMtuButton','UnifiedBackButton',
     'UnifiedModeCombo','UnifiedKillSwitch','UnifiedDnsCombo',
     'UnifiedFastestNode','UnifiedForwardButton','UnifiedPerformanceButton',
-    'UnifiedTorButton','UnifiedExternalNodeButton'
+    'UnifiedTorButton','UnifiedExternalNodeButton','UnifiedExternalPathButton'
 )
 $BeforeEvents=@(Get-HelpEventCalls $Before)
 $AfterEvents=@(Get-HelpEventCalls $After)
@@ -105,7 +105,7 @@ foreach($Name in $ExpectedControls){
     Assert-HelpBinding ($Original.Count -eq 1 -and $Actual.Count -eq 1) ("Composed control lost or duplicated its binding: "+$Name)
     Assert-HelpBinding ($Original[0].Extent.Text -ceq $Actual[0].Extent.Text) ("Help altered the callback for "+$Name)
 }
-$Count++;Write-Host 'PASS all 17 generated main-control event bindings preserved'
+$Count++;Write-Host 'PASS all 18 generated main-control event bindings preserved'
 $BeforeOther=@($BeforeEvents|Where-Object{(Get-HelpControlName $_) -ne 'TutorialButton'}|ForEach-Object{$_.Extent.Text})
 $AfterOther=@($AfterEvents|Where-Object{(Get-HelpControlName $_) -ne 'TutorialButton'}|ForEach-Object{$_.Extent.Text})
 Assert-HelpBinding (($BeforeOther -join "`0") -ceq ($AfterOther -join "`0")) 'Help changed another generated event, timer or window cleanup binding'
@@ -119,12 +119,12 @@ Assert-HelpBinding $Former.Success 'Former bug no longer reproduced by the regre
 $Broken=$Before.Substring(0,$Former.Index)+$New+"`n"+'$BaseCombo.SelectedIndex=0'+$Before.Substring($Former.Index+$Former.Length)
 $Lost=@(Get-HelpEventCalls $Broken|Where-Object{$ExpectedControls -contains (Get-HelpControlName $_)})
 Assert-HelpBinding ($Lost.Count -eq 0) 'Negative control did not expose the lost generated bindings'
-$Count++;Write-Host 'PASS negative control reproduces loss of all 17 main-control bindings'
+$Count++;Write-Host 'PASS negative control reproduces loss of all 18 main-control bindings'
 
 # Actually register and invoke the final composed Connect and Help callbacks.
 # Fake controls record callbacks; the invoked functions cannot touch a network.
 $script:HelpTestButtons=@{}
-$script:HelpTestConnects=0;$script:HelpTestOpens=0;$script:HelpTestForced=$false;$script:HelpTestSpeedLabs=0
+$script:HelpTestConnects=0;$script:HelpTestOpens=0;$script:HelpTestForced=$false;$script:HelpTestSpeedLabs=0;$script:HelpTestExternalPaths=0
 function Control([string]$Name){
     if(-not$script:HelpTestButtons.ContainsKey($Name)){
         $Button=[pscustomobject]@{Callback=$null;Registrations=0}
@@ -136,6 +136,7 @@ function Control([string]$Name){
 function UnifiedConnect{$script:HelpTestConnects++}
 function Show-RouterVPNProductOnboarding{param([switch]$Force)$script:HelpTestOpens++;$script:HelpTestForced=[bool]$Force}
 function ShowUnifiedSpeedLab{$script:HelpTestSpeedLabs++}
+function ShowUnifiedExternalPath{$script:HelpTestExternalPaths++}
 $PerformanceFunctions=@([ScriptBlock]::Create($After).Ast.FindAll({
     param($Node)
     $Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and
@@ -143,7 +144,7 @@ $PerformanceFunctions=@([ScriptBlock]::Create($After).Ast.FindAll({
 },$true))
 Assert-HelpBinding ($PerformanceFunctions.Count -eq 1) 'Performance button target missing from the composed app'
 . ([ScriptBlock]::Create($PerformanceFunctions[0].Extent.Text))
-foreach($Name in @('UnifiedConnectButton','TutorialButton','UnifiedPerformanceButton')){
+foreach($Name in @('UnifiedConnectButton','TutorialButton','UnifiedPerformanceButton','UnifiedExternalPathButton')){
     $Binding=@($AfterEvents|Where-Object{(Get-HelpControlName $_) -eq $Name})
     Assert-HelpBinding ($Binding.Count -eq 1) ("Executable binding missing: "+$Name)
     . ([ScriptBlock]::Create($Binding[0].Extent.Text))
@@ -152,6 +153,7 @@ foreach($Name in @('UnifiedConnectButton','TutorialButton','UnifiedPerformanceBu
     & $Callback
 }
 Assert-HelpBinding ($script:HelpTestConnects -eq 1 -and $script:HelpTestOpens -eq 1 -and $script:HelpTestForced) 'Composed Connect/Help callbacks did not invoke the intended actions'
+Assert-HelpBinding ($script:HelpTestExternalPaths -eq 1) 'Composed external path control did not open its own dialog'
 $Count++;Write-Host 'PASS composed Connect works and Help explicitly opens full onboarding'
 Assert-HelpBinding ($script:HelpTestSpeedLabs -eq 1) 'Performance button did not open Speed Lab'
 $Count++;Write-Host 'PASS composed Performance button invokes Speed Lab'

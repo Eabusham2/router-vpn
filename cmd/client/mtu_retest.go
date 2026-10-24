@@ -209,6 +209,7 @@ func captureMTURetestSnapshot(a *app) (mtuRetestSnapshot, error) {
 	a.mu.Lock()
 	selectedID := a.profiles.SelectedID
 	p, ok := a.profileByIDLocked(selectedID)
+	p = common.CloneRouterProfile(p)
 	st := a.state
 	a.mu.Unlock()
 	if !ok {
@@ -309,15 +310,11 @@ func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {
 }
 
 func mtuProfileSnapshotToken(p common.RouterProfile) string {
-	v := struct {
-		ID, NodeKind, Endpoint, RouterAPI, NodeProofID, PathProbeURL string
-		DAITAHost, MTUPolicy, BaseTunnel                             string
-		DAITAPort, ManualMTU                                         int
-		JumboTUN                                                     bool
-	}{p.ID, p.NodeKind, p.Endpoint, p.RouterAPI, p.NodeProofID, p.PathProbeURL, p.DAITAHost, p.MTUPolicy, p.BaseTunnel, p.DAITAPort, p.ManualMTU, p.JumboTUN}
-	b, _ := json.Marshal(v)
-	sum := sha256.Sum256(b)
-	return fmt.Sprintf("%x", sum)
+	// Freeze the same credential, route, DNS and protection identity as other
+	// live measurements. Adoption changes EffectiveMTU itself; omit only that
+	// measured value so persisting our result does not invalidate our capture.
+	p.EffectiveMTU = 0
+	return liveMeasurementProfileToken(p)
 }
 
 func mtuStateSnapshotToken(st state) string {

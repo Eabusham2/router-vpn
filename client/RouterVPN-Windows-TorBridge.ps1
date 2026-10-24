@@ -40,6 +40,161 @@ function ParseUnifiedExternalAmneziaParameters([string]$Text){
     if($Values.Count -ne $Keys.Count){throw 'Supply all 11 provider values: Jc, Jmin, Jmax, S1-S4 and H1-H4.'}
     return $Values
 }
+function ExternalPublicValue($Object,[string]$Name,$Default=''){
+    if($null-eq$Object){return $Default}
+    if($Object -is [System.Collections.IDictionary]){if($Object.Contains($Name)){return $Object[$Name]};return $Default}
+    $Property=$Object.PSObject.Properties[$Name];if($null-ne$Property){return $Property.Value};return $Default
+}
+function GetUnifiedExternalSavedExecution($Profile){
+    $Value=[string](ExternalPublicValue $Profile 'multihop_execution' 'local')
+    if(-not $Value){return 'local'}
+    if($Value -cnotin @('local','server','auto')){throw 'The selected external node has an invalid saved execution choice.'}
+    return $Value
+}
+function NewUnifiedExternalConnectBody($Profile,[string]$EntryID,[string]$Execution,[bool]$Direct){
+    $ID=[string](ExternalPublicValue $Profile 'id');$Kind=[string](ExternalPublicValue $Profile 'node_kind')
+    if(-not $ID -or $Kind -ne 'external'){throw 'Select an external node first.'}
+    if($Execution -cnotin @('local','server','auto')){throw 'Choose Local, Server or Compare both.'}
+    if($Direct){return @{profile_id=$ID;direct=$true;execution='local'}}
+    if($EntryID -eq $ID){throw 'External entry and exit must be different nodes.'}
+    $Body=@{profile_id=$ID;execution=$Execution}
+    if($EntryID){$Body.entry_id=$EntryID}
+    return $Body
+}
+function GetUnifiedExternalPathIdentity($Profile){
+    $External=ExternalPublicValue $Profile 'external' $null
+    return (@([string](ExternalPublicValue $Profile 'id'),[string](ExternalPublicValue $Profile 'node_kind'),[string](ExternalPublicValue $Profile 'endpoint'),[string](ExternalPublicValue $Profile 'start_layer'),[string](ExternalPublicValue $Profile 'multihop_entry_mode'),[string](ExternalPublicValue $External 'protocol'),[string](ExternalPublicValue $External 'expected_public_ip'),(ExternalPublicValue $External 'has_response_probe' $false),(ExternalPublicValue $External 'has_server_peer' $false))|ConvertTo-Json -Compress)
+}
+function GetUnifiedExternalEntryMode($Captured,$Entry,[string]$Selected,$Modes){
+    $Kind=[string](ExternalPublicValue $Entry 'node_kind' 'router-vpn')
+    if($null-eq$Entry -or ($Kind -and $Kind -cne 'router-vpn')){
+        if($Selected){throw 'An entry mode applies only to a Router VPN entry.'}
+        return ''
+    }
+    $Mode=$Selected
+    if(-not $Mode){
+        $Base=[string](ExternalPublicValue $Entry 'base_tunnel')
+        if($Base -cnotin @('wg','awg')){$Base=[string](ExternalPublicValue $Captured 'base_tunnel')}
+        $Mode=if($Base -ceq 'awg'){'awg2-fast'}else{'wg'}
+    }
+    $Found=@($Modes|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Mode})
+    if($Found.Count -ne 1){throw 'Choose an exact Router entry mode from the current native catalog.'}
+    return $Mode
+}
+function NewUnifiedExternalPathBody($Captured,[string]$EntryID,[string]$Execution,[bool]$Direct,$Current,$EntryMode=$null,$EntryModes=@()){
+    $ID=[string](ExternalPublicValue $Captured 'id')
+    $Matches=@($Current|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
+    if($Matches.Count -ne 1 -or (GetUnifiedExternalPathIdentity $Matches[0]) -cne (GetUnifiedExternalPathIdentity $Captured)){throw 'The external node changed while this dialog was open. Reopen its path settings.'}
+    if(-not $Direct){
+        $Entries=@($Current|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $EntryID})
+        if(-not $EntryID -or $Entries.Count -ne 1){throw 'The selected entry is missing or ambiguous. Choose it again.'}
+    }
+    if($Execution -cne 'local'){
+        $External=ExternalPublicValue $Matches[0] 'external' $null;$Protocol=[string](ExternalPublicValue $External 'protocol')
+        if($Protocol -cnotin @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect')){throw 'Server / Compare requires a supported authenticated external transport.'}
+        if((ExternalPublicValue $External 'has_response_probe' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_response_probe' $false) -cne $true){throw 'Server / Compare requires this external node HTTPS response probe.'}
+        if($Protocol -cin @('wireguard','amneziawg') -and ((ExternalPublicValue $External 'has_server_peer' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_server_peer' $false) -cne $true)){throw 'WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.'}
+        if($Direct -or [string](ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cne 'router-vpn'){throw 'Server / Compare requires a Router VPN entry.'}
+    }
+    $Body=NewUnifiedExternalConnectBody $Captured $EntryID $Execution $Direct
+    if($null-ne$EntryMode){
+        $SelectedEntry=if($Direct){$null}else{$Entries[0]}
+        $Mode=GetUnifiedExternalEntryMode $Captured $SelectedEntry ([string]$EntryMode) $EntryModes
+        if($Mode){$Body.entry_mode=$Mode}
+    }
+    return $Body
+}
+function AddUnifiedExternalServerPeer($Body,[string]$Protocol,[string]$PublicKey,[string]$Addresses,[string]$MTUText,[string]$KeepaliveText){
+    $PublicKey=$PublicKey.Trim();$Addresses=$Addresses.Trim();$MTUText=$MTUText.Trim();$KeepaliveText=$KeepaliveText.Trim()
+    if(-not ($PublicKey -or $Addresses -or $MTUText -or $KeepaliveText)){return}
+    if($Protocol -cnotin @('wireguard','amneziawg')){throw 'Server peer fields apply only to WireGuard or AmneziaWG.'}
+    $MTU=0;$Keepalive=0;$IPs=@(SplitUnifiedExternalCsv $Addresses)
+    if(-not $PublicKey -or $IPs.Count -lt 1 -or $IPs.Count -gt 2 -or -not [int]::TryParse($MTUText,[ref]$MTU) -or $MTU -lt 1280 -or $MTU -gt 9000){throw 'Supply the separately provisioned server peer public key, one address per IP family, and MTU 1280–9000.'}
+    try{$KeyBytes=[Convert]::FromBase64String($PublicKey);if($KeyBytes.Length -ne 32 -or [Convert]::ToBase64String($KeyBytes) -cne $PublicKey){throw 'invalid'}}catch{throw 'Server peer public key must be canonical 32-byte Base64.'}
+    $Peer=@{public_key=$PublicKey;addresses=$IPs;mtu=$MTU}
+    if($KeepaliveText){if(-not [int]::TryParse($KeepaliveText,[ref]$Keepalive) -or $Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Server peer keepalive must be 0–65535 seconds.'};$Peer.persistent_keepalive_interval=$Keepalive}
+    $Body.server_peer=$Peer
+}
+function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$false){
+    if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before choosing an external path.';return}
+    try{
+        $Store=Api '/api/nodes' -Timeout 5
+        if(-not $ProfileID){$ProfileID=[string]$Store.selected_id}
+        $Matches=@($Store.profiles|Where-Object{[string]$_.id -ceq $ProfileID})
+        if($Matches.Count -ne 1 -or [string]$Matches[0].node_kind -ne 'external'){throw 'Select an external node first.'}
+        $Captured=$Matches[0];$SavedExecution=GetUnifiedExternalSavedExecution $Captured
+        $Capabilities=Api '/api/external-profile/capabilities' -Timeout 5
+        $EntryModes=@(ExternalPublicValue $Capabilities 'router_vpn_entry_modes' @())
+        $SavedMode=[string](ExternalPublicValue $Captured 'multihop_entry_mode')
+        if($SavedMode -and @($EntryModes|Where-Object{[string]$_.id -ceq $SavedMode}).Count -ne 1){throw 'The saved Router entry mode is missing from the current native catalog.'}
+        $SavedEntry=if([bool](ExternalPublicValue $Captured 'multihop_enabled' $false)){[string](ExternalPublicValue $Captured 'multihop_entry_id')}else{''}
+        [xml]$PathX=@"
+<Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="External path" Width="650" Height="560" MinHeight="450" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
+<TextBlock Name="PathNode" FontSize="21" FontWeight="Bold" TextWrapping="Wrap"/>
+<TextBlock Text="Entry" Margin="0,14,0,4"/><ComboBox Name="PathEntry" DisplayMemberPath="display_name" SelectedValuePath="id"/>
+<TextBlock Text="Router entry mode" Margin="0,14,0,4"/><ComboBox Name="PathEntryMode" DisplayMemberPath="name" SelectedValuePath="id"/>
+<TextBlock Text="The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,6,0,0"/>
+<TextBlock Text="External execution" Margin="0,14,0,4"/><ComboBox Name="PathExecution"><ComboBoxItem Content="Local — exit runs on this device" Tag="local"/><ComboBoxItem Content="Server — exit runs on Router entry" Tag="server"/><ComboBoxItem Content="Compare both — lowest valid average" Tag="auto"/></ComboBox>
+<TextBlock Text="Server / Compare requires a Router entry, an authenticated external exit, and its saved HTTPS response probe. WireGuard / AmneziaWG also needs a separately provisioned server peer. Pairing and actual path proof are checked when connecting. Direct uses Local. A successful connection saves this node's choice." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,12"/>
+<TextBlock Name="PathReadiness" TextWrapping="Wrap" Foreground="#A8B6D5"/><TextBlock Name="PathError" TextWrapping="Wrap" Foreground="#FFCC8A" Margin="0,8"/>
+<StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="PathConnect" Content="Connect selected path" Padding="12,8"/><Button Name="PathCancel" Content="Cancel" Padding="12,8" Margin="8,0,0,0"/></StackPanel>
+</StackPanel></ScrollViewer></Window>
+"@
+        $Reader=New-Object System.Xml.XmlNodeReader $PathX;$Dialog=[Windows.Markup.XamlReader]::Load($Reader);$Dialog.Owner=$Window
+        $Entry=$Dialog.FindName('PathEntry');$EntryMode=$Dialog.FindName('PathEntryMode');$Execution=$Dialog.FindName('PathExecution');$ErrorText=$Dialog.FindName('PathError')
+        $Dialog.FindName('PathNode').Text=[string]$Captured.name
+        $Choices=@([pscustomobject]@{id='';display_name='Direct — no entry'})+@($Store.profiles|Where-Object{[string]$_.id -cne $ProfileID})
+        $Entry.ItemsSource=$Choices;$Entry.SelectedIndex=0
+        if($SavedEntry){$Entry.SelectedValue=$SavedEntry;if($Entry.SelectedIndex -lt 0){throw 'The saved external entry is missing. Relink it or select Direct explicitly.'}}
+        $Execution.SelectedIndex=@('local','server','auto').IndexOf($SavedExecution)
+        $EntryMode.ItemsSource=@([pscustomobject]@{id='';name="Use selected entry's saved base"})+$EntryModes
+        $EntryMode.SelectedValue=$SavedMode
+        $UpdatePathEntry={
+            $Direct=-not [string]$Entry.SelectedValue
+            $Selected=@($Choices|Where-Object{[string]$_.id -ceq [string]$Entry.SelectedValue})
+            $Kind=if($Selected.Count -eq 1){[string](ExternalPublicValue $Selected[0] 'node_kind' 'router-vpn')}else{'external'}
+            $RouterEntry=(-not $Direct) -and (-not $Kind -or $Kind -ceq 'router-vpn')
+            $EntryMode.IsEnabled=$RouterEntry
+            if(-not $RouterEntry){$EntryMode.SelectedValue=''}
+            $Execution.IsEnabled=-not $Direct
+            if($Direct){$Execution.SelectedIndex=0}
+        }
+        & $UpdatePathEntry
+        if(-not [string]$Entry.SelectedValue){$Execution.SelectedIndex=0;$Execution.IsEnabled=$false}
+        $Entry.Add_SelectionChanged($UpdatePathEntry)
+        $HasProbe=[bool](ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'has_response_probe' $false)
+        $Dialog.FindName('PathReadiness').Text=if($HasProbe){'HTTPS response probe saved; server pairing and native proof remain pending.'}else{'No HTTPS response probe saved. Import or create a provisioned external node before choosing Server / Compare.'}
+        $Dialog.FindName('PathCancel').Add_Click({$Dialog.Close()})
+        $Dialog.FindName('PathConnect').Add_Click({
+            try{
+                if(-not(TestUnifiedExternalMutationIdle)){throw 'VPN state changed while the path dialog was open. Nothing was connected.'}
+                $EntryID=[string]$Entry.SelectedValue;$Direct=-not $EntryID
+                if($RequireEntry -and $Direct){throw 'Choose an entry for this via-entry connection.'}
+                $Choice=[string]$Execution.SelectedItem.Tag
+                $Current=Api '/api/nodes' -Timeout 5
+                $Body=NewUnifiedExternalPathBody $Captured $EntryID $Choice $Direct @($Current.profiles) ([string]$EntryMode.SelectedValue) $EntryModes
+                $Dialog.Tag=$Body;$Dialog.Close()
+            }catch{$ErrorText.Text=$_.Exception.Message}
+        })
+        [void]$Dialog.ShowDialog()
+        if($null-ne$Dialog.Tag){$Body=$Dialog.Tag;[void](StartUnifiedApiAsync 'Connecting external path…' '/api/external-profile/connect' 'POST' $Body 180 {param($R)Log 'External selected path passed connection proof.'} {param($E)Log ('External path failed: '+$E)} $null)}
+    }catch{Log ('External path: '+$_.Exception.Message)}
+}
+function AddUnifiedExternalTransportFields($Body,[string]$Protocol,[string]$Server,[string]$ProbeURL,[string]$ProbeName,[string]$Layer,[string]$LayerAPI,[string]$LayerPort,[string]$LayerKey){
+    $Proxies=@('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect')
+    $ProbeURL=$ProbeURL.Trim();$ProbeName=$ProbeName.Trim();$LayerAPI=$LayerAPI.Trim();$LayerPort=$LayerPort.Trim()
+    if($Layer -cnotin @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'Choose a supported external Start Layer.'}
+    if(($ProbeURL -or $ProbeName -or $Layer -ne 'off' -or $LayerAPI -or $LayerPort -or $LayerKey) -and $Protocol -cnotin $Proxies){throw 'Response probes and external Start Layers require a supported external transport.'}
+    if($ProbeName -and -not $ProbeURL){throw 'Supply the HTTPS response URL with its certificate server name.'}
+    if($ProbeURL){$Body.response_probe=@{url=$ProbeURL;server_name=$ProbeName}}
+    $Body.start_layer=$Layer
+    if($Layer -eq 'off'){
+        if($LayerAPI -or $LayerPort -or $LayerKey){throw 'Select a Start Layer before supplying its provisioned credentials.'}
+        return
+    }
+    $Port=0;if(-not [int]::TryParse($LayerPort,[ref]$Port) -or $Port -lt 1 -or $Port -gt 65535 -or -not $LayerAPI -or -not $LayerKey){throw 'An active Start Layer requires its private API, AES port (1–65535), and key.'}
+    $Body.start_layer_provision=@{mode=$Layer;api=$LayerAPI;transport=@{type='shadowsocks';tag='provisioned-exit-layer';server=$Server.Trim();server_port=$Port;method='2022-blake3-aes-256-gcm';password=$LayerKey}}
+}
 function ShowUnifiedExternalNodeBuilder{
     if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before adding an external node. Unknown controller state fails closed.';return}
     [xml]$X=@"
@@ -55,6 +210,15 @@ function ShowUnifiedExternalNodeBuilder{
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="Shadowsocks method"/><TextBox Name="ExtMethod" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Shadowsocks / Hysteria2 secret"/><PasswordBox Name="ExtSecret" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
     <TextBlock Text="TLS server name / SNI (HTTPS CONNECT or Hysteria2)"/><TextBox Name="ExtTLS" Margin="0,4,0,8" Padding="7"/>
     <Separator Margin="0,8"/>
+    <TextBlock Text="External Server / Compare and Start Layer" FontWeight="SemiBold"/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Optional for WireGuard, AmneziaWG, Shadowsocks, Hysteria2 and authenticated SOCKS5 / HTTP(S). Server and Compare require a Router entry plus an HTTPS response probe on this server's public IP. Use only a Start Layer provisioned by that server; AES + XOR keeps authenticated encryption."/>
+    <TextBlock Text="HTTPS response URL on this external server"/><TextBox Name="ExtResponseURL" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Response certificate server name (when needed)"/><TextBox Name="ExtResponseName" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="External Start Layer"/><ComboBox Name="ExtStartLayer" SelectedIndex="0" Margin="0,4,0,8"><ComboBoxItem Content="Off" Tag="off"/><ComboBoxItem Content="AES-256-GCM" Tag="aes-256-gcm"/><ComboBoxItem Content="AES-256-GCM + XOR whitening" Tag="aes-256-gcm+xor-whitening"/></ComboBox>
+    <TextBlock Text="Provisioned layer private API URL"/><TextBox Name="ExtLayerAPI" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Provisioned AES transport port"/><TextBox Name="ExtLayerPort" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Provisioned AES key (32-byte Base64)"/><PasswordBox Name="ExtLayerKey" Margin="0,4,0,8" Padding="7"/>
+    <Separator Margin="0,8"/>
     <TextBlock Text="WireGuard / AmneziaWG peer" FontWeight="SemiBold"/>
     <TextBlock Text="Private key"/><PasswordBox Name="ExtWGPrivate" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Peer public key"/><TextBox Name="ExtWGPeer" Margin="0,4,0,8" Padding="7"/>
@@ -66,6 +230,12 @@ function ShowUnifiedExternalNodeBuilder{
     <TextBlock Text="AmneziaWG parameters — copy all 11 values from your provider"/>
     <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,4,0,4" Text="Use Jc=…; Jmin=…; Jmax=…; S1=…; S2=…; S3=…; S4=…; H1=…; H2=…; H3=…; H4=…. You can paste one key=value per line. Header ranges are preserved."/>
     <TextBox Name="ExtAWGParameters" AcceptsReturn="True" VerticalScrollBarVisibility="Auto" Height="100" Margin="0,4,0,8" Padding="7" MaxLength="4096"/>
+    <TextBlock Text="Separate server peer — WireGuard / AmneziaWG Server and Compare" FontWeight="SemiBold" Margin="0,8,0,4"/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Optional for Local. Copy the public descriptor of the separate client peer provisioned on the Router entry. Its addresses and public identity must differ from this device. Keep its private key and preshared key on the server; the peer public key above still identifies the remote provider."/>
+    <TextBlock Text="Server-side client public key"/><TextBox Name="ExtServerPeerPublic" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Server peer addresses — one CIDR per family, comma separated"/><TextBox Name="ExtServerPeerAddresses" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Server peer MTU — required with descriptor, 1280–9000"/><TextBox Name="ExtServerPeerMTU" Margin="0,4,0,8" Padding="7"/>
+    <TextBlock Text="Server peer keepalive seconds — optional, 0–65535"/><TextBox Name="ExtServerPeerKeepalive" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,6,0,8" Text="Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker never accepts executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration."/>
     <TextBlock Name="ExtStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="ExtSave" Content="Save node" Padding="14,8"/><Button Name="ExtClose" Content="Close" Margin="8,0,0,0" Padding="14,8"/></StackPanel>
@@ -96,6 +266,8 @@ function ShowUnifiedExternalNodeBuilder{
                 $KeepaliveText=[string]$D.FindName('ExtWGKeepalive').Text;if($KeepaliveText.Trim()){$Keepalive=[int]$KeepaliveText;if($Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Keepalive must be 0–65535 seconds.'};$Body.wg_keepalive=$Keepalive}
                 if($ID -eq 'amneziawg'){$Body.awg_parameters=ParseUnifiedExternalAmneziaParameters ([string]$D.FindName('ExtAWGParameters').Text)}
             }
+            AddUnifiedExternalServerPeer $Body $ID ([string]$D.FindName('ExtServerPeerPublic').Text) ([string]$D.FindName('ExtServerPeerAddresses').Text) ([string]$D.FindName('ExtServerPeerMTU').Text) ([string]$D.FindName('ExtServerPeerKeepalive').Text)
+            AddUnifiedExternalTransportFields $Body $ID ([string]$D.FindName('ExtServer').Text) ([string]$D.FindName('ExtResponseURL').Text) ([string]$D.FindName('ExtResponseName').Text) ([string]$D.FindName('ExtStartLayer').SelectedItem.Tag) ([string]$D.FindName('ExtLayerAPI').Text) ([string]$D.FindName('ExtLayerPort').Text) ([string]$D.FindName('ExtLayerKey').Password)
             $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected. Use a Router entry for Home AdGuard, or choose a resolver in DNS for Direct.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct
         }catch{$Status.Text='External node rejected: '+$_.Exception.Message}
     })
@@ -105,7 +277,10 @@ function ShowUnifiedExternalNodeBuilder{
     $ProductSource=$ProductSource.Replace($stateMarker,$functions+"`r`n"+$stateMarker)
     $eventMarker="(Control 'UnifiedNodesButton').Add_Click({OpenUnifiedDetail 1})"
     if(-not $ProductSource.Contains($eventMarker)){throw 'Windows external-node UI: unified node event seam drifted.'}
-    $ProductSource=$ProductSource.Replace($eventMarker,$eventMarker+"`r`n(Control 'UnifiedExternalNodeButton').Add_Click({ShowUnifiedExternalNodeBuilder})")
+    $ProductSource=$ProductSource.Replace($eventMarker,$eventMarker+"`r`n(Control 'UnifiedExternalNodeButton').Add_Click({ShowUnifiedExternalNodeBuilder})`r`n(Control 'UnifiedExternalPathButton').Add_Click({ShowUnifiedExternalPath})")
+    $pathMarker='<TextBlock Name="UnifiedComparisonText"'
+    if(-not $ProductSource.Contains($pathMarker)){throw 'Windows external path: comparison row seam drifted.'}
+    $ProductSource=$ProductSource.Replace($pathMarker,'<StackPanel Orientation="Horizontal" Margin="76,2,0,6"><Button Name="UnifiedExternalPathButton" Content="External path…" Padding="10,5"/><TextBlock Text="Direct / entry • Local / Server / Compare" VerticalAlignment="Center" Margin="8,0,0,0" Foreground="#A8B6D5"/></StackPanel>'+$pathMarker)
     foreach($marker in @('UnifiedExternalNodeButton','Add external node…','ShowUnifiedExternalNodeBuilder','/api/external-profile/create','wireguard','amneziawg','awg_parameters','socks5','http-connect','https-connect','shadowsocks','hysteria2','TestUnifiedExternalMutationIdle','VPN state changed while the external-node dialog was open','typed maker never accepts executable paths')){if(-not$ProductSource.Contains($marker)){throw "Windows external-node transform missing $marker"}}
     return $ProductSource
 }
