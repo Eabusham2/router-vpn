@@ -57,6 +57,10 @@ base.SPECS[name] = (
     [(i1 + 10, i2 + 10, old, new) for i1, i2, old, new in changes],
 )
 
+# The captured device Settings dispatch adds one line ahead of existing guards.
+# Keep the frozen expected text and every earlier mutation guard.
+base.SPECS['routervpn-profile-settings-v1.inc'] = ('b4cc4e0bd2b543e98b432828797e7be90fb9920db64c5c3df9bd10c4a921a9ac', [(243, 243, [], ['    if (!routervpn_require_mutation_idle(state->app, "starting multihop")) { linux_multihop_update_summary_v7(state, "Disconnect Router VPN or let the active transition finish before changing the live route graph."); return; }\n']), (441, 441, [], ['    gboolean mutation_busy = routervpn_mutation_busy(app);\n']), (532, 532, [], ['    GtkWidget *save_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), GTK_RESPONSE_OK);\n', '    GtkWidget *mutable_widgets[] = {multihop, lan, kill, ipv6, base, fallback, mtu, manual, daita, jumbo, socks, startup, autoconnect};\n', '    for (guint i = 0; i < G_N_ELEMENTS(mutable_widgets); i++) gtk_widget_set_sensitive(mutable_widgets[i], !mutation_busy);\n', '    if (save_button != NULL) gtk_widget_set_sensitive(save_button, !mutation_busy);\n', '    if (mutation_busy) gtk_label_set_text(GTK_LABEL(note), "Connected/transitioning: settings are read-only. Disconnect Router VPN or let the active transition finish before saving persistent node policy.");\n', '\n']), (537, 537, [], ['        if (!routervpn_require_mutation_idle(app, "saving persistent node settings")) { gtk_widget_destroy(dialog); json_node_free(root); g_free(err); free(out.data); refresh_home_summary_v6(app); return; }\n'])])
+
 # The wrapper is both the shipping CLI and the importable compatibility API used
 # by the authoritative session-mutation audit. Keep one mutation implementation:
 # the frozen v1 apply() operates on the adjusted SPECS table above.

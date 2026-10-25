@@ -417,6 +417,7 @@ static gboolean profile_external_startup_dialog_v7(App *app) {
 static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
+    if (linux_device_settings_open_v1(app)) return;
     Buffer out = {0};
     char *err = NULL;
     if (!api_request("/api/profile/settings", "GET", NULL, 5000, &out, &err)) {

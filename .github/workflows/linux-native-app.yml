@@ -104,6 +104,8 @@ jobs:
         run: python3 deploy/test_desktop_quick_dns.py --platform linux
       - name: GTK measured DNS selection, cancellation drain and expiring drafts
         run: python3 deploy/test_linux_dns_measurement.py
+      - name: GTK captured device policy and atomic startup settings
+        run: python3 deploy/test_linux_device_settings.py
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}

@@ -12,7 +12,7 @@ the interactive connection path's owned runtime and proofs. The delayed attempt
 captures selection, credentials, policy and private entry assets; manual
 Connect and Disconnect retire it. Last retains a matching proved Local/Server
 choice without rerunning Compare, with fresh session proof still required.
-Native Windows, macOS and Linux Settings now provide startup-only editing for
+Native Windows, macOS and Linux Settings now provide captured startup editing for
 imported nodes using a captured node revision, preserving their private settings.
 See [STARTUP-POLICY.md](STARTUP-POLICY.md) for the source contract and executable
 checks. This closes a source gap found during requirement 116 reconciliation;
@@ -47,6 +47,18 @@ protection independently from its entry and Android system lockdown. The VPN
 service validates that policy against its captured private marker before launch.
 These controls preserve protocol credentials, graph, DNS, startup and historical
 measurements; invalid fixed MTU and stale editor saves remain rejected.
+
+The desktop common device API now validates ordinary external LAN, protection,
+IPv6 and Auto/Fixed/Default MTU against the actual native transport parser.
+Its captured revision includes the independent entry and private source;
+mutation rechecks selection, idle state and shutdown at persistence, rolls back
+failed writes, and preserves DNS, credentials and fresh measurement metadata.
+The GTK Settings dialog now exposes those controls and atomically includes
+startup only when edited. Unchanged SMART AUTO aliases remain untouched; Manual
+startup cannot enable auto-connect. The actual GTK form passed 461 checks and
+seven deliberately broken variants, and the complete application and controller
+cleanup suite passed. The corresponding Windows/AppKit device forms and Tor
+adapter remain separate continuation work at this checkpoint.
 
 Desktop DNS editors now load and save ordinary external and Tor policies
 against the exact selected profile and saved entry. The saved transport,
