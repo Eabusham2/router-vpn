@@ -82,7 +82,7 @@ static JsonNode *status(LinuxDNSV1 *s, const char *stage, gboolean complete, gbo
     JsonArray *results = json_array_new();
     if (rows) {
         const char *ids[] = {"selected", "cf4a", "cf4b", "g4a"};
-        const char *addresses[] = {"192.168.50.133", "1.1.1.1", "1.0.0.1", "8.8.8.8"};
+        const char *addresses[] = {"192.0.2.53", "1.1.1.1", "1.0.0.1", "8.8.8.8"};
         for (int i = 0; i < 4; i++) {
             JsonObject *row = json_object_new(); const char *transport = i == 0 ? "https" : s->public_transport;
             json_object_set_string_member(row, "id", ids[i]); json_object_set_string_member(row, "name", i == 0 ? "Home AdGuard" : ids[i]);
