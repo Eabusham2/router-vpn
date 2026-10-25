@@ -1,0 +1,376 @@
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/hex"
+	"errors"
+	"io"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+var routerVPNTorFailure = errors.New("captured desktop Tor runtime failed; private inputs and child diagnostics were not logged")
+
+type routerVPNTorInput struct {
+	info os.FileInfo
+	hash [32]byte
+	file *os.File
+}
+
+// The handle and exact initial file identities belong to one private runtime.
+// Neither a later pathname nor a process exit grants another workspace's data.
+type routerVPNTorFiles struct {
+	*routerVPNExternalFiles
+	directory     string
+	directoryInfo os.FileInfo
+	data          *os.Root
+	dataInfo      os.FileInfo
+	inputs        *mobiletor.DesktopBridgeInputs
+	immutable     map[string]routerVPNTorInput
+}
+
+func routerVPNOpenTorFiles(directory, session, binary string, getenv func(string) string) (owned *routerVPNTorFiles, failure error) {
+	if getenv == nil || !routerVPNExternalSession.MatchString(session) {
+		return nil, routerVPNTorFailure
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	owned = &routerVPNTorFiles{routerVPNExternalFiles: files, directory: directory, immutable: map[string]routerVPNTorInput{}}
+	opened := owned
+	defer func() {
+		if failure != nil {
+			_ = opened.closeHandles()
+		}
+	}()
+	owned.directoryInfo, err = files.root.Stat(".")
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	profile, err := owned.captureInput("tor-profile.json", 4<<20)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	capture, err := owned.captureInput("tor-capture.json", 16<<10)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	inputs, err := mobiletor.DecodeDesktopBridgeCapture(string(profile), string(capture), directory)
+	if err != nil || inputs.Capture().SessionID != session || inputs.Capture().TargetOS != runtime.GOOS || inputs.Capture().TorBinary != binary {
+		return nil, routerVPNTorFailure
+	}
+	digests := inputs.Digests()
+	for key, value := range map[string]string{
+		"SESSION": session, "SOURCE_SHA256": digests.SourceSHA256, "PROFILE_SHA256": digests.ProfileSHA256,
+		"CAPTURE_SHA256": digests.CaptureSHA256, "TORRC_SHA256": digests.TorrcSHA256,
+		"DEFAULTS_SHA256": digests.DefaultsSHA256, "CONFIG_SHA256": digests.ConfigSHA256,
+	} {
+		if getenv("HOMEVPN_TOR_"+key) != value {
+			return nil, routerVPNTorFailure
+		}
+	}
+	for name, expected := range map[string]string{"torrc": inputs.Torrc(), "tor-defaults": inputs.Defaults(), "sing-box.json": inputs.Policy().Config()} {
+		raw, err := owned.captureInput(name, 4<<20)
+		if err != nil || !bytes.Equal(raw, []byte(expected)) {
+			return nil, routerVPNTorFailure
+		}
+	}
+	owned.inputs = inputs
+	info, err := files.root.Lstat("tor-data")
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return nil, routerVPNTorFailure
+	}
+	owned.data, err = files.root.OpenRoot("tor-data")
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	actual, err := owned.data.Stat(".")
+	if err != nil || !os.SameFile(info, actual) {
+		return nil, routerVPNTorFailure
+	}
+	owned.dataInfo = info
+	if entries, err := routerVPNTorReadDirectory(owned.data, 1); err != nil || len(entries) != 0 {
+		return nil, routerVPNTorFailure
+	}
+	entries, err := routerVPNTorReadDirectory(files.root, 8)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	for _, entry := range entries {
+		if _, captured := owned.immutable[entry.Name()]; captured || entry.Name() == "tor-data" {
+			continue
+		}
+		if entry.Name() != "stop.json" || !files.stopRequested(session, digests.SourceSHA256) {
+			return nil, routerVPNTorFailure
+		}
+	}
+	if err := owned.current(); err != nil {
+		return nil, err
+	}
+	return owned, nil
+}
+
+func routerVPNTorReadDirectory(root *os.Root, maximum int) ([]os.DirEntry, error) {
+	file, err := root.Open(".")
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	defer file.Close()
+	entries, err := file.ReadDir(maximum + 1)
+	if len(entries) > maximum || err != nil && !errors.Is(err, io.EOF) {
+		return nil, routerVPNTorFailure
+	}
+	return entries, nil
+}
+
+func (f *routerVPNTorFiles) captureInput(name string, limit int64) ([]byte, error) {
+	info, err := f.root.Lstat(name)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	raw, err := f.read(name, limit)
+	after, statErr := f.root.Lstat(name)
+	if err != nil || statErr != nil || !os.SameFile(info, after) {
+		return nil, routerVPNTorFailure
+	}
+	pinned, err := f.root.Open(name)
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	actual, err := pinned.Stat()
+	if err != nil || !os.SameFile(actual, after) {
+		_ = pinned.Close()
+		return nil, routerVPNTorFailure
+	}
+	f.immutable[name] = routerVPNTorInput{info: after, hash: sha256.Sum256(raw), file: pinned}
+	return raw, nil
+}
+
+func (f *routerVPNTorFiles) current() error {
+	if f == nil || f.root == nil || f.data == nil || f.inputs == nil {
+		return routerVPNTorFailure
+	}
+	actual, err := os.Lstat(f.directory)
+	if err != nil || !actual.IsDir() || actual.Mode()&os.ModeSymlink != 0 || !os.SameFile(actual, f.directoryInfo) || runtime.GOOS != "windows" && actual.Mode().Perm()&0077 != 0 {
+		return routerVPNTorFailure
+	}
+	actual, err = f.root.Lstat("tor-data")
+	if err != nil || !actual.IsDir() || actual.Mode()&os.ModeSymlink != 0 || !os.SameFile(actual, f.dataInfo) || runtime.GOOS != "windows" && actual.Mode().Perm()&0077 != 0 {
+		return routerVPNTorFailure
+	}
+	for name, captured := range f.immutable {
+		actual, err := f.root.Lstat(name)
+		if err != nil || !actual.Mode().IsRegular() || !os.SameFile(actual, captured.info) {
+			return routerVPNTorFailure
+		}
+		raw, err := f.read(name, 4<<20)
+		if err != nil || sha256.Sum256(raw) != captured.hash {
+			return routerVPNTorFailure
+		}
+	}
+	return nil
+}
+
+func (f *routerVPNTorFiles) closeHandles() error {
+	if f == nil {
+		return nil
+	}
+	var err error
+	for _, input := range f.immutable {
+		if input.file != nil {
+			err = errors.Join(err, input.file.Close())
+		}
+	}
+	if f.data != nil {
+		err = errors.Join(err, f.data.Close())
+	}
+	if f.root != nil {
+		err = errors.Join(err, f.root.Close())
+	}
+	return err
+}
+
+type routerVPNTorBinary struct {
+	path string
+	info os.FileInfo
+	hash string
+}
+
+func routerVPNCaptureTorBinary(path, expected string) (*routerVPNTorBinary, error) {
+	decoded, err := hex.DecodeString(expected)
+	if err != nil || len(decoded) != sha256.Size || hex.EncodeToString(decoded) != expected || !filepath.IsAbs(path) || filepath.Clean(path) != path || strings.ContainsAny(path, "\x00\r\n") {
+		return nil, routerVPNTorFailure
+	}
+	info, digest, err := routerVPNHashTorBinary(path)
+	if err != nil || digest != expected {
+		return nil, routerVPNTorFailure
+	}
+	return &routerVPNTorBinary{path: path, info: info, hash: expected}, nil
+}
+
+func routerVPNHashTorBinary(path string) (os.FileInfo, string, error) {
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() <= 0 || info.Size() > 384<<20 {
+		return nil, "", routerVPNTorFailure
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, "", routerVPNTorFailure
+	}
+	defer file.Close()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(actual, info) {
+		return nil, "", routerVPNTorFailure
+	}
+	hash := sha256.New()
+	count, err := io.Copy(hash, io.LimitReader(file, (384<<20)+1))
+	after, statErr := file.Stat()
+	current, pathErr := os.Lstat(path)
+	if err != nil || statErr != nil || pathErr != nil || !current.Mode().IsRegular() || !os.SameFile(info, after) || !os.SameFile(info, current) || count != info.Size() || after.Size() != info.Size() || current.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) || !current.ModTime().Equal(info.ModTime()) {
+		return nil, "", routerVPNTorFailure
+	}
+	return info, hex.EncodeToString(hash.Sum(nil)), nil
+}
+
+func (b *routerVPNTorBinary) current() error {
+	if b == nil {
+		return routerVPNTorFailure
+	}
+	info, digest, err := routerVPNHashTorBinary(b.path)
+	if err != nil || !os.SameFile(info, b.info) || digest != b.hash {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+
+// No recursive path deletion is used. The native command calls this only after
+// the sole Tor child has actually exited and its Wait has joined. All entries
+// are snapshotted before removal; replacement, links or unbounded state remain
+// pending, and the captured empty data directory stays for controller cleanup.
+func (f *routerVPNTorFiles) cleanupData() error {
+	if err := f.current(); err != nil {
+		return err
+	}
+	budget := routerVPNTorDataBudget{files: 4096, bytes: 512 << 20}
+	tree, err := routerVPNTorCaptureData(f.data, &budget, 0)
+	if err != nil {
+		return err
+	}
+	defer tree.close()
+	if err := tree.remove(f.current); err != nil {
+		return err
+	}
+	if entries, err := routerVPNTorReadDirectory(f.data, 0); err != nil || len(entries) != 0 {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+
+type routerVPNTorDataBudget struct {
+	files int
+	bytes int64
+}
+type routerVPNTorDataTree struct {
+	root    *os.Root
+	entries []routerVPNTorDataEntry
+	owned   bool
+}
+type routerVPNTorDataEntry struct {
+	name  string
+	info  os.FileInfo
+	child *routerVPNTorDataTree
+}
+
+func routerVPNTorCaptureData(root *os.Root, budget *routerVPNTorDataBudget, depth int) (tree *routerVPNTorDataTree, failure error) {
+	if depth > 8 || budget == nil || budget.files < 0 {
+		return nil, routerVPNTorFailure
+	}
+	tree = &routerVPNTorDataTree{root: root}
+	capturedTree := tree
+	defer func() {
+		if failure != nil {
+			capturedTree.close()
+		}
+	}()
+	entries, err := routerVPNTorReadDirectory(root, budget.files)
+	if err != nil {
+		return nil, err
+	}
+	budget.files -= len(entries)
+	for _, entry := range entries {
+		info, err := root.Lstat(entry.Name())
+		if err != nil || info.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+			return nil, routerVPNTorFailure
+		}
+		captured := routerVPNTorDataEntry{name: entry.Name(), info: info}
+		if info.IsDir() {
+			child, err := root.OpenRoot(entry.Name())
+			if err != nil {
+				return nil, routerVPNTorFailure
+			}
+			actual, err := child.Stat(".")
+			if err != nil || !os.SameFile(actual, info) {
+				_ = child.Close()
+				return nil, routerVPNTorFailure
+			}
+			captured.child, err = routerVPNTorCaptureData(child, budget, depth+1)
+			if err != nil {
+				_ = child.Close()
+				return nil, err
+			}
+			captured.child.owned = true
+		} else if !info.Mode().IsRegular() || info.Size() < 0 || info.Size() > budget.bytes {
+			return nil, routerVPNTorFailure
+		} else {
+			budget.bytes -= info.Size()
+		}
+		tree.entries = append(tree.entries, captured)
+	}
+	return tree, nil
+}
+
+func (t *routerVPNTorDataTree) close() {
+	if t == nil {
+		return
+	}
+	for _, entry := range t.entries {
+		entry.child.close()
+	}
+	if t.owned {
+		_ = t.root.Close()
+	}
+}
+
+func (t *routerVPNTorDataTree) remove(current func() error) error {
+	for _, entry := range t.entries {
+		if current() != nil {
+			return routerVPNTorFailure
+		}
+		info, err := t.root.Lstat(entry.name)
+		if err != nil || !os.SameFile(info, entry.info) || info.Mode() != entry.info.Mode() || info.Mode()&os.ModeSymlink != 0 || !info.IsDir() && (info.Size() != entry.info.Size() || !info.ModTime().Equal(entry.info.ModTime())) {
+			return routerVPNTorFailure
+		}
+		if entry.child != nil {
+			if err := entry.child.remove(current); err != nil {
+				return err
+			}
+		}
+		if current() != nil {
+			return routerVPNTorFailure
+		}
+		info, err = t.root.Lstat(entry.name)
+		if err != nil || !os.SameFile(info, entry.info) || info.Mode()&os.ModeSymlink != 0 {
+			return routerVPNTorFailure
+		}
+		if err := t.root.Remove(entry.name); err != nil {
+			return routerVPNTorFailure
+		}
+	}
+	return nil
+}

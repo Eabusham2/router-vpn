@@ -1,0 +1,331 @@
+package main
+
+import (
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+const routerVPNTorTestSession = "0123456789abcdef0123456789abcdef"
+const routerVPNTorTestIsolation = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+type routerVPNTorFileFixture struct {
+	directory, binary string
+	inputs            *mobiletor.DesktopBridgeInputs
+	environment       map[string]string
+}
+
+func routerVPNNewTorFileFixture(t *testing.T) *routerVPNTorFileFixture {
+	t.Helper()
+	base := t.TempDir()
+	directory := filepath.Join(base, "session")
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(directory, "tor-data"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	binary := filepath.Join(base, "tor-owned-fixture")
+	if runtime.GOOS == "windows" {
+		binary += ".exe"
+	}
+	if err := os.WriteFile(binary, []byte("captured child executable fixture"), 0700); err != nil {
+		t.Fatal(err)
+	}
+	profile := `{"id":"tor-fixture","node_kind":"external","external":{"protocol":"tor-bridge","tor_bridge":{"transport":"obfs4","socks_port":19151,"bridges":["obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=` + strings.Repeat("A", 70) + ` iat-mode=0"]}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353,"home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"off","mtu_policy":"manual","manual_mtu":1392}`
+	inputs, err := mobiletor.NewDesktopBridgeCapture(profile, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binary, directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, raw := range map[string]string{"tor-profile.json": profile, "tor-capture.json": inputs.JSON(), "torrc": inputs.Torrc(), "tor-defaults": inputs.Defaults(), "sing-box.json": inputs.Policy().Config()} {
+		if err := os.WriteFile(filepath.Join(directory, name), []byte(raw), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := inputs.Digests()
+	binaryHash := sha256.Sum256([]byte("captured child executable fixture"))
+	f := &routerVPNTorFileFixture{directory: directory, binary: binary, inputs: inputs, environment: map[string]string{
+		"HOMEVPN_TOR_SESSION": routerVPNTorTestSession, "HOMEVPN_TOR_SOURCE_SHA256": d.SourceSHA256, "HOMEVPN_TOR_PROFILE_SHA256": d.ProfileSHA256,
+		"HOMEVPN_TOR_CAPTURE_SHA256": d.CaptureSHA256, "HOMEVPN_TOR_TORRC_SHA256": d.TorrcSHA256, "HOMEVPN_TOR_DEFAULTS_SHA256": d.DefaultsSHA256,
+		"HOMEVPN_TOR_CONFIG_SHA256": d.ConfigSHA256, "HOMEVPN_TOR_BINARY_SHA256": hex.EncodeToString(binaryHash[:]),
+	}}
+	return f
+}
+func (f *routerVPNTorFileFixture) getenv(name string) string { return f.environment[name] }
+func (f *routerVPNTorFileFixture) open(t *testing.T) *routerVPNTorFiles {
+	t.Helper()
+	owned, err := routerVPNOpenTorFiles(f.directory, routerVPNTorTestSession, f.binary, f.getenv)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = owned.closeHandles() })
+	return owned
+}
+
+func TestRouterVPNDesktopTorFilesBindExactCaptureAndFreshAdmission(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	owned := f.open(t)
+	if owned.inputs.Digests() != f.inputs.Digests() || owned.current() != nil {
+		t.Fatal("native input capture changed policy identity")
+	}
+	if err := owned.publish("progress.json", map[string]any{"schema": 1, "session_id": routerVPNTorTestSession, "source_sha256": f.inputs.Digests().SourceSHA256, "stage": "starting"}); err != nil {
+		t.Fatal(err)
+	}
+	if other, err := routerVPNOpenTorFiles(f.directory, routerVPNTorTestSession, f.binary, f.getenv); err == nil || other != nil {
+		t.Fatal("another process admitted the same live runtime")
+	}
+	if err := owned.current(); err != nil {
+		t.Fatal("refused second admission changed first owner", err)
+	}
+}
+
+func TestRouterVPNDesktopTorFilesRejectChangedInputsDefaultsAndWorkspace(t *testing.T) {
+	for _, kind := range []string{"source", "capture", "torrc", "defaults", "config", "env", "session", "binary-path", "unknown", "old-proof", "nonempty-data", "wrong-stop", "link-input", "link-data", "replacement", "mutation"} {
+		t.Run(kind, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			session, binary := routerVPNTorTestSession, f.binary
+			var owned *routerVPNTorFiles
+			switch kind {
+			case "source", "capture", "torrc", "defaults", "config":
+				name := map[string]string{"source": "tor-profile.json", "capture": "tor-capture.json", "torrc": "torrc", "defaults": "tor-defaults", "config": "sing-box.json"}[kind]
+				raw, err := os.ReadFile(filepath.Join(f.directory, name))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(f.directory, name), append(raw, ' '), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "env":
+				f.environment["HOMEVPN_TOR_CONFIG_SHA256"] = strings.Repeat("a", 64)
+			case "session":
+				session = strings.Repeat("c", 32)
+			case "binary-path":
+				binary = filepath.Join(filepath.Dir(binary), "other-tor")
+			case "unknown", "old-proof":
+				name := "unexpected.secret"
+				if kind == "old-proof" {
+					name = "proof.json"
+				}
+				if err := os.WriteFile(filepath.Join(f.directory, name), []byte("unowned"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "nonempty-data":
+				if err := os.WriteFile(filepath.Join(f.directory, "tor-data", "cached"), []byte("old owner"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "wrong-stop":
+				if err := os.WriteFile(filepath.Join(f.directory, "stop.json"), []byte(`{"schema":1,"session_id":"bad","source_sha256":"bad"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "link-input", "link-data":
+				name := "tor-profile.json"
+				if kind == "link-data" {
+					name = "tor-data"
+				}
+				target := filepath.Join(filepath.Dir(f.directory), "foreign")
+				if err := os.Rename(filepath.Join(f.directory, name), target); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, filepath.Join(f.directory, name)); err != nil {
+					t.Skipf("symlink privilege unavailable: %v", err)
+				}
+			case "replacement", "mutation":
+				owned = f.open(t)
+				path := filepath.Join(f.directory, "torrc")
+				raw, err := os.ReadFile(path)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if kind == "replacement" {
+					if err := os.Remove(path); err != nil {
+						t.Fatal(err)
+					}
+				} else {
+					raw = append(raw, ' ')
+				}
+				if err := os.WriteFile(path, raw, 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if owned != nil {
+				if owned.current() == nil {
+					t.Fatal("retained immutable file adopted replacement or changed bytes")
+				}
+				return
+			}
+			if candidate, err := routerVPNOpenTorFiles(f.directory, session, binary, f.getenv); err == nil || candidate != nil {
+				t.Fatal("invalid private launch was admitted")
+			}
+			if _, err := os.Stat(filepath.Join(f.directory, "stopped.json")); !os.IsNotExist(err) {
+				t.Fatal("failed preflight fabricated a cleanup receipt")
+			}
+		})
+	}
+	t.Run("cancel-before-admission", func(t *testing.T) {
+		f := routerVPNNewTorFileFixture(t)
+		raw, _ := json.Marshal(routerVPNExternalStop{Schema: 1, Session: routerVPNTorTestSession, SourceSHA256: f.inputs.Digests().SourceSHA256})
+		if err := os.WriteFile(filepath.Join(f.directory, "stop.json"), raw, 0600); err != nil {
+			t.Fatal(err)
+		}
+		owned := f.open(t)
+		if !owned.stopRequested(routerVPNTorTestSession, f.inputs.Digests().SourceSHA256) {
+			t.Fatal("captured cancellation was lost")
+		}
+	})
+}
+
+func TestRouterVPNDesktopTorBinaryRequiresExactRegularFileBytes(t *testing.T) {
+	for _, kind := range []string{"valid", "hash", "replacement", "mutation", "link"} {
+		t.Run(kind, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			expected := f.environment["HOMEVPN_TOR_BINARY_SHA256"]
+			if kind == "hash" {
+				expected = strings.Repeat("b", 64)
+			}
+			if kind == "link" {
+				target := f.binary + ".real"
+				if err := os.Rename(f.binary, target); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(target, f.binary); err != nil {
+					t.Skipf("symlink privilege unavailable: %v", err)
+				}
+			}
+			owned, err := routerVPNCaptureTorBinary(f.binary, expected)
+			if kind == "hash" || kind == "link" {
+				if err == nil || owned != nil {
+					t.Fatal("unverified Tor binary was captured")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "replacement" {
+				raw, err := os.ReadFile(f.binary)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Rename(f.binary, f.binary+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(f.binary, raw, 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if kind == "mutation" {
+				if err := os.WriteFile(f.binary, []byte("changed child executable fixture!"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = owned.current()
+			if (err == nil) != (kind == "valid") {
+				t.Fatal("binary byte/file ownership readback is wrong", kind, err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorDataCleanupRetainsCapturedDirectoryAndRefusesReplacement(t *testing.T) {
+	for _, kind := range []string{"clean", "file-replacement", "directory-replacement", "root-replacement", "link", "late-file", "budget"} {
+		t.Run(kind, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			owned := f.open(t)
+			data := filepath.Join(f.directory, "tor-data")
+			if err := os.Mkdir(filepath.Join(data, "keys"), 0700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Join(data, "keys", "state"), []byte("private native state"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			budget := routerVPNTorDataBudget{files: 4096, bytes: 512 << 20}
+			if kind == "budget" {
+				budget.bytes = 2
+			}
+			tree, err := routerVPNTorCaptureData(owned.data, &budget, 0)
+			if kind == "budget" {
+				if err == nil {
+					tree.close()
+					t.Fatal("unbounded private state was admitted")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer tree.close()
+			switch kind {
+			case "file-replacement":
+				path := filepath.Join(data, "keys", "state")
+				if err := os.Rename(path, path+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("replacement"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			case "directory-replacement":
+				if err := os.Rename(filepath.Join(data, "keys"), filepath.Join(data, "retired-keys")); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(filepath.Join(data, "keys"), 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "root-replacement":
+				if err := os.Rename(data, data+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Mkdir(data, 0700); err != nil {
+					t.Fatal(err)
+				}
+			case "link":
+				path := filepath.Join(data, "keys", "state")
+				if err := os.Remove(path); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.Symlink(f.binary, path); err != nil {
+					t.Skipf("symlink privilege unavailable: %v", err)
+				}
+			case "late-file":
+				if err := os.WriteFile(filepath.Join(data, "unexpected"), []byte("replacement data"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err = tree.remove(owned.current)
+			if kind == "late-file" {
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err := routerVPNTorReadDirectory(owned.data, 0); err == nil {
+					t.Fatal("new private state was falsely reported empty")
+				}
+				return
+			}
+			if kind != "clean" {
+				if err == nil {
+					t.Fatal("cleanup removed a replacement owner")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := owned.cleanupData(); err != nil {
+				t.Fatal(err)
+			}
+			info, err := os.Lstat(data)
+			if err != nil || !os.SameFile(info, owned.dataInfo) {
+				t.Fatal("native cleanup removed or replaced its captured data directory", err)
+			}
+			if _, err := os.Stat(filepath.Join(f.directory, "torrc")); err != nil {
+				t.Fatal("native cleanup consumed controller input", err)
+			}
+		})
+	}
+}

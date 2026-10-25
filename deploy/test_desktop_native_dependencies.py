@@ -372,7 +372,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                     if args[:2] == ['go', 'test']:
                         package = args[args.index('-ldflags=-checklinkname=0')+1]
                         expected = {
-                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS)|NodeMTU)',
+                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                             './routervpn/desktoppt': '^Test(RouterVPNDesktopTorPT|DesktopTorNetworkOwner)',
                             '.': '^TestRouterVPNDesktopTor',
                         }
