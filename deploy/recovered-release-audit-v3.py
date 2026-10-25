@@ -30,12 +30,10 @@ def shipping_has(build_rel: str, candidates: tuple[str, ...], *markers: str) -> 
 
 
 def windows_shipping_has(*markers: str) -> bool:
-    package = mod.body("deploy/package-builds.sh")
     entry = "client/RouterVPN-Windows-App.ps1"
     product = "client/RouterVPN-Windows-Product-v2.ps1"
     return (
-        Path(entry).name in package
-        and 'cp -a "$ROOT/client"' in package
+        mod.legacy.windows_owned_package()
         and mod.has(entry, Path(product).name, "PresentationFramework", "ShowDialog()")
         and mod.has(product, *markers)
     )
@@ -81,27 +79,17 @@ def macos_killswitch_gate() -> bool:
 
 
 def controller_multihop_platform(platform: str) -> bool:
-    routes = "cmd/client/multihop_native_routes.go"
-    if not mod.has(routes, "nativeMultihopPlatformSupported", "/api/multihop/status", "/api/multihop/connect", "proveNativeMultihop"):
-        return False
-    if not mod.has("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig", "verifyBundledNative", "nativeMultihopEnvironment", "HOMEVPN_POLICY_PROFILE_ID", "proveMultihopLaneNodeContext", "captureNativeMultihopSelection"):
+    if not mod.legacy.retained_native_multihop_platform(platform):
         return False
     if platform == "windows":
-        return mod.has(routes, 'runtime.GOOS == "windows"', "nativeWindowsMultihopCommand") and mod.has(
-            "cmd/client/multihop_native.go",
-            "nativeWindowsMultihopCommand",
-            "prepareNativeMultihop",
-            "stageNativeMultihopCapture",
-            "nativeMultihopEnvironment",
+        return mod.has(
+            "client/native-multihop-windows.ps1",
+            "Remove-PrivateRuntime",
+            "Invoke-RouterVPNNativeKillSwitch 'prepare'",
+            "Invoke-RouterVPNNativeKillSwitch 'release'",
         )
     if platform == "darwin":
-        return mod.has(routes, 'runtime.GOOS == "darwin"', "nativeDarwinMultihopCommand") and mod.has(
-            "cmd/client/multihop_native_darwin.go",
-            "nativeDarwinMultihopCommand",
-            "prepareNativeMultihop",
-            "native-multihop-darwin.sh",
-            "nativeMultihopEnvironment",
-        ) and mod.has(
+        return mod.has(
             "modes/native-multihop-darwin.sh",
             "sing-box",
             "kill-switch-platform.py",

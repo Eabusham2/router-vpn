@@ -19,6 +19,8 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - name: Reject broken native launch and ownership paths
+        run: python3 deploy/test_native_shipping_audit_gates.py
       - name: Score legacy and recovered source/live release gates
         run: |
           python3 deploy/weighted-release-audit.py | tee "$RUNNER_TEMP/weighted-release.json"

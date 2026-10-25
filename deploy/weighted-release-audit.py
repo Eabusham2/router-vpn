@@ -84,6 +84,90 @@ def no_self_mutating_workflows() -> bool:
     return True
 
 
+def windows_owned_package() -> bool:
+    """Follow package -> checked executable -> WPF, including owned shutdown."""
+    return (
+        all_markers("deploy/package-builds.sh",
+                    'cp "$DIST/client/RouterVPN-$arch.exe" "$dir/RouterVPN.exe"',
+                    'cp -a "$ROOT/client" "$dir/client"',
+                    'write_windows_app_launcher "$dir/Start-RouterVPN.ps1"',
+                    "$launcher=Join-Path $Root 'RouterVPN.exe'",
+                    "Wait=$true;PassThru=$true", "$process=Start-Process @start",
+                    "$process.Refresh()", "exit ([int]$process.ExitCode)")
+        and all_markers("cmd/windows-app-launcher/main.go",
+                        'filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")',
+                        '"-File", app, "-BaseUrl", localBaseURL',
+                        "controllerprocess.Track(child, ownerToken)",
+                        "controllerprocess.Stop(child)", "ui.Wait()")
+        and all_markers("cmd/portable-launcher/main.go",
+                        "RouterVPN-Windows-App.ps1", "nativeCmd.Wait()",
+                        "trackPortableController(cmd, ownerToken)", "stopPortableController(cmd)")
+        and all_markers("cmd/portable-launcher/controller_shutdown.go",
+                        "controllerprocess.Track(cmd, token)", "controllerprocess.Stop(cmd)")
+        and all_markers("internal/controllerprocess/client.go", "owners.Load(cmd)",
+                        "receipt.PID != pid", "receipt.Token != token", "!receipt.Closed",
+                        "<-owner.done", "api/controller/shutdown")
+        and all_markers("internal/controllerprocess/client_test.go",
+                        "TestControllerProcessPendingCleanupRetainsOwnedProcess",
+                        "TestControllerProcessDeathIsNotCleanupEvidence")
+        and all_markers("deploy/test_windows_recovery_launcher.py",
+                        "def audit_contracts()", "write_windows_app_launcher", "Broken checked-launcher invariant passed")
+        and all_markers(".github/workflows/windows-native-contract.yml",
+                        "./internal/controllerprocess",
+                        "test_windows_recovery_launcher.py --shell pwsh",
+                        "test_windows_recovery_launcher.py --shell powershell.exe")
+    )
+
+
+def retained_native_multihop_platform(platform: str) -> bool:
+    """Require the current captured launch chain, rather than its old file layout."""
+    wrappers = {
+        "windows": ("cmd/client/multihop_native.go", "nativeWindowsMultihopCommand",
+                    '"client", "native-multihop-windows.ps1"'),
+        "darwin": ("cmd/client/multihop_native_darwin.go", "nativeDarwinMultihopCommand",
+                   'helper = "native-multihop-darwin.sh"'),
+    }
+    if platform not in wrappers:
+        return False
+    wrapper, command, helper = wrappers[platform]
+    return (
+        all_markers("cmd/client/multihop_native_routes.go", "nativeMultihopPlatformSupported",
+                    "/api/multihop/status", "/api/multihop/connect", "switch runtime.GOOS",
+                    f'case "{platform}":\n\t\treturn {command}(a, sel)',
+                    "bindNativeMultihopRuntime(a, native, sel, network)",
+                    "a.proveNativeMultihop(sel, cmd)")
+        and all_markers(wrapper, f"func {command}(a *app, sel multihopSelection)",
+                        "return prepareOwnedNativeMultihopCommand(a, sel, nil)")
+        and all_markers("cmd/client/multihop_native_capture.go", "mobilemultihop.NodeMultihopConfig",
+                        "verifyBundledNative", "nativeMultihopEnvironment", "HOMEVPN_POLICY_PROFILE_ID",
+                        "proveMultihopLaneNodeContext", "captureNativeMultihopSelection")
+        and all_markers("cmd/client/multihop_native_launch.go",
+                        "preflightOwnedNativeMultihopCommand(a, sel, descriptor)",
+                        "verifyBundledNative(desktopAmneziaPackageRoot())",
+                        "compileRetainedNativeMultihopLaunch(sel, descriptor)",
+                        "sel.Native.validate(sel) != nil",
+                        "compileDesktopExecutionConfig(data, *descriptor, sel)",
+                        'inbound["auto_route"] != true || inbound["strict_route"] != true',
+                        "preflightRetainedNativeMultihop(a.connectionOperationContextOrBackground(), binary, launch, runDesktopExternalPreflightCommand)",
+                        "stageOwnedNativeMultihopCommand(a, sel, launch)",
+                        "stageDesktopNodeLaunch(a, launch)",
+                        "nativeNodeMTUEnvironment(nativeMultihopEnvironment(launch.root, sel), launch.mtuSession, launch.configSHA256)",
+                        "registerNativeMultihopDNSRuntime(a, sel, launch.command)",
+                        "!a.ownsConnectionRuntime(launch.command)",
+                        "physicalNetworkIdentity() != network", "current != launch")
+        and all_markers("cmd/client/desktop_node_native.go", "func stageDesktopNodeLaunch",
+                        "receipt.ConfigSHA256 != configSHA256", "captureDesktopRuntimeDirectory(launch, directory)",
+                        'writeDesktopRuntimeFile(launch, "sing-box.json", launch.config, false)', helper)
+        and all_markers("cmd/client/multihop_native_retained_test.go",
+                        "TestNativeMultihopRetainedStageBindsFreshSessionAndExactConfig",
+                        "TestNativeMultihopRetainedPreflightReadsExactGraphAndPreservesFailure",
+                        "TestNativeMultihopRetainedLateProofCannotEraseReplacementGraph")
+        and all_markers("cmd/client/multihop_native_capture_test.go",
+                        "TestNativeMultihopCannotFallBackToStockEngine",
+                        "TestNativeMultihopProofCannotAdoptRetiredEntryOrExit")
+    )
+
+
 @dataclass(frozen=True)
 class Gate:
     name: str
@@ -105,14 +189,14 @@ GATES = [
     Gate("immutable node identity on edits/import", 3.0, lambda: all_markers("cmd/client/main.go", "NodeProofID") and any(x in body("cmd/client/main.go") for x in ("linked router node proof identity cannot be changed", "incoming != identity"))),
     Gate("generic package secret separation", 4.0, lambda: all_markers("deploy/check-generic-package-secrets.py", "generic package contains private bundle", "package does not ship LICENSE") and all_markers("server/scripts/build-download-on-demand.py", "copy_generic_runtime", "write_blank_routers", "assert_generic_tree", "same-image prebuilt components", "same-SHA native GitHub artifact is required", "controller-only substitute")),
     Gate("same-SHA GitHub-first package policy", 4.0, lambda: all_markers("server/scripts/download-broker.py", "ROUTER_VPN_GITHUB_SHA", "artifact") and none_markers("server/portainer-current.yaml", "build:") and no_self_mutating_workflows()),
-    Gate("Windows native WPF app + Portable lifecycle", 8.0, lambda: all_markers("client/RouterVPN-Windows-App.ps1", "PresentationFramework", "ShowDialog()", "/api/connect-logical") and all_markers("cmd/portable-launcher/main.go", "RouterVPN-Windows-App.ps1", "nativeCmd.Wait()") and none_markers("cmd/portable-launcher/main.go", "msedge.exe", "chrome.exe", "--app=") and all_markers("cmd/client/multihop_native_routes.go", 'runtime.GOOS == "windows"', "nativeWindowsMultihopCommand", "nativeMultihopConnect") and all_markers("client/native-multihop-windows.ps1", "Remove-PrivateRuntime", "Invoke-RouterVPNNativeKillSwitch 'prepare'", "Invoke-RouterVPNNativeKillSwitch 'release'")),
+    Gate("Windows native WPF app + Portable lifecycle", 8.0, lambda: all_markers("client/RouterVPN-Windows-App.ps1", "PresentationFramework", "ShowDialog()", "/api/connect-logical") and windows_owned_package() and none_markers("cmd/portable-launcher/main.go", "msedge.exe", "chrome.exe", "--app=") and retained_native_multihop_platform("windows") and all_markers("client/native-multihop-windows.ps1", "Remove-PrivateRuntime", "Invoke-RouterVPNNativeKillSwitch 'prepare'", "Invoke-RouterVPNNativeKillSwitch 'release'")),
     Gate("Android raw WG/AWG native runtime", 3.0, lambda: all_markers("android/app/src/main/java/com/eabusham/routervpn/NativeWireGuardController.java", "GoBackend", "State.UP", "AndroidNativeProfilePolicy.patchWireGuardLikeConfig", "AndroidPathProbe.prove(privateBundle, 8000)", "recoverAfterNetworkChange", "network-transition recovery failed closed") and all_markers("android/app/src/main/java/com/eabusham/routervpn/NativeAmneziaWGController.java", "org.amnezia.awg.backend.GoBackend", "State.UP", "AndroidNativeProfilePolicy.patchWireGuardLikeConfig", "AndroidPathProbe.prove(privateBundle, 8000)", "recoverAfterNetworkChange", "network-transition recovery failed closed")),
     Gate("Android embedded libbox/Xray AUTO/SMART/CUSTOM/ALL", 3.0, lambda: all_markers("android/app/src/main/java/com/eabusham/routervpn/AndroidModeOrchestrator.java", "AndroidPathProbe.prove", "SMART AUTO", "void all(File bundle,Callback cb)", "protectionRank", "ALL failed closed because no Android-native branch passed Start Layer requirements and selected-node path proof", "ALL requires a complete MAX TLS/QUIC branch under the selected base, fallback and Start Layer policy", "candidates.removeIf(c->protectionRank(c)==0||!bases.contains(baseFor(c)))", "rethrowCancellation(error);checkedBundle(bundle);", "stopCurrent(false);checkedBundle(bundle);", "if(!ownsSelection())return message;") and all_markers("android/test_android_runtime_contract.py", '"test_android_mode_orchestrator.py"') and all_markers("android/test_android_mode_orchestrator.py", "'AndroidModeOrchestrator', 'AndroidProfileSelection', 'AndroidKillSwitchPolicy'", "['javac', '--release', '17'", "ALL complete fallback order, never weaker substitute", "SMART cancellation never restores or adopts another candidate", "unconfirmed cleanup aborts instead of starting another engine", "lost session owner is neither adopted nor overwritten") and all_markers("android/app/src/main/java/com/eabusham/routervpn/NativeXrayController.java", "isCompositeProfile", "cannot be represented truthfully by native Xray alone") and exists("android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java") and exists("android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java") and all_markers("android/build-sing-box-libbox.sh", "LIBXRAY_COMMIT=294fb37343205b9b0cb7b7b1b423d3d4b60d9998", "exactly one gomobile go.Seq runtime class") and none_markers("android/app/build.gradle", "libs/libxray.aar", "prepareXrayLibXray")),
     Gate("Android strict lockdown and transitions", 2.0, lambda: all_markers("android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java", "isAlwaysOn()", "isLockdownEnabled()", "resetNetwork", "updateDefaultInterface") and all_markers("android/app/src/main/java/com/eabusham/routervpn/XrayVpnService.java", "isAlwaysOn()", "isLockdownEnabled()", "routerXrayRegisterDialerController", "routerXraySetDNS", "routerXrayResetDNS", "restartAfterNetworkChange", "AndroidPathProbe.prove(activeBundle")),
     Gate("Android real narrow multihop + multi-node store", 2.0, lambda: all_markers("android/app/src/main/java/com/eabusham/routervpn/AndroidNodeStore.java", "MAX_NODES = 24", "stableNodeIdentity") and all_markers("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopController.java", '"shadowsocks".equals(exitMode)', '"hysteria2".equals(exitMode)', 'proxy.put("detour", "entry-wg")') and all_markers("android/app/src/main/java/com/eabusham/routervpn/AndroidMultihopRuntime.java", "AndroidPathProbe.prove(prepared.exitBundle", "Exit-node private path proof failed", "boolean stopped = !started || stopEmbeddedAndProve();", "transitioning = !stopped;")),
     Gate("iOS real pinned WireGuard PacketTunnel", 5.0, lambda: all_markers("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "WireGuardAdapter(with: self)", "RouterVPNWireGuardConfig.parse", "completionHandler(nil)")),
     Gate("iOS exact node proof, Libbox and strict unsupported fail-closed", 3.0, lambda: all_markers("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", 'body["node_id"] as? String == expectedNodeID', "strict Apple kill switch requested", "includeAllNetworks", "enforceRoutes", 'case "libbox":', 'case "external-libbox":', "RouterVPNLibboxEngine", "proveExternalExit") and all_markers("ios/RouterVPN/App/IOSRuntimeSelection.swift", 'case libbox = "libbox"', "sing-box.json", "Unimplemented helper combinations and unsupported multihop combinations remain unavailable instead of faking Connected; native REALITY, PQ REALITY, XHTTP and dual-transport Xray graphs are supported.") and all_markers("ios/RouterVPN/App/RouterVPNModelExternal.swift", "external-libbox", "External OpenVPN — selected native DNS and exact public-exit proof", "exact public-exit proof") and all_markers("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift", "LibboxRouterOpenVPNEndpoint", 'endpoint["type"] as? String == "openvpn-client"', 'endpoint["system"] as? Bool == false') and all_markers("mobile/routervpn_openvpn_native_test.go.tmpl", "verified-TLS-payload-and-shutdown", "untrusted-CA-rejected", "wrong-peer-name-rejected", "malformed-CA-rejected") and all_markers("ios/RouterVPN/project.yml", "test_mobile_openvpn_pinned.sh")),
-    Gate("macOS native AppKit packages", 6.0, lambda: all_markers("client/macos/RouterVPNMacProduct.swift", "NSWindow(", "NSTabViewController", "--self-test") and all_markers("client/macos/build-native-app.sh", 'SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"', '"$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC"') and all_markers("deploy/package-macos-native.sh", "RouterVPN.app", "RouterVPN-darwin-amd64", "RouterVPN-darwin-arm64") and none_markers("client/macos/RouterVPNMacProduct.swift", "WKWebView", "import WebKit") and all_markers("cmd/client/multihop_native_darwin.go", 'filepath.Join(root, "modes", "native-multihop-darwin.sh")', "prepareNativeMultihop") and all_markers("modes/native-multihop-darwin.sh", "cleanup-private-runtime.py", "kill-switch-platform.py", "HOMEVPN_POLICY_PROFILE_ID") and all_markers("modes/darwin_kill_switch.py", 'PF_ANCHOR = "com.apple/router-vpn"', "block drop out quick all", "refusing protected connect", 'run_pf(["-X", token]')),
+    Gate("macOS native AppKit packages", 6.0, lambda: all_markers("client/macos/RouterVPNMacProduct.swift", "NSWindow(", "NSTabViewController", "--self-test") and all_markers("client/macos/build-native-app.sh", 'SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"', '"$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC"') and all_markers("deploy/package-macos-native.sh", "RouterVPN.app", "RouterVPN-darwin-amd64", "RouterVPN-darwin-arm64") and none_markers("client/macos/RouterVPNMacProduct.swift", "WKWebView", "import WebKit") and retained_native_multihop_platform("darwin") and all_markers("modes/native-multihop-darwin.sh", "cleanup-private-runtime.py", "kill-switch-platform.py", "HOMEVPN_POLICY_PROFILE_ID") and all_markers("modes/darwin_kill_switch.py", 'PF_ANCHOR = "com.apple/router-vpn"', "block drop out quick all", "refusing protected connect", 'run_pf(["-X", token]')),
     Gate("Linux native GTK amd64+ARM packages", 6.0, lambda: all_markers("client/linux/build-native-app.sh", 'SRC="$ROOT/client/linux/routervpn-gtk-product-v5.c"', 'START_LAYER_SETTINGS="$ROOT/client/linux/apply-start-layer-settings.py"', 'SHIPPED=("$SRC"', '"$V4" "$V3" "$CORE" "$START_LAYER_SETTINGS")', '"$SETTINGS_INC" "$MUTATION_SETTINGS"', 'python3 "$START_LAYER_SETTINGS" "$MUTATION_SETTINGS" "$HARDENED_SETTINGS"', "gcc -O2 -Wall -Wextra -Werror") and all_markers("client/linux/routervpn-gtk-product-v5.c", "gtk_window_new", "gtk_notebook_new", "--self-test") and all_markers("client/linux/routervpn-gtk-product.c", "http://127.0.0.1:8788", "/api/connect-logical", "/api/emergency-stop") and all(none_markers(rel, "WebKit", "WebView", "xdg-open", "sensible-browser") for rel in ("client/linux/routervpn-gtk-product-v5.c", "client/linux/routervpn-gtk-product-v4.c", "client/linux/routervpn-gtk-product-v3.c", "client/linux/routervpn-gtk-product.c")) and all_markers(".github/workflows/linux-native-app.yml", "ubuntu-24.04", "ubuntu-24.04-arm")),
     Gate("Setup Center persistent Full Guide lifecycle", 2.0, lambda: all_markers("server/scripts/setup_center_guide.py", "routervpn.setup-guide.v1", "if(!state.completed)setTimeout(show,250)", "Restart guide", "state.completed=true")),
     Gate("zero-knowledge method hierarchy and HOW onboarding", 1.0, lambda: all_markers("server/scripts/setup_center_guide.py", "1 — Simple / native method", "2 — Router VPN app", "3 — Universal third-party", "4 — Manual / custom", "Deploy the home node from zero", "Manual Connect still requires health proof and rollback on failure")),
