@@ -122,6 +122,41 @@ class DesktopPTPreparation(unittest.TestCase):
                             for row in actual['Replace']))
         self.assertFalse(any(row['Path'] == 'router-vpn' for row in actual['Require']))
 
+    def test_crlf_preparation_keeps_exact_source_and_raw_replacement_guards(self):
+        metadata = ('include/registry.go', 'route/network.go')
+        windows_inputs = (*metadata, 'dns/transport_adapter.go', 'go.mod', 'go.sum')
+        for name in windows_inputs:
+            self.assertIn(b'\n', ORIGINALS[name])
+            (self.vendor/name).write_bytes(ORIGINALS[name].replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+        self.prepare()
+        first = snapshot(self.vendor)
+        for name in metadata:
+            self.assertNotIn(b'\r', first[name])
+        self.assertEqual(first['include/registry.go'].count(b'routervpndesktoppt.RegisterNetworkOwner(registry)'), 1)
+        self.assertEqual(first['route/network.go'].count(PREP.NETWORK_DISPATCH.encode()), 1)
+        self.assertEqual(first['dns/transport_adapter.go'], (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes())
+        self.assertTrue(first['go.mod'].startswith(('module '+PREP.MODULE+'\n').encode()))
+        # A previously prepared Windows file is the same exact Go source.
+        for name in windows_inputs:
+            (self.vendor/name).write_bytes(first[name].replace(b'\r\n', b'\n').replace(b'\n', b'\r\n'))
+        self.prepare()
+        self.assertEqual(snapshot(self.vendor), first)
+        # Normalization must not hide even a newline-only replacement while
+        # the owned module update is staged: the final guard compares bytes.
+        actual = PREP.TOR.prepare_modules
+        def replace_captured_registry(staged, go):
+            actual(staged, go)
+            target = self.vendor/'include/registry.go'
+            target.write_bytes(target.read_bytes().replace(b'\n', b'\r\n'))
+        with patch.object(PREP.TOR, 'prepare_modules', side_effect=replace_captured_registry), \
+             self.assertRaisesRegex(ValueError, 'target changed before adoption'):
+            self.prepare()
+        changed = snapshot(self.vendor)
+        self.assertEqual(changed.pop('include/registry.go'), first['include/registry.go'].replace(b'\n', b'\r\n'))
+        expected = dict(first)
+        expected.pop('include/registry.go')
+        self.assertEqual(changed, expected)
+
     def test_checksum_conflict_and_foreign_module_fail_before_adoption(self):
         lock = json.loads((ROOT/'mobile/torpt/SOURCE_LOCK.json').read_text())
         item = lock['modules'][0]

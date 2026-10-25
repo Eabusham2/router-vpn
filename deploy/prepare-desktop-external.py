@@ -136,6 +136,10 @@ def pt_copies():
 
 
 def pt_registry_source(source):
+    # Windows preparation steps can write CRLF even when Git inputs are LF.
+    # Parse the same Go source with canonical newlines; the caller retains the
+    # original bytes for its ownership/replacement check before any write.
+    source = source.replace('\r\n', '\n')
     if MODULE+'/protocol/routervpntor' in source or 'routervpntor.RegisterOutbound' in source:
         raise ValueError('Desktop PT preparation cannot share an embedded Tor registry')
     imported = '\t"'+MODULE+'/routervpn/desktoppt"'
@@ -153,7 +157,8 @@ def pt_registry_source(source):
 
 
 def pt_network_source(vendor, source):
-    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':route/network.go']).decode()
+    source = source.replace('\r\n', '\n')
+    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':route/network.go']).decode().replace('\r\n', '\n')
     marker, anchor = 'func (r *NetworkManager) ResetNetwork(ctx context.Context) {', '\tfor _, endpoint := range r.endpoint.Endpoints() {'
     if original.count(marker) != 1 or source.count(marker) != 1:
         raise ValueError('Desktop Tor network reset boundary changed')
@@ -209,7 +214,7 @@ def prepare_desktop_pt(vendor, go='go'):
     previous = preflight_pt_files(vendor, content)
     paths = {name: TOR.destination(vendor, name) for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum')}
     originals = {name: path.read_bytes() for name, path in paths.items()}
-    if not originals['go.mod'].startswith(('module '+MODULE+'\n').encode()):
+    if not originals['go.mod'].replace(b'\r\n', b'\n').startswith(('module '+MODULE+'\n').encode()):
         raise ValueError('Desktop PT preparation requires the existing single native Go module')
     registry = pt_registry_source(originals['include/registry.go'].decode())
     network = pt_network_source(vendor, originals['route/network.go'].decode())

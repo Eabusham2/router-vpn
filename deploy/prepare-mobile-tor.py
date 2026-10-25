@@ -117,7 +117,9 @@ def bootstrap_dns_source(vendor: Path, generated: bytes) -> bytes:
         if candidate.is_symlink():
             raise ValueError('Linked native Tor DNS adapter destination')
     actual = path.read_bytes()
-    if actual not in (original, generated):
+    # Git and earlier Windows preparation steps may use CRLF. Accept only
+    # newline-equivalent exact source; semantic drift still fails before write.
+    if actual.replace(b'\r\n', b'\n') not in (original.replace(b'\r\n', b'\n'), generated.replace(b'\r\n', b'\n')):
         raise ValueError('Pinned native Tor DNS bootstrap adapter changed outside its exact preparation')
     return generated
 
