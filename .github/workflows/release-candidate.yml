@@ -71,6 +71,7 @@ jobs:
           python3 deploy/profile-readiness-marker-audit.py
           python3 deploy/test_source_provenance.py
           python3 deploy/test-release-candidate-provenance.py
+          python3 deploy/test_windows_release_gates.py
           python3 deploy/private-bundle-boundary-audit.py
           python3 deploy/docker-cleanup-safety-audit.py
           python3 deploy/router-forwarding-audit.py
@@ -219,6 +220,8 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with: {go-version: '1.26.3', cache: false}
+      - uses: actions/setup-python@v5
+        with: {python-version: '3.12'}
       - name: Verify native Windows Tor host compatibility API
         shell: pwsh
         env: {ROUTER_VPN_REQUIRE_TOR_HELPERS: '1'}
@@ -258,6 +261,18 @@ jobs:
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $runtimeTest -SourceRoot $root.FullName
           if($LASTEXITCODE -ne 0){throw 'Windows PowerShell 5.1 runtime installation fixture failed'}
           & (Join-Path $root.FullName 'client\test-windows-installed-runtimes.ps1') -PackageRoot $root.FullName -ExpectedArchitecture $arch
+      - name: Execute packaged device and DNS ownership gates
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            python deploy/test_windows_release_gates.py --package-root $roots[0].FullName --shell $shell
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch device/DNS gates failed in $shell"}
+          }
       - name: Execute shipped Tor helpers on the actual Windows architecture
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
