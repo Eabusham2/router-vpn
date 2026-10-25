@@ -54,6 +54,7 @@ function Environment-Capture {
 # Compile the shipping helper with the oldest supported C# syntax, then execute
 # its exact argument/environment serializers even on the non-Windows build host.
 $ownerType=[RouterVPN.PrivateJobOwner]
+Reject { Add-RouterVPNPrivateJobType -TypeDefinition 'public static class RouterVPNJobNewerSyntax { public static string Value => "unsupported"; }' } 'The private Job compiler accepted post-C#5 syntax.'
 Check $ownerType.IsSealed 'Private process ownership must not be subclassable.'
 Check ($ownerType.GetConstructors().Length -eq 0) 'An unrelated caller can construct an unowned process handle.'
 Check ($ownerType.GetFields([Reflection.BindingFlags]'Public,Instance').Length -eq 0) 'A native handle is publicly writable.'
@@ -101,7 +102,7 @@ function New-Variant([string]$Name,[string]$Source) {
     $namespace='RouterVPNJobFixture'+$Name
     Check ($Source -cne $script:NativeSource) 'A defect variant did not alter its intended source.'
     $source=$Source.Replace('namespace RouterVPN {',('namespace '+$namespace+' {'))
-    Add-Type -TypeDefinition $source -CompilerOptions '/langversion:5' -ErrorAction Stop
+    Add-RouterVPNPrivateJobType -TypeDefinition $source
     $type=($namespace+'.PrivateJobOwner') -as [type]
     Check ($null -ne $type) 'The intended native defect variant did not compile.'
     return $type
@@ -239,7 +240,7 @@ public static class RouterVPNPrivateJobFixtureChild {
     [DllImport("kernel32.dll", ExactSpelling=true, CharSet=CharSet.Unicode, SetLastError=true)] static extern uint GetLongPathNameW(string path, StringBuilder result, uint size);
 }
 '@
-Add-Type -TypeDefinition $childSource -CompilerOptions '/langversion:5' -ErrorAction Stop
+Add-RouterVPNPrivateJobType -TypeDefinition $childSource
 if($CompileOnly) {
     Write-Output ("Windows private Job portable checks passed: {0}; C#5 helper and fixture compiled. Windows kernel execution was not requested." -f $script:Checks)
     exit 0

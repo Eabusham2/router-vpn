@@ -3,6 +3,24 @@
 # PID, invokes a shell, changes firewall policy, or declares application drain.
 # Windows contracts: CreateProcessW, AssignProcessToJobObject, Job Objects and
 # Parsing C command-line arguments on learn.microsoft.com.
+function Add-RouterVPNPrivateJobType {
+    param([Parameter(Mandatory=$true)][string]$TypeDefinition)
+    # Windows PowerShell 5.1 uses CodeDom CompilerParameters; PowerShell 7
+    # exposes CompilerOptions. Both compile the same source as C# 5.
+    $compiler = Get-Command Microsoft.PowerShell.Utility\Add-Type -ErrorAction Stop
+    if ($compiler.Parameters.ContainsKey('CompilerOptions')) {
+        Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $TypeDefinition -CompilerOptions '/langversion:5' -ErrorAction Stop
+    } elseif ($compiler.Parameters.ContainsKey('CompilerParameters')) {
+        $parameters = New-Object System.CodeDom.Compiler.CompilerParameters
+        $parameters.GenerateInMemory = $true
+        $parameters.CompilerOptions = '/langversion:5'
+        [void]$parameters.ReferencedAssemblies.Add('System.dll')
+        [void]$parameters.ReferencedAssemblies.Add('System.Core.dll')
+        Microsoft.PowerShell.Utility\Add-Type -TypeDefinition $TypeDefinition -CompilerParameters $parameters -ErrorAction Stop
+    } else {
+        throw 'This PowerShell compiler cannot enforce the private Job C# 5 contract.'
+    }
+}
 $routerVPNPrivateJobSource = @'
 using System;
 using System.Collections;
@@ -334,7 +352,7 @@ try {
 } finally { $routerVPNPrivateJobHasher.Dispose() }
 $routerVPNPrivateJobSource = $routerVPNPrivateJobSource.Replace('__ROUTERVPN_JOB_SOURCE_SHA256__', $routerVPNPrivateJobHash)
 if (-not ('RouterVPN.PrivateJobOwner' -as [type])) {
-    Add-Type -TypeDefinition $routerVPNPrivateJobSource -CompilerOptions '/langversion:5' -ErrorAction Stop
+    Add-RouterVPNPrivateJobType -TypeDefinition $routerVPNPrivateJobSource
 } elseif ([RouterVPN.PrivateJobOwner]::SourceIdentity -cne $routerVPNPrivateJobHash) {
     throw 'A different Router VPN private Job helper is already loaded in this process.'
 }
