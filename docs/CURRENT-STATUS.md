@@ -52,6 +52,15 @@ native DNS Retest and selection of a complete measured resolver draft remain
 implementation work. Router Home's UDP preset is still distinct from explicit
 DoT/DoH policy, and broader encrypted Home support remains to be completed.
 
+Compact desktop Home and Rescue actions now capture the displayed node before
+reading its DNS revision. Re-selecting Home preserves an already-selected
+encrypted Home transport, address, port, TLS name and path; changing back from a
+different policy requests the linked Home preset without carrying that other
+resolver. Configurable choices and Fastest open DNS details for explicit editing
+or measured selection. Shipping composition tests cover the complete Windows
+editor and compact control, AppKit mutation transforms, and GTK callbacks. The
+updated transforms retain both the synchronous and asynchronous idle guards.
+
 The current source also includes Apple candidate-measurement repair `7484eec1`
 and macOS Tor editor integration `b94f5df9`. The Apple probe receives an immutable
 Sendable target while private profiles remain on MainActor; its executable

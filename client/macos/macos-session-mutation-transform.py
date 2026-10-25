@@ -139,10 +139,48 @@ def _captured_protection_pairs(pairs, mode):
         raise SystemExit("captured protection mutation pair count drifted")
     return result
 
+def _captured_quick_dns_pairs(pairs, mode):
+    if mode != "unified":
+        return pairs
+    import re
+    callback = '    @objc func unifiedDNSChanged(_ sender: NSPopUpButton) {\n        let index = sender.indexOfSelectedItem\n        guard index >= 0 && index < dnsModeIDs.count else { return }\n        let mode = dnsModeIDs[index]\n        if ["fastest", "custom", "dot", "doh", "doh3"].contains(mode) { openUnifiedDNS(); return }\n        guard ensureMutationIdle("changing DNS policy") else { refreshUnifiedChrome(); return }\n        let selectedIndex = routerPopup.indexOfSelectedItem\n        guard selectedIndex >= 0 && selectedIndex < routerIDs.count else { refreshUnifiedChrome(); return }\n        let displayedProfileID = routerIDs[selectedIndex]\n        asyncAction {\n            try self.requireMutationIdle("changing DNS policy")\n            let captured = try self.api.json("/api/dns/policy", timeout: 5) as? [String: Any]\n            let body = try productQuickDNSBody(captured: captured, displayedProfileID: displayedProfileID, mode: mode)\n            _ = try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10)\n            return "DNS saved for the selected node. The next connection will prove its selected resolver."\n        }\n    }\n'
+    result = []
+    hits = 0
+    for pair in pairs:
+        values = [base64.b64decode(value).decode("utf-8") for value in pair]
+        if "@objc func unifiedDNSChanged" in values[0]:
+            hits += 1
+            for i, value in enumerate(values):
+                replaced, count = re.subn(r"    @objc func unifiedDNSChanged\(_ sender: NSPopUpButton\) \{.*\Z", lambda _: callback, value, flags=re.M | re.S)
+                if count != 1:
+                    raise SystemExit("captured quick DNS anchor drifted")
+                values[i] = replaced
+        result.append([base64.b64encode(value.encode("utf-8")).decode("ascii") for value in values])
+    if hits != 1:
+        raise SystemExit("captured quick DNS mutation pair count drifted")
+    return result
+
+def _captured_dns_editor_pairs(pairs, mode):
+    if mode != "product":
+        return pairs
+    raw, hardened = '    @objc func saveDNS() {\n        let displayedID = routerPopup.selectedItem?.representedObject as? String ?? ""\n        let captured = dnsPolicyCapture\n        let modeIndex = max(0, min(dnsModePopup.indexOfSelectedItem, dnsModeIDs.count - 1))\n        let protocolIndex = max(0, min(dnsProtocolPopup.indexOfSelectedItem, dnsProtocolIDs.count - 1))\n        let portText = dnsPortField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)\n        do {\n            guard let port = portText.isEmpty ? 0 : Int(portText) else {\n                throw NSError(domain: "RouterVPN.DNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a valid numeric DNS port."])\n            }\n            let fields: [String: Any] = ["mode": dnsModeIDs[modeIndex], "protocol": dnsProtocolIDs[protocolIndex], "host": dnsHostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "port": port, "server_name": dnsServerNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "path": dnsPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)]\n            let body = try productDNSPolicyBody(captured: captured, displayedProfileID: displayedID, fields: fields)\n            asyncAction { String(data: try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10), encoding: .utf8) ?? "DNS policy saved for the next connection" }\n        } catch { errorLabel.stringValue = error.localizedDescription; appendHelp("DNS policy failed: \\(error.localizedDescription)") }\n    }\n', '    @objc func saveDNS() {\n        guard ensureMutationIdle("saving DNS policy") else { return }\n        let displayedID = routerPopup.selectedItem?.representedObject as? String ?? ""\n        let captured = dnsPolicyCapture\n        let modeIndex = max(0, min(dnsModePopup.indexOfSelectedItem, dnsModeIDs.count - 1))\n        let protocolIndex = max(0, min(dnsProtocolPopup.indexOfSelectedItem, dnsProtocolIDs.count - 1))\n        let portText = dnsPortField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)\n        do {\n            guard let port = portText.isEmpty ? 0 : Int(portText) else {\n                throw NSError(domain: "RouterVPN.DNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a valid numeric DNS port."])\n            }\n            let fields: [String: Any] = ["mode": dnsModeIDs[modeIndex], "protocol": dnsProtocolIDs[protocolIndex], "host": dnsHostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "port": port, "server_name": dnsServerNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "path": dnsPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)]\n            let body = try productDNSPolicyBody(captured: captured, displayedProfileID: displayedID, fields: fields)\n            asyncAction { try self.requireMutationIdle("saving DNS policy"); return String(data: try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10), encoding: .utf8) ?? "DNS policy saved for the next connection" }\n        } catch { errorLabel.stringValue = error.localizedDescription; appendHelp("DNS policy failed: \\(error.localizedDescription)") }\n    }\n'
+    result = []
+    hits = 0
+    for pair in pairs:
+        old = base64.b64decode(pair[0]).decode("utf-8")
+        if "@objc func saveDNS()" in old:
+            hits += 1
+            result.append([base64.b64encode(raw.encode("utf-8")).decode("ascii"), base64.b64encode(hardened.encode("utf-8")).decode("ascii")])
+        else:
+            result.append(pair)
+    if hits != 1:
+        raise SystemExit("captured DNS editor mutation pair count drifted")
+    return result
+
 def transform(source: str, mode: str) -> str:
     if mode not in PAIRS:
         raise SystemExit(f"unknown transform mode: {mode}")
-    for old64, new64 in _captured_protection_pairs(_external_path_pairs(_pairs_for(mode), mode), mode):
+    for old64, new64 in _captured_dns_editor_pairs(_captured_quick_dns_pairs(_captured_protection_pairs(_external_path_pairs(_pairs_for(mode), mode), mode), mode), mode):
         old=base64.b64decode(old64).decode('utf-8')
         new=base64.b64decode(new64).decode('utf-8')
         count=source.count(old)

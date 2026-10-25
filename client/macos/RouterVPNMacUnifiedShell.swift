@@ -3,6 +3,19 @@ import Foundation
 import MapKit
 import ObjectiveC
 
+func productQuickDNSBody(captured: [String: Any]?, displayedProfileID: String, mode: String) throws -> [String: Any] {
+    guard ["home", "rescue"].contains(mode) else {
+        throw NSError(domain: "RouterVPN.DNS", code: 3, userInfo: [NSLocalizedDescriptionKey: "Open DNS details to configure or select a measured resolver."])
+    }
+    var fields: [String: Any] = ["mode": mode, "port": 0]
+    if mode == "home", captured?["mode"] as? String == "home" {
+        for key in ["protocol", "host", "port", "server_name", "path"] {
+            if let value = captured?[key] { fields[key] = value }
+        }
+    }
+    return try productDNSPolicyBody(captured: captured, displayedProfileID: displayedProfileID, fields: fields)
+}
+
 private let unifiedSelectedModeKey = "routervpn.unified.selected-mode.v1"
 private let unifiedCustomPresetsKey = "routervpn.unified.custom-presets.v1"
 private let unifiedMultihopEnabledKey = "routervpn.unified.multihop-enabled.v1"
@@ -515,11 +528,21 @@ extension ProductWindowController {
     }
 
     @objc func unifiedDNSChanged(_ sender: NSPopUpButton) {
-        let index = max(0, min(sender.indexOfSelectedItem, dnsModeIDs.count - 1)); let id = dnsModeIDs[index]
-        if dnsModePopup.numberOfItems == 0 { _ = dnsView() }
-        dnsModePopup.selectItem(at: index)
-        if ["custom", "dot", "doh", "doh3"].contains(id) && dnsHostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { openUnifiedDNS(); return }
-        saveDNS()
+        let index = sender.indexOfSelectedItem
+        guard index >= 0 && index < dnsModeIDs.count else { return }
+        let mode = dnsModeIDs[index]
+        if ["fastest", "custom", "dot", "doh", "doh3"].contains(mode) { openUnifiedDNS(); return }
+        guard ensureMutationIdle("changing DNS policy") else { refreshUnifiedChrome(); return }
+        let selectedIndex = routerPopup.indexOfSelectedItem
+        guard selectedIndex >= 0 && selectedIndex < routerIDs.count else { refreshUnifiedChrome(); return }
+        let displayedProfileID = routerIDs[selectedIndex]
+        asyncAction {
+            try self.requireMutationIdle("changing DNS policy")
+            let captured = try self.api.json("/api/dns/policy", timeout: 5) as? [String: Any]
+            let body = try productQuickDNSBody(captured: captured, displayedProfileID: displayedProfileID, mode: mode)
+            _ = try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10)
+            return "DNS saved for the selected node. The next connection will prove its selected resolver."
+        }
     }
 
     func refreshUnifiedChrome() {

@@ -56,6 +56,16 @@ static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state) {
 }
 
 
+static char *linux_quick_dns_payload_v22(JsonObject *captured, const char *displayed, const char *mode) {
+    if (mode == NULL || (strcmp(mode,"home") != 0 && strcmp(mode,"rescue") != 0)) return NULL;
+    gboolean retained = strcmp(mode,"home") == 0 && strcmp(obj_string(captured,"mode"),"home") == 0;
+    char *port = retained && json_object_has_member(captured,"port") ? g_strdup_printf("%" G_GINT64_FORMAT,json_object_get_int_member(captured,"port")) : g_strdup("0");
+    char *body = dns_policy_payload_v5(captured,displayed,mode,
+        retained ? obj_string(captured,"protocol") : "", retained ? obj_string(captured,"host") : "", port,
+        retained ? obj_string(captured,"server_name") : "", retained ? obj_string(captured,"path") : "");
+    g_free(port); return body;
+}
+
 static const char *const linux_unified_mode_ids_v8[] = {
     "smart-auto","auto","base-raw","base-pq","awg-strong","shadowsocks","reality-vision","hysteria2",
     "reality-pq-vision","ss-v2ray","naive-h2","naive-h3","split","reality-xhttp","max","max-quic","max-tls","all",NULL
@@ -256,7 +266,22 @@ static void linux_unified_kill_changed_v8(GtkToggleButton *toggle, gpointer data
     g_free(displayed); g_free(err); free(out.data); linux_unified_refresh_v8(state);
 }
 static void linux_unified_dns_changed_v8(GtkComboBox *combo, gpointer data) {
-    LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;const char *mode=gtk_combo_box_get_active_id(combo);if(mode==NULL)return;if(strcmp(mode,"custom")==0||strcmp(mode,"dot")==0||strcmp(mode,"doh")==0||strcmp(mode,"doh3")==0){linux_unified_show_detail_v8(state,3);return;}char *body=g_strdup_printf("{\"mode\":\"%s\"}",mode);post_and_log(state->app,"/api/dns/policy",body,12000,"DNS policy");g_free(body);
+    LinuxUnifiedV8 *state=data;
+    if(state==NULL||state->syncing)return;
+    const char *selected=gtk_combo_box_get_active_id(combo);
+    if(selected==NULL)return;
+    if(strcmp(selected,"fastest")==0||strcmp(selected,"custom")==0||strcmp(selected,"dot")==0||strcmp(selected,"doh")==0||strcmp(selected,"doh3")==0){linux_unified_show_detail_v8(state,3);refresh_dns_page_v5(state->app);return;}
+    if(!routervpn_require_mutation_idle(state->app,"changing DNS policy")){linux_unified_refresh_v8(state);return;}
+    char *mode=g_strdup(selected), *displayed=g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));
+    Buffer out={0}; char *err=NULL;
+    if(displayed!=NULL && api_request("/api/dns/policy","GET",NULL,5000,&out,&err)){
+        JsonNode *root=parse_json(out.data);
+        char *body=root!=NULL && JSON_NODE_HOLDS_OBJECT(root) ? linux_quick_dns_payload_v22(json_node_get_object(root),displayed,mode) : NULL;
+        if(body!=NULL)post_and_log(state->app,"/api/dns/policy",body,10000,"DNS policy");
+        else append_diag(state->app,"The selected node changed. Refresh DNS before saving.");
+        g_free(body);if(root!=NULL)json_node_free(root);
+    }else append_diag(state->app,err!=NULL?err:"Select a node before changing DNS.");
+    g_free(mode);g_free(displayed);g_free(err);free(out.data);refresh_dns_page_v5(state->app);linux_unified_refresh_v8(state);
 }
 static void linux_unified_node_changed_v8(GtkComboBox *combo, gpointer data) {
     LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;const char *id=gtk_combo_box_get_active_id(combo);if(id==NULL||id[0]=='\0')return;char *body=json_string_body("id",id);post_and_log(state->app,"/api/profile/select",body,12000,"Node selection");g_free(body);refresh_all(state->app);
