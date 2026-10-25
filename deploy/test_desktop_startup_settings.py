@@ -59,6 +59,18 @@ if(-not$caught){throw 'Server rejection hidden'}
 
 def windows(directory, shell):
     source = read("client/RouterVPN-Windows-ProfileSettings.ps1")
+    parser = directory / "parse-source.ps1"
+    parser.write_text(r"""param([string]$Source)
+$tokens=$null;$parseErrors=$null
+[void][System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$parseErrors)
+if($parseErrors.Count){throw ($parseErrors.Message -join '; ')}
+""", encoding="utf-8-sig")
+    run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(parser), "-Source", str(ROOT / "client/RouterVPN-Windows-ProfileSettings.ps1")])
+    broken = source.replace("Saved connection uses the selected protocol", "Saved connection uses this node’s protocol")
+    assert broken != source
+    broken_path = directory / "smart-quote-regression.ps1"
+    broken_path.write_text(broken, encoding="utf-8-sig")
+    run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(parser), "-Source", str(broken_path)], broken=True)
     function = section(source, r"^function global:Save-RouterVPNProfileStartup \{.*?^\}")
     assert 'Name="StartupSettings"' in source
     assert "-Captured $externalStartup" in source and "$captured.node_kind -eq 'external'" in source

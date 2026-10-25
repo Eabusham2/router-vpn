@@ -160,7 +160,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $startupMode=[string]$externalStartup.startup_mode;if($startupMode -eq 'smart-auto'){$startupMode='auto'};SetTag $startup $startupMode
         $autoConnect.IsChecked=[bool]$externalStartup.auto_connect
         $settingsNote.Text='Startup settings for the selected imported node. Its saved protocol, credentials and connection policy are kept.'
-        $startupNote.Text='Saved connection uses this node’s protocol and hop settings. Last keeps its previously proved Local/Server choice when it is still valid.'
+        $startupNote.Text='Saved connection uses the selected protocol and hop settings. Last keeps its previously proved Local/Server choice when it is still valid.'
         $settingsSave.IsEnabled=$true
     }
     if(($null -eq $current -and $null -eq $externalStartup) -or (Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl)){$startupSettings.IsEnabled=$false;$settingsSave.IsEnabled=$false}
