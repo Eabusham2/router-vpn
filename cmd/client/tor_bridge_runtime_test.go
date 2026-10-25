@@ -22,7 +22,9 @@ func clientTorProfile(bridges ...string) common.RouterProfile {
 func TestTorBridgeRuntimeNormalizesExactTransportSet(t *testing.T) {
 	p := clientTorProfile(clientTorBridge)
 	normalized, cfg, transports, host, err := torBridgeProfile(p)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if normalized.External == nil || normalized.External.Protocol != "tor-bridge" || cfg.SocksPort != common.ExternalTorDefaultSocksPort || host != "203.0.113.44" {
 		t.Fatalf("Tor bridge runtime normalization wrong: profile=%+v cfg=%+v host=%q", normalized, cfg, host)
 	}
@@ -35,7 +37,9 @@ func TestTorBridgeRuntimeAcceptsCustomMixedTransportSet(t *testing.T) {
 	p := clientTorProfile(clientTorBridge, clientWebTunnelBridge)
 	p.External.TorBridge.Transport = "custom"
 	_, cfg, transports, host, err := torBridgeProfile(p)
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	if cfg.Transport != "custom" || host != "203.0.113.44" || len(transports) != 2 || transports[0] != "obfs4" || transports[1] != "webtunnel" {
 		t.Fatalf("custom Tor runtime set wrong: cfg=%q transports=%v host=%q", cfg.Transport, transports, host)
 	}
@@ -44,85 +48,81 @@ func TestTorBridgeRuntimeAcceptsCustomMixedTransportSet(t *testing.T) {
 func installFakeExecutable(t *testing.T, dir, name string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil { t.Fatal(err) }
+	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 
-func TestTorBridgeTransportBinaryPrefersLyrebird(t *testing.T) {
+func TestTorBridgeCapabilityRequiresOwnedNativeEngine(t *testing.T) {
 	dir := t.TempDir()
-	lyrebird := installFakeExecutable(t, dir, "lyrebird")
-	installFakeExecutable(t, dir, "obfs4proxy")
+	installFakeExecutable(t, dir, "tor")
+	installFakeExecutable(t, dir, "lyrebird")
+	installFakeExecutable(t, dir, "sing-box")
 	t.Setenv("PATH", dir)
-	for _, set := range [][]string{{"obfs4"}, {"meek_lite"}, {"snowflake"}, {"webtunnel"}, {"obfs4", "snowflake", "webtunnel"}} {
-		got, err := torBridgeTransportBinary(set)
-		if err != nil { t.Fatalf("Lyrebird set %v rejected: %v", set, err) }
-		if got != lyrebird { t.Fatalf("set %v chose %q, want lyrebird %q", set, got, lyrebird) }
-	}
-}
-
-func TestTorBridgeTransportBinaryScopesLegacyFallback(t *testing.T) {
-	dir := t.TempDir()
-	legacy := installFakeExecutable(t, dir, "obfs4proxy")
-	t.Setenv("PATH", dir)
-	if got, err := torBridgeTransportBinary([]string{"obfs4", "meek_lite"}); err != nil || got != legacy {
-		t.Fatalf("legacy obfs4/meek fallback: got=%q err=%v", got, err)
-	}
-	for _, set := range [][]string{{"snowflake"}, {"webtunnel"}, {"obfs4", "snowflake"}} {
-		if _, err := torBridgeTransportBinary(set); err == nil || !strings.Contains(err.Error(), "lyrebird") {
-			t.Fatalf("modern PT set %v did not fail closed without Lyrebird: %v", set, err)
-		}
+	t.Setenv("HOMEVPN_ROOT", t.TempDir())
+	if cap := torBridgeRuntimeCapability(); cap.Supported {
+		t.Fatal("unverified stock helpers enabled the native Tor path")
 	}
 }
 
 func TestTorBridgeCapabilityIsTruthful(t *testing.T) {
 	cap := torBridgeRuntimeCapability()
-	if cap.Protocol != "tor-bridge" || !cap.Implemented { t.Fatalf("Tor bridge capability missing: %#v", cap) }
-	if !cap.Supported && strings.TrimSpace(cap.Reason) == "" { t.Fatalf("unsupported Tor bridge capability has no reason: %#v", cap) }
+	if cap.Protocol != "tor-bridge" || !cap.Implemented {
+		t.Fatalf("Tor bridge capability missing: %#v", cap)
+	}
+	if !cap.Supported && strings.TrimSpace(cap.Reason) == "" {
+		t.Fatalf("unsupported Tor bridge capability has no reason: %#v", cap)
+	}
 	caps := externalProfileProtocolCapabilities()
 	found := false
 	for _, item := range caps {
 		if item.Protocol == "tor-bridge" {
 			found = true
-			if !item.Implemented { t.Fatalf("Tor bridge external capability is not marked implemented: %#v", item) }
+			if !item.Implemented {
+				t.Fatalf("Tor bridge external capability is not marked implemented: %#v", item)
+			}
 		}
 	}
-	if !found { t.Fatal("Tor bridge missing from external profile capabilities") }
+	if !found {
+		t.Fatal("Tor bridge missing from external profile capabilities")
+	}
 }
 
 func TestTorDynamicExitMustBePublic(t *testing.T) {
 	for _, bad := range []string{"", "not-ip", "127.0.0.1", "10.0.0.1", "::1", "fd00::1"} {
-		if _, err := publicTorExit(bad); err == nil { t.Fatalf("invalid Tor exit %q was accepted", bad) }
+		if _, err := publicTorExit(bad); err == nil {
+			t.Fatalf("invalid Tor exit %q was accepted", bad)
+		}
 	}
-	if got, err := publicTorExit("8.8.8.8"); err != nil || got != "8.8.8.8" { t.Fatalf("public Tor exit rejected: got=%q err=%v", got, err) }
+	if got, err := publicTorExit("8.8.8.8"); err != nil || got != "8.8.8.8" {
+		t.Fatalf("public Tor exit rejected: got=%q err=%v", got, err)
+	}
 }
 
-func TestTorBridgeLauncherRequiresBootstrapOwnedCleanupAndExactPT(t *testing.T) {
-	body, err := os.ReadFile("../../modes/native-tor-bridge.sh")
-	if err != nil { t.Fatal(err) }
-	source := string(body)
-	for _, marker := range []string{
-		"Bootstrapped 100%",
-		"Tor process start is not connectivity",
-		"runtime-pids.py",
-		"record \"$ROOT\" \"$PID_MODE\" \"$tor_pid\"",
-		"record \"$ROOT\" \"$PID_MODE\" \"$sing_pid\"",
-		"kill-switch-platform.py",
-		"HOMEVPN_ENDPOINT=\"$BRIDGE_ENDPOINT\"",
-		"HOMEVPN_TOR_PT_BINARY",
-		"HOMEVPN_TOR_PLUGIN_TRANSPORTS",
-		"Tor PT binary changed after capability proof",
-		"ClientTransportPlugin $PT_TRANSPORTS exec ",
-		"legacy obfs4proxy cannot provide Snowflake or WebTunnel",
-		"Tor circumvention process exited; tearing down full-device path",
-		"cleanup-private-runtime.py",
-	} {
-		if !strings.Contains(source, marker) { t.Fatalf("Tor bridge launcher lost %q", marker) }
+func TestTorBridgeLauncherRequiresNativeProofAndExactOwner(t *testing.T) {
+	raw, err := os.ReadFile("../../modes/native-tor-bridge.sh")
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := string(raw)
+	for _, marker := range []string{"HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_BINARY_SHA256", "router_vpn_standard_engine", "kill-switch-platform.py", "exec \"$NATIVE_BIN\" routervpn-tor", "--runtime-dir \"$RUNTIME_DIR\"", "--session \"$HOMEVPN_TOR_SESSION\"", "--tor-binary \"$TOR_BIN\""} {
+		if !strings.Contains(source, marker) {
+			t.Fatal("native Tor launcher lost captured ownership", marker)
+		}
+	}
+	for _, bad := range []string{"Bootstrapped 100%", "ClientTransportPlugin", "verified-mode", "trap cleanup", "rm -rf", "--RunAsDaemon", "lyrebird"} {
+		if strings.Contains(source, bad) {
+			t.Fatal("launcher regained an unowned process or cleanup path", bad)
+		}
 	}
 }
 
 func TestTorBridgeControllerRequiresDynamicTorProofBeforeConnected(t *testing.T) {
 	body, err := os.ReadFile("tor_bridge_routes.go")
-	if err != nil { t.Fatal(err) }
+	if err != nil {
+		t.Fatal(err)
+	}
 	source := string(body)
 	proof := strings.Index(source, "actualIP, proofErr := a.proveTorBridgeExit()")
 	connected := strings.Index(source, "a.state.Connected = true")
@@ -137,22 +137,27 @@ func TestTorBridgeControllerRequiresDynamicTorProofBeforeConnected(t *testing.T)
 		"a.rollbackProfilesLocked(previousStore)",
 		"tor-project-is-tor-passed",
 	} {
-		if !strings.Contains(source, marker) { t.Fatalf("Tor bridge transaction lost %q", marker) }
+		if !strings.Contains(source, marker) {
+			t.Fatalf("Tor bridge transaction lost %q", marker)
+		}
 	}
 }
 
 func TestTorBridgeRuntimeSourceKeepsStrictDynamicBootstrapBoundary(t *testing.T) {
-	body, err := os.ReadFile("tor_bridge_runtime.go")
-	if err != nil { t.Fatal(err) }
-	source := string(body)
-	for _, marker := range []string{
-		"strictLiteralObfs4",
-		"multiple or dynamic/CDN/WebRTC bootstrap egress",
-		"set this profile kill switch Off or use one obfs4 bridge",
-		"ClientTransportPlugin \" + strings.Join(transports, \",\")",
-		"HOMEVPN_TOR_PLUGIN_TRANSPORTS=",
-		"HOMEVPN_TOR_PT_BINARY=",
-	} {
-		if !strings.Contains(source, marker) { t.Fatalf("Tor runtime lost %q", marker) }
+	raw, err := os.ReadFile("../../internal/mobiletor/desktop_bridge.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(raw), "strict desktop Tor protection requires one fixed obfs4 bridge") {
+		t.Fatal("captured policy dropped its physical egress boundary")
+	}
+	raw, err = os.ReadFile("desktop_tor_prepare.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, marker := range []string{"verifyBundledNative", "captureDesktopTorExecutable", "NewDesktopBridgeCapture", "HOMEVPN_TOR_BINARY_SHA256", "desktopTorEnvironment"} {
+		if !strings.Contains(string(raw), marker) {
+			t.Fatal("Tor launch lost captured policy/engine", marker)
+		}
 	}
 }

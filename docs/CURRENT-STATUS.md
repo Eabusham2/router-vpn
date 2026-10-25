@@ -62,8 +62,9 @@ transaction, including atomic startup changes only when edited. The shipping
 PowerShell checks and actual WPF form have passed; a Windows-only error-format
 matcher was repaired without removing its negative control. AppKit's shipping
 Swift serializer/composition checks passed, while current native SDK/release
-verification remains separate. The standalone Tor native adapter is still being
-integrated and is not closed by these ordinary-node forms.
+verification remains separate. Tor's separately captured native lifecycle and
+DNS adapter are described below; ordinary-node forms do not establish the
+remaining Tor graph and MTU capabilities.
 
 Desktop DNS editors now load and save ordinary external and Tor policies
 against the exact selected profile and saved entry. The saved transport,
@@ -93,7 +94,36 @@ Actual native/controller race suites, shipping UI ownership fixtures, loopback
 cancellation and negative controls passed. The complete GTK application built
 and its rendered panel was inspected; WPF/AppKit SDK and release checks remain
 the current exact-SHA native workflow evidence, separate from physical devices.
-Standalone desktop Tor still needs its own retained native DNS adapter.
+Standalone desktop Tor now uses the same retained DNS measurement service
+through its actual Tor Box owner. It captures the selected resolver and public
+comparison transport, preserves the request generation across cancellation,
+and cannot adopt a result from a replacement native session. Automatic loss of
+Tor or ordinary external proof invalidates completed drafts even if the physical
+network fingerprint is unchanged. Explicit Disconnect can retain an otherwise
+valid draft within its original two-minute lifetime.
+
+Desktop Tor bridge launch now stages five immutable private inputs, a fresh
+session/isolation capture, and the exact standalone Tor executable digest. The
+verified native command starts Tor with networking disabled, authenticates its
+SAFECOOKIE control channel and actual PID, owns the Go pluggable transports,
+and starts/proves one captured TUN, selected DNS and Tor exit. Checked native
+drain and actual process exit precede controller-owned cleanup. Windows uses a
+suspended child assigned to a private Job before execution; Unix replaces its
+wrapper with the exact native process. A wrapper failure before native creation
+uses a distinct no-native-process witness, accepted only after actual wrapper
+exit and validation of the unused private workspace. Native crashes or ambiguous
+shutdown do not acquire that exception.
+
+Speed Lab now captures this distinct Tor owner and restores the complete saved
+policy through a fresh Tor session, isolation secret and proof. It does not
+reinterpret Tor as an ordinary external graph or reuse a previous session's
+proof. Executable native-command, actual child-process, wrapper, DNS and Speed
+Lab race tests cover these source paths; physical Tor circuits, kernel TUN
+acceptance and current release packages remain separate evidence. Auto currently
+uses a conservative 1280-byte configured TUN MTU with actual interface readback;
+that value is not a fresh path-MTU measurement. Tor MTU Retest/optimization,
+Router-entry/server/Compare graphs, compatible Jumbo/padding and dynamic-bridge
+strict protection remain requirements to implement.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
 AdGuard address, port, TLS name and HTTPS path. The address must belong to the
@@ -854,10 +884,12 @@ The pinned native registry accepts those graphs and rejects corresponding
 missing-Tor-engine mutations. These constructor/configuration checks do not
 start a public Tor circuit or replace APK/IPA and device networking tests.
 
-Windows x64, macOS and Linux use pinned owned Tor/helper processes. Windows
-ARM64 uses verified Windows 11 x64 userspace compatibility for Tor/Lyrebird;
-the app, VPN engine and driver stay ARM64. Capability checks describe this
-accurately and reject hosts without the required execution support.
+Windows x64, macOS and Linux use an owned standalone Tor process with the
+packaged native Go transports and physical-network observer. Windows ARM64
+uses verified Windows 11 x64 userspace compatibility for standalone Tor;
+the app, transport/VPN engine and driver stay ARM64. Lyrebird is not launched
+by this native connection path. Capability checks describe this accurately
+and reject hosts without the required execution support.
 See [WINDOWS-TOR-ARM64.md](WINDOWS-TOR-ARM64.md).
 
 External imports include validated WG/AWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks,

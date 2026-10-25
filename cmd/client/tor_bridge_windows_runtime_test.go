@@ -53,20 +53,17 @@ func TestPinnedWindowsTorRuntimeResolverRejectsSymlink(t *testing.T) {
 }
 
 func TestWindowsTorControllerUsesPinnedNativeLifecycle(t *testing.T) {
-	runtimeBody, err := os.ReadFile("tor_bridge_runtime.go")
+	runtimeBody, err := os.ReadFile("desktop_tor_prepare.go")
 	if err != nil {
 		t.Fatal(err)
 	}
 	source := string(runtimeBody)
 	for _, marker := range []string{
-		`case "windows":`,
-		`windowsTorHostCompatibility()`,
-		`windowsTorRuntimeExecutable(root, "tor.exe")`,
-		`windowsTorRuntimeExecutable(root, "lyrebird.exe")`,
-		`windowsTorRuntimeExecutable(root, "sing-box.exe")`,
+		`runtime.GOOS == "windows"`,
 		`native-tor-bridge-windows.ps1`,
 		`safeExecutable("powershell.exe")`,
 		`"-Action", "up"`,
+		`"-NativeBinary", prepared.NativeBinary`,
 		`"-TunnelAlias", "router-vpn-tor"`,
 	} {
 		if !strings.Contains(source, marker) {
@@ -80,13 +77,9 @@ func TestWindowsTorControllerUsesPinnedNativeLifecycle(t *testing.T) {
 	}
 	helper := string(helperBody)
 	for _, marker := range []string{
-		"JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
-		"AssignProcessToJobObject",
-		"windows-kill-switch.ps1",
-		"Bootstrapped 100%",
-		"Tor SOCKS listener is unavailable after bootstrap",
-		"Tor circumvention process exited; tearing down full-device path",
-		"Tor PT binary changed after capability proof",
+		"Start-RouterVPNPrivateJob", "Wait-RouterVPNPrivateJob", "Close-RouterVPNPrivateJob",
+		"windows-kill-switch.ps1", "routervpn-tor", "HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_BINARY_SHA256",
+		"Standalone Tor bytes changed after capture.",
 	} {
 		if !strings.Contains(helper, marker) {
 			t.Fatalf("Windows Tor lifecycle helper lost %q", marker)

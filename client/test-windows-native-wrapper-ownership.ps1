@@ -97,7 +97,7 @@ $Count=0
 try{
     Assert-ShippingKillSwitchDispatch $Root 'client/native-multihop-windows.ps1' 'Invoke-RouterVPNNativeKillSwitch' @('release','check','prepare')
     Assert-ShippingKillSwitchDispatch $Root 'client/native-openvpn-windows.ps1' 'Invoke-RouterVPNOpenVPNKillSwitch' @('release','check','prepare','tunnel')
-    Assert-ShippingKillSwitchDispatch $Root 'client/native-tor-bridge-windows.ps1' 'Invoke-RouterVPNTorKillSwitch' @('release','check','prepare')
+    Assert-ShippingKillSwitchDispatch $Root 'client/native-tor-bridge-windows.ps1' 'Invoke-RouterVPNTorKillSwitch' @('check','prepare')
     foreach($Case in @('check','failed-check','down','up','changed','early')){
         $PrivateRoot=Join-Path $TaskRoot $Case;$Runtime=Join-Path $PrivateRoot 'run/native-node/one';[void][IO.Directory]::CreateDirectory($Runtime)
         [IO.File]::WriteAllText((Join-Path $Runtime 'sing-box.json'),'{}');[IO.File]::WriteAllText((Join-Path $Runtime 'replacement.marker'),'retained')
@@ -126,7 +126,7 @@ try{
         if($Case-eq'changed'){Assert-Wrapper (-not(Test-Path -LiteralPath $env:WRAPPER_STOPPED)) 'Changed process identity was force-stopped.'}
         $Count++
     }
-    Write-Host ('PASS full shipping Windows native wrapper: '+$Count+' check/failure/owner/replacement cases; 10 shipping firewall dispatches and 3 alias/failure negative controls')
+    Write-Host ('PASS full shipping Windows native wrapper: '+$Count+' check/failure/owner/replacement cases; 9 shipping firewall dispatches and 3 alias/failure negative controls')
 }finally{
     foreach($Name in $Names){[Environment]::SetEnvironmentVariable($Name,$Saved[$Name],'Process')}
     if(Test-Path -LiteralPath $TaskRoot){[IO.Directory]::Delete($TaskRoot,$true)}

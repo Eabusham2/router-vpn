@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"router-vpn/internal/dnsmeasure"
-	"router-vpn/internal/mobilemultihop"
 )
 
 type desktopDNSNativeRequest struct {
@@ -32,11 +31,12 @@ type desktopDNSNativeRecord struct {
 func decodeDesktopDNSRecord(launch *desktopNodeLaunch, raw []byte) (desktopDNSNativeRecord, error) {
 	var record desktopDNSNativeRecord
 	bad := errors.New("native DNS result differs from the captured session, graph or request")
-	if launch == nil || launch.external == nil || len(raw) == 0 || len(raw) > 64<<10 || decodeRelayControlJSON(raw, &record) != nil {
+	owner, ownerErr := capturedDesktopDNSRuntime(launch)
+	if ownerErr != nil || len(raw) == 0 || len(raw) > 64<<10 || decodeRelayControlJSON(raw, &record) != nil {
 		return record, bad
 	}
-	owner, status := launch.external, record.Status
-	if record.Schema != 1 || record.Session != owner.session || record.SourceSHA256 != owner.expected.SourceSHA256 || record.ConfigSHA256 != owner.expected.ConfigSHA256 || status.Schema != 1 || status.NodeID != owner.expected.ExitID || status.SessionID != owner.session || len(status.Results) > 13 || len(status.Failure) > 256 {
+	status := record.Status
+	if record.Schema != 1 || record.Session != owner.session || record.SourceSHA256 != owner.source || record.ConfigSHA256 != owner.config || status.Schema != 1 || status.NodeID != owner.node || status.SessionID != owner.session || len(status.Results) > 13 || len(status.Failure) > 256 {
 		return record, bad
 	}
 	if record.Generation == 0 {
@@ -132,11 +132,11 @@ func writeDesktopDNSRequest(launch *desktopNodeLaunch, name string, request desk
 // the original directory handle after a rename; it never resolves the old
 // pathname again or writes Start, policy, or connection commands this way.
 func writeDesktopDNSCleanupCancel(launch *desktopNodeLaunch, request desktopDNSNativeRequest) error {
-	if launch == nil || launch.external == nil {
-		return errors.New("DNS cleanup has no captured native owner")
+	owner, ownerErr := capturedDesktopDNSRuntime(launch)
+	if ownerErr != nil {
+		return ownerErr
 	}
-	owner := launch.external
-	if request.Schema != 1 || request.Session != owner.session || request.SourceSHA256 != owner.expected.SourceSHA256 || request.ConfigSHA256 != owner.expected.ConfigSHA256 || request.Generation == 0 || !desktopMTURequestPattern.MatchString(request.Request) {
+	if request.Schema != 1 || request.Session != owner.session || request.SourceSHA256 != owner.source || request.ConfigSHA256 != owner.config || request.Generation == 0 || !desktopMTURequestPattern.MatchString(request.Request) {
 		return errors.New("DNS cleanup command belongs to another owner")
 	}
 	raw, err := json.Marshal(request)
@@ -190,25 +190,12 @@ func validateDesktopDNSResults(launch *desktopNodeLaunch, status dnsmeasure.Stat
 	if !status.Complete || !status.Drained || status.Stage != "complete" || status.Failure != "" || len(status.Results) != 13 {
 		return bad
 	}
-	policy, err := mobilemultihop.NewExternalPolicy(string(launch.external.source), string(launch.external.capture))
-	if err != nil || policy.SourceSHA256() != launch.external.expected.SourceSHA256 {
+	selected, routeLabel, ipv6Mode, err := desktopDNSExpectedEndpoints(launch)
+	if err != nil {
 		return bad
 	}
-	var metadata struct {
-		DNSProtocol   string `json:"dns_protocol"`
-		DNSServer     string `json:"dns_server"`
-		DNSPort       int    `json:"dns_port"`
-		DNSServerName string `json:"dns_server_name"`
-		DNSPath       string `json:"dns_path"`
-		DNSDetour     string `json:"dns_detour"`
-		IPv6Mode      string `json:"ipv6_mode"`
-	}
-	if json.Unmarshal([]byte(policy.Metadata()), &metadata) != nil {
-		return bad
-	}
-	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: metadata.DNSServer, Port: metadata.DNSPort, Transport: metadata.DNSProtocol, ServerName: metadata.DNSServerName, Path: metadata.DNSPath, Route: metadata.DNSDetour, RouteLabel: "Selected DNS via " + metadata.DNSDetour}
 	endpoints := map[string]dnsmeasure.Endpoint{selected.ID: selected}
-	for _, endpoint := range dnsmeasure.PublicEndpoints(status.PublicTransport, "Current external exit") {
+	for _, endpoint := range dnsmeasure.PublicEndpoints(status.PublicTransport, routeLabel) {
 		endpoints[endpoint.ID] = endpoint
 	}
 	seen := map[string]bool{}
@@ -222,7 +209,7 @@ func validateDesktopDNSResults(launch *desktopNodeLaunch, status dnsmeasure.Stat
 			if result.Samples != dnsmeasure.Samples || result.Failed != 0 || result.Median == nil || *result.Median <= 0 || math.IsNaN(*result.Median) || math.IsInf(*result.Median, 0) || result.Failure != "" {
 				return bad
 			}
-			if result.Kind == "public" && metadata.IPv6Mode != "on" && metadata.IPv6Mode != "auto" {
+			if result.Kind == "public" && ipv6Mode != "on" && ipv6Mode != "auto" {
 				address, err := netip.ParseAddr(result.Address)
 				if err != nil || address.Is6() {
 					return bad
@@ -239,16 +226,20 @@ func validateDesktopDNSResults(launch *desktopNodeLaunch, status dnsmeasure.Stat
 // worker drain. Cancellation never closes a replacement VPN or releases a
 // still-active measurement. A stubborn native close stays visibly draining.
 func (a *app) runDesktopDNSNative(ctx context.Context, operation *desktopDNSOperation) (result dnsmeasure.Status, failure error) {
-	launch, owner := operation.snapshot.launch, operation.snapshot.launch.external
-	if !owner.dnsMu.TryLock() {
+	launch := operation.snapshot.launch
+	owner, ownerErr := capturedDesktopDNSRuntime(launch)
+	if ownerErr != nil {
+		return result, ownerErr
+	}
+	if !owner.lock.TryLock() {
 		return result, errors.New("another native DNS measurement is still draining")
 	}
-	defer owner.dnsMu.Unlock()
-	if owner.dnsFailed {
+	defer owner.lock.Unlock()
+	if *owner.failed {
 		return result, errors.New("native DNS control was retired; reconnect before Retest")
 	}
 	initial, err := readDesktopDNSRecord(launch)
-	if err != nil || !initial.Status.Complete || !initial.Status.Drained || initial.Generation != owner.dnsGeneration || owner.dnsGeneration == ^uint64(0) {
+	if err != nil || !initial.Status.Complete || !initial.Status.Drained || initial.Generation != *owner.generation || *owner.generation == ^uint64(0) {
 		return result, errors.New("native DNS mailbox is unavailable or has another owner")
 	}
 	if err := operation.snapshot.current(a); err != nil {
@@ -257,8 +248,8 @@ func (a *app) runDesktopDNSNative(ctx context.Context, operation *desktopDNSOper
 	if err := ctx.Err(); err != nil {
 		return result, err
 	}
-	owner.dnsGeneration++
-	request := desktopDNSNativeRequest{Schema: 1, Session: owner.session, SourceSHA256: owner.expected.SourceSHA256, ConfigSHA256: owner.expected.ConfigSHA256, Generation: owner.dnsGeneration, Request: operation.request, Transport: operation.transport}
+	*owner.generation++
+	request := desktopDNSNativeRequest{Schema: 1, Session: owner.session, SourceSHA256: owner.source, ConfigSHA256: owner.config, Generation: *owner.generation, Request: operation.request, Transport: operation.transport}
 	drained := false
 	defer func() {
 		if drained {
@@ -272,8 +263,8 @@ func (a *app) runDesktopDNSNative(ctx context.Context, operation *desktopDNSOper
 			if err == nil && record.desktopDNSNativeRequest == request && record.Status.Complete && record.Status.Drained {
 				return
 			}
-			if desktopPathNativeClosed(launch) {
-				owner.dnsFailed = true
+			if desktopDNSNativeClosed(launch) {
+				*owner.failed = true
 				return // The exact native close follows DNS worker/socket drain.
 			}
 			_ = writeDesktopDNSCleanupCancel(launch, request)
@@ -281,7 +272,7 @@ func (a *app) runDesktopDNSNative(ctx context.Context, operation *desktopDNSOper
 		}
 	}()
 	if err := writeDesktopDNSRequest(launch, "dns-request.json", request); err != nil {
-		owner.dnsFailed = true
+		*owner.failed = true
 		return result, err
 	}
 	tick := time.NewTicker(100 * time.Millisecond)

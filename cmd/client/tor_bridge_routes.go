@@ -183,9 +183,21 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		return
 	}
 
+	retainedProof, retainedErr := a.readDesktopTorProof(prelaunch.workspace)
+	if retainedErr != nil {
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor native path retired before result adoption: "+retainedErr.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		status := http.StatusConflict
+		if cleanupFailed {
+			status = http.StatusInternalServerError
+		}
+		http.Error(w, message, status)
+		return
+	}
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
-	if a.cmd != cmd || startup != nil && startup.currentLocked(a) != nil {
+	capturedProfile, capturedFound := a.profileByIDLocked(profile.ID)
+	if a.cmd != cmd || !capturedFound || asyncMeasurementProfileToken(capturedProfile) != prelaunch.workspace.tor.profileToken || startup != nil && startup.currentLocked(a) != nil {
 		a.mu.Unlock()
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime or captured startup selection changed before dynamic exit proof could be adopted")
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -203,8 +215,9 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 			a.profiles.Profiles[i].UseCount++
 			a.profiles.Profiles[i].LastUsedAt = now
 			a.profiles.Profiles[i].PublicIP = actualIP
-			a.profiles.Profiles[i].MultihopEnabled = false
-			a.profiles.Profiles[i].MultihopEntryID, a.profiles.Profiles[i].MultihopExitID = "", ""
+			// Preserve every captured policy field. A proved direct Tor policy
+			// already has multihop disabled; stale saved entry/exit selections
+			// must not invalidate this session when usage metadata is saved.
 			found = true
 			break
 		}
@@ -251,6 +264,8 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		return
 	}
 
+	a.monitorDesktopTorRuntime(prelaunch.workspace)
+
 	transport := strings.TrimSpace(torCfg.Transport)
 	if transport == "" {
 		transport = "custom"
@@ -268,6 +283,10 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		"actual_public_ip":  actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
 		"dns_mode":          policy.DNSMode,
+		"interface_name":    retainedProof.InterfaceName,
+		"interface_index":   retainedProof.InterfaceIndex,
+		"interface_mtu":     retainedProof.EffectiveMTU,
+		"mtu_source":        "native-interface-readback",
 		"route":             "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet",
 	})
 }

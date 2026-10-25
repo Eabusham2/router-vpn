@@ -21,17 +21,22 @@ import (
 // standalone Tor child, PT workers and TUN have drained. A process exit alone
 // cannot release private inputs or the client's protection policy.
 type desktopTorRuntime struct {
-	mu               sync.Mutex
-	expected         mobiletor.DesktopBridgeMetadata
-	digests          mobiletor.DesktopBridgeInputDigests
-	profileToken     string
-	network          string
-	networkIdentity  func() string
-	started          time.Time
-	adopted          *desktopTorProof
-	stopAcknowledged bool
-	inputs           map[string]desktopTorInput
-	dataInfo         os.FileInfo
+	mu                    sync.Mutex
+	dnsMu                 sync.Mutex
+	dnsGeneration         uint64
+	dnsFailed             bool
+	expected              mobiletor.DesktopBridgeMetadata
+	digests               mobiletor.DesktopBridgeInputDigests
+	profileToken          string
+	network               string
+	networkIdentity       func() string
+	started               time.Time
+	adopted               *desktopTorProof
+	stopAcknowledged      bool
+	prelaunchAcknowledged bool
+	admissionObserved     bool
+	inputs                map[string]desktopTorInput
+	dataInfo              os.FileInfo
 }
 
 type desktopTorInput struct {
@@ -59,6 +64,16 @@ type desktopTorProgress struct {
 	SourceSHA256 string `json:"source_sha256"`
 	ConfigSHA256 string `json:"config_sha256"`
 	Stage        string `json:"stage"`
+}
+
+// This wrapper witness proves only that native admission was never attempted.
+// It cannot replace a native stopped receipt once progress or any worker exists.
+type desktopTorPrelaunchFailure struct {
+	Schema          int    `json:"schema"`
+	SessionID       string `json:"session_id"`
+	SourceSHA256    string `json:"source_sha256"`
+	ConfigSHA256    string `json:"config_sha256"`
+	NoNativeProcess bool   `json:"no_native_process"`
 }
 
 func (owner *desktopTorRuntime) currentNetworkIdentity() string {
@@ -134,6 +149,9 @@ func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, e
 	if err != nil {
 		return desktopTorProof{}, err
 	}
+	launch.tor.mu.Lock()
+	launch.tor.admissionObserved = true
+	launch.tor.mu.Unlock()
 	proof, err := validateDesktopTorProof(raw, launch.tor, time.Now())
 	if err == nil {
 		err = a.desktopTorCurrent(launch)
@@ -152,6 +170,9 @@ func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
 	if err != nil {
 		return err
 	}
+	launch.tor.mu.Lock()
+	launch.tor.admissionObserved = true
+	launch.tor.mu.Unlock()
 	var progress desktopTorProgress
 	expected := launch.tor.expected
 	if decodeRelayControlJSON(raw, &progress) != nil || progress.Schema != 1 || progress.SessionID != expected.SessionID || progress.SourceSHA256 != expected.SourceSHA256 || progress.ConfigSHA256 != expected.ConfigSHA256 {
@@ -237,6 +258,106 @@ func desktopTorStopped(launch *desktopNodeLaunch) (bool, error) {
 	return true, nil
 }
 
+func desktopTorNoNativeWork(launch *desktopNodeLaunch) (bool, error) {
+	if launch == nil || launch.tor == nil || !desktopNodeProcessExited(launch) {
+		return false, nil
+	}
+	raw, err := readDesktopRuntimeFile(launch, "prelaunch-failed.json", 4096)
+	if errors.Is(err, os.ErrNotExist) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	bad := errors.New("Tor prelaunch witness does not prove an unused captured native workspace")
+	var witness desktopTorPrelaunchFailure
+	owner := launch.tor
+	expected := owner.expected
+	if decodeRelayControlJSON(raw, &witness) != nil || witness.Schema != 1 || !witness.NoNativeProcess || witness.SessionID != expected.SessionID || witness.SourceSHA256 != expected.SourceSHA256 || witness.ConfigSHA256 != expected.ConfigSHA256 {
+		return false, bad
+	}
+	owner.mu.Lock()
+	proved := owner.adopted != nil || owner.admissionObserved
+	owner.mu.Unlock()
+	if proved || len(owner.inputs) != len(desktopTorInputNames) || owner.dataInfo == nil {
+		return false, bad
+	}
+	launch.workspaceMu.Lock()
+	defer launch.workspaceMu.Unlock()
+	if err := desktopExternalDirectoryCurrent(launch); err != nil {
+		return false, err
+	}
+	root := launch.directoryRoot
+	directory, err := root.Open(".")
+	if err != nil {
+		return false, err
+	}
+	entries, readErr := directory.ReadDir(16)
+	_ = directory.Close()
+	if readErr != nil && !errors.Is(readErr, io.EOF) || len(entries) < 7 || len(entries) > 8 {
+		return false, bad
+	}
+	seen := make(map[string]bool)
+	for _, entry := range entries {
+		name := entry.Name()
+		seen[name] = true
+		info, err := root.Lstat(name)
+		if err != nil || info.Mode()&os.ModeSymlink != 0 {
+			return false, bad
+		}
+		if input, ok := owner.inputs[name]; ok {
+			contents, err := readDesktopRuntimeSnapshot(root, name, 4<<20)
+			if err != nil || input.info == nil || !os.SameFile(info, input.info) || desktopTorDigest(contents) != input.digest {
+				return false, bad
+			}
+			continue
+		}
+		switch name {
+		case "tor-data":
+			if !info.IsDir() || !os.SameFile(info, owner.dataInfo) {
+				return false, bad
+			}
+			data, err := root.Open(name)
+			if err != nil {
+				return false, bad
+			}
+			actual, statErr := data.Stat()
+			contents, readErr := data.ReadDir(1)
+			_ = data.Close()
+			if statErr != nil || !os.SameFile(actual, info) || len(contents) != 0 || readErr != nil && !errors.Is(readErr, io.EOF) {
+				return false, bad
+			}
+		case "prelaunch-failed.json":
+			contents, err := readDesktopRuntimeSnapshot(root, name, 4096)
+			if err != nil || desktopTorDigest(contents) != desktopTorDigest(raw) {
+				return false, bad
+			}
+		case "stop.json":
+			contents, err := readDesktopRuntimeSnapshot(root, name, 4096)
+			var stop desktopExternalStop
+			if err != nil || decodeRelayControlJSON(contents, &stop) != nil || stop.Schema != 1 || stop.Closed || stop.SessionID != expected.SessionID || stop.SourceSHA256 != expected.SourceSHA256 {
+				return false, bad
+			}
+		default:
+			// Even a partial progress write establishes an attempted native
+			// admission. No-work cleanup cannot infer that its workers drained.
+			return false, bad
+		}
+	}
+	for _, name := range append(append([]string(nil), desktopTorInputNames...), "tor-data", "prelaunch-failed.json") {
+		if !seen[name] {
+			return false, bad
+		}
+	}
+	if err := desktopExternalDirectoryCurrent(launch); err != nil || !desktopNodeProcessExited(launch) {
+		return false, bad
+	}
+	owner.mu.Lock()
+	owner.prelaunchAcknowledged = true
+	owner.mu.Unlock()
+	return true, nil
+}
+
 func desktopTorStopOwner(a *app, launch *desktopNodeLaunch, command *exec.Cmd) error {
 	if launch == nil || launch.tor == nil || launch.command == nil || command != nil && command != launch.command {
 		return errors.New("Tor teardown has no captured process owner")
@@ -276,7 +397,7 @@ func requestDesktopTorStop(ctx context.Context, a *app, launch *desktopNodeLaunc
 	}
 	owner := launch.tor
 	owner.mu.Lock()
-	acknowledged := owner.stopAcknowledged
+	acknowledged := owner.stopAcknowledged || owner.prelaunchAcknowledged
 	owner.mu.Unlock()
 	if acknowledged && desktopNodeProcessExited(launch) {
 		if _, err := os.Lstat(launch.directory); errors.Is(err, os.ErrNotExist) {
@@ -308,6 +429,11 @@ func requestDesktopTorStop(ctx context.Context, a *app, launch *desktopNodeLaunc
 			return desktopTorStopOwner(a, launch, command)
 		}
 		if exited {
+			if unused, err := desktopTorNoNativeWork(launch); err != nil {
+				return err
+			} else if unused {
+				return desktopTorStopOwner(a, launch, command)
+			}
 			return errors.New("Tor native process exited without checked drain; protection and private ownership retained")
 		}
 		select {
@@ -324,20 +450,29 @@ func stopDesktopTorRuntime(a *app, launch *desktopNodeLaunch, command *exec.Cmd)
 		return err
 	}
 	launch.tor.mu.Lock()
-	acknowledged := launch.tor.stopAcknowledged
+	acknowledged := launch.tor.stopAcknowledged || launch.tor.prelaunchAcknowledged
+	unused := launch.tor.prelaunchAcknowledged && !launch.tor.stopAcknowledged
 	launch.tor.mu.Unlock()
 	if !acknowledged || !desktopNodeProcessExited(launch) {
-		return errors.New("Tor cleanup requires its checked native drain and joined process")
+		return errors.New("Tor cleanup requires checked native drain or a verified prelaunch failure and joined process")
 	}
 	if _, err := os.Lstat(launch.directory); errors.Is(err, os.ErrNotExist) {
 		return nil
+	}
+	if unused {
+		if valid, err := desktopTorNoNativeWork(launch); err != nil {
+			return err
+		} else if !valid {
+			return errors.New("Tor prelaunch witness changed before private cleanup")
+		}
 	}
 	return cleanupDesktopTorLaunch(launch)
 }
 
 func desktopTorMailbox(name string) bool {
 	switch name {
-	case "proof.json", "progress.json", "stop.json", "stopped.json", ".proof.json.pending", ".progress.json.pending", ".stopped.json.pending":
+	case "proof.json", "progress.json", "stop.json", "stopped.json", "prelaunch-failed.json", ".proof.json.pending", ".progress.json.pending", ".stopped.json.pending",
+		"dns-status.json", "dns-request.json", "dns-cancel.json", ".dns-status.json.pending":
 		return true
 	}
 	return false
@@ -394,9 +529,11 @@ func cleanupDesktopTorLaunch(launch *desktopNodeLaunch) error {
 				if input.info == nil || !os.SameFile(info, input.info) {
 					return errors.New("Tor immutable input was replaced")
 				}
-				raw, err := readDesktopRuntimeSnapshot(root, name, 4<<20)
-				if err != nil || desktopTorDigest(raw) != input.digest {
-					return errors.New("Tor immutable input contents changed")
+				if info.Size() != 0 || input.digest != desktopTorDigest(nil) {
+					raw, err := readDesktopRuntimeSnapshot(root, name, 4<<20)
+					if err != nil || desktopTorDigest(raw) != input.digest {
+						return errors.New("Tor immutable input contents changed")
+					}
 				}
 			} else if !desktopTorMailbox(name) || info.Size() > 64<<10 {
 				return errors.New("Tor workspace contains unowned files; cleanup remains pending")
@@ -457,6 +594,9 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 				a.operationMu.Unlock()
 				continue
 			}
+			// Automatic proof/network retirement cannot preserve a completed
+			// DNS draft as though the user explicitly disconnected this path.
+			invalidateDesktopDNSResults(a)
 			err := a.stopModeWithIntent(true)
 			message := "Tor native proof or physical network retired; protection is held"
 			if err != nil {

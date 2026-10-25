@@ -6,149 +6,66 @@ RUNTIME_DIR=${2:-}
 BRIDGE_ENDPOINT=${3:-}
 SOCKS_PORT=${4:-}
 TOR_BIN=${5:-}
-SING_BOX_BIN=${6:-}
+NATIVE_BIN=${6:-}
 ROOT=${HOMEVPN_ROOT:-/opt/router-vpn-client}
-SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 PROFILE_ID=${HOMEVPN_PROFILE_ID:-}
-POLICY_PROFILE_ID=${HOMEVPN_POLICY_PROFILE_ID:-$PROFILE_ID}
-PT_BIN=${HOMEVPN_TOR_PT_BINARY:-}
-PT_TRANSPORTS=${HOMEVPN_TOR_PLUGIN_TRANSPORTS:-}
-TOR_TRANSPORT=${HOMEVPN_TOR_TRANSPORT:-}
+POLICY_PROFILE_ID=${HOMEVPN_POLICY_PROFILE_ID:-}
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
-[[ "$ACTION" == "check" || "$ACTION" == "up" || "$ACTION" == "down" ]] || { echo 'usage: native-tor-bridge.sh check|up|down RUNTIME_DIR BRIDGE_IP SOCKS_PORT TOR_BIN SING_BOX_BIN' >&2; exit 2; }
-[[ -n "$RUNTIME_DIR" && -n "$PROFILE_ID" && -n "$POLICY_PROFILE_ID" && -n "$BRIDGE_ENDPOINT" ]] || { echo 'Tor bridge runtime/profile/bridge endpoint are required' >&2; exit 2; }
-[[ "$SOCKS_PORT" =~ ^[0-9]+$ ]] && (( SOCKS_PORT >= 1024 && SOCKS_PORT <= 65535 )) || { echo 'invalid Tor SOCKS port' >&2; exit 2; }
-[[ "$PT_TRANSPORTS" =~ ^(obfs4|meek_lite|snowflake|webtunnel)(,(obfs4|meek_lite|snowflake|webtunnel))*$ ]] || { echo 'invalid Tor pluggable-transport set' >&2; exit 2; }
-[[ "$TOR_TRANSPORT" == "obfs4" || "$TOR_TRANSPORT" == "meek_lite" || "$TOR_TRANSPORT" == "snowflake" || "$TOR_TRANSPORT" == "webtunnel" || "$TOR_TRANSPORT" == "custom" ]] || { echo 'invalid Tor transport identity' >&2; exit 2; }
+[[ "$ACTION" == check || "$ACTION" == up || "$ACTION" == down ]] || { echo 'usage: native-tor-bridge.sh check|up|down RUNTIME_DIR BRIDGE_IP SOCKS_PORT TOR_BIN NATIVE_BIN' >&2; exit 2; }
+[[ -n "$RUNTIME_DIR" && -n "$PROFILE_ID" && "$POLICY_PROFILE_ID" == "$PROFILE_ID" && -n "$BRIDGE_ENDPOINT" ]] || { echo 'Tor requires its captured private profile and endpoint' >&2; exit 2; }
+[[ "$SOCKS_PORT" =~ ^[0-9]+$ ]] && (( SOCKS_PORT >= 1024 && SOCKS_PORT <= 65535 )) || { echo 'invalid captured Tor SOCKS port' >&2; exit 2; }
+[[ ${HOMEVPN_STANDARD_ENGINE:-} == native && ${HOMEVPN_TOR_SESSION:-} =~ ^[a-f0-9]{32}$ ]] || { echo 'Tor requires its captured native session' >&2; exit 2; }
+for field in HOMEVPN_TOR_SOURCE_SHA256 HOMEVPN_TOR_PROFILE_SHA256 HOMEVPN_TOR_CAPTURE_SHA256 HOMEVPN_TOR_TORRC_SHA256 HOMEVPN_TOR_DEFAULTS_SHA256 HOMEVPN_TOR_CONFIG_SHA256 HOMEVPN_TOR_BINARY_SHA256; do
+  [[ ${!field:-} =~ ^[a-f0-9]{64}$ ]] || { echo 'Tor launch is missing an exact input digest' >&2; exit 2; }
+done
+# Disconnect has already requested and checked native drain. The controller
+# retains the exact private directory handle and performs all final cleanup.
+if [[ "$ACTION" == down ]]; then exit 0; fi
 
-RUNTIME_DIR=$(HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" verify-dir "$RUNTIME_DIR") || {
-  echo 'refusing unsafe Tor bridge runtime directory' >&2
-  exit 2
+# This trap exists only in the un-replaced wrapper. A successful exec discards
+# it, so neither a running native child nor its crash can receive a no-work
+# witness. Signal exits remain ambiguous and retain the controller's owner.
+tor_prelaunch_failed() {
+  local result=${1:-$?}
+  trap - EXIT
+  if (( result > 0 && result < 128 )) && [[ -f "$SCRIPT_DIR/tor-prelaunch-witness.py" && ! -L "$SCRIPT_DIR/tor-prelaunch-witness.py" ]]; then
+    HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/tor-prelaunch-witness.py" "$RUNTIME_DIR" >/dev/null 2>&1 || :
+  fi
+  exit "$result"
 }
-TORRC="$RUNTIME_DIR/torrc"
-CONFIG="$RUNTIME_DIR/sing-box.json"
-TOR_LOG="$RUNTIME_DIR/tor.log"
-PID_REGISTRY="$SCRIPT_DIR/runtime-pids.py"
-PID_MODE=native-tor-bridge
-KILL_SWITCH="$SCRIPT_DIR/kill-switch-platform.py"
+if [[ "$ACTION" == up ]]; then trap tor_prelaunch_failed EXIT; fi
 
-[[ -f "$TORRC" && ! -L "$TORRC" && -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared Tor bridge runtime files are missing or unsafe' >&2; exit 1; }
-[[ -f "$KILL_SWITCH" && ! -L "$KILL_SWITCH" && -f "$PID_REGISTRY" && ! -L "$PID_REGISTRY" ]] || { echo 'Tor bridge safety helpers are missing or unsafe' >&2; exit 1; }
-[[ -n "$TOR_BIN" && -x "$TOR_BIN" && -n "$SING_BOX_BIN" && -x "$SING_BOX_BIN" && -n "$PT_BIN" && -x "$PT_BIN" ]] || { echo 'trusted tor, pluggable-transport, and sing-box binaries are required' >&2; exit 1; }
-[[ "$(command -v tor 2>/dev/null || true)" == "$TOR_BIN" ]] || { echo 'Tor binary changed after capability proof' >&2; exit 1; }
-[[ "$(command -v sing-box 2>/dev/null || true)" == "$SING_BOX_BIN" ]] || { echo 'sing-box binary changed after capability proof' >&2; exit 1; }
-pt_name=$(basename -- "$PT_BIN")
-[[ "$pt_name" == "lyrebird" || "$pt_name" == "obfs4proxy" ]] || { echo 'Tor PT binary is not an approved Router VPN transport helper' >&2; exit 1; }
-[[ "$(command -v "$pt_name" 2>/dev/null || true)" == "$PT_BIN" ]] || { echo 'Tor PT binary changed after capability proof' >&2; exit 1; }
-if [[ "$pt_name" == "obfs4proxy" && "$PT_TRANSPORTS" =~ (^|,)(snowflake|webtunnel)(,|$) ]]; then
-  echo 'legacy obfs4proxy cannot provide Snowflake or WebTunnel; Lyrebird is required' >&2
-  exit 1
-fi
-grep -Fq "ClientTransportPlugin $PT_TRANSPORTS exec " "$TORRC" || { echo 'Tor runtime PT set does not match the validated torrc' >&2; exit 1; }
+for helper in cleanup-private-runtime.py tor-prelaunch-witness.py select-standard-engine.sh kill-switch-platform.py; do
+  [[ -f "$SCRIPT_DIR/$helper" && ! -L "$SCRIPT_DIR/$helper" ]] || { echo 'Tor native safety helper is missing or unsafe' >&2; exit 1; }
+done
+RUNTIME_DIR=$(HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" verify-dir "$RUNTIME_DIR") || { echo 'Tor private runtime directory is unsafe' >&2; exit 1; }
+for input in torrc tor-defaults tor-profile.json tor-capture.json sing-box.json; do
+  [[ -f "$RUNTIME_DIR/$input" && ! -L "$RUNTIME_DIR/$input" ]] || { echo 'captured Tor native input is missing or unsafe' >&2; exit 1; }
+done
+[[ "$TOR_BIN" == /* && -f "$TOR_BIN" && ! -L "$TOR_BIN" && -x "$TOR_BIN" ]] || { echo 'captured standalone Tor executable is missing or unsafe' >&2; exit 1; }
+source "$SCRIPT_DIR/select-standard-engine.sh"
+VERIFIED_NATIVE=$(router_vpn_standard_engine) || { echo 'Tor native engine failed its complete package verification' >&2; exit 1; }
+[[ "$VERIFIED_NATIVE" == "$NATIVE_BIN" && -f "$NATIVE_BIN" && ! -L "$NATIVE_BIN" && -x "$NATIVE_BIN" ]] || { echo 'Tor native engine changed after capture' >&2; exit 1; }
+"$NATIVE_BIN" routervpn-tor --help >/dev/null
+"$NATIVE_BIN" check -D "$RUNTIME_DIR" -c "$RUNTIME_DIR/sing-box.json" >/dev/null
+if [[ "$ACTION" == check ]]; then exit 0; fi
 
-stop_owned() {
-  local pid
-  while IFS= read -r pid; do
-    [[ "$pid" =~ ^[0-9]+$ ]] && (( pid > 1 )) || continue
-    kill -INT "$pid" 2>/dev/null || true
-    for _ in 1 2 3 4 5 6 7 8 9 10 11 12 13 14 15 16 17 18 19 20; do
-      kill -0 "$pid" 2>/dev/null || break
-      sleep 0.1
-    done
-    kill -TERM "$pid" 2>/dev/null || true
-    wait "$pid" 2>/dev/null || true
-  done < <(python3 "$PID_REGISTRY" verified-mode "$ROOT" "$PID_MODE" 2>/dev/null || true)
-  python3 "$PID_REGISTRY" init "$ROOT" "$PID_MODE" >/dev/null 2>&1 || true
-}
-
-release_guard() {
-  HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$BRIDGE_ENDPOINT" \
-    python3 "$KILL_SWITCH" release >/dev/null 2>&1 || true
-}
-
-cleanup() {
-  status=$?
-  trap - EXIT INT TERM HUP
-  stop_owned
-  # Unexpected Tor/PT/TUN failure must not release on-connect/always policy.
-  # Normal controller Disconnect releases after teardown; failure stays closed.
-  HOMEVPN_ROOT="$ROOT" python3 "$SCRIPT_DIR/cleanup-private-runtime.py" "$RUNTIME_DIR" >/dev/null 2>&1 || true
-  exit "$status"
-}
-trap cleanup EXIT INT TERM HUP
-
-if [[ "$ACTION" == "down" ]]; then release_guard; cleanup; fi
-"$TOR_BIN" --version >/dev/null
-"$SING_BOX_BIN" check -D "$RUNTIME_DIR" -c "$CONFIG" >/dev/null
-if [[ "$ACTION" == "check" ]]; then
-  echo "native Tor $TOR_TRANSPORT bridge graph ready ($PT_TRANSPORTS)"
-  trap - EXIT INT TERM HUP
-  exit 0
-fi
-
-# Runtime construction already refuses dynamic/CDN/WebRTC bridge families when
-# strict kill-switch policy is requested. For the one strict-safe obfs4 case,
-# this installs the literal bridge exception before Tor starts. With policy Off,
-# the normal dispatcher remains a no-op and the selected PT owns its real egress.
+# Install the captured client protection before the native TUN or Tor starts.
+# Linux uses router-vpn, already permitted by the strict helper; Darwin's
+# existing watcher admits only the newly observed routed utun.
 HOMEVPN_ROOT="$ROOT" HOMEVPN_PROFILE_ID="$PROFILE_ID" HOMEVPN_POLICY_PROFILE_ID="$POLICY_PROFILE_ID" HOMEVPN_ENDPOINT="$BRIDGE_ENDPOINT" \
-  python3 "$KILL_SWITCH" apply
-stop_owned
-: > "$TOR_LOG"
-chmod 600 "$TOR_LOG"
-"$TOR_BIN" -f "$TORRC" --RunAsDaemon 0 &
-tor_pid=$!
-if ! python3 "$PID_REGISTRY" record "$ROOT" "$PID_MODE" "$tor_pid"; then
-  kill -TERM "$tor_pid" 2>/dev/null || true
-  wait "$tor_pid" 2>/dev/null || true
-  echo 'could not prove ownership of Tor process' >&2
-  exit 1
-fi
+  python3 "$SCRIPT_DIR/kill-switch-platform.py" apply
 
-# Tor process start is not connectivity. Require bootstrap 100% and the owned
-# local SOCKS listener before the full-device TUN can start.
-bootstrapped=0
-for _ in $(seq 1 180); do
-  kill -0 "$tor_pid" 2>/dev/null || { wait "$tor_pid" || true; echo 'Tor exited before circumvention bootstrap completed' >&2; exit 1; }
-  if grep -Fq 'Bootstrapped 100%' "$TOR_LOG" 2>/dev/null; then bootstrapped=1; break; fi
-  sleep 0.5
-done
-(( bootstrapped == 1 )) || { echo "Tor $TOR_TRANSPORT path did not reach Bootstrapped 100% within 90 seconds" >&2; exit 1; }
-
-python3 - "$SOCKS_PORT" <<'PY'
-import socket,sys,time
-port=int(sys.argv[1]);last=None
-for _ in range(20):
-    try:
-        s=socket.create_connection(("127.0.0.1",port),timeout=.25);s.close();raise SystemExit(0)
-    except OSError as exc:
-        last=exc;time.sleep(.1)
-raise SystemExit(f"Tor SOCKS listener is unavailable after bootstrap: {last}")
-PY
-
-"$SING_BOX_BIN" run -D "$RUNTIME_DIR" -c "$CONFIG" &
-sing_pid=$!
-if ! python3 "$PID_REGISTRY" record "$ROOT" "$PID_MODE" "$sing_pid"; then
-  kill -TERM "$sing_pid" 2>/dev/null || true
-  wait "$sing_pid" 2>/dev/null || true
-  echo 'could not prove ownership of Tor full-device sing-box process' >&2
-  exit 1
-fi
-sleep 0.5
-kill -0 "$sing_pid" 2>/dev/null || { wait "$sing_pid" || true; echo 'Tor full-device sing-box exited during startup' >&2; exit 1; }
-
-# Keep the wrapper alive only while both owned children remain alive. Losing Tor
-# or the TUN is a hard runtime failure; cleanup tears down the other child while
-# leaving strict failure protection owned by the controller/kill-switch state.
-while :; do
-  if ! kill -0 "$tor_pid" 2>/dev/null; then
-    wait "$tor_pid" || true
-    echo 'Tor circumvention process exited; tearing down full-device path' >&2
-    exit 1
-  fi
-  if ! kill -0 "$sing_pid" 2>/dev/null; then
-    wait "$sing_pid" || true
-    echo 'Tor full-device sing-box process exited' >&2
-    exit 1
-  fi
-  sleep 0.5
-done
+# The native command replaces this shell, so the controller owns and joins the
+# actual native process. It launches disabled Tor, authenticates SAFECOOKIE,
+# binds its Go PTs to the physical network, starts/proves the selected TUN/DNS
+# path and publishes captured receipts. No external PT process or log marker
+# can substitute for bootstrap/proof; no asynchronous trap deletes a pathname.
+# exec can discard EXIT traps even when replacement fails. Only its failure
+# return can take the explicit no-work branch; successful exec never returns.
+# Bash's errexit can still exit inside this special builtin, so handle its
+# failure explicitly after every required preflight/protection check passed.
+shopt -s execfail
+set +e
+exec "$NATIVE_BIN" routervpn-tor --runtime-dir "$RUNTIME_DIR" --session "$HOMEVPN_TOR_SESSION" --tor-binary "$TOR_BIN" || tor_prelaunch_failed "$?"

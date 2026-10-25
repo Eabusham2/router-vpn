@@ -5,7 +5,6 @@ import (
 	"net/http"
 	"path/filepath"
 	"runtime"
-	"strings"
 
 	"router-vpn/internal/common"
 )
@@ -38,69 +37,24 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 		}
 		return rows
 	}
-	if runtime.GOOS == "windows" {
-		lyrebird, err := windowsTorRuntimeExecutable(root, "lyrebird.exe")
-		if err != nil {
-			for i := range rows {
-				rows[i].Reason = err.Error()
-			}
-			return rows
-		}
-		for i := range rows {
-			rows[i].Supported = true
-			rows[i].Helper = strings.TrimSpace(lyrebird)
-		}
-		return rows
-	}
-
-	lyrebird, lyrebirdErr := safeExecutable("lyrebird")
-	legacy, legacyErr := safeExecutable("obfs4proxy")
 	for i := range rows {
-		switch rows[i].ID {
-		case "obfs4", "meek_lite":
-			if lyrebirdErr == nil {
-				rows[i].Supported, rows[i].Helper = true, lyrebird
-			} else if legacyErr == nil {
-				rows[i].Supported, rows[i].Helper = true, legacy
-			} else {
-				rows[i].Reason = "Lyrebird is preferred; compatible legacy obfs4proxy is not installed"
-			}
-		case "snowflake", "webtunnel", "custom":
-			if lyrebirdErr == nil {
-				rows[i].Supported, rows[i].Helper = true, lyrebird
-			} else {
-				rows[i].Reason = "Lyrebird is required for this Tor circumvention transport"
-			}
-		}
-		rows[i].Helper = strings.TrimSpace(rows[i].Helper)
+		rows[i].Supported = true
+		rows[i].Helper = "Router VPN native transport owner"
 	}
 	return rows
 }
 
-// torBridgeProfileRuntimeCapability answers the narrower question the node list
-// needs: can this exact saved Tor PT set run here? A broad "Tor is supported"
-// capability is insufficient when only legacy obfs4proxy is installed because
-// Snowflake/WebTunnel require Lyrebird.
+// The packaged native owner implements the complete accepted transport set.
+// The saved profile still needs exact grammar and policy validation.
 func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExitCapability {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	cap := torBridgeRuntimeCapabilityForRoot(root)
 	if !cap.Supported {
 		return cap
 	}
-	_, _, transports, _, err := torBridgeProfile(profile)
-	if err != nil {
+	if _, _, _, _, err := torBridgeProfile(profile); err != nil {
 		cap.Supported = false
 		cap.Reason = "saved Tor bridge profile is invalid: " + err.Error()
-		return cap
-	}
-	if runtime.GOOS == "windows" {
-		// Windows support already requires the pinned Tor Expert Bundle's exact
-		// Lyrebird executable, which implements every accepted PT family.
-		return cap
-	}
-	if _, err := torBridgeTransportBinary(transports); err != nil {
-		cap.Supported = false
-		cap.Reason = err.Error()
 	}
 	return cap
 }

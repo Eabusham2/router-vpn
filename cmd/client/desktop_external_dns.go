@@ -43,6 +43,7 @@ type desktopDNSSlot struct {
 
 type desktopDNSSnapshot struct {
 	launch       *desktopNodeLaunch
+	session      string
 	profileID    string
 	profileToken string
 	stateToken   string
@@ -74,30 +75,52 @@ func (a *app) desktopDNSFor() *desktopDNSSlot {
 
 func captureDesktopDNSSnapshot(a *app) (desktopDNSSnapshot, error) {
 	var snapshot desktopDNSSnapshot
-	launch := desktopExternalMTULaunch(a)
-	if launch == nil || launch.external.profile.External == nil || !desktopExternalNativeProtocol(launch.external.profile.External.Protocol) {
-		return snapshot, errors.New("DNS Retest needs the currently proved ordinary external native runtime; desktop Tor needs its own measurement adapter")
+	raw, found := desktopNodeOwners.Load(a)
+	launch, ok := raw.(*desktopNodeLaunch)
+	if !found || !ok {
+		return snapshot, errors.New("DNS Retest needs the currently proved external or Tor native runtime")
 	}
-	if _, err := a.readDesktopExternalProof(launch); err != nil {
+	identity, err := capturedDesktopDNSRuntime(launch)
+	if err != nil {
 		return snapshot, err
 	}
-	launch.external.mu.Lock()
-	baseline := launch.external.mtu
-	launch.external.mu.Unlock()
-	if baseline == nil {
-		return snapshot, errors.New("native DNS has no captured saved source identity")
+	if err := a.desktopDNSCurrentProof(launch); err != nil {
+		return snapshot, err
+	}
+	var baseline *desktopMTUSession
+	if launch.external != nil {
+		if launch.external.profile.External == nil || !desktopExternalNativeProtocol(launch.external.profile.External.Protocol) {
+			return snapshot, errors.New("DNS Retest has no supported captured external engine")
+		}
+		launch.external.mu.Lock()
+		baseline = launch.external.mtu
+		launch.external.mu.Unlock()
+		if baseline == nil {
+			return snapshot, errors.New("native DNS has no captured saved source identity")
+		}
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	profile, entry, ok := a.dnsPolicySelectionLocked()
-	if !ok || !externalDNSProfile(profile) || profile.ID != launch.external.expected.ExitID || entry.ID != launch.external.expected.EntryID {
+	if !ok || !externalDNSProfile(profile) || profile.ID != identity.node {
 		return snapshot, errors.New("select the connected external node and its captured entry before DNS Retest")
 	}
-	snapshot = desktopDNSSnapshot{launch: launch, profileID: profile.ID, profileToken: dnsPolicySelectionToken(profile, entry), stateToken: mtuStateSnapshotToken(a.state), baseline: baseline.profileToken, entryID: baseline.entryID, entryToken: baseline.entryToken}
+	if launch.tor != nil {
+		if entry.ID != "" || profile.MultihopEnabled || asyncMeasurementProfileToken(profile) != launch.tor.profileToken {
+			return snapshot, errors.New("Tor DNS Retest belongs to another saved path or policy")
+		}
+		baseline = &desktopMTUSession{profileToken: mtuProfileSnapshotToken(profile)}
+	} else if entry.ID != launch.external.expected.EntryID {
+		return snapshot, errors.New("DNS Retest entry differs from its captured graph")
+	}
+	snapshot = desktopDNSSnapshot{launch: launch, session: identity.session, profileID: profile.ID, profileToken: dnsPolicySelectionToken(profile, entry), stateToken: mtuStateSnapshotToken(a.state), baseline: baseline.profileToken, entryID: baseline.entryID, entryToken: baseline.entryToken}
 	return snapshot, snapshot.currentLocked(a)
 }
 
 func (s desktopDNSSnapshot) currentLocked(a *app) error {
+	if owner, found := desktopNodeOwners.Load(a); !found || owner != s.launch {
+		return errors.New("native DNS process owner changed")
+	}
 	if a.closing || a.cmd != s.launch.command || !a.state.Connected || a.state.Phase != "connected" || a.state.RouterID != s.profileID || mtuStateSnapshotToken(a.state) != s.stateToken {
 		return errors.New("native DNS connection or controller owner changed")
 	}
@@ -115,7 +138,7 @@ func (s desktopDNSSnapshot) currentLocked(a *app) error {
 }
 
 func (s desktopDNSSnapshot) current(a *app) error {
-	if _, err := a.readDesktopExternalProof(s.launch); err != nil {
+	if err := a.desktopDNSCurrentProof(s.launch); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -140,7 +163,7 @@ func writeDesktopDNSJSON(w http.ResponseWriter, code int, value any) {
 }
 
 func desktopDNSInitialView(snapshot desktopDNSSnapshot) desktopDNSView {
-	session := snapshot.launch.external.session
+	session := snapshot.session
 	return desktopDNSView{ProfileID: snapshot.profileID, ProfileToken: snapshot.profileToken, SessionID: session, Status: dnsmeasure.Status{Schema: 1, NodeID: snapshot.profileID, SessionID: session, Stage: "idle", Complete: true, Drained: true, Results: []dnsmeasure.Result{}}}
 }
 
@@ -198,7 +221,7 @@ func (a *app) desktopDNSMeasurement(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if request.ProfileID != snapshot.profileID || request.ProfileToken != snapshot.profileToken || request.SessionID != snapshot.launch.external.session || r.Context().Err() != nil {
+	if request.ProfileID != snapshot.profileID || request.ProfileToken != snapshot.profileToken || request.SessionID != snapshot.session || r.Context().Err() != nil {
 		http.Error(w, "DNS source or connection changed before Retest", http.StatusConflict)
 		return
 	}
@@ -330,7 +353,7 @@ func (o *desktopDNSOperation) view(a *app) desktopDNSView {
 	}
 	o.mu.Lock()
 	defer o.mu.Unlock()
-	view := desktopDNSView{ProfileID: o.snapshot.profileID, ProfileToken: o.snapshot.profileToken, SessionID: o.snapshot.launch.external.session, Request: o.request, Status: cloneDesktopDNSStatus(o.status)}
+	view := desktopDNSView{ProfileID: o.snapshot.profileID, ProfileToken: o.snapshot.profileToken, SessionID: o.snapshot.session, Request: o.request, Status: cloneDesktopDNSStatus(o.status)}
 	if !o.invalid && !o.completedAt.IsZero() {
 		view.ExpiresInMS = max(int64(0), (desktopDNSDraftLifetime - time.Since(o.completedAt)).Milliseconds())
 	}
@@ -338,7 +361,7 @@ func (o *desktopDNSOperation) view(a *app) desktopDNSView {
 }
 
 func (o *desktopDNSOperation) draftCurrent(a *app) error {
-	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != o.snapshot.launch.external.currentNetworkIdentity() {
+	if !desktopDNSNetworkCurrent(o.snapshot.launch) {
 		return errors.New("DNS result belongs to a previous physical network")
 	}
 	a.mu.Lock()
@@ -351,8 +374,16 @@ func (o *desktopDNSOperation) draftCurrentLocked(a *app) error {
 	if a.closing || !ok || profile.ID != o.snapshot.profileID || dnsPolicySelectionToken(profile, entry) != o.snapshot.profileToken {
 		return errors.New("DNS result belongs to an old selected source or entry")
 	}
+	if a.state.Phase == "failed" {
+		return errors.New("DNS result was retired by a failed connection or native proof")
+	}
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) && (a.cmd != o.snapshot.launch.command || !a.state.Connected || a.state.Phase != "connected") {
 		return errors.New("a replacement connection invalidated the DNS result")
+	}
+	if a.state.Connected {
+		if owner, found := desktopNodeOwners.Load(a); !found || owner != o.snapshot.launch {
+			return errors.New("a replacement native owner invalidated the DNS result")
+		}
 	}
 	return nil
 }
@@ -371,7 +402,7 @@ func (a *app) cancelDesktopDNSMeasurement(w http.ResponseWriter, r *http.Request
 	slot.mu.Lock()
 	operation := slot.current
 	if operation != nil && operation.request == request.Request {
-		if operation.snapshot.profileID != request.ProfileID || operation.snapshot.launch.external.session != request.SessionID {
+		if operation.snapshot.profileID != request.ProfileID || operation.snapshot.session != request.SessionID {
 			slot.mu.Unlock()
 			http.Error(w, "DNS cancellation belongs to another connection", http.StatusConflict)
 			return
@@ -465,7 +496,7 @@ func (a *app) selectDesktopDNSResult(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
-	if request.ProfileID != operation.snapshot.profileID || request.ProfileToken != operation.snapshot.profileToken || request.SessionID != operation.snapshot.launch.external.session {
+	if request.ProfileID != operation.snapshot.profileID || request.ProfileToken != operation.snapshot.profileToken || request.SessionID != operation.snapshot.session {
 		http.Error(w, "DNS result belongs to another source or connection", http.StatusConflict)
 		return
 	}
@@ -517,7 +548,7 @@ func (o *desktopDNSOperation) beginDraftCommitLocked(a *app, request dnsPolicyRe
 	if err := o.draftCurrentLocked(a); err != nil {
 		return nil, err
 	}
-	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != o.snapshot.launch.external.currentNetworkIdentity() {
+	if !desktopDNSNetworkCurrent(o.snapshot.launch) {
 		return nil, errors.New("measured DNS draft belongs to an old network")
 	}
 	o.mu.Lock()

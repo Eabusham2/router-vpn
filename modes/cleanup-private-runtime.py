@@ -8,6 +8,10 @@ import stat
 import sys
 
 ALLOWED_ROOTS = {"native-node", "multihop", "native-multihop", "native-standard-exit", "openvpn-standard-exit"}
+# Tor's controller pins and removes its own exact files after native drain.
+# Its wrapper may verify the workspace, but generic recursive cleanup must
+# never acquire deletion authority from this verification-only category.
+VERIFY_ONLY_ROOTS = {"tor-bridge"}
 DIR_FLAGS = os.O_RDONLY | getattr(os, "O_DIRECTORY", 0) | getattr(os, "O_NOFOLLOW", 0)
 
 
@@ -85,7 +89,7 @@ def verify_directory(root_value: str, target_value: str) -> Path:
         rel = target.relative_to(run_root)
     except ValueError as exc:
         raise RuntimeError("refusing runtime directory outside HOMEVPN_ROOT/run") from exc
-    if not rel.parts or rel.parts[0] not in ALLOWED_ROOTS or len(rel.parts) > 2:
+    if not rel.parts or rel.parts[0] not in ALLOWED_ROOTS | VERIFY_ONLY_ROOTS or len(rel.parts) > 2:
         raise RuntimeError("refusing unrelated/deep private runtime directory")
 
     run_fd = open_directory(run_root, run_info, "Router VPN run directory")

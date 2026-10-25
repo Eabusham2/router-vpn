@@ -643,6 +643,9 @@ func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {
 				a.operationMu.Unlock()
 				continue
 			}
+			// A failed native proof retires measured DNS even when the physical
+			// fingerprint is unchanged. Only explicit Disconnect retains drafts.
+			invalidateDesktopDNSResults(a)
 			err := a.stopModeWithIntent(true)
 			message := "external native proof or physical network retired; protection is held"
 			if err != nil {

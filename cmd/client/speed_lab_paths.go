@@ -71,6 +71,8 @@ type speedLabPathIdentity struct {
 	EntryToken      string
 	External        *desktopNodeLaunch
 	ExternalSession string
+	Tor             *desktopNodeLaunch
+	TorSession      string
 	Execution       string
 	Options         [3]bool
 }
@@ -138,27 +140,46 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 	} else if st.Mode == "external-node" {
 		if raw, exists := desktopNodeOwners.Load(a); exists {
 			launch, ok := raw.(*desktopNodeLaunch)
-			if !ok || launch == nil || launch.external == nil || launch.command != command {
+			if !ok || launch == nil || launch.command != command || launch.profileID != profile.ID {
 				return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime owner changed")
 			}
-			proof, err := a.readDesktopExternalProof(launch)
-			if err != nil {
-				return speedLabPathIdentity{}, speedLabPath{}, err
-			}
-			identity.External, identity.ExternalSession, identity.Execution = launch, proof.SessionID, proof.Execution
-			path.Execution, path.ExitID, path.ExitName = proof.Execution, profile.ID, profile.Name
-			path.StartedAt = launch.external.started
-			if !launch.external.direct {
-				path.EntryID, path.EntryName = launch.external.entry.ID, launch.external.entry.Name
-				path.EntryMode = launch.external.profile.MultihopEntryMode
-				a.mu.Lock()
-				entry, ok := a.profileByIDLocked(path.EntryID)
-				a.mu.Unlock()
-				if !ok {
-					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab entry disappeared")
+			if launch.tor != nil {
+				if launch.external != nil || profile.External == nil || profile.External.Protocol != "tor-bridge" || st.RuntimeMode != "external-tor-bridge" {
+					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab owner belongs to a different path")
 				}
-				identity.EntryToken = liveMeasurementProfileToken(entry)
+				proof, err := a.readDesktopTorProof(launch)
+				if err != nil {
+					return speedLabPathIdentity{}, speedLabPath{}, err
+				}
+				identity.Tor, identity.TorSession, identity.Execution = launch, proof.SessionID, "local"
+				path.Execution, path.ExitID, path.ExitName = "local", profile.ID, profile.Name
+				path.StartedAt = launch.tor.started
+				path.Description = "actual captured Tor bridge path with owned Tor exit, selected DNS and interface proof"
+			} else {
+				if launch.external == nil || profile.External != nil && profile.External.Protocol == "tor-bridge" {
+					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime has no matching proof owner")
+				}
+				proof, err := a.readDesktopExternalProof(launch)
+				if err != nil {
+					return speedLabPathIdentity{}, speedLabPath{}, err
+				}
+				identity.External, identity.ExternalSession, identity.Execution = launch, proof.SessionID, proof.Execution
+				path.Execution, path.ExitID, path.ExitName = proof.Execution, profile.ID, profile.Name
+				path.StartedAt = launch.external.started
+				if !launch.external.direct {
+					path.EntryID, path.EntryName = launch.external.entry.ID, launch.external.entry.Name
+					path.EntryMode = launch.external.profile.MultihopEntryMode
+					a.mu.Lock()
+					entry, ok := a.profileByIDLocked(path.EntryID)
+					a.mu.Unlock()
+					if !ok {
+						return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab entry disappeared")
+					}
+					identity.EntryToken = liveMeasurementProfileToken(entry)
+				}
 			}
+		} else if profile.External != nil && profile.External.Protocol == "tor-bridge" {
+			return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab path has no captured native owner")
 		}
 	}
 	if err := validateSpeedLabIdentity(a, identity); err != nil {
@@ -168,6 +189,10 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 }
 
 func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
+	if identity.External != nil && (identity.External.external == nil || identity.External.tor != nil || identity.Tor != nil) ||
+		identity.Tor != nil && (identity.Tor.tor == nil || identity.Tor.external != nil || identity.GraphOK || identity.EntryToken != "") {
+		return errors.New("Speed Lab identity mixes incompatible native path owners")
+	}
 	session := sessionTrackerFor(a).snapshot(0)
 	if identity.SessionID == "" || session.ID != identity.SessionID || !session.Connected || session.Phase != "connected" || session.PathProof != "passed" || session.RouterID != identity.RouterID {
 		return errors.New("Speed Lab result became stale because the VPN session/path changed")
@@ -209,6 +234,19 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		}
 		if proof.SessionID != identity.ExternalSession || proof.Execution != identity.Execution {
 			return errors.New("Speed Lab result belongs to a different external execution")
+		}
+	}
+	if identity.Tor != nil {
+		current, exists := desktopNodeOwners.Load(a)
+		if !exists || current != identity.Tor || identity.Tor.command != identity.Command || identity.Tor.profileID != identity.RouterID {
+			return errors.New("Speed Lab result became stale because the native Tor owner changed")
+		}
+		proof, err := a.readDesktopTorProof(identity.Tor)
+		if err != nil {
+			return err
+		}
+		if identity.TorSession == "" || proof.SessionID != identity.TorSession || identity.Execution != "local" {
+			return errors.New("Speed Lab result belongs to a different Tor execution")
 		}
 	}
 	return nil
@@ -851,9 +889,18 @@ func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfi
 	if err := a.checkConnectionOperation(); err != nil || !a.ownsConnectionRuntime(command) {
 		return speedLabPath{}, errors.Join(err, errors.New("Tor proof completed for a retired Speed Lab runtime"))
 	}
+	if err := a.desktopTorCurrent(prelaunch.workspace); err != nil {
+		return speedLabPath{}, err
+	}
 	a.mu.Lock()
+	currentProfile, present := a.profileByIDLocked(profile.ID)
+	if a.cmd != command || !present || asyncMeasurementProfileToken(currentProfile) != prelaunch.workspace.tor.profileToken {
+		a.mu.Unlock()
+		return speedLabPath{}, errors.New("Tor Speed Lab adoption belongs to a retired node or command")
+	}
 	a.state.Connected, a.state.Phase = true, "connected"
 	a.mu.Unlock()
+	a.monitorDesktopTorRuntime(prelaunch.workspace)
 	if _, err := waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond); err != nil {
 		return speedLabPath{}, err
 	}

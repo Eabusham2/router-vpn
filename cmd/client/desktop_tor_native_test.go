@@ -172,10 +172,15 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 			os.Exit(92)
 		}
 	}
+	if desktopTorPrelaunchFailureChild(kind, directory, expected, write) {
+		return
+	}
 	checked := time.Now()
 	proof := desktopTorFixtureProof(expected, checked)
 	write("progress.json", desktopTorProgress{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving"})
+	dnsTick := desktopTorDNSChildFixture(kind, directory, expected, write)
 	for {
+		dnsTick()
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
 		raw, err := os.ReadFile(filepath.Join(directory, "stop.json"))

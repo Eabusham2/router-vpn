@@ -50,6 +50,30 @@ def main() -> int:
         assert not native_node.exists()
         assert (run / "native-standard-exit").is_dir(), "another runtime owner was removed"
 
+        # The Tor wrapper needs the same no-follow execution check, while its
+        # controller retains exclusive deletion ownership after native drain.
+        tor = run / "tor-bridge" / "session-captured"
+        tor.mkdir(parents=True)
+        private = tor / "tor-profile.json"
+        private.write_text("captured private Tor input\n", encoding="utf-8")
+        assert CLEAN.verify_directory(str(root), str(tor)) == tor
+        for target in (tor, tor.parent):
+            try:
+                CLEAN.cleanup(str(root), str(target))
+            except RuntimeError as exc:
+                assert "unrelated" in str(exc)
+            else:
+                raise AssertionError("verification-only Tor workspace acquired generic deletion authority")
+        assert private.read_text(encoding="utf-8") == "captured private Tor input\n"
+        tor_deep = tor / "unowned-depth"
+        tor_deep.mkdir()
+        try:
+            CLEAN.verify_directory(str(root), str(tor_deep))
+        except RuntimeError as exc:
+            assert "deep" in str(exc)
+        else:
+            raise AssertionError("Tor verification bypassed the existing depth bound")
+
         # First launch with no run directory is an intentional no-op.
         fresh = root / "fresh"
         fresh.mkdir()
@@ -74,6 +98,34 @@ def main() -> int:
             raise AssertionError("cleanup accepted unexpectedly deep runtime path")
 
     if os.name != "nt":
+        with tempfile.TemporaryDirectory(prefix="router-vpn-tor-verify-links-") as td:
+            root = Path(td)
+            run = root / "run"
+            category = run / "tor-bridge"
+            category.mkdir(parents=True)
+            outside = root / "outside"
+            outside.mkdir()
+            (outside / "keep").write_text("retained\n", encoding="utf-8")
+            session = category / "session-linked"
+            session.symlink_to(outside, target_is_directory=True)
+            for target in (session, category / "session-linked" / "child"):
+                try:
+                    CLEAN.verify_directory(str(root), str(target))
+                except RuntimeError as exc:
+                    assert "symlink" in str(exc) or "deep" in str(exc)
+                else:
+                    raise AssertionError("Tor verification followed a linked/deep runtime")
+            session.unlink()
+            category.rmdir()
+            category.symlink_to(outside, target_is_directory=True)
+            try:
+                CLEAN.verify_directory(str(root), str(category / "session-linked"))
+            except RuntimeError as exc:
+                assert "symlink" in str(exc)
+            else:
+                raise AssertionError("Tor verification followed a linked category")
+            assert (outside / "keep").read_text(encoding="utf-8") == "retained\n"
+
         with tempfile.TemporaryDirectory(prefix="router-vpn-cleanup-leaf-link-") as td:
             root = Path(td)
             run = root / "run"

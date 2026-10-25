@@ -50,8 +50,8 @@ def need_android_tor_editor_controls(path: str) -> None:
 
 # Canonical external profile model: PT family is explicit, dynamic Tor exit is
 # never replaced with a user-supplied fixed public IP, and imported data cannot
-# supply executable paths or torrc directives. ClientTransportPlugin generation
-# belongs to the trusted runtime layer below, never to untrusted profile parsing.
+# supply executable paths or torrc directives. Native transport listeners are
+# configured by the authenticated control owner, never by imported commands.
 need(
     "internal/common/types.go",
     "ExternalTorBridgeConfig",
@@ -88,32 +88,111 @@ need(
     "TestTorBridgeRejectsCustomTransportInjection",
 )
 
-# Desktop runtime: trusted Tor/PT helpers, private torrc, exact transport set,
-# bootstrap=100%, full-device TUN, owned children, and dynamic Tor exit proof.
-# Windows x64/ARM64 retain native VPN engines/drivers. ARM64 uses the pinned
-# x64 Tor/PT userspace helpers only after an OS compatibility and execution check.
+# Desktop runtime: standalone disabled Tor, owned native Go PTs, authenticated
+# control/bootstrap, one captured TUN, selected DNS and dynamic Tor exit proof.
+# Windows ARM64 retains its native VPN engine/driver and checks the pinned
+# standalone x64 Tor executable through the recorded OS compatibility boundary.
 need(
     "cmd/client/tor_bridge_runtime.go",
-    'safeExecutable("lyrebird")',
-    'safeExecutable("obfs4proxy")',
-    "torBridgeTransportBinary",
     "torBridgeRuntimeCapabilityForRoot",
     'case "windows":',
     'windowsTorHostCompatibility()',
     'windowsTorRuntimeExecutable(root, "tor.exe")',
-    'windowsTorRuntimeExecutable(root, "lyrebird.exe")',
-    'windowsTorRuntimeExecutable(root, "sing-box.exe")',
+    "verifyBundledNative",
+    "filepath.EvalSymlinks",
+)
+need(
+    "cmd/client/desktop_tor_prepare.go",
     "native-tor-bridge-windows.ps1",
     'safeExecutable("powershell.exe")',
     '"-Action", "up"',
     '"-TunnelAlias", "router-vpn-tor"',
-    "ClientTransportPlugin ",
-    "strings.Join(transports, \",\")",
-    "strictLiteralObfs4",
-    "multiple or dynamic/CDN/WebRTC bootstrap egress",
-    "selectedTorBridgeDNS",
-    "HOMEVPN_TOR_PLUGIN_TRANSPORTS=",
-    "HOMEVPN_TOR_PT_BINARY=",
+    "verifyBundledNative", "captureDesktopTorExecutable", "NewDesktopBridgeCapture",
+    "HOMEVPN_TOR_BINARY_SHA256=", "desktopTorEnvironment", "preflightDesktopTorLaunch",
+    '[]string{"routervpn-tor", "--help"}', "30*time.Second",
+)
+forbid("cmd/client/tor_bridge_runtime.go", "torBridgeTransportBinary", 'safeExecutable("lyrebird")')
+need(
+    "internal/mobiletor/desktop_capture.go",
+    '"DisableNetwork 1"', '"SocksPort 0"', '"CookieAuthentication 1"',
+    '"RunAsDaemon 0"', '"Log notice stdout"', "IsolationSecret", "ConfigSHA256",
+)
+need(
+    "internal/mobiletor/desktop_control.go",
+    "AUTHCHALLENGE SAFECOOKIE ", "TAKEOWNERSHIP", "GETINFO process/pid net/listeners/control",
+    "pid != c.pid", '"DisableNetwork": {"1"}',
+)
+need(
+    "internal/mobiletor/desktop_session.go",
+    "Configure", "EnableNetwork", "WaitBootstrap", "Verify", "Quiesce",
+)
+need(
+    "internal/mobiletor/desktop_bridge.go",
+    "strict desktop Tor protection requires one fixed obfs4 bridge",
+    "routervpn-desktop-tor-network", "BootstrapDNSTag", "ConfiguredMTU",
+)
+need(
+    "mobile/desktop/tor_box.go.tmpl",
+    "RouterVPNDesktopTorCreate", "RouterVPNDesktopMTU", "session.Configure",
+    "session.EnableNetwork", "session.WaitBootstrap", "r.engine.DNSProof",
+    "mobiletor.Prove", "proof.DNSProven = true", "VerifyCurrentPath", "DNSMeasurement",
+    "r.workers.Wait()", "r.pt.Close(ctx)",
+)
+need(
+    "mobile/desktop/external_tor.go.tmpl",
+    'Use: "routervpn-tor"', "routerVPNOpenTorFiles", 'files.publish("progress.json", progress)',
+    "routerVPNCaptureTorBinary", "routerVPNOpenDesktopDNSService", "owner.VerifyCurrentPath",
+    "owner.Cancel()", "<-done", "owner.Close(cleanup)", 'files.publish("stopped.json", closed)',
+)
+need(
+    "mobile/desktop/external_tor_test.go.tmpl",
+    "TestRouterVPNDesktopTorCommandPublishesExactProofHeartbeatDNSAndStop",
+    "TestRouterVPNDesktopTorCommandCancelJoinsStartProofAndNativeDrain",
+    "TestRouterVPNDesktopTorCommandNoWorkIsBoundToExclusiveAdmission",
+    "TestRouterVPNDesktopTorCommandDNSCancelRetainsActualWorkerAndHealthyConnection",
+)
+need(
+    "cmd/client/desktop_tor_native.go",
+    "validateDesktopTorProof", "proof.Policy != expected", "!proof.Proof.DNSProven",
+    "desktopTorCurrent", "waitDesktopTorProof", "desktopNodeProcessExited",
+    "requestDesktopTorStop", "cleanupDesktopTorLaunch", "monitorDesktopTorRuntime",
+    "desktopTorNoNativeWork", "prelaunchAcknowledged", "admissionObserved", "invalidateDesktopDNSResults(a)",
+)
+need(
+    "cmd/client/desktop_dns_owner.go",
+    "capturedDesktopDNSRuntime", "a.readDesktopTorProof", "desktopDNSNativeClosed",
+    "Selected DNS via captured Tor exit", "Current Tor connection",
+)
+need(
+    "cmd/client/desktop_tor_prepare_test.go",
+    "TestDesktopTorStagingCapturesAllTransportFamiliesAndDisabledInputs",
+    "TestDesktopTorPreflightChecksNativeCommandAndRetainsInputIdentity",
+    "TestDesktopTorPreparedStartRejectsStaleOwnersAndSameInodeChanges",
+    "TestDesktopTorPreparedRealChildTransfersToCheckedDrain",
+)
+need(
+    "cmd/client/desktop_tor_dns_test.go",
+    "TestDesktopTorDNSUsesCapturedMailboxAndExplicitMeasuredDraft",
+    "TestDesktopTorDNSCancellationRetainsNativeOwnerAndHoldUntilDrain",
+    "TestDesktopTorDNSRejectsResolverTransportRouteAndReplacementOwners",
+    "TestDesktopTorDNSCleanupRequiresBothReceiptAndRealProcessJoin",
+)
+need(
+    "cmd/client/desktop_tor_prelaunch_failure_test.go",
+    "TestDesktopTorPrelaunchFailureRetiresOnlyAfterWrapperExit",
+    "TestDesktopTorPrelaunchFailureCannotExcuseNativeAdmissionOrChangedInputs",
+    "TestDesktopTorPrelaunchCleanupRechecksAdmission",
+)
+need(
+    "cmd/client/desktop_dns_retirement_test.go",
+    "TestDesktopDNSNativeFailureRetiresCompletedDraftOnUnchangedNetwork",
+    "monitorDesktopTorRuntime", "monitorDesktopExternalRuntime",
+)
+need(
+    "cmd/client/speed_lab_tor_identity_test.go",
+    "TestSpeedLabTorCapturesActualRegisteredNativeOwner",
+    "TestSpeedLabTorRestoreRejectsChangedCapturedSource",
+    "TestSpeedLabTorCancelledTestRestoresFreshOwnedSession",
 )
 need(
     "cmd/client/tor_bridge_windows_runtime.go",
@@ -184,13 +263,21 @@ need(
 )
 need(
     "client/native-tor-bridge-windows.ps1",
-    "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE",
-    "AssignProcessToJobObject",
     "windows-kill-switch.ps1",
-    "Bootstrapped 100%",
-    "Tor SOCKS listener is unavailable after bootstrap",
-    "Tor PT binary changed after capability proof",
-    "Tor circumvention process exited; tearing down full-device path",
+    "HOMEVPN_TOR_BINARY_SHA256", "Get-RouterVPNTorNativeEnvironment",
+    "Invoke-RouterVPNTorOwnedNative", "RecoveryOwner", "Start-RouterVPNPrivateJob",
+    "Wait-RouterVPNPrivateJob", "Stop-RouterVPNPrivateJob", "Close-RouterVPNPrivateJob",
+    "Invoke-RouterVPNTorKillSwitch 'check'", "Invoke-RouterVPNTorKillSwitch 'prepare'",
+    "Write-RouterVPNTorPrelaunchFailure", "NoNativeChild", "NoChildFailure",
+)
+need(
+    "client/Private-RouterVPN-Job.ps1",
+    "CREATE_SUSPENDED", "JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE", "AssignProcessToJobObject",
+    "ResumeThread", "RecoveryOwner", "WaitForSingleObject",
+)
+need(
+    "client/test-windows-tor-wrapper-lifecycle.ps1",
+    "RecoveryOwner", "Environment", "Detect-Defect",
 )
 need(
     "cmd/client/tor_bridge_windows_runtime_test.go",
@@ -200,16 +287,19 @@ need(
 )
 need(
     "modes/native-tor-bridge.sh",
-    "Bootstrapped 100%",
-    "Tor process start is not connectivity",
-    "HOMEVPN_TOR_PT_BINARY",
-    "HOMEVPN_TOR_PLUGIN_TRANSPORTS",
-    "Tor PT binary changed after capability proof",
-    "legacy obfs4proxy cannot provide Snowflake or WebTunnel",
-    "record \"$ROOT\" \"$PID_MODE\" \"$tor_pid\"",
-    "record \"$ROOT\" \"$PID_MODE\" \"$sing_pid\"",
-    "Tor circumvention process exited; tearing down full-device path",
+    "HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_BINARY_SHA256", "router_vpn_standard_engine",
+    'cleanup-private-runtime.py" verify-dir', 'python3 "$SCRIPT_DIR/kill-switch-platform.py" apply',
+    'exec "$NATIVE_BIN" routervpn-tor', '--session "$HOMEVPN_TOR_SESSION"', '--tor-binary "$TOR_BIN"',
+    "tor_prelaunch_failed", "tor-prelaunch-witness.py", "shopt -s execfail",
 )
+need(
+    "modes/tor-prelaunch-witness.py",
+    '"prelaunch-failed.json"', '"no_native_process": True', "os.O_EXCL",
+    "regular_at", "verify_directory", "os.path.samestat", "os.fsync",
+)
+for path in ("modes/native-tor-bridge.sh", "client/native-tor-bridge-windows.ps1"):
+    forbid(path, "Bootstrapped 100%", "HOMEVPN_TOR_PT_BINARY", "HOMEVPN_TOR_PLUGIN_TRANSPORTS")
+forbid("modes/native-tor-bridge.sh", "rm -rf", "trap cleanup")
 need(
     "cmd/client/tor_bridge_proof.go",
     "IsTor",
@@ -256,7 +346,7 @@ need(
     "upstream_hop",
     "torBridgeRuntimeCapabilityForRoot",
     'runtime.GOOS == "windows"',
-    'windowsTorRuntimeExecutable(root, "lyrebird.exe")',
+    "Router VPN native transport owner",
 )
 need(
     "cmd/client/tor_bridge_import.go",
