@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
+import shlex
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -29,6 +31,30 @@ def forbid(path: str, *markers: str) -> None:
     for marker in markers:
         if marker in body:
             errors.append(f"{path}: forbidden shipping marker {marker!r}")
+
+
+def macos_compiler_closure() -> None:
+    body = read("client/macos/build-native-app.sh")
+    # Extensions may be inserted or reordered without removing the map. Check
+    # the actual compiler command, not a contiguous spelling of its old inputs
+    # or declarations that could remain after an input stopped shipping.
+    commands = re.findall(r"^xcrun swiftc [^\n]*", body.replace("\\\n", " "), re.MULTILINE)
+    if len(commands) != 1:
+        errors.append("macOS requires exactly one shipping Swift compiler invocation")
+        return
+    try:
+        inputs = shlex.split(commands[0])
+    except ValueError:
+        errors.append("macOS shipping Swift compiler invocation is malformed")
+        return
+    for name in (
+        "HARDENED_UNIFIED_SRC", "TELEMETRY_SRC", "SPEED_LAB_SRC", "SPEED_LAB_TRANSPORT_SRC",
+        "MTU_TRANSPORT_SRC", "MTU_CONTROLLER_SRC", "MTU_PANEL_SRC",
+        "DNS_TRANSPORT_SRC", "DNS_CONTROLLER_SRC", "DNS_PANEL_SRC", "GLOBE_SRC",
+        "PROFILE_SRC", "PROFILE_CHROME_SRC", "ONBOARDING_SRC", "HOME_SRC", "SETTINGS_SRC",
+    ):
+        if inputs.count("$" + name) != 1:
+            errors.append(f"macOS shipping compiler must include {name} exactly once")
 
 
 contract = json.loads(read("client/unified-control-center-v2.json") or "{}")
@@ -192,6 +218,7 @@ forbid("client/RouterVPN-Windows-App.ps1", "msedge.exe", "chrome.exe", "--app=")
 
 # macOS: the native compiler command includes hardened unified UI, telemetry,
 # Speed Lab, globe, whole-profile CRUD, onboarding and settings sources.
+macos_compiler_closure()
 need(
     "client/macos/build-native-app.sh",
     "RouterVPNMacUnifiedShell.swift",
@@ -201,7 +228,9 @@ need(
     "RouterVPNConnectionProfiles.swift",
     "RouterVPNConnectionProfileChrome.swift",
     "RouterVPNProfileSettings.swift",
-    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$MTU_TRANSPORT_SRC" "$MTU_CONTROLLER_SRC" "$MTU_PANEL_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
+    "RouterVPNMacDNSTransport.swift",
+    "RouterVPNMacDNSController.swift",
+    "RouterVPNMacDNSPanel.swift",
     "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
 )
 need(

@@ -5,6 +5,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 import re
+import shlex
 import types
 import unittest
 
@@ -129,6 +130,51 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.replace("modes/native-multihop-darwin.sh", "kill-switch-platform.py", "unprotected-helper.py")
         self.assertFalse(self.recovered["controller_multihop_platform"]("darwin"))
         self.assertFalse(self.legacy["macOS native AppKit packages"]())
+
+
+class MacUnifiedCompilerAuditTests(unittest.TestCase):
+    def test_actual_map_audit_checks_compiler_inputs_without_stale_adjacency(self):
+        path = ROOT / "deploy/unified-map-shipping-audit.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "macos_compiler_closure"]
+        self.assertEqual(len(functions), 1)
+        self.assertTrue(any(isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Name) and node.value.func.id == "macos_compiler_closure"
+                            for node in tree.body))
+        body = (ROOT / "client/macos/build-native-app.sh").read_text(encoding="utf-8")
+        changes, errors = {}, []
+        scope = {"read": lambda _: changes.get("body", body), "errors": errors, "re": re, "shlex": shlex}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), scope)
+        scope["macos_compiler_closure"]()
+        self.assertEqual(errors, [])
+        # Reordering an independent extension must not invalidate the map gate.
+        changed = body.replace('"$DNS_PANEL_SRC" "$GLOBE_SRC"', '"$GLOBE_SRC" "$DNS_PANEL_SRC"')
+        self.assertNotEqual(changed, body)
+        changes["body"] = changed
+        scope["macos_compiler_closure"]()
+        self.assertEqual(errors, [])
+        before_compiler, compiler = body.split("xcrun swiftc ", 1)
+        for name in ("HARDENED_UNIFIED_SRC", "TELEMETRY_SRC", "SPEED_LAB_SRC", "SPEED_LAB_TRANSPORT_SRC",
+                     "MTU_TRANSPORT_SRC", "MTU_CONTROLLER_SRC", "MTU_PANEL_SRC",
+                     "DNS_TRANSPORT_SRC", "DNS_CONTROLLER_SRC", "DNS_PANEL_SRC", "GLOBE_SRC",
+                     "PROFILE_SRC", "PROFILE_CHROME_SRC", "ONBOARDING_SRC", "HOME_SRC", "SETTINGS_SRC"):
+            with self.subTest(removed=name):
+                token = '"$' + name + '"'
+                self.assertIn(token, body)
+                errors.clear()
+                # The file declaration and a comment cannot replace the input.
+                changes["body"] = before_compiler + "xcrun swiftc " + compiler.replace(token, "", 1) + "\n# " + token + "\n"
+                scope["macos_compiler_closure"]()
+                self.assertTrue(errors, "Uncompiled map extension passed the real audit")
+        for changed in (
+            body.replace('"$GLOBE_SRC"', '"$GLOBE_SRC" "$GLOBE_SRC"', 1),
+            body.replace("xcrun swiftc ", "# xcrun swiftc ", 1),
+            body + '\nxcrun swiftc "$GLOBE_SRC"\n',
+        ):
+            errors.clear(); changes["body"] = changed
+            scope["macos_compiler_closure"]()
+            self.assertTrue(errors, "Invalid compiler owner passed the real audit")
 
 
 class LinuxDNSMeasurementAuditTests(unittest.TestCase):
