@@ -93,7 +93,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                 capturedHome=AndroidHomeStateStore.snapshot(context);
             }
             cb.owned(capturedHome.sessionId);
-            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with strict Android lockdown…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
+            cb.progress(direct?"Preparing direct "+exit.protocol+" custom exit with its captured protection policy…":"Preparing "+entryMode+" entry → "+exit.protocol+" custom exit…");
             NativeSingBoxController.SessionInfo session=direct?directBuilder.prepare(exit):builder.prepare(entry,exit,entryMode,execution,restoredExecution);
             preparedSession=session;
             if(Thread.currentThread().isInterrupted()||closed.get())throw new InterruptedException("Custom exit cancelled.");

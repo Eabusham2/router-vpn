@@ -72,6 +72,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private static final String MODE_KEY = "layered_mode_v1";
     private static final String ERROR_KEY = "layered_error_v1";
 
+    /** Null means the app has no live service from which to read the OS setting. */
+    static Boolean currentLockdownState() {
+        LayeredVpnService service = currentService.get();
+        return service == null || Build.VERSION.SDK_INT < Build.VERSION_CODES.Q ? null : service.isLockdownEnabled();
+    }
+
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Object lock = new Object();
     private final Object tunAccess = new Object();
@@ -459,6 +465,14 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                 externalHome = captureExternalHome(externalMetadata, homeSession);
             } else if (AndroidExternalPolicy.supports(externalProtocol)) {
                 throw new IllegalStateException("The ordinary external VPN has no captured policy and proof metadata.");
+            }
+            if (externalMetadata != null || torMetadata != null) {
+                boolean required = externalMetadata != null
+                        ? AndroidExternalProtection.externalCapture(new JSONObject(externalMetadata.getString("capture_json")))
+                        : AndroidExternalProtection.torCapture(torMetadata);
+                AndroidExternalProtection.requireSession(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER).isFile(), required,
+                        Build.VERSION.SDK_INT, Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isAlwaysOn(),
+                        Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q && isLockdownEnabled());
             }
             preparedMAX = AndroidMAXProfilePreparation.claim(this, session, sessionId, modeId, config, maxOwner);
 

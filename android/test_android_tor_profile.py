@@ -349,6 +349,15 @@ HARNESS = prefix + r'''
    check(rejected,"Tor session accepted changed owner: "+fault);
   }
  }
+ static void capturedProtection(Path root)throws Exception{
+  for(boolean enabled:new boolean[]{false,true}){
+   Path directory=Files.createTempDirectory(root,"tor-protection-");AndroidStandardExitStore.Entry saved=tor("tor","tcp");saved.torPolicy=AndroidExternalProtection.withChoice(saved.torPolicy,enabled);String source=AndroidStandardExitStore.snapshot(saved);
+   NativeSingBoxController.SessionInfo session=AndroidTorProfile.prepare(new Context(directory.toFile()),null,saved,"direct");Path folder=directory.resolve("layered-sessions").resolve(session.sessionId);
+   JSONObject metadata=AndroidTorProfile.session(Files.readString(folder.resolve("sing-box.json")),Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE)),session.sessionId,session.modeId);
+   check(metadata.getJSONObject("tor_profile").getBoolean("kill_switch")==enabled&&AndroidExternalProtection.torCapture(metadata)==enabled,"actual Tor compiler lost explicit captured protection");
+   check(Files.exists(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==enabled&&source.equals(AndroidStandardExitStore.snapshot(saved)),"Tor protection staging changed saved policy or explicit Off");
+  }
+ }
  public static void main(String[] args)throws Exception{
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));
   compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));
@@ -358,7 +367,7 @@ HARNESS = prefix + r'''
    for(String mode:ALL){check(NativeSingBoxController.nativeMultihopEntry(mode),"captured Tor entry absent from native catalog");for(int i=0;i<LAYERS.length;i++)verify(dir,mode,LAYERS[i],kind,new String[]{"tcp","dot","doh"}[i],certificate);}
   }
   check(graphs==348,"Tor entry/Start Layer/bridge matrix incomplete");
-  homePaths(dir,certificate);policyNegatives(dir);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);
+  homePaths(dir,certificate);policyNegatives(dir);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);capturedProtection(dir);
   System.out.println("Android Tor: PASS ("+graphs+" shipping Java/Go graphs; "+checks+" checks; OS/startup doubled, native Tor traffic separate)");
  }
 }
@@ -438,7 +447,7 @@ def run():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia") + EXTRA_SOURCES:
+        for name in ("AndroidExternalProtection", "AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia") + EXTRA_SOURCES:
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         (app / "MultihopGraphHarness.java").write_text(P.M.HARNESS)
         (app / "PQSelectionHarness.java").write_text(HARNESS)

@@ -22,7 +22,7 @@ final class AndroidExternalPolicy {
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
             "fastest_dns_host", "fastest_dns_latency_ms", "dns_results", "dns_bootstrap", "ipv6_mode", "home_lan_access",
-            "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu", "start_layer"));
+            "home_lan_cidrs", "mtu_policy", "manual_mtu", "effective_mtu", "start_layer", "kill_switch", "kill_switch_policy"));
 
     static boolean supports(String protocol) {
         return Arrays.asList("wireguard", "amneziawg", "socks5", "http", "https", "shadowsocks", "hysteria2", "openvpn").contains(protocol);
@@ -47,6 +47,7 @@ final class AndroidExternalPolicy {
 
     static void checkPolicy(JSONObject policy) throws Exception {
         if (policy == null || !bounded(policy.toString(), MAX_CAPTURE)) throw new IllegalArgumentException("External settings are missing or oversized.");
+        AndroidExternalProtection.validate(policy);
         JSONArray keys = policy.names();
         for (int i = 0; keys != null && i < keys.length(); i++) {
             if (!POLICY.contains(keys.getString(i))) throw new IllegalArgumentException("External settings contain an unowned policy field.");
@@ -274,7 +275,7 @@ final class AndroidExternalPolicy {
         File folder = new File(root, sessionId);
         if (!folder.mkdir()) throw new IllegalStateException("Cannot create the captured external session.");
         try {
-            if (entry == null || AndroidKillSwitchPolicy.strictRequested(entry)) AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
+            if (AndroidExternalProtection.externalCapture(new JSONObject(compiled.capture))) AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
             AndroidPrivateFileStore.write(new File(folder, "sing-box.json"), compiled.config.getBytes(StandardCharsets.UTF_8), MAX_CONFIG);
             AndroidPrivateFileStore.write(new File(folder, SESSION_FILE), text.getBytes(StandardCharsets.UTF_8), MAX_METADATA);
             String mode=(entry == null ? "standard-direct-" : "standard-") + exit.protocol;
@@ -290,6 +291,7 @@ final class AndroidExternalPolicy {
         if (metadata.length() != 8 || metadata.getInt("version") != 1 || !sessionID.equals(metadata.getString("session_id"))
                 || !supports(metadata.getString("protocol"))) throw new IllegalStateException("The captured external session identity changed.");
         Compiled compiled = new Compiled(metadata.getString("source_config"), metadata.getString("capture_json"));
+        AndroidExternalProtection.externalCapture(new JSONObject(compiled.capture));
         boolean hasEntry = new JSONObject(compiled.capture).has("entry");
         if (!config.equals(compiled.config) || !compiled.metadataText.equals(metadata.getString("metadata_json"))
                 || !compiled.metadata.getString("exit_id").equals(metadata.getString("external_id"))

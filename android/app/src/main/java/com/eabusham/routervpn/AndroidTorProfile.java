@@ -22,7 +22,7 @@ final class AndroidTorProfile {
     static final String[] TRANSPORTS = {"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"};
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
-            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu"));
+            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu", "kill_switch", "kill_switch_policy"));
 
     static boolean isTor(String protocol) { return "tor".equals(protocol) || "tor-bridge".equals(protocol); }
 
@@ -31,6 +31,7 @@ final class AndroidTorProfile {
         if (saved == null) return new JSONObject().put("dns_mode", "home")
                 .put("ipv6_mode", "on").put("home_lan_access", true);
         JSONObject policy = saved.torPolicy == null ? new JSONObject() : new JSONObject(saved.torPolicy.toString());
+        AndroidExternalProtection.validate(policy);
         String mode = policy.optString("dns_mode", "");
         if (mode.isEmpty() || "home".equals(mode)) {
             policy.put("dns_mode", "home");
@@ -86,6 +87,7 @@ final class AndroidTorProfile {
         if (exit == null || !isTor(exit.protocol)) throw new IllegalArgumentException("Select a saved Tor node.");
         JSONObject result = new JSONObject();
         JSONObject policy = exit.torPolicy == null ? new JSONObject() : new JSONObject(exit.torPolicy.toString());
+        AndroidExternalProtection.validate(policy);
         JSONArray keys = policy.names();
         for (int i = 0; keys != null && i < keys.length(); i++) {
             String key = keys.getString(i);
@@ -205,8 +207,9 @@ final class AndroidTorProfile {
             File folder = new File(root, sessionId);
             if (!folder.mkdir()) throw new IllegalStateException("Cannot create the captured Tor session.");
             try {
-                // Every Tor launch uses strict OS lockdown, including bootstrap.
-                AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
+                // Legacy Tor saves retain strict lockdown. Explicit protection
+                // and the independent predecessor are captured together.
+                if (AndroidExternalProtection.torCapture(metadata)) AndroidPrivateFileStore.write(new File(folder, AndroidKillSwitchPolicy.SESSION_MARKER), new byte[]{'1', '\n'}, 16);
                 AndroidPrivateFileStore.write(new File(folder, "sing-box.json"), config.getBytes(StandardCharsets.UTF_8), MAX_CONFIG);
                 AndroidPrivateFileStore.write(new File(folder, SESSION_FILE), metadataText.getBytes(StandardCharsets.UTF_8), MAX_METADATA);
                 if (relay != null) AndroidPrivateFileStore.write(new File(folder, AndroidStartLayerRelay.SESSION_FILE), relay.metadata().toString().getBytes(StandardCharsets.UTF_8), 16384);
@@ -227,6 +230,7 @@ final class AndroidTorProfile {
     static JSONObject session(String config, String metadataText, String sessionId, String mode) throws Exception {
         if (!bounded(metadataText, MAX_METADATA) || !bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor session is empty or oversized.");
         JSONObject metadata = new JSONObject(metadataText), graph = new JSONObject(config);
+        AndroidExternalProtection.torCapture(metadata);
         JSONObject capturedProfile = metadata.getJSONObject("tor_profile");
         if (!metadata.getString("external_id").equals(capturedProfile.getString("id"))
                 || !metadata.getString("protocol").equals(capturedProfile.getJSONObject("external").getString("protocol")))

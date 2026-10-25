@@ -304,7 +304,7 @@ public final class TorFormHarness {
   }
   dialog=form(activity,selected);EditText secret=field(dialog,"Paste bridge lines, one per line");secret.setText("  "+OBFS+"\r\n\r\n"+MEEK+"  \r\n");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
   check(!dialog.showing&&store(activity).get(selected.id).torBridges.equals(Arrays.asList(OBFS,MEEK)),"CRLF bridge block order/normalization failed");
-  dialog=form(activity,selected);AndroidVpnMutationGuard.busy=true;dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(dialog.showing,"form mutated a live VPN capture");AndroidVpnMutationGuard.busy=false;dialog.dismiss();
+  dialog=form(activity,store(activity).get(selected.id));AndroidVpnMutationGuard.busy=true;dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(dialog.showing,"form mutated a live VPN capture");AndroidVpnMutationGuard.busy=false;dialog.dismiss();
  }
  static AndroidNodeStore.Node node(Path directory)throws Exception{
   JSONObject bundle=MultihopGraphHarness.bundle('a');JSONObject profiles=bundle.getJSONObject("profiles");JSONArray modes=bundle.getJSONArray("modes");
@@ -660,7 +660,24 @@ public final class TorFormHarness {
   java.lang.reflect.Method parse=AndroidStandardExitStore.class.getDeclaredMethod("fromJson",JSONObject.class);parse.setAccessible(true);JSONObject old=new JSONObject(AndroidStandardExitStore.snapshot(ordinary("socks5")));old.remove("startup_mode");old.remove("auto_connect");AndroidStandardExitStore.Entry legacy=(AndroidStandardExitStore.Entry)parse.invoke(null,old);check(legacy.startupMode.equals("smart-auto")&&!legacy.autoConnect,"legacy external node gained automatic startup");
   for(String kind:List.of("string-bool","null-bool","number-mode","unknown","manual-on")){JSONObject malformed=new JSONObject(old.toString());malformed.put("startup_mode",kind.equals("number-mode")?3:kind.equals("unknown")?"random":kind.equals("manual-on")?"manual":"auto");malformed.put("auto_connect",kind.equals("string-bool")?"true":kind.equals("null-bool")?JSONObject.NULL:true);boolean rejected=false;try{parse.invoke(null,malformed);}catch(Exception expected){rejected=true;}check(rejected,"invalid external startup metadata accepted: "+kind);}
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ static void protectionSettings()throws Exception{
+  for(String kind:new String[]{"socks5","tor","tor-bridge"}){
+   StandardExitActivity a=activity(Files.createTempDirectory(root,"protection-form-"),null);boolean isTor=AndroidTorProfile.isTor(kind);AndroidStandardExitStore.Entry saved=isTor?tor(kind.equals("tor-bridge")?"obfs4":kind,"doh"):ordinary(kind);store(a).save(saved);
+   if(!isTor){invoke(a,"showExternalPolicyForm",saved);AlertDialog baseline=AlertDialog.last;baseline.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!baseline.showing,"ordinary baseline settings failed");saved=store(a).get(saved.id);}
+   String original=AndroidStandardExitStore.snapshot(saved);
+   if(isTor)invoke(a,"showTorForm",kind,saved);else invoke(a,"showExternalPolicyForm",saved);
+   AlertDialog form=AlertDialog.last;Spinner control=spinner(form,"Keep saved protection default");check(control.getSelectedItemPosition()==0,"external form replaced the legacy protection default");control.setSelection(2);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"external protection form did not save On");
+   AndroidStandardExitStore.Entry current=store(a).get(saved.id);JSONObject p=isTor?current.torPolicy:current.policy;check(p.has("kill_switch")&&p.has("kill_switch_policy")&&p.getBoolean("kill_switch")&&p.getString("kill_switch_policy").equals("always"),"external form lost explicit protection");
+   AndroidStandardExitStore.Entry untouched=AndroidStandardExitStore.copy(current);JSONObject unchanged=isTor?untouched.torPolicy:untouched.policy;unchanged.remove("kill_switch");unchanged.remove("kill_switch_policy");check(original.equals(AndroidStandardExitStore.snapshot(untouched)),"external protection form rewrote credentials or saved DNS/device policy");
+   if(isTor)invoke(a,"showTorForm",kind,current);else invoke(a,"showExternalPolicyForm",current);form=AlertDialog.last;control=spinner(form,"Keep saved protection default");check(control.getSelectedItemPosition()==2,"external form failed to restore explicit On");control.setSelection(1);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"external protection form did not save Off");current=store(a).get(saved.id);p=isTor?current.torPolicy:current.policy;check(!p.getBoolean("kill_switch")&&p.getString("kill_switch_policy").equals("off"),"external form did not save explicit Off");
+   for(String fault:new String[]{"replaced","removed"}){
+    store(a).save(current);if(isTor)invoke(a,"showTorForm",kind,current);else invoke(a,"showExternalPolicyForm",current);AlertDialog stale=AlertDialog.last;
+    if(fault.equals("removed"))store(a).remove(current.id);else{AndroidStandardExitStore.Entry replacement=AndroidStandardExitStore.copy(current);replacement.name+=" replacement";store(a).save(replacement);}
+    String expected=store(a).storedSnapshot(current.id);spinner(stale,"Keep saved protection default").setSelection(2);stale.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(stale.showing&&expected.equals(store(a).storedSnapshot(current.id)),"stale normal external protection form overwrote or resurrected its node");stale.dismiss();
+   }
+  }
+ }
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -726,7 +743,7 @@ def main():
             target.parent.mkdir(parents=True, exist_ok=True)
             target.write_text(text)
         app = src / "com/eabusham/routervpn"
-        for name in ("AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
+        for name in ("AndroidExternalProtection", "AndroidMultihopController", "NativeSingBoxController", "AndroidNativeMAXProfile", "AndroidNativeCompositeProfile", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidNativeProfilePolicy", "AndroidWireGuardLibboxPolicy", "AndroidStartLayer", "AndroidXrayLibboxPolicy", "NativeXrayController", "AndroidMultihopStartLayer", "AndroidTorProfile", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDirectStandardExitController", "AndroidOpenVPN", "StandardExitActivity", "AndroidDNSMeasurementDialog", "AndroidDNSSelectionDraft", "AndroidDNSMeasurementReceipt"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         dialog_api=src/"android/app/AlertDialog.java"
         dialog_api.write_text(dialog_api.read_text().replace("public void show(){","public boolean isShowing(){return showing;}public void show(){").replace("public static AlertDialog last;","public static volatile AlertDialog last;"))
@@ -787,6 +804,14 @@ def main():
              'if(entry==null||expected==null||entry.wasPersisted&&expected.isEmpty()||!expected.equals(storedSnapshot(entry.id)))',
              'if(false)',
              "stale external editor overwrote another owner or resurrected deletion"),
+            ("tor-settings-owner", "StandardExitActivity.java",
+             'else exitStore.saveIfUnchanged(entry,storedSource);',
+             'else exitStore.save(entry);',
+             "stale normal external protection form overwrote or resurrected its node"),
+            ("exit-protection-setting", "StandardExitActivity.java",
+             'next.policy=protection.apply(next.policy);',
+             '// omitted selected exit protection',
+             "external form lost explicit protection"),
             ("dns-source-draft", "AndroidDNSSelectionDraft.java",
              'if(!nodeID.equals(current.id)||!source.equals(AndroidStandardExitStore.snapshot(current)))',
              'if(false)',

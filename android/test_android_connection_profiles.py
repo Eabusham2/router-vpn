@@ -97,21 +97,23 @@ final class AndroidTorProfile {
  static void validate(AndroidStandardExitStore.Entry exit)throws Exception{AndroidConnectionProfilePolicy.external(exit.torPolicy,exit.protocol);if("tor-bridge".equals(exit.protocol)&&exit.torBridges.isEmpty())throw new IllegalArgumentException("missing bridge");}
 }
 final class AndroidExternalPolicy {
- private static final Set<String> POLICY=new HashSet<>(Arrays.asList("dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","effective_mtu","start_layer"));
+ EXTERNAL_POLICY_FIELDS
  static final int MAX_CAPTURE=8*1024*1024;static boolean bounded(String value,int max){return value!=null&&!value.isEmpty()&&value.length()<=max;}
  EXTERNAL_METHODS
 }
 '''
 
 PRODUCT = r'''package com.eabusham.routervpn;
-import android.content.*;import java.util.*;
+import android.content.*;import java.util.*;import org.json.*;import java.nio.charset.StandardCharsets;
 // Only UI rendering and runtime dispatch are doubled. The shipping handler reads
 // the same actual profile/node/exit stores used by the persistence regression.
 final class ProductConnectSurface extends Context {
  static final String MULTI_ENTRY="multihop_entry",MULTI_EXIT="multihop_exit",MULTI_MODE="multihop_exit_mode";
+ static final String SELECTED_ID="selected_id",SELECTED_KIND="selected_kind";
  final ConnectionProfilesHarness.Fixture fixture;final AndroidNodeStore nodeStore;final AndroidStandardExitStore exitStore;
- static final class View{void setText(String value){}boolean isChecked(){return false;}}
+ static final class View{String text="";boolean checked,enabled;void setText(String value){text=value;}boolean isChecked(){return checked;}void setChecked(boolean value){checked=value;}void setEnabled(boolean value){enabled=value;}}
  final View statusView=new View(),connectButton=new View(),multihopToggle=new View();String message="";
+ final View killSwitch=new View(),autoRequirementsHint=new View();private String externalProtectionID="",externalProtectionSource="";
  static final class Probe{boolean isBusy(){return false;}}final Probe viaEntryProbe=new Probe();
  static final class Connection{
   int starts;boolean direct;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry exit;String mode,execution;
@@ -128,8 +130,15 @@ final class ProductConnectSurface extends Context {
  AndroidNodeStore.Node nodeById(String id)throws Exception{for(var n:nodeStore.list())if(n.id.equals(id))return n;return null;}
  Object callback(){return new Object();}void configureMultihop(){}void refreshModeChoices(){}void refreshConnectionLater(){}ModeChoice currentMode(){throw new AssertionError("external selection used Router mode");}
  static String safe(Exception error){return error.getMessage();}void pressConnect(){connectOrDisconnect();}
+ boolean mutationBusy(){return AndroidVpnMutationGuard.isBusy(this);}
+ JSONObject activeBundle()throws Exception{return new JSONObject(ConnectionProfilesHarness.text(nodeStore.file(nodeStore.activeId())));}
+ JSONObject selectedProfile(JSONObject bundle)throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle);}
+ JSONObject activeRouterProfile(){try{return selectedProfile(activeBundle());}catch(Exception invalid){return null;}}
+ void displayProtection(){refreshSettingsState();}void pressProtection(boolean enabled){setQuickKillSwitch(enabled);}
  PRODUCT_CONNECT
+ PRODUCT_PROTECTION
 }
+final class LayeredVpnService {static Boolean lockdown;static Boolean currentLockdownState(){return lockdown;}}
 final class AndroidUnifiedNodeCatalog {static final class Item{final String id;Item(String id){this.id=id;}boolean isRouterVpn(){return false;}}}
 final class AndroidViaEntryLatencyProbe {static boolean active;static int cancellations;static boolean cancelActiveOperation(){if(!active)return false;cancellations++;return true;}}
 '''
@@ -308,7 +317,36 @@ public final class ConnectionProfilesHarness {
   java.io.ByteArrayOutputStream invalid=new java.io.ByteArrayOutputStream();invalid.write((prefix+",\"unrelated\":\"").getBytes(StandardCharsets.UTF_8));invalid.write(255);invalid.write("\"}".getBytes(StandardCharsets.UTF_8));
   rejected(()->f.nodes.importBundle(invalid.toByteArray()),"malformed UTF-8 private bundle");before.same(f,"malformed byte import rejection");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ static void quickProtection(Path root)throws Exception{
+  for(boolean tor:new boolean[]{false,true})for(boolean via:new boolean[]{false,true})for(boolean enabled:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);String id=tor?"external-b":"external-a";AndroidStandardExitStore.Entry before=f.exits.get(id);String original=AndroidStandardExitStore.snapshot(before);String entryBytes=text(f.first.file);
+   f.store.selectExternalPath(before,via?f.first:null,"hysteria2");ProductConnectSurface ui=new ProductConnectSurface(f);LayeredVpnService.lockdown=true;ui.displayProtection();
+   check(ui.killSwitch.enabled&&ui.killSwitch.checked==(tor||!via),"quick external protection lost its legacy displayed default");
+   ui.pressProtection(enabled);AndroidStandardExitStore.Entry saved=f.exits.get(id);JSONObject policy=tor?saved.torPolicy:saved.policy;
+   check(policy.getBoolean("kill_switch")==enabled&&policy.getString("kill_switch_policy").equals(enabled?"always":"off"),"quick external protection did not save its exact choice");
+   check(ui.killSwitch.checked==enabled&&ui.autoRequirementsHint.text.contains("Android system lockdown is currently On"),"quick external protection hid the independent OS lockdown floor");
+   check(!via||ui.autoRequirementsHint.text.contains("Captured entry also requires lockdown"),"quick external protection hid its independent strict entry");
+   check(entryBytes.equals(text(f.first.file)),"quick external protection changed the independent entry");
+   AndroidStandardExitStore.Entry retained=AndroidStandardExitStore.copy(saved);JSONObject retainedPolicy=tor?retained.torPolicy:retained.policy;retainedPolicy.remove("kill_switch");retainedPolicy.remove("kill_switch_policy");
+   check(original.equals(AndroidStandardExitStore.snapshot(retained)),"quick external protection changed credentials DNS MTU or graph");
+   AndroidConnectionProfileStore.Record record=f.store.add("Protection "+enabled);ui.pressProtection(!enabled);f.store.load(record.id);JSONObject restored=tor?f.exits.get(id).torPolicy:f.exits.get(id).policy;
+   check(restored.getBoolean("kill_switch")==enabled&&restored.getString("kill_switch_policy").equals(enabled?"always":"off"),"connection profile did not restore exact external protection");
+  }
+  for(String fault:List.of("selection","router-selection","changed-source","removed","busy")){
+   Fixture f=new Fixture(root);f.store.selectExternalPath(f.exits.get("external-a"),null,"wg");ProductConnectSurface ui=new ProductConnectSurface(f);ui.displayProtection();
+   if(fault.equals("selection"))f.store.selectExternalPath(f.exits.get("external-b"),null,"wg");
+   if(fault.equals("router-selection"))f.otherSelection();
+   if(fault.equals("changed-source"))f.changeExternal("external-a");
+   if(fault.equals("removed"))f.exits.remove("external-a");
+   if(fault.equals("busy"))AndroidVpnMutationGuard.busy=true;
+   State before=new State(f);ui.pressProtection(false);AndroidVpnMutationGuard.busy=false;before.same(f,"stale quick protection "+fault);
+   check(!ui.message.isEmpty(),"stale quick protection failed without feedback");
+  }
+  LayeredVpnService.lockdown=null;
+  Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
+  exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
@@ -332,11 +370,14 @@ def main():
             target.write_text(content)
         app = src / "com/eabusham/routervpn"
         app.mkdir(parents=True)
-        for name in ("AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia", "AndroidOpenVPN"):
+        for name in ("AndroidExternalProtection", "AndroidKillSwitchPolicy", "AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static void checkPolicy("))
-        (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods))
-        (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", method("ProductActivity.java", "private void connectOrDisconnect(")))
+        policy_source = (JAVA / "AndroidExternalPolicy.java").read_text(encoding="utf-8")
+        policy_fields = policy_source[policy_source.index("    private static final Set<String> POLICY"):policy_source.index("\n\n    static boolean supports", policy_source.index("    private static final Set<String> POLICY"))]
+        (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods).replace("EXTERNAL_POLICY_FIELDS", policy_fields), encoding="utf-8")
+        protection = "\n".join(method("ProductActivity.java", signature) for signature in ("private boolean isExternalSelected(", "private void setQuickKillSwitch(", "private void refreshSettingsState("))
+        (app / "ProductConnectSurface.java").write_text(PRODUCT.replace("PRODUCT_CONNECT", method("ProductActivity.java", "private void connectOrDisconnect(")).replace("PRODUCT_PROTECTION", protection), encoding="utf-8")
         (app / "ConnectionProfilesHarness.java").write_text(HARNESS)
         classes = work / "classes"
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
@@ -356,7 +397,7 @@ def main():
         classpath = str(negative) + os.pathsep + str(jar)
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", classpath, "-d", str(negative), str(mutation)], check=True, timeout=60)
         negative_data = work / "negative-data"; negative_data.mkdir()
-        rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(negative_data)], env=env, capture_output=True, text=True, timeout=180)
+        rejected = subprocess.run(["java", "-cp", classpath, "com.eabusham.routervpn.ConnectionProfilesHarness", str(negative_data), "concurrency"], env=env, capture_output=True, text=True, timeout=180)
         if rejected.returncode == 0 or "independent store instances both adopted the same obsolete editor source" not in rejected.stderr:
             raise AssertionError("Lost-update negative control did not reject the broken transaction\n" + rejected.stderr)
         print("Android private-store concurrency: independent-Activity lost-update negative control rejected")

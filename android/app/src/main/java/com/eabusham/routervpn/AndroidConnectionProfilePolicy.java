@@ -7,8 +7,8 @@ import java.util.Iterator;
 
 /** Bounded, non-secret choices saved by connection profiles, never runtime proof. */
 final class AndroidConnectionProfilePolicy {
-    private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","start_layer"};
-    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu"};
+    private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","start_layer","kill_switch","kill_switch_policy"};
+    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","kill_switch","kill_switch_policy"};
 
     static JSONObject router(JSONObject source,String[] keys)throws Exception{return checked(source,keys,false);}
     static JSONObject external(JSONObject source,String protocol)throws Exception{
@@ -39,7 +39,8 @@ final class AndroidConnectionProfilePolicy {
         choice(source,"dns_mode","","home","rescue","custom","fastest","dot","doh","doh3");
         choice(source,"dns_protocol","","udp","tcp","dot","doh","doh3","tls","https","h3");
         choice(source,"ipv6_mode","","on","auto","off");
-        choice(source,"kill_switch_policy","","off","on-connect","always");
+        if(external)AndroidExternalProtection.validate(source);
+        else choice(source,"kill_switch_policy","","off","on-connect","always");
         choice(source,"base_tunnel","","auto","wg","awg");
         choice(source,"start_layer","","off","aes-256-gcm","aes-256-gcm+xor-whitening");
         if(external)choice(source,"mtu_policy","auto","fixed","manual");

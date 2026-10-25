@@ -88,7 +88,20 @@ static void storeValidation(AndroidStandardExitStore.Entry e)throws Exception{An
 static void layer(AndroidStandardExitStore.Entry e,String mode)throws Exception{e.policy.put("start_layer",mode);e.startLayer=mode.equals("off")?null:new JSONObject().put("mode",mode).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",e.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",key('l')));}
 static JSONObject copy(JSONObject p)throws Exception{return new JSONObject(p.toString());}
 static JSONObject find(JSONObject g,String tag)throws Exception{for(String f:List.of("outbounds","endpoints")){JSONArray a=g.optJSONArray(f);if(a!=null)for(int i=0;i<a.length();i++)if(tag.equals(a.getJSONObject(i).optString("tag")))return a.getJSONObject(i);}throw new AssertionError(tag);}
-public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libbox.compiler=args[0];Path root=Path.of(args[1]);android.content.Context context=new android.content.Context(root.toFile());
+static void capturedProtection(Path root)throws Exception{
+ for(String setting:List.of("legacy","off","on"))for(int predecessor=0;predecessor<3;predecessor++){
+  Path home=Files.createTempDirectory(root,"protection-capture-");android.content.Context context=new android.content.Context(home.toFile());AndroidStandardExitStore.Entry saved=exit("socks5");
+  if(!setting.equals("legacy"))saved.policy=AndroidExternalProtection.withChoice(saved.policy,setting.equals("on"));
+  java.io.File entryFile=null;if(predecessor!=0){JSONObject bundle=entry();profile(bundle).put("kill_switch",predecessor==2).put("kill_switch_policy",predecessor==2?"always":"off");Path file=home.resolve("entry.json");Files.writeString(file,bundle.toString());entryFile=file.toFile();}
+  String source=AndroidStandardExitStore.snapshot(saved);NativeSingBoxController.SessionInfo prepared=AndroidExternalPolicy.prepare(context,entryFile,saved,predecessor==0?"external":"wg");Path folder=home.resolve("layered-sessions").resolve(prepared.sessionId);
+  JSONObject metadata=AndroidExternalPolicy.session(Files.readString(folder.resolve("sing-box.json")),Files.readString(folder.resolve(AndroidExternalPolicy.SESSION_FILE)),prepared.sessionId,prepared.mode);
+  JSONObject capture=new JSONObject(metadata.getString("capture_json"));boolean required=setting.equals("on")||setting.equals("legacy")&&predecessor==0||predecessor==2;
+  check(AndroidExternalProtection.externalCapture(capture)==required&&Files.exists(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER))==required,"actual external compiler/staging lost its captured protection owner");
+  check(AndroidStandardExitStore.snapshot(saved).equals(source),"native protection preparation changed saved private input");
+  if(!setting.equals("legacy"))check(capture.getJSONObject("profile").getBoolean("kill_switch")==setting.equals("on"),"native external capture dropped explicit protection");
+ }
+}
+public static void main(String[]args)throws Exception{io.nekohasekai.libbox.Libbox.compiler=args[0];Path root=Path.of(args[1]);android.content.Context context=new android.content.Context(root.toFile());capturedProtection(root);
  String[] kinds={"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"};
  for(String kind:kinds)for(boolean hopped:new boolean[]{false,true}){
   AndroidStandardExitStore.Entry e=exit(kind);JSONObject b=hopped?entry():null;String before=AndroidStandardExitStore.snapshot(e),nodeBefore=b==null?"":b.toString();
@@ -251,7 +264,7 @@ def main():
             target.write_text(source)
         app = temp / "com/eabusham/routervpn"
         app.mkdir(parents=True, exist_ok=True)
-        for name in ("AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidNumericAddress", "AndroidOpenVPN"):
+        for name in ("AndroidExternalProtection", "AndroidExternalPolicy", "AndroidStandardExitStore", "AndroidExternalAmnezia", "AndroidProfileSelection", "AndroidDirectStandardExitController", "AndroidStandardExitController", "AndroidNumericAddress", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / f"{name}.java", app / f"{name}.java")
         (app / "Boundaries.java").write_text("package com.eabusham.routervpn;\n" + BOUNDARIES)
         (app / "ExternalPolicyTest.java").write_text(HARNESS)

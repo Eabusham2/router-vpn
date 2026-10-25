@@ -145,7 +145,7 @@ public final class StandardExitActivity extends Activity {
     private String capabilityText() {
         StringBuilder s=new StringBuilder("Supported now:");
         for(AndroidStandardExitStore.Capability c:AndroidStandardExitStore.capabilities()) s.append("\n").append(c.supported?"✓ ":"— ").append(c.protocol).append(c.supported?"":" — "+c.reason);
-        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Direct custom exits and every Tor path require Android Always-on VPN plus ‘Block connections without VPN’. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Other supported native external exits retain their saved DNS, IPv6, LAN and MTU settings and prove the selected public exit before Connected. Choose the exact Router VPN entry mode and Start Layer for either path; the entry's private authenticated identity is also required. OpenVPN preserves its complete saved remote list and inline TLS settings within the same VPN. Secrets remain in app-private storage. External servers use literal IPs; a selected DNS hostname requires the explicit bootstrap saved in its settings. Tor transport hostnames use captured protected networking.");
+        s.append("\n\nHTTP is HTTP CONNECT. HTTPS uses certificate-verified TLS/SNI. Saved default direct custom exits and Tor paths require Android Always-on VPN plus ‘Block connections without VPN’. Settings can save an explicit exit protection choice; a strict entry and Android system lockdown remain independent. Tor uses one embedded VPN runtime with ordinary Tor, obfs4, meek, Snowflake, WebTunnel or a supported custom bridge block. Its exit can change; the native circuit and selected DNS are proved before Connected. Tor carries TCP; UDP and DoH3 DNS are rejected. Other supported native external exits retain their saved DNS, IPv6, LAN and MTU settings and prove the selected public exit before Connected. Choose the exact Router VPN entry mode and Start Layer for either path; the entry's private authenticated identity is also required. OpenVPN preserves its complete saved remote list and inline TLS settings within the same VPN. Secrets remain in app-private storage. External servers use literal IPs; a selected DNS hostname requires the explicit bootstrap saved in its settings. Tor transport hostnames use captured protected networking.");
         return s.toString();
     }
 
@@ -194,7 +194,11 @@ public final class StandardExitActivity extends Activity {
         if(activeOrTransitioning()){toast("Disconnect before changing a Tor node.");return;}
         final AndroidStandardExitStore.Entry saved;
         final JSONObject policy;
-        try{saved=draft==null?original:draft.apply(original);policy=AndroidTorProfile.editorPolicy(saved);}catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
+        final String storedSource;
+        try{saved=original==null?null:draft==null?AndroidStandardExitStore.copy(original):draft.apply(original);policy=AndroidTorProfile.editorPolicy(saved);
+            storedSource=original==null?"":exitStore.storedSnapshot(original.id);
+            if(original!=null&&(original.wasPersisted&&storedSource.isEmpty()||!storedSource.isEmpty()&&!storedSource.equals(AndroidStandardExitStore.snapshot(original))))throw new IllegalStateException("The saved Tor node changed before opening its settings.");
+        }catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
         LinearLayout form=new LinearLayout(this);form.setOrientation(LinearLayout.VERTICAL);int pad=dp(12);form.setPadding(pad,pad,pad,pad);
         EditText name=field("Display name",false);if(saved!=null)name.setText(saved.name);form.addView(name);
         Spinner transport=choice(new String[]{"obfs4","meek","Snowflake","WebTunnel","Custom bridge block"});
@@ -226,22 +230,25 @@ public final class StandardExitActivity extends Activity {
         EditText lan=field("Private LAN CIDRs to block, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Manual interface MTU, 1280–9000 (blank uses automatic)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if("manual".equals(policy.optString("mtu_policy"))||"fixed".equals(policy.optString("mtu_policy")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         final ExternalStartupControls startup=new ExternalStartupControls(form,saved);
+        final ExternalProtectionControls protection=new ExternalProtectionControls(form,policy);
         final JSONObject initialEditor;
         try{initialEditor=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);}
         catch(Exception invalid){toast("The saved Tor settings could not be restored safely.");return;}
-        form.addView(text("Home AdGuard uses the paired Router VPN entry you select; leave its address blank to use that entry's saved AdGuard. Direct Tor needs an explicitly selected TCP, DoT, DoH or Rescue resolver. Application traffic stays on Tor. Every Tor path requires Android Always-on VPN and Block connections without VPN.",13,false));
+        form.addView(text("Home AdGuard uses the paired Router VPN entry you select; leave its address blank to use that entry's saved AdGuard. Direct Tor needs an explicitly selected TCP, DoT, DoH or Rescue resolver. Application traffic stays on Tor. Saved default Tor protection requires Android Always-on VPN and Block connections without VPN.",13,false));
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle(saved==null?"Add "+protocol:"Edit "+saved.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
             if(activeOrTransitioning()){error.setText("VPN state changed; disconnect before saving.");return;}
             try{
                 if(draft!=null)draft.requireSource(exitStore.get(draft.nodeID));
-                AndroidStandardExitStore.Entry entry=new AndroidStandardExitStore.Entry();if(saved!=null)entry.id=saved.id;entry.name=name.getText().toString();entry.protocol=protocol;
+                AndroidStandardExitStore.Entry entry=saved==null?new AndroidStandardExitStore.Entry():AndroidStandardExitStore.copy(saved);entry.name=name.getText().toString();entry.protocol=protocol;
+                entry.torBridges.clear();entry.torTransport="";
                 if("tor-bridge".equals(protocol)){entry.torTransport=AndroidTorProfile.TRANSPORTS[transport.getSelectedItemPosition()];String block=bridges.getText().toString();if(block.length()>65536)throw new IllegalArgumentException("Bridge block exceeds its bound.");for(String line:block.split("\\r?\\n")){String value=line.trim();if(!value.isEmpty())entry.torBridges.add(value);}if(entry.torBridges.isEmpty()||entry.torBridges.size()>8)throw new IllegalArgumentException("Enter one to eight bridge lines.");}
                 JSONObject edited=readTorEditorPolicy(dns,homeDNS,dnsHost,dnsPort,dnsName,dnsPath,ipv6,blockLAN,lan,mtu);
                 entry.torPolicy=AndroidTorProfile.editedPolicy(saved,initialEditor,edited);
+                entry.torPolicy=protection.apply(entry.torPolicy);
                 startup.apply(entry);
-                exitStore.save(entry);refresh();toast("Saved "+entry.name);dialog.dismiss();
+                if(saved==null)exitStore.save(entry);else exitStore.saveIfUnchanged(entry,storedSource);refresh();toast("Saved "+entry.name);dialog.dismiss();
             }catch(Exception invalid){error.setText("Save failed. Check the complete bridge lines, selected DNS endpoint, private LAN ranges and MTU. The saved profile was not changed.");}
         }));
         dialog.setOnDismissListener(ignored->bridges.setText(""));dialog.show();
@@ -374,6 +381,24 @@ public final class StandardExitActivity extends Activity {
                 }).setNegativeButton("Keep current connection",null).show();
     }
 
+    private final class ExternalProtectionControls {
+        private final Spinner choice;
+        private final int initial;
+        ExternalProtectionControls(LinearLayout form,JSONObject policy) {
+            choice=choice(new String[]{"Keep saved protection default","Kill switch Off for this exit","Require Android lockdown for this exit"});
+            try{initial=!policy.has("kill_switch")&&!policy.has("kill_switch_policy")?0:AndroidExternalProtection.requested(policy,false)?2:1;}
+            catch(Exception invalid){throw new IllegalArgumentException("The saved exit protection is invalid.",invalid);}
+            choice.setSelection(initial);form.addView(text("Exit kill switch",14,true));form.addView(choice);
+            form.addView(text("Default retains this saved path's existing protection. On requires Android Always-on VPN and Block connections without VPN. Off changes only this exit's requirement; a strict entry and Android's system lockdown setting remain independent. Use Android VPN settings to change system lockdown.",13,false));
+        }
+        JSONObject apply(JSONObject policy)throws Exception{
+            int selected=choice.getSelectedItemPosition();
+            if(selected==initial)return policy;
+            if(selected==0){JSONObject next=new JSONObject(policy.toString());next.remove("kill_switch");next.remove("kill_switch_policy");return next;}
+            return AndroidExternalProtection.withChoice(policy,selected==2);
+        }
+    }
+
     private final class ExternalStartupControls {
         private final Spinner mode;
         private final CheckBox enabled;
@@ -420,6 +445,7 @@ public final class StandardExitActivity extends Activity {
         EditText lan=field("Private LAN CIDRs, comma separated (blank uses defaults)",false);JSONArray cidrs=policy.optJSONArray("home_lan_cidrs");if(cidrs!=null){List<String> values=new ArrayList<>();for(int i=0;i<cidrs.length();i++)values.add(cidrs.optString(i));lan.setText(android.text.TextUtils.join(", ",values));}form.addView(lan);
         EditText mtu=field("Fixed MTU 1280–9000 (blank: Auto baseline)",false);mtu.setInputType(InputType.TYPE_CLASS_NUMBER);if(!"auto".equals(policy.optString("mtu_policy","auto")))mtu.setText(Integer.toString(policy.optInt("manual_mtu",0)));form.addView(mtu);
         final ExternalStartupControls startup=new ExternalStartupControls(form,captured);
+        final ExternalProtectionControls protection=new ExternalProtectionControls(form,policy);
         Spinner exitLayer=choice(new String[]{"Off","AES-256-GCM","AES-256-GCM + XOR whitening"});
         String layerMode=policy.optString("start_layer","off");exitLayer.setSelection("aes-256-gcm".equals(layerMode)?1:"aes-256-gcm+xor-whitening".equals(layerMode)?2:0);
         EditText layerAPI=field("Provisioned private service API URL",false),layerPort=field("Provisioned AES port",false),layerKey=field("Provisioned AES-256-GCM key",true);layerPort.setInputType(InputType.TYPE_CLASS_NUMBER);
@@ -510,6 +536,7 @@ public final class StandardExitActivity extends Activity {
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
                 startup.apply(next);
+                next.policy=protection.apply(next.policy);
                 AndroidExternalPolicy.validateDraft(next);
                 exitStore.saveIfUnchanged(next,storedSource);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
             }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}

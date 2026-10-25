@@ -25,6 +25,8 @@ SOURCES["com/eabusham/routervpn/AndroidHomeStateStore.java"] = SOURCES["com/eabu
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public java.io.File getFilesDir(){return null;}", "public java.io.File files;public java.io.File getFilesDir(){return files;}")
 SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public Object getSystemService(String name){return null;}", "public Object getSystemService(String name){return name.equals(NOTIFICATION_SERVICE)?new android.app.NotificationManager():new android.net.ConnectivityManager();}")
 SOURCES["android/net/VpnService.java"] = SOURCES["android/net/VpnService.java"].replace("public boolean isAlwaysOn(){return true;}public boolean isLockdownEnabled(){return true;}", "public static boolean lockdown=true;public boolean isAlwaysOn(){return lockdown;}public boolean isLockdownEnabled(){return lockdown;}")
+SOURCES["android/content/Context.java"] = SOURCES["android/content/Context.java"].replace("public java.io.File getCacheDir(){return null;}", "public java.io.File getCacheDir(){return getFilesDir();}")
+SOURCES["com/eabusham/routervpn/AndroidExternalPolicy.java"] = SOURCES["com/eabusham/routervpn/AndroidExternalPolicy.java"].replace("return null;", "return new org.json.JSONObject(m);")
 SOURCES["io/nekohasekai/libbox/RouterExternalProofRequest.java"] = r'''package io.nekohasekai.libbox;
 import org.json.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;
 public class RouterExternalProofRequest {
@@ -38,6 +40,7 @@ public class RouterExternalProofRequest {
  public int closes,closeFailures;public String selected="local";public String execution(){return selected;}public void close()throws Exception{closes++;if(closeFailures>0){closeFailures--;throw new IllegalStateException("lease cleanup pending");}cancel();}
  public boolean healthy(){return alive&&ran;}
 }'''
+SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Libbox.java"].replace("public static void setup(SetupOptions o)throws Exception{}", 'public static int protectionSetups;public static void setup(SetupOptions o)throws Exception{protectionSetups++;throw new IllegalStateException("Captured protection reached native setup boundary");}')
 SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Libbox.java"][:-1] + r'''
  public static volatile RouterExternalProofRequest externalNext,externalCreated;
  public static volatile java.util.concurrent.CountDownLatch externalFactoryEntered,externalFactoryRelease;
@@ -168,7 +171,29 @@ public class ExternalSessionTest {
   LayeredVpnService s=new LayeredVpnService();AndroidMTUSession mtu=new AndroidMTUSession(s,owner->{});mtu.closeFailures=1;android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();field("mtuSession").set(s,mtu);field("tunDescriptor").set(s,tun);AndroidHomeStateStore.Snapshot captured=home(true);field("externalHomeOwner").set(s,captured);field("externalOwner").setBoolean(s,true);field("commandServer").set(s,new CommandServer(s,s));
   reject(()->close(s));check(field("mtuSession").get(s)==mtu&&!tun.closed&&mtu.closes==1&&field("externalHomeOwner").get(s)==captured,"unconfirmed MTU cleanup discarded the only native, Home or TUN owner");close(s);check(field("mtuSession").get(s)==null&&tun.closed&&mtu.closes==2&&field("externalHomeOwner").get(s)==null,"successful MTU cleanup retry did not release its owner");s.onDestroy();
  }
- public static void main(String[]args)throws Exception{try{success();execution();rejection();cancellation();serviceOwner();leaseCleanup();homeCapture();failedHome();preparedFiles();automaticMTU();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
+ static void capturedProtection()throws Exception{
+  for(boolean tor:new boolean[]{false,true})for(boolean enabled:new boolean[]{false,true})for(boolean entryStrict:new boolean[]{false,true})for(boolean marker:new boolean[]{false,true})for(boolean lockdown:new boolean[]{false,true}){
+   Libbox.externalReset();Libbox.protectionSetups=0;android.net.VpnService.lockdown=lockdown;
+   LayeredVpnService service=new LayeredVpnService();service.files=Files.createTempDirectory("captured-protection-service-").toFile();service.onCreate();
+   check(LayeredVpnService.currentLockdownState()==lockdown,"native protection UI read another OS lockdown state");
+   String id="protection-owned",protocol=tor?"tor":"socks5",mode=(entryStrict?"standard-":"standard-direct-")+protocol;
+   Path folder=service.files.toPath().resolve("layered-sessions").resolve(id);Files.createDirectories(folder);Files.writeString(folder.resolve("sing-box.json"),"{}");if(marker)Files.writeString(folder.resolve(AndroidKillSwitchPolicy.SESSION_MARKER),"1\n");
+   JSONObject profile=new JSONObject().put("id","exit-owned").put("kill_switch",enabled).put("kill_switch_policy",enabled?"always":"off");JSONObject predecessor=new JSONObject().put("id","entry-owned").put("kill_switch",true).put("kill_switch_policy","always");
+   JSONObject metadata=new JSONObject().put("external_id","exit-owned");
+   if(tor){metadata.put("tor_profile",profile);if(entryStrict)metadata.put("predecessor_profile",predecessor);Files.writeString(folder.resolve(AndroidTorProfile.SESSION_FILE),metadata.toString());}
+   else{
+    AndroidHomeStateStore.Snapshot selected=home(false);JSONObject capture=new JSONObject().put("exit_id","exit-owned").put("profile",profile).put("expected_public_ip","8.8.4.4");
+    if(entryStrict){capture.put("entry",predecessor).put("entry_tag","entry-owned");selected.activeEntryId="entry-owned";selected.activeEntryMode="wg";}
+    metadata.put("capture_json",capture.toString()).put("protocol",protocol).put("entry_mode",entryStrict?"wg":"external");Files.writeString(folder.resolve(AndroidExternalPolicy.SESSION_FILE),metadata.toString());
+   }
+   invoke(service,"startLayered",new Class<?>[]{String.class,String.class,long.class,String.class,String.class},id,mode,0L,"","home-owned");
+   boolean required=enabled||entryStrict,valid=marker==required&&(!required||lockdown);
+   check((Libbox.protectionSetups==1)==valid,"shipping service bypassed captured external protection before native setup");
+   check(!Files.exists(folder),"failed or bounded protection startup leaked its private session");service.onDestroy();
+  }
+  android.net.VpnService.lockdown=true;
+ }
+ public static void main(String[]args)throws Exception{try{success();execution();rejection();cancellation();serviceOwner();leaseCleanup();homeCapture();failedHome();preparedFiles();automaticMTU();capturedProtection();System.out.println("Android external proof/service lifecycle: "+checks+" executable checks passed");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -200,6 +225,7 @@ def main():
             ("LayeredVpnService.java", "||generation!=service.lifecycle.get()||service.explicitStop||!\"UP\".equals(service.state))return;", "||service.explicitStop||!\"UP\".equals(service.state))return;", "queued external MTU generation"),
             ("LayeredVpnService.java", 'if(service.externalSession!=external||home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', 'if(home==null||!now.connected||!"passed".equals(now.pathProof)||!external.healthy()', "queued external MTU native owner"),
             ("LayeredVpnService.java", 'catch(Exception error){publish("STOPPING",activeMode,"MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("MTU controller teardown has not drained.");}', "catch(Exception error){}", "retained failed MTU cleanup"),
+            ("LayeredVpnService.java", "AndroidExternalProtection.requireSession(new File(session, AndroidKillSwitchPolicy.SESSION_MARKER).isFile(), required,", "AndroidExternalProtection.requireSession(required, required,", "native protection marker capture"),
         ]
         for name, old, new, label in mutations:
             target = app / name
@@ -212,7 +238,7 @@ def main():
             if result.returncode == 0:
                 raise AssertionError(f"Regression escaped: {label}")
             target.write_text(original)
-        print("Android external owner negative controls: 9 rejected")
+        print("Android external owner negative controls: 10 rejected")
 
 
 if __name__ == "__main__":

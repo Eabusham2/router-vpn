@@ -193,6 +193,7 @@ final class AndroidStandardExitStore {
         validateServerPeer(e);
         AndroidOpenVPN.validatePairing(e);
         AndroidOpenVPN.validateResponseProbes(e);
+        AndroidExternalProtection.validate(e.policy);
     }
 
     /** Same-server HTTPS response identity; the native compiler repeats this validation. */

@@ -63,6 +63,7 @@ public final class ProductActivity extends Activity {
     private boolean resumed;
     private AlertDialog currentSpeedDialog;
     private AndroidTelemetry.PathResult currentPathReceipt;
+    private String externalProtectionID="",externalProtectionSource="";
     private final android.os.Handler telemetryHandler=new android.os.Handler(android.os.Looper.getMainLooper());
     private final Runnable telemetryTick=new Runnable(){public void run(){if(!resumed||isFinishing()||isDestroyed())return;refreshTelemetry(false);telemetryHandler.postDelayed(this,5000);}};
 
@@ -394,8 +395,48 @@ public final class ProductActivity extends Activity {
     }
 
     private void showSettings(){if(openSelectedExternal(false))return;JSONObject p=activeRouterProfile();if(p==null){toast("Select a Router VPN node first.");return;}AndroidProfileSettingsDialog.show(this,nodeStore,this::refreshAll);}
-    private void setQuickKillSwitch(boolean enabled){if(isExternalSelected()){toast("External paths require Android always-on VPN and lockdown.");refreshSettingsState();return;}if(mutationBusy()){toast("Disconnect/finish before changing persistent kill-switch policy.");refreshSettingsState();return;}try{JSONObject root=activeBundle(),p=selectedProfile(root);if(p==null)throw new IllegalStateException("Select a Router VPN node first.");p.put("kill_switch",enabled);p.put("kill_switch_policy",enabled?"on-connect":"off");nodeStore.importBundle(root.toString().getBytes(StandardCharsets.UTF_8));toast(enabled?"Kill switch enabled":"Kill switch disabled");}catch(Exception error){toast(safe(error));}refreshSettingsState();}
-    private void refreshSettingsState(){if(isExternalSelected()){killSwitch.setChecked(true);killSwitch.setEnabled(false);if(autoRequirementsHint!=null)autoRequirementsHint.setText("External path • Android always-on VPN and lockdown required • saved entry policy retained");return;}JSONObject p=activeRouterProfile();boolean enabled=p!=null&&(!"off".equalsIgnoreCase(p.optString("kill_switch_policy","off"))||p.optBoolean("kill_switch",false));killSwitch.setChecked(enabled);if(autoRequirementsHint!=null){boolean encrypted=p!=null&&p.optBoolean("auto_require_encrypted",false),obfuscated=p!=null&&p.optBoolean("auto_require_obfuscation",false);String value=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";autoRequirementsHint.setText("AUTO requirements: "+value+" • Off by default • SMART never simplifies below enabled requirements");}}
+    private void setQuickKillSwitch(boolean enabled){
+        if(mutationBusy()){toast("Disconnect/finish before changing persistent kill-switch policy.");refreshSettingsState();return;}
+        try{
+            if(!externalProtectionID.isEmpty()&&!isExternalSelected())throw new IllegalStateException("The displayed external selection changed; refresh before saving protection.");
+            if(isExternalSelected()){
+                String id=externalProtectionID,source=externalProtectionSource;
+                if(id.isEmpty()||source.isEmpty()||!id.equals(prefs().getString(SELECTED_ID,"")))throw new IllegalStateException("The displayed external node changed; refresh before saving its protection.");
+                AndroidStandardExitStore.Entry next=AndroidStandardExitStore.copy(exitStore.get(id));
+                if(!source.equals(AndroidStandardExitStore.snapshot(next)))throw new IllegalStateException("The saved external node changed; refresh before changing its protection.");
+                if(AndroidTorProfile.isTor(next.protocol))next.torPolicy=AndroidExternalProtection.withChoice(next.torPolicy,enabled);
+                else next.policy=AndroidExternalProtection.withChoice(next.policy,enabled);
+                exitStore.saveIfUnchanged(next,source);
+                toast(enabled?"Saved exit requires Android Always-on VPN and Block connections without VPN.":"Saved exit requirement is Off. Android system lockdown and a strict entry remain independent.");
+            }else{
+                JSONObject root=activeBundle(),p=selectedProfile(root);if(p==null)throw new IllegalStateException("Select a Router VPN node first.");
+                p.put("kill_switch",enabled);p.put("kill_switch_policy",enabled?"on-connect":"off");nodeStore.importBundle(root.toString().getBytes(StandardCharsets.UTF_8));toast(enabled?"Kill switch enabled":"Kill switch disabled");
+            }
+        }catch(Exception error){toast(safe(error));}refreshSettingsState();
+    }
+    private void refreshSettingsState(){
+        externalProtectionID="";externalProtectionSource="";
+        if(isExternalSelected()){
+            killSwitch.setText("Exit kill switch");
+            try{
+                String id=prefs().getString(SELECTED_ID,"");
+                AndroidConnectionProfileStore.ExternalSelection path=new AndroidConnectionProfileStore(this,nodeStore,exitStore).currentExternalPath(id);
+                AndroidStandardExitStore.Entry exit=path.exit;boolean tor=AndroidTorProfile.isTor(exit.protocol);
+                boolean selected=AndroidExternalProtection.requested(tor?exit.torPolicy:exit.policy,tor||path.direct());
+                boolean entryStrict=path.entry!=null&&AndroidKillSwitchPolicy.strictRequested(path.entry.file);
+                Boolean os=LayeredVpnService.currentLockdownState();
+                externalProtectionID=id;externalProtectionSource=AndroidStandardExitStore.snapshot(exit);
+                killSwitch.setChecked(selected);killSwitch.setEnabled(!mutationBusy());
+                if(autoRequirementsHint!=null)autoRequirementsHint.setText("Saved exit kill switch: "+(selected?"On; Android lockdown required":"Off")
+                        +(entryStrict?" • Captured entry also requires lockdown":"")
+                        +(Boolean.TRUE.equals(os)?" • Android system lockdown is currently On":os==null?" • Android system lockdown is controlled in VPN settings":" • Android system lockdown is currently Off")
+                        +". Changing this saved exit does not turn off Android's system setting.");
+            }catch(Exception invalid){killSwitch.setChecked(false);killSwitch.setEnabled(false);if(autoRequirementsHint!=null)autoRequirementsHint.setText("Choose this external node's valid path before changing its saved protection. Android system lockdown remains independent.");}
+            return;
+        }
+        killSwitch.setText("Kill switch");JSONObject p=activeRouterProfile();boolean enabled=p!=null&&(!"off".equalsIgnoreCase(p.optString("kill_switch_policy","off"))||p.optBoolean("kill_switch",false));killSwitch.setChecked(enabled);
+        if(autoRequirementsHint!=null){boolean encrypted=p!=null&&p.optBoolean("auto_require_encrypted",false),obfuscated=p!=null&&p.optBoolean("auto_require_obfuscation",false);String value=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";autoRequirementsHint.setText("AUTO requirements: "+value+" • Off by default • SMART never simplifies below enabled requirements");}
+    }
     private void showMtuHelp(){AndroidMTUDialog.show(this);}
 
     private void refreshForwardingState(){AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(this);if(AndroidViaEntryLatencyProbe.hasActiveOperation()||!connection.isConnected()||"external".equals(home.logicalMode)){forwardingEnabled=null;forwardButton.setText("Forward");return;}if(forwardingBusy)return;forwardingBusy=true;forwardingMaster.get((enabled,error)->runOnUiThread(()->{forwardingBusy=false;if(error==null&&enabled!=null){forwardingEnabled=enabled;forwardButton.setText(enabled?"Forward ON":"Forward OFF");}else{forwardingEnabled=null;forwardButton.setText("Forward ?");}}));}
