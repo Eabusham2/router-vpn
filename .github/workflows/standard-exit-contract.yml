@@ -122,7 +122,8 @@ jobs:
           $source = Get-Content -Raw -LiteralPath 'client/native-openvpn-windows.ps1'
           if ($source -notmatch "Get-NetRoute -DestinationPrefix '0.0.0.0/1'") { throw 'missing def1 route proof' }
           if ($source -notmatch "Get-NetRoute -DestinationPrefix '128.0.0.0/1'") { throw 'missing second def1 route proof' }
-          if ($source -notmatch "Kill 'tunnel'") { throw 'strict firewall never promotes the proven OpenVPN interface' }
+          if (-not $source.Contains("Invoke-RouterVPNOpenVPNKillSwitch 'tunnel'")) { throw 'strict firewall never promotes the proven OpenVPN interface' }
+          if ($source -match '(?im)^\s*function\s+Kill\s*(?:\(|\{)') { throw 'OpenVPN wrapper collides with the built-in kill alias' }
           if ($source -notmatch "OpenVPN 2\\.7\\.") { throw 'OpenVPN 2.7 pin check is missing' }
           if ($source -match 'windows-driver\s+wintun') { throw 'OpenVPN 2.7 removed Wintun; stale driver directive found' }
       - name: Pinned zero-knowledge OpenVPN setup contract

@@ -174,7 +174,13 @@ function Captured-EndpointAddresses([string]$Primary) {
   }
   try {
     if (-not $raw.Trim().StartsWith('[') -or -not $raw.Trim().EndsWith(']')) { throw 'array required' }
-    $values = @($raw | ConvertFrom-Json)
+    # PowerShell 5.1 returns a top-level JSON array as one pipeline object;
+    # PowerShell 7 normally enumerates it. Read an object property to retain
+    # exactly one array level on both. Validate the original JSON first so it
+    # cannot inject another member into the private parsing wrapper.
+    $null = ConvertFrom-Json -InputObject $raw
+    $parsed = ConvertFrom-Json -InputObject ('{"endpoints":' + $raw + '}')
+    $values = @($parsed.endpoints)
     if ($values.Count -lt 1 -or $values.Count -gt 16) { throw 'endpoint count' }
     $result = @()
     foreach ($value in $values) {

@@ -67,6 +67,21 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     String activeMultihopExitMode() { return multihop.activeExitMode(); }
     List<AndroidStandardExitStore.Entry> standardExits() throws Exception { return exitStore.list(); }
 
+    String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner,String requested)throws Exception{
+        if(owner==null||!owner.connected||!"connected".equals(owner.phase)||!"passed".equals(owner.pathProof)||!"external".equals(owner.logicalMode)
+                ||!samePath(owner,AndroidHomeStateStore.snapshot(activity)))throw new IllegalStateException("The temporary external path lost its captured owner.");
+        final String selected;
+        if(AndroidTorProfile.isTor(owner.activeExternalProtocol)){
+            if(!"local".equals(requested))throw new IllegalStateException("The captured Tor path requires Local execution.");
+            runtime.standardExit.capturedTorExit(owner);selected="local";
+        }else{
+            if(!requested.equals(runtime.standardExit.capturedRequestedExecution(owner)))throw new IllegalStateException("The external execution changed during the temporary test.");
+            selected=runtime.standardExit.capturedExternalExecution(owner);
+        }
+        if(!samePath(owner,AndroidHomeStateStore.snapshot(activity)))throw new IllegalStateException("The temporary external owner changed while reading its execution receipt.");
+        return selected;
+    }
+
     boolean isStartupPending(){return pendingStartup!=null&&pendingCallback!=null;}
     boolean cancelStartupPending(){
         if(!isStartupPending())return false;

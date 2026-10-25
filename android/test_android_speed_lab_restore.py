@@ -68,6 +68,14 @@ final class AndroidStandardExitRuntime {
 }
 '''
 METERS = r'''
+// Saved preference/private-store boundary; the real profile store has its own
+// executable transactional tests. The actual dialog consumes this exact tuple.
+final class AndroidConnectionProfileStore {
+ static ExternalSelection saved;
+ static final class ExternalSelection {final AndroidNodeStore.Node entry;final AndroidStandardExitStore.Entry exit;final String entryMode,execution;ExternalSelection(AndroidNodeStore.Node e,AndroidStandardExitStore.Entry x,String m,String c){entry=e;exit=x;entryMode=m;execution=c;}boolean direct(){return entry==null;}}
+ AndroidConnectionProfileStore(Context c,AndroidNodeStore n,AndroidStandardExitStore e){}
+ ExternalSelection currentExternalPath(String id){if(saved==null||!saved.exit.id.equals(id))throw new IllegalStateException("stale saved selection");return saved;}
+}
 final class LayeredVpnService {static java.util.function.Consumer<Throwable> quiesce;static int automatic;static void quiesceMTUForSpeedLab(java.util.function.Consumer<Throwable> cb){quiesce=cb;}static void startAutomaticMTU(){automatic++;}}
 final class AndroidSpeedLab {
  interface Callback{void finished(Result result,Throwable error);}static final class Latency{double medianMs,p90Ms;String detail(){return "latency";}}static final class Transfer{double mbps,bufferbloatMs;Latency loadedLatency=new Latency();}static final class Result{Latency idle=new Latency();Transfer download=new Transfer(),upload=new Transfer();String pathIdentity="captured";org.json.JSONObject json(){return new org.json.JSONObject();}String summary(){return "measured";}}
@@ -85,7 +93,7 @@ final class AndroidHopMeasurementDialog{AndroidHopMeasurementDialog(android.app.
 final class AndroidSpeedLabHopMeter{static final class Hop{String summary(){return "hop";}}}
 '''
 HARNESS = r'''package com.eabusham.routervpn;
-import android.app.*;import java.nio.file.*;import java.util.*;
+import android.app.*;import java.nio.file.*;import java.util.*;import org.json.*;
 public final class SpeedLabRestoreTest {
  static int checks;static void check(boolean v,String msg){checks++;if(!v)throw new AssertionError(msg);}
  interface Condition{boolean ready();}static void waitFor(Condition c,String msg)throws Exception{long until=System.nanoTime()+3_000_000_000L;while(!c.ready()&&System.nanoTime()<until)Thread.sleep(2);check(c.ready(),msg);}
@@ -94,14 +102,14 @@ public final class SpeedLabRestoreTest {
   final Activity activity=new Activity();final AndroidNodeStore nodes=new AndroidNodeStore(activity);final AndroidUnifiedConnectionController connection;final AndroidSpeedLabController controller;final Result result=new Result();final AndroidSpeedLabController.Request request=new AndroidSpeedLabController.Request();
   final AndroidNodeStore.Node original,first,last;final AndroidStandardExitStore.Entry external=new AndroidStandardExitStore.Entry();final String type,raw;String originalSession,originalWinner="server";
   Fixture(Path directory,String type,String topology)throws Exception{check(!AndroidMTUMeasurementGate.held(),"previous case leaked hold");this.type=type;this.raw=type.equals("multihop")?"max-quic-awg":type.startsWith("external")?type.substring(9):"reality-pq-vision";
-   RuntimeBoundary.reset();AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();android.net.VpnService.needsPermission=false;AndroidSpeedLab.starts=AndroidSpeedLab.cancels=0;AndroidSpeedLab.pending=null;AndroidNativeHopMeasurement.starts=AndroidNativeHopMeasurement.cancels=0;AndroidNativeHopMeasurement.hold=false;AndroidNativeHopMeasurement.pending=null;LayeredVpnService.quiesce=null;LayeredVpnService.automatic=0;
+   RuntimeBoundary.reset();android.content.Context.speedPreferences.clear();AndroidConnectionProfileStore.saved=null;AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();android.net.VpnService.needsPermission=false;AndroidSpeedLab.starts=AndroidSpeedLab.cancels=0;AndroidSpeedLab.pending=null;AndroidNativeHopMeasurement.starts=AndroidNativeHopMeasurement.cancels=0;AndroidNativeHopMeasurement.hold=false;AndroidNativeHopMeasurement.pending=null;LayeredVpnService.quiesce=null;LayeredVpnService.automatic=0;
    original=node(directory,"original");first=node(directory,"entry");last=node(directory,"exit");external.protocol=type.startsWith("external")?raw:"tor-bridge";AndroidStandardExitStore.saved.put(external.id,AndroidStandardExitStore.copy(external));
    connection=new AndroidUnifiedConnectionController(activity,nodes);controller=new AndroidSpeedLabController(activity,connection);
    if(type.equals("router")){AndroidHomeStateStore.begin("SMART AUTO",raw,"",original.id,"","");AndroidRuntimeRegistry.instance.orchestrator.source=Files.readString(original.file.toPath());AndroidHomeStateStore.proved();}
    if(type.equals("multihop")){AndroidHomeStateStore.begin("multihop",raw,original.id,last.id,"reality-xhttp","");AndroidRuntimeRegistry.instance.multihop.execution="auto";AndroidRuntimeRegistry.instance.multihop.selected="server";AndroidHomeStateStore.proved();}
    if(type.startsWith("external")){AndroidHomeStateStore.begin("external",raw,original.id,"","max-quic-awg",external.id);AndroidHomeStateStore.proved();}
    originalSession=AndroidHomeStateStore.current.sessionId;
-   request.scope="temporary";request.topology=topology;request.node=first;request.entry=first;request.exit=last;request.mode="all";request.entryMode="wg-pq";request.exitMode="shadowsocks";request.execution="server";request.standardExit=external;request.externalDirect=false;
+   request.scope="temporary";request.topology=topology;request.node=first;request.entry=first;request.exit=last;request.mode="all";request.entryMode="wg-pq";request.exitMode="shadowsocks";request.execution="external".equals(topology)?"local":"server";request.standardExit=external;request.externalDirect=false;
   }
   AndroidNodeStore.Node node(Path root,String id)throws Exception{Path folder=Files.createTempDirectory(root,id);Path file=folder.resolve(id+".json");Files.writeString(file,"{\"private\":\""+id+"\",\"dns\":\"home-adguard\",\"mtu\":\"auto\"}");AndroidNodeStore.Node n=new AndroidNodeStore.Node(id,file.toFile());AndroidNodeStore.nodes.add(n);return n;}
   void start(){controller.run(request,result);}void quiesce(){LayeredVpnService.quiesce.accept(null);}void measured()throws Exception{waitFor(()->AndroidSpeedLab.pending!=null,"measurement never started");AndroidSpeedLab.drained(false);}
@@ -186,7 +194,28 @@ public final class SpeedLabRestoreTest {
    AndroidSpeedLab.drained(true);waitFor(()->!f.controller.isRunning(),"UI cancellation never finalized");check(!AndroidMTUMeasurementGate.held()&&run.isEnabled()&&!cancel.isEnabled(),"UI completion failed to restore action buttons");check(AndroidHomeStateStore.current.sessionId.equals(f.originalSession),"current-path cancel replaced the existing connection");
   }
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,8 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
+
+ static android.widget.Spinner spinner(AndroidSpeedLabDialog dialog,String name)throws Exception{java.lang.reflect.Field field=AndroidSpeedLabDialog.class.getDeclaredField(name);field.setAccessible(true);return (android.widget.Spinner)field.get(dialog);}
+ static android.widget.Button runButton(AndroidSpeedLabDialog dialog)throws Exception{java.lang.reflect.Field field=AndroidSpeedLabDialog.class.getDeclaredField("run");field.setAccessible(true);return (android.widget.Button)field.get(dialog);}
+ static void externalUI(Path root)throws Exception{
+  for(String requested:new String[]{"local","server","auto"}){
+   Fixture f=new Fixture(root,"router","external");f.external.protocol="shadowsocks";AndroidStandardExitStore.saved.put(f.external.id,AndroidStandardExitStore.copy(f.external));
+   JSONObject profiles=new JSONObject();JSONArray modes=new JSONArray();for(String mode:new String[]{"wg","max-quic-awg","reality-xhttp"}){profiles.put(mode,new JSONObject());modes.put(new JSONObject().put("id",mode).put("name",mode));}Files.writeString(f.first.file.toPath(),new JSONObject().put("profiles",profiles).put("modes",modes).toString());
+   AndroidConnectionProfileStore.saved=new AndroidConnectionProfileStore.ExternalSelection(f.first,AndroidStandardExitStore.copy(f.external),"reality-xhttp","auto");
+   android.content.Context.speedPreferences.put("selected_kind","external");android.content.Context.speedPreferences.put("selected_id",f.external.id);
+   Map<String,String> saved=new HashMap<>(android.content.Context.speedPreferences);
+   AndroidSpeedLabDialog ui=new AndroidSpeedLabDialog(f.activity,f.nodes,f.connection,f.controller);ui.show();
+   check(spinner(ui,"topology").getSelectedItemPosition()==3&&spinner(ui,"execution").getSelectedItemPosition()==2&&spinner(ui,"entry").getSelectedItemPosition()==1&&spinner(ui,"entryMode").getSelectedItemPosition()==2,"Speed Lab replaced saved external entry/mode/Compare defaults");
+   spinner(ui,"scope").setSelection(1);check(spinner(ui,"execution").getVisibility()==android.view.View.VISIBLE,"External Speed Lab hides execution choices");
+   spinner(ui,"execution").setSelection(java.util.Arrays.asList("local","server","auto").indexOf(requested));check(runButton(ui).performClick(),"Actual external Run callback missing");
+   spinner(ui,"execution").setSelection(0);LayeredVpnService.quiesce.accept(null);waitFor(()->AndroidSpeedLab.pending!=null,"Temporary external UI did not reach measurement");
+   AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.instance.standardExit;
+   check(runtime.execution.equals(requested)&&runtime.selected.equals(requested.equals("auto")?"server":requested)&&AndroidHomeStateStore.current.activeEntryMode.equals("reality-xhttp"),"Actual Speed Lab Run substituted Local or a different entry mode");
+   AndroidSpeedLab.drained(false);waitFor(()->!f.controller.isRunning(),"UI external cleanup never finished");f.originalRestored();check(saved.equals(android.content.Context.speedPreferences),"Temporary external choices rewrote saved path");android.app.AlertDialog.last.dismiss();
+  }
+  Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Unsupported Tor comparison stopped the original path");
+ }
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,8 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
 }
 '''
 
@@ -199,12 +228,16 @@ def replace_class(text, name, replacement):
 def main():
     jar=Path(os.environ.get('ANDROID_JSON_JAR','/usr/share/java/com.android.json.jar'))
     ui=dict(P.T.UI)
+    ui['android/content/Context.java']=ui['android/content/Context.java'].replace('public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->fallback;}', 'public static final java.util.Map<String,String> speedPreferences=new java.util.HashMap<>();public SharedPreferences getSharedPreferences(String name,int mode){return (key,fallback)->speedPreferences.getOrDefault(key,fallback);}')
     ui['android/content/SharedPreferences.java']='package android.content;public interface SharedPreferences{String getString(String key,String fallback);}'
+    # AdapterView.INVALID_POSITION represents an unavailable saved selection;
+    # it must stay unselected instead of implicitly choosing another entry mode.
+    ui['android/widget/Spinner.java']=ui['android/widget/Spinner.java'].replace('if(value<0||adapter==null||value>=adapter.getCount())','if(value < -1||adapter==null||value>=adapter.getCount())').replace('if(listener!=null)listener.onItemSelected(this,null,position,position);','if(listener!=null){if(position<0)listener.onNothingSelected(this);else listener.onItemSelected(this,null,position,position);}')
     ui['android/os/Bundle.java']=ui['android/os/Bundle.java'][:-1]+'public void putStringArrayList(String k,java.util.ArrayList<String> v){values.put(k,v);}public java.util.ArrayList<String> getStringArrayList(String k){return (java.util.ArrayList<String>)values.get(k);}public boolean containsKey(String k){return values.containsKey(k);}}'
 
     ui['android/graphics/Color.java']='package android.graphics;public final class Color{public static final int WHITE=-1;public static int rgb(int r,int g,int b){return r*65536+g*256+b;}}'
     ui['android/view/Gravity.java']='package android.view;public final class Gravity{public static final int CENTER_VERTICAL=16;}'
-    ui['android/view/View.java']=ui['android/view/View.java'][:-1]+'public static final int VISIBLE=0,GONE=8;private Object tag;public void setTag(Object v){tag=v;}public Object getTag(){return tag;}public void setVisibility(int v){}public void setBackgroundColor(int c){} }'
+    ui['android/view/View.java']=ui['android/view/View.java'][:-1]+'public static final int VISIBLE=0,GONE=8;private Object tag;public void setTag(Object v){tag=v;}public Object getTag(){return tag;}private int visibility;public void setVisibility(int v){visibility=v;}public int getVisibility(){return visibility;}public void setBackgroundColor(int c){} }'
     ui['android/widget/TextView.java']=ui['android/widget/TextView.java'][:-1]+'public void setTextIsSelectable(boolean v){}public void setHintTextColor(int c){} }'
     ui['android/widget/LinearLayout.java']=ui['android/widget/LinearLayout.java'].replace('public static final int VERTICAL=1;','public static final int VERTICAL=1,HORIZONTAL=0;public void setGravity(int g){}').replace('public LayoutParams(int width,int height){}','public LayoutParams(int width,int height){}public LayoutParams(int width,int height,float weight){}')
     ui['android/widget/CheckBox.java']=ui['android/widget/CheckBox.java'][:-1]+'public interface OnCheckedChangeListener{void onChanged(CheckBox c,boolean v);}public void setOnCheckedChangeListener(OnCheckedChangeListener l){} }'

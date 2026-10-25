@@ -33,6 +33,9 @@ final class AndroidStandardExitStore{
  static final class Entry{String id="exit",protocol="openvpn",secret="captured-private-key";}
  static Entry copy(Entry x){Entry e=new Entry();e.id=x.id;e.protocol=x.protocol;e.secret=x.secret;return e;}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("invalid external profile");}
+ // Authentication/key/probe compilation is exercised by the real store/native
+ // graph suites. This boundary only models execution admission to the controller.
+ static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||e.protocol.startsWith("tor")))throw new IllegalArgumentException("unowned execution");}
 }
 final class AndroidHomeStateStore{
  static final class Snapshot{boolean connected;long pathGeneration;String sessionId="off",phase="off",pathProof="pending",logicalMode="",runtimeMode="",activeNodeId="",activeExternalId="",activeExternalProtocol="",activeEntryId="",activeEntryMode="",activeExitId="";}
@@ -41,7 +44,7 @@ final class AndroidHomeStateStore{
 final class LayeredVpnService{static Consumer<Throwable> quiesce;static int calls;static void quiesceMTUForSpeedLab(Consumer<Throwable> cb){calls++;quiesce=cb;}static void startAutomaticMTU(){}}
 final class AndroidUnifiedConnectionController{
  interface Callback{void progress(String m);void finished(boolean ok,String m);default void owned(String session){}default void superseded(){}default void validate()throws Exception{}}
- int starts,broadStops,ownedStops,ownedRequests;String entryMode="",requestedCleanup="";boolean direct,busy,holdCleanup;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry external;Callback pending,cleanup;
+ int starts,broadStops,ownedStops,ownedRequests;String entryMode="",execution="local",selectedExecution="local",requestedCleanup="";boolean direct,busy,holdCleanup;AndroidNodeStore.Node entry;AndroidStandardExitStore.Entry external;Callback pending,cleanup;
  static final class RestorePoint{final AndroidHomeStateStore.Snapshot home;final String topology="off";RestorePoint(AndroidHomeStateStore.Snapshot s){home=s;}boolean connected(){return home.connected;}}
  RestorePoint captureRestorePoint(){if(isActiveOrTransitioning())throw new IllegalStateException("fixture has no captured live graph");return new RestorePoint(AndroidHomeStateStore.value);}
  boolean restorePointCurrent(RestorePoint p){return idleCurrent(p.home);}
@@ -51,7 +54,8 @@ final class AndroidUnifiedConnectionController{
  boolean cancelPending(Callback cb){if(cb!=pending)return false;pending=null;cb.finished(false,"permission cancelled");return true;}
  void stopCaptured(String session,String topology,Callback cb){disconnectExternal(session,cb);}
  boolean isActiveOrTransitioning(){return busy||AndroidHomeStateStore.value.connected;}
- void connectExternal(AndroidNodeStore.Node node,AndroidStandardExitStore.Entry exit,boolean d,String mode,Callback cb){starts++;entry=node;external=exit;direct=d;entryMode=mode;pending=cb;}
+ void connectExternal(AndroidNodeStore.Node node,AndroidStandardExitStore.Entry exit,boolean d,String mode,String execution,Callback cb){starts++;entry=node;external=exit;direct=d;entryMode=mode;this.execution=execution;selectedExecution=execution.equals("auto")?"server":execution;pending=cb;}
+ String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner,String requested){if(!owner.sessionId.equals(AndroidHomeStateStore.value.sessionId)||!requested.equals(execution))throw new IllegalStateException("stale execution receipt");return selectedExecution;}
  void connectNode(AndroidNodeStore.Node n,String mode,List<String> layers,Callback cb){starts++;pending=cb;}
  void connectMultihop(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;pending=cb;}
  void disconnect(Callback cb){broadStops++;AndroidHomeStateStore.value=new AndroidHomeStateStore.Snapshot();cb.finished(true,"broad native stop");}
@@ -90,13 +94,15 @@ public class SpeedLabExternalTest{
   void run(){controller.run(request,result);}void drain(){LayeredVpnService.quiesce.accept(null);}void finish(){AndroidSpeedLab.pending.finished(new AndroidSpeedLab.Result(),null);}
  }
  static void allEntries(Path root)throws Exception{
-  for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL){
-   Fixture f=new Fixture(root);f.request.entryMode=mode;f.request.standardExit.protocol=protocol;String secret=f.request.standardExit.secret;f.run();check(f.connection.starts==0&&AndroidMTUMeasurementGate.held(),"temporary graph started before MTU drain");
-   f.request.entryMode="wg";f.request.standardExit.secret="changed-caller-key";f.request.standardExit.protocol="http";f.request.minSeconds=7;f.request.topology="system-direct";f.drain();
-   check(f.connection.starts==1&&f.connection.entryMode.equals(mode)&&f.connection.external.protocol.equals(protocol)&&f.connection.external.secret.equals(secret),"Speed Lab dropped captured external credentials or selected entry");
+  for(String protocol:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn","tor","tor-bridge"})for(String mode:ALL)for(String execution:protocol.startsWith("tor")?new String[]{"local"}:new String[]{"local","server","auto"}){
+   Fixture f=new Fixture(root);f.request.entryMode=mode;f.request.standardExit.protocol=protocol;f.request.execution=execution;String secret=f.request.standardExit.secret;f.run();check(f.connection.starts==0&&AndroidMTUMeasurementGate.held(),"temporary graph started before MTU drain");
+   f.request.entryMode="wg";f.request.execution="changed";f.request.standardExit.secret="changed-caller-key";f.request.standardExit.protocol="http";f.request.minSeconds=7;f.request.topology="system-direct";f.drain();
+   check(f.connection.starts==1&&f.connection.entryMode.equals(mode)&&f.connection.external.protocol.equals(protocol)&&f.connection.external.secret.equals(secret)&&f.connection.execution.equals(execution),"Speed Lab dropped captured external credentials, execution or selected entry");
    f.connection.prove("test-owned");check(AndroidSpeedLab.starts==1&&AndroidSpeedLab.min==2&&AndroidSpeedLab.max==3,"measurement did not use captured timing and proven path");f.finish();
    check(f.result.completions==1&&f.result.error==null&&!f.controller.isRunning()&&!AndroidMTUMeasurementGate.held(),"test transaction did not finish cleanly");check(f.connection.broadStops==0&&f.connection.ownedStops==1&&f.connection.requestedCleanup.equals("test-owned"),"temporary external cleanup escaped its exact Home owner");
   }
+  for(String reason:new String[]{"invalid","empty","direct","tor"}){Fixture bad=new Fixture(root);bad.request.execution=reason.equals("empty")?"":reason.equals("invalid")?"invalid":"server";if(reason.equals("direct"))bad.request.externalDirect=true;if(reason.equals("tor"))bad.request.standardExit.protocol="tor";bad.run();check(bad.result.error!=null&&bad.connection.starts==0&&LayeredVpnService.calls==0&&!AndroidMTUMeasurementGate.held(),"Invalid external execution suspended the original path: "+reason);}
+  for(boolean requested:new boolean[]{false,true}){Fixture changed=new Fixture(root);changed.request.execution="auto";changed.run();changed.drain();changed.connection.prove("compare-owned");if(requested)changed.connection.execution="local";else changed.connection.selectedExecution="local";changed.finish();check(changed.result.error!=null&&changed.result.result==null,"Changed external execution kept a speed score");}
   Fixture direct=new Fixture(root);direct.request.externalDirect=true;direct.request.entry=null;direct.request.entryMode="";direct.run();direct.drain();direct.connection.prove("direct-owned");direct.finish();check(direct.result.error==null&&direct.connection.ownedStops==1,"direct temporary external path acquired an entry");
  }
  static void staleAndDenied(Path root)throws Exception{
@@ -128,7 +134,7 @@ def main():
     boundaries = BOUNDARIES.replace(" // PRODUCTION_NATIVE_PREDICATES", "\n".join(predicates)).replace(" // PRODUCTION_COMPOSITE_PREDICATE", composite).replace(" // PRODUCTION_DURATION_POLICY", duration)
     modes = next(line for line in P.T.T.HARNESS.splitlines() if "static final String[] ALL=" in line)
     dialog = (JAVA / "AndroidSpeedLabDialog.java").read_text()
-    assert 'q.entryMode=selectedEntryMode()' in dialog
+    assert 'q.entryMode="external".equals(q.topology)&&q.externalDirect?"":selectedEntryMode()' in dialog
     assert 'connection.supportedNativeEntryModes(selected)' in dialog
     assert 'q.entryMode=new String[]{"wg"' not in dialog
     with tempfile.TemporaryDirectory(prefix="routervpn-speed-external-") as directory:
@@ -151,7 +157,8 @@ def main():
         path = app / "AndroidSpeedLabController.java"
         original = path.read_text()
         for old, new, label in (
-            ("request.externalDirect,request.entryMode,bridge", 'request.externalDirect,"wg",bridge', "exact selected entry"),
+            ("request.externalDirect,request.entryMode,request.execution,bridge", 'request.externalDirect,"wg",request.execution,bridge', "exact selected entry"),
+            ("request.externalDirect,request.entryMode,request.execution,bridge", 'request.externalDirect,request.entryMode,"local",bridge', "captured execution"),
             ("AndroidStandardExitStore.copy(input.standardExit)", "input.standardExit", "frozen external credentials"),
             ("connection.stopCaptured(home,topology,new AndroidUnifiedConnectionController.Callback()", "connection.disconnect(new AndroidUnifiedConnectionController.Callback()", "captured external cleanup"),
         ):
@@ -161,7 +168,7 @@ def main():
             result = subprocess.run(run_args, capture_output=True, text=True, timeout=25)
             assert result.returncode != 0 and "AssertionError" in result.stderr, label + " negative control escaped"
             path.write_text(original)
-        print("Android external Speed Lab negative controls: 3 rejected")
+        print("Android external Speed Lab negative controls: 4 rejected")
 
 
 if __name__ == "__main__":

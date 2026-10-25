@@ -1,4 +1,14 @@
+param([switch]$PreserveJsonArrays)
 $ErrorActionPreference = 'Stop'
+if ($PreserveJsonArrays) {
+  if (-not (Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('NoEnumerate')) { throw 'This compatibility test requires NoEnumerate support.' }
+  # Reproduce Windows PowerShell 5.1's top-level array behavior on PowerShell 7.
+  function ConvertFrom-Json {
+    [CmdletBinding()]
+    param([Parameter(Mandatory=$true,ValueFromPipeline=$true)][string]$InputObject)
+    process { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate }
+  }
+}
 $script = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-killswitch-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
@@ -55,7 +65,8 @@ try {
 
   $badLists=@('null','{}','[]','"203.0.113.7"','["198.51.100.20"]',
     '["203.0.113.7","203.0.113.7"]','["203.0.113.7",null]',
-    '["203.0.113.7",7]','["203.0.113.7",["198.51.100.20"]]')
+    '["203.0.113.7",7]','["203.0.113.7",["198.51.100.20"]]',
+    '[["203.0.113.7"]]','[],"endpoints":["203.0.113.7"]')
   $badLists += '[' + ((@('"203.0.113.7"') * 17) -join ',') + ']'
   foreach ($address in @('vpn.example.test','198.51.100.20/24',' 198.51.100.20',
     '127.0.0.1','0.0.0.0','255.255.255.255','224.0.0.1','169.254.1.2',

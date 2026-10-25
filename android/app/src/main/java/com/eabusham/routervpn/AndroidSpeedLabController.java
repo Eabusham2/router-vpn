@@ -37,6 +37,7 @@ final class AndroidSpeedLabController {
     private volatile Callback activeCallback;
     private long generation;
     private String temporaryHome="",phase="idle";
+    private String temporaryExecution="";
     private boolean externalTemporary, completionStarted, originalSuspended;
     private volatile boolean cancelled, pathDecisionChanged;
     private AndroidUnifiedConnectionController.RestorePoint original;
@@ -46,10 +47,10 @@ final class AndroidSpeedLabController {
     private Map<File,String> capturedFiles=Collections.emptyMap();
 
     private static Request capture(Request input)throws Exception{
-        Request q=new Request();q.scope=normalize(input.scope,"current");q.topology=normalize(input.topology,"router");q.mode=normalize(input.mode,"smart-auto");q.entryMode=normalize(input.entryMode,"");q.exitMode=normalize(input.exitMode,"shadowsocks");q.execution=normalize(input.execution,"local");q.externalDirect=input.externalDirect;
+        Request q=new Request();q.scope=normalize(input.scope,"current");q.topology=normalize(input.topology,"router");q.mode=normalize(input.mode,"smart-auto");q.entryMode=normalize(input.entryMode,"");q.exitMode=normalize(input.exitMode,"shadowsocks");q.execution=normalize(input.execution,"");q.externalDirect=input.externalDirect;
         if(!java.util.Arrays.asList("current","temporary").contains(q.scope))throw new IllegalArgumentException("Choose Current path or Temporary config.");
         if("temporary".equals(q.scope)&&!java.util.Arrays.asList("router","multihop","external","system-direct").contains(q.topology))throw new IllegalArgumentException("Choose a supported temporary topology.");
-        if("multihop".equals(q.topology)&&!java.util.Arrays.asList("local","server","auto").contains(q.execution))throw new IllegalArgumentException("Choose an exact multihop execution.");
+        if("temporary".equals(q.scope)&&("multihop".equals(q.topology)||"external".equals(q.topology))&&!java.util.Arrays.asList("local","server","auto").contains(q.execution))throw new IllegalArgumentException("Choose Local, Server, or Compare both for the exact test path.");
         q.node=input.node;q.entry=input.entry;q.exit=input.exit;q.standardExit=input.standardExit==null?null:AndroidStandardExitStore.copy(input.standardExit);
         q.customLayers=input.customLayers==null?Collections.emptyList():Collections.unmodifiableList(new ArrayList<>(input.customLayers));
         AndroidSpeedLab.DurationPolicy time=AndroidSpeedLab.DurationPolicy.normalize(input.durationMode,input.minSeconds,input.maxSeconds);q.durationMode=time.mode;q.minSeconds=time.minSeconds;q.maxSeconds=time.maxSeconds;
@@ -72,7 +73,7 @@ final class AndroidSpeedLabController {
         final long owner;final Request captured;final Map<File,String> sources=new LinkedHashMap<>();final Object lease;
         synchronized(this){
             if(!running.compareAndSet(false,true)){callback.finished(null,new IllegalStateException("Another Speed Lab test is already running."));return;}
-            owner=++generation;temporaryHome="";externalTemporary=false;completionStarted=false;originalSuspended=false;cancelled=false;pathDecisionChanged=false;original=null;idle=null;connectingCallback=null;phase="quiescing";
+            owner=++generation;temporaryHome="";temporaryExecution="";externalTemporary=false;completionStarted=false;originalSuspended=false;cancelled=false;pathDecisionChanged=false;original=null;idle=null;connectingCallback=null;phase="quiescing";
             try{
                 captured=capture(request);
                 if("temporary".equals(captured.scope)){
@@ -81,6 +82,7 @@ final class AndroidSpeedLabController {
                     if("external".equals(captured.topology)){
                         if(captured.standardExit==null)throw new IllegalArgumentException("Choose a stored custom exit.");
                         AndroidStandardExitStore.validate(captured.standardExit);
+                        AndroidStandardExitStore.validateExecution(captured.standardExit,!captured.externalDirect,captured.execution);
                         if(!captured.externalDirect)captureNode(sources,captured.entry);
                     }
                 }
@@ -159,7 +161,7 @@ final class AndroidSpeedLabController {
             switch(request.topology){
                 case "router":String mode=request.mode;if("custom".equals(mode))mode="custom:speed-lab";connection.connectNode(request.node,mode,request.customLayers,bridge);break;
                 case "multihop":connection.connectMultihop(request.entry,request.exit,request.exitMode,request.execution,request.entryMode,bridge);break;
-                case "external":connection.connectExternal(request.entry,request.standardExit,request.externalDirect,request.entryMode,bridge);break;
+                case "external":connection.connectExternal(request.entry,request.standardExit,request.externalDirect,request.entryMode,request.execution,bridge);break;
                 default:throw new IllegalArgumentException("Unsupported Android Speed Lab topology: "+request.topology);
             }
         }catch(Throwable error){complete(callback,null,error);}
@@ -268,8 +270,14 @@ final class AndroidSpeedLabController {
         if(temporaryHome.isEmpty()||!temporaryHome.equals(state.sessionId)||!state.connected||!"connected".equals(state.phase)||!"passed".equals(state.pathProof))return false;
         if("router".equals(q.topology))return q.node.id.equals(state.activeNodeId)&&!"multihop".equals(state.logicalMode)&&!"external".equals(state.logicalMode);
         if("multihop".equals(q.topology))return "multihop".equals(state.logicalMode)&&q.entry.id.equals(state.activeEntryId)&&q.exit.id.equals(state.activeExitId)&&q.exitMode.equals(state.runtimeMode)&&q.entryMode.equals(state.activeEntryMode);
-        return "external".equals(state.logicalMode)&&q.standardExit.id.equals(state.activeExternalId)&&q.standardExit.protocol.equals(state.activeExternalProtocol)
-                &&(q.externalDirect?state.activeEntryId.isEmpty():q.entry.id.equals(state.activeEntryId)&&q.entryMode.equals(state.activeEntryMode));
+        if(!"external".equals(state.logicalMode)||!q.standardExit.id.equals(state.activeExternalId)||!q.standardExit.protocol.equals(state.activeExternalProtocol)
+                ||!(q.externalDirect?state.activeEntryId.isEmpty():q.entry.id.equals(state.activeEntryId)&&q.entryMode.equals(state.activeEntryMode)))return false;
+        try{
+            String selected=connection.capturedExternalExecution(state,q.execution);
+            if(!java.util.Arrays.asList("local","server").contains(selected))return false;
+            if(temporaryExecution.isEmpty())temporaryExecution=selected;
+            return temporaryExecution.equals(selected);
+        }catch(Exception changed){return false;}
     }
 
     private static AndroidNodeStore.Node find(List<AndroidNodeStore.Node>nodes,String id){if(nodes==null||id==null)return null;for(AndroidNodeStore.Node node:nodes)if(node!=null&&id.equals(node.id))return node;return null;}
