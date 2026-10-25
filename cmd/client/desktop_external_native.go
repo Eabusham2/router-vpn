@@ -35,6 +35,7 @@ type desktopExternalRuntime struct {
 	source, capture                        []byte
 	predecessor                            string
 	session, network, selection, execution string
+	networkIdentity                        func() string
 	expected                               mobilemultihop.ExternalProofResult
 	profile, entry                         common.RouterProfile
 	physicalEndpoints                      []string
@@ -48,6 +49,17 @@ type desktopExternalRuntime struct {
 	waitDone                               chan struct{}
 	waitErr                                error
 	progress                               *comparisonOwner
+}
+
+// A captured native owner uses one physical-network observation dependency at
+// every admission and adoption boundary. Production owners use the real link
+// inventory; isolated child-protocol fixtures can supply their own inventory
+// without making unrelated runner interface changes part of an IPC test.
+func (o *desktopExternalRuntime) currentNetworkIdentity() string {
+	if o != nil && o.networkIdentity != nil {
+		return o.networkIdentity()
+	}
+	return physicalNetworkIdentity()
 }
 
 type desktopExternalProof struct {
@@ -365,7 +377,7 @@ func (a *app) readDesktopExternalProof(launch *desktopNodeLaunch) (desktopExtern
 	if desktopExternalProcessExited(launch) {
 		return desktopExternalProof{}, errors.New("native external process exited before the captured proof could be retained")
 	}
-	if owner.network == "" || owner.network != physicalNetworkIdentity() {
+	if owner.network == "" || owner.network != owner.currentNetworkIdentity() {
 		return desktopExternalProof{}, errors.New("external proof belongs to a retired physical network")
 	}
 	raw, err := readDesktopRuntimeFile(launch, "proof.json", 256<<10)
@@ -373,7 +385,7 @@ func (a *app) readDesktopExternalProof(launch *desktopNodeLaunch) (desktopExtern
 		return desktopExternalProof{}, err
 	}
 	proof, err := validateDesktopExternalProof(raw, owner, time.Now())
-	if err == nil && (!a.ownsConnectionRuntime(launch.command) || desktopExternalProcessExited(launch) || owner.network != physicalNetworkIdentity()) {
+	if err == nil && (!a.ownsConnectionRuntime(launch.command) || desktopExternalProcessExited(launch) || owner.network != owner.currentNetworkIdentity()) {
 		err = errors.New("native external process or physical network changed during proof adoption")
 	}
 	return proof, err

@@ -360,7 +360,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	if err := a.checkConnectionOperation(); err != nil {
 		return err
 	}
-	if launch.external != nil && (launch.external.network == "" || launch.external.network != physicalNetworkIdentity()) {
+	if launch.external != nil && (launch.external.network == "" || launch.external.network != launch.external.currentNetworkIdentity()) {
 		return errors.New("external connection network changed before native staging")
 	}
 	var receipt struct {
@@ -455,7 +455,7 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	} else {
 		stop[2] = "down"
 	}
-	if launch.external != nil && launch.external.network != physicalNetworkIdentity() {
+	if launch.external != nil && launch.external.network != launch.external.currentNetworkIdentity() {
 		return errors.New("external connection network changed during native staging")
 	}
 	owned = true

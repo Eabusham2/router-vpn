@@ -338,7 +338,7 @@ func (o *desktopDNSOperation) view(a *app) desktopDNSView {
 }
 
 func (o *desktopDNSOperation) draftCurrent(a *app) error {
-	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != physicalNetworkIdentity() {
+	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != o.snapshot.launch.external.currentNetworkIdentity() {
 		return errors.New("DNS result belongs to a previous physical network")
 	}
 	a.mu.Lock()
@@ -517,7 +517,7 @@ func (o *desktopDNSOperation) beginDraftCommitLocked(a *app, request dnsPolicyRe
 	if err := o.draftCurrentLocked(a); err != nil {
 		return nil, err
 	}
-	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != physicalNetworkIdentity() {
+	if o.snapshot.launch.external.network == "" || o.snapshot.launch.external.network != o.snapshot.launch.external.currentNetworkIdentity() {
 		return nil, errors.New("measured DNS draft belongs to an old network")
 	}
 	o.mu.Lock()

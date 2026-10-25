@@ -335,7 +335,12 @@ func desktopExternalRunningFixture(t *testing.T, kind string) (*app, *desktopNod
 
 func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *desktopNodeLaunch) (*app, *desktopNodeLaunch) {
 	t.Helper()
-	launch.root, launch.external.network = root, physicalNetworkIdentity()
+	// This process is a private IPC peer, not a real tunnel. Own its network
+	// generation explicitly so Docker/runner interface churn cannot invalidate
+	// the precondition of unrelated transport/cancellation negative controls.
+	fixtureNetwork := "isolated-child-network"
+	launch.external.networkIdentity = func() string { return fixtureNetwork }
+	launch.root, launch.external.network = root, fixtureNetwork
 	a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {
 		t.Fatal(err)
@@ -358,6 +363,24 @@ func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *
 		_ = launch.directoryRoot.Close()
 	})
 	return a, launch
+}
+
+func TestDesktopExternalChangedObservedNetworkRetiresCapturedProof(t *testing.T) {
+	a, launch := desktopExternalRunningFixture(t, "proof")
+	observed := launch.external.network
+	launch.external.networkIdentity = func() string { return observed }
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	if _, err := a.waitDesktopExternalProof(ctx, launch); err != nil {
+		t.Fatal("fixture proof was not admitted on its captured network", err)
+	}
+	observed = "replacement-child-network"
+	if _, err := a.readDesktopExternalProof(launch); err == nil || !strings.Contains(err.Error(), "physical network") {
+		t.Fatal("observed network replacement retained proof authority", err)
+	}
+	if launch.external.network == observed {
+		t.Fatal("network readback rewrote the original captured generation")
+	}
 }
 
 func TestDesktopExternalActualProcessProofStopAndCancellation(t *testing.T) {
