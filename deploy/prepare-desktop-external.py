@@ -219,7 +219,7 @@ def preflight_pt_files(vendor, content):
     return previous
 
 
-def prepare_desktop_pt(vendor, go='go'):
+def prepare_desktop_pt(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
     content = pt_copies()
     previous = preflight_pt_files(vendor, content)
@@ -240,7 +240,7 @@ def prepare_desktop_pt(vendor, go='go'):
         staged = Path(directory).resolve(strict=True)
         for name in ('go.mod', 'go.sum'):
             (staged/name).write_bytes(originals[name])
-        TOR.prepare_modules(staged, go)
+        TOR.prepare_modules(staged, go, env=env)
         modules = {name: (staged/name).read_bytes() for name in ('go.mod', 'go.sum')}
     if any(TOR.destination(vendor, name).read_bytes() != data for name, data in originals.items()):
         raise ValueError('Desktop PT preparation target changed before adoption')
@@ -258,9 +258,9 @@ def prepare_desktop_pt(vendor, go='go'):
         files={name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(content.items())}), indent=2, sort_keys=True)+'\n').encode())
 
 
-def prepare(vendor, go='go'):
+def prepare(vendor, go='go', *, env=None):
     vendor = checked_vendor(vendor)
-    prepare_desktop_pt(vendor, go)
+    prepare_desktop_pt(vendor, go, env=env)
     # These pure policy types are shared by the Box's external and Tor proof
     # ownership code. The selective PT owner above shares this one Go runtime;
     # no embedded Tor implementation or C package is installed here.

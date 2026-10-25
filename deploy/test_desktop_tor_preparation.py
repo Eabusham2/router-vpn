@@ -11,6 +11,7 @@ import hashlib
 import importlib.util
 import io
 import json
+import os
 import shutil
 import subprocess
 import tempfile
@@ -105,13 +106,31 @@ class DesktopPTPreparation(unittest.TestCase):
         self.assertEqual(record['source_sha256'], PREP.digest())
 
     def test_shipping_preparer_calls_selective_pipeline_without_mobile_tor(self):
+        captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
         with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write'), \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
-            PREP.prepare(self.vendor, GO)
-            selective.assert_called_once_with(self.vendor.resolve(), GO)
+            PREP.prepare(self.vendor, GO, env=captured)
+            selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
+
+    def test_actual_module_commands_use_captured_toolchain_environment(self):
+        captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
+        before = snapshot(self.vendor)
+        # No network/download is needed: the fixture uses the installed pinned
+        # binary. Poison the ambient selector so dropping the captured env at
+        # any actual version/read/edit command is an executable failure.
+        with patch.dict(os.environ, {'GOTOOLCHAIN': 'invalid-routervpn-ambient-toolchain'}):
+            with self.assertRaises(subprocess.CalledProcessError):
+                self.prepare()
+            self.assertEqual(snapshot(self.vendor), before)
+            with contextlib.redirect_stdout(io.StringIO()):
+                PREP.prepare_desktop_pt(self.vendor, GO, env=captured)
+        self.assertTrue((self.vendor/PREP.PT_OWNER).is_file())
+        actual = json.loads(self.real_output([GO, 'mod', 'edit', '-json'], cwd=self.vendor, env=captured))
+        self.assertEqual(actual['Module']['Path'], PREP.MODULE)
+        self.assertGreaterEqual(PREP.TOR.go_version_key(actual['Go']), PREP.TOR.go_version_key('1.26.0'))
 
     def test_real_module_edit_retains_newer_native_versions_and_single_module(self):
         subprocess.run([GO, 'mod', 'edit', '-go=1.26.3', '-require=golang.org/x/net@v0.59.1',
@@ -147,8 +166,8 @@ class DesktopPTPreparation(unittest.TestCase):
         # Normalization must not hide even a newline-only replacement while
         # the owned module update is staged: the final guard compares bytes.
         actual = PREP.TOR.prepare_modules
-        def replace_captured_registry(staged, go):
-            actual(staged, go)
+        def replace_captured_registry(staged, go, **kwargs):
+            actual(staged, go, **kwargs)
             target = self.vendor/'include/registry.go'
             target.write_bytes(target.read_bytes().replace(b'\n', b'\r\n'))
         with patch.object(PREP.TOR, 'prepare_modules', side_effect=replace_captured_registry), \
@@ -176,9 +195,9 @@ class DesktopPTPreparation(unittest.TestCase):
             with actual_temp(dir=alias, **kwargs) as directory:
                 self.assertNotEqual(Path(directory), Path(directory).resolve())
                 yield directory
-        def prepare_actual_modules(directory, go):
+        def prepare_actual_modules(directory, go, **kwargs):
             observed.append(directory)
-            actual_modules(directory, go)
+            actual_modules(directory, go, **kwargs)
             self.assertEqual(directory, directory.resolve(strict=True))
         with patch.object(PREP.tempfile, 'TemporaryDirectory', side_effect=owned_alias), \
              patch.object(PREP.TOR, 'prepare_modules', side_effect=prepare_actual_modules):
@@ -324,8 +343,8 @@ class DesktopPTPreparation(unittest.TestCase):
 
     def test_metadata_change_during_module_staging_is_not_overwritten(self):
         actual = PREP.TOR.prepare_modules
-        def change_target(staged, go):
-            actual(staged, go)
+        def change_target(staged, go, **kwargs):
+            actual(staged, go, **kwargs)
             (self.vendor/'go.sum').write_bytes(ORIGINALS['go.sum']+b'\n# foreign replacement\n')
         with patch.object(PREP.TOR, 'prepare_modules', side_effect=change_target), self.assertRaisesRegex(ValueError, 'target changed'):
             self.prepare()

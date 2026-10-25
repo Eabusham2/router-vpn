@@ -395,7 +395,8 @@ class DarwinNativeEnvironment(unittest.TestCase):
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet'):
                     with self.assertRaises(CompilerBoundary):
                         N.build(target, root/'output', source=root/'core', xray=root/'xray', pq=pq)
-                    external_prepare.assert_called_once_with((root/'core').resolve())
+                    external_prepare.assert_called_once_with((root/'core').resolve(), env=commands[0][1])
+                    self.assertEqual(external_prepare.call_args.kwargs['env']['GOTOOLCHAIN'], N.TOOLCHAIN)
                 self.assertEqual(len(commands), 1)
                 _, env = commands[0]
                 expected = ['-target', arch+'-apple-macosx13.0', '-isysroot', str(sdk)]

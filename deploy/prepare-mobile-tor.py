@@ -145,15 +145,19 @@ def go_version_key(version):
             (-1 if (major, minor) >= (1, 21) else 0))
 
 
-def prepare_modules(vendor, go):
-    if subprocess.check_output([go, 'version'], text=True).split()[2] != 'go1.26.3':
+def prepare_modules(vendor, go, *, env=None):
+    # The desktop builder has already checked its pinned compiler environment.
+    # Carry that same capture into every module command: native C setup may
+    # put /usr/bin ahead of the runner's Go while GOTOOLCHAIN selects the pin.
+    env = None if env is None else dict(env)
+    if subprocess.check_output([go, 'version'], text=True, env=env).split()[2] != 'go1.26.3':
         raise ValueError('Native Tor preparation requires the pinned Go 1.26.3 toolchain')
-    module = json.loads(subprocess.check_output([go, 'mod', 'edit', '-json'], cwd=vendor, text=True))
+    module = json.loads(subprocess.check_output([go, 'mod', 'edit', '-json'], cwd=vendor, text=True, env=env))
     versions = {item['Path']: item['Version'] for item in module.get('Require', [])}
     lock = json.loads((ROOT/'mobile/torpt/SOURCE_LOCK.json').read_text())
     if lock.get('schema') != 1 or lock.get('native_core') != CORE or lock.get('go') != 'go1.26.3':
         raise ValueError('Native Tor PT source lock changed schema or core')
-    pt_module = json.loads(subprocess.check_output([go, 'mod', 'edit', '-json'], cwd=ROOT/'mobile/torpt', text=True))
+    pt_module = json.loads(subprocess.check_output([go, 'mod', 'edit', '-json'], cwd=ROOT/'mobile/torpt', text=True, env=env))
     declared = {item['Path']: item['Version'] for item in pt_module.get('Require', []) if item['Path'] != 'router-vpn'}
     if declared != {item['path']: item['version'] for item in lock['modules']} or len(declared) != len(lock['modules']):
         raise ValueError('Native Tor PT source lock differs from its actual module requirements')
@@ -174,7 +178,7 @@ def prepare_modules(vendor, go):
     # needs only 1.26.0; host tests do not import the Android-only Xray bridge.
     existing_go, minimum_go = module.get('Go', '1.0'), pt_module['Go']
     selected_go = max((existing_go, minimum_go), key=go_version_key)
-    subprocess.run([go, 'mod', 'edit', '-go='+selected_go, *required], cwd=vendor, check=True)
+    subprocess.run([go, 'mod', 'edit', '-go='+selected_go, *required], cwd=vendor, check=True, env=env)
     sum_path = destination(vendor, 'go.sum')
     current = sum_path.read_text().splitlines()
     known = {tuple(line.split()[:2]): line.split()[2] for line in current}

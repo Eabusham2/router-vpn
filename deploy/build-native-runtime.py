@@ -451,7 +451,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         POLICY.prepare_native(source, xray)
         PERFORMANCE.prepare(source)
         OPENVPN.prepare(source)
-        EXTERNAL.prepare(source)
+        EXTERNAL.prepare(source, env=env)
         BUFFERS.prepare(source)
         run(['go', 'mod', 'tidy'], cwd=source, env=env)
         run(['go', 'mod', 'verify'], cwd=source, env=env)
