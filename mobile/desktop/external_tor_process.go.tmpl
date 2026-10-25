@@ -1,0 +1,329 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// This owner launches exactly one foreground Tor executable. Native Go owns
+// every PT socket and listener; no Lyrebird or other PT child is spawned. The
+// sole Wait also joins exec's discarded-output readers before acknowledging.
+type routerVPNTorProcess struct {
+	files   *routerVPNTorFiles
+	binary  *routerVPNTorBinary
+	mu      sync.Mutex
+	used    bool
+	command *exec.Cmd
+	done    chan struct{}
+	control *mobiletor.DesktopControl
+	session *mobiletor.DesktopBridgeSession
+	port    string
+	cookie  *routerVPNTorInput
+	retired bool
+}
+
+func routerVPNNewTorProcess(files *routerVPNTorFiles, binary *routerVPNTorBinary) (*routerVPNTorProcess, error) {
+	if files == nil || binary == nil || files.inputs == nil || files.inputs.Capture().TorBinary != binary.path || files.current() != nil || binary.current() != nil {
+		return nil, routerVPNTorFailure
+	}
+	return &routerVPNTorProcess{files: files, binary: binary}, nil
+}
+
+func routerVPNTorChildEnvironment() []string {
+	var environment []string
+	for _, value := range os.Environ() {
+		key, _, _ := strings.Cut(value, "=")
+		upper := strings.ToUpper(key)
+		if strings.HasPrefix(upper, "HOMEVPN_") || strings.HasPrefix(upper, "TOR_PT_") {
+			continue
+		}
+		environment = append(environment, value)
+	}
+	return environment
+}
+
+func (p *routerVPNTorProcess) launch(ctx context.Context) error {
+	if p == nil || ctx == nil || ctx.Err() != nil || p.files.current() != nil || p.binary.current() != nil {
+		return routerVPNTorFailure
+	}
+	p.mu.Lock()
+	if p.used || p.retired {
+		p.mu.Unlock()
+		return routerVPNTorFailure
+	}
+	p.used = true
+	// The pinned Tor source accepts this parent PID and watches early parent
+	// death. TAKEOWNERSHIP and this real Cmd.Wait remain the authority: its
+	// upstream process monitor is periodic and cannot acknowledge our drain.
+	command := exec.Command(p.binary.path, "--defaults-torrc", filepath.Join(p.files.directory, "tor-defaults"), "-f", filepath.Join(p.files.directory, "torrc"), "--__OwningControllerProcess", strconv.Itoa(os.Getpid()))
+	command.Dir = p.files.directory
+	command.Env = routerVPNTorChildEnvironment()
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if ctx.Err() != nil || command.Start() != nil {
+		p.mu.Unlock()
+		return routerVPNTorFailure
+	}
+	p.command, p.done = command, make(chan struct{})
+	done := p.done
+	go func() { _ = command.Wait(); close(done) }()
+	p.mu.Unlock()
+	// Exec was given a path, so recheck both actual byte and file identity after
+	// launch and before any authenticated operation can enable networking.
+	if ctx.Err() != nil || p.binary.current() != nil || p.files.current() != nil || p.exited() {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+
+func (p *routerVPNTorProcess) exited() bool {
+	if p == nil {
+		return true
+	}
+	p.mu.Lock()
+	done := p.done
+	p.mu.Unlock()
+	if done == nil {
+		return true
+	}
+	select {
+	case <-done:
+		return true
+	default:
+		return false
+	}
+}
+
+func routerVPNTorControlAddress(raw []byte) (string, error) {
+	text := string(raw)
+	if strings.HasSuffix(text, "\r\n") {
+		text = strings.TrimSuffix(text, "\r\n")
+	} else if strings.HasSuffix(text, "\n") {
+		text = strings.TrimSuffix(text, "\n")
+	} else {
+		return "", routerVPNTorFailure
+	}
+	if !strings.HasPrefix(text, "PORT=") || strings.ContainsAny(text, "\x00\r\n") {
+		return "", routerVPNTorFailure
+	}
+	value := strings.TrimPrefix(text, "PORT=")
+	address, err := netip.ParseAddrPort(value)
+	if err != nil || address.Addr() != netip.MustParseAddr("127.0.0.1") || address.Port() < 1024 || address.String() != value {
+		return "", routerVPNTorFailure
+	}
+	return value, nil
+}
+
+func (p *routerVPNTorProcess) authenticate(parent context.Context) error {
+	if p == nil || parent == nil || parent.Err() != nil || p.exited() {
+		return routerVPNTorFailure
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var cookie []byte
+	var address string
+	var cookieInfo os.FileInfo
+	for {
+		if ctx.Err() != nil || p.files.current() != nil || p.exited() {
+			return routerVPNTorFailure
+		}
+		port, portErr := p.files.read("tor-control.port", 128)
+		secret, cookieErr := p.files.read("tor-control.cookie", 32)
+		if portErr == nil && cookieErr == nil {
+			var err error
+			address, err = routerVPNTorControlAddress(port)
+			if err != nil || len(secret) != 32 {
+				clear(secret)
+				return routerVPNTorFailure
+			}
+			cookieInfo, err = p.files.root.Lstat("tor-control.cookie")
+			again, readErr := p.files.read("tor-control.cookie", 32)
+			if err != nil || readErr != nil || !bytes.Equal(secret, again) {
+				clear(secret)
+				clear(again)
+				return routerVPNTorFailure
+			}
+			clear(again)
+			cookie = secret
+			break
+		}
+		clear(secret)
+		if portErr != nil && !errors.Is(portErr, os.ErrNotExist) || cookieErr != nil && !errors.Is(cookieErr, os.ErrNotExist) {
+			return routerVPNTorFailure
+		}
+		select {
+		case <-ctx.Done():
+			return routerVPNTorFailure
+		case <-ticker.C:
+		}
+	}
+	defer clear(cookie)
+	p.mu.Lock()
+	command := p.command
+	p.mu.Unlock()
+	if command == nil || command.Process == nil {
+		return routerVPNTorFailure
+	}
+	var dialer net.Dialer
+	connection, err := dialer.DialContext(ctx, "tcp4", address)
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	control, err := mobiletor.NewDesktopControl(ctx, connection, cookie, command.Process.Pid)
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	p.control = control
+	p.port = address
+	p.cookie = &routerVPNTorInput{info: cookieInfo, hash: sha256.Sum256(cookie)}
+	if p.exited() || ctx.Err() != nil || p.files.current() != nil {
+		return routerVPNTorFailure
+	}
+	p.session, err = mobiletor.NewDesktopBridgeSession(control, p.files.inputs.Policy())
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+
+// Start/authentication must be joined before this method. The exact Tor child
+// is quiesced and its authenticated controller retired first. If it ignores
+// that shutdown, only this retained child is terminated; PT/Box remain owned
+// until the actual Wait and every separate native drain have completed.
+func (p *routerVPNTorProcess) close(ctx context.Context) error {
+	if p == nil {
+		return nil
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return routerVPNTorFailure
+	}
+	p.mu.Lock()
+	command, done := p.command, p.done
+	first := !p.retired
+	p.retired = true
+	p.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	if first {
+		if p.session != nil {
+			_ = p.session.Quiesce(ctx)
+		}
+		if p.control != nil {
+			_ = p.control.Close()
+		}
+	}
+	if command == nil || command.Process == nil {
+		return routerVPNTorFailure
+	}
+	select {
+	case <-done:
+		return nil
+	default:
+	}
+	if p.control != nil {
+		timer := time.NewTimer(250 * time.Millisecond)
+		defer timer.Stop()
+		select {
+		case <-done:
+			return nil
+		case <-ctx.Done():
+			return routerVPNTorFailure
+		case <-timer.C:
+		}
+	}
+	if err := command.Process.Kill(); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return routerVPNTorFailure
+	}
+	select {
+	case <-done:
+		return nil
+	case <-ctx.Done():
+		return routerVPNTorFailure
+	}
+}
+
+// Tor's pinned write_bytes_to_file uses <name>.tmp atomic outputs (files.c,
+// commit4a522a3ca491c6c04d4a44cb006b92101c42efc1). Only these four fixed control
+// names are admitted after the real child joins; unrelated files are retained.
+func (p *routerVPNTorProcess) cleanup() error {
+	if p == nil || !p.exited() || p.files.current() != nil {
+		return routerVPNTorFailure
+	}
+	if err := p.files.cleanupData(); err != nil {
+		return err
+	}
+	for _, name := range []string{"tor-control.cookie", "tor-control.port", "tor-control.cookie.tmp", "tor-control.port.tmp"} {
+		info, err := p.files.root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		limit := int64(128)
+		if strings.HasPrefix(name, "tor-control.cookie") {
+			limit = 32
+		}
+		if err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 || info.Size() < 0 || info.Size() > limit || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+			return routerVPNTorFailure
+		}
+		file, err := p.files.root.Open(name)
+		if err != nil {
+			return routerVPNTorFailure
+		}
+		opened, statErr := file.Stat()
+		raw, readErr := io.ReadAll(io.LimitReader(file, limit+1))
+		closeErr := file.Close()
+		if statErr != nil || readErr != nil || closeErr != nil || !os.SameFile(opened, info) || int64(len(raw)) != info.Size() {
+			clear(raw)
+			return routerVPNTorFailure
+		}
+		if name == "tor-control.cookie" && p.cookie != nil && (!os.SameFile(info, p.cookie.info) || sha256.Sum256(raw) != p.cookie.hash) {
+			clear(raw)
+			return routerVPNTorFailure
+		}
+		if name == "tor-control.port" && len(raw) > 0 {
+			address, err := routerVPNTorControlAddress(raw)
+			if err != nil || p.port != "" && address != p.port {
+				clear(raw)
+				return routerVPNTorFailure
+			}
+		}
+		digest := sha256.Sum256(raw)
+		clear(raw)
+		current, err := p.files.root.Lstat(name)
+		if p.files.current() != nil || err != nil || !os.SameFile(current, info) || current.Size() != info.Size() || !current.ModTime().Equal(info.ModTime()) {
+			return routerVPNTorFailure
+		}
+		// A fixed control file may be zero-length after an interrupted native
+		// write; its exact observed bytes must still match immediately before
+		// removal. A same-name replacement never grants cleanup authority.
+		file, err = p.files.root.Open(name)
+		if err != nil {
+			return routerVPNTorFailure
+		}
+		again, readErr := io.ReadAll(io.LimitReader(file, limit+1))
+		actual, statErr := file.Stat()
+		closeErr = file.Close()
+		matches := readErr == nil && statErr == nil && closeErr == nil && os.SameFile(actual, info) && sha256.Sum256(again) == digest
+		clear(again)
+		if !matches || p.files.root.Remove(name) != nil {
+			return routerVPNTorFailure
+		}
+	}
+	return nil
+}

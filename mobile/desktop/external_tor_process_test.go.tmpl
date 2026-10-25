@@ -1,0 +1,381 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/hmac"
+	"crypto/sha256"
+	"encoding/hex"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func TestMain(m *testing.M) {
+	if os.Getenv("ROUTERVPN_NATIVE_TOR_FIXTURE") == "1" {
+		os.Exit(routerVPNTorFixtureChild())
+	}
+	os.Exit(m.Run())
+}
+
+// An actual foreground subprocess doubles only the Tor daemon/control peer.
+// Production launches this same process owner with the bundled Tor executable;
+// the fixture receives exactly its arguments and performs real SAFECOOKIE I/O.
+func routerVPNTorFixtureChild() int {
+	if len(os.Args) != 7 || os.Args[1] != "--defaults-torrc" || os.Args[3] != "-f" || os.Args[5] != "--__OwningControllerProcess" {
+		return 71
+	}
+	parent, err := strconv.Atoi(os.Args[6])
+	if err != nil || parent != os.Getppid() {
+		return 72
+	}
+	directory := filepath.Dir(os.Args[4])
+	if filepath.Base(os.Args[2]) != "tor-defaults" || filepath.Dir(os.Args[2]) != directory || filepath.Base(os.Args[4]) != "torrc" {
+		return 73
+	}
+	defaults, err := os.ReadFile(os.Args[2])
+	if err != nil || string(defaults) != "\n" {
+		return 74
+	}
+	torrc, err := os.ReadFile(os.Args[4])
+	if err != nil || !bytes.Contains(torrc, []byte("DisableNetwork 1\n")) || !bytes.Contains(torrc, []byte("Log notice stdout\n")) || bytes.Contains(torrc, []byte("ClientTransportPlugin")) || bytes.Contains(torrc, []byte("Log notice file")) {
+		return 75
+	}
+	for _, entry := range os.Environ() {
+		key, _, _ := strings.Cut(entry, "=")
+		key = strings.ToUpper(key)
+		if strings.HasPrefix(key, "HOMEVPN_") || strings.HasPrefix(key, "TOR_PT_") {
+			return 76
+		}
+	}
+	// Discarded output readers must join too. Private diagnostics are never
+	// inherited by the UI and are not saved to an unbounded log file.
+	_, _ = os.Stdout.Write(bytes.Repeat([]byte("private-tor-stdout\n"), 8192))
+	_, _ = os.Stderr.Write(bytes.Repeat([]byte("private-tor-stderr\n"), 8192))
+	mode := os.Getenv("ROUTERVPN_NATIVE_TOR_FIXTURE_MODE")
+	if mode == "early-exit" {
+		return 17
+	}
+	if mode == "no-control" {
+		for {
+			time.Sleep(time.Second)
+		}
+	}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return 77
+	}
+	defer listener.Close()
+	address := listener.Addr().String()
+	cookie := bytes.Repeat([]byte{0x91}, 32)
+	diskCookie := append([]byte(nil), cookie...)
+	if mode == "wrong-cookie" {
+		diskCookie[0] ^= 0xff
+	}
+	writeControl := func(name string, raw []byte) error {
+		if err := os.WriteFile(filepath.Join(directory, name+".tmp"), raw, 0600); err != nil {
+			return err
+		}
+		return os.Rename(filepath.Join(directory, name+".tmp"), filepath.Join(directory, name))
+	}
+	if err := writeControl("tor-control.cookie", diskCookie); err != nil {
+		return 78
+	}
+	lineEnd := "\n"
+	if runtime.GOOS == "windows" {
+		lineEnd = "\r\n"
+	}
+	if err := writeControl("tor-control.port", []byte("PORT="+address+lineEnd)); err != nil {
+		return 79
+	}
+	connection, err := listener.Accept()
+	if err != nil {
+		return 80
+	}
+	defer connection.Close()
+	reader := bufio.NewReader(connection)
+	var clientHash []byte
+	configuration := map[string]string{"DisableNetwork": "1", "__ReloadTorrcOnSIGHUP": "0", "SocksPort": "0", "UseBridges": "0"}
+	if mode == "enabled" {
+		configuration["DisableNetwork"] = "0"
+	}
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil {
+			break
+		}
+		command := strings.TrimSuffix(line, "\r\n")
+		reply := "250 OK\r\n"
+		switch {
+		case strings.HasPrefix(command, "AUTHCHALLENGE SAFECOOKIE "):
+			nonce, err := hex.DecodeString(strings.TrimPrefix(command, "AUTHCHALLENGE SAFECOOKIE "))
+			if err != nil || len(nonce) != 32 {
+				return 81
+			}
+			serverNonce := bytes.Repeat([]byte{0x47}, 32)
+			transcript := append(append(append([]byte(nil), cookie...), nonce...), serverNonce...)
+			server := hmac.New(sha256.New, []byte("Tor safe cookie authentication server-to-controller hash"))
+			_, _ = server.Write(transcript)
+			client := hmac.New(sha256.New, []byte("Tor safe cookie authentication controller-to-server hash"))
+			_, _ = client.Write(transcript)
+			clientHash = client.Sum(nil)
+			reply = "250 AUTHCHALLENGE SERVERHASH=" + hex.EncodeToString(server.Sum(nil)) + " SERVERNONCE=" + hex.EncodeToString(serverNonce) + "\r\n"
+		case strings.HasPrefix(command, "AUTHENTICATE "):
+			value, err := hex.DecodeString(strings.TrimPrefix(command, "AUTHENTICATE "))
+			if err != nil || !hmac.Equal(value, clientHash) {
+				return 82
+			}
+		case strings.HasPrefix(command, "GETINFO "):
+			var lines []string
+			for _, key := range strings.Fields(strings.TrimPrefix(command, "GETINFO ")) {
+				value := ""
+				switch key {
+				case "process/pid":
+					pid := os.Getpid()
+					if mode == "wrong-pid" {
+						pid++
+					}
+					value = strconv.Itoa(pid)
+				case "net/listeners/control":
+					value = strconv.Quote(address)
+					if mode == "wrong-listener" {
+						value += " " + strconv.Quote("127.0.0.1:19222")
+					}
+				}
+				lines = append(lines, "250-"+key+"="+value)
+			}
+			reply = strings.Join(lines, "\r\n") + "\r\n250 OK\r\n"
+		case strings.HasPrefix(command, "GETCONF "):
+			var lines []string
+			for _, key := range strings.Fields(strings.TrimPrefix(command, "GETCONF ")) {
+				lines = append(lines, "250-"+key+"="+configuration[key])
+			}
+			reply = strings.Join(lines, "\r\n") + "\r\n250 OK\r\n"
+		case strings.HasPrefix(command, "SETCONF "):
+			configuration = map[string]string{"DisableNetwork": "1", "__ReloadTorrcOnSIGHUP": "0", "SocksPort": "0", "UseBridges": "0"}
+		case command == "SIGNAL CLEARDNSCACHE" || command == "TAKEOWNERSHIP":
+		default:
+			return 83
+		}
+		if _, err := io.WriteString(connection, reply); err != nil {
+			break
+		}
+	}
+	if mode == "hold" {
+		if err := os.WriteFile(filepath.Join(directory, "tor-data", "control-closed"), []byte("retired"), 0600); err != nil {
+			return 84
+		}
+		for {
+			if _, err := os.Stat(filepath.Join(directory, "tor-data", "allow-exit")); err == nil {
+				break
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}
+	return 0
+}
+
+func routerVPNNewTorProcessFixture(t *testing.T, mode string) (*routerVPNTorFileFixture, *routerVPNTorProcess) {
+	t.Helper()
+	t.Setenv("ROUTERVPN_NATIVE_TOR_FIXTURE", "1")
+	t.Setenv("ROUTERVPN_NATIVE_TOR_FIXTURE_MODE", mode)
+	t.Setenv("HOMEVPN_PRIVATE_NODE_SECRET", "must-not-reach-tor-child")
+	t.Setenv("TOR_PT_CLIENT_TRANSPORTS", "must-not-reach-tor-child")
+	f := routerVPNNewTorFileFixture(t)
+	binary, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	binary, err = filepath.EvalSymlinks(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	inputs, err := mobiletor.NewDesktopBridgeCapture(f.inputs.Policy().Profile(), routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binary, f.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.binary, f.inputs = binary, inputs
+	if err := os.WriteFile(filepath.Join(f.directory, "tor-capture.json"), []byte(inputs.JSON()), 0600); err != nil {
+		t.Fatal(err)
+	}
+	f.environment["HOMEVPN_TOR_CAPTURE_SHA256"] = inputs.Digests().CaptureSHA256
+	_, digest, err := routerVPNHashTorBinary(binary)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.environment["HOMEVPN_TOR_BINARY_SHA256"] = digest
+	files := f.open(t)
+	captured, err := routerVPNCaptureTorBinary(binary, digest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := routerVPNNewTorProcess(files, captured)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := p.close(ctx); err != nil {
+			t.Error("actual fixture child did not join", err)
+		}
+		if !p.exited() {
+			// Defect controls deliberately break production waiting. Fail the
+			// fixture, then still terminate and join its exact subprocess.
+			t.Error("production close left its actual child running")
+			_ = p.command.Process.Kill()
+			select {
+			case <-p.done:
+			case <-time.After(3 * time.Second):
+				t.Error("fixture emergency child cleanup did not join")
+			}
+		}
+	})
+	return f, p
+}
+
+func TestRouterVPNDesktopTorProcessOwnsAuthenticatedActualChildAndPrivateCleanup(t *testing.T) {
+	f, p := routerVPNNewTorProcessFixture(t, "")
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := p.launch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.authenticate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if p.exited() || p.control == nil || p.session == nil || p.control.PID() != p.command.Process.Pid {
+		t.Fatal("native control did not capture its actual child")
+	}
+	if err := p.launch(ctx); err == nil {
+		t.Fatal("standalone process owner launched twice")
+	}
+	if err := p.cleanup(); err == nil {
+		t.Fatal("live Tor child granted cleanup authority")
+	}
+	if err := os.WriteFile(filepath.Join(f.directory, "tor-data", "state"), []byte("private circuit state"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.directory, "tor-control.cookie.tmp"), []byte{1, 2}, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(f.directory, "tor-control.port.tmp"), []byte("PORT="), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if !p.exited() {
+		t.Fatal("control closure was confused with actual process exit")
+	}
+	if err := p.cleanup(); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := os.ReadDir(filepath.Join(f.directory, "tor-data"))
+	if err != nil || len(entries) != 0 {
+		t.Fatal("native Tor data remained after cleanup", entries, err)
+	}
+	for _, name := range []string{"tor-control.cookie", "tor-control.port", "tor-control.cookie.tmp", "tor-control.port.tmp", "tor.log"} {
+		if _, err := os.Lstat(filepath.Join(f.directory, name)); !os.IsNotExist(err) {
+			t.Fatal("unowned or undrained generated file", name, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.directory, "torrc")); err != nil {
+		t.Fatal("child cleanup removed controller input", err)
+	}
+}
+
+func TestRouterVPNDesktopTorProcessRejectsWrongAuthenticatedOwnerAndDisabledStartup(t *testing.T) {
+	for _, mode := range []string{"wrong-cookie", "wrong-pid", "wrong-listener", "enabled", "early-exit", "no-control"} {
+		t.Run(mode, func(t *testing.T) {
+			_, p := routerVPNNewTorProcessFixture(t, mode)
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			launchErr := p.launch(ctx)
+			if mode != "early-exit" && launchErr != nil {
+				t.Fatal(launchErr)
+			}
+			if mode == "no-control" {
+				cancel()
+				ctx, cancel = context.WithTimeout(context.Background(), 30*time.Millisecond)
+			}
+			if launchErr == nil && p.authenticate(ctx) == nil {
+				t.Fatal("unproved or enabled standalone child was accepted", mode)
+			}
+			cancel()
+			closeCtx, closeCancel := context.WithTimeout(context.Background(), 3*time.Second)
+			defer closeCancel()
+			if err := p.close(closeCtx); err != nil || !p.exited() {
+				t.Fatal("failed child was not actually joined", err)
+			}
+			if p.session != nil {
+				t.Fatal("failed authentication gained session authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorProcessCloseWaitsForActualExitAndPreservesCookieReplacement(t *testing.T) {
+	f, p := routerVPNNewTorProcessFixture(t, "hold")
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	if err := p.launch(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.authenticate(ctx); err != nil {
+		t.Fatal(err)
+	}
+	short, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := p.close(short)
+	stop()
+	if err == nil || p.exited() {
+		t.Fatal("native process close inferred exit from retired control", err)
+	}
+	if err := p.cleanup(); err == nil {
+		t.Fatal("pending process join released private files")
+	}
+	if err := os.WriteFile(filepath.Join(f.directory, "tor-data", "allow-exit"), []byte("release"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.close(ctx); err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(f.directory, "tor-control.cookie")
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Rename(path, path+".old"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := p.cleanup(); err == nil {
+		t.Fatal("native cleanup deleted another cookie file with identical bytes")
+	}
+	if _, err := os.Stat(path); err != nil {
+		t.Fatal("replacement cookie was removed", err)
+	}
+}
+
+func TestRouterVPNDesktopTorControlFileRequiresOneCanonicalLoopbackListener(t *testing.T) {
+	for _, raw := range []string{"PORT=127.0.0.1:19421\n", "PORT=127.0.0.1:19421\r\n"} {
+		if value, err := routerVPNTorControlAddress([]byte(raw)); err != nil || value != "127.0.0.1:19421" {
+			t.Fatal(value, err)
+		}
+	}
+	for _, raw := range []string{"PORT=0.0.0.0:19421\n", "PORT=[::1]:19421\n", "PORT=127.0.0.1:22\n", "PORT=127.0.0.1:019421\n", "PORT=127.0.0.1:19421", "PORT=127.0.0.1:19421\nPORT=127.0.0.1:19422\n", "UNIX_PORT=/tmp/foreign\n"} {
+		if _, err := routerVPNTorControlAddress([]byte(raw)); err == nil {
+			t.Fatal("unowned listener admitted", raw)
+		}
+	}
+}
