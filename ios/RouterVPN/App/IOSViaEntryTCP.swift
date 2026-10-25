@@ -41,6 +41,14 @@ final class IOSViaEntryNetwork: @unchecked Sendable {
     }
 }
 
+/// Copy only the probe's immutable input across the main-actor boundary.
+/// The private profile and its source/selection ownership remain on MainActor.
+struct IOSViaEntryTCPTarget: Sendable {
+    let id: String
+    let name: String
+    let endpoint: String
+}
+
 enum IOSViaEntryTCP {
     static func endpointHost(_ endpoint: String) -> String {
         let text = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -68,17 +76,17 @@ enum IOSViaEntryTCP {
         return false
     }
 
-    static func measure(_ profile: RouterProfile, excluding excluded: Set<String>, allowIPv6: Bool = true) async throws -> IOSViaEntryValue {
-        let name = profile.name.isEmpty ? profile.id : profile.name
-        let host = endpointHost(profile.endpoint)
+    static func measure(_ target: IOSViaEntryTCPTarget, excluding excluded: Set<String>, allowIPv6: Bool = true) async throws -> IOSViaEntryValue {
+        let name = target.name.isEmpty ? target.id : target.name
+        let host = endpointHost(target.endpoint)
         func unavailable(_ reason: String) -> IOSViaEntryValue {
-            IOSViaEntryValue(id: profile.id, name: name, medianMS: nil, samples: 0, failed: 5, reason: reason)
+            IOSViaEntryValue(id: target.id, name: name, medianMS: nil, samples: 0, failed: 5, reason: reason)
         }
         guard publicHost(host), !excluded.contains(host), allowIPv6 || IPv6Address(host) == nil else {
             return unavailable("This candidate has no distinct public literal endpoint that can be proved through the entry.")
         }
         var ports: [UInt16] = []
-        if let parts = URLComponents(string: profile.endpoint.contains("://") ? profile.endpoint : "tcp://" + profile.endpoint),
+        if let parts = URLComponents(string: target.endpoint.contains("://") ? target.endpoint : "tcp://" + target.endpoint),
            let port = parts.port, (1...65535).contains(port) { ports.append(UInt16(port)) }
         ports += [443, 8388, 10443, 11443, 12443, 13443, 14443, 15443]
         var tried = Set<UInt16>(), selected: UInt16?
@@ -102,7 +110,7 @@ enum IOSViaEntryTCP {
         if values.isEmpty { median = nil }
         else if values.count % 2 == 0 { median = (values[values.count / 2 - 1] + values[values.count / 2]) / 2 }
         else { median = values[values.count / 2] }
-        return IOSViaEntryValue(id: profile.id, name: name, medianMS: median, samples: values.count, failed: failed,
+        return IOSViaEntryValue(id: target.id, name: name, medianMS: median, samples: values.count, failed: failed,
             reason: failed == 0 ? "Five TCP connect response samples through the captured entry." : "At least one response failed; excluded from automatic selection.")
     }
 

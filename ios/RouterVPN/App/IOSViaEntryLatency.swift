@@ -242,7 +242,8 @@ final class IOSViaEntryLatency: ObservableObject {
                         guard IOSViaEntryNetwork.shared.current == network,
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }
                         self.progress = "\(capture.entryName) → \(candidate.name.isEmpty ? candidate.id : candidate.name) • \(values.count + 1)/\(capture.candidates.count)"
-                        let value = try await IOSViaEntryTCP.measure(candidate, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6)
+                        let target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint)
+                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6)
                         try Task.checkCancellation()
                         guard IOSViaEntryNetwork.shared.current == network,
                               ProcessInfo.processInfo.systemUptime < deadline else { throw CancellationError() }

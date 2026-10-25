@@ -6,6 +6,7 @@ boundaries doubled. This is not a claim of physical-device routed traffic.
 """
 from pathlib import Path
 import importlib.util
+import json
 import shutil
 import subprocess
 import tempfile
@@ -226,13 +227,22 @@ import Network
   }
   for endpoint in ["203.0.113.10","127.0.0.1","10.0.0.1","169.254.1.1","100.64.0.1","fd12::1","::1","router.example","tor"] {
    var p=try bundle("blocked",endpoint).routerProfiles[0];p.endpoint=endpoint;NWTest.shared.reset()
-   let result=try await IOSViaEntryTCP.measure(p,excluding:["203.0.113.10"])
+   let result=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint),excluding:["203.0.113.10"])
    check("LAN/bootstrap/entry bypass cannot become routed evidence: "+endpoint,result.medianMS==nil && !result.eligible && NWTest.shared.events.isEmpty)
   }
   do {
    let p=try bundle("ipv6","2001:db8::2").routerProfiles[0];NWTest.shared.reset()
-   let value=try await IOSViaEntryTCP.measure(p,excluding:[],allowIPv6:false)
+   let value=try await IOSViaEntryTCP.measure(IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint),excluding:[],allowIPv6:false)
    check("IPv6-Off cannot probe a candidate over an excluded physical route",value.medianMS==nil && NWTest.shared.events.isEmpty)
+  }
+  do {
+   var p=try bundle("captured","203.0.113.21:8388").routerProfiles[0];p.name="Captured candidate"
+   let target=IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint)
+   p.id="replacement";p.name="Replacement candidate";p.endpoint="203.0.113.22:443"
+   NWTest.shared.reset();let value=try await IOSViaEntryTCP.measure(target,excluding:[])
+   check("asynchronous probe retains captured scalar identity",value.id=="captured" && value.name=="Captured candidate" && value.eligible)
+   check("asynchronous probe retains captured endpoint and port",NWTest.shared.events.contains("start:203.0.113.21:8388") && !NWTest.shared.events.contains(where:{$0.hasPrefix("start:203.0.113.22:")}))
+   check("probe cannot mutate the replacement private profile",p.id=="replacement" && p.name=="Replacement candidate" && p.endpoint=="203.0.113.22:443")
   }
   do {
    NWTest.shared.reset();let captured=try await IOSViaEntryNetwork.shared.snapshot()
@@ -267,14 +277,16 @@ def main():
     boundaries = P.FIXTURE.split('@MainActor @main struct Tests', 1)[0]
     assert boundaries.count('func refreshTunnelStatus()async{}') == 1
     boundaries = boundaries.replace('func refreshTunnelStatus()async{}', 'func refreshTunnelStatus()async{CandidateFault.refreshHook?(self)}')
-    sources = [APP / name for name in ('Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift',
-               'IOSSpeedLabRunner.swift', 'IOSViaEntryLatency.swift', 'IOSViaEntryTCP.swift')]
-    code = '\n'.join(p.read_text().replace('import Combine\n', '') for p in sources)
+    source_names = ('Models.swift', 'IOSSessionIdentity.swift', 'IOSSpeedLabOwnership.swift', 'IOSMultihopStartLayer.swift',
+                    'IOSSpeedLabRunner.swift', 'IOSViaEntryLatency.swift', 'IOSViaEntryTCP.swift')
+    # Preserve the shipping source-file boundaries. Concatenating Models with
+    # the caller masks Swift's non-Sendable cross-file actor diagnostics.
+    code = {name: (APP / name).read_text().replace('import Combine\n', '') for name in source_names}
     view = (APP / 'IOSMultihopView.swift').read_text()
     manual = view.split('    private func chooseExit(id: String) {', 1)[1].rsplit('\n}', 1)[0]
     manual = '    func chooseExit(id: String) {' + manual
     assert 'selection: Binding(get: { exitID }, set: { chooseExit(id: $0) })' in view
-    code += '\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
+    code['Fixture.swift'] = 'import Foundation\n' + types + '\n' + boundaries + '\n' + FIXTURE.replace('// SHIPPING_MANUAL_EXIT_CHOICE', manual)
     with tempfile.TemporaryDirectory(prefix='ios-via-entry-') as temporary:
         folder = Path(temporary); network = folder / 'Network.swift'; network.write_text(NETWORK)
         import platform
@@ -282,12 +294,16 @@ def main():
         args = [swift, '-swift-version', '6', '-module-cache-path', str(folder / 'modules')]
         subprocess.run(args + ['-emit-module', '-emit-library', '-module-name', 'Network', str(network),
             '-emit-module-path', str(folder / 'Network.swiftmodule'), '-o', str(folder / ('libNetwork' + suffix))], check=True, timeout=120)
-        source = folder / 'test.swift'
         binary = folder / 'tests'
+        def write_sources(contents):
+            paths = []
+            for name, source in contents.items():
+                path = folder / name; path.write_text(source); paths.append(str(path))
+            return paths
         def execute(contents, mutation=None):
-            source.write_text(contents)
+            paths = write_sources(contents)
             subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
-                '-Xlinker', '-rpath', '-Xlinker', str(folder), str(source), '-o', str(binary)], check=True, timeout=150)
+                '-Xlinker', '-rpath', '-Xlinker', str(folder)] + paths + ['-o', str(binary)], check=True, timeout=150)
             result = subprocess.run([str(binary)], text=True, capture_output=True, timeout=120)
             if mutation:
                 assert result.returncode != 0 and 'FAIL:' in result.stderr, f'Negative control escaped: {mutation}\n{result.stdout}\n{result.stderr}'
@@ -308,18 +324,69 @@ def main():
                 '_ = physical'),
         }
         for name, (before, after) in mutations.items():
-            assert code.count(before) == 1, f'Mutation anchor changed: {name}'
-            execute(code.replace(before, after), name)
+            assert sum(source.count(before) for source in code.values()) == 1, f'Mutation anchor changed: {name}'
+            execute({path: source.replace(before, after) for path, source in code.items()}, name)
+        unsafe = dict(code)
+        before = '_ target: IOSViaEntryTCPTarget, excluding excluded:'
+        assert unsafe['IOSViaEntryTCP.swift'].count(before) == 1
+        unsafe['IOSViaEntryTCP.swift'] = unsafe['IOSViaEntryTCP.swift'].replace(before, '_ target: RouterProfile, excluding excluded:')
+        before = 'IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts'
+        assert unsafe['IOSViaEntryLatency.swift'].count(before) == 1
+        unsafe['IOSViaEntryLatency.swift'] = unsafe['IOSViaEntryLatency.swift'].replace(before, 'IOSViaEntryTCP.measure(candidate, excluding: capture.excludedHosts')
+        unsafe['Fixture.swift'] = unsafe['Fixture.swift'].replace('IOSViaEntryTCPTarget(id:p.id,name:p.name,endpoint:p.endpoint)', 'p')
+        # Region-isolation diagnostics are emitted during SIL/code generation;
+        # a typecheck-only invocation can accept the historical broken call.
+        rejected = subprocess.run(args + ['-parse-as-library', '-I', str(folder), '-L', str(folder), '-lNetwork',
+            '-Xlinker', '-rpath', '-Xlinker', str(folder)] + write_sources(unsafe) + ['-o', str(binary)],
+            text=True, capture_output=True, timeout=150)
+        assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr and 'IOSViaEntryLatency.swift' in rejected.stderr, (
+            'Historical full-profile actor crossing was not rejected at the shipping call site:\n' + rejected.stdout + rejected.stderr)
+        print('Apple candidate negative control rejected: full private profile crosses MainActor')
         if platform.system() == 'Darwin':
             # The executable fixture doubles OS behavior. Independently typecheck
-            # the production network owner against Apple's actual SDK/API.
-            actual = folder / 'actual-network.swift'
+            # the real helper and its actor crossing against the iOS SDK, with
+            # the same deployment target as the shipping application.
+            actual = folder / 'ActualValue.swift'
             value = (APP / 'IOSViaEntryLatency.swift').read_text().split('@MainActor', 1)[0].replace('import Combine\n', '')
-            actual.write_text(value + '\n' + (APP / 'IOSViaEntryTCP.swift').read_text())
-            sdk = subprocess.check_output(['xcrun', '--sdk', 'macosx', '--show-sdk-path'], text=True).strip()
-            subprocess.run([swift, '-swift-version', '6', '-typecheck', '-sdk', sdk,
-                str(APP / 'Models.swift'), str(actual)], check=True, timeout=120)
-            print('Apple candidate network owner: real SDK typecheck PASS')
+            actual.write_text(value)
+            actor = folder / 'ActualActorBoundary.swift'
+            capture = ('let target = IOSViaEntryTCPTarget(id: candidate.id, name: candidate.name, endpoint: candidate.endpoint)\n'
+                       '                        let value = try await IOSViaEntryTCP.measure(target, excluding: capture.excludedHosts, allowIPv6: capture.allowsIPv6)')
+            assert code['IOSViaEntryLatency.swift'].count(capture) == 1
+            crossing = capture.replace('capture.excludedHosts', 'excludedHosts').replace('capture.allowsIPv6', 'allowsIPv6')
+            actor_code = '''import Foundation
+@MainActor final class ActualViaEntryActorBoundary {
+    let candidates: [RouterProfile]
+    let excludedHosts: Set<String>
+    let allowsIPv6: Bool
+    init(candidates: [RouterProfile], excludedHosts: Set<String>, allowsIPv6: Bool) {
+        self.candidates = candidates; self.excludedHosts = excludedHosts; self.allowsIPv6 = allowsIPv6
+    }
+    func measure() async throws -> [IOSViaEntryValue] {
+        var values: [IOSViaEntryValue] = []
+        for candidate in candidates {
+            // SHIPPING_SCALAR_CAPTURE
+            values.append(value)
+        }
+        return values
+    }
+}
+'''.replace('// SHIPPING_SCALAR_CAPTURE', crossing)
+            actor.write_text(actor_code)
+            helper = folder / 'ActualTCP.swift'; helper.write_text(code['IOSViaEntryTCP.swift'])
+            sdk = subprocess.check_output(['xcrun', '--sdk', 'iphoneos', '--show-sdk-path'], text=True).strip()
+            sdk_sources = [APP / 'Models.swift', actual, helper, actor]
+            output_map = folder / 'sdk-output-map.json'
+            output_map.write_text(json.dumps({str(path): {'object': str(folder / (path.stem + '.o'))} for path in sdk_sources}))
+            sdk_args = [swift, '-swift-version', '6', '-parse-as-library', '-c', '-sdk', sdk, '-target', 'arm64-apple-ios17.0',
+                        '-module-cache-path', str(folder / 'sdk-modules'), '-output-file-map', str(output_map)] + [str(path) for path in sdk_sources]
+            subprocess.run(sdk_args, check=True, timeout=120)
+            helper.write_text(unsafe['IOSViaEntryTCP.swift'])
+            actor.write_text(actor_code.replace('IOSViaEntryTCP.measure(target,', 'IOSViaEntryTCP.measure(candidate,'))
+            rejected = subprocess.run(sdk_args, text=True, capture_output=True, timeout=120)
+            assert rejected.returncode != 0 and "sending 'candidate' risks causing data races" in rejected.stderr, (
+                'Real iOS SDK failed to reject the full-profile actor crossing:\n' + rejected.stdout + rejected.stderr)
+            print('Apple candidate network owner: real iOS SDK actor crossing PASS; full-profile negative rejected')
 
 
 if __name__ == '__main__': main()
