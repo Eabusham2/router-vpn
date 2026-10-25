@@ -22,6 +22,40 @@ typedef struct {
 // function declaration on either amd64 or arm64 GTK builds.
 static gboolean linux_unified_refresh_v8(gpointer data);
 
+static char *linux_protection_payload_v21(JsonObject *captured, const char *displayed, gboolean enabled) {
+    const char *id = obj_string(captured, "profile_id"), *token = obj_string(captured, "profile_token");
+    if (displayed == NULL || displayed[0] == '\0' || strcmp(id, displayed) != 0 || token[0] == '\0') return NULL;
+    JsonBuilder *builder = json_builder_new(); json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "profile_id"); json_builder_add_string_value(builder, displayed);
+    json_builder_set_member_name(builder, "profile_token"); json_builder_add_string_value(builder, token);
+    json_builder_set_member_name(builder, "kill_switch_policy"); json_builder_add_string_value(builder, enabled ? "on-connect" : "off");
+    json_builder_end_object(builder);
+    JsonNode *root = json_builder_get_root(builder); JsonGenerator *generator = json_generator_new();
+    json_generator_set_root(generator, root); char *body = json_generator_to_data(generator, NULL);
+    json_node_free(root); g_object_unref(generator); g_object_unref(builder); return body;
+}
+
+static void linux_unified_refresh_protection_v21(LinuxUnifiedV8 *state) {
+    Buffer out = {0}; char *err = NULL; gboolean valid = FALSE, enabled = FALSE;
+    if (api_request("/api/profile/protection", "GET", NULL, 3500, &out, &err)) {
+        JsonNode *root = parse_json(out.data);
+        if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
+            JsonObject *captured = json_node_get_object(root);
+            const char *displayed = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node));
+            const char *policy = obj_string(captured, "kill_switch_policy");
+            char *validation = linux_protection_payload_v21(captured, displayed, FALSE);
+            valid = validation != NULL && (strcmp(policy,"off") == 0 || strcmp(policy,"on-connect") == 0 || strcmp(policy,"always") == 0);
+            enabled = strcmp(policy,"off") != 0; g_free(validation);
+        }
+        if (root != NULL) json_node_free(root);
+    }
+    g_free(err); free(out.data);
+    gtk_toggle_button_set_inconsistent(GTK_TOGGLE_BUTTON(state->kill_switch), !valid);
+    gtk_widget_set_sensitive(state->kill_switch, valid && !routervpn_mutation_busy(state->app));
+    if (valid) gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch), enabled);
+}
+
+
 static const char *const linux_unified_mode_ids_v8[] = {
     "smart-auto","auto","base-raw","base-pq","awg-strong","shadowsocks","reality-vision","hysteria2",
     "reality-pq-vision","ss-v2ray","naive-h2","naive-h3","split","reality-xhttp","max","max-quic","max-tls","all",NULL
@@ -206,7 +240,20 @@ static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
     else{JsonBuilder *builder=json_builder_new();json_builder_begin_object(builder);json_builder_set_member_name(builder,"mode");json_builder_add_string_value(builder,mode);json_builder_set_member_name(builder,"base");json_builder_add_string_value(builder,"auto");json_builder_end_object(builder);JsonNode *payload=json_builder_get_root(builder);JsonGenerator *gen=json_generator_new();json_generator_set_root(gen,payload);char *body=json_generator_to_data(gen,NULL);post_and_log(state->app,"/api/connect-logical",body,180000,"Logical mode");g_free(body);json_node_free(payload);g_object_unref(gen);g_object_unref(builder);}
 }
 static void linux_unified_kill_changed_v8(GtkToggleButton *toggle, gpointer data) {
-    LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;const char *policy=gtk_toggle_button_get_active(toggle)?"on-connect":"off";char *body=g_strdup_printf("{\"kill_switch_policy\":\"%s\"}",policy);post_and_log(state->app,"/api/profile/settings",body,12000,"Kill switch");g_free(body);
+    LinuxUnifiedV8 *state = data;
+    if (state == NULL || state->syncing) return;
+    if (!routervpn_require_mutation_idle(state->app,"changing persistent kill-switch policy")) { linux_unified_refresh_v8(state); return; }
+    char *displayed = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)));
+    gboolean enabled = gtk_toggle_button_get_active(toggle);
+    Buffer out = {0}; char *err = NULL;
+    if (displayed != NULL && api_request("/api/profile/protection", "GET", NULL, 5000, &out, &err)) {
+        JsonNode *root = parse_json(out.data);
+        char *body = root != NULL && JSON_NODE_HOLDS_OBJECT(root) ? linux_protection_payload_v21(json_node_get_object(root), displayed, enabled) : NULL;
+        if (body != NULL) post_and_log(state->app,"/api/profile/protection",body,8000,"Kill switch");
+        else append_diag(state->app,"The selected node changed. Refresh before changing protection.");
+        g_free(body); if (root != NULL) json_node_free(root);
+    } else append_diag(state->app,err != NULL ? err : "Select a node before changing protection.");
+    g_free(displayed); g_free(err); free(out.data); linux_unified_refresh_v8(state);
 }
 static void linux_unified_dns_changed_v8(GtkComboBox *combo, gpointer data) {
     LinuxUnifiedV8 *state=data;if(state==NULL||state->syncing)return;const char *mode=gtk_combo_box_get_active_id(combo);if(mode==NULL)return;if(strcmp(mode,"custom")==0||strcmp(mode,"dot")==0||strcmp(mode,"doh")==0||strcmp(mode,"doh3")==0){linux_unified_show_detail_v8(state,3);return;}char *body=g_strdup_printf("{\"mode\":\"%s\"}",mode);post_and_log(state->app,"/api/dns/policy",body,12000,"DNS policy");g_free(body);
@@ -217,8 +264,9 @@ static void linux_unified_node_changed_v8(GtkComboBox *combo, gpointer data) {
 static gboolean linux_unified_refresh_v8(gpointer data) {
     LinuxUnifiedV8 *state=data;if(state==NULL)return G_SOURCE_REMOVE;state->syncing=TRUE;
     Buffer out={0};char *err=NULL;if(api_request("/api/status","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");gboolean transition=g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;gtk_button_set_label(GTK_BUTTON(state->connect),(connected||transition)?"Disconnect":"Connect");char *text=g_strdup_printf("%s • logical %s • runtime %s • base %s",phase[0]?phase:"disconnected",obj_string(obj,"logical_mode"),obj_string(obj,"runtime_mode"),obj_string(obj,"base"));gtk_label_set_text(GTK_LABEL(state->status),text);g_free(text);json_node_free(root);}}g_free(err);free(out.data);
-    out=(Buffer){0};err=NULL;if(api_request("/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);const char *kill=obj_string(obj,"kill_switch_policy");gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->kill_switch),kill[0]&&strcmp(kill,"off")!=0);gboolean encrypted=json_object_has_member(obj,"auto_require_encrypted")&&json_object_get_boolean_member(obj,"auto_require_encrypted");gboolean obfuscated=json_object_has_member(obj,"auto_require_obfuscation")&&json_object_get_boolean_member(obj,"auto_require_obfuscation");const char *requirements=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";char *summary=g_strdup_printf("AUTO requirements: %s • Off by default • SMART never simplifies below enabled requirements",requirements);if(state->settings_summary!=NULL)gtk_label_set_text(GTK_LABEL(state->settings_summary),summary);g_free(summary);json_node_free(root);}}g_free(err);free(out.data);
+    out=(Buffer){0};err=NULL;if(api_request("/api/profile/settings","GET",NULL,3500,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean encrypted=json_object_has_member(obj,"auto_require_encrypted")&&json_object_get_boolean_member(obj,"auto_require_encrypted");gboolean obfuscated=json_object_has_member(obj,"auto_require_obfuscation")&&json_object_get_boolean_member(obj,"auto_require_obfuscation");const char *requirements=encrypted&&obfuscated?"Encrypted + Obfuscation":encrypted?"Encrypted":obfuscated?"Obfuscation":"Off";char *summary=g_strdup_printf("AUTO requirements: %s • Off by default • SMART never simplifies below enabled requirements",requirements);if(state->settings_summary!=NULL)gtk_label_set_text(GTK_LABEL(state->settings_summary),summary);g_free(summary);json_node_free(root);}}g_free(err);free(out.data);
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(state->node));for(guint i=0;i<state->app->router_ids->len;i++){const char *id=g_ptr_array_index(state->app->router_ids,i);gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state->node),id,id);}const char *active=active_router_id(state->app);if(active!=NULL)gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->node),active);
+    linux_unified_refresh_protection_v21(state);
     state->syncing=FALSE;refresh_home_summary_v6(state->app);if(state->app->map!=NULL)gtk_widget_queue_draw(state->app->map);return G_SOURCE_CONTINUE;
 }
 

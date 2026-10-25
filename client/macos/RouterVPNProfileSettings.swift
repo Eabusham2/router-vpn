@@ -75,6 +75,27 @@ private struct MacProfileStartupSettings: Decodable, Sendable {
     }
 }
 
+struct MacProfileProtectionSettings: Decodable, Sendable {
+    let profileID: String
+    let profileToken: String
+    let killSwitchPolicy: String
+
+    enum CodingKeys: String, CodingKey {
+        case profileID = "profile_id", profileToken = "profile_token"
+        case killSwitchPolicy = "kill_switch_policy"
+    }
+
+    func saveData(displayedProfileID: String, enabled: Bool) throws -> Data {
+        guard !displayedProfileID.isEmpty, profileID == displayedProfileID, !profileToken.isEmpty else {
+            throw NSError(domain: "RouterVPN.Settings", code: 4, userInfo: [NSLocalizedDescriptionKey: "The selected node changed. Refresh before changing protection."])
+        }
+        return try JSONSerialization.data(withJSONObject: [
+            "profile_id": profileID, "profile_token": profileToken,
+            "kill_switch_policy": enabled ? "on-connect" : "off"
+        ])
+    }
+}
+
 private struct MacConnectionPresetMirror: Codable {
     var name: String
     var layers: [String]

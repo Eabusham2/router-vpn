@@ -20,6 +20,15 @@ function global:Save-RouterVPNProfileStartup {
     Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/startup') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
 }
 
+function global:Set-RouterVPNProfileProtection {
+    param([string]$BaseUrl,[string]$DisplayedProfileID,[bool]$Enabled)
+    if([string]::IsNullOrWhiteSpace($DisplayedProfileID)){throw 'Select a node before changing protection.'}
+    $captured=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Get -TimeoutSec 5
+    if([string]$captured.profile_id -cne $DisplayedProfileID -or [string]::IsNullOrWhiteSpace([string]$captured.profile_token)){throw 'The selected node changed. Refresh before changing protection.'}
+    $body=@{profile_id=$DisplayedProfileID;profile_token=[string]$captured.profile_token;kill_switch_policy=$(if($Enabled){'on-connect'}else{'off'})}
+    Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/protection') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
+}
+
 function global:Get-RouterVPNStartLayerCapabilities {
     param([string]$BaseUrl)
     Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/start-layer/capabilities') -Method Get -TimeoutSec 5

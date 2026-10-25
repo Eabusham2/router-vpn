@@ -769,7 +769,7 @@ $Window.Add_Closed({
     try{if($null-ne$script:UnifiedAsyncCts){$script:UnifiedAsyncCts.Dispose()}}catch{}
 })
 (Control 'UnifiedModeCombo').Add_SelectionChanged({if($ModeCombo.SelectedValue){$ID=[string]$ModeCombo.SelectedValue;if($ID -eq 'custom:new'){ShowUnifiedCustomBuilder}else{SaveUnifiedModeID $ID}}})
-(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;[void](Api '/api/profile/settings' 'POST' @{kill_switch_policy=if($On){'on-connect'}else{'off'}} 12);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedKillSwitch').Add_Click({try{$On=[bool](Control 'UnifiedKillSwitch').IsChecked;$DisplayedProfileID=[string]$RouterCombo.SelectedValue;[void](Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On);Log (if($On){'Kill switch enabled'}else{'Kill switch disabled'})}catch{Log ('Kill switch update failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedDnsCombo').Add_SelectionChanged({if(-not $script:Busy){$Tag=ComboTag (Control 'UnifiedDnsCombo') 'home';if($Tag -in @('custom','dot','doh','doh3')){OpenUnifiedDetail 3}else{try{[void](Api '/api/dns/policy' 'POST' @{mode=$Tag} 10);Log ('DNS selected: '+$Tag)}catch{Log ('DNS update failed: '+$_.Exception.Message)};RefreshDnsPolicy;RefreshProduct}}})
 '@
     $ProductSource = $ProductSource.Replace($beforeShow, $handlers + "`n" + $beforeShow)

@@ -9,6 +9,7 @@ on:
       - 'deploy/materialize-desktop-icons.py'
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
+      - 'deploy/test_desktop_protection_settings.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -25,6 +26,7 @@ on:
       - 'deploy/materialize-desktop-icons.py'
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
+      - 'deploy/test_desktop_protection_settings.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
       - 'internal/common/**'
@@ -70,6 +72,8 @@ jobs:
         run: go test ./cmd/client ./internal/common
       - name: Imported-node startup settings preserve captured identity
         run: python3 deploy/test_desktop_startup_settings.py --platform macos
+      - name: Native protection controls preserve the captured node
+        run: python3 deploy/test_desktop_protection_settings.py --platform macos
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-darwin-*-${{ github.sha }}

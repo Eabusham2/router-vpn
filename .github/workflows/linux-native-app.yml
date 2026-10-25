@@ -10,6 +10,7 @@ on:
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
       - 'deploy/test_desktop_startup_settings.py'
+      - 'deploy/test_desktop_protection_settings.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -28,6 +29,7 @@ on:
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
       - 'deploy/test_desktop_startup_settings.py'
+      - 'deploy/test_desktop_protection_settings.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -88,6 +90,8 @@ jobs:
         run: python3 deploy/test_desktop_mtu.py --platform linux
       - name: Imported-node startup settings preserve captured identity
         run: python3 deploy/test_desktop_startup_settings.py --platform linux
+      - name: Native protection controls preserve the captured node
+        run: python3 deploy/test_desktop_protection_settings.py --platform linux
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}

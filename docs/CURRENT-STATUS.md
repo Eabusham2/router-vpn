@@ -18,6 +18,27 @@ See [STARTUP-POLICY.md](STARTUP-POLICY.md) for the source contract and executabl
 checks. This closes a source gap found during requirement 116 reconciliation;
 current native release and physical startup acceptance remain separate evidence.
 
+Apple startup now captures the selected bundle, entry, generation and available
+system VPN state through permission save/readback. Imported nodes use their
+saved graph, and Last restores a matching proved Local/Server choice with fresh
+native proofs. Startup cannot acquire a measurement hold on a replacement
+connection, supersede a temporary test, or repeat merely because a view reopens.
+The shipping Swift startup, strategy, receipt and ownership fixtures passed;
+the current Xcode package and physical permission checks remain separate.
+
+The Windows, macOS and Linux quick kill-switch controls now use a common
+captured-node protection transaction for Router and imported nodes. Each action
+captures the displayed node before reading its revision and submits only that
+identity and the selected kill policy. The controller rejects changed source,
+selection, busy state and malformed input, rolls back failed persistence and
+preserves credentials, DNS, graph, MTU and concurrent measurement metadata.
+Unavailable protection reads display an unknown disabled control on macOS and
+Linux rather than reusing another node's checked state. The API race suite,
+shipping PowerShell/Swift/GTK serializer checks and actual GTK build with its
+product and shutdown ownership suites passed. Real Windows PowerShell 5.1 and
+AppKit package verification run in their native workflows; physical tunnel
+enforcement remains an independent acceptance requirement.
+
 The current source also includes Apple candidate-measurement repair `7484eec1`
 and macOS Tor editor integration `b94f5df9`. The Apple probe receives an immutable
 Sendable target while private profiles remain on MainActor; its executable

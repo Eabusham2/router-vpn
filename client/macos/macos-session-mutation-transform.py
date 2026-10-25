@@ -110,10 +110,39 @@ def _external_path_pairs(pairs, mode):
         raise SystemExit("external path callback guard pair count drifted")
     return result
 
+def _captured_protection_pairs(pairs, mode):
+    if mode != "unified":
+        return pairs
+    import re
+    callback = '    @objc func toggleUnifiedKillSwitch(_ sender: NSButton) {\n        guard ensureMutationIdle("changing persistent kill-switch policy") else { refreshUnifiedChrome(); return }\n        let index = routerPopup.indexOfSelectedItem\n        guard index >= 0 && index < routerIDs.count else { refreshUnifiedChrome(); return }\n        let displayedProfileID = routerIDs[index]\n        let enabled = sender.state == .on\n        asyncAction {\n            try self.requireMutationIdle("changing persistent kill-switch policy")\n            let data = try self.api.request("/api/profile/protection", timeout: 5)\n            let captured = try JSONDecoder().decode(MacProfileProtectionSettings.self, from: data)\n            let body = try captured.saveData(displayedProfileID: displayedProfileID, enabled: enabled)\n            _ = try self.api.requestRaw("/api/profile/protection", body: body, timeout: 8)\n            return enabled ? "Kill switch enabled for the selected node." : "Kill switch disabled for the selected node."\n        }\n    }\n'
+    old_read, new_read = '            let settings = (try? self.api.json("/api/profile/settings", timeout: 3) as? [String: Any]) ?? [:]\n', '            let settings = (try? self.api.json("/api/profile/settings", timeout: 3) as? [String: Any]) ?? [:]\n            let protectionData = try? self.api.request("/api/profile/protection", timeout: 3)\n            let protection = protectionData.flatMap { try? JSONDecoder().decode(MacProfileProtectionSettings.self, from: $0) }\n'
+    old_display = '                if let kill = self.findUnifiedView("unified-kill-switch") as? NSButton { let policy = (settings["kill_switch_policy"] as? String ?? "off").lowercased(); kill.state = policy == "off" ? .off : .on }\n'
+    result = []
+    callback_count = display_count = 0
+    for pair in pairs:
+        values = [base64.b64decode(value).decode("utf-8") for value in pair]
+        if "@objc func toggleUnifiedKillSwitch" in values[0]:
+            callback_count += 1
+            for i, value in enumerate(values):
+                replaced, count = re.subn(r"    @objc func toggleUnifiedKillSwitch\(_ sender: NSButton\) \{.*?^    \}\n", lambda _: callback, value, flags=re.M | re.S)
+                if count != 1:
+                    raise SystemExit("captured protection toggle anchor drifted")
+                values[i] = replaced
+        if old_display in values[0]:
+            display_count += 1
+            for i, value in enumerate(values):
+                if value.count(old_read) != 1 or value.count(old_display) != 1:
+                    raise SystemExit("captured protection display anchor drifted")
+                values[i] = value.replace(old_read, new_read).replace(old_display, "")
+        result.append([base64.b64encode(value.encode("utf-8")).decode("ascii") for value in values])
+    if callback_count != 1 or display_count != 1:
+        raise SystemExit("captured protection mutation pair count drifted")
+    return result
+
 def transform(source: str, mode: str) -> str:
     if mode not in PAIRS:
         raise SystemExit(f"unknown transform mode: {mode}")
-    for old64, new64 in _external_path_pairs(_pairs_for(mode), mode):
+    for old64, new64 in _captured_protection_pairs(_external_path_pairs(_pairs_for(mode), mode), mode):
         old=base64.b64decode(old64).decode('utf-8')
         new=base64.b64decode(new64).decode('utf-8')
         count=source.count(old)

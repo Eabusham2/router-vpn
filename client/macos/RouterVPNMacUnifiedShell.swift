@@ -499,8 +499,19 @@ extension ProductWindowController {
     @objc func unifiedMultihopChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); refreshUnifiedHopOverlay() }
 
     @objc func toggleUnifiedKillSwitch(_ sender: NSButton) {
+        guard ensureMutationIdle("changing persistent kill-switch policy") else { refreshUnifiedChrome(); return }
+        let index = routerPopup.indexOfSelectedItem
+        guard index >= 0 && index < routerIDs.count else { refreshUnifiedChrome(); return }
+        let displayedProfileID = routerIDs[index]
         let enabled = sender.state == .on
-        asyncAction { _ = try self.api.request("/api/profile/settings", method: "POST", body: ["kill_switch_policy": enabled ? "on-connect" : "off"], timeout: 12); return enabled ? "Kill switch enabled for the selected Router VPN profile." : "Kill switch disabled for the selected Router VPN profile." }
+        asyncAction {
+            try self.requireMutationIdle("changing persistent kill-switch policy")
+            let data = try self.api.request("/api/profile/protection", timeout: 5)
+            let captured = try JSONDecoder().decode(MacProfileProtectionSettings.self, from: data)
+            let body = try captured.saveData(displayedProfileID: displayedProfileID, enabled: enabled)
+            _ = try self.api.requestRaw("/api/profile/protection", body: body, timeout: 8)
+            return enabled ? "Kill switch enabled for the selected node." : "Kill switch disabled for the selected node."
+        }
     }
 
     @objc func unifiedDNSChanged(_ sender: NSPopUpButton) {
@@ -516,12 +527,23 @@ extension ProductWindowController {
             guard let self else { return }
             let status = (try? self.api.json("/api/status", timeout: 3) as? [String: Any]) ?? [:]
             let settings = (try? self.api.json("/api/profile/settings", timeout: 3) as? [String: Any]) ?? [:]
+            let protectionData = try? self.api.request("/api/profile/protection", timeout: 3)
+            let protection = protectionData.flatMap { try? JSONDecoder().decode(MacProfileProtectionSettings.self, from: $0) }
             DispatchQueue.main.async {
                 let connected = status["connected"] as? Bool ?? false; let phase = status["phase"] as? String ?? "off"
                 if let button = self.findUnifiedView("unified-connect") as? NSButton { let transitioning = !connected && (phase.contains("trying") || phase == "starting" || phase == "checking" || phase.contains("proving")); button.title = connected || transitioning ? "Disconnect" : "Connect" }
-                if let kill = self.findUnifiedView("unified-kill-switch") as? NSButton { let policy = (settings["kill_switch_policy"] as? String ?? "off").lowercased(); kill.state = policy == "off" ? .off : .on }
                 if let requirements = self.findUnifiedView("unified-auto-requirements") as? NSTextField {
                     var active: [String] = []; if settings["auto_require_encrypted"] as? Bool ?? false { active.append("Encrypted") }; if settings["auto_require_obfuscation"] as? Bool ?? false { active.append("Obfuscation") }; requirements.stringValue = active.isEmpty ? "AUTO requirements: Off" : "AUTO requirements: " + active.joined(separator: " + ")
+                }
+                if let kill = self.findUnifiedView("unified-kill-switch") as? NSButton {
+                    let index = self.routerPopup.indexOfSelectedItem
+                    let displayedID = index >= 0 && index < self.routerIDs.count ? self.routerIDs[index] : ""
+                    let valid = protection?.profileID == displayedID && !displayedID.isEmpty && !(protection?.profileToken.isEmpty ?? true) && ["off", "on-connect", "always"].contains(protection?.killSwitchPolicy ?? "")
+                    let known = status["connected"] is Bool
+                    let stable = ["", "off", "failed"].contains(phase.trimmingCharacters(in: .whitespacesAndNewlines).lowercased())
+                    kill.isEnabled = valid && known && !connected && stable
+                    kill.allowsMixedState = !valid
+                    kill.state = valid ? (protection?.killSwitchPolicy == "off" ? .off : .on) : .mixed
                 }
                 let selectedIndex = self.routerPopup.indexOfSelectedItem
                 if selectedIndex >= 0 && selectedIndex < self.profiles.count {
