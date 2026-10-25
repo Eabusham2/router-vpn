@@ -340,6 +340,75 @@ struct ExternalServerPeerUpdate {
     let peer: ExternalServerPeer?
 }
 
+/// Opaque typed JSON retains every provisioned transport field for the native
+/// validator. Unknown transport fields are never silently discarded by Codable.
+indirect enum ExternalOpenVPNJSON: Codable, Hashable {
+    case string(String), number(Double), bool(Bool), array([ExternalOpenVPNJSON]), object([String: ExternalOpenVPNJSON]), null
+    init(from decoder: Decoder) throws {
+        let c = try decoder.singleValueContainer()
+        if c.decodeNil() { self = .null }
+        else if let value = try? c.decode(Bool.self) { self = .bool(value) }
+        else if let value = try? c.decode(String.self) { self = .string(value) }
+        else if let value = try? c.decode(Double.self), value.isFinite { self = .number(value) }
+        else if let value = try? c.decode([ExternalOpenVPNJSON].self) { self = .array(value) }
+        else { self = .object(try c.decode([String: ExternalOpenVPNJSON].self)) }
+    }
+    func encode(to encoder: Encoder) throws {
+        var c = encoder.singleValueContainer()
+        switch self {
+        case .string(let value): try c.encode(value)
+        case .number(let value): try c.encode(value)
+        case .bool(let value): try c.encode(value)
+        case .array(let value): try c.encode(value)
+        case .object(let value): try c.encode(value)
+        case .null: try c.encodeNil()
+        }
+    }
+}
+
+struct ExternalOpenVPNPairing: Codable, Hashable {
+    struct Server: Codable, Hashable {
+        let pairingPublicKey: String
+        let transport: [String: ExternalOpenVPNJSON]
+        let providerIdentity: [String: String]
+        enum CodingKeys: String, CodingKey { case pairingPublicKey = "pairing_public_key", transport, providerIdentity = "provider_identity" }
+        init(from decoder: Decoder) throws {
+            let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+            guard Set(raw.allKeys.map(\.stringValue)) == ["pairing_public_key", "transport", "provider_identity"] else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN server descriptor contains unowned fields."))
+            }
+            let c = try decoder.container(keyedBy: CodingKeys.self)
+            pairingPublicKey = try c.decode(String.self, forKey: .pairingPublicKey)
+            transport = try c.decode([String: ExternalOpenVPNJSON].self, forKey: .transport)
+            providerIdentity = try c.decode([String: String].self, forKey: .providerIdentity)
+            guard !providerIdentity.isEmpty, Set(providerIdentity.keys).isSubset(of: ["public_key_sha256", "common_name", "username"]) else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN server provider identity must not contain its secrets."))
+            }
+        }
+    }
+    let privateKey: String
+    let server: Server
+    enum CodingKeys: String, CodingKey { case privateKey = "private_key", server }
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+        guard Set(raw.allKeys.map(\.stringValue)) == ["private_key", "server"] else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN pairing contains unowned fields."))
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        privateKey = try c.decode(String.self, forKey: .privateKey)
+        server = try c.decode(Server.self, forKey: .server)
+        for value in [privateKey, server.pairingPublicKey] {
+            guard let key = Data(base64Encoded: value), key.count == 32, key.base64EncodedString() == value else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN pairing keys require canonical 32-byte Base64."))
+            }
+        }
+    }
+}
+
+struct ExternalOpenVPNPairingUpdate {
+    let pairing: ExternalOpenVPNPairing?
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -355,9 +424,10 @@ struct ExternalNodeConfig: Codable, Hashable {
     var responseProbe: ExternalResponseProbe?
     var startLayer: ExternalStartLayer?
     var serverPeer: ExternalServerPeer?
+    var openVPNPairing: ExternalOpenVPNPairing?
 
     static let packetProtocols: Set<String> = ["wireguard", "amneziawg"]
-    static let serverExecutionProtocols: Set<String> = ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"]
+    static let serverExecutionProtocols: Set<String> = ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"]
     var packetConfiguration: ExternalWireGuardConfig? {
         if protocolName == "wireguard" { return wireGuard }
         guard protocolName == "amneziawg", let value = amneziaWG else { return nil }
@@ -396,6 +466,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var authenticatedServerExecution: Bool {
         switch protocolName {
         case "wireguard", "amneziawg": return serverPeer != nil && !(packetConfiguration?.privateKey ?? "").isEmpty && !(packetConfiguration?.peerPublicKey ?? "").isEmpty
+        case "openvpn": return openVPNPairing != nil && !(openVPN?.config ?? "").isEmpty
         case "shadowsocks": return !(shadowsocks?.password ?? "").isEmpty
         case "hysteria2": return !(hysteria2?.password ?? "").isEmpty
         case "socks5": return !(socks5?.username ?? "").isEmpty && !(socks5?.password ?? "").isEmpty
@@ -408,10 +479,11 @@ struct ExternalNodeConfig: Codable, Hashable {
     func matchesStartLayer(_ selected: String?) -> Bool {
         let mode = selected ?? "off"
         if mode.isEmpty || mode == "off" { return startLayer == nil }
-        guard Self.serverExecutionProtocols.contains(protocolName), let host = serverExecutionHost,
+        guard Self.serverExecutionProtocols.contains(protocolName),
               let layer = startLayer, ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(mode),
               layer.mode == mode, !layer.api.isEmpty, layer.api.utf8.count <= 4096,
-              layer.transport.type == "shadowsocks", layer.transport.server == host,
+              layer.transport.type == "shadowsocks", !layer.transport.server.isEmpty,
+              (protocolName == "openvpn" || layer.transport.server == serverExecutionHost),
               layer.transport.method == "2022-blake3-aes-256-gcm", !layer.transport.tag.isEmpty,
               (1...65535).contains(layer.transport.serverPort), !layer.transport.password.isEmpty,
               layer.transport.password.utf8.count <= 4096, !layer.transport.password.contains("\0") else { return false }
@@ -437,6 +509,10 @@ struct ExternalNodeConfig: Codable, Hashable {
         // Explicit null must not turn a rejected imported layer into absence.
         startLayer = c.contains(.startLayer) ? try c.decode(ExternalStartLayer.self, forKey: .startLayer) : nil
         serverPeer = c.contains(.serverPeer) ? try c.decode(ExternalServerPeer.self, forKey: .serverPeer) : nil
+        openVPNPairing = c.contains(.openVPNPairing) ? try c.decode(ExternalOpenVPNPairing.self, forKey: .openVPNPairing) : nil
+        guard openVPNPairing == nil || protocolName == "openvpn" else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN pairing belongs only to its private OpenVPN node."))
+        }
         guard serverPeer == nil || Self.packetProtocols.contains(protocolName) else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "A server peer belongs only to its saved WireGuard or AmneziaWG node."))
         }
@@ -453,6 +529,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case responseProbe = "response_probe"
         case startLayer = "start_layer"
         case serverPeer = "server_peer"
+        case openVPNPairing = "openvpn_pairing"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

@@ -20,9 +20,10 @@ import (
 // session authentication contract. Packet peers need independent server keys
 // before they can participate in Local/Server comparison.
 type ExternalExit struct {
-	ExpectedPublicIP string              `json:"expected_public_ip"`
-	ResponseProbe    ResponseProbe       `json:"response_probe"`
-	Packet           *ExternalPacketPair `json:"packet,omitempty"`
+	ExpectedPublicIP string               `json:"expected_public_ip"`
+	ResponseProbe    ResponseProbe        `json:"response_probe"`
+	Packet           *ExternalPacketPair  `json:"packet,omitempty"`
+	OpenVPN          *ExternalOpenVPNPair `json:"openvpn,omitempty"`
 }
 
 type ResponseProbe struct {
@@ -64,7 +65,9 @@ func ExternalFingerprint(exit Exit) (string, error) {
 		return "", err
 	}
 	var value any
-	if ExternalPacketMode(exit.Mode) {
+	if exit.Mode == "openvpn" {
+		value = []any{"routervpn-external-openvpn-v4", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
+	} else if ExternalPacketMode(exit.Mode) {
 		value = []any{"routervpn-external-packet-v3", exit.Mode, exit.External.Packet.Local, exit.External.Packet.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
 	} else if exit.Mode == "shadowsocks" && exit.StartLayer == nil {
 		// Preserve the published v1 identity for already-paired Shadowsocks nodes.
@@ -115,7 +118,14 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	}
 	var key []byte
 	domain := "routervpn-external-relay-auth-v1\x00"
-	if ExternalPacketMode(exit.Mode) {
+	if exit.Mode == "openvpn" {
+		key, err = externalOpenVPNAuthKey(exit, fingerprint)
+		if err != nil {
+			return Request{}, err
+		}
+		defer clear(key)
+		domain = "routervpn-external-openvpn-auth-v4\x00"
+	} else if ExternalPacketMode(exit.Mode) {
 		key, err = externalPacketAuthKey(exit, fingerprint)
 		if err != nil {
 			return Request{}, err
@@ -125,7 +135,7 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	} else {
 		key = []byte(exit.Transport["password"].(string))
 	}
-	if !ExternalPacketMode(exit.Mode) && (exit.Mode != "shadowsocks" || exit.StartLayer != nil) {
+	if !ExternalIndependentMode(exit.Mode) && (exit.Mode != "shadowsocks" || exit.StartLayer != nil) {
 		var outerSecret any
 		if exit.StartLayer != nil {
 			outerSecret = exit.StartLayer.Transport["password"]

@@ -32,7 +32,8 @@ extension RouterVPNModel {
         exitLayerAPI: String = "",
         exitLayerPort: Int = 0,
         exitLayerKey: String = "",
-        serverPeerJSON: String? = nil
+        serverPeerJSON: String? = nil,
+        openVPNPairingJSON: String? = nil
     ) -> Bool {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before editing node metadata."; return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -58,20 +59,26 @@ extension RouterVPNModel {
         do {
             let probe: ExternalResponseProbe?
             let layerUpdate: ExternalStartLayerUpdate?
+            let pairingUpdate: ExternalOpenVPNPairingUpdate?
+            if let openVPNPairingJSON {
+                guard let expectedExternal, expectedExternal.protocolName == "openvpn", let original = expectedExternal.openVPN else { throw IOSExternalExecution.issue() }
+                pairingUpdate = ExternalOpenVPNPairingUpdate(pairing: try IOSExternalExecution.openVPNPairing(openVPNPairingJSON, profile: original))
+            } else { pairingUpdate = nil }
             let peerUpdate: ExternalServerPeerUpdate?
             if let serverPeerJSON {
                 guard let expectedExternal, ExternalNodeConfig.packetProtocols.contains(expectedExternal.protocolName) else { throw IOSExternalExecution.issue() }
                 peerUpdate = ExternalServerPeerUpdate(peer: try IOSExternalExecution.serverPeer(serverPeerJSON))
             } else { peerUpdate = nil }
             if let expectedExternal {
-                guard let host = expectedExternal.serverExecutionHost else { throw IOSExternalExecution.issue() }
+                let host = try IOSExternalExecution.host(expectedExternal)
                 probe = try IOSExternalExecution.responseProbe(host: host, url: responseProbeURL, serverName: responseProbeServerName)
             } else {
                 guard responseProbeURL.isEmpty && responseProbeServerName.isEmpty else { throw IOSExternalExecution.issue() }
                 probe = nil
             }
             if let exitStartLayer {
-                guard let expectedExternal, let host = expectedExternal.serverExecutionHost else { throw IOSExternalExecution.issue() }
+                guard let expectedExternal else { throw IOSExternalExecution.issue() }
+                let host = try IOSExternalExecution.host(expectedExternal)
                 let layer: ExternalStartLayer?
                 if exitStartLayer == "off" {
                     guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
@@ -97,7 +104,8 @@ extension RouterVPNModel {
                 expectedExternal: expectedExternal,
                 responseProbe: probe,
                 startLayerUpdate: layerUpdate,
-                serverPeerUpdate: peerUpdate
+                serverPeerUpdate: peerUpdate,
+                openVPNPairingUpdate: pairingUpdate
             )
             if bundle?.routerProfiles.contains(where: { $0.id == id }) == true {
                 try importBundle(replacement)

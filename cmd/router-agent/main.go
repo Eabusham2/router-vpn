@@ -42,6 +42,13 @@ type server struct {
 }
 
 func main() {
+	if len(os.Args) > 1 && (os.Args[1] == "describe-external-openvpn-peer" || os.Args[1] == "compile-external-openvpn-pair") {
+		if len(os.Args) != 2 { log.Fatal("OpenVPN pairing commands accept only bounded private stdin") }
+		command := describeExternalOpenVPNPeer
+		if os.Args[1] == "compile-external-openvpn-pair" { command = compileExternalOpenVPNPair }
+		if err := command(os.Stdin, os.Stdout); err != nil { log.Fatal(err) }
+		return
+	}
 	if len(os.Args) > 1 && os.Args[1] == "describe-external-packet-peer" {
 		if len(os.Args) != 2 {
 			log.Fatal("describe-external-packet-peer accepts only bounded private stdin")

@@ -58,7 +58,14 @@ final class AndroidNodeStore {
     synchronized Node importBundle(byte[] bytes) throws Exception {
         requireMutable("importing or replacing a Router VPN node");
         if (bytes == null || bytes.length == 0 || bytes.length > MAX_BUNDLE) throw new IllegalArgumentException("Router bundle size is invalid.");
-        JSONObject bundle = new JSONObject(new String(bytes, StandardCharsets.UTF_8));
+        // Validate original bytes before JSONObject can collapse duplicate
+        // credential or node-identity fields into one apparently valid value.
+        String source = StandardCharsets.UTF_8.newDecoder()
+                .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                .decode(java.nio.ByteBuffer.wrap(bytes)).toString();
+        io.nekohasekai.libbox.Libbox.routerValidatePrivateNodeJSON(source);
+        JSONObject bundle = new JSONObject(source);
         validateBundle(bundle);
         ensureRoot();
         String id = deriveId(bundle, bytes);

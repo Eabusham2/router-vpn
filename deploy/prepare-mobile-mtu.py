@@ -51,7 +51,7 @@ def prepare(vendor, *, mobile=True):
     changes={
       'protocol/tun/inbound.go':[
         ('\t"strings"','\t"strings"\n\t"sync"'),
-        ('type Inbound struct {','type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool'),
+        ('type Inbound struct {','type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool\n\troutervpnDesktop bool\n\troutervpnDesktopFresh bool\n\troutervpnDesktopIndex int\n\troutervpnDesktopGuard func() bool'),
         ('func (t *Inbound) Start(stage adapter.StartStage) error {','func (t *Inbound) routervpnStart(stage adapter.StartStage) error {'),
         ('\tinbound := &Inbound{','\tinbound := &Inbound{\n\t\troutervpnInitial: options,'),
       ],
@@ -84,6 +84,10 @@ def prepare(vendor, *, mobile=True):
         text=path.read_text()
         for old,new in pairs:
             if new in text:continue
+            previous='type Inbound struct {\n\troutervpnInitial option.TunInboundOptions\n\troutervpnLifecycle sync.Mutex\n\troutervpnReady bool'
+            if old=='type Inbound struct {' and previous in text:
+                text=text.replace(previous,new)
+                continue
             if text.count(old)!=1:raise ValueError('native MTU boundary changed: '+name)
             text=text.replace(old,new)
         writes[path]=text

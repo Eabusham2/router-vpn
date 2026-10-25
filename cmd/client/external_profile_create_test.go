@@ -99,7 +99,7 @@ func TestTypedExternalProfileBuilderSupportsCommonNodeFamilies(t *testing.T) {
 
 func TestTypedExternalProfileBuilderDelegatesSpecializedImports(t *testing.T) {
 	for protocol, want := range map[string]string{
-		"openvpn":    "hardened config import path",
+		"openvpn":    "original inline profile",
 		"tor-bridge": "dedicated censorship-circumvention builder",
 	} {
 		q := createRequestFor("socks5")
@@ -195,9 +195,9 @@ func TestTypedExternalProfileCreateRollsBackOnPersistenceFailure(t *testing.T) {
 	}
 	old := common.RouterProfile{SchemaVersion: common.RouterProfileSchemaVersion, ID: "old-node", Name: "Old", NodeKind: "external", Endpoint: "203.0.113.9", External: &common.ExternalNodeConfig{Protocol: "socks5", ExpectedPublicIP: "8.8.4.4", SOCKS5: &common.ExternalSOCKS5Config{Host: "203.0.113.9", Port: 1080}}}
 	a := &app{
-		cfg: common.ClientConfig{ProfilesFile: filepath.Join(blocker, "routers.json")},
+		cfg:      common.ClientConfig{ProfilesFile: filepath.Join(blocker, "routers.json")},
 		profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion, SelectedID: old.ID, Profiles: []common.RouterProfile{old}},
-		state: state{Mode: "off", Phase: "off", RouterID: old.ID},
+		state:    state{Mode: "off", Phase: "off", RouterID: old.ID},
 	}
 	recorder := httptest.NewRecorder()
 	a.externalProfileCreate(recorder, typedCreateRequest(t, createRequestFor("socks5")))

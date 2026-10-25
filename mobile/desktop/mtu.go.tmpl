@@ -1,0 +1,377 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type routerVPNDesktopMTURequest struct {
+	Schema       int                        `json:"schema"`
+	Session      string                     `json:"session_id"`
+	SourceSHA256 string                     `json:"source_sha256"`
+	ConfigSHA256 string                     `json:"config_sha256"`
+	Generation   uint64                     `json:"generation"`
+	Request      string                     `json:"request_id"`
+	Force        bool                       `json:"force"`
+	Cache        *routerVPNDesktopMTUCached `json:"cache,omitempty"`
+	RestoreMTU   int                        `json:"restore_mtu,omitempty"`
+}
+type routerVPNDesktopMTUCached struct {
+	PathKey  string `json:"path_key"`
+	MTU      int    `json:"mtu"`
+	TestedAt int64  `json:"tested_at"`
+}
+type routerVPNDesktopMTUControl struct {
+	Schema       int    `json:"schema"`
+	Session      string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+	ConfigSHA256 string `json:"config_sha256"`
+	Generation   uint64 `json:"generation"`
+	Request      string `json:"request_id"`
+	PathKey      string `json:"path_key,omitempty"`
+	MTU          int    `json:"mtu,omitempty"`
+}
+type routerVPNDesktopMTURecord struct {
+	Schema          int              `json:"schema"`
+	Session         string           `json:"session_id"`
+	SourceSHA256    string           `json:"source_sha256"`
+	ConfigSHA256    string           `json:"config_sha256"`
+	Generation      uint64           `json:"generation"`
+	Requested       bool             `json:"requested"`
+	WaitingCommit   bool             `json:"waiting_commit"`
+	PreparedMTU     int              `json:"prepared_mtu,omitempty"`
+	PreparedPathKey string           `json:"prepared_path_key,omitempty"`
+	RestoredMTU     int              `json:"restored_mtu,omitempty"`
+	Status          mobilemtu.Status `json:"status"`
+}
+
+// A freshly verified winner remains provisional until the captured parent has
+// durably saved it. A failed write, cancellation or missing parent therefore
+// goes through the shared controller's exact pre-test rollback.
+type routerVPNDesktopMTUCache struct {
+	mu       sync.Mutex
+	cached   *routerVPNDesktopMTUCached
+	pending  *routerVPNDesktopMTUCached
+	decision chan bool
+}
+
+func (c *routerVPNDesktopMTUCache) Lookup(key string) (int, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.cached == nil || c.cached.PathKey != key {
+		return 0, false
+	}
+	now := time.Now().Unix()
+	return c.cached.MTU, c.cached.MTU >= 1280 && c.cached.MTU <= 9000 && c.cached.TestedAt >= now-24*3600 && c.cached.TestedAt <= now+2
+}
+func (c *routerVPNDesktopMTUCache) Save(key string, mtu int, valid func() bool) error {
+	if len(key) != 64 || mtu < 1280 || mtu > 9000 || valid == nil || !valid() {
+		return routerVPNExternalFailure
+	}
+	c.mu.Lock()
+	if c.pending != nil {
+		c.mu.Unlock()
+		return routerVPNExternalFailure
+	}
+	decision := make(chan bool, 1)
+	pending := &routerVPNDesktopMTUCached{PathKey: key, MTU: mtu, TestedAt: time.Now().Unix()}
+	c.pending, c.decision = pending, decision
+	c.mu.Unlock()
+	defer func() {
+		c.mu.Lock()
+		if c.pending == pending {
+			c.pending, c.decision = nil, nil
+		}
+		c.mu.Unlock()
+	}()
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	for {
+		select {
+		case accepted := <-decision:
+			if !accepted || !valid() {
+				return routerVPNExternalFailure
+			}
+			c.mu.Lock()
+			c.cached = pending
+			c.mu.Unlock()
+			if !valid() {
+				c.mu.Lock()
+				if c.cached == pending {
+					c.cached = nil
+				}
+				c.mu.Unlock()
+				return routerVPNExternalFailure
+			}
+			return nil
+		case <-ticker.C:
+			if !valid() {
+				return routerVPNExternalFailure
+			}
+		case <-deadline.C:
+			return routerVPNExternalFailure
+		}
+	}
+}
+func (c *routerVPNDesktopMTUCache) prepare() *routerVPNDesktopMTUCached {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending == nil {
+		return nil
+	}
+	result := *c.pending
+	return &result
+}
+func (c *routerVPNDesktopMTUCache) decide(key string, mtu int, accepted bool) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.pending == nil || c.decision == nil || accepted && (c.pending.PathKey != key || c.pending.MTU != mtu) {
+		return routerVPNExternalFailure
+	}
+	select {
+	case c.decision <- accepted:
+	default:
+	}
+	return nil
+}
+
+type routerVPNDesktopMTU struct {
+	mu            sync.Mutex
+	owner         *routerVPNDesktopMTUOwner
+	controller    *mobilemtu.Controller
+	cache         *routerVPNDesktopMTUCache
+	request       routerVPNDesktopMTURequest
+	original      mobilemtu.State
+	rolling       bool
+	closed        bool
+	restored      *mobilemtu.Status
+	restoring     bool
+	restoreTarget int
+	restoreCancel context.CancelFunc
+}
+
+type routerVPNExternalMTUProvider interface {
+	DesktopMTU() (*routerVPNDesktopMTU, error)
+}
+
+func (n *routerVPNExternalNative) DesktopMTU() (*routerVPNDesktopMTU, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.mtu != nil {
+		return n.mtu, nil
+	}
+	if n.proof == nil || !n.proof.Healthy() || n.box == nil || n.boxClosed {
+		return nil, routerVPNExternalFailure
+	}
+	lease, err := n.box.RouterVPNExternalClaimMTU(n.proof, n.source, n.capture)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	owner, err := newRouterVPNDesktopMTUOwner(lease, n.session, func() string { return routerVPNDesktopPhysicalPath(n.box) })
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	cache := &routerVPNDesktopMTUCache{}
+	controller, err := mobilemtu.NewExternal(owner, lease.Config(), lease.Authority(), cache)
+	if err != nil {
+		owner.invalid.Store(true)
+		lease.Close()
+		return nil, routerVPNExternalFailure
+	}
+	n.mtu = &routerVPNDesktopMTU{owner: owner, controller: controller, cache: cache}
+	return n.mtu, nil
+}
+
+func (m *routerVPNDesktopMTU) start(request routerVPNDesktopMTURequest) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.rolling || m.controller.Running() || !routerVPNExternalSession.MatchString(request.Request) || request.Generation != m.request.Generation+1 {
+		return routerVPNExternalFailure
+	}
+	before, err := m.owner.Capture()
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	if request.Cache != nil && (len(request.Cache.PathKey) != 64 || request.Cache.MTU < 1280 || request.Cache.MTU > 9000) {
+		return routerVPNExternalFailure
+	}
+	if request.RestoreMTU != 0 {
+		plan, err := mobilemtu.NewPlan(m.controller.Config(), before.MTU)
+		if err != nil || !m.controller.Requested() || request.RestoreMTU < 1280 || request.RestoreMTU > plan.Ceiling || request.Cache != nil {
+			return routerVPNExternalFailure
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		m.request, m.original, m.restored = request, before, nil
+		m.rolling, m.restoring, m.restoreTarget, m.restoreCancel = true, true, request.RestoreMTU, cancel
+		go m.restoreCaptured(ctx, request, before)
+		return nil
+	}
+	m.cache.mu.Lock()
+	if request.Cache != nil {
+		saved := *request.Cache
+		m.cache.cached = &saved
+	}
+	m.cache.mu.Unlock()
+	if err := m.controller.Start(request.Request, request.Force); err != nil {
+		return routerVPNExternalFailure
+	}
+	m.request, m.original, m.restored, m.restoreTarget = request, before, nil, 0
+	return nil
+}
+
+func (m *routerVPNDesktopMTU) matches(control routerVPNDesktopMTUControl) bool {
+	return control.Request != "" && control.Request == m.request.Request && control.Generation == m.request.Generation
+}
+func (m *routerVPNDesktopMTU) commit(control routerVPNDesktopMTUControl) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || m.rolling || !m.matches(control) {
+		return routerVPNExternalFailure
+	}
+	return m.cache.decide(control.PathKey, control.MTU, true)
+}
+func (m *routerVPNDesktopMTU) cancel(control routerVPNDesktopMTUControl) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.closed || !m.matches(control) {
+		return routerVPNExternalFailure
+	}
+	if m.rolling {
+		if m.restoring && m.restoreCancel != nil {
+			m.restoreCancel()
+		}
+		return nil
+	}
+	if m.controller.Running() {
+		m.controller.Cancel(control.Request)
+		return nil
+	}
+	var previous mobilemtu.Status
+	if m.restored != nil {
+		if m.restored.Source != "restored-captured-system-tun" || !m.restored.Restored {
+			return nil
+		}
+		previous = *m.restored
+	} else {
+		if json.Unmarshal([]byte(m.controller.StatusJSON()), &previous) != nil || !previous.Measured {
+			return nil
+		}
+	}
+	// Cancellation may race the completion record. Retain the original readback
+	// until the next generation so that a canceled HTTP adoption still restores
+	// this exact session; a replacement generation can never be rolled back.
+	m.rolling = true
+	go m.rollback(control, previous)
+	return nil
+}
+func (m *routerVPNDesktopMTU) rollback(control routerVPNDesktopMTUControl, previous mobilemtu.Status) {
+	ctx, stop := context.WithTimeout(context.Background(), 8*time.Second)
+	defer stop()
+	current, err := m.owner.Capture()
+	m.mu.Lock()
+	valid := !m.closed && m.matches(control)
+	original := m.original
+	m.mu.Unlock()
+	if valid && err == nil && current.Session == original.Session && current.Path == original.Path {
+		var restored mobilemtu.State
+		restored, err = m.owner.ChangeMTU(ctx, current, original.MTU)
+		if err == nil && restored.MTU == original.MTU {
+			err = m.owner.VerifyExternal(ctx, restored)
+		}
+	} else {
+		err = routerVPNExternalFailure
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rolling = false
+	if m.closed || !m.matches(control) {
+		return
+	}
+	previous.Measured, previous.Running, previous.Complete = false, false, true
+	previous.Source, previous.Phase, previous.Failure = "unavailable-stale-owner", "failed", "Exact native MTU rollback could not be confirmed"
+	previous.EffectiveMTU, previous.Restored = 0, false
+	if err == nil {
+		previous.Source, previous.Phase, previous.Failure = "restored-unmeasured", "restored", "MTU adoption was canceled"
+		previous.EffectiveMTU, previous.Restored = original.MTU, true
+		m.cache.mu.Lock()
+		m.cache.cached = nil
+		m.cache.mu.Unlock()
+		_ = m.controller.Close()
+		fresh, createErr := m.recapture()
+		if createErr == nil {
+			m.controller = fresh
+		} else {
+			m.owner.invalid.Store(true)
+			previous.Restored, previous.EffectiveMTU = false, 0
+		}
+	} else {
+		m.owner.invalid.Store(true)
+	}
+	m.restored = &previous
+}
+
+func (m *routerVPNDesktopMTU) record() routerVPNDesktopMTURecord {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var status mobilemtu.Status
+	_ = json.Unmarshal([]byte(m.controller.StatusJSON()), &status)
+	if m.restored != nil {
+		status = *m.restored
+	}
+	if status.Complete && !status.Running && status.OriginalMTU == 0 && m.request.Request != "" {
+		// Immediate Cancel can win before the shared worker's first capture.
+		// Report the preserved readback only after rechecking that exact reader.
+		if actual, err := m.owner.Capture(); err == nil && actual == m.original {
+			status.OriginalMTU, status.EffectiveMTU, status.Restored = actual.MTU, actual.MTU, true
+			status.Source, status.Phase = "restored-unmeasured", "restored"
+		}
+	}
+	if m.rolling {
+		status.Phase, status.Running, status.Complete, status.Measured, status.Restored = "rolling-back", true, false, false, false
+		if m.restoring {
+			status.Request, status.Phase, status.OriginalMTU = m.request.Request, "restoring-captured-mtu", m.original.MTU
+		}
+	}
+	result := routerVPNDesktopMTURecord{Generation: m.request.Generation, Requested: m.controller.Requested(), RestoredMTU: m.restoreTarget, Status: status}
+	if prepared := m.cache.prepare(); prepared != nil {
+		result.WaitingCommit, result.PreparedMTU, result.PreparedPathKey = true, prepared.MTU, prepared.PathKey
+	}
+	return result
+}
+func (m *routerVPNDesktopMTU) invalidate() {
+	if m == nil {
+		return
+	}
+	m.owner.invalid.Store(true)
+	m.mu.Lock()
+	if m.restoreCancel != nil {
+		m.restoreCancel()
+	}
+	m.controller.Invalidate()
+	m.mu.Unlock()
+}
+func (m *routerVPNDesktopMTU) close() error {
+	if m == nil {
+		return nil
+	}
+	m.mu.Lock()
+	m.closed = true
+	if m.restoreCancel != nil {
+		m.restoreCancel()
+	}
+	controller, rolling := m.controller, m.rolling
+	m.mu.Unlock()
+	m.owner.invalid.Store(true)
+	if err := controller.Close(); err != nil || rolling {
+		return routerVPNExternalFailure
+	}
+	m.owner.lease.Close()
+	return nil
+}

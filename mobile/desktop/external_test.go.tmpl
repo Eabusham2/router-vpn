@@ -164,17 +164,28 @@ func TestRouterVPNDesktopExternalProofAndPrivateStopOwnExactSession(t *testing.T
 		t.Fatal("unproved or foreign connection published")
 	}
 	desktopExternalStopFile(t, directory, strings.Repeat("b", 32), policy.SourceSHA256())
-	select {
-	case <-done:
-		t.Fatal("stale stop retired another session")
-	case <-time.After(650 * time.Millisecond):
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var heartbeat routerVPNExternalProofRecord
+		if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &heartbeat) != nil || heartbeat.CheckedAt != proof.CheckedAt {
+			t.Fatal("native heartbeat changed original proof identity")
+		}
+		if heartbeat.HeartbeatAt > proof.HeartbeatAt {
+			break
+		}
+		select {
+		case <-done:
+			t.Fatal("stale stop retired another session")
+		case <-deadline.C:
+			t.Fatal("native heartbeat did not advance within its bounded freshness budget")
+		case <-tick.C:
+		}
 	}
 	if !owner.Healthy() {
 		t.Fatal("stale cancellation reached current owner")
-	}
-	var heartbeat routerVPNExternalProofRecord
-	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &heartbeat) != nil || heartbeat.HeartbeatAt <= proof.HeartbeatAt || heartbeat.CheckedAt != proof.CheckedAt {
-		t.Fatal("native heartbeat failed to preserve original proof time")
 	}
 	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
 	if err := desktopExternalWait(t, done); err != nil {

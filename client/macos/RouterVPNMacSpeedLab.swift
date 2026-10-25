@@ -1,11 +1,53 @@
 import AppKit
 import Foundation
+import CoreFoundation
 import ObjectiveC
 
 private var macSpeedLabButtonKey: UInt8 = 0
 private var macSpeedLabControllerKey: UInt8 = 0
 
-private final class RouterVPNMacSpeedLabController: NSWindowController {
+private enum RouterVPNMacSpeedLabPathPolicy {
+    static func find(_ values: [[String: Any]], _ id: String) -> [String: Any]? {
+        guard !id.isEmpty else { return nil }
+        let matches = values.filter { $0["id"] as? String == id }
+        return matches.count == 1 ? matches[0] : nil
+    }
+    static func kind(_ node: [String: Any]?) -> String { node == nil ? "" : (node?["node_kind"] as? String).flatMap { $0.isEmpty ? nil : $0 } ?? "router-vpn" }
+    static func entryMode(_ node: [String: Any]?, _ entry: [String: Any]?) -> String {
+        guard kind(entry) == "router-vpn" else { return "" }
+        if node?["multihop_entry_id"] as? String == entry?["id"] as? String, let saved = node?["multihop_entry_mode"] as? String, !saved.isEmpty { return saved }
+        var base = entry?["base_tunnel"] as? String ?? ""
+        if !["wg", "awg"].contains(base) { base = node?["base_tunnel"] as? String ?? "" }
+        return base == "awg" ? "awg2-fast" : "wg"
+    }
+    static func serverReady(_ node: [String: Any]) -> Bool {
+        guard node["has_response_probe"] as? Bool == true else { return false }
+        let proto = node["external_protocol"] as? String ?? ""
+        if ["wireguard", "amneziawg"].contains(proto) { return node["has_server_peer"] as? Bool == true }
+        if proto == "openvpn" { return node["has_openvpn_pairing"] as? Bool == true }
+        return ["shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(proto)
+    }
+    static func validate(nodes: [[String: Any]], entryModes: [[String: Any]], executions: [[String: Any]],
+                         topology: String, nodeID: String, entryID: String, exitID: String, entryMode: String, execution: String) throws {
+        func reject(_ text: String) throws { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: text]) }
+        if topology == "system-direct" { return }
+        let node = find(nodes, nodeID), entry = find(nodes, entryID)
+        if topology == "router" { if kind(node) != "router-vpn" { try reject("Select a linked Router VPN node.") }; return }
+        if topology == "multihop" {
+            if kind(entry) != "router-vpn" || kind(find(nodes, exitID)) != "router-vpn" || entryID == exitID { try reject("Select two different linked Router VPN nodes.") }
+        } else if topology == "external" {
+            guard let node, kind(node) == "external" else { try reject("Select a linked external exit."); return }
+            if !entryID.isEmpty && (entry == nil || entryID == nodeID) { try reject("Select a different linked entry, or Direct.") }
+            if kind(entry) == "router-vpn" {
+                if find(entryModes, entryMode) == nil { try reject("Select a supported Router entry mode.") }
+                if execution != "local" && !serverReady(node) { try reject("Server/Compare requires this exit's response probe and independent server pairing where required.") }
+            } else if execution != "local" { try reject("Direct and ordinary external entry paths use Local execution.") }
+        } else { try reject("Select a supported test topology.") }
+        if !["local", "server", "auto"].contains(execution) || find(executions, execution) == nil { try reject("Select Local, Server, or Compare both from current capabilities.") }
+    }
+}
+
+private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindowDelegate {
     private weak var product: ProductWindowController?
     private let api: ProductAPI
     private let scope = NSPopUpButton()
@@ -16,6 +58,8 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
     private let mode = NSPopUpButton()
     private let base = NSPopUpButton()
     private let exitMode = NSPopUpButton()
+    private let entryMode = NSPopUpButton()
+    private let execution = NSPopUpButton()
     private let layers = NSTextField(string: "")
     private let durationMode = NSPopUpButton()
     private let minTime = NSSlider(value: 4, minValue: 1, maxValue: 60, target: nil, action: nil)
@@ -36,6 +80,15 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
     private let detail = NSTextView()
     private let runButton = NSButton(title: "Run Speed Lab", target: nil, action: nil)
     private var nodes: [[String: Any]] = []
+    private var entryModes: [[String: Any]] = []
+    private var executions: [[String: Any]] = []
+    private var updatingChoices = false
+    private var optionsReady = false
+    private var closed = false
+    private var cancelled = false
+    private var loadingOptions = false
+    private var generation: UInt64 = 0
+    private var request: RouterVPNMacSpeedLabTransport?
 
     init(api: ProductAPI, product: ProductWindowController) {
         self.api = api
@@ -44,11 +97,13 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
         window.title = "Router VPN Speed Lab"
         window.minSize = NSSize(width: 760, height: 600)
         super.init(window: window)
+        window.delegate = self
         buildUI()
         loadOptions()
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    deinit { request?.cancel() }
 
     private func label(_ value: String) -> NSTextField {
         let v = NSTextField(labelWithString: value)
@@ -96,17 +151,19 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
             [label("Test"), scope, label("Topology"), topology, label("Mode"), mode],
             [label("Node / exit"), node, label("Entry"), entry, label("Exit"), exit],
             [label("Base"), base, label("Exit transport"), exitMode, label("CUSTOM layers"), layers],
+            [label("Entry mode"), entryMode, label("Execution"), execution, label(""), NSView()],
             [label("Duration"), durationMode, minLabel, minTime, maxLabel, maxTime]
         ])
         grid.rowSpacing = 7; grid.columnSpacing = 8; root.addArrangedSubview(grid)
         let flags = NSStackView(views: [daita, jumbo, encrypted, obfuscated]); flags.orientation = .horizontal; flags.spacing = 14; root.addArrangedSubview(flags)
 
-        detail.isEditable = false; detail.isRichText = false; detail.font = .monospacedSystemFont(ofSize: 11, weight: .regular); detail.string = "Ready. Temporary configurations require Router VPN to be disconnected."
+        detail.isEditable = false; detail.isRichText = false; detail.font = .monospacedSystemFont(ofSize: 11, weight: .regular); detail.string = "Ready. Temporary tests capture and restore the complete connected path and its proved execution choice."
         let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder; scroll.documentView = detail; scroll.heightAnchor.constraint(greaterThanOrEqualToConstant: 150).isActive = true; root.addArrangedSubview(scroll)
 
         let actions = NSStackView(); actions.orientation = .horizontal; actions.spacing = 8; actions.addArrangedSubview(status); let spacer = NSView(); spacer.setContentHuggingPriority(.defaultLow, for: .horizontal); actions.addArrangedSubview(spacer); runButton.target = self; runButton.action = #selector(runSpeedLab); runButton.bezelStyle = .rounded; actions.addArrangedSubview(runButton); let close = NSButton(title: "Close", target: self, action: #selector(closePanel)); actions.addArrangedSubview(close); root.addArrangedSubview(actions)
 
-        scope.target = self; scope.action = #selector(refreshControls); topology.target = self; topology.action = #selector(refreshControls); mode.target = self; mode.action = #selector(refreshControls); durationMode.target = self; durationMode.action = #selector(refreshControls); minTime.target = self; minTime.action = #selector(timeChanged); maxTime.target = self; maxTime.action = #selector(timeChanged)
+        scope.target = self; scope.action = #selector(refreshControls); topology.target = self; topology.action = #selector(pathChanged(_:)); node.target = self; node.action = #selector(pathChanged(_:)); entry.target = self; entry.action = #selector(pathChanged(_:)); mode.target = self; mode.action = #selector(refreshControls); durationMode.target = self; durationMode.action = #selector(refreshControls); minTime.target = self; minTime.action = #selector(timeChanged); maxTime.target = self; maxTime.action = #selector(timeChanged)
+        execution.toolTip = "Server/Compare requires a Router entry, this exit’s response probe, and separate packet/OpenVPN pairing. The controller proves the captured path before testing."
         refreshControls(); timeChanged()
     }
 
@@ -123,28 +180,124 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
         if popup.numberOfItems > 0 { popup.selectItem(at: 0) }
     }
 
-    private func loadOptions() {
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            do {
-                let root = try self.api.json("/api/speed-lab/options", timeout: 10) as? [String: Any] ?? [:]
-                let nodeValues = root["nodes"] as? [[String: Any]] ?? []
-                let modes = root["logical_modes"] as? [[String: Any]] ?? []
-                DispatchQueue.main.async {
-                    self.nodes = nodeValues; self.populate(self.node, values: nodeValues); self.populate(self.entry, values: nodeValues); self.populate(self.exit, values: nodeValues, kind: "router-vpn")
-                    self.mode.removeAllItems(); for m in modes { let id=m["id"] as? String ?? ""; if id.isEmpty { continue }; self.mode.addItem(withTitle: m["name"] as? String ?? id); self.mode.lastItem?.representedObject=id }; if let idx=(0..<self.mode.numberOfItems).first(where:{ self.mode.item(at:$0)?.representedObject as? String == "smart-auto" }) { self.mode.selectItem(at: idx) }
-                    self.refreshControls()
-                }
-            } catch { DispatchQueue.main.async { self.detail.string = "Could not load Speed Lab options: \(error.localizedDescription)"; self.runButton.isEnabled = false } }
+    private func selectPreserving(_ popup: NSPopUpButton, _ id: String) {
+        if let index = (0..<popup.numberOfItems).first(where: { popup.item(at: $0)?.representedObject as? String == id }) { popup.selectItem(at: index) }
+        else { popup.addItem(withTitle: "Unavailable saved choice: \(id)"); popup.lastItem?.representedObject = id; popup.selectItem(at: popup.numberOfItems - 1) }
+    }
+
+    private func applyPathDefaults() {
+        guard !updatingChoices, let value = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)) else { return }
+        updatingChoices = true; defer { updatingChoices = false }
+        let saved = value["multihop_enabled"] as? Bool == true
+        let rawBase = value["base_tunnel"] as? String ?? ""
+        selectPreserving(base, rawBase.isEmpty ? "auto" : rawBase)
+        let top = selected(topology)
+        if top == "external" {
+            selectPreserving(entry, saved ? value["multihop_entry_id"] as? String ?? "" : "")
+            let choice = saved ? value["multihop_execution"] as? String ?? "local" : "local"
+            selectPreserving(execution, choice.isEmpty ? "local" : choice)
+            setEntryModeDefault()
+        } else if top == "multihop" {
+            let savedEntry = saved ? value["multihop_entry_id"] as? String ?? "" : ""
+            selectPreserving(entry, savedEntry.isEmpty ? selected(node) : savedEntry)
+            if saved, let id = value["multihop_exit_id"] as? String, !id.isEmpty { selectPreserving(exit, id) }
+            let choice = saved ? value["multihop_execution"] as? String ?? "local" : "local"
+            selectPreserving(execution, choice.isEmpty ? "local" : choice)
         }
     }
 
+    private func setEntryModeDefault() {
+        let value = RouterVPNMacSpeedLabPathPolicy.entryMode(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)), RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry)))
+        if value.isEmpty { entryMode.selectItem(at: -1) } else { selectPreserving(entryMode, value) }
+    }
+
+    @objc private func pathChanged(_ sender: NSPopUpButton) {
+        guard !updatingChoices else { return }
+        if sender === entry {
+            updatingChoices = true; setEntryModeDefault()
+            if RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) != "router-vpn" { selectPreserving(execution, "local") }
+            updatingChoices = false
+        } else {
+            if sender === topology {
+                let kind = selected(topology) == "external" ? "external" : "router-vpn"
+                if RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node))) != kind {
+                    if let first = nodes.first(where: { RouterVPNMacSpeedLabPathPolicy.kind($0) == kind }), let id = first["id"] as? String { selectPreserving(node, id) }
+                    else { node.selectItem(at: -1) }
+                }
+            }
+            applyPathDefaults()
+        }
+        refreshControls()
+    }
+
+    private func performLocalRequest(_ path: String, body: [String: Any]?, timeout: TimeInterval, completion: @escaping (Result<Data, Error>) -> Void) throws {
+        guard !closed, request == nil, let url = URL(string: path, relativeTo: routerVPNProductBaseURL)?.absoluteURL else { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Another Speed Lab request is active."]) }
+        generation &+= 1; let owner = generation; cancelled = false
+        let transport = try RouterVPNMacSpeedLabTransport(url: url, body: body, timeout: timeout) { [weak self] result in
+            DispatchQueue.main.async {
+                guard let self, !self.closed, self.generation == owner else { return }
+                self.request = nil; self.loadingOptions = false
+                self.runButton.title = "Run Speed Lab"
+                self.refreshControls()
+                if self.cancelled {
+                    self.status.stringValue = "Test request cancelled."
+                    self.detail.string = "The controller owns teardown and restoration of the captured path. A replacement connection remains protected."
+                    return
+                }
+                completion(result)
+            }
+        }
+        request = transport; transport.start(); refreshControls()
+    }
+
+    private func loadOptions() {
+        optionsReady = false; loadingOptions = true; status.stringValue = "Loading Speed Lab paths…"
+        do {
+            try performLocalRequest("/api/speed-lab/options", body: nil, timeout: 10) { [weak self] result in
+                guard let self else { return }
+                do {
+                    let data = try result.get()
+                    guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPNSpeedLab", code: 1) }
+                    self.updatingChoices = true
+                    self.nodes = root["nodes"] as? [[String: Any]] ?? []
+                    self.entryModes = root["router_vpn_entry_modes"] as? [[String: Any]] ?? []
+                    self.executions = root["execution_choices"] as? [[String: Any]] ?? []
+                    self.populate(self.node, values: self.nodes); self.populate(self.entry, values: self.nodes); self.populate(self.exit, values: self.nodes, kind: "router-vpn")
+                    self.entry.insertItem(withTitle: "Direct / no entry", at: 0); self.entry.item(at: 0)?.representedObject = ""
+                    self.populate(self.mode, values: root["logical_modes"] as? [[String: Any]] ?? [])
+                    self.selectPreserving(self.mode, "smart-auto")
+                    self.populate(self.entryMode, values: self.entryModes); self.populate(self.execution, values: self.executions); self.selectPreserving(self.execution, "local")
+                    let selectedNodes = self.nodes.filter { $0["selected"] as? Bool == true }
+                    if selectedNodes.count == 1, let id = selectedNodes[0]["id"] as? String { self.selectPreserving(self.node, id) }
+                    let selectedNode = RouterVPNMacSpeedLabPathPolicy.find(self.nodes, self.selected(self.node))
+                    self.selectPreserving(self.topology, RouterVPNMacSpeedLabPathPolicy.kind(selectedNode) == "external" ? "external" : selectedNode?["multihop_enabled"] as? Bool == true ? "multihop" : "router")
+                    self.updatingChoices = false; self.applyPathDefaults(); self.optionsReady = true
+                    self.status.stringValue = "Ready • current configuration selected; no saved preferences changed"
+                    self.refreshControls()
+                } catch {
+                    self.updatingChoices = false; self.detail.string = "Could not load Speed Lab options: \(error.localizedDescription)"; self.status.stringValue = "Speed Lab options unavailable."; self.refreshControls()
+                }
+            }
+        } catch { loadingOptions = false; detail.string = error.localizedDescription; refreshControls() }
+    }
+
     @objc private func refreshControls() {
-        let temporary = selected(scope) == "temporary"
-        let controls: [NSControl] = [topology,node,entry,exit,mode,base,exitMode,layers,daita,jumbo,encrypted,obfuscated]
+        let available = !closed && optionsReady && request == nil
+        let temporary = available && selected(scope) == "temporary"
+        let controls: [NSControl] = [topology,node,entry,exit,mode,base,exitMode,entryMode,execution,layers,daita,jumbo,encrypted,obfuscated]
         controls.forEach { $0.isEnabled = temporary }
-        let top = selected(topology); entry.isEnabled = temporary && (top == "multihop" || top == "external"); exit.isEnabled = temporary && top == "multihop"; exitMode.isEnabled = temporary && top == "multihop"; layers.isEnabled = temporary && selected(mode) == "custom"
-        let customTime = selected(durationMode) == "custom"; minTime.isEnabled = customTime; maxTime.isEnabled = customTime
+        scope.isEnabled = available; durationMode.isEnabled = available
+        runButton.isEnabled = !closed && (request != nil ? !loadingOptions && !cancelled : optionsReady)
+        let top = selected(topology)
+        entry.isEnabled = temporary && (top == "multihop" || top == "external")
+        exit.isEnabled = temporary && top == "multihop"; exitMode.isEnabled = temporary && top == "multihop"
+        layers.isEnabled = temporary && top == "router" && selected(mode) == "custom"
+        mode.isEnabled = temporary && top == "router"; node.isEnabled = temporary && ["router", "external"].contains(top)
+        base.isEnabled = temporary && ["router", "multihop"].contains(top)
+        let routerEntry = RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn"
+        entryMode.isEnabled = temporary && top == "external" && routerEntry
+        execution.isEnabled = temporary && (top == "multihop" || top == "external" && routerEntry)
+        let customTime = available && selected(durationMode) == "custom"; minTime.isEnabled = customTime; maxTime.isEnabled = customTime
     }
 
     @objc private func timeChanged() {
@@ -153,14 +306,25 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
         minLabel.stringValue = String(format: "Min %.0f s", minTime.doubleValue); maxLabel.stringValue = String(format: "Max %.0f s", maxTime.doubleValue)
     }
 
-    private func requestBody() -> [String: Any] {
+    private func requestBody() throws -> [String: Any] {
         var body: [String: Any] = ["scope": selected(scope), "duration_mode": selected(durationMode)]
         if selected(durationMode) == "custom" { body["min_seconds"] = minTime.doubleValue; body["max_seconds"] = maxTime.doubleValue }
-        if selected(scope) == "temporary" {
-            body["topology"] = selected(topology); body["node_id"] = selected(node); body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["mode"] = selected(mode); body["base"] = selected(base); body["exit_mode"] = selected(exitMode)
+        guard selected(scope) == "temporary" else { return body }
+        let top = selected(topology)
+        try RouterVPNMacSpeedLabPathPolicy.validate(nodes: nodes, entryModes: entryModes, executions: executions, topology: top, nodeID: selected(node), entryID: selected(entry), exitID: selected(exit), entryMode: selected(entryMode), execution: selected(execution))
+        body["topology"] = top
+        if top == "system-direct" { return body }
+        if ["router", "external"].contains(top) { body["node_id"] = selected(node) }
+        if top == "router" {
+            body["mode"] = selected(mode); body["base"] = selected(base)
             if selected(mode) == "custom" { body["custom_layers"] = layers.stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
-            body["daita"] = daita.state == .on; body["jumbo"] = jumbo.state == .on; body["require_encrypted"] = encrypted.state == .on; body["require_obfuscation"] = obfuscated.state == .on
         }
+        if top == "multihop" { body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution) }
+        if top == "external" {
+            body["entry_id"] = selected(entry); body["execution"] = selected(execution)
+            if RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn" { body["entry_mode"] = selected(entryMode) }
+        }
+        body["daita"] = daita.state == .on; body["jumbo"] = jumbo.state == .on; body["require_encrypted"] = encrypted.state == .on; body["require_obfuscation"] = obfuscated.state == .on
         return body
     }
 
@@ -187,18 +351,31 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
     }
 
     @objc private func runSpeedLab() {
-        let body = requestBody(); let maxSeconds = selected(durationMode) == "custom" ? maxTime.doubleValue : 12
-        runButton.isEnabled = false; status.stringValue = "Building/proving path and measuring…"; detail.string = "Speed Lab running. Temporary path state will be restored after completion."
-        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
-            guard let self else { return }
-            do {
-                let data = try self.api.request("/api/speed-lab/run", method: "POST", body: body, timeout: max(100, maxSeconds * 2 + 80))
-                guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], let summary = root["summary"] as? [String: Any], let measurement = root["measurement"] as? [String: Any] else { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speed Lab returned invalid JSON."]) }
+        guard !closed else { return }
+        if let request {
+            if !loadingOptions { cancelled = true; request.cancel(); status.stringValue = "Cancelling test request…"; refreshControls() }
+            return
+        }
+        guard optionsReady else { return }
+        do {
+            let body = try requestBody(); let maxSeconds = selected(durationMode) == "custom" ? maxTime.doubleValue : 12
+            status.stringValue = "Building/proving path and measuring…"; detail.string = "Speed Lab running. The controller restores the complete captured path after a temporary test."
+            for field in [idle,download,upload,idleDetail,downloadDetail,uploadDetail] { field.stringValue = "--" }
+            runButton.title = "Cancel test"
+            try performLocalRequest("/api/speed-lab/run", body: body, timeout: max(100, maxSeconds * 2 + 80)) { [weak self] result in
+                guard let self else { return }
+                do {
+                let data = try result.get()
+                guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any], root["ok"] as? Bool == true,
+                      let summary = root["summary"] as? [String: Any], let measurement = root["measurement"] as? [String: Any],
+                      ["idle_ms", "download_mbps", "upload_mbps", "download_loaded_ms", "upload_loaded_ms", "download_bufferbloat_ms", "upload_bufferbloat_ms"].allSatisfy({ key in
+                          guard let value = summary[key] as? NSNumber, CFGetTypeID(value) != CFBooleanGetTypeID() else { return false }
+                          return value.doubleValue.isFinite && value.doubleValue >= 0
+                      }) else { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Speed Lab returned an invalid measurement."]) }
                 let down = measurement["download"] as? [String: Any] ?? [:], up = measurement["upload"] as? [String: Any] ?? [:], idleStats = measurement["idle_latency"] as? [String: Any] ?? [:]
                 let downLoaded = down["loaded_latency"] as? [String: Any] ?? [:], upLoaded = up["loaded_latency"] as? [String: Any] ?? [:]
                 let pretty = String(data: try JSONSerialization.data(withJSONObject: root, options: [.prettyPrinted, .sortedKeys]), encoding: .utf8) ?? ""
                 let hops = self.hopSummary(root)
-                DispatchQueue.main.async {
                     self.idle.stringValue = String(format: "%.1f ms", (summary["idle_ms"] as? NSNumber)?.doubleValue ?? 0); self.download.stringValue = String(format: "%.1f Mbps", (summary["download_mbps"] as? NSNumber)?.doubleValue ?? 0); self.upload.stringValue = String(format: "%.1f Mbps", (summary["upload_mbps"] as? NSNumber)?.doubleValue ?? 0)
                     self.idleDetail.stringValue = String(format: "p90 %.1f • max %.1f • jitter %.1f ms", (idleStats["p90_ms"] as? NSNumber)?.doubleValue ?? 0, (idleStats["max_ms"] as? NSNumber)?.doubleValue ?? 0, (idleStats["jitter_ms"] as? NSNumber)?.doubleValue ?? 0)
                     self.downloadDetail.stringValue = String(format: "loaded %.1f ms • +%.1f bloat • p90 %.1f", (summary["download_loaded_ms"] as? NSNumber)?.doubleValue ?? 0, (summary["download_bufferbloat_ms"] as? NSNumber)?.doubleValue ?? 0, (downLoaded["p90_ms"] as? NSNumber)?.doubleValue ?? 0)
@@ -206,13 +383,17 @@ private final class RouterVPNMacSpeedLabController: NSWindowController {
                     self.detail.string = hops.isEmpty ? pretty : hops + "\n\nFULL RESULT\n" + pretty
                     let hopCount = (root["hops"] as? [[String: Any]])?.count ?? 0
                     let hopSuffix = hopCount > 0 ? " • \(hopCount) hop measurements" : ""
-                    self.status.stringValue = "Finished • \((root["path"] as? [String:Any])?["topology"] as? String ?? "path") • \(measurement["provider"] as? String ?? "Speed Lab")\(hopSuffix)"; self.runButton.isEnabled = true
-                }
-            } catch { DispatchQueue.main.async { self.detail.string = error.localizedDescription; self.status.stringValue = "Speed Lab failed closed; see details."; self.runButton.isEnabled = true } }
-        }
+                    self.status.stringValue = "Finished • \((root["path"] as? [String:Any])?["topology"] as? String ?? "path") • \(measurement["provider"] as? String ?? "Speed Lab")\(hopSuffix)"
+                } catch { self.detail.string = error.localizedDescription; self.status.stringValue = "Speed Lab failed closed; see details." }
+            }
+        } catch { runButton.title = "Run Speed Lab"; detail.string = error.localizedDescription; status.stringValue = "Speed Lab failed closed; see details."; refreshControls() }
     }
 
+    func windowWillClose(_ notification: Notification) {
+        closed = true; generation &+= 1; cancelled = true; request?.cancel(); request = nil
+    }
     @objc private func closePanel() { close() }
+
 }
 
 extension ProductWindowController {

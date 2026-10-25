@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"strings"
 	"testing"
 
@@ -68,6 +69,22 @@ func TestExternalRelayHTTPRetainsAuthenticatedLeaseLifecycle(t *testing.T) {
 			t.Fatal("external lease bypassed private peer/token authorization")
 		}
 	}
+	if response := call(http.MethodPut, captured, peer, token); response.Code != 400 || !strings.Contains(response.Body.String(), "upgrade") || runner.starts != 0 {
+		t.Fatal("legacy external request did not require an explicit upgrade")
+	}
+	get := httptest.NewRequest(http.MethodGet, multihopRelayPath+"?external_packet=1", nil)
+	get.RemoteAddr = peer
+	get.Header.Set("Authorization", "Bearer "+token)
+	challengeResponse := httptest.NewRecorder()
+	mux.ServeHTTP(challengeResponse, get)
+	var caps multihoprelay.Capabilities
+	if challengeResponse.Code != 200 || json.Unmarshal(challengeResponse.Body.Bytes(), &caps) != nil || caps.PacketChallenge == nil || caps.Validate(captured.EntryNodeID) != nil {
+		t.Fatal("proxy challenge discovery failed")
+	}
+	captured, err = multihoprelay.ChallengeExternalRequest(exit, captured, *caps.PacketChallenge)
+	if err != nil {
+		t.Fatal(err)
+	}
 	response := call(http.MethodPut, captured, peer, token)
 	if response.Code != http.StatusOK {
 		t.Fatalf("captured authenticated external request never reached the manager: status %d: %s", response.Code, response.Body.String())
@@ -102,7 +119,7 @@ func TestExternalRelayHTTPRetainsAuthenticatedLeaseLifecycle(t *testing.T) {
 	if response = call(http.MethodDelete, wrong, peer, token); response.Code != http.StatusForbidden || !runner.process.alive {
 		t.Fatal("changed external authentication could retire another lease")
 	}
-	if response = call(http.MethodPut, captured, "10.77.0.3:4321", token); response.Code != http.StatusConflict || runner.starts != 1 || !runner.process.alive {
+	if response = call(http.MethodPut, captured, "10.77.0.3:4321", token); response.Code != http.StatusForbidden || runner.starts != 1 || !runner.process.alive {
 		t.Fatal("another tunnel peer could replace the owned listener")
 	}
 	if response = call(http.MethodDelete, captured, peer, token); response.Code != http.StatusOK || runner.process.alive || runner.process.stops != 1 {
@@ -121,9 +138,11 @@ func TestExternalRelayHTTPRetainsAuthenticatedLeaseLifecycle(t *testing.T) {
 	}
 	for _, field := range []string{"missing", "authentication", "fingerprint", "session", "listener"} {
 		changed := captured
+		wantStatus := http.StatusForbidden
 		switch field {
 		case "missing":
 			changed.ExternalFingerprint, changed.ExternalAuthentication = "", ""
+			wantStatus = http.StatusBadRequest
 		case "authentication":
 			changed.ExternalAuthentication = strings.Repeat("0", 64)
 		case "fingerprint":
@@ -133,14 +152,26 @@ func TestExternalRelayHTTPRetainsAuthenticatedLeaseLifecycle(t *testing.T) {
 		case "listener":
 			changed.Password = strings.Repeat("f", 48)
 		}
-		if response = call(http.MethodPut, changed, peer, token); response.Code != http.StatusForbidden || runner.starts != 1 {
+		if response = call(http.MethodPut, changed, peer, token); response.Code != wantStatus || runner.starts != 1 {
 			t.Fatalf("captured authentication was reusable after changing %s", field)
 		}
 	}
 }
 
 func TestExternalRelayRequestRequiresExactAuthenticationPair(t *testing.T) {
-	_, captured := externalRelayHTTPFixture(t)
+	exit, captured := externalRelayHTTPFixture(t)
+	manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.77.0.1", FirstPort: 26240, LastPort: 26241, Exits: []multihoprelay.Exit{exit}}, captured.EntryNodeID, &layerRunner{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	challenge, err := manager.PacketChallenge(netip.MustParseAddr("10.77.0.2"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	captured, err = multihoprelay.ChallengeExternalRequest(exit, captured, challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
 	raw, err := json.Marshal(captured)
 	if err != nil {
 		t.Fatal(err)

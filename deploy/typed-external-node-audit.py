@@ -29,13 +29,15 @@ def forbid(path: str, *markers: str) -> None:
 
 
 # One backend typed creation boundary owns desktop profile validation and durable
-# selection. Rich/raw OpenVPN and Tor input remain on dedicated hardened paths.
+# selection. Original inline OpenVPN and its private pairing use the strict
+# typed decoder and native compiler; Tor retains its dedicated bridge builder.
 need(
     "cmd/client/external_profile_create.go",
     "externalProfileCreateRequest",
     'case "wireguard", "amneziawg"', 'case "socks5"', 'case "http-connect"',
     'case "https-connect"', 'case "shadowsocks"', 'case "hysteria2"',
-    "OpenVPN uses the hardened config import path",
+    'case "openvpn"', 'decodeExternalProfileCreate', 'nativeopenvpn.CompileProfile',
+    'json:"openvpn_pairing_json,omitempty"', 'provide one OpenVPN pairing representation',
     "Tor bridges use the dedicated censorship-circumvention builder",
     "externalRuntimePolicy(p)",
     "standardExitFromExternalProfile(policy)",

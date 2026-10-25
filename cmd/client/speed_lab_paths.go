@@ -21,6 +21,7 @@ type speedLabRequest struct {
 	Topology           string   `json:"topology,omitempty"`
 	NodeID             string   `json:"node_id,omitempty"`
 	EntryID            string   `json:"entry_id,omitempty"`
+	EntryMode          string   `json:"entry_mode,omitempty"`
 	ExitID             string   `json:"exit_id,omitempty"`
 	Mode               string   `json:"mode,omitempty"`
 	Base               string   `json:"base,omitempty"`
@@ -44,6 +45,7 @@ type speedLabPath struct {
 	NodeName         string    `json:"node_name,omitempty"`
 	EntryID          string    `json:"entry_id,omitempty"`
 	EntryName        string    `json:"entry_name,omitempty"`
+	EntryMode        string    `json:"entry_mode,omitempty"`
 	ExitID           string    `json:"exit_id,omitempty"`
 	ExitName         string    `json:"exit_name,omitempty"`
 	RequestedMode    string    `json:"requested_mode,omitempty"`
@@ -118,6 +120,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 	if st.Mode == "multihop" {
 		path.Topology = "multihop"
 		path.EntryID, path.ExitID = graph.EntryID, graph.ExitID
+		path.EntryMode = graph.EntryMode
 		path.Base, path.ExitMode, path.StartedAt, path.Execution = graph.Base, graph.ExitMode, graph.Started, graph.Execution
 		a.mu.Lock()
 		entry, entryOK := a.profileByIDLocked(graph.EntryID)
@@ -147,6 +150,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 			path.StartedAt = launch.external.started
 			if !launch.external.direct {
 				path.EntryID, path.EntryName = launch.external.entry.ID, launch.external.entry.Name
+				path.EntryMode = launch.external.profile.MultihopEntryMode
 				a.mu.Lock()
 				entry, ok := a.profileByIDLocked(path.EntryID)
 				a.mu.Unlock()
@@ -496,6 +500,9 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 func speedLabExternalEntry(profiles []common.RouterProfile, external common.RouterProfile, q speedLabRequest) (common.RouterProfile, string, bool, error) {
 	entryID := strings.TrimSpace(q.EntryID)
 	if entryID == "" {
+		if q.EntryMode != "" {
+			return common.RouterProfile{}, "", false, errors.New("an external Speed Lab entry mode requires its captured Router entry")
+		}
 		return common.RouterProfile{}, "", true, nil
 	}
 	if entryID == external.ID {
@@ -511,19 +518,19 @@ func speedLabExternalEntry(profiles []common.RouterProfile, external common.Rout
 	}
 	switch kind {
 	case "router-vpn":
-		if base := normalizeBase(q.Base); base != "" && base != "auto" && base != "wg" {
-			return common.RouterProfile{}, "", false, errors.New("Router VPN entry for an external exit currently requires standard WireGuard")
+		if _, err := desktopExternalEntryMode(external, entry, q.EntryMode, q.Base); err != nil {
+			return common.RouterProfile{}, "", false, err
 		}
 		if strings.TrimSpace(entry.Endpoint) == "" {
 			return common.RouterProfile{}, "", false, errors.New("Router VPN external-entry hop has no public endpoint")
 		}
 	case "external":
-		entryExit, err := standardExitFromExternalProfile(entry)
+		if q.EntryMode != "" {
+			return common.RouterProfile{}, "", false, errors.New("an external Speed Lab entry mode requires its captured Router entry")
+		}
+		_, err := standardExitFromExternalProfile(entry)
 		if err != nil {
 			return common.RouterProfile{}, "", false, err
-		}
-		if entryExit.Protocol == "openvpn" {
-			return common.RouterProfile{}, "", false, errors.New("external OpenVPN remains unavailable as an upstream hop")
 		}
 	default:
 		return common.RouterProfile{}, "", false, errors.New("unsupported temporary external entry kind")
@@ -565,7 +572,7 @@ func (a *app) prepareSpeedLabExternalPath(q speedLabRequest, restored *speedLabE
 		return nil, errors.New("temporary external Speed Lab path requires an external custom node")
 	}
 	if external.External.Protocol == "tor-bridge" {
-		if q.EntryID != "" || q.Execution != "" && q.Execution != "local" {
+		if q.EntryID != "" || q.EntryMode != "" || q.Execution != "" && q.Execution != "local" {
 			return nil, errors.New("external Tor Speed Lab requires its direct owned Tor runtime")
 		}
 		if _, _, _, _, err := torBridgeProfile(external); err != nil {
@@ -599,6 +606,17 @@ func (a *app) prepareSpeedLabExternalPath(q speedLabRequest, restored *speedLabE
 	if err != nil {
 		return nil, err
 	}
+	if !direct && entryKind == "router-vpn" {
+		policy.MultihopEntryMode, err = desktopExternalEntryMode(policy, entry, q.EntryMode, q.Base)
+		if err != nil {
+			return nil, err
+		}
+	} else {
+		if q.EntryMode != "" {
+			return nil, errors.New("an external Speed Lab entry mode requires its captured Router entry")
+		}
+		policy.MultihopEntryMode = ""
+	}
 	policy, err = externalDNSPolicyForPath(policy, entry, direct)
 	if err != nil {
 		return nil, err
@@ -629,7 +647,7 @@ func (a *app) prepareSpeedLabExternalPath(q speedLabRequest, restored *speedLabE
 	if err != nil {
 		return nil, err
 	}
-	if exit.Protocol == "openvpn" {
+	if exit.Protocol == "openvpn" && native == nil {
 		capability := openVPNRuntimeCapability()
 		if runtime.GOOS == "windows" {
 			capability = windowsOpenVPNRuntimeCapability()
@@ -745,6 +763,9 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 		err = proofErr
 		chosenExecution = proof.Execution
 		if err == nil {
+			err = a.restoreDesktopCapturedMTU(a.connectionOperationContextOrBackground(), native)
+		}
+		if err == nil {
 			err = registerActiveDNSRuntimeConfig(a, external.ID, "external-"+exit.Protocol, filepath.Join(native.directory, "sing-box.json"))
 		}
 	} else if exit.Protocol == "openvpn" {
@@ -775,12 +796,13 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	path := speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: external.ID, NodeName: external.Name, ExitID: external.ID, ExitName: external.Name, RuntimeMode: "external-" + exit.Protocol, LogicalMode: "external-node", Base: sessionBase, ExternalProtocol: exit.Protocol, Execution: chosenExecution, Description: "temporary external direct/hopped exit; captured native node/DNS/execution proof passes before measurement and no profile selection is saved"}
 	if !direct {
 		path.EntryID, path.EntryName = entry.ID, entry.Name
+		path.EntryMode = policy.MultihopEntryMode
 	}
 	return path, nil
 }
 
 func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfile) (speedLabPath, error) {
-	if q.EntryID != "" || q.Execution != "" && q.Execution != "local" {
+	if q.EntryID != "" || q.EntryMode != "" || q.Execution != "" && q.Execution != "local" {
 		return speedLabPath{}, errors.New("external Tor Speed Lab requires its direct owned Tor runtime")
 	}
 	if _, _, _, _, err := torBridgeProfile(profile); err != nil {

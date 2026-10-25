@@ -135,7 +135,10 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 		(!relayExternalDigest.MatchString(fields["external_fingerprint"]) || !relayExternalDigest.MatchString(fields["external_authentication"])) {
 		return q, bad
 	}
-	packet := multihoprelay.ExternalPacketMode(fields["exit_mode"])
+	packet := seen["external_fingerprint"] || multihoprelay.ExternalIndependentMode(fields["exit_mode"])
+	if packet && !seen["external_epoch"] && !seen["external_peer"] && !seen["external_expires_at"] && !seen["external_attempt"] {
+		return q, multihoprelay.ErrExternalUpgradeRequired
+	}
 	for _, key := range []string{"external_epoch", "external_peer", "external_expires_at", "external_attempt"} {
 		if seen[key] != packet {
 			return q, bad
@@ -188,7 +191,8 @@ func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 		result := map[string]any{"node_id": s.cfg.NodeID, "execution": "server", "exits": s.relay.Available()}
 		if r.URL.RawQuery != "" {
 			// Preserve the exact catalog shape for existing strict native clients.
-			// New packet clients explicitly request a fresh peer-bound challenge.
+			// Current external clients explicitly request a fresh peer-bound
+			// challenge. The historical query name preserves its wire contract.
 			if r.URL.RawQuery != "external_packet=1" {
 				http.Error(w, "invalid capability query", 400)
 				return
@@ -205,6 +209,10 @@ func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	q, err := decodeRelayRequest(http.MaxBytesReader(w, r.Body, 4096))
 	if err != nil {
+		if errors.Is(err, multihoprelay.ErrExternalUpgradeRequired) {
+			http.Error(w, multihoprelay.ErrExternalUpgradeRequired.Error(), 400)
+			return
+		}
 		http.Error(w, "invalid relay request", 400)
 		return
 	}

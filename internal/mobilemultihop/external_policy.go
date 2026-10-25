@@ -707,6 +707,9 @@ func externalCapturedTransport(out, profile map[string]any) error {
 	if err := multihoprelay.ValidateExternalServerPeer(protocol, ext); err != nil {
 		return err
 	}
+	if err := multihoprelay.ValidateExternalOpenVPNPairing(protocol, ext); err != nil {
+		return err
+	}
 	key := strings.ReplaceAll(protocol, "-", "_")
 	source, ok := ext[key].(map[string]any)
 	if !ok {
@@ -1041,9 +1044,29 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 		}
 	}
 	if exit["type"] == externalOpenVPNType {
-		mtu, err = externalOpenVPNMTU(tun, exit, mtu, entryMTU, fixed)
+		layerOverhead, failure := externalPacketLayerOverhead(profile)
+		if failure != nil {
+			return 0, 0, "", failure
+		}
+		mtu, err = externalOpenVPNMTU(tun, exit, mtu, entryMTU, fixed, layerOverhead)
 		if err != nil {
 			return 0, 0, "", err
+		}
+		if selection, _ := externalSavedExecution(profile); selection != "local" {
+			ext, _ := profile["external"].(map[string]any)
+			pair, _ := ext["openvpn_pairing"].(map[string]any)
+			server, _ := pair["server"].(map[string]any)
+			transport, _ := server["transport"].(map[string]any)
+			serverMTU, failure := mtuNumber(transport["mtu"])
+			if failure != nil {
+				return 0, 0, "", errors.New("OpenVPN server execution lost its captured provider interface MTU")
+			}
+			if fixed > serverMTU {
+				return 0, 0, "", errors.New("fixed MTU exceeds the independently owned OpenVPN server interface")
+			}
+			if fixed == 0 && mtu > serverMTU {
+				mtu = serverMTU
+			}
 		}
 	}
 	// Historical effective_mtu and its old network/probe fingerprints never

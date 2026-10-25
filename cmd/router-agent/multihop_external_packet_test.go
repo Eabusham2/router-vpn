@@ -139,10 +139,17 @@ func TestExternalPacketHTTPChallengeDecoderLeaseAndRetiredReplay(t *testing.T) {
 					t.Fatal("null challenge accepted")
 				}
 			}
-			for _, raw := range []string{strings.Replace(string(body), `"external_attempt":`, `"external_attempt":"`+strings.Repeat("f", 32)+`","external_attempt":`, 1), strings.Replace(string(body), `"external_expires_at":`, `"external_expires_at":1.5,"external_expires_at":`, 1), strings.Replace(string(body), `"exit_mode":"`+protocol+`"`, `"exit_mode":"shadowsocks"`, 1)} {
+			for _, raw := range []string{strings.Replace(string(body), `"external_attempt":`, `"external_attempt":"`+strings.Repeat("f", 32)+`","external_attempt":`, 1), strings.Replace(string(body), `"external_expires_at":`, `"external_expires_at":1.5,"external_expires_at":`, 1)} {
 				if _, err := decodeRelayRequest(strings.NewReader(raw)); err == nil {
 					t.Fatal("ambiguous/cross-family challenge accepted")
 				}
+			}
+			crossFamily := strings.Replace(string(body), `"exit_mode":"`+protocol+`"`, `"exit_mode":"shadowsocks"`, 1)
+			if decoded, err := decodeRelayRequest(strings.NewReader(crossFamily)); err != nil || decoded.ExitMode != "shadowsocks" {
+				t.Fatal("proxy acquisition no longer accepts its required challenge shape")
+			}
+			if w := call("PUT", multihopRelayPath, crossFamily, peer, token); w.Code != 503 || runner.starts != 0 {
+				t.Fatal("packet signature authorized a substituted unpaired proxy mode")
 			}
 			if w := call("PUT", multihopRelayPath, string(body), "10.77.0.3:4321", token); w.Code != 403 || runner.starts != 0 {
 				t.Fatal("signed acquisition replayed by different peer")

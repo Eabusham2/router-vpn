@@ -166,6 +166,32 @@ function Parse-Bool([string]$Value,[bool]$Default) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return $Default }
   return $Value.ToLowerInvariant() -eq 'true'
 }
+function Captured-EndpointAddresses([string]$Primary) {
+  $raw = $env:HOMEVPN_NATIVE_ENDPOINTS_JSON
+  if ($null -eq $raw) { if ($Primary) { return @($Primary) }; return @() }
+  if ($raw.Length -gt 1024 -or $env:HOMEVPN_STANDARD_ENGINE -cne 'native' -or $env:HOMEVPN_EXTERNAL_SESSION -cnotmatch '^[a-f0-9]{32}$') {
+    throw 'Native endpoint list has no captured external session.'
+  }
+  try {
+    if (-not $raw.Trim().StartsWith('[') -or -not $raw.Trim().EndsWith(']')) { throw 'array required' }
+    $values = @($raw | ConvertFrom-Json)
+    if ($values.Count -lt 1 -or $values.Count -gt 16) { throw 'endpoint count' }
+    $result = @()
+    foreach ($value in $values) {
+      $address = $null
+      if ($value -isnot [string] -or -not [Net.IPAddress]::TryParse($value,[ref]$address) -or $address.ToString() -cne $value) { throw 'literal required' }
+      if ([Net.IPAddress]::IsLoopback($address) -or $address.Equals([Net.IPAddress]::Any) -or $address.Equals([Net.IPAddress]::IPv6Any) -or $address.Equals([Net.IPAddress]::Broadcast)) { throw 'unicast required' }
+      $bytes = $address.GetAddressBytes()
+      if ($address.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
+        if ($address.IsIPv6Multicast -or $address.IsIPv6LinkLocal -or $address.IsIPv4MappedToIPv6 -or $address.ScopeId -ne 0) { throw 'unicast required' }
+      } elseif (($bytes[0] -ge 224 -and $bytes[0] -le 239) -or ($bytes[0] -eq 169 -and $bytes[1] -eq 254)) { throw 'unicast required' }
+      if ($result -ccontains $value) { throw 'duplicate endpoint' }
+      $result += $value
+    }
+    if ($result[0] -cne $Primary) { throw 'physical entry changed' }
+    return $result
+  } catch { throw 'Native endpoint list must retain its captured literal physical remotes.' }
+}
 function Resolve-Settings {
   $profile = $null
   if (-not $Endpoint -or -not $Policy -or -not $HomeLANAccess) {
@@ -180,6 +206,7 @@ function Resolve-Settings {
   }
   [pscustomobject]@{
     endpoint = $effectiveEndpoint.Trim().Trim('[',']')
+    endpoint_ips = @(Captured-EndpointAddresses $effectiveEndpoint.Trim().Trim('[',']'))
     policy = $effectivePolicy
     home_lan_access = $effectiveLAN
     tunnel_alias = $TunnelAlias
@@ -193,14 +220,14 @@ function Firewall-Profiles {
 function Remove-Rules {
   Get-NetFirewallRule -Group $RuleGroup -ErrorAction SilentlyContinue | Remove-NetFirewallRule -ErrorAction SilentlyContinue
 }
-function Add-Rule([string]$Name,[hashtable]$Args) {
+function Add-Rule([string]$Name,[hashtable]$RuleArguments) {
   $params = @{ DisplayName = $RulePrefix + $Name; Group = $RuleGroup; Direction='Outbound'; Action='Allow'; Profile='Any' }
-  foreach ($key in $Args.Keys) { $params[$key] = $Args[$key] }
+  foreach ($key in $RuleArguments.Keys) { $params[$key] = $RuleArguments[$key] }
   New-NetFirewallRule @params | Out-Null
 }
 function Install-AllowRules($settings) {
   Remove-Rules
-  if ($settings.endpoint) { Add-Rule 'selected node' @{ RemoteAddress=$settings.endpoint } }
+  if ($settings.endpoint_ips.Count -gt 0) { Add-Rule 'selected node' @{ RemoteAddress=@($settings.endpoint_ips) } }
   Add-Rule 'loopback' @{ RemoteAddress=@('127.0.0.1','::1') }
   Add-Rule 'DHCPv4' @{ Protocol='UDP'; LocalPort='68'; RemotePort='67' }
   Add-Rule 'IPv6 link maintenance' @{ Protocol='ICMPv6'; IcmpType=@('133','134','135','136') }
@@ -233,6 +260,7 @@ switch ($Action) {
     [pscustomobject]@{
       policy = $settings.policy
       endpoint = $settings.endpoint
+      endpoint_ips = @($settings.endpoint_ips)
       home_lan_access = $settings.home_lan_access
       tunnel_alias = $settings.tunnel_alias
       default_outbound = if ($settings.policy -eq 'off') { 'unchanged' } else { 'Block' }
@@ -263,6 +291,7 @@ switch ($Action) {
       schema_version = 1
       policy = $settings.policy
       endpoint = $settings.endpoint
+      endpoint_ips = @($settings.endpoint_ips)
       home_lan_access = $settings.home_lan_access
       tunnel_alias = $settings.tunnel_alias
       phase = 'preparing'

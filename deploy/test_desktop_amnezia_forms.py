@@ -54,14 +54,16 @@ import Foundation
 HELPER
 final class Field { var stringValue: String; init(_ value: String) { stringValue = value } }
 final class Popup { var indexOfSelectedItem = 0 }
+final class TextArea { var string = "" }
 final class Form {
     var selected = "amneziawg"
     var result: [String: Any]?
     var message = ""
-    let server = Field("203.0.113.60")
+    let server = Field("203.0.113.60"); let expected = Field("203.0.113.60")
     let username = Field(""); let password = Field(""); let method = Field(""); let secret = Field(""); let tlsName = Field("")
     let responseURL = Field(""); let responseName = Field(""); let startLayer = Popup()
     let layerAPI = Field(""); let layerPort = Field(""); let layerKey = Field("")
+    let openVPNConfig = TextArea(); let openVPNPairing = TextArea()
     let serverPeerPublic = Field(""); let serverPeerAddresses = Field(""); let serverPeerMTU = Field(""); let serverPeerKeepalive = Field("")
     let wgPrivate = Field(Data(repeating: 112, count: 32).base64EncodedString())
     let wgPeer = Field(Data(repeating: 113, count: 32).base64EncodedString())
@@ -76,7 +78,7 @@ final class Form {
     func appendHelp(_ text: String) { message = text }
     func save() {
         result = nil
-        var body: [String: Any] = ["protocol": selected, "name": "Imported AWG fixture", "server": "203.0.113.60", "port": 51820, "expected_public_ip": "203.0.113.60"]
+        var body: [String: Any] = ["protocol": selected, "name": "Imported AWG fixture", "server": server.stringValue, "port": 51820, "expected_public_ip": expected.stringValue]
         PROXY
         FIELDS
         EXTRA
@@ -165,6 +167,32 @@ form.selected = "shadowsocks"; form.save(); check(form.result == nil, "Proxy acc
 for field in [form.serverPeerPublic, form.serverPeerAddresses, form.serverPeerMTU, form.serverPeerKeepalive] { field.stringValue = "" }
 form.startLayer.indexOfSelectedItem = 0; form.layerAPI.stringValue = ""; form.layerPort.stringValue = ""; form.layerKey.stringValue = ""
 form.selected = "shadowsocks"; form.responseURL.stringValue = ""; form.save(); check(form.result == nil, "Partial response endpoint accepted"); count += 1
+
+let openVPNFixtures = try JSONSerialization.jsonObject(with: Data(contentsOf: output.appendingPathComponent("external-openvpn-client.json"))) as! [String: Any]
+let openVPNLayers = openVPNFixtures["layers"] as! [String: [String: Any]]
+for (index, layer) in layers.enumerated() {
+    let fixture = openVPNLayers[layer]!, external = fixture["external"] as! [String: Any], original = external["openvpn"] as! [String: Any]
+    let probe = external["response_probe"] as! [String: String]
+    form.selected = "openvpn"; form.server.stringValue = "203.0.113.20"; form.expected.stringValue = external["expected_public_ip"] as! String; form.openVPNConfig.string = original["config"] as! String
+    form.openVPNPairing.string = String(decoding: try JSONSerialization.data(withJSONObject: external["openvpn_pairing"]!, options: [.sortedKeys, .prettyPrinted]), as: UTF8.self)
+    form.username.stringValue = original["username"] as! String; form.password.stringValue = original["password"] as! String
+    form.responseURL.stringValue = probe["url"]!; form.responseName.stringValue = probe["server_name"] ?? ""; form.startLayer.indexOfSelectedItem = index
+    form.layerAPI.stringValue = ""; form.layerPort.stringValue = ""; form.layerKey.stringValue = ""
+    if let provision = external["start_layer"] as? [String: Any], let transport = provision["transport"] as? [String: Any] {
+        form.layerAPI.stringValue = provision["api"] as! String; form.layerPort.stringValue = String(transport["server_port"] as! Int); form.layerKey.stringValue = transport["password"] as! String
+    }
+    form.save(); check(form.result != nil, form.message)
+    let body = form.result!, inline = body["openvpn"] as! [String: String]
+    check(inline["config"] == form.openVPNConfig.string && inline["username"] == form.username.stringValue && inline["password"] == form.password.stringValue && body["openvpn_pairing_json"] as? String == form.openVPNPairing.string, "OpenVPN source or private pairing bytes changed")
+    var capturedBody = body; capturedBody["server"] = "203.0.113.20"; capturedBody["expected_public_ip"] = external["expected_public_ip"]
+    try JSONSerialization.data(withJSONObject: capturedBody, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-"+layer+".json")); count += 1
+}
+form.openVPNPairing.string = ""; form.openVPNConfig.string += "remote 203.0.113.21 443 tcp\n"; form.responseURL.stringValue = ""; form.responseName.stringValue = ""; form.startLayer.indexOfSelectedItem = 0; form.layerAPI.stringValue = ""; form.layerPort.stringValue = ""; form.layerKey.stringValue = ""
+form.save(); check(form.result != nil && form.result!["openvpn_pairing_json"] == nil, "Plain Local multiremote incorrectly requires pairing")
+try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-local-multiremote.json")); count += 1
+form.selected = "shadowsocks"; form.save(); check(form.result == nil, "Changing protocol discarded private OpenVPN source"); count += 1
+form.openVPNConfig.string = ""; form.selected = "openvpn"; form.save(); check(form.result == nil, "Empty OpenVPN source reached controller"); count += 1
+form.openVPNPairing.string = ""; form.selected = "shadowsocks"
 var profile: [String: Any] = ["id": "captured-exit", "node_kind": "external"]
 check(try externalSavedExecution(profile) == "local", "Legacy external default is not Local"); count += 1
 for choice in ["local", "server", "auto"] {
@@ -182,13 +210,16 @@ profile["multihop_execution"] = "invalid"; check(rejects { _ = try externalSaved
 profile["node_kind"] = "router-vpn"; check(rejects { _ = try externalConnectBody(profile: profile, execution: "local") }, "Router selection became external"); count += 1
 let upstream: [String: Any] = ["id": "entry", "node_kind": "router-vpn"]
 var captured: [String: Any] = ["id": "exit", "node_kind": "external", "external": ["protocol": "wireguard", "has_response_probe": true, "has_server_peer": true]]
-for transport in ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"] {
-    captured["external"] = ["protocol": transport, "has_response_probe": true, "has_server_peer": true]
+for transport in ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"] {
+    captured["external"] = ["protocol": transport, "has_response_probe": true, "has_server_peer": ["wireguard", "amneziawg"].contains(transport), "has_openvpn_pairing": transport == "openvpn"]
     for choice in ["local", "server", "auto"] {
         let body = try externalPathConnectBody(captured: captured, entryID: "entry", execution: choice, direct: false, current: [captured, upstream])
         check(body["profile_id"] as? String == "exit" && body["entry_id"] as? String == "entry" && body["execution"] as? String == choice, "External path changed its captured identity"); count += 1
     }
 }
+var replacedPairing = captured
+replacedPairing["external"] = ["protocol": "openvpn", "has_response_probe": true, "has_openvpn_pairing": false]
+check(rejects { _ = try externalPathConnectBody(captured: captured, entryID: "entry", execution: "auto", direct: false, current: [replacedPairing, upstream]) }, "Stale OpenVPN pairing eligibility reached controller"); count += 1
 captured["external"] = ["protocol": "wireguard", "has_response_probe": true, "has_server_peer": true]
 for changed in ["removed", "duplicate", "protocol", "peer", "probe", "entry"] {
     var fresh = captured, catalog = [captured, upstream]
@@ -334,6 +365,7 @@ def main():
     for shell in shells:
         with tempfile.TemporaryDirectory(prefix='router-vpn-amnezia-form-') as temporary:
             directory = Path(temporary)
+            shutil.copyfile(ROOT/'deploy/fixtures/external-openvpn-client.json', directory/'external-openvpn-client.json')
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
             subprocess.run(['go', 'test', '-count=1', './cmd/client', '-run', '^TestDesktopExternalEntryModeFormCatalog$'], cwd=ROOT, env=env, check=True, timeout=180)
             if args.platform == 'linux':
@@ -343,7 +375,7 @@ def main():
             else:
                 windows_form(directory, shell)
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
-            subprocess.run(['go', 'test', '-race', '-count=1', './cmd/client', '-run', '^TestDesktop(Amnezia|ExternalProxy|ExternalPacket|ExternalEntryMode)FormPayload$'], cwd=ROOT, env=env, check=True, timeout=180)
+            subprocess.run(['go', 'test', '-race', '-count=1', './cmd/client', '-run', '^TestDesktop(Amnezia|ExternalProxy|ExternalPacket|ExternalEntryMode|ExternalOpenVPN)FormPayload$'], cwd=ROOT, env=env, check=True, timeout=180)
     print('Verified native '+args.platform+' forms to exact Go AWG/WG profiles and authenticated proxy/layer runtime graphs', flush=True)
 
 

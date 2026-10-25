@@ -21,6 +21,7 @@ def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
+        *[p for p in (ROOT/'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')],
         *(ROOT/'internal/mobiletor').glob('*.go'),
         ROOT/'internal/dnsmeasure/catalog.go',
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
@@ -53,6 +54,7 @@ def rewrite(data):
         ('router-vpn/internal/mobiletor', MODULE+'/routervpn/mobiletor'),
         ('router-vpn/internal/common', MODULE+'/routervpn/common'),
         ('router-vpn/internal/awgpolicy', MODULE+'/routervpn/awgpolicy'),
+        ('router-vpn/internal/nativeopenvpn', MODULE+'/routervpn/nativeopenvpn'),
         ('router-vpn/mobile/torpt', MODULE+'/routervpn/torpt'),
     ):
         data = data.replace(('"'+source).encode(), ('"'+target).encode())
@@ -64,7 +66,7 @@ def copies():
     # The DNS-only native Tor adapter uses the same closed catalog as the full
     # mobile measurement bridge, including in standalone pinned Tor tests.
     result['routervpn/dnsmeasure/catalog.go'] = (ROOT/'internal/dnsmeasure/catalog.go').read_bytes()
-    for name in ('common', 'mobiletor', 'awgpolicy'):
+    for name in ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn'):
         for path in sorted((ROOT/'internal'/name).glob('*.go')):
             if name != 'mobiletor' and path.name.endswith('_test.go'):
                 continue

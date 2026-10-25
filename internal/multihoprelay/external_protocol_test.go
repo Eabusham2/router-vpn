@@ -89,6 +89,7 @@ func TestExternalProxyFamiliesOwnNativeRelayAndLayerLifecycle(t *testing.T) {
 					t.Fatal("private outer credential entered discovery")
 				}
 				peer := netip.MustParseAddr("10.77.0.2")
+				request = challengedExternalFixture(t, manager, exit, request, peer)
 				lease, err := manager.Create(context.Background(), peer, request)
 				if err != nil || lease.Request != request || lease.ExitNodeID != "" {
 					t.Fatal("owned external relay failed", err)
@@ -154,6 +155,11 @@ func TestExternalProxyPublicIdentityOmitsAllSecretsButPrivateProofBindsThem(t *t
 						continue
 					}
 					exit, request := externalProxyFixture(t, protocol, layer)
+					originalRaw, _ := json.Marshal(exit)
+					var original Exit
+					if json.Unmarshal(originalRaw, &original) != nil {
+						t.Fatal("fixture ownership")
+					}
 					if credential == "outer" {
 						exit.StartLayer.Transport["password"] = base64.StdEncoding.EncodeToString([]byte(strings.Repeat("z", 32)))
 					} else {
@@ -174,6 +180,7 @@ func TestExternalProxyPublicIdentityOmitsAllSecretsButPrivateProofBindsThem(t *t
 					if err != nil {
 						t.Fatal(err)
 					}
+					request = challengedExternalFixture(t, manager, original, request, netip.MustParseAddr("10.77.0.2"))
 					if _, err := manager.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), request); err == nil || r.starts != 0 {
 						t.Fatal("substituted private credential started a server engine")
 					}
@@ -281,7 +288,7 @@ func TestExternalProxyAuthenticationAndTransportCannotBeDowngraded(t *testing.T)
 			t.Fatal("packet credentials reused without independently provisioned server peer")
 		}
 	}
-	for _, protocol := range []string{"openvpn", "unknown"} {
+	for _, protocol := range []string{"unknown"} {
 		if ExternalMode(protocol) {
 			t.Fatal("packet/session credentials cannot be reused as proxy credentials")
 		}

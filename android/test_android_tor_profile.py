@@ -382,7 +382,7 @@ final class AndroidRuntimeRegistry {
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();
  static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
 }
-final class AndroidOpenVPN {
+final class AndroidOpenVPN {static void validatePairing(AndroidStandardExitStore.Entry entry){if(entry.openVPNPairing!=null)throw new AssertionError("OpenVPN pairing is outside this non-OpenVPN fixture");}
  static JSONObject endpoint(AndroidStandardExitStore.Entry e,String value){throw new AssertionError("Tor must not invoke OpenVPN");}
 }
 '''

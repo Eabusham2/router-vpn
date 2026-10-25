@@ -56,7 +56,8 @@ func externalPathIdentity(_ profile: [String: Any]) -> [String: Any] {
         "endpoint": profile["endpoint"] as? String ?? "", "start_layer": profile["start_layer"] as? String ?? "",
         "multihop_entry_mode": profile["multihop_entry_mode"] as? String ?? "",
         "protocol": ext["protocol"] as? String ?? "", "expected_public_ip": ext["expected_public_ip"] as? String ?? "",
-        "has_response_probe": ext["has_response_probe"] as? Bool ?? false, "has_server_peer": ext["has_server_peer"] as? Bool ?? false]
+        "has_response_probe": ext["has_response_probe"] as? Bool ?? false, "has_server_peer": ext["has_server_peer"] as? Bool ?? false,
+        "has_openvpn_pairing": ext["has_openvpn_pairing"] as? Bool ?? false]
 }
 
 func externalEntryMode(captured: [String: Any], entry: [String: Any]?, selected: String,
@@ -92,9 +93,10 @@ func externalPathConnectBody(captured: [String: Any], entryID: String, execution
     if execution != "local" {
         let ext = matches[0]["external"] as? [String: Any] ?? [:]
         let protocolID = ext["protocol"] as? String ?? ""
-        guard ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(protocolID) else { throw fail("Server / Compare requires a supported authenticated external transport.") }
+        guard ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(protocolID) else { throw fail("Server / Compare requires a supported authenticated external transport.") }
         guard ext["has_response_probe"] as? Bool == true else { throw fail("Server / Compare requires this external node's HTTPS response probe.") }
         guard !["wireguard", "amneziawg"].contains(protocolID) || ext["has_server_peer"] as? Bool == true else { throw fail("WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.") }
+        guard protocolID != "openvpn" || ext["has_openvpn_pairing"] as? Bool == true else { throw fail("OpenVPN Server / Compare requires private pairing with independent provider credentials.") }
         guard !direct, entries[0]["node_kind"] as? String ?? "router-vpn" == "router-vpn" else { throw fail("Server / Compare requires a Router VPN entry.") }
     }
     var body = try externalConnectBody(profile: captured, entryID: entryID, execution: execution, direct: direct)
@@ -124,6 +126,20 @@ func externalServerPeerFields(protocolID: String, publicKey: String, addresses: 
     return ["server_peer": peer]
 }
 
+func externalOpenVPNFields(protocolID: String, config: String, pairing: String, username: String, password: String) throws -> [String: Any] {
+    func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    guard protocolID == "openvpn" else {
+        guard config.isEmpty && pairing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw fail("OpenVPN profile and pairing fields belong only to OpenVPN.") }
+        return [:]
+    }
+    guard !config.isEmpty, config.utf8.count <= 256 * 1024, !config.contains("\0"), pairing.utf8.count <= 512 * 1024 else {
+        throw fail("Paste a bounded inline OpenVPN profile and its optional private pairing package.")
+    }
+    var result: [String: Any] = ["openvpn": ["config": config, "username": username, "password": password]]
+    if !pairing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result["openvpn_pairing_json"] = pairing }
+    return result
+}
+
 // These are private typed provision fields. The controller validates exact server,
 // API, response endpoint and key ownership before saving or starting a runtime.
 func externalOptionalTransportFields(protocolID: String, server: String, responseURL: String,
@@ -136,7 +152,7 @@ func externalOptionalTransportFields(protocolID: String, server: String, respons
     let port = layerPort.trimmingCharacters(in: .whitespacesAndNewlines)
     guard ["off", "aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(startLayer) else { throw fail("Choose a supported external Start Layer.") }
     let supplied = !probe.isEmpty || !name.isEmpty || startLayer != "off" || !api.isEmpty || !port.isEmpty || !layerKey.isEmpty
-    guard !supplied || ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(protocolID) else { throw fail("Response probes and external Start Layers require a supported external transport.") }
+    guard !supplied || ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(protocolID) else { throw fail("Response probes and external Start Layers require a supported external transport.") }
     guard name.isEmpty || !probe.isEmpty else { throw fail("Supply the HTTPS response URL with its certificate server name.") }
     var fields: [String: Any] = ["start_layer": startLayer]
     if !probe.isEmpty { fields["response_probe"] = ["url": probe, "server_name": name] }
@@ -282,12 +298,12 @@ extension ProductWindowController {
 
         let panel = NSAlert()
         panel.messageText = "Add external node"
-        panel.informativeText = "Create a full-device external node. OpenVPN uses Import; Tor uses Tor Bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."
+        panel.informativeText = "Create a full-device external node. OpenVPN accepts its original inline profile; Tor uses Tor Bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."
         panel.addButton(withTitle: "Save node")
         panel.addButton(withTitle: "Cancel")
 
         let protocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
-        protocolPopup.addItems(withTitles: ["WireGuard", "AmneziaWG", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks", "Hysteria2"])
+        protocolPopup.addItems(withTitles: ["WireGuard", "AmneziaWG", "SOCKS5", "HTTP CONNECT", "HTTPS CONNECT", "Shadowsocks", "Hysteria2", "OpenVPN"])
         let name = externalField("Display name")
         let server = externalField("Server IP/hostname")
         let port = externalField("Port")
@@ -295,7 +311,7 @@ extension ProductWindowController {
         let location = externalField("Location label (optional)")
         let latitude = externalField("Latitude -90..90 (optional)")
         let longitude = externalField("Longitude -180..180 (optional)")
-        let username = externalField("Username (proxy only)")
+        let username = externalField("Username (proxy / OpenVPN)")
         let password = externalField("Password / proxy credential", secure: true)
         let method = externalField("Shadowsocks method")
         let secret = externalField("Shadowsocks/Hysteria2 secret", secure: true)
@@ -322,7 +338,17 @@ extension ProductWindowController {
         let serverPeerMTU = externalField("Server peer MTU 1280–9000 (required with descriptor)")
         let serverPeerKeepalive = externalField("Server peer keepalive 0–65535 (optional)")
 
-        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. Optional coordinates are real values you provide. AmneziaWG requires all 11 exact provider values. Server / Compare requires a Router entry and an HTTPS response probe on the external server. WG/AWG also requires the public descriptor of a separately provisioned server-side client peer, with addresses and public identity distinct from this device. Keep that peer's private key and preshared key on the server. The WG peer key identifies the remote provider. Start Layers require matching server provisioning; SOCKS5 / HTTP(S) needs authentication for Server / Compare.")
+        let openVPNConfig = NSTextView(); let openVPNPairing = NSTextView()
+        let openVPNViews = [openVPNConfig, openVPNPairing].map { view -> NSScrollView in
+            view.isRichText = false; view.isAutomaticQuoteSubstitutionEnabled = false; view.isAutomaticDashSubstitutionEnabled = false
+            view.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
+            view.frame = NSRect(x: 0, y: 0, width: 420, height: 130); view.isVerticallyResizable = true; view.isHorizontallyResizable = false
+            view.autoresizingMask = [.width]; view.textContainer?.widthTracksTextView = true
+            let scroll = NSScrollView(); scroll.hasVerticalScroller = true; scroll.borderType = .bezelBorder; scroll.documentView = view
+            scroll.heightAnchor.constraint(equalToConstant: 130).isActive = true
+            return scroll
+        }
+        let note = NSTextField(wrappingLabelWithString: "Relevant fields depend on the protocol. Optional coordinates are real values you provide. AmneziaWG requires all 11 exact provider values. Server / Compare requires a Router entry and an HTTPS response probe on the external server. WG/AWG also requires the public descriptor of a separately provisioned server-side client peer, with addresses and public identity distinct from this device. Keep that peer's private key and preshared key on the server. The WG peer key identifies the remote provider. Start Layers require matching server provisioning; SOCKS5 / HTTP(S) needs authentication for Server / Compare. OpenVPN uses its original inline profile and private pairing with independent provider identities; server secrets remain on the Router entry.")
         note.textColor = .secondaryLabelColor
         let grid = NSGridView(views: [
             [NSTextField(labelWithString: "Protocol"), protocolPopup],
@@ -357,6 +383,8 @@ extension ProductWindowController {
             [NSTextField(labelWithString: "Server peer addresses"), serverPeerAddresses],
             [NSTextField(labelWithString: "Server peer MTU"), serverPeerMTU],
             [NSTextField(labelWithString: "Server peer keepalive"), serverPeerKeepalive],
+            [NSTextField(labelWithString: "Private inline OpenVPN profile"), openVPNViews[0]],
+            [NSTextField(labelWithString: "Private OpenVPN pairing JSON"), openVPNViews[1]],
         ])
         grid.rowSpacing = 5
         grid.columnSpacing = 10
@@ -365,7 +393,7 @@ extension ProductWindowController {
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
-        content.setFrameSize(NSSize(width: 660, height: 1080))
+        content.setFrameSize(NSSize(width: 660, height: 1380))
         grid.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 680, height: 580))
         scroll.hasVerticalScroller = true
@@ -380,7 +408,7 @@ extension ProductWindowController {
             return
         }
 
-        let protocols = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"]
+        let protocols = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
         let index = max(0, min(protocolPopup.indexOfSelectedItem, protocols.count - 1))
         let selected = protocols[index]
         var body: [String: Any] = [
@@ -417,6 +445,11 @@ extension ProductWindowController {
         if !secret.stringValue.isEmpty { body["secret"] = secret.stringValue }
         let sni = tlsName.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
         if !sni.isEmpty { body["tls_server_name"] = sni }
+        do {
+            body.merge(try externalOpenVPNFields(protocolID: selected, config: openVPNConfig.string, pairing: openVPNPairing.string,
+                username: username.stringValue, password: password.stringValue)) { _, supplied in supplied }
+            if selected == "openvpn" { body.removeValue(forKey: "username"); body.removeValue(forKey: "password") }
+        } catch { appendHelp(error.localizedDescription); return }
         if selected == "wireguard" || selected == "amneziawg" {
             body["wg_private_key"] = wgPrivate.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
             body["wg_peer_public_key"] = wgPeer.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)

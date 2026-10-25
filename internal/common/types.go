@@ -1,5 +1,7 @@
 package common
 
+import "router-vpn/internal/nativeopenvpn"
+
 const (
 	RouterProfileSchemaVersion = 4
 	RouterProfileStoreVersion  = 4
@@ -16,7 +18,8 @@ type DNSBenchmarkResult struct { Name string `json:"name"`; Address string `json
 
 type ExternalWireGuardConfig struct { PrivateKey string `json:"private_key"`; Addresses []string `json:"addresses"`; PeerPublicKey string `json:"peer_public_key"`; PresharedKey string `json:"preshared_key,omitempty"`; Endpoint string `json:"endpoint"`; AllowedIPs []string `json:"allowed_ips"`; DNS []string `json:"dns,omitempty"`; MTU int `json:"mtu,omitempty"`; PersistentKeepalive int `json:"persistent_keepalive_interval,omitempty"` }
 type ExternalAmneziaWGConfig struct { ExternalWireGuardConfig; Parameters map[string]string `json:"parameters"` }
-type ExternalOpenVPNConfig struct { Config string `json:"config"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
+type ExternalOpenVPNConfig = nativeopenvpn.Profile
+type ExternalOpenVPNPairing = nativeopenvpn.Pairing
 type ExternalShadowsocksConfig struct { Server string `json:"server"`; Port int `json:"port"`; Method string `json:"method"`; Password string `json:"password"` }
 type ExternalSOCKS5Config struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
 type ExternalHTTPConnectConfig struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"`; TLSServerName string `json:"tls_server_name,omitempty"` }
@@ -44,6 +47,7 @@ type ExternalNodeConfig struct {
 	ResponseProbe *ExternalResponseProbe `json:"response_probe,omitempty"`
 	StartLayer *ExternalStartLayer `json:"start_layer,omitempty"`
 	ServerPeer *ExternalServerPeer `json:"server_peer,omitempty"`
+	OpenVPNPairing *ExternalOpenVPNPairing `json:"openvpn_pairing,omitempty"`
 	WireGuard *ExternalWireGuardConfig `json:"wireguard,omitempty"`
 	AmneziaWG *ExternalAmneziaWGConfig `json:"amneziawg,omitempty"`
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`

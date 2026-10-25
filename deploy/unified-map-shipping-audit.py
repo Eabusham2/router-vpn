@@ -194,7 +194,7 @@ need(
     "RouterVPNConnectionProfiles.swift",
     "RouterVPNConnectionProfileChrome.swift",
     "RouterVPNProfileSettings.swift",
-    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
+    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
     "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
 )
 need(

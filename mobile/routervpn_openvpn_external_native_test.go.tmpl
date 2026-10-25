@@ -1,0 +1,458 @@
+//go:build routervpn_start_layer_integration
+
+package libbox
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/json"
+	"encoding/pem"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"github.com/sagernet/sing-box/log"
+	xorout "github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type externalOpenVPNNativeCertificates struct{ ca, provider, providerKey, local, localKey, relay, relayKey string }
+
+func externalOpenVPNNativePKI(t *testing.T) externalOpenVPNNativeCertificates {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Private native OpenVPN test CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := externalOpenVPNNativeCertificates{ca: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, DNSNames: []string{name}}
+		der, err := x509.CreateCertificate(rand.Reader, cert, ca, &private.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := x509.MarshalPKCS8PrivateKey(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: secret}))
+	}
+	result.provider, result.providerKey = issue(2, "provider.routervpn.test", x509.ExtKeyUsageServerAuth)
+	result.local, result.localKey = issue(3, "local-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	result.relay, result.relayKey = issue(4, "relay-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	return result
+}
+
+func externalOpenVPNNativeProfile(pki externalOpenVPNNativeCertificates, cert, key, network, control string) nativeopenvpn.Profile {
+	config := "client\nremote 192.0.2.1 1194 " + network + "\nverify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + pki.ca + "</ca>\n<cert>\n" + cert + "</cert>\n<key>\n" + key + "</key>\n"
+	if control != "" {
+		config += "<" + control + ">\n" + externalOpenVPNControlKey + "</" + control + ">\n"
+		if control == "tls-auth" {
+			config += "key-direction 1\n"
+		}
+	}
+	return nativeopenvpn.Profile{Config: config}
+}
+
+var externalOpenVPNControlKey = "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
+
+func externalOpenVPNNativeXOR(t *testing.T, target, password string) int {
+	t.Helper()
+	binary := os.Getenv("ROUTER_VPN_WHITENING_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("production Start Layer relay fixture required")
+	}
+	port := routerNativeFreePort(t)
+	path := filepath.Join(t.TempDir(), "private-test-layer.json")
+	body, _ := json.Marshal(map[string]any{"outbounds": []any{map[string]any{"type": "shadowsocks", "method": "2022-blake3-aes-256-gcm", "password": password}}})
+	if err := os.WriteFile(path, body, 0600); err != nil {
+		t.Fatal(err)
+	}
+	command := exec.Command(binary, "--mode", "server", "--listen", fmt.Sprintf("127.0.0.1:%d", port), "--target", target, "--key-config", path)
+	command.Stdout, command.Stderr = io.Discard, io.Discard
+	if err := command.Start(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- command.Wait() }()
+	t.Cleanup(func() {
+		_ = command.Process.Kill()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("owned whitening process did not close")
+		}
+	})
+	for deadline := time.Now().Add(3 * time.Second); time.Now().Before(deadline); {
+		select {
+		case <-done:
+			t.Fatal("owned whitening process exited")
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), 100*time.Millisecond)
+		if err == nil {
+			_ = conn.Close()
+			return port
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatal("owned whitening listener did not start")
+	return 0
+}
+
+type externalOpenVPNNativeProcess struct {
+	owner *routerNativeOwner
+	alive atomic.Bool
+}
+
+// Production rejects a loopback Start Layer. The existing build-tagged test
+// helper preserves its real constructor, original captured address, AES and
+// XOR framing; only the final physical socket goes to this test's owned relay.
+type externalOpenVPNNativePhysical struct{ port int }
+
+func (p externalOpenVPNNativePhysical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if destination.String() != "192.0.2.1:8389" || (network != "tcp" && network != "udp") {
+		return nil, fmt.Errorf("unowned native layer physical target")
+	}
+	return (&net.Dialer{Control: startwhitening.UDPControl}).DialContext(ctx, network, fmt.Sprintf("127.0.0.1:%d", p.port))
+}
+func (externalOpenVPNNativePhysical) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, fmt.Errorf("native layer requires its owned connected packet socket")
+}
+
+func externalOpenVPNNativeTryStart(root map[string]any, layer string, port int) (*routerNativeOwner, error) {
+	if layer != "aes-256-gcm+xor-whitening" {
+		return routerNativeTryStart(root)
+	}
+	ctx := baseContext(nil)
+	registry := service.FromContext[adapter.OutboundRegistry](ctx).(*outbound.Registry)
+	outbound.Register[xorout.Options](registry, startwhitening.Type,
+		func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options xorout.Options) (adapter.Outbound, error) {
+			return xorout.RouterVPNTestPhysicalOutbound(ctx, tag, options, externalOpenVPNNativePhysical{port: port})
+		})
+	raw, err := json.Marshal(root)
+	if err != nil {
+		return nil, err
+	}
+	options, err := parseConfig(ctx, string(raw))
+	if err != nil {
+		return nil, err
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		return nil, err
+	}
+	if err := instance.Start(); err != nil {
+		_ = instance.Close()
+		return nil, err
+	}
+	return &routerNativeOwner{Box: instance}, nil
+}
+
+func (p *externalOpenVPNNativeProcess) Alive() bool { return p.alive.Load() }
+func (p *externalOpenVPNNativeProcess) Stop(context.Context) error {
+	err := p.owner.Close()
+	if err == nil {
+		p.alive.Store(false)
+	}
+	return err
+}
+
+type externalOpenVPNNativeRunner struct {
+	t                  *testing.T
+	vpnPort, layerPort int
+	layer, badTLS      string
+	port               int
+	process            *externalOpenVPNNativeProcess
+	starts             int
+}
+
+func (r *externalOpenVPNNativeRunner) mappedGraph(raw []byte) (map[string]any, error) {
+	var graph map[string]any
+	if err := json.Unmarshal(raw, &graph); err != nil {
+		return nil, err
+	}
+	endpoint := graph["endpoints"].([]any)[0].(map[string]any)
+	if endpoint["system"] != false || endpoint["type"] != "openvpn-client" {
+		return nil, fmt.Errorf("native relay changed endpoint ownership")
+	}
+	if r.layer == "" {
+		endpoint["server"], endpoint["server_port"] = "127.0.0.1", r.vpnPort
+	} else if r.layer != "aes-256-gcm+xor-whitening" {
+		outer := graph["outbounds"].([]any)[0].(map[string]any)
+		outer["server"], outer["server_port"] = "127.0.0.1", r.layerPort
+	}
+	if r.badTLS != "" {
+		tls := endpoint["tls"].(map[string]any)
+		if r.badTLS == "name" {
+			tls["server_name"] = "untrusted.provider.invalid"
+		} else if r.badTLS == "control" {
+			tls["control_wrap"].(map[string]any)["key"] = []string{strings.ReplaceAll(externalOpenVPNControlKey, strings.Repeat("a", 32), strings.Repeat("b", 32))}
+		} else {
+			tls["certificate"] = []string{r.badTLS}
+		}
+	}
+	return graph, nil
+}
+
+func (r *externalOpenVPNNativeRunner) Start(_ context.Context, raw []byte, _ multihoprelay.Lease) (multihoprelay.Process, error) {
+	r.starts++
+	graph, err := r.mappedGraph(raw)
+	if err != nil {
+		return nil, err
+	}
+	// Only this isolated fixture maps the captured private entry lane to its
+	// loopback listener. Authentication and the reject-hostname rule stay intact.
+	r.port = routerNativeFreePort(r.t)
+	listener := graph["inbounds"].([]any)[0].(map[string]any)
+	listener["listen"], listener["listen_port"] = "127.0.0.1", r.port
+	graph["route"].(map[string]any)["rules"].([]any)[0].(map[string]any)["source_ip_cidr"] = []string{"127.0.0.1/32"}
+	owner, err := externalOpenVPNNativeTryStart(graph, r.layer, r.layerPort)
+	if err != nil {
+		r.t.Logf("owned test native start failed: %v", err)
+		return nil, err
+	}
+	p := &externalOpenVPNNativeProcess{owner: owner}
+	p.alive.Store(true)
+	r.process = p
+	return p, nil
+}
+
+func externalOpenVPNNativeFetch(t *testing.T, port int, username, password, role string, accept bool, counter *atomic.Int64) {
+	t.Helper()
+	u, _ := url.Parse(fmt.Sprintf("socks5://127.0.0.1:%d", port))
+	if username != "" {
+		u.User = url.UserPassword(username, password)
+	}
+	transport := &http.Transport{Proxy: http.ProxyURL(u), DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: time.Second}
+	limit := 12 * time.Second
+	if !accept {
+		limit = 4 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), limit)
+	defer cancel()
+	before := counter.Load()
+	for ctx.Err() == nil {
+		request, _ := http.NewRequestWithContext(ctx, "GET", "http://192.0.2.123/"+role, nil)
+		response, err := client.Do(request)
+		if err == nil {
+			body, readErr := io.ReadAll(io.LimitReader(response.Body, 1024))
+			_ = response.Body.Close()
+			if readErr == nil && response.StatusCode == 200 && string(body) == "encrypted-provider-path/"+role {
+				if !accept {
+					t.Fatal("invalid native owner delivered encrypted payload")
+				}
+				return
+			}
+		}
+		if !accept && counter.Load() != before {
+			t.Fatal("invalid native owner reached provider egress")
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	if accept {
+		t.Fatal("actual native OpenVPN path failed to deliver the owned payload")
+	}
+}
+
+func TestRouterOpenVPNNativeExternalSeparateProviderOwnersAndLayerTraffic(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			t.Run(network+"/"+layer, func(t *testing.T) {
+				pki := externalOpenVPNNativePKI(t)
+				vpnPort := routerNativeFreePort(t)
+				echo, err := net.Listen("tcp", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				var requests atomic.Int64
+				httpServer := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+					requests.Add(1)
+					_, _ = w.Write([]byte("encrypted-provider-path" + r.URL.Path))
+				})}
+				go func() { _ = httpServer.Serve(echo) }()
+				t.Cleanup(func() { _ = httpServer.Close() })
+				control := "tls-auth"
+				if network == "udp" {
+					control = "tls-crypt"
+				}
+				providerTLS := map[string]any{"certificate": []string{pki.provider}, "key": []string{pki.providerKey}, "client_certificate": []string{pki.ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client", "control_wrap": map[string]any{"type": strings.ReplaceAll(control, "-", "_"), "key": []string{externalOpenVPNControlKey}}}
+				if control == "tls-auth" {
+					providerTLS["control_wrap"].(map[string]any)["direction"] = "server"
+				}
+				provider := map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false, "listen": "127.0.0.1", "listen_port": vpnPort, "network": network, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"}, "tls": providerTLS}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "egress"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"192.0.2.123/32"}, "port": []int{80}, "action": "route", "outbound": "egress", "override_address": "127.0.0.1", "override_port": echo.Addr().(*net.TCPAddr).Port}, map[string]any{"action": "reject"}}}}
+				routerNativeStart(t, provider)
+				localProfile := externalOpenVPNNativeProfile(pki, pki.local, pki.localKey, network, control)
+				serverProfile := externalOpenVPNNativeProfile(pki, pki.relay, pki.relayKey, network, control)
+				secret := func(char string) string { return base64.StdEncoding.EncodeToString([]byte(strings.Repeat(char, 32))) }
+				serverSource := map[string]any{"protocol": "openvpn", "openvpn": serverProfile, "pairing_private_key": secret("b")}
+				encoded, _ := json.Marshal(serverSource)
+				var serverMap map[string]any
+				_ = json.Unmarshal(encoded, &serverMap)
+				descriptor, err := multihoprelay.ExternalOpenVPNServerDescriptor(serverMap)
+				if err != nil {
+					t.Fatal(err)
+				}
+				external := map[string]any{"protocol": "openvpn", "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://192.0.2.1/node-response", "server_name": "provider.routervpn.test"}, "openvpn": localProfile, "openvpn_pairing": nativeopenvpn.Pairing{PrivateKey: secret("a"), Server: descriptor}}
+				var wrapped *multihoprelay.StartLayer
+				layerPort := 0
+				if layer != "" {
+					password := secret("s")
+					wrapped = &multihoprelay.StartLayer{Mode: layer, API: "http://10.88.0.1:8787", Transport: map[string]any{"type": "shadowsocks", "tag": "saved-layer", "server": "192.0.2.1", "server_port": 8388, "method": "2022-blake3-aes-256-gcm", "password": password}}
+					if strings.Contains(layer, "xor") {
+						wrapped.Transport["server_port"] = 8389
+					}
+					external["start_layer"] = wrapped
+					layerPort = routerNativeFreePort(t)
+					outer := map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "shadowsocks", "tag": "owned-layer", "listen": "127.0.0.1", "listen_port": layerPort, "method": "2022-blake3-aes-256-gcm", "password": password}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "provider-route"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"10.88.0.1/32"}, "port": []int{1194}, "action": "route", "outbound": "provider-route", "override_address": "127.0.0.1", "override_port": vpnPort}, map[string]any{"action": "reject"}}}}
+					routerNativeStart(t, outer)
+					if strings.Contains(layer, "xor") {
+						layerPort = externalOpenVPNNativeXOR(t, fmt.Sprintf("127.0.0.1:%d", layerPort), password)
+					}
+				}
+				encoded, _ = json.Marshal(external)
+				var captured map[string]any
+				_ = json.Unmarshal(encoded, &captured)
+				client, err := multihoprelay.ExternalSelection("provider-exit", "openvpn", captured, wrapped)
+				if err != nil {
+					t.Fatal(err)
+				}
+				server, err := multihoprelay.PairExternalOpenVPN(client.ID, captured, serverMap, wrapped)
+				if err != nil {
+					t.Fatal(err)
+				}
+				q := multihoprelay.Request{SessionID: strings.Repeat("c", 32), EntryNodeID: strings.Repeat("d", 64), ExitID: client.ID, ExitMode: "openvpn", ExitStartLayer: layer, Port: 26240, Username: strings.Repeat("e", 48), Password: strings.Repeat("f", 48)}
+				q, err = multihoprelay.AuthenticateExternalRequest(client, q)
+				if err != nil {
+					t.Fatal(err)
+				}
+				runner := &externalOpenVPNNativeRunner{t: t, vpnPort: vpnPort, layerPort: layerPort, layer: layer}
+				manager, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.77.0.1", FirstPort: 26240, LastPort: 26241, TTLSeconds: 90, Exits: []multihoprelay.Exit{server}}, q.EntryNodeID, runner)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = manager.Close(context.Background()) })
+				peer := netip.MustParseAddr("10.77.0.2")
+				challenge, err := manager.PacketChallenge(peer)
+				if err != nil {
+					t.Fatal(err)
+				}
+				q, err = multihoprelay.ChallengeExternalRequest(client, q, challenge)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if _, err = manager.Create(context.Background(), peer, q); err != nil {
+					t.Fatal(err)
+				}
+				// Local retains its independently issued certificate in a separate
+				// userspace endpoint. Neither client creates another OS TUN.
+				endpoint := client.Transport
+				outputs := []any{}
+				if wrapped != nil {
+					inner, outer, err := multihoprelay.WrapStartLayer(endpoint, "openvpn", wrapped, multihoprelay.ExitStartLayerTag, "")
+					if err != nil {
+						t.Fatal(err)
+					}
+					endpoint, outputs = inner, []any{outer}
+				}
+				localRaw, _ := json.Marshal(map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{endpoint}, "outbounds": outputs, "route": map[string]any{"final": "exit"}})
+				localGraph, err := runner.mappedGraph(localRaw)
+				if err != nil {
+					t.Fatal(err)
+				}
+				localPort := routerNativeFreePort(t)
+				localGraph["inbounds"] = []any{map[string]any{"type": "mixed", "tag": "local-proof", "listen": "127.0.0.1", "listen_port": localPort}}
+				localOwner, err := externalOpenVPNNativeTryStart(localGraph, layer, layerPort)
+				if err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() { _ = localOwner.Close() })
+				for _, role := range []string{"local-first", "server-first", "local-retained", "server-retained"} {
+					port, user, password := localPort, "", ""
+					if strings.HasPrefix(role, "server") {
+						port, user, password = runner.port, q.Username, q.Password
+					}
+					externalOpenVPNNativeFetch(t, port, user, password, role, true, &requests)
+				}
+				if layer == "" && network == "tcp" {
+					externalOpenVPNNativeFetch(t, runner.port, q.Username, "wrong-listener-password", "unauthorized", false, &requests)
+				}
+				if err := manager.Delete(context.Background(), peer, q); err != nil {
+					t.Fatal(err)
+				}
+				if runner.process.Alive() {
+					t.Fatal("native relay retained engine after confirmed lease close")
+				}
+				if _, err := manager.Create(context.Background(), peer, q); err == nil || runner.starts != 1 {
+					t.Fatal("deleted native OpenVPN acquisition replayed")
+				}
+				externalOpenVPNNativeFetch(t, localPort, "", "", "local-after-server-close", true, &requests)
+				if err := localOwner.Close(); err != nil {
+					t.Fatal(err)
+				}
+				for _, port := range []int{runner.port, localPort} {
+					conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+					if err == nil {
+						_ = conn.Close()
+						t.Fatal("closed native provider owner retained its listener")
+					}
+				}
+				if layer == "" && network == "tcp" {
+					untrusted := externalOpenVPNNativePKI(t).ca
+					for _, failure := range []string{"name", untrusted, "control"} {
+						runner.badTLS = failure
+						challenge, err := manager.PacketChallenge(peer)
+						if err != nil {
+							t.Fatal(err)
+						}
+						negative, err := multihoprelay.ChallengeExternalRequest(client, q, challenge)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if _, err := manager.Create(context.Background(), peer, negative); err != nil {
+							t.Fatal(err)
+						}
+						externalOpenVPNNativeFetch(t, runner.port, negative.Username, negative.Password, "invalid-provider", false, &requests)
+						if err := manager.Delete(context.Background(), peer, negative); err != nil {
+							t.Fatal(err)
+						}
+					}
+				}
+			})
+		}
+	}
+}

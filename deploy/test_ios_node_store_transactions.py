@@ -43,6 +43,9 @@ enum IOSDNSRuntimePolicy {
  }
 }
 enum IOSExternalExecution {
+ // The shared strict native JSON parser has a separate executable binding
+ // gate. This fixture owns atomic persistence and failure rollback only.
+ static func validatePrivateNodeJSON(_ data: Data) throws {}
  static func validateImported(_ value: ClientBundle) throws {}
  static func issue() -> NSError { NSError(domain: "ExternalValidationBoundary", code: 1) }
 }

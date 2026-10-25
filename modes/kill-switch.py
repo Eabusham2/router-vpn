@@ -152,6 +152,37 @@ def resolve_literal_endpoint(endpoint: str) -> list[ipaddress._BaseAddress]:
         ) from None
 
 
+def captured_endpoint_ips(endpoint: str) -> list[ipaddress._BaseAddress]:
+    primary = resolve_literal_endpoint(endpoint)
+    raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON")
+    if raw is None:
+        return primary
+    session = os.environ.get("HOMEVPN_EXTERNAL_SESSION", "")
+    if (len(raw) > 1024 or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
+            or len(session) != 32 or any(c not in "0123456789abcdef" for c in session)):
+        raise RuntimeError("native endpoint list has no captured external session")
+    try:
+        values = json.loads(raw)
+        if not isinstance(values, list) or not 1 <= len(values) <= 16:
+            raise ValueError()
+        result = []
+        for value in values:
+            if not isinstance(value, str):
+                raise ValueError()
+            address = ipaddress.ip_address(value)
+            if (str(address) != value or address.is_unspecified or address.is_multicast
+                    or address.is_loopback or address.is_link_local or '%' in value
+                    or value == '255.255.255.255'
+                    or getattr(address, 'ipv4_mapped', None) is not None or address in result):
+                raise ValueError()
+            result.append(address)
+        if result[0] != primary[0]:
+            raise ValueError()
+        return result
+    except (ValueError, TypeError):
+        raise RuntimeError("native endpoint list must retain its captured literal physical remotes") from None
+
+
 def nft_prefix() -> list[str]:
     nft = shutil.which("nft")
     if nft is None:
@@ -369,7 +400,7 @@ def apply() -> int:
     if not sys.platform.startswith("linux"):
         raise RuntimeError(f"strict kill switch is not implemented for {sys.platform}; refusing protected connect")
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    endpoint_ips = resolve_literal_endpoint(endpoint)
+    endpoint_ips = captured_endpoint_ips(endpoint)
     lan_access = bool(control_profile.get("home_lan_access", False))
     rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False)
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1":
@@ -466,6 +497,7 @@ def reassert() -> int:
     os.environ["HOMEVPN_PROFILE_ID"] = runtime_id
     os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
     os.environ["HOMEVPN_ENDPOINT"] = str(runtime_profile.get("endpoint") or state.get("endpoint") or "")
+    os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
     return apply()
 
 

@@ -41,7 +41,7 @@ enum IOSStartLayer {
             return
         }
         guard [aes, aesXOR].contains(mode),
-              ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(external["protocol"] as? String ?? ""),
+              ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(external["protocol"] as? String ?? ""),
               let layer = external["start_layer"] as? [String: Any], Set(layer.keys) == Set(["mode", "api", "transport"]),
               layer["mode"] as? String == mode, layer["api"] is String,
               let transport = layer["transport"] as? [String: Any],

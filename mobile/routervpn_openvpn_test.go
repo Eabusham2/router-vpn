@@ -1,10 +1,76 @@
 package libbox
 
 import (
+	"crypto/ecdh"
+	"encoding/base64"
 	"encoding/json"
 	"strings"
 	"testing"
 )
+
+func TestNativeOpenVPNPairingBindingPreservesStrictPrivateInput(t *testing.T) {
+	config := "client\nremote 203.0.113.20 1194 udp\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint " + strings.Repeat("ab", 32) + "\n"
+	profile, _ := json.Marshal(map[string]string{"config": config, "username": "local-owner", "password": " exact local password "})
+	serverRaw, err := RouterOpenVPNEndpoint(config, "server-owner", "separate server password", "exit", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var server map[string]any
+	if err := json.Unmarshal([]byte(serverRaw), &server); err != nil {
+		t.Fatal(err)
+	}
+	delete(server, "username")
+	delete(server, "password")
+	delete(server, "tag")
+	server["mtu"] = 1500
+	key, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b", 32)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	pairing, _ := json.Marshal(map[string]any{
+		"private_key": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32))),
+		"server": map[string]any{"pairing_public_key": base64.StdEncoding.EncodeToString(key.PublicKey().Bytes()),
+			"transport": server, "provider_identity": map[string]any{"username": "server-owner"}},
+	})
+	if err := RouterValidateExternalOpenVPNPairing(string(profile), string(pairing)); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{"null", strings.Replace(string(pairing), "{", `{"unexpected_private_field":"must-not-disappear",`, 1),
+		strings.Replace(string(pairing), `"private_key":`, `"private_key":"duplicate","private_key":`, 1),
+		strings.Replace(string(pairing), `"server-owner"`, `"local-owner"`, 1)} {
+		if err := RouterValidateExternalOpenVPNPairing(string(profile), raw); err == nil {
+			t.Fatal("binding accepted an ambiguous or duplicate provider owner")
+		}
+	}
+	for _, raw := range []string{"null", strings.Replace(string(profile), "{", `{"script":"must-not-disappear",`, 1),
+		strings.Replace(string(profile), `"username":`, `"username":"duplicate","username":`, 1)} {
+		if err := RouterValidateExternalOpenVPNPairing(raw, string(pairing)); err == nil {
+			t.Fatal("binding accepted an ambiguous original private profile")
+		}
+	}
+}
+
+func TestNativePrivateNodeBindingRejectsLossyWholeBundleDecoding(t *testing.T) {
+	valid := `{"router_profiles":[{"id":"owned","external":{"protocol":"openvpn","openvpn":{"config":"original inline source"},"openvpn_pairing":{"private_key":"local key","server":{"provider_identity":{"username":"server owner"}}}}}],"files":{"config.json":"opaque file content"}}`
+	if err := RouterValidatePrivateNodeJSON(valid); err != nil {
+		t.Fatal(err)
+	}
+	for _, raw := range []string{
+		strings.Replace(valid, `"private_key":`, `"private_key":"duplicate","private_key":`, 1),
+		strings.Replace(valid, `"provider_identity":`, `"provider_identity":{},"provider_identity":`, 1),
+		strings.Replace(valid, `"private_key":`, `"\u0070rivate_key":"duplicate","private_key":`, 1),
+		strings.Replace(valid, `"router_profiles":`, `"router_profiles":[],"router_profiles":`, 1),
+		valid + `{}`, `null`, `[]`, strings.Replace(valid, "server owner", string([]byte{0xff}), 1),
+	} {
+		if err := RouterValidatePrivateNodeJSON(raw); err == nil {
+			t.Fatal("whole-bundle native decoder accepted lost or ambiguous private input")
+		}
+	}
+	// Structure validation must not substitute for later schema validation.
+	if err := RouterValidatePrivateNodeJSON(`{"unrecognized_schema_member":true}`); err != nil {
+		t.Fatal("structure validator silently took ownership of bundle semantics")
+	}
+}
 
 // Deliberately synthetic PEM: these tests verify configuration semantics, not a
 // TLS handshake. The pinned native-core tests perform certificate parsing.

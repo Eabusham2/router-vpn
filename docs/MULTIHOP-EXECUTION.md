@@ -127,6 +127,17 @@ engine can start. SOCKS5 and CONNECT Server/Compare require a nonempty paired
 username/password. Ordinary Local use may retain a deliberately anonymous
 provider; an absent credential is never invented for server authentication.
 
+Every external protocol acquisition also signs a fresh challenge from the
+authenticated entry: its current boot epoch, observed tunnel peer, 60-second
+acquisition deadline and random attempt. A DELETE received before a delayed PUT
+retires the same attempt; restarting the entry changes the epoch. Active owned
+leases can renew after the initial acquisition deadline, but a retired attempt
+cannot recreate a process. Existing proxy bundle fingerprints and credential
+derivation remain compatible. Old clients or entries without this challenge
+return an explicit upgrade requirement; an unchallenged acquisition is not an
+accepted fallback. The historical capability member is still named
+`external_packet_challenge`, including for proxy and OpenVPN acquisitions.
+
 Each trial measures a complete **HTTPS response time** from that configured
 last node and the same randomly selected external HTTPS endpoint. Merely opening
 the proxy stream is insufficient: native early connection establishment
@@ -260,11 +271,96 @@ packet entry. These are configured bounds; current-path MTU evidence still
 comes from the owned measurement and proof lifecycle. Canonical packet/PQ
 ownership also includes the packet base inside complete MAX chains.
 
-External OpenVPN Server/Compare still needs an independently authenticated
-session pairing. External-entry Server execution also requires its own
-administrative/runtime owner. Operator pairing and device/off-LAN acceptance
-remain distinct evidence; no private deployment occurs when sources or tests
-are updated.
+### External OpenVPN provider sessions
+
+An external OpenVPN Server or Compare path keeps two independently provisioned
+provider sessions. The client retains the complete original
+`external.openvpn` inline profile. The Router entry receives its own original
+inline profile with a different client certificate public key and canonical
+common name, a different provider username, or both, according to the provider's
+authentication method. Reissuing a certificate with the same public key,
+changing only name case or whitespace, or supplying another password for the
+same provider username does not create a distinct owner.
+
+Each owner also holds a separate random 32-byte X25519 pairing key, stored in
+standard base64. These dedicated authentication keys are independent of the
+provider's TLS and password credentials. The server's private input has this
+shape:
+
+```json
+{
+  "protocol": "openvpn",
+  "openvpn": {
+    "config": "the server owner's original inline OpenVPN profile",
+    "username": "the server owner's provider username when required",
+    "password": "the server owner's provider password when required"
+  },
+  "pairing_private_key": "the server owner's dedicated base64 X25519 key"
+}
+```
+
+Export its public counterpart descriptor offline:
+
+```sh
+router-vpn-agent describe-external-openvpn-peer \
+  < /private/server-openvpn-peer.json > /private/server-openvpn-peer.public.json
+```
+
+The descriptor contains the pairing public key, canonical public transport
+policy and provider identity. It excludes the original profile, TLS client
+certificate/key, provider password, TLS control key and pairing private key.
+Keep this descriptor inside the private node bundle; it is not a discovery or
+public status record. The client's `external.openvpn_pairing` contains exactly
+`private_key` for its dedicated Local pairing key and `server` for that public
+descriptor. The native editor validates the raw profile and pairing objects
+before JSON conversion can discard unknown or duplicate private fields.
+
+Pair the complete client bundle with `router-vpn-relay-pair` using the same
+arguments shown for packet peers and
+`--server-peer-profile /private/server-openvpn-peer.json`. The real Go compiler
+verifies the original sources and both descriptors. The private registry retains
+only the Server profile and pairing private key, plus both public descriptions.
+The client retains no Server private material. Public capabilities contain only
+the external fingerprint and expected exit address; public profile views expose
+pairing eligibility as a boolean.
+
+X25519 agreement and a separate HKDF domain authenticate the lease. The public
+fingerprint includes both public descriptors, response endpoint, expected exit
+and selected Start Layer. It does not publish a provider password digest.
+The common challenge, cancellation, expiry and confirmed-close rules above
+apply. Concurrent relay leases cannot alias a canonical provider public key,
+common name or username, and a process whose cleanup failed keeps that identity
+reserved.
+
+The current paired comparison requires all captured remotes to use the same
+public literal host, because one captured last-node response endpoint must
+prove that node. Multiple ports, TCP/UDP fallback order and supported original
+TLS, cipher, control wrapping, keepalive, fragment and MTU settings remain
+intact. Ordinary Local profiles continue to support different-host remote
+lists. Comparing different provider hosts still needs trustworthy observation
+of the selected remote and its matching response proof; that extension remains
+open.
+
+Off, AES-256-GCM and AES-256-GCM plus XOR exit Start Layers use the same owned
+native graph. The private relay runs a userspace `openvpn-client` endpoint with
+`system: false`; it does not create another system VPN or change the entry's
+global default route. The client proves its selected DNS and exit through the
+chosen path. Configured interface/fragment bounds account for the enclosing
+packet and Start Layer overhead without representing them as a fresh path MTU
+measurement.
+
+`deploy/test_external_openvpn_native.py --core PINNED_CORE_CHECKOUT` executes
+real encrypted traffic with independent Local and Server client certificates
+over TCP and UDP, in all three layer choices. It uses the actual native provider,
+relay builder, lease manager and shipping whitening binary. The same race gate
+checks wrong CA, peer name, control key and listener password, repeated traffic
+from both owners, replay after deletion and closed listeners. Only the test's
+physical sockets are mapped to owned loopback endpoints; production endpoint
+validation stays active.
+
+External-entry Server execution still requires its own administrative/runtime
+owner. Operator pairing and device/off-LAN acceptance remain distinct evidence;
+no private deployment occurs when sources or tests are updated.
 
 ## Mobile LAN-Off enforcement
 

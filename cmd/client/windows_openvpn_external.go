@@ -39,17 +39,14 @@ func windowsOpenVPNRuntimeCapability() standardExitCapability {
 
 func externalProfileProtocolCapabilities() []standardExitCapability {
 	caps := append(standardExitCapabilities(), torBridgeRuntimeCapability())
-	if runtime.GOOS != "windows" {
-		return caps
-	}
-	windows := windowsOpenVPNRuntimeCapability()
+	native := desktopNativeOpenVPNCapability()
 	for i := range caps {
 		if caps[i].Protocol == "openvpn" {
-			caps[i] = windows
+			caps[i] = native
 			return caps
 		}
 	}
-	return append(caps, windows)
+	return append(caps, native)
 }
 
 func prepareWindowsOpenVPNRuntime(root string, control, entry common.RouterProfile, exit standardExit, direct bool) (string, string, error) {
@@ -130,7 +127,9 @@ func windowsOpenVPNStandardExitCommand(a *app, control, entry common.RouterProfi
 	useAmnezia := !direct && entry.External != nil && entry.External.Protocol == "amneziawg"
 	useNative := !direct && entry.External != nil && entry.External.StartLayer != nil
 	if useNative {
-		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+			return nil, err
+		}
 	} else if useAmnezia {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err

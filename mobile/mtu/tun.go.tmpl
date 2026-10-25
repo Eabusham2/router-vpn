@@ -1,35 +1,126 @@
 package tun
 
 import (
- "errors"
- "github.com/sagernet/sing-box/adapter"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+	"net"
+	"runtime"
 )
 
 // RouterVPNMTUReaders builds distinct readers from the immutable original TUN
 // policy. Only the inbound manager starts them; encrypted endpoints stay alive.
 func (t *Inbound) RouterVPNMTUReaders(mtu int) (adapter.Inbound, adapter.Inbound, error) {
- t.routervpnLifecycle.Lock()
- defer t.routervpnLifecycle.Unlock()
- if !t.routervpnReady || t.platformInterface == nil || t.autoRedirect != nil || mtu < 1280 || mtu > 9000 {
-  return nil, nil, errors.New("MTU replacement requires a live platform-owned TUN")
- }
- options := t.routervpnInitial
- options.MTU = uint32(mtu)
- candidate, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
- if err != nil { return nil, nil, err }
- options.MTU = t.tunOptions.MTU
- rollback, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
- if err != nil { _ = candidate.Close(); return nil, nil, err }
- return candidate, rollback, nil
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnReady || t.platformInterface == nil && !t.routervpnDesktop || t.autoRedirect != nil || mtu < 1280 || mtu > 9000 {
+		return nil, nil, errors.New("MTU replacement requires a live platform-owned TUN")
+	}
+	if t.routervpnDesktop {
+		if _, _, _, err := t.routervpnDesktopInterface(); err != nil {
+			return nil, nil, err
+		}
+	}
+	options := t.routervpnInitial
+	// Desktop firewall rules retain this captured alias throughout replacement.
+	// No physical route, resolver, endpoint or encryption option is changed.
+	if t.routervpnDesktop {
+		options.InterfaceName = t.tunOptions.Name
+	}
+	options.MTU = uint32(mtu)
+	candidate, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
+	if err != nil {
+		return nil, nil, err
+	}
+	options.MTU = t.tunOptions.MTU
+	rollback, err := NewInbound(t.ctx, t.router, t.logger, t.tag, options)
+	if err != nil {
+		_ = candidate.Close()
+		return nil, nil, err
+	}
+	if t.routervpnDesktop {
+		for _, reader := range []adapter.Inbound{candidate, rollback} {
+			next := reader.(*Inbound)
+			next.routervpnDesktop = true
+			next.routervpnDesktopFresh = true
+			next.routervpnDesktopGuard = t.routervpnDesktopGuard
+		}
+	}
+	return candidate, rollback, nil
+}
+
+// RouterVPNDesktopMTU grants one explicitly captured desktop owner permission
+// to replace this reader. Mobile adapters keep their existing retained handles.
+// The guard is read-only and must not call back into the Box's proof mutex.
+func (t *Inbound) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if t.platformInterface != nil || t.autoRedirect != nil || t.tunOptions.NetNs != "" || guard == nil || !guard() ||
+		(runtime.GOOS != "linux" && runtime.GOOS != "darwin" && runtime.GOOS != "windows") {
+		return "", 0, 0, errors.New("desktop MTU requires its directly owned native TUN")
+	}
+	if t.routervpnDesktop {
+		return "", 0, 0, errors.New("desktop TUN already has an MTU owner")
+	}
+	name, index, mtu, err := t.routervpnDesktopInterface()
+	if err != nil {
+		return "", 0, 0, err
+	}
+	t.routervpnDesktop, t.routervpnDesktopIndex, t.routervpnDesktopGuard = true, index, guard
+	return name, index, mtu, nil
+}
+
+func (t *Inbound) RouterVPNDesktopMTUInterface() (string, int, int, error) {
+	t.routervpnLifecycle.Lock()
+	defer t.routervpnLifecycle.Unlock()
+	if !t.routervpnDesktop {
+		return "", 0, 0, errors.New("desktop MTU owner is missing")
+	}
+	return t.routervpnDesktopInterface()
+}
+
+func (t *Inbound) routervpnDesktopInterface() (string, int, int, error) {
+	if !t.routervpnReady || t.tunIf == nil || t.routervpnDesktopGuard != nil && !t.routervpnDesktopGuard() {
+		return "", 0, 0, errors.New("desktop TUN or physical path retired")
+	}
+	name, err := t.tunIf.Name()
+	if err != nil || name == "" || name != t.tunOptions.Name {
+		return "", 0, 0, errors.New("native TUN name changed")
+	}
+	current, err := net.InterfaceByName(name)
+	if err != nil || current.Index < 1 || current.Flags&net.FlagUp == 0 || current.MTU < 1280 || current.MTU > 9000 ||
+		t.routervpnDesktopIndex != 0 && current.Index != t.routervpnDesktopIndex || current.MTU != int(t.tunOptions.MTU) {
+		return "", 0, 0, errors.New("native TUN identity or MTU readback changed")
+	}
+	return name, current.Index, current.MTU, nil
 }
 
 // Suppress reset callbacks until all native reader startup stages finish.
 func (t *Inbound) Start(stage adapter.StartStage) error {
- err := t.routervpnStart(stage)
- if err == nil && stage == adapter.StartStateStarted {
-  t.routervpnLifecycle.Lock()
-  t.routervpnReady = true
-  t.routervpnLifecycle.Unlock()
- }
- return err
+	if t.routervpnDesktopFresh && stage == adapter.StartStateStart {
+		if t.routervpnDesktopGuard == nil || !t.routervpnDesktopGuard() {
+			return errors.New("desktop MTU path retired before reader startup")
+		}
+		// Never reopen an interface created by a replacement owner while our reader
+		// was down. The native desktop preparation also requires exclusive Wintun
+		// creation; a same-name adapter is not an MTU rollback resource.
+		if _, err := net.InterfaceByName(t.tunOptions.Name); err == nil {
+			return errors.New("desktop TUN alias is already owned")
+		}
+	}
+	err := t.routervpnStart(stage)
+	if err == nil && stage == adapter.StartStateStarted {
+		t.routervpnLifecycle.Lock()
+		t.routervpnReady = true
+		if t.routervpnDesktop {
+			_, index, _, readErr := t.routervpnDesktopInterface()
+			if readErr != nil {
+				err = readErr
+			} else {
+				t.routervpnDesktopIndex = index
+				t.routervpnDesktopFresh = false
+			}
+		}
+		t.routervpnLifecycle.Unlock()
+	}
+	return err
 }

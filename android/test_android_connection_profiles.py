@@ -16,8 +16,8 @@ ROOT = Path(__file__).resolve().parents[1]
 JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 
 GO = r'''package main
-import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop")
-func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil&&len(args)==2{result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1])}else if err==nil{panic("invalid fixture request")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
+import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop";"router-vpn/mobile")
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil&&len(args)==2{result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1])}else if err==nil&&len(args)==1{err=libbox.RouterValidatePrivateNodeJSON(args[0])}else if err==nil{panic("invalid fixture request")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
 
 
 def method(name, signature):
@@ -61,8 +61,10 @@ public final class MemoryPreferences implements SharedPreferences {
  public static byte[] decode(String value,int flags){return java.util.Base64.getMimeDecoder().decode(value);}
 }''',
     "io/nekohasekai/libbox/Libbox.java": r'''package io.nekohasekai.libbox;import org.json.JSONArray;import java.nio.charset.StandardCharsets;
-public final class Libbox {public static String routerCompileAmneziaProfile(String profile,String identity)throws Exception{
- Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();process.getOutputStream().write(new JSONArray(java.util.Arrays.asList(profile,identity)).toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
+public final class Libbox {public static String routerCompileAmneziaProfile(String profile,String identity)throws Exception{return call(profile,identity);}
+public static void routerValidatePrivateNodeJSON(String source)throws Exception{call(source);}
+private static String call(String...args)throws Exception{
+ Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();process.getOutputStream().write(new JSONArray(java.util.Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
 }}''',
 }
 
@@ -82,7 +84,7 @@ final class AndroidRuntimeRegistry {
  static final class Engine{boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}String getState(){return "DOWN";}}
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
 }
-final class AndroidOpenVPN {static JSONObject endpoint(AndroidStandardExitStore.Entry entry,String detour){throw new AssertionError("OpenVPN compiler is outside the persistence fixture");}}
+final class AndroidOpenVPN {static void validatePairing(AndroidStandardExitStore.Entry entry){if(entry.openVPNPairing!=null)throw new AssertionError("OpenVPN pairing is outside this non-OpenVPN fixture");}static JSONObject endpoint(AndroidStandardExitStore.Entry entry,String detour){throw new AssertionError("OpenVPN compiler is outside the persistence fixture");}}
 final class AndroidTorProfile {
  static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}
  static String digest(byte[] bytes)throws Exception{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
@@ -279,7 +281,15 @@ public final class ConnectionProfilesHarness {
    check(!a.isAlive()&&!b.isAlive()&&firstError.get()==null&&secondError.get() instanceof IllegalStateException,"independent store instances both adopted the same obsolete editor source");check(first.get(original.id).password.equals(one.password),"concurrent stale editor replaced the retained private credential owner");
   }finally{release.countDown();AndroidPrivateFileStore.beforeWrite=null;a.join(5000);b.join(5000);}
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ static void strictRawImport(Path root)throws Exception{
+  Fixture f=new Fixture(root);State before=new State(f);String valid=node("strict-import",3).toString(),prefix=valid.substring(0,valid.length()-1);
+  for(String bad:List.of("null","[]",valid+" {}",prefix+",\"routerProfiles\":[]}",prefix+",\"extra\":{\"openvpn_pairing\":{\"private_key\":\"first\",\"private_key\":\"second\"}}}")){
+   rejected(()->f.nodes.importBundle(bad.getBytes(StandardCharsets.UTF_8)),"ambiguous raw private bundle");before.same(f,"strict raw import rejection");
+  }
+  java.io.ByteArrayOutputStream invalid=new java.io.ByteArrayOutputStream();invalid.write((prefix+",\"unrelated\":\"").getBytes(StandardCharsets.UTF_8));invalid.write(255);invalid.write("\"}".getBytes(StandardCharsets.UTF_8));
+  rejected(()->f.nodes.importBundle(invalid.toByteArray()),"malformed UTF-8 private bundle");before.same(f,"malformed byte import rejection");
+ }
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

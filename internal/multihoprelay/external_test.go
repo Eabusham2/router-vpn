@@ -23,6 +23,19 @@ func externalFixture(t *testing.T) (Config, Request) {
 	return cfg, request
 }
 
+func challengedExternalFixture(t *testing.T, m *Manager, exit Exit, q Request, peer netip.Addr) Request {
+	t.Helper()
+	challenge, err := m.PacketChallenge(peer)
+	if err != nil {
+		t.Fatal(err)
+	}
+	q, err = ChallengeExternalRequest(exit, q, challenge)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return q
+}
+
 func TestExternalRelayRetainsTypedIdentityPrivateCredentialsAndOwnedLifecycle(t *testing.T) {
 	cfg, request := externalFixture(t)
 	runner := &runner{}
@@ -40,6 +53,7 @@ func TestExternalRelayRetainsTypedIdentityPrivateCredentialsAndOwnedLifecycle(t 
 		t.Fatal("private credential/proof entered catalog")
 	}
 	peer := netip.MustParseAddr("10.77.0.2")
+	request = challengedExternalFixture(t, m, cfg.Exits[0], request, peer)
 	lease, err := m.Create(context.Background(), peer, request)
 	if err != nil || lease.ExitNodeID != "" || lease.ExternalFingerprint != request.ExternalFingerprint || lease.Request != request {
 		t.Fatal("external relay identity/owner changed", err)
@@ -87,24 +101,28 @@ func TestExternalRelayRejectsCredentialOrGraphSubstitutionBeforeStarting(t *test
 	} {
 		t.Run(name, func(t *testing.T) {
 			cfg, q := externalFixture(t)
-			change(&q)
 			r := &runner{}
 			m, err := New(cfg, req().EntryNodeID, r)
 			if err != nil {
 				t.Fatal(err)
 			}
+			q = challengedExternalFixture(t, m, cfg.Exits[0], q, netip.MustParseAddr("10.77.0.2"))
+			change(&q)
 			if _, err = m.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), q); err == nil || r.starts != 0 {
 				t.Fatal("changed capture started external relay")
 			}
 		})
 	}
 	cfg, q := externalFixture(t)
+	original := cfg.Exits[0]
+	original.Transport, _ = copyMap(original.Transport)
 	cfg.Exits[0].Transport["password"] = "BBBBBBBBBBBBBBBBBBBBBB=="
 	r := &runner{}
 	m, err := New(cfg, req().EntryNodeID, r)
 	if err != nil {
 		t.Fatal(err)
 	}
+	q = challengedExternalFixture(t, m, original, q, netip.MustParseAddr("10.77.0.2"))
 	if _, err := m.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), q); err == nil || r.starts != 0 {
 		t.Fatal("same endpoint substituted another password")
 	}
@@ -153,6 +171,7 @@ func TestExternalRelayCannotImpersonateRouterOrUseUnsupportedPolicy(t *testing.T
 	}
 	now := time.Now()
 	m.now = func() time.Time { return now }
+	q = challengedExternalFixture(t, m, cfg.Exits[0], q, netip.MustParseAddr("10.77.0.2"))
 	if _, err := m.Create(context.Background(), netip.MustParseAddr("10.77.0.2"), q); err != nil {
 		t.Fatal(err)
 	}

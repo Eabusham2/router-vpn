@@ -55,7 +55,7 @@ RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
  && go mod download github.com/amnezia-vpn/amneziawg-go/v3@v3.1.20260814 \
  && python3 /routervpn-source/deploy/test_server_pq_real.py --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
  && python3 /routervpn-source/deploy/test_server_pq_traffic.py --core /core --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
- && CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,routervpn_native_pq,with_naive_outbound,with_musl \
+ && CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
       -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       -o /usr/local/bin/sing-box ./cmd/sing-box \
  && ! readelf -l /usr/local/bin/sing-box | grep -q INTERP \

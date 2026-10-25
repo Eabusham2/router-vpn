@@ -42,6 +42,7 @@ def inputs() -> list[Path]:
             ROOT/'mobile/externalpolicy/graph_test.go.tmpl',
             ROOT/'android/test_android_external_entries.py', ROOT/'android/test_android_tor_profile.py',
             ROOT/'deploy/test_ios_tor_profile.py',
+            ROOT/'deploy/fixtures/external-openvpn-client.json',
             *sorted((ROOT/'android/app/src/main/java/com/eabusham/routervpn').glob('*.java')),
             *sorted((ROOT/'ios/RouterVPN/App').glob('*.swift')),
             *sorted((ROOT/'ios/RouterVPN/PacketTunnel').glob('*.swift'))] + HOST.inputs()
@@ -56,10 +57,10 @@ def digest() -> str:
 
 def expected_names(target: str) -> set[str]:
     local = {'-'.join(case)+'.json' for case in itertools.product(MODES, LAYERS, PROTOCOLS[target])}
-    # Paired execution uses the same pinned constructors for seven supported
-    # authenticated transports, including distinct WG/AWG client peers. Both exit layers also
+    # Paired execution uses the same pinned constructors for eight supported
+    # authenticated transports, including distinct WG/AWG peers and OpenVPN owners. Both exit layers also
     # cross every entry-layer choice on the representative native WG entry.
-    supported = tuple(p for p in PROTOCOLS[target] if p != 'openvpn')
+    supported = PROTOCOLS[target]
     paired = {'-'.join(case)+'.json'
               for case in itertools.product(MODES, LAYERS, supported, EXECUTIONS)}
     layered = {'wg-'+entry+'-'+protocol+'-exit-'+layer+'-'+execution+'.json'

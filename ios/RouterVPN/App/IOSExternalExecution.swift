@@ -4,15 +4,64 @@ import Libbox
 /// Pure readiness checks. Passing these checks never means that the entry's
 /// private relay registry accepted this node or that a candidate was proved.
 enum IOSExternalExecution {
+    static func validatePrivateNodeJSON(_ data: Data) throws {
+        guard !data.isEmpty, data.count <= 32 * 1024 * 1024,
+              let source = String(data: data, encoding: .utf8) else { throw issue() }
+        var failure: NSError?
+        let valid = LibboxRouterValidatePrivateNodeJSON(source, &failure)
+        if let failure { throw failure }
+        guard valid else { throw issue() }
+    }
+
     static func validateImported(_ bundle: ClientBundle) throws {
         for profile in bundle.routerProfiles {
             guard let external = profile.external else { continue }
             guard profile.normalizedNodeKind == "external", external.matchesStartLayer(profile.startLayer) else { throw issue() }
-            if external.startLayer != nil || external.serverPeer != nil { try validateLayerDraft(profile) }
+            if external.startLayer != nil || external.serverPeer != nil || external.openVPNPairing != nil || (external.protocolName == "openvpn" && external.responseProbe != nil) { try validateLayerDraft(profile) }
             guard let probe = external.responseProbe else { continue }
-            guard let host = external.serverExecutionHost else { throw issue() }
+            let host = try host(external)
             try validate(probe, host: host)
         }
+    }
+
+    static func openVPNEndpoint(_ external: ExternalNodeConfig) throws -> [String: Any] {
+        guard external.protocolName == "openvpn", let profile = external.openVPN,
+              LibboxVersion().trimmingCharacters(in: .whitespacesAndNewlines) == "1.14.1" else { throw issue() }
+        var failure: NSError?
+        let source = LibboxRouterOpenVPNEndpoint(profile.config, profile.username ?? "", profile.password ?? "", "custom-exit", "", &failure)
+        if let failure { throw failure }
+        guard let result = try JSONSerialization.jsonObject(with: Data(source.utf8)) as? [String: Any],
+              result["type"] as? String == "openvpn-client", result["system"] as? Bool == false,
+              result["tag"] as? String == "custom-exit", result["detour"] == nil else { throw issue() }
+        return result
+    }
+
+    static func host(_ external: ExternalNodeConfig) throws -> String {
+        if external.protocolName == "openvpn" {
+            let endpoint = try openVPNEndpoint(external)
+            let primary = (endpoint["servers"] as? [[String: Any]])?.first ?? endpoint
+            guard let host = primary["server"] as? String, !host.isEmpty else { throw issue() }
+            return host
+        }
+        guard let host = external.serverExecutionHost else { throw issue() }
+        return host
+    }
+
+    static func openVPNPairing(_ text: String, profile: ExternalOpenVPNConfig) throws -> ExternalOpenVPNPairing? {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        guard text.utf8.count <= 512 * 1024 else { throw issue() }
+        let source = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        var failure: NSError?
+        let valid = LibboxRouterValidateExternalOpenVPNPairing(source, text, &failure)
+        if let failure { throw failure }
+        guard valid else { throw issue() }
+        return try JSONDecoder().decode(ExternalOpenVPNPairing.self, from: Data(text.utf8))
+    }
+
+    static func openVPNPairingText(_ pairing: ExternalOpenVPNPairing?) -> String {
+        guard let pairing else { return "" }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return (try? String(decoding: encoder.encode(pairing), as: UTF8.self)) ?? ""
     }
 
     static func responseProbe(host: String, url: String, serverName: String) throws -> ExternalResponseProbe? {
@@ -45,11 +94,17 @@ enum IOSExternalExecution {
     /// Saving an imported wrapper validates the real compiler contract while
     /// leaving Home DNS unresolved until its selected Router entry is captured.
     static func validateLayerDraft(_ profile: RouterProfile) throws {
-        guard let external = profile.external, let host = external.serverExecutionHost,
+        guard let external = profile.external,
               external.matchesStartLayer(profile.startLayer) else { throw issue() }
+        let host = try host(external)
         var exit: [String: Any] = ["tag": "custom-exit", "server": host]
-        let packet = ExternalNodeConfig.packetProtocols.contains(external.protocolName)
+        let packet = ExternalNodeConfig.packetProtocols.contains(external.protocolName) || external.protocolName == "openvpn"
         switch external.protocolName {
+        case "openvpn":
+            exit = try openVPNEndpoint(external)
+            if let pairing = external.openVPNPairing, let original = external.openVPN {
+                _ = try openVPNPairing(String(decoding: JSONEncoder().encode(pairing), as: UTF8.self), profile: original)
+            }
         case "wireguard", "amneziawg":
             guard let value = external.packetConfiguration, let endpoint = external.packetEndpoint else { throw issue() }
             var peer: [String: Any] = ["address": endpoint.host, "port": endpoint.port,
@@ -106,10 +161,11 @@ enum IOSExternalExecution {
               entry.nodeProofID?.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
               !entry.routerAPI.isEmpty, !entry.apiToken.isEmpty,
               exit.normalizedNodeKind == "external", let external = exit.external,
-              let host = external.serverExecutionHost, external.authenticatedServerExecution, let probe = external.responseProbe,
+              external.authenticatedServerExecution, let probe = external.responseProbe,
               external.matchesStartLayer(exit.startLayer) else { throw issue() }
+        let host = try host(external)
         try validate(probe, host: host)
-        if external.serverPeer != nil { try validateLayerDraft(exit) }
+        if external.serverPeer != nil || external.openVPNPairing != nil { try validateLayerDraft(exit) }
     }
 
     static func require(selection: String, entry: RouterProfile, exit: RouterProfile) throws {
@@ -119,6 +175,6 @@ enum IOSExternalExecution {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ExternalExecution", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated external exit with an HTTPS response URL on its exact server IP. WireGuard and AmneziaWG also require the public descriptor of a separately provisioned server peer, with distinct client identity and assigned addresses. Configure this exit in the entry's private relay registry before connecting."])
+            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated external exit with an HTTPS response URL on its exact server IP. WireGuard and AmneziaWG require a separately provisioned server peer. OpenVPN requires private pairing with independent provider and authentication identities. Configure this exit in the entry's private relay registry before connecting."])
     }
 }

@@ -166,6 +166,7 @@ def main():
     inputs = [Path(__file__).resolve()] + [p for p in sorted(SOURCE.iterdir()) if p.is_file()]
     inputs += sorted((ROOT / 'internal/mobiletor').glob('*.go'))
     inputs += sorted((ROOT / 'internal/common').glob('*.go'))
+    inputs += sorted((ROOT / 'internal/nativeopenvpn').glob('*.go'))
     record = {
         'scope': 'offline-native-lifecycle-and-control', 'mobile_capability_enabled': False,
         'tor_repository': TOR_REPOSITORY, 'tor_commit': TOR_COMMIT,

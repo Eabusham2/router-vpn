@@ -207,6 +207,7 @@ type routerVPNExternalNative struct {
 	boxClosed    bool
 	boxCloseFail error
 	partial      []io.Closer
+	mtu          *routerVPNDesktopMTU
 }
 
 // Box.New registers each constructed component before constructing the next.
@@ -288,6 +289,9 @@ func (n *routerVPNExternalNative) Run() (string, error) {
 func (n *routerVPNExternalNative) Cancel() {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.mtu != nil {
+		n.mtu.invalidate()
+	}
 	if n.proof != nil {
 		n.proof.Cancel()
 	} else {
@@ -312,6 +316,11 @@ func (n *routerVPNExternalNative) ProgressJSON() string {
 func (n *routerVPNExternalNative) Close() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.mtu != nil {
+		if err := n.mtu.close(); err != nil {
+			return routerVPNExternalFailure
+		}
+	}
 	if n.box == nil {
 		n.cancel()
 		pending := n.partial[:0]
@@ -385,7 +394,7 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 		return routerVPNExternalFailure
 	}
 	defer files.root.Close()
-	for _, name := range []string{"proof.json", "progress.json", "stopped.json"} {
+	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json"} {
 		if !files.current(name) {
 			return routerVPNExternalFailure
 		}
@@ -468,6 +477,7 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 	finished, connected, stopping := false, false, false
 	var receipt routerVPNExternalProofRecord
 	var heartbeat time.Time
+	var mtuFiles *routerVPNDesktopMTUFiles
 	for !stopping {
 		select {
 		case outcome := <-done:
@@ -490,6 +500,11 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 				break
 			}
 			connected, progress.Stage = true, "connected"
+			mtuFiles, err = routerVPNOpenDesktopMTU(files, owner, session, policy.SourceSHA256(), configSHA)
+			if err != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
 		case <-parent.Done():
 			stopping = true
 		case <-ticker.C:
@@ -500,6 +515,12 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 			if connected && !owner.Healthy() {
 				failure, stopping = routerVPNExternalFailure, true
 				break
+			}
+			if connected && mtuFiles != nil {
+				if err := mtuFiles.tick(); err != nil {
+					failure, stopping = routerVPNExternalFailure, true
+					break
+				}
 			}
 			if !connected {
 				progress.Stage = "proving"

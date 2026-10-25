@@ -1,8 +1,10 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"maps"
 	"math"
 	"net"
@@ -10,40 +12,70 @@ import (
 	"strconv"
 	"strings"
 
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 // externalProfileCreateRequest is the native-UI-safe creation surface for the
 // common external node families. It deliberately does not expose executable
-// paths, arbitrary sing-box JSON, torrc directives, or OpenVPN text. Those
-// richer imports keep their dedicated hardened import paths.
+// paths, arbitrary sing-box JSON or torrc directives. Original inline OpenVPN
+// text passes the same strict native compiler as private imported profiles.
 type externalProfileCreateRequest struct {
-	Name                string                        `json:"name"`
-	Protocol            string                        `json:"protocol"`
-	ExpectedPublicIP    string                        `json:"expected_public_ip"`
-	Server              string                        `json:"server"`
-	Port                int                           `json:"port"`
-	Username            string                        `json:"username,omitempty"`
-	Password            string                        `json:"password,omitempty"`
-	Method              string                        `json:"method,omitempty"`
-	Secret              string                        `json:"secret,omitempty"`
-	TLSServerName       string                        `json:"tls_server_name,omitempty"`
-	WGPrivateKey        string                        `json:"wg_private_key,omitempty"`
-	WGAddresses         []string                      `json:"wg_addresses,omitempty"`
-	WGPeerPublicKey     string                        `json:"wg_peer_public_key,omitempty"`
-	WGPresharedKey      string                        `json:"wg_preshared_key,omitempty"`
-	WGAllowedIPs        []string                      `json:"wg_allowed_ips,omitempty"`
-	WGDNS               []string                      `json:"wg_dns,omitempty"`
-	WGMTU               int                           `json:"wg_mtu,omitempty"`
-	WGKeepalive         int                           `json:"wg_keepalive,omitempty"`
-	AWGParameters       map[string]string             `json:"awg_parameters,omitempty"`
-	Location            string                        `json:"location,omitempty"`
-	Latitude            *float64                      `json:"latitude,omitempty"`
-	Longitude           *float64                      `json:"longitude,omitempty"`
-	ResponseProbe       *common.ExternalResponseProbe `json:"response_probe,omitempty"`
-	StartLayer          string                        `json:"start_layer,omitempty"`
-	StartLayerProvision *common.ExternalStartLayer    `json:"start_layer_provision,omitempty"`
-	ServerPeer          *common.ExternalServerPeer    `json:"server_peer,omitempty"`
+	Name                string                         `json:"name"`
+	Protocol            string                         `json:"protocol"`
+	ExpectedPublicIP    string                         `json:"expected_public_ip"`
+	Server              string                         `json:"server"`
+	Port                int                            `json:"port"`
+	Username            string                         `json:"username,omitempty"`
+	Password            string                         `json:"password,omitempty"`
+	Method              string                         `json:"method,omitempty"`
+	Secret              string                         `json:"secret,omitempty"`
+	TLSServerName       string                         `json:"tls_server_name,omitempty"`
+	WGPrivateKey        string                         `json:"wg_private_key,omitempty"`
+	WGAddresses         []string                       `json:"wg_addresses,omitempty"`
+	WGPeerPublicKey     string                         `json:"wg_peer_public_key,omitempty"`
+	WGPresharedKey      string                         `json:"wg_preshared_key,omitempty"`
+	WGAllowedIPs        []string                       `json:"wg_allowed_ips,omitempty"`
+	WGDNS               []string                       `json:"wg_dns,omitempty"`
+	WGMTU               int                            `json:"wg_mtu,omitempty"`
+	WGKeepalive         int                            `json:"wg_keepalive,omitempty"`
+	AWGParameters       map[string]string              `json:"awg_parameters,omitempty"`
+	Location            string                         `json:"location,omitempty"`
+	Latitude            *float64                       `json:"latitude,omitempty"`
+	Longitude           *float64                       `json:"longitude,omitempty"`
+	ResponseProbe       *common.ExternalResponseProbe  `json:"response_probe,omitempty"`
+	StartLayer          string                         `json:"start_layer,omitempty"`
+	StartLayerProvision *common.ExternalStartLayer     `json:"start_layer_provision,omitempty"`
+	ServerPeer          *common.ExternalServerPeer     `json:"server_peer,omitempty"`
+	OpenVPN             *common.ExternalOpenVPNConfig  `json:"openvpn,omitempty"`
+	OpenVPNPairing      *common.ExternalOpenVPNPairing `json:"openvpn_pairing,omitempty"`
+	OpenVPNPairingJSON  string                         `json:"openvpn_pairing_json,omitempty"`
+}
+
+const externalProfileCreateMaxBytes = 2 << 20
+
+func decodeExternalProfileCreate(raw []byte) (externalProfileCreateRequest, error) {
+	bad := errors.New("bad external node request")
+	if len(raw) == 0 || len(raw) > externalProfileCreateMaxBytes {
+		return externalProfileCreateRequest{}, bad
+	}
+	object, err := applexray.Object(raw)
+	if err != nil {
+		return externalProfileCreateRequest{}, bad
+	}
+	for _, field := range []string{"openvpn", "openvpn_pairing", "openvpn_pairing_json"} {
+		if value, exists := object[field]; exists && value == nil {
+			return externalProfileCreateRequest{}, bad
+		}
+	}
+	var request externalProfileCreateRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || decoder.Decode(new(any)) != io.EOF {
+		return externalProfileCreateRequest{}, bad
+	}
+	return request, nil
 }
 
 func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.RouterProfile, error) {
@@ -70,6 +102,19 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	}
 
 	protocol := normalizeStandardExitProtocol(q.Protocol)
+	if protocol != "openvpn" && (q.OpenVPN != nil || q.OpenVPNPairing != nil || q.OpenVPNPairingJSON != "") {
+		return common.RouterProfile{}, errors.New("OpenVPN source and pairing belong only to the OpenVPN protocol")
+	}
+	if q.OpenVPNPairingJSON != "" {
+		if q.OpenVPNPairing != nil {
+			return common.RouterProfile{}, errors.New("provide one OpenVPN pairing representation")
+		}
+		var pairing common.ExternalOpenVPNPairing
+		if err := json.Unmarshal([]byte(q.OpenVPNPairingJSON), &pairing); err != nil {
+			return common.RouterProfile{}, errors.New("OpenVPN pairing JSON is invalid")
+		}
+		q.OpenVPNPairing = &pairing
+	}
 	if protocol != "amneziawg" && len(q.AWGParameters) != 0 {
 		return common.RouterProfile{}, errors.New("AmneziaWG parameters require the AmneziaWG protocol")
 	}
@@ -77,7 +122,7 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		ID:         newID(),
 		Name:       q.Name,
 		NodeKind:   "external",
-		External:   &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP), ResponseProbe: q.ResponseProbe, StartLayer: q.StartLayerProvision, ServerPeer: q.ServerPeer},
+		External:   &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP), ResponseProbe: q.ResponseProbe, StartLayer: q.StartLayerProvision, ServerPeer: q.ServerPeer, OpenVPNPairing: q.OpenVPNPairing},
 		StartLayer: q.StartLayer,
 		Location:   q.Location,
 		Latitude:   latitude,
@@ -132,12 +177,19 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	case "hysteria2":
 		p.External.Hysteria2 = &common.ExternalHysteria2Config{Server: host, Port: q.Port, Password: q.Secret, TLSServerName: q.TLSServerName}
 	case "openvpn":
-		return common.RouterProfile{}, errors.New("OpenVPN uses the hardened config import path; the typed node maker does not accept raw OpenVPN text")
+		if q.OpenVPN == nil {
+			return common.RouterProfile{}, errors.New("OpenVPN requires its original inline profile and captured credentials")
+		}
+		if _, err := nativeopenvpn.CompileProfile(*q.OpenVPN, "custom-exit", ""); err != nil {
+			return common.RouterProfile{}, err
+		}
+		p.External.OpenVPN = q.OpenVPN
 	case "tor-bridge":
 		return common.RouterProfile{}, errors.New("Tor bridges use the dedicated censorship-circumvention builder")
 	default:
 		return common.RouterProfile{}, errors.New("unsupported external node protocol")
 	}
+	p = common.CloneRouterProfile(p)
 	if err := common.NormalizeRouterProfile(&p); err != nil {
 		return common.RouterProfile{}, err
 	}
@@ -170,8 +222,9 @@ func (a *app) externalProfileCreate(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer release()
-	var q externalProfileCreateRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&q); err != nil {
+	raw, readErr := io.ReadAll(http.MaxBytesReader(w, r.Body, externalProfileCreateMaxBytes))
+	q, decodeErr := decodeExternalProfileCreate(raw)
+	if readErr != nil || decodeErr != nil {
 		http.Error(w, "bad external node request", http.StatusBadRequest)
 		return
 	}

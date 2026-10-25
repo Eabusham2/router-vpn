@@ -82,7 +82,7 @@ struct RouterVPNExternalPolicy: Sendable {
             guard let requested = execution["selection"] as? String, ["local", "server", "auto"].contains(requested),
                   values["execution"] as? String == requested,
                   values["last_node_measurement"] as? String == "https-response-time",
-                  ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(protocolName), entryID != nil else { throw issue() }
+                  ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(protocolName), entryID != nil else { throw issue() }
         } else {
             guard selected?["execution"] == nil, values["execution"] == nil, values["last_node_measurement"] == nil else { throw issue() }
         }

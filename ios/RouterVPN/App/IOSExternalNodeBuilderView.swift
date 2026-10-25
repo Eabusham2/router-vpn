@@ -63,7 +63,8 @@ extension RouterVPNModel {
         exitLayerAPI: String = "",
         exitLayerPort: Int = 0,
         exitLayerKey: String = "",
-        serverPeerJSON: String = ""
+        serverPeerJSON: String = "",
+        openVPNPairingJSON: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -192,6 +193,13 @@ extension RouterVPNModel {
         if let serverPeer = try IOSExternalExecution.serverPeer(serverPeerJSON) {
             guard ExternalNodeConfig.packetProtocols.contains(protocolName) else { throw IOSExternalExecution.issue() }
             external["server_peer"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(serverPeer))
+        }
+        if !openVPNPairingJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard protocolName == "openvpn" else { throw IOSExternalExecution.issue() }
+            let original = ExternalOpenVPNConfig(config: openVPNConfig, username: username, password: password)
+            if let pairing = try IOSExternalExecution.openVPNPairing(openVPNPairingJSON, profile: original) {
+                external["openvpn_pairing"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pairing))
+            }
         }
         if ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
             if let probe = try IOSExternalExecution.responseProbe(host: server, url: responseProbeURL, serverName: responseProbeServerName) {
@@ -339,6 +347,7 @@ struct IOSExternalNodeBuilderView: View {
     @State private var exitLayerPort = ""
     @State private var exitLayerKey = ""
     @State private var serverPeerJSON = ""
+    @State private var openVPNPairingJSON = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -446,6 +455,13 @@ struct IOSExternalNodeBuilderView: View {
                     Section("Hysteria2") { SecureField("Password", text: $secret); TextField("TLS server name / SNI", text: $tlsName).textInputAutocapitalization(.never).autocorrectionDisabled() }
                 }
                 if selected == .openvpn {
+                    Section("Private OpenVPN Server pairing") {
+                        TextEditor(text: $openVPNPairingJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 140)
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            .accessibilityLabel("Private OpenVPN pairing JSON")
+                        Text("Paste the private client pairing package supplied by your Router entry. It includes a dedicated local authentication key and the separate server's descriptor. Provider credentials and authentication keys must differ between Local and Server. Server secrets stay on the entry. Leave blank for Local only.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                     Section("Private OpenVPN profile") {
                         TextEditor(text: $openVPNConfig).frame(minHeight: 150)
                             .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -518,7 +534,8 @@ struct IOSExternalNodeBuilderView: View {
                 exitLayerAPI: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerAPI : "",
                 exitLayerPort: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
                 exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : "",
-                serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : ""
+                serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : "",
+                openVPNPairingJSON: selected == .openvpn ? openVPNPairingJSON : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

@@ -2,10 +2,14 @@
 """Exercise Windows delivery imports and the real native builder link boundary."""
 from pathlib import Path, PureWindowsPath
 import importlib.util
+import contextlib
+import io
 import json
 import os
 import shlex
 import struct
+import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -14,6 +18,47 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('native_dependencies', ROOT/'deploy/build-native-runtime.py')
 N = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(N)
+
+
+class NativeBuildDiagnostics(unittest.TestCase):
+    def test_real_failed_child_preserves_failure_and_both_output_streams(self):
+        command = [sys.executable, '-c', 'import os,sys; os.write(1,b"actual native assertion\\n"); os.write(2,b"compiler detail\\xff\\n"); sys.exit(7)']
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic), self.assertRaises(subprocess.CalledProcessError) as caught:
+            N.run(command)
+        error = caught.exception
+        self.assertEqual(error.returncode, 7)
+        self.assertEqual(error.cmd, command)
+        self.assertEqual(error.stdout, b'actual native assertion\n')
+        self.assertEqual(error.stderr, b'compiler detail\xff\n')
+        self.assertIn('actual native assertion', diagnostic.getvalue())
+        self.assertIn('compiler detail\ufffd', diagnostic.getvalue())
+
+    def test_real_failure_diagnostics_are_bounded_without_mutating_exception(self):
+        command = [sys.executable, '-c', 'import os,sys; os.write(1,b"EARLY_STDOUT"+b"x"*200000+b"FINAL_NATIVE_FAILURE"); os.write(2,b"EARLY_STDERR"+b"y"*200000+b"FINAL_COMPILER_FAILURE"); sys.exit(9)']
+        diagnostic = io.StringIO()
+        with contextlib.redirect_stderr(diagnostic), self.assertRaises(subprocess.CalledProcessError) as caught:
+            N.run(command)
+        report = diagnostic.getvalue()
+        self.assertLessEqual(len(report.encode('utf-8')), N.MAX_BUILD_DIAGNOSTIC+256)
+        self.assertIn('FINAL_NATIVE_FAILURE', report)
+        self.assertIn('FINAL_COMPILER_FAILURE', report)
+        self.assertNotIn('EARLY_STDOUT', report)
+        self.assertNotIn('EARLY_STDERR', report)
+        self.assertTrue(caught.exception.stdout.startswith(b'EARLY_STDOUT'))
+        self.assertTrue(caught.exception.stderr.startswith(b'EARLY_STDERR'))
+        self.assertEqual(caught.exception.returncode, 9)
+
+    def test_real_success_keeps_metadata_separate_and_preserves_cwd_environment(self):
+        with tempfile.TemporaryDirectory(prefix='native-diagnostic-') as temporary:
+            environment = dict(os.environ, ROUTERVPN_DIAGNOSTIC_FIXTURE='captured')
+            command = [sys.executable, '-c', 'import os,json; os.write(2,b"warning remains stderr\\n"); os.write(1,(json.dumps({"cwd":os.getcwd(),"value":os.environ["ROUTERVPN_DIAGNOSTIC_FIXTURE"]})+"\\r\\n").encode())']
+            diagnostic = io.StringIO()
+            with contextlib.redirect_stderr(diagnostic):
+                result = json.loads(N.run(command, cwd=temporary, env=environment))
+            self.assertEqual(Path(result['cwd']).resolve(), Path(temporary).resolve())
+            self.assertEqual(result['value'], 'captured')
+            self.assertEqual(diagnostic.getvalue(), 'warning remains stderr\n')
 
 PE, OPTIONAL, HEADER = 0x80, 0x98, 0x200
 SECTIONS = OPTIONAL+240
@@ -270,7 +315,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                         builds.append((args, env.copy()))
                         raise CompilerBoundary()
                     if args[:2] == ['go', 'test']:
-                        self.assertIn('^TestRouterVPNDesktopExternal', args)
+                        self.assertIn('^TestRouterVPNDesktop(External|MTU)', args)
                         self.assertIn('./cmd/sing-box', args)
                         return ''
                     self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])

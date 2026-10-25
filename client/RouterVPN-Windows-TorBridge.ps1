@@ -63,7 +63,7 @@ function NewUnifiedExternalConnectBody($Profile,[string]$EntryID,[string]$Execut
 }
 function GetUnifiedExternalPathIdentity($Profile){
     $External=ExternalPublicValue $Profile 'external' $null
-    return (@([string](ExternalPublicValue $Profile 'id'),[string](ExternalPublicValue $Profile 'node_kind'),[string](ExternalPublicValue $Profile 'endpoint'),[string](ExternalPublicValue $Profile 'start_layer'),[string](ExternalPublicValue $Profile 'multihop_entry_mode'),[string](ExternalPublicValue $External 'protocol'),[string](ExternalPublicValue $External 'expected_public_ip'),(ExternalPublicValue $External 'has_response_probe' $false),(ExternalPublicValue $External 'has_server_peer' $false))|ConvertTo-Json -Compress)
+    return (@([string](ExternalPublicValue $Profile 'id'),[string](ExternalPublicValue $Profile 'node_kind'),[string](ExternalPublicValue $Profile 'endpoint'),[string](ExternalPublicValue $Profile 'start_layer'),[string](ExternalPublicValue $Profile 'multihop_entry_mode'),[string](ExternalPublicValue $External 'protocol'),[string](ExternalPublicValue $External 'expected_public_ip'),(ExternalPublicValue $External 'has_response_probe' $false),(ExternalPublicValue $External 'has_server_peer' $false),(ExternalPublicValue $External 'has_openvpn_pairing' $false))|ConvertTo-Json -Compress)
 }
 function GetUnifiedExternalEntryMode($Captured,$Entry,[string]$Selected,$Modes){
     $Kind=[string](ExternalPublicValue $Entry 'node_kind' 'router-vpn')
@@ -91,9 +91,10 @@ function NewUnifiedExternalPathBody($Captured,[string]$EntryID,[string]$Executio
     }
     if($Execution -cne 'local'){
         $External=ExternalPublicValue $Matches[0] 'external' $null;$Protocol=[string](ExternalPublicValue $External 'protocol')
-        if($Protocol -cnotin @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect')){throw 'Server / Compare requires a supported authenticated external transport.'}
+        if($Protocol -cnotin @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect','openvpn')){throw 'Server / Compare requires a supported authenticated external transport.'}
         if((ExternalPublicValue $External 'has_response_probe' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_response_probe' $false) -cne $true){throw 'Server / Compare requires this external node HTTPS response probe.'}
         if($Protocol -cin @('wireguard','amneziawg') -and ((ExternalPublicValue $External 'has_server_peer' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_server_peer' $false) -cne $true)){throw 'WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.'}
+        if($Protocol -ceq 'openvpn' -and ((ExternalPublicValue $External 'has_openvpn_pairing' $false) -isnot [bool] -or (ExternalPublicValue $External 'has_openvpn_pairing' $false) -cne $true)){throw 'OpenVPN Server / Compare requires private pairing with independent provider credentials.'}
         if($Direct -or [string](ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cne 'router-vpn'){throw 'Server / Compare requires a Router VPN entry.'}
     }
     $Body=NewUnifiedExternalConnectBody $Captured $EntryID $Execution $Direct
@@ -114,6 +115,16 @@ function AddUnifiedExternalServerPeer($Body,[string]$Protocol,[string]$PublicKey
     $Peer=@{public_key=$PublicKey;addresses=$IPs;mtu=$MTU}
     if($KeepaliveText){if(-not [int]::TryParse($KeepaliveText,[ref]$Keepalive) -or $Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Server peer keepalive must be 0–65535 seconds.'};$Peer.persistent_keepalive_interval=$Keepalive}
     $Body.server_peer=$Peer
+}
+function AddUnifiedExternalOpenVPN($Body,[string]$Protocol,[string]$Config,[string]$Pairing,[string]$Username,[string]$Password){
+    if($Protocol -cne 'openvpn'){
+        if($Config -or $Pairing.Trim()){throw 'OpenVPN profile and pairing fields belong only to OpenVPN.'}
+        return
+    }
+    if(-not $Config -or [Text.Encoding]::UTF8.GetByteCount($Config) -gt 262144 -or $Config.Contains([string][char]0)){throw 'Paste a bounded inline OpenVPN profile (up to 256 KiB).'}
+    if([Text.Encoding]::UTF8.GetByteCount($Pairing) -gt 524288){throw 'OpenVPN pairing JSON is too large.'}
+    $Body.openvpn=@{config=$Config;username=$Username;password=$Password}
+    if($Pairing.Trim()){$Body.openvpn_pairing_json=$Pairing}
 }
 function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$false){
     if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before choosing an external path.';return}
@@ -181,7 +192,7 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
     }catch{Log ('External path: '+$_.Exception.Message)}
 }
 function AddUnifiedExternalTransportFields($Body,[string]$Protocol,[string]$Server,[string]$ProbeURL,[string]$ProbeName,[string]$Layer,[string]$LayerAPI,[string]$LayerPort,[string]$LayerKey){
-    $Proxies=@('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect')
+    $Proxies=@('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect','openvpn')
     $ProbeURL=$ProbeURL.Trim();$ProbeName=$ProbeName.Trim();$LayerAPI=$LayerAPI.Trim();$LayerPort=$LayerPort.Trim()
     if($Layer -cnotin @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){throw 'Choose a supported external Start Layer.'}
     if(($ProbeURL -or $ProbeName -or $Layer -ne 'off' -or $LayerAPI -or $LayerPort -or $LayerKey) -and $Protocol -cnotin $Proxies){throw 'Response probes and external Start Layers require a supported external transport.'}
@@ -201,8 +212,8 @@ function ShowUnifiedExternalNodeBuilder{
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Add external node" Width="820" Height="760" MinWidth="680" MinHeight="600" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Add external node" FontSize="26" FontWeight="Bold"/>
-    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Create a full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."/>
-    <TextBlock Text="Protocol"/><ComboBox Name="ExtProtocol" Margin="0,4,0,10"><ComboBoxItem Content="WireGuard" Tag="wireguard"/><ComboBoxItem Content="AmneziaWG" Tag="amneziawg"/><ComboBoxItem Content="SOCKS5" Tag="socks5"/><ComboBoxItem Content="HTTP CONNECT" Tag="http-connect"/><ComboBoxItem Content="HTTPS CONNECT" Tag="https-connect"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
+    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Create a full-device external node. For OpenVPN, paste your private inline profile below. Tor has its own Tor bridges form. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS."/>
+    <TextBlock Text="Protocol"/><ComboBox Name="ExtProtocol" Margin="0,4,0,10"><ComboBoxItem Content="WireGuard" Tag="wireguard"/><ComboBoxItem Content="AmneziaWG" Tag="amneziawg"/><ComboBoxItem Content="SOCKS5" Tag="socks5"/><ComboBoxItem Content="HTTP CONNECT" Tag="http-connect"/><ComboBoxItem Content="HTTPS CONNECT" Tag="https-connect"/><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="OpenVPN" Tag="openvpn"/></ComboBox>
     <TextBlock Text="Display name"/><TextBox Name="ExtName" Margin="0,4,0,8" Padding="7"/>
     <Grid><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="170"/></Grid.ColumnDefinitions><StackPanel Margin="0,0,6,0"><TextBlock Text="Server IP / hostname"/><TextBox Name="ExtServer" Margin="0,4,0,8" Padding="7"/></StackPanel><StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Port"/><TextBox Name="ExtPort" Margin="0,4,0,8" Padding="7"/></StackPanel></Grid>
     <TextBlock Text="Expected public exit IP"/><TextBox Name="ExtExpected" Margin="0,4,0,8" Padding="7"/>
@@ -236,7 +247,10 @@ function ShowUnifiedExternalNodeBuilder{
     <TextBlock Text="Server peer addresses — one CIDR per family, comma separated"/><TextBox Name="ExtServerPeerAddresses" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Server peer MTU — required with descriptor, 1280–9000"/><TextBox Name="ExtServerPeerMTU" Margin="0,4,0,8" Padding="7"/>
     <TextBlock Text="Server peer keepalive seconds — optional, 0–65535"/><TextBox Name="ExtServerPeerKeepalive" Margin="0,4,0,8" Padding="7"/>
-    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,6,0,8" Text="Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker never accepts executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration."/>
+    <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,6,0,8" Text="Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker never accepts executable paths, arbitrary sing-box JSON, Tor directives, or OpenVPN scripts and file paths."/>
+    <TextBlock Text="Private inline OpenVPN profile" FontWeight="Bold" Margin="0,14,0,4"/><TextBox Name="ExtOpenVPNConfig" AcceptsReturn="True" MinHeight="130" MaxHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" TextWrapping="NoWrap"/>
+    <TextBlock Text="Private OpenVPN pairing JSON — optional for Local" Margin="0,10,0,4"/><TextBox Name="ExtOpenVPNPairing" AcceptsReturn="True" MinHeight="110" MaxHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" TextWrapping="NoWrap"/>
+    <TextBlock Text="Use the original inline profile and username/password above. Server / Compare requires this device's private pairing package and a separate provider identity on the Router entry. Server secrets stay on the entry. The controller validates the original profile and JSON before saving; scripts and file paths are rejected." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,6,0,8"/>
     <TextBlock Name="ExtStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="ExtSave" Content="Save node" Padding="14,8"/><Button Name="ExtClose" Content="Close" Margin="8,0,0,0" Padding="14,8"/></StackPanel>
   </StackPanel></ScrollViewer>
@@ -266,6 +280,7 @@ function ShowUnifiedExternalNodeBuilder{
                 $KeepaliveText=[string]$D.FindName('ExtWGKeepalive').Text;if($KeepaliveText.Trim()){$Keepalive=[int]$KeepaliveText;if($Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Keepalive must be 0–65535 seconds.'};$Body.wg_keepalive=$Keepalive}
                 if($ID -eq 'amneziawg'){$Body.awg_parameters=ParseUnifiedExternalAmneziaParameters ([string]$D.FindName('ExtAWGParameters').Text)}
             }
+            AddUnifiedExternalOpenVPN $Body $ID ([string]$D.FindName('ExtOpenVPNConfig').Text) ([string]$D.FindName('ExtOpenVPNPairing').Text) ([string]$D.FindName('ExtUser').Text) ([string]$D.FindName('ExtPassword').Password)
             AddUnifiedExternalServerPeer $Body $ID ([string]$D.FindName('ExtServerPeerPublic').Text) ([string]$D.FindName('ExtServerPeerAddresses').Text) ([string]$D.FindName('ExtServerPeerMTU').Text) ([string]$D.FindName('ExtServerPeerKeepalive').Text)
             AddUnifiedExternalTransportFields $Body $ID ([string]$D.FindName('ExtServer').Text) ([string]$D.FindName('ExtResponseURL').Text) ([string]$D.FindName('ExtResponseName').Text) ([string]$D.FindName('ExtStartLayer').SelectedItem.Tag) ([string]$D.FindName('ExtLayerAPI').Text) ([string]$D.FindName('ExtLayerPort').Text) ([string]$D.FindName('ExtLayerKey').Password)
             $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected. Use a Router entry for Home AdGuard, or choose a resolver in DNS for Direct.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct

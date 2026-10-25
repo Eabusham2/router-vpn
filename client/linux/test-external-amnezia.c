@@ -42,6 +42,7 @@ int main(int argc,char **argv){
     s.protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s.protocol),"wireguard","WireGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s.protocol),"amneziawg","AmneziaWG");gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.protocol),"amneziawg");
     const char *proxy_protocols[]={"shadowsocks","hysteria2","socks5","http-connect","https-connect"};
     for(guint i=0;i<G_N_ELEMENTS(proxy_protocols);i++)gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s.protocol),proxy_protocols[i],proxy_protocols[i]);
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s.protocol),"openvpn","OpenVPN");s.openvpn_config=gtk_text_view_new();s.openvpn_pairing=gtk_text_view_new();
     s.response_url=field("");s.response_name=field("");s.layer_api=field("");s.layer_port=field("");s.layer_key=field("");s.start_layer=gtk_combo_box_text_new();
     s.server_peer_public=field("");s.server_peer_addresses=field("");s.server_peer_mtu=field("");s.server_peer_keepalive=field("");
     const char *layers[]={"off","aes-256-gcm","aes-256-gcm+xor-whitening"};
@@ -111,6 +112,27 @@ int main(int argc,char **argv){
     GtkWidget *peer_fields[]={s.server_peer_public,s.server_peer_addresses,s.server_peer_mtu,s.server_peer_keepalive};for(guint i=0;i<G_N_ELEMENTS(peer_fields);i++)gtk_entry_set_text(GTK_ENTRY(peer_fields[i]),"");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.start_layer),"off");gtk_entry_set_text(GTK_ENTRY(s.layer_api),"");gtk_entry_set_text(GTK_ENTRY(s.layer_port),"");gtk_entry_set_text(GTK_ENTRY(s.layer_key),"");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.protocol),"shadowsocks");gtk_entry_set_text(GTK_ENTRY(s.response_url),"");body=linux_external_payload_v14(&s,&error);check(body==NULL,"Partial response endpoint accepted");g_free(error);error=NULL;count++;
+    char *openvpn_path=g_build_filename(argv[1],"external-openvpn-client.json",NULL),*openvpn_raw=NULL;
+    check(g_file_get_contents(openvpn_path,&openvpn_raw,NULL,NULL),"Synthetic OpenVPN fixture missing");g_free(openvpn_path);
+    JsonNode *openvpn_fixture=parse_json(openvpn_raw);g_free(openvpn_raw);JsonObject *openvpn_layers=json_object_get_object_member(json_node_get_object(openvpn_fixture),"layers");
+    for(guint li=0;li<G_N_ELEMENTS(layers);li++){
+        JsonObject *fixture=json_object_get_object_member(openvpn_layers,layers[li]),*external=json_object_get_object_member(fixture,"external"),*original=json_object_get_object_member(external,"openvpn"),*probe=json_object_get_object_member(external,"response_probe");
+        gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.protocol),"openvpn");gtk_entry_set_text(GTK_ENTRY(s.server),"203.0.113.20");gtk_entry_set_text(GTK_ENTRY(s.expected),obj_string(external,"expected_public_ip"));
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_config)),obj_string(original,"config"),-1);
+        JsonGenerator *pairing_generator=json_generator_new();json_generator_set_root(pairing_generator,json_object_get_member(external,"openvpn_pairing"));char *pairing_text=json_generator_to_data(pairing_generator,NULL);g_object_unref(pairing_generator);
+        gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_pairing)),pairing_text,-1);
+        gtk_entry_set_text(GTK_ENTRY(s.username),obj_string(original,"username"));gtk_entry_set_text(GTK_ENTRY(s.password),obj_string(original,"password"));gtk_entry_set_text(GTK_ENTRY(s.response_url),obj_string(probe,"url"));gtk_entry_set_text(GTK_ENTRY(s.response_name),obj_string(probe,"server_name"));gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.start_layer),layers[li]);
+        gtk_entry_set_text(GTK_ENTRY(s.layer_api),"");gtk_entry_set_text(GTK_ENTRY(s.layer_port),"");gtk_entry_set_text(GTK_ENTRY(s.layer_key),"");
+        if(li>0){JsonObject *layer=json_object_get_object_member(external,"start_layer"),*transport=json_object_get_object_member(layer,"transport");char *number=g_strdup_printf("%d",(int)json_object_get_int_member(transport,"server_port"));gtk_entry_set_text(GTK_ENTRY(s.layer_api),obj_string(layer,"api"));gtk_entry_set_text(GTK_ENTRY(s.layer_port),number);gtk_entry_set_text(GTK_ENTRY(s.layer_key),obj_string(transport,"password"));g_free(number);}
+        body=linux_external_payload_v14(&s,&error);check(body!=NULL,error?error:"OpenVPN form failed");root=parse_json(body);obj=json_node_get_object(root);JsonObject *saved_openvpn=json_object_get_object_member(obj,"openvpn");
+        check(g_strcmp0(obj_string(saved_openvpn,"config"),obj_string(original,"config"))==0&&g_strcmp0(obj_string(saved_openvpn,"username"),obj_string(original,"username"))==0&&g_strcmp0(obj_string(saved_openvpn,"password"),obj_string(original,"password"))==0&&g_strcmp0(obj_string(obj,"openvpn_pairing_json"),pairing_text)==0,"OpenVPN source or private pairing bytes changed");g_free(pairing_text);
+        char *name=g_strdup_printf("openvpn-%s.json",layers[li]);output=g_build_filename(argv[1],name,NULL);check(g_file_set_contents(output,body,-1,NULL),"OpenVPN payload write failed");g_free(name);g_free(output);g_free(body);json_node_free(root);count++;
+    }
+    char *original_config=linux_external_text_v14(s.openvpn_config),*multiremote=g_strconcat(original_config,"remote 203.0.113.21 443 tcp\n",NULL);g_free(original_config);gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_config)),multiremote,-1);g_free(multiremote);
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_pairing)),"",-1);gtk_entry_set_text(GTK_ENTRY(s.response_url),"");gtk_entry_set_text(GTK_ENTRY(s.response_name),"");gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.start_layer),"off");gtk_entry_set_text(GTK_ENTRY(s.layer_api),"");gtk_entry_set_text(GTK_ENTRY(s.layer_port),"");gtk_entry_set_text(GTK_ENTRY(s.layer_key),"");
+    body=linux_external_payload_v14(&s,&error);check(body!=NULL,"Unpaired Local multiremote rejected");root=parse_json(body);check(!json_object_has_member(json_node_get_object(root),"openvpn_pairing_json"),"Plain Local profile acquired pairing");output=g_build_filename(argv[1],"openvpn-local-multiremote.json",NULL);check(g_file_set_contents(output,body,-1,NULL),"Local multiremote write failed");g_free(output);g_free(body);json_node_free(root);count++;
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.protocol),"shadowsocks");body=linux_external_payload_v14(&s,&error);check(body==NULL,"Changing protocol discarded OpenVPN source");g_free(error);error=NULL;count++;
+    gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_config)),"",-1);gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.protocol),"openvpn");body=linux_external_payload_v14(&s,&error);check(body==NULL,"Empty OpenVPN source reached controller");g_free(error);error=NULL;count++;json_node_free(openvpn_fixture);
     JsonObject *profile=json_object_new();check(g_strcmp0(external_saved_execution_v4(profile),"local")==0,"Legacy external default is not Local");count++;
     const char *executions[]={"local","server","auto"};
     for(guint i=0;i<G_N_ELEMENTS(executions);i++){
@@ -121,13 +143,18 @@ int main(int argc,char **argv){
     check(json_external_hop_body("captured-exit","captured-exit","local",FALSE)==NULL,"Self-hop accepted");count++;
     check(json_external_hop_body("captured-exit","entry","invalid",FALSE)==NULL,"Invalid execution accepted");count++;
     json_object_set_string_member(profile,"multihop_execution","invalid");check(external_saved_execution_v4(profile)==NULL,"Invalid saved execution silently replaced");json_object_unref(profile);g_free(key);count++;
-    const char *eligible[]={"wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect"};
+    const char *eligible[]={"wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect","openvpn"};
     JsonNode *captured_node=parse_json("{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"wireguard\",\"has_response_probe\":true,\"has_server_peer\":true}}");JsonObject *captured=json_node_get_object(captured_node);
     for(guint pi=0;pi<G_N_ELEMENTS(eligible);pi++)for(guint ei=0;ei<G_N_ELEMENTS(executions);ei++){
         json_object_set_string_member(json_object_get_object_member(captured,"external"),"protocol",eligible[pi]);
-        char *catalog=g_strdup_printf("{\"profiles\":[{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\",\"has_response_probe\":true,\"has_server_peer\":true}},{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}]}",eligible[pi]);JsonNode *current=parse_json(catalog);g_free(catalog);
+        gboolean openvpn=g_strcmp0(eligible[pi],"openvpn")==0;json_object_set_boolean_member(json_object_get_object_member(captured,"external"),"has_openvpn_pairing",openvpn);
+        char *catalog=g_strdup_printf("{\"profiles\":[{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\",\"has_response_probe\":true,\"has_server_peer\":true,\"has_openvpn_pairing\":%s}},{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}]}",eligible[pi],openvpn?"true":"false");JsonNode *current=parse_json(catalog);g_free(catalog);
         body=external_path_current_body_v4(captured,current,"entry",executions[ei],FALSE,&error);check(body!=NULL,error?error:"Eligible captured external path rejected");root=parse_json(body);obj=json_node_get_object(root);check(g_strcmp0(obj_string(obj,"profile_id"),"exit")==0&&g_strcmp0(obj_string(obj,"entry_id"),"entry")==0&&g_strcmp0(obj_string(obj,"execution"),executions[ei])==0,"External path changed captured identity");json_node_free(root);json_node_free(current);g_free(body);count++;
     }
+    JsonNode *replaced_pairing=parse_json("{\"profiles\":[{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"openvpn\",\"has_response_probe\":true,\"has_server_peer\":true,\"has_openvpn_pairing\":false}},{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}]}");
+    body=external_path_current_body_v4(captured,replaced_pairing,"entry","auto",FALSE,&error);check(body==NULL,"Stale OpenVPN pairing eligibility reached controller");g_free(error);error=NULL;count++;
+    json_object_set_boolean_member(json_object_get_object_member(captured,"external"),"has_openvpn_pairing",FALSE);
+    body=external_path_current_body_v4(captured,replaced_pairing,"entry","auto",FALSE,&error);check(body==NULL,"OpenVPN comparison accepted missing independent pairing");g_free(error);error=NULL;json_node_free(replaced_pairing);count++;
     json_object_set_string_member(json_object_get_object_member(captured,"external"),"protocol","wireguard");
     for(guint ci=0;ci<6;ci++){
         JsonNode *current=parse_json("{\"profiles\":[{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"wireguard\",\"has_response_probe\":true,\"has_server_peer\":true}},{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}]}");JsonArray *catalog=json_object_get_array_member(json_node_get_object(current),"profiles");JsonObject *fresh=json_array_get_object_element(catalog,0),*ext=json_object_get_object_member(fresh,"external");

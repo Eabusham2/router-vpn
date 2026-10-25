@@ -249,6 +249,7 @@ private struct RouterVPNNodeMetadataEditor: View {
     @State private var exitLayerPort: String
     @State private var exitLayerKey: String
     @State private var serverPeerJSON: String
+    @State private var openVPNPairingJSON: String
     @State private var errorText = ""
 
     init(profile: RouterProfile) {
@@ -264,6 +265,7 @@ private struct RouterVPNNodeMetadataEditor: View {
         _exitLayerPort = State(initialValue: profile.external?.startLayer.map { String($0.transport.serverPort) } ?? "")
         _exitLayerKey = State(initialValue: profile.external?.startLayer?.transport.password ?? "")
         _serverPeerJSON = State(initialValue: IOSExternalExecution.serverPeerText(profile.external?.serverPeer))
+        _openVPNPairingJSON = State(initialValue: IOSExternalExecution.openVPNPairingText(profile.external?.openVPNPairing))
     }
 
     var body: some View {
@@ -289,13 +291,22 @@ private struct RouterVPNNodeMetadataEditor: View {
                     Text("Re-import a validated node profile to change its protocol, primary credentials or expected public exit.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
-                if profile.normalizedNodeKind == "external", profile.external?.serverExecutionHost != nil {
+                if profile.normalizedNodeKind == "external", ExternalNodeConfig.serverExecutionProtocols.contains(profile.external?.protocolName ?? "") {
                     if ExternalNodeConfig.packetProtocols.contains(profile.external?.protocolName ?? "") {
                         Section("Server / Compare peer") {
                             TextEditor(text: $serverPeerJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 110)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                                 .accessibilityLabel("Provisioned server peer public descriptor JSON")
                             Text("Use the independently provisioned server client's public_key, addresses, mtu and optional persistent_keepalive_interval. Its identity and assigned addresses must differ from this device's peer. Server private keys stay on the Router VPN entry. Choose Local before removing this descriptor.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                    if profile.external?.protocolName == "openvpn" {
+                        Section("Private OpenVPN Server pairing") {
+                            TextEditor(text: $openVPNPairingJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 140)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityLabel("Private OpenVPN pairing JSON")
+                            Text("Use this device's private pairing package with its dedicated authentication key and the server descriptor. Server provider and authentication secrets remain on the Router entry. Choose Local before removing this pairing.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -328,7 +339,7 @@ private struct RouterVPNNodeMetadataEditor: View {
                 ToolbarItem(placement: .confirmationAction) {
                     Button("Save") {
                         guard !model.profileMutationBlocked else { model.message = "Disconnect or let the active VPN transition finish before editing node metadata."; return }
-                        let external = profile.normalizedNodeKind == "external" && profile.external?.serverExecutionHost != nil ? profile.external : nil
+                        let external = profile.normalizedNodeKind == "external" && ExternalNodeConfig.serverExecutionProtocols.contains(profile.external?.protocolName ?? "") ? profile.external : nil
                         if model.updateNodeMetadata(id: profile.id, name: name, location: location, latitudeText: latitude, longitudeText: longitude,
                             expectedExternal: external, responseProbeURL: external == nil ? "" : responseProbeURL,
                             responseProbeServerName: external == nil ? "" : responseProbeServerName,
@@ -336,7 +347,8 @@ private struct RouterVPNNodeMetadataEditor: View {
                             exitLayerAPI: external != nil && exitStartLayer != "off" ? exitLayerAPI : "",
                             exitLayerPort: external != nil && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
                             exitLayerKey: external != nil && exitStartLayer != "off" ? exitLayerKey : "",
-                            serverPeerJSON: ExternalNodeConfig.packetProtocols.contains(external?.protocolName ?? "") ? serverPeerJSON : nil) { dismiss() }
+                            serverPeerJSON: ExternalNodeConfig.packetProtocols.contains(external?.protocolName ?? "") ? serverPeerJSON : nil,
+                            openVPNPairingJSON: external?.protocolName == "openvpn" ? openVPNPairingJSON : nil) { dismiss() }
                         else { errorText = model.message }
                     }
                     .disabled(model.profileMutationBlocked)

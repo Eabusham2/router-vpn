@@ -42,8 +42,7 @@ func desktopAWGProfile(t *testing.T) common.RouterProfile {
 
 func TestDesktopAmneziaCapabilityEndpointsAgree(t *testing.T) {
 	var a app
-	var previous []string
-	for _, handler := range []http.HandlerFunc{platformStandardExitCapabilitiesHandler, a.externalProfileCapabilities} {
+	for index, handler := range []http.HandlerFunc{platformStandardExitCapabilitiesHandler, a.externalProfileCapabilities} {
 		response := httptest.NewRecorder()
 		handler(response, httptest.NewRequest(http.MethodGet, "/", nil))
 		var body struct {
@@ -52,10 +51,16 @@ func TestDesktopAmneziaCapabilityEndpointsAgree(t *testing.T) {
 		if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &body) != nil {
 			t.Fatal("capability response is invalid")
 		}
-		if !slices.Contains(body.Entries, "amneziawg") || (previous != nil && !reflect.DeepEqual(body.Entries, previous)) {
-			t.Fatal("desktop capability surfaces disagree with the implemented AmneziaWG entry")
+		// The legacy standard-exit command retains its bounded entry set. The
+		// native-node owner additionally composes OpenVPN with system=false;
+		// its advertised support must not promote the older command path.
+		expected := []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"}
+		if index == 1 {
+			expected = append(expected, "openvpn")
 		}
-		previous = body.Entries
+		if !slices.Equal(body.Entries, expected) {
+			t.Fatal("desktop capability surface advertised another owner's entry set")
+		}
 	}
 	profile := desktopAWGProfile(t)
 	entry, kind, err := standardExitEntry([]common.RouterProfile{profile}, profile, standardExitConnectRequest{EntryID: profile.ID})

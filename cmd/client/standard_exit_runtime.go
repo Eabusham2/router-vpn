@@ -156,6 +156,10 @@ func directStandardExitRuntimeParts(e standardExit) (map[string]any, map[string]
 	if err := validateStandardExit(&e); err != nil {
 		return nil, nil, err
 	}
+	if e.Protocol == "openvpn" {
+		endpoint, err := desktopOpenVPNEndpoint(e, "")
+		return endpoint, nil, err
+	}
 	if e.Protocol == "amneziawg" {
 		endpoint, err := desktopAmneziaEndpoint(e, "")
 		return endpoint, nil, err
@@ -301,7 +305,9 @@ func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	useNative := exit.StartLayer != nil
 	if useNative {
-		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+			return nil, err
+		}
 	} else if exit.Protocol == "amneziawg" {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err

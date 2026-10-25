@@ -11,61 +11,114 @@ const externalTestWGKey = "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="
 const externalTestTorBridge = "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=abcdefghijklmnopqrstuvwxyz iat-mode=0"
 
 func externalProfileBase(id, protocol string) common.RouterProfile {
-	return common.RouterProfile{ID:id,Name:id,NodeKind:"external",External:&common.ExternalNodeConfig{Protocol:protocol,ExpectedPublicIP:"203.0.113.90"}}
+	return common.RouterProfile{ID: id, Name: id, NodeKind: "external", External: &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: "203.0.113.90"}}
 }
 
 func TestExternalWireGuardProfileBecomesStandardExit(t *testing.T) {
-	p:=externalProfileBase("ext-wg","wireguard")
-	p.External.WireGuard=&common.ExternalWireGuardConfig{PrivateKey:externalTestWGKey,Addresses:[]string{"10.1.0.2/32"},PeerPublicKey:externalTestWGKey,Endpoint:"198.51.100.10:51820",AllowedIPs:[]string{"0.0.0.0/0"},MTU:1380}
-	e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatal(err)}
-	if e.Protocol!="wireguard"||e.Server!="198.51.100.10"||e.ServerPort!=51820||e.ExpectedPublicIP!="203.0.113.90"{t.Fatalf("bad bridge: %+v",e)}
-	if e.WGPrivateKey!=externalTestWGKey||e.WGMTU!=1380{t.Fatalf("wireguard credentials lost: %+v",e)}
+	p := externalProfileBase("ext-wg", "wireguard")
+	p.External.WireGuard = &common.ExternalWireGuardConfig{PrivateKey: externalTestWGKey, Addresses: []string{"10.1.0.2/32"}, PeerPublicKey: externalTestWGKey, Endpoint: "198.51.100.10:51820", AllowedIPs: []string{"0.0.0.0/0"}, MTU: 1380}
+	e, err := standardExitFromExternalProfile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Protocol != "wireguard" || e.Server != "198.51.100.10" || e.ServerPort != 51820 || e.ExpectedPublicIP != "203.0.113.90" {
+		t.Fatalf("bad bridge: %+v", e)
+	}
+	if e.WGPrivateKey != externalTestWGKey || e.WGMTU != 1380 {
+		t.Fatalf("wireguard credentials lost: %+v", e)
+	}
 }
 
 func TestExternalProxyProfilesBecomeStandardExits(t *testing.T) {
-	ss:=externalProfileBase("ext-ss","shadowsocks");ss.External.Shadowsocks=&common.ExternalShadowsocksConfig{Server:"198.51.100.11",Port:8388,Method:"aes-256-gcm",Password:"secret"}
-	socks:=externalProfileBase("ext-socks","socks5");socks.External.SOCKS5=&common.ExternalSOCKS5Config{Host:"198.51.100.12",Port:1080,Username:"u",Password:"p"}
-	httpExit:=externalProfileBase("ext-http","http-connect");httpExit.External.HTTPConnect=&common.ExternalHTTPConnectConfig{Host:"198.51.100.15",Port:8080,Username:"hu",Password:"hp"}
-	httpsExit:=externalProfileBase("ext-https","https-connect");httpsExit.External.HTTPSConnect=&common.ExternalHTTPConnectConfig{Host:"198.51.100.16",Port:443,Username:"su",Password:"sp",TLSServerName:"proxy.example.com"}
-	hy:=externalProfileBase("ext-hy","hysteria2");hy.External.Hysteria2=&common.ExternalHysteria2Config{Server:"198.51.100.13",Port:8443,Password:"pw",TLSServerName:"hy.example.com"}
-	for _,p:=range []common.RouterProfile{ss,socks,httpExit,httpsExit,hy}{
-		e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatalf("%s: %v",p.ID,err)}
-		if e.ID!=p.ID||e.ExpectedPublicIP!="203.0.113.90"{t.Fatalf("identity/proof lost: %+v",e)}
+	ss := externalProfileBase("ext-ss", "shadowsocks")
+	ss.External.Shadowsocks = &common.ExternalShadowsocksConfig{Server: "198.51.100.11", Port: 8388, Method: "aes-256-gcm", Password: "secret"}
+	socks := externalProfileBase("ext-socks", "socks5")
+	socks.External.SOCKS5 = &common.ExternalSOCKS5Config{Host: "198.51.100.12", Port: 1080, Username: "u", Password: "p"}
+	httpExit := externalProfileBase("ext-http", "http-connect")
+	httpExit.External.HTTPConnect = &common.ExternalHTTPConnectConfig{Host: "198.51.100.15", Port: 8080, Username: "hu", Password: "hp"}
+	httpsExit := externalProfileBase("ext-https", "https-connect")
+	httpsExit.External.HTTPSConnect = &common.ExternalHTTPConnectConfig{Host: "198.51.100.16", Port: 443, Username: "su", Password: "sp", TLSServerName: "proxy.example.com"}
+	hy := externalProfileBase("ext-hy", "hysteria2")
+	hy.External.Hysteria2 = &common.ExternalHysteria2Config{Server: "198.51.100.13", Port: 8443, Password: "pw", TLSServerName: "hy.example.com"}
+	for _, p := range []common.RouterProfile{ss, socks, httpExit, httpsExit, hy} {
+		e, err := standardExitFromExternalProfile(p)
+		if err != nil {
+			t.Fatalf("%s: %v", p.ID, err)
+		}
+		if e.ID != p.ID || e.ExpectedPublicIP != "203.0.113.90" {
+			t.Fatalf("identity/proof lost: %+v", e)
+		}
 	}
-	httpRuntime,err:=standardExitFromExternalProfile(httpExit);if err!=nil{t.Fatal(err)}
-	if httpRuntime.Protocol!="http-connect"||httpRuntime.Server!="198.51.100.15"||httpRuntime.ServerPort!=8080||httpRuntime.Username!="hu"||httpRuntime.Password!="hp"||httpRuntime.TLSServerName!=""{t.Fatalf("HTTP CONNECT adapter wrong: %+v",httpRuntime)}
-	httpsRuntime,err:=standardExitFromExternalProfile(httpsExit);if err!=nil{t.Fatal(err)}
-	if httpsRuntime.Protocol!="https-connect"||httpsRuntime.Server!="198.51.100.16"||httpsRuntime.ServerPort!=443||httpsRuntime.Username!="su"||httpsRuntime.Password!="sp"||httpsRuntime.TLSServerName!="proxy.example.com"{t.Fatalf("HTTPS CONNECT adapter wrong: %+v",httpsRuntime)}
+	httpRuntime, err := standardExitFromExternalProfile(httpExit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if httpRuntime.Protocol != "http-connect" || httpRuntime.Server != "198.51.100.15" || httpRuntime.ServerPort != 8080 || httpRuntime.Username != "hu" || httpRuntime.Password != "hp" || httpRuntime.TLSServerName != "" {
+		t.Fatalf("HTTP CONNECT adapter wrong: %+v", httpRuntime)
+	}
+	httpsRuntime, err := standardExitFromExternalProfile(httpsExit)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if httpsRuntime.Protocol != "https-connect" || httpsRuntime.Server != "198.51.100.16" || httpsRuntime.ServerPort != 443 || httpsRuntime.Username != "su" || httpsRuntime.Password != "sp" || httpsRuntime.TLSServerName != "proxy.example.com" {
+		t.Fatalf("HTTPS CONNECT adapter wrong: %+v", httpsRuntime)
+	}
 }
 
 func TestExternalTorBridgeBecomesDynamicExitAdapter(t *testing.T) {
-	p:=common.RouterProfile{ID:"ext-tor",Name:"Tor Bridge",NodeKind:"external",External:&common.ExternalNodeConfig{Protocol:"tor-bridge",TorBridge:&common.ExternalTorBridgeConfig{Bridges:[]string{externalTestTorBridge}}}}
-	e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatal(err)}
-	if e.ID!="ext-tor"||e.Protocol!="tor-bridge"||e.Server!="203.0.113.44"||e.ExpectedPublicIP!=""{t.Fatalf("Tor adapter lost dynamic-exit semantics: %+v",e)}
+	p := common.RouterProfile{ID: "ext-tor", Name: "Tor Bridge", NodeKind: "external", External: &common.ExternalNodeConfig{Protocol: "tor-bridge", TorBridge: &common.ExternalTorBridgeConfig{Bridges: []string{externalTestTorBridge}}}}
+	e, err := standardExitFromExternalProfile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.ID != "ext-tor" || e.Protocol != "tor-bridge" || e.Server != "203.0.113.44" || e.ExpectedPublicIP != "" {
+		t.Fatalf("Tor adapter lost dynamic-exit semantics: %+v", e)
+	}
 
-	p.External.ExpectedPublicIP="198.51.100.90"
-	if _,err=standardExitFromExternalProfile(p);err==nil||!strings.Contains(err.Error(),"dynamic circuit exit"){t.Fatalf("Tor fixed exit was accepted: %v",err)}
+	p.External.ExpectedPublicIP = "198.51.100.90"
+	if _, err = standardExitFromExternalProfile(p); err == nil || !strings.Contains(err.Error(), "dynamic circuit exit") {
+		t.Fatalf("Tor fixed exit was accepted: %v", err)
+	}
 }
 
-func TestExternalOpenVPNUsesExistingSanitizer(t *testing.T) {
-	p:=externalProfileBase("ext-ovpn","openvpn")
-	p.External.OpenVPN=&common.ExternalOpenVPNConfig{Config:"client\nproto tcp-client\nremote 198.51.100.14 443 tcp-client\n<ca>\nTEST\n</ca>"}
-	e,err:=standardExitFromExternalProfile(p);if err!=nil{t.Fatal(err)}
-	if e.Server!="198.51.100.14"||e.ServerPort!=443||e.Method!="tcp-client"{t.Fatalf("openvpn remote not derived: %+v",e)}
-	p.External.OpenVPN.Config="client\nremote 198.51.100.14 443 tcp-client\nscript-security 2\n"
-	if _,err=standardExitFromExternalProfile(p);err==nil||!strings.Contains(err.Error(),"script-security"){t.Fatalf("unsafe OpenVPN config was not rejected: %v",err)}
+func TestExternalOpenVPNUsesStrictNativeCompiler(t *testing.T) {
+	p := externalProfileBase("ext-ovpn", "openvpn")
+	p.External.OpenVPN = &common.ExternalOpenVPNConfig{Config: "client\nproto tcp-client\nremote 198.51.100.14 443 tcp-client\npeer-fingerprint " + strings.Repeat("a", 64) + "\n", Username: " user ", Password: " password "}
+	e, err := standardExitFromExternalProfile(p)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Server != "198.51.100.14" || e.ServerPort != 443 || e.Method != "tcp" || e.Username != " user " || e.Password != " password " {
+		t.Fatal("OpenVPN remote or literal credentials changed")
+	}
+	p.External.OpenVPN.Config = "client\nremote 198.51.100.14 443 tcp-client\nscript-security 2\n"
+	if _, err = standardExitFromExternalProfile(p); err == nil {
+		t.Fatal("unsafe OpenVPN config was not rejected")
+	}
 }
 
 func TestExternalProfileBridgeRejectsRouterVPNProfile(t *testing.T) {
-	if _,err:=standardExitFromExternalProfile(common.RouterProfile{ID:"home"});err==nil||!strings.Contains(err.Error(),"not an external"){t.Fatalf("expected kind rejection, got %v",err)}
+	if _, err := standardExitFromExternalProfile(common.RouterProfile{ID: "home"}); err == nil || !strings.Contains(err.Error(), "not an external") {
+		t.Fatalf("expected kind rejection, got %v", err)
+	}
 }
 
 func TestSplitExternalEndpoint(t *testing.T) {
-	cases:=[]struct{in string;port int;host string;want int}{
-		{"example.com:51820",51820,"example.com",51820},
-		{"203.0.113.1",51820,"203.0.113.1",51820},
-		{"[2001:db8::1]:51821",51820,"2001:db8::1",51821},
-		{"2001:db8::2",51820,"2001:db8::2",51820},
+	cases := []struct {
+		in   string
+		port int
+		host string
+		want int
+	}{
+		{"example.com:51820", 51820, "example.com", 51820},
+		{"203.0.113.1", 51820, "203.0.113.1", 51820},
+		{"[2001:db8::1]:51821", 51820, "2001:db8::1", 51821},
+		{"2001:db8::2", 51820, "2001:db8::2", 51820},
 	}
-	for _,tc:=range cases{h,p,err:=splitExternalEndpoint(tc.in,tc.port);if err!=nil||h!=tc.host||p!=tc.want{t.Fatalf("%q => %q/%d err=%v",tc.in,h,p,err)}}
+	for _, tc := range cases {
+		h, p, err := splitExternalEndpoint(tc.in, tc.port)
+		if err != nil || h != tc.host || p != tc.want {
+			t.Fatalf("%q => %q/%d err=%v", tc.in, h, p, err)
+		}
+	}
 }

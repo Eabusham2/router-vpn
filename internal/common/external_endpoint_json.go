@@ -90,13 +90,16 @@ func normalizeExternalJSONWireGuardEndpoint(value string) (string, error) {
 }
 
 func (e *ExternalNodeConfig) UnmarshalJSON(data []byte) error {
-	var fields map[string]json.RawMessage
-	if err := json.Unmarshal(data, &fields); err != nil { return err }
+	fields, fieldErr := externalProfileJSONObject(data, 2<<20)
+	if fieldErr != nil { return fieldErr }
 	if raw, exists := fields["start_layer"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("external Start Layer must be an explicit private provision or absent")
 	}
 	if raw, exists := fields["server_peer"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("external server peer must be an explicit public descriptor or absent")
+	}
+	if raw, exists := fields["openvpn_pairing"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+		return fmt.Errorf("external OpenVPN pairing must be an explicit private capture or absent")
 	}
 	var decoded externalNodeConfigJSON
 	if err := json.Unmarshal(data, &decoded); err != nil {

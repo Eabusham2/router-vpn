@@ -60,7 +60,7 @@ func externalExitRequiresUDP(endpoint map[string]any, protocol string) bool {
 	return protocol == "wireguard" || protocol == "amneziawg" || protocol == "hysteria2" || protocol == "openvpn" && externalOpenVPNRequiresUDP(endpoint)
 }
 
-func externalOpenVPNMTU(tun, endpoint map[string]any, mtu, entryMTU, fixed int) (int, error) {
+func externalOpenVPNMTU(tun, endpoint map[string]any, mtu, entryMTU, fixed, layerOverhead int) (int, error) {
 	configured := 1500 // The pinned native TLS client default; not a measurement.
 	if raw, exists := endpoint["mtu"]; exists {
 		var err error
@@ -76,7 +76,7 @@ func externalOpenVPNMTU(tun, endpoint map[string]any, mtu, entryMTU, fixed int) 
 		if fragment, _ := endpoint["fragment"].(float64); fragment > 0 {
 			// Native fragment bounds its OpenVPN datagram, including data
 			// framing/cipher overhead. Reserve IPv6 plus UDP outside that.
-			if fragment > float64(entryMTU-48) {
+			if fragment > float64(entryMTU-48-layerOverhead) {
 				return 0, errors.New("captured OpenVPN fragments exceed the entry packet MTU")
 			}
 		} else {
@@ -84,7 +84,7 @@ func externalOpenVPNMTU(tun, endpoint map[string]any, mtu, entryMTU, fixed int) 
 			// 4 + packet ID 4 + IV 16 + SHA512 64 + block padding 16 +
 			// optional stub/fragment framing 6 + IPv6/UDP 48 = 158 bytes.
 			// This is a conservative configured bound, never an Auto result.
-			limit := entryMTU - 160
+			limit := entryMTU - 160 - layerOverhead
 			if limit < 1280 {
 				return 0, errors.New("entry packet MTU cannot carry the selected unfragmented OpenVPN UDP path")
 			}

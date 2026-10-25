@@ -12,16 +12,11 @@ import (
 )
 
 // externalEntryGraph converts a validated external node into a single
-// controlled upstream hop. OpenVPN is intentionally excluded here: a native
-// OpenVPN TUN cannot safely act as a sing-box detour without a separate
-// route-owned entry adapter, so we fail closed rather than create competing
-// default tunnels.
+// controlled upstream hop. The native OpenVPN endpoint has system=false and
+// contributes only its captured dialer; the enclosing graph owns the OS TUN.
 func externalEntryGraph(entry standardExit) ([]any, []any, string, error) {
 	if err := validateStandardExit(&entry); err != nil {
 		return nil, nil, "", err
-	}
-	if entry.Protocol == "openvpn" {
-		return nil, nil, "", errors.New("external OpenVPN is supported as a direct/final exit, but not yet as an upstream hop; refusing competing default-tunnel ownership")
 	}
 	endpoint, outbound, err := directStandardExitRuntimeParts(entry)
 	if err != nil {
@@ -98,7 +93,9 @@ func nativeExternalEntryStandardExitCommand(a *app, control, entry common.Router
 	useAmnezia := entryExit.Protocol == "amneziawg" || exit.Protocol == "amneziawg"
 	useNative := entryExit.StartLayer != nil || exit.StartLayer != nil
 	if useNative {
-		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil { return nil, err }
+		if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
+			return nil, err
+		}
 	} else if useAmnezia {
 		if _, err := verifyBundledAmnezia(desktopAmneziaPackageRoot()); err != nil {
 			return nil, err
@@ -162,9 +159,13 @@ func externalEntryBridgeConfig(entry standardExit, listenPort int) (map[string]a
 		return nil, err
 	}
 	if entry.StartLayer != nil {
-		if len(endpoints) != 0 || len(outbounds) != 1 { return nil, errors.New("external Start Layer requires its captured native proxy entry") }
+		if len(endpoints) != 0 || len(outbounds) != 1 {
+			return nil, errors.New("external Start Layer requires its captured native proxy entry")
+		}
 		inner, outer, err := multihoprelay.WrapStartLayer(outbounds[0].(map[string]any), entry.Protocol, (*multihoprelay.StartLayer)(entry.StartLayer), "routervpn-external-entry-start-layer", "")
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		outbounds = []any{inner, outer}
 	}
 	final := entryTag

@@ -17,6 +17,7 @@ T.EXTRA_SOURCES = ("AndroidExternalPolicy", "AndroidExternalEntry", "AndroidDire
 T.TOR_BOUNDARIES = T.TOR_BOUNDARIES[:T.TOR_BOUNDARIES.index("final class AndroidOpenVPN")]
 T.EXTRA_LIBBOX = r'''
  public static String version(){return "1.14.1";}
+ public static void routerValidateExternalOpenVPNPairing(String profile,String pairing)throws Exception{call("external-openvpn-pairing",profile,pairing);}
  public static String routerPrepareExternalExecutionCapture(String source,String capture,String restored)throws Exception{return call("external-execution",source,new JSONObject().put("capture",capture).put("restored",restored).toString());}
  public static String routerCompileExternalPolicy(String source,String capture)throws Exception{return call("external-policy",source,capture);}
  public static void routerValidateExternalTransport(String source,String capture)throws Exception{call("external-transport",source,capture);}public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
@@ -26,6 +27,7 @@ T.GO = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mob
 T.GO = T.GO.replace('case "tor-profile":', '''case "external-openvpn":
   var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p)
   if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
+ case "external-openvpn-pairing":err=nativeopenvpn.RouterValidateExternalOpenVPNPairing(r.Config,r.Policy)
  case "external-execution":
   var selected struct{Capture,Restored string};err=json.Unmarshal([]byte(r.Policy),&selected)
   if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,selected.Capture,selected.Restored)}
@@ -39,6 +41,10 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  static void paired(AndroidStandardExitStore.Entry exit)throws Exception{
   exit.responseProbe=new JSONObject().put("url","https://203.0.113.50:8443/response").put("server_name","external.example.test");
   if(AndroidStandardExitStore.packetExecutionProtocol(exit.protocol))exit.serverPeer=new JSONObject().put("public_key","bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=").put("addresses",new JSONArray().put("10.94.0.3/32").put("fd94::3/128")).put("mtu",1360).put("persistent_keepalive_interval",25);
+  if(exit.protocol.equals("openvpn")){
+   JSONObject external=load(Path.of(System.getenv("ROUTERVPN_OPENVPN_CLIENT_FIXTURE"))).getJSONObject("layers").getJSONObject("off").getJSONObject("external"),original=external.getJSONObject("openvpn");
+   exit.openVPNConfig=original.getString("config");exit.username=original.getString("username");exit.password=original.getString("password");exit.openVPNPairing=new JSONObject(external.getJSONObject("openvpn_pairing").toString());exit.responseProbe=new JSONObject(external.getJSONObject("response_probe").toString());exit.server="203.0.113.20";exit.serverPort=1194;exit.expectedPublicIp=external.getString("expected_public_ip");
+  }
  }
  static String externalCertificate;static int executionGraphs,layerGraphs;
  static AndroidStandardExitStore.Entry external(String kind,String dns)throws Exception{
@@ -57,7 +63,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   // The final external interface owns its policy; the entry keeps its own
   // measured-independent transport sizing and authenticated performance owner.
   profile(selected).put("mtu_policy","auto").remove("manual_mtu");
-  if(mode.equals("wg")&&AndroidStandardExitStore.packetExecutionProtocol(kind))profile(selected).put("mtu_policy","fixed").put("manual_mtu",1500);
+  if(mode.equals("wg")&&AndroidStandardExitStore.packetExecutionProtocol(kind)||kind.equals("openvpn")&&(NativeSingBoxController.nativeWireGuardFamily(mode)||NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode)))profile(selected).put("mtu_policy","fixed").put("manual_mtu",1500);
   File file=save(directory,selected);byte[] frozen=Files.readAllBytes(file.toPath());AndroidStandardExitStore.Entry exit=external(kind,graphs%2==0?"custom":"home");String frozenExit=AndroidStandardExitStore.snapshot(exit);
   NativeSingBoxController.SessionInfo info=AndroidExternalPolicy.prepare(context,file,exit,mode);Path folder=app.resolve("layered-sessions").resolve(info.sessionId);
   String config=Files.readString(folder.resolve("sing-box.json")),metadata=Files.readString(folder.resolve(AndroidExternalPolicy.SESSION_FILE));JSONObject session=AndroidExternalPolicy.session(config,metadata,info.sessionId,info.modeId),capture=new JSONObject(session.getString("capture_json")),graph=new JSONObject(config),proof=new JSONObject(session.getString("metadata_json"));
@@ -93,6 +99,12 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
     check(descriptor.getString("public_key").equals(paired.serverPeer.getString("public_key"))&&descriptor.getJSONArray("addresses").toString().equals(paired.serverPeer.getJSONArray("addresses").toString()),"packet execution lost separately provisioned Server identity");
     if(kind.equals("amneziawg"))check(local.getString("type").equals("routervpn-amneziawg")&&sameParams(local.getJSONObject("amnezia"),paired.awgParameters),"Server/Compare changed captured AWG parameters");
    }
+   if(kind.equals("openvpn")){
+    JSONObject local=byTag(executionGraph,"routervpn-execution-local"),captured=new JSONObject(executionSession.getString("capture_json")).getJSONObject("profile").getJSONObject("external");
+    check(local.getString("type").equals("openvpn-client")&&!local.getBoolean("system")&&local.getJSONArray("servers").length()==2&&local.getString("username").equals(paired.username)&&local.getString("password").equals(paired.password),"OpenVPN comparison borrowed Server credentials or replaced its owned remote list");
+    check(captured.getJSONObject("openvpn").getString("config").equals(paired.openVPNConfig)&&same(captured.getJSONObject("openvpn_pairing"),paired.openVPNPairing),"OpenVPN comparison changed private source or pairing identity");
+    check(!executionMeta.toString().contains(paired.password)&&!executionMeta.toString().contains(paired.openVPNPairing.getString("private_key")),"OpenVPN private pairing entered public metadata");
+   }
    if(export!=null)Files.writeString(Path.of(export).resolve(mode+"-"+layer+"-"+kind+"-"+execution+".json"),executable);
    if(executionInfo.maxPreparation!=null)executionInfo.maxPreparation.close();executionGraphs++;
   }
@@ -101,7 +113,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
    paired.startLayer=new JSONObject().put("mode",exitLayer).put("api","http://10.99.0.1:8787").put("transport",new JSONObject().put("type","shadowsocks").put("tag","provisioned-exit-layer").put("server",paired.server).put("server_port",8388).put("method","2022-blake3-aes-256-gcm").put("password",MultihopGraphHarness.key('l')));
    String originalExit=AndroidStandardExitStore.snapshot(paired);NativeSingBoxController.SessionInfo layered=AndroidExternalPolicy.prepare(context,file,paired,mode,execution,"");Path owned=app.resolve("layered-sessions").resolve(layered.sessionId);
    String executable=Files.readString(owned.resolve("sing-box.json"));JSONObject layeredGraph=new JSONObject(executable),local=byTag(layeredGraph,execution.equals("local")?"custom-exit":"routervpn-execution-local"),wrapper=byTag(layeredGraph,"routervpn-exit-start-layer");
-   String localServer=AndroidStandardExitStore.packetExecutionProtocol(kind)?local.getJSONArray("peers").getJSONObject(0).getString("address"):local.getString("server");
+   String localServer=AndroidStandardExitStore.packetExecutionProtocol(kind)?local.getJSONArray("peers").getJSONObject(0).getString("address"):kind.equals("openvpn")?local.getJSONArray("servers").getJSONObject(0).getString("server"):local.getString("server");
    check(localServer.equals("10.99.0.1")&&local.getString("detour").equals("routervpn-exit-start-layer")&&wrapper.getString("detour").equals("external-entry"),"independent entry and exit layers lost routing ownership");
    check(wrapper.getString("type").equals(exitLayer.equals("aes-256-gcm")?"shadowsocks":"routervpn-aes-xor")&&wrapper.getString("server").equals(paired.server),"exit layer changed its selected protocol or server");
    check(originalExit.equals(AndroidStandardExitStore.snapshot(paired))&&Arrays.equals(frozen,Files.readAllBytes(file.toPath())),"layered execution mutated private node capture");
@@ -110,6 +122,26 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   }
  }
  static void ordinaryRejections(Path directory,String certificate)throws Exception{
+  AndroidStandardExitStore.Entry validOpenVPN=external("openvpn","custom");paired(validOpenVPN);
+  AndroidStandardExitStore.validate(validOpenVPN);AndroidExternalPolicy.validateDraft(validOpenVPN);
+  String pairingText=validOpenVPN.openVPNPairing.toString(),privateSource=validOpenVPN.openVPNConfig;
+  check(same(AndroidOpenVPN.pairing(validOpenVPN,pairingText),validOpenVPN.openVPNPairing),"private OpenVPN editor changed its validated pairing");
+  AndroidStandardExitStore.Entry copied=AndroidStandardExitStore.copy(validOpenVPN);copied.openVPNPairing.getJSONObject("server").getJSONObject("provider_identity").put("username","other-server-user");
+  check(validOpenVPN.openVPNConfig.equals(privateSource)&&!same(copied.openVPNPairing,validOpenVPN.openVPNPairing),"private OpenVPN snapshot borrowed mutable pairing state");
+  for(String raw:new String[]{"null",pairingText+" {}",pairingText.substring(0,pairingText.length()-1)+",\"private_key\":\""+validOpenVPN.openVPNPairing.getString("private_key")+"\"}",pairingText.substring(0,pairingText.length()-1)+",\"unknown\":true}"}){
+   boolean rejected=false;try{AndroidOpenVPN.pairing(validOpenVPN,raw);}catch(Exception expected){rejected=true;}check(rejected,"raw malformed or duplicate OpenVPN pairing reached a saved object");
+  }
+  for(String fault:new String[]{"missing-pairing","provider-alias","server-private-key","changed-transport","wrong-response","pairing-change","credentials-change"}){
+   Path app=Files.createTempDirectory(directory,"openvpn-pairing-");JSONObject source=entry("wg","off",certificate);File file=save(directory,source);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(validOpenVPN);
+   if(fault.equals("missing-pairing"))exit.openVPNPairing=null;
+   if(fault.equals("provider-alias"))exit.openVPNPairing.getJSONObject("server").getJSONObject("provider_identity").put("username",exit.username);
+   if(fault.equals("server-private-key"))exit.openVPNPairing.getJSONObject("server").put("private_key",MultihopGraphHarness.key('z'));
+   if(fault.equals("changed-transport"))exit.openVPNPairing.getJSONObject("server").getJSONObject("transport").put("auth","SHA512");
+   if(fault.equals("wrong-response"))exit.responseProbe.put("url","https://203.0.113.21/response");
+   io.nekohasekai.libbox.Libbox.afterCheck=()->{try{if(fault.equals("pairing-change"))exit.openVPNPairing.put("private_key",MultihopGraphHarness.key('z'));if(fault.equals("credentials-change"))exit.password="replacement-owner-password";}catch(Exception invalid){throw new RuntimeException(invalid);}};
+   boolean rejected=false;try{AndroidExternalPolicy.prepare(new Context(app.toFile()),file,exit,"wg","auto","");}catch(Exception expected){rejected=true;}finally{io.nekohasekai.libbox.Libbox.afterCheck=null;}
+   check(rejected&&sessions(app)==0,"invalid or replaced private OpenVPN owner staged a comparison: "+fault);
+  }
   for(String invalid:new String[]{"unfragmented","oversized-fragment"}){
    Path app=Files.createTempDirectory(directory,"openvpn-mtu-");JSONObject source=entry("wg","off",certificate);profile(source).put("mtu_policy","auto").remove("manual_mtu");File file=save(directory,source);AndroidStandardExitStore.Entry exit=external("openvpn","custom");
    exit.openVPNConfig=exit.openVPNConfig.replace("fragment 1200\n",invalid.equals("unfragmented")?"":"fragment 1400\n");boolean rejected=false;try{AndroidExternalPolicy.prepare(new Context(app.toFile()),file,exit,"wg");}catch(Exception expected){rejected=true;}
@@ -133,7 +165,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  public static void main(String[] args)throws Exception{
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");externalCertificate=io.nekohasekai.libbox.Libbox.testCertificate("external-openvpn.example.test").trim();
   for(String mode:ALL)for(String layer:LAYERS)for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})ordinary(dir,mode,layer,kind,certificate);
-  check(graphs==456&&executionGraphs==798&&layerGraphs==126,"ordinary encrypted entry and execution matrix incomplete");ordinaryRejections(dir,certificate);
+  check(graphs==456&&executionGraphs==912&&layerGraphs==144,"ordinary encrypted entry and execution matrix incomplete");ordinaryRejections(dir,certificate);
   System.out.println("Android ordinary external entries: PASS "+graphs+" local and "+executionGraphs+" Server/Compare and "+layerGraphs+" independent exit-layer shipping Java/Go graphs, "+checks+" checks; all19 native entry modes and saved Start Layers");
  }
 }
@@ -141,6 +173,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
 
 
 def main():
+    os.environ["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"] = str(ROOT / "deploy/fixtures/external-openvpn-client.json")
     export = os.environ.get("ROUTERVPN_ANDROID_EXTERNAL_GRAPHS")
     if export:
         path = Path(export)

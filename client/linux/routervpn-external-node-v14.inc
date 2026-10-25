@@ -1,9 +1,9 @@
 /* Linux native typed external-node creator.
  *
  * This form only sends the bounded typed fields accepted by
- * /api/external-profile/create. OpenVPN and Tor keep their dedicated hardened
- * import/builders; arbitrary runtime JSON, executable paths and directives are
- * never accepted here.
+ * /api/external-profile/create. Inline OpenVPN and raw private pairing text are
+ * validated by the controller's native bounded parser. Tor keeps its dedicated
+ * builder; arbitrary runtime JSON, scripts and executable paths are not accepted.
  */
 #include <math.h>
 
@@ -42,8 +42,32 @@ typedef struct {
     GtkWidget *server_peer_addresses;
     GtkWidget *server_peer_mtu;
     GtkWidget *server_peer_keepalive;
+    GtkWidget *openvpn_config;
+    GtkWidget *openvpn_pairing;
     GtkWidget *status;
 } LinuxExternalNodeV14;
+
+static char *linux_external_text_v14(GtkWidget *view) {
+    if(view==NULL)return g_strdup("");
+    GtkTextBuffer *buffer=gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));GtkTextIter start,end;
+    gtk_text_buffer_get_bounds(buffer,&start,&end);return gtk_text_buffer_get_text(buffer,&start,&end,FALSE);
+}
+
+static gboolean linux_external_openvpn_v14(LinuxExternalNodeV14 *state,JsonBuilder *builder,const char *protocol,char **error) {
+    g_autofree char *config=linux_external_text_v14(state->openvpn_config),*pairing=linux_external_text_v14(state->openvpn_pairing);
+    g_autofree char *trimmed=g_strdup(pairing);g_strstrip(trimmed);
+    if(g_strcmp0(protocol,"openvpn")!=0){
+        if(config[0]||trimmed[0]){if(error!=NULL)*error=g_strdup("OpenVPN profile and pairing fields belong only to OpenVPN.");return FALSE;}
+        return TRUE;
+    }
+    if(!config[0]||strlen(config)>256*1024||strlen(pairing)>512*1024){if(error!=NULL)*error=g_strdup("Paste a bounded inline OpenVPN profile and its optional private pairing package.");return FALSE;}
+    json_builder_set_member_name(builder,"openvpn");json_builder_begin_object(builder);
+    json_builder_set_member_name(builder,"config");json_builder_add_string_value(builder,config);
+    json_builder_set_member_name(builder,"username");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->username)));
+    json_builder_set_member_name(builder,"password");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->password)));json_builder_end_object(builder);
+    if(trimmed[0]){json_builder_set_member_name(builder,"openvpn_pairing_json");json_builder_add_string_value(builder,pairing);}
+    return TRUE;
+}
 
 static gboolean linux_external_mutation_idle_v14(App *app) {
     (void)app;
@@ -161,7 +185,7 @@ static gboolean linux_external_transport_fields_v14(LinuxExternalNodeV14 *state,
     const char *port=gtk_entry_get_text(GTK_ENTRY(state->layer_port));
     const char *key=gtk_entry_get_text(GTK_ENTRY(state->layer_key));
     const char *message=NULL;
-    gboolean supported=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0||g_strcmp0(protocol,"shadowsocks")==0||g_strcmp0(protocol,"hysteria2")==0||g_strcmp0(protocol,"socks5")==0||g_strcmp0(protocol,"http-connect")==0||g_strcmp0(protocol,"https-connect")==0;
+    gboolean supported=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0||g_strcmp0(protocol,"shadowsocks")==0||g_strcmp0(protocol,"hysteria2")==0||g_strcmp0(protocol,"socks5")==0||g_strcmp0(protocol,"http-connect")==0||g_strcmp0(protocol,"https-connect")==0||g_strcmp0(protocol,"openvpn")==0;
     gboolean off=g_strcmp0(layer,"off")==0;
     if(!off&&g_strcmp0(layer,"aes-256-gcm")!=0&&g_strcmp0(layer,"aes-256-gcm+xor-whitening")!=0)message="Choose a supported external Start Layer.";
     else if(!supported&&(probe[0]||name[0]||!off||api[0]||port[0]||key[0]))message="Response probes and external Start Layers require a supported external transport.";
@@ -194,7 +218,8 @@ static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **vali
     if(protocol==NULL){if(validation_error!=NULL)*validation_error=g_strdup("Choose an external node protocol.");return NULL;}
     const char *port_text=gtk_entry_get_text(GTK_ENTRY(state->port));
     char *port_end=NULL; long port=g_ascii_strtoll(port_text,&port_end,10);
-    if(port_end==port_text || (port_end!=NULL && *port_end!='\0') || port<1 || port>65535){if(validation_error!=NULL)*validation_error=g_strdup("Port must be 1..65535.");return NULL;}
+    if(g_strcmp0(protocol,"openvpn")!=0&&(port_end==port_text || (port_end!=NULL && *port_end!='\0') || port<1 || port>65535)){if(validation_error!=NULL)*validation_error=g_strdup("Port must be 1..65535.");return NULL;}
+    if(g_strcmp0(protocol,"openvpn")==0)port=0; // Exact remotes come only from the native inline parser.
 
     JsonBuilder *builder=json_builder_new(); json_builder_begin_object(builder);
     json_builder_set_member_name(builder,"name");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->name)));
@@ -231,7 +256,7 @@ static char *linux_external_payload_v14(LinuxExternalNodeV14 *state, char **vali
             if(!valid){g_object_unref(builder);return NULL;}
         }
     }
-    if(!linux_external_server_peer_v14(state,builder,protocol,validation_error)||!linux_external_transport_fields_v14(state,builder,protocol,validation_error)){g_object_unref(builder);return NULL;}
+    if(!linux_external_openvpn_v14(state,builder,protocol,validation_error)||!linux_external_server_peer_v14(state,builder,protocol,validation_error)||!linux_external_transport_fields_v14(state,builder,protocol,validation_error)){g_object_unref(builder);return NULL;}
     json_builder_end_object(builder);JsonNode *root=json_builder_get_root(builder);JsonGenerator *generator=json_generator_new();json_generator_set_root(generator,root);char *payload=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(root);g_object_unref(builder);return payload;
 }
 
@@ -250,8 +275,8 @@ static void on_linux_external_node_v14(GtkButton *button, gpointer data) {
     LinuxExternalNodeV14 state={0};state.app=app;
     state.dialog=gtk_dialog_new_with_buttons("Add external node",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,"Save node",GTK_RESPONSE_ACCEPT,NULL);gtk_window_set_default_size(GTK_WINDOW(state.dialog),780,820);
     GtkWidget *content=gtk_dialog_get_content_area(GTK_DIALOG(state.dialog));GtkWidget *box=gtk_box_new(GTK_ORIENTATION_VERTICAL,6);gtk_container_set_border_width(GTK_CONTAINER(box),14);
-    GtkWidget *intro=gtk_label_new("Create a full-device external node. OpenVPN uses Import; Tor uses Tor bridges. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS.");gtk_label_set_line_wrap(GTK_LABEL(intro),TRUE);gtk_label_set_xalign(GTK_LABEL(intro),0.0f);gtk_box_pack_start(GTK_BOX(box),intro,FALSE,FALSE,0);
-    state.protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"wireguard","WireGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"amneziawg","AmneziaWG");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"socks5","SOCKS5");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"http-connect","HTTP CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"https-connect","HTTPS CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"shadowsocks","Shadowsocks");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"hysteria2","Hysteria2");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.protocol),"wireguard");gtk_box_pack_start(GTK_BOX(box),state.protocol,FALSE,FALSE,0);
+    GtkWidget *intro=gtk_label_new("Create a full-device external node. For OpenVPN, paste your private inline profile below. Tor has its own Tor bridges form. Home AdGuard is the default through a Router entry. For Direct, choose a resolver in DNS.");gtk_label_set_line_wrap(GTK_LABEL(intro),TRUE);gtk_label_set_xalign(GTK_LABEL(intro),0.0f);gtk_box_pack_start(GTK_BOX(box),intro,FALSE,FALSE,0);
+    state.protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"wireguard","WireGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"amneziawg","AmneziaWG");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"socks5","SOCKS5");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"http-connect","HTTP CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"https-connect","HTTPS CONNECT");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"shadowsocks","Shadowsocks");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"hysteria2","Hysteria2");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.protocol),"openvpn","OpenVPN");gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.protocol),"wireguard");gtk_box_pack_start(GTK_BOX(box),state.protocol,FALSE,FALSE,0);
     state.name=linux_external_field_v14("Display name",FALSE);state.server=linux_external_field_v14("Server IP / hostname",FALSE);state.port=linux_external_field_v14("Port",FALSE);state.expected=linux_external_field_v14("Expected public exit IP",FALSE);state.location=linux_external_field_v14("Location label (optional, e.g. Austin, TX)",FALSE);state.latitude=linux_external_field_v14("Latitude -90..90 (optional)",FALSE);state.longitude=linux_external_field_v14("Longitude -180..180 (optional)",FALSE);state.username=linux_external_field_v14("Username (proxy only)",FALSE);state.password=linux_external_field_v14("Password / proxy credential",TRUE);state.method=linux_external_field_v14("Shadowsocks method",FALSE);state.secret=linux_external_field_v14("Shadowsocks / Hysteria2 secret",TRUE);state.tls_name=linux_external_field_v14("TLS server name / SNI",FALSE);state.wg_private=linux_external_field_v14("WG private key",TRUE);state.wg_peer=linux_external_field_v14("WG peer public key",FALSE);state.wg_psk=linux_external_field_v14("WG preshared key (optional)",TRUE);state.wg_addresses=linux_external_field_v14("WG addresses, comma-separated CIDRs",FALSE);state.wg_allowed=linux_external_field_v14("WG AllowedIPs, comma-separated CIDRs",FALSE);state.wg_dns=linux_external_field_v14("WG DNS IPs, comma-separated",FALSE);state.wg_mtu=linux_external_field_v14("WG MTU (optional)",FALSE);
     state.wg_keepalive=linux_external_field_v14("WG / AWG keepalive seconds 0..65535 (blank means disabled)",FALSE);
     GtkWidget *fields[]={state.name,state.server,state.port,state.expected,state.location,state.latitude,state.longitude,state.username,state.password,state.method,state.secret,state.tls_name,state.wg_private,state.wg_peer,state.wg_psk,state.wg_addresses,state.wg_allowed,state.wg_dns,state.wg_mtu,state.wg_keepalive};for(guint i=0;i<G_N_ELEMENTS(fields);i++)gtk_box_pack_start(GTK_BOX(box),fields[i],FALSE,FALSE,0);
@@ -266,7 +291,15 @@ static void on_linux_external_node_v14(GtkButton *button, gpointer data) {
     GtkWidget *peer_note=gtk_label_new("WireGuard / AmneziaWG Server and Compare: copy the public descriptor of the separate client peer provisioned on the Router entry. Its public identity and addresses must differ from this device. Keep its private key and preshared key on the server. The WG peer public key above still identifies the remote provider. Leave all descriptor fields blank for Local-only use.");gtk_label_set_line_wrap(GTK_LABEL(peer_note),TRUE);gtk_label_set_xalign(GTK_LABEL(peer_note),0.0f);gtk_box_pack_start(GTK_BOX(box),peer_note,FALSE,FALSE,0);
     state.server_peer_public=linux_external_field_v14("Separate server-side client public key",FALSE);state.server_peer_addresses=linux_external_field_v14("Server peer CIDRs, one per family, comma separated",FALSE);state.server_peer_mtu=linux_external_field_v14("Server peer MTU — required with descriptor, 1280..9000",FALSE);state.server_peer_keepalive=linux_external_field_v14("Server peer keepalive seconds — optional, 0..65535",FALSE);
     GtkWidget *peer_fields[]={state.server_peer_public,state.server_peer_addresses,state.server_peer_mtu,state.server_peer_keepalive};for(guint i=0;i<G_N_ELEMENTS(peer_fields);i++)gtk_box_pack_start(GTK_BOX(box),peer_fields[i],FALSE,FALSE,0);
-    GtkWidget *note=gtk_label_new("Optional coordinates must be real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker cannot inject executable paths, arbitrary sing-box JSON, Tor directives, or raw OpenVPN configuration.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
+    GtkWidget *openvpn_note=gtk_label_new("OpenVPN: paste the original inline profile and use the username/password fields above. Server / Compare additionally needs this device's private pairing JSON and a separate provider identity on the Router entry. The controller validates the original profile and JSON before saving; scripts and file paths are rejected. Leave pairing blank for Local only.");gtk_label_set_line_wrap(GTK_LABEL(openvpn_note),TRUE);gtk_label_set_xalign(GTK_LABEL(openvpn_note),0.0f);gtk_box_pack_start(GTK_BOX(box),openvpn_note,FALSE,FALSE,0);
+    state.openvpn_config=gtk_text_view_new();state.openvpn_pairing=gtk_text_view_new();
+    GtkWidget *openvpn_fields[]={state.openvpn_config,state.openvpn_pairing};const char *openvpn_labels[]={"Private inline OpenVPN profile","Private OpenVPN pairing JSON"};
+    for(guint i=0;i<G_N_ELEMENTS(openvpn_fields);i++){
+        gtk_box_pack_start(GTK_BOX(box),gtk_label_new(openvpn_labels[i]),FALSE,FALSE,0);
+        gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(openvpn_fields[i]),GTK_WRAP_WORD_CHAR);
+        GtkWidget *field_scroll=gtk_scrolled_window_new(NULL,NULL);gtk_widget_set_size_request(field_scroll,-1,130);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(field_scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(field_scroll),openvpn_fields[i]);gtk_box_pack_start(GTK_BOX(box),field_scroll,FALSE,FALSE,0);
+    }
+    GtkWidget *note=gtk_label_new("Optional coordinates must be real values you provide; Router VPN never fabricates a custom-node pin from IP geolocation. Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker cannot inject executable paths, arbitrary sing-box JSON, Tor directives, or OpenVPN scripts and file paths.");gtk_label_set_line_wrap(GTK_LABEL(note),TRUE);gtk_label_set_xalign(GTK_LABEL(note),0.0f);gtk_box_pack_start(GTK_BOX(box),note,FALSE,FALSE,0);
     state.status=gtk_label_new("");gtk_label_set_line_wrap(GTK_LABEL(state.status),TRUE);gtk_label_set_xalign(GTK_LABEL(state.status),0.0f);gtk_box_pack_start(GTK_BOX(box),state.status,FALSE,FALSE,0);
     GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);gtk_scrolled_window_set_policy(GTK_SCROLLED_WINDOW(scroll),GTK_POLICY_NEVER,GTK_POLICY_AUTOMATIC);gtk_container_add(GTK_CONTAINER(scroll),box);gtk_box_pack_start(GTK_BOX(content),scroll,TRUE,TRUE,0);gtk_widget_show_all(state.dialog);
     while(TRUE){int response=gtk_dialog_run(GTK_DIALOG(state.dialog));if(response==GTK_RESPONSE_ACCEPT){if(linux_external_save_v14(&state))break;continue;}break;}gtk_widget_destroy(state.dialog);

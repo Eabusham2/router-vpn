@@ -15,7 +15,7 @@ import (
 
 func externalExecutionProtocol(protocol string) bool {
 	switch protocol {
-	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
+	case "wireguard", "amneziawg", "openvpn", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
 		return true
 	}
 	return false
@@ -46,8 +46,12 @@ func (layer *ExternalStartLayer) UnmarshalJSON(raw []byte) error {
 }
 
 func externalLayerJSONObject(raw []byte) (map[string]json.RawMessage, error) {
+	return externalProfileJSONObject(raw, 16384)
+}
+
+func externalProfileJSONObject(raw []byte, limit int) (map[string]json.RawMessage, error) {
 	bad := errors.New("external Start Layer object is invalid or contains duplicate fields")
-	if len(raw) == 0 || len(raw) > 16384 || !utf8.Valid(raw) {
+	if len(raw) == 0 || len(raw) > limit || !utf8.Valid(raw) {
 		return nil, bad
 	}
 	d := json.NewDecoder(bytes.NewReader(raw))
@@ -119,6 +123,7 @@ func validateExternalStartLayer(profile *RouterProfile) error {
 		}
 	}
 	host := externalNodeEndpoint(profile.External)
+	if profile.External.Protocol == "openvpn" { host, err = externalOpenVPNProofHost(profile.External); if err != nil { return bad } }
 	ip, err := netip.ParseAddr(host)
 	if err != nil || ip.Is4In6() || ip.Zone() != "" {
 		return bad

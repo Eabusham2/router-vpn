@@ -1,0 +1,289 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"fmt"
+	"net"
+	"net/netip"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"syscall"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	ntun "github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing/common/control"
+)
+
+type routerVPNDesktopMTULease interface {
+	Healthy() bool
+	Close()
+	Config() string
+	Authority() string
+	Inbound() (adapter.Inbound, error)
+	ChangeMTU(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
+	Lifetime(context.Context) (context.Context, context.CancelFunc, error)
+	Verify(context.Context, func(context.Context, string, string) (net.Conn, error)) error
+	Resolve(context.Context, string) ([]netip.Addr, error)
+}
+
+// This adapter reads the interface actually owned by the Box. It never picks
+// a route by guessing an interface name or lets net.Dial fall back to the LAN.
+type routerVPNDesktopMTUTUN interface {
+	adapter.Inbound
+	RouterVPNDesktopMTU(func() bool) (string, int, int, error)
+	RouterVPNDesktopMTUInterface() (string, int, int, error)
+}
+
+type routerVPNDesktopMTUOwner struct {
+	mu            sync.Mutex
+	invalid       atomic.Bool
+	lease         routerVPNDesktopMTULease
+	inbound       routerVPNDesktopMTUTUN
+	session, path string
+	physical      func() string
+}
+
+func routerVPNDesktopPhysicalPath(instance *box.Box) string {
+	if instance == nil || instance.Network() == nil {
+		return ""
+	}
+	manager := instance.Network()
+	selected := manager.DefaultNetworkInterface()
+	if selected == nil || selected.Index < 1 || selected.Name == "" {
+		return ""
+	}
+	current, err := net.InterfaceByIndex(selected.Index)
+	if err != nil || current.Name != selected.Name || current.Flags&net.FlagUp == 0 || current.Flags&net.FlagLoopback != 0 {
+		return ""
+	}
+	addresses, err := current.Addrs()
+	if err != nil || len(addresses) == 0 {
+		return ""
+	}
+	parts := []string{current.Name, fmt.Sprint(current.Index), fmt.Sprint(current.MTU)}
+	for _, address := range addresses {
+		parts = append(parts, address.String())
+	}
+	for _, gateway := range selected.Gateways {
+		parts = append(parts, "gateway:"+gateway.String())
+	}
+	sort.Strings(parts)
+	digest := sha256.Sum256([]byte(strings.Join(parts, "\x00")))
+	return hex.EncodeToString(digest[:])
+}
+
+func newRouterVPNDesktopMTUOwner(lease routerVPNDesktopMTULease, session string, physical func() string) (*routerVPNDesktopMTUOwner, error) {
+	if lease == nil || !lease.Healthy() || !routerVPNExternalSession.MatchString(session) || physical == nil {
+		return nil, routerVPNExternalFailure
+	}
+	path := physical()
+	if len(path) != 64 {
+		return nil, routerVPNExternalFailure
+	}
+	current, err := lease.Inbound()
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	inbound, ok := current.(routerVPNDesktopMTUTUN)
+	if !ok || inbound.Type() != "tun" {
+		return nil, routerVPNExternalFailure
+	}
+	owner := &routerVPNDesktopMTUOwner{lease: lease, inbound: inbound, session: session, path: path, physical: physical}
+	if _, _, _, err = inbound.RouterVPNDesktopMTU(owner.pathCurrent); err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	if _, err = owner.Capture(); err != nil {
+		return nil, err
+	}
+	return owner, nil
+}
+
+func (o *routerVPNDesktopMTUOwner) pathCurrent() bool {
+	return o != nil && !o.invalid.Load() && o.physical != nil && o.path != "" && o.physical() == o.path
+}
+
+func (o *routerVPNDesktopMTUOwner) captureLocked() (mobilemtu.State, error) {
+	if !o.pathCurrent() || o.lease == nil || !o.lease.Healthy() {
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	current, err := o.lease.Inbound()
+	if err != nil || current != o.inbound {
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	name, index, mtu, err := o.inbound.RouterVPNDesktopMTUInterface()
+	if err != nil || name == "" || index < 1 || mtu < 1280 || mtu > 9000 || !o.pathCurrent() || !o.lease.Healthy() {
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	return mobilemtu.State{Session: o.session, Path: o.path, Interface: fmt.Sprintf("%s/%d", name, index), MTU: mtu}, nil
+}
+
+func (o *routerVPNDesktopMTUOwner) Capture() (mobilemtu.State, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.captureLocked()
+}
+
+func (o *routerVPNDesktopMTUOwner) ChangeMTU(ctx context.Context, expected mobilemtu.State, mtu int) (mobilemtu.State, error) {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	before, err := o.captureLocked()
+	if err != nil || before != expected || ctx == nil || ctx.Err() != nil || mtu < 1280 || mtu > 9000 {
+		return before, routerVPNExternalFailure
+	}
+	current, changeErr := o.lease.ChangeMTU(ctx, o.inbound, mtu)
+	reader, ok := current.(routerVPNDesktopMTUTUN)
+	if !ok || reader.Tag() != o.inbound.Tag() || reader.Type() != "tun" {
+		o.invalid.Store(true)
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	// Only the native transaction can supply its candidate or rollback reader.
+	o.inbound = reader
+	after, err := o.captureLocked()
+	if err != nil {
+		o.invalid.Store(true)
+		return mobilemtu.State{}, routerVPNExternalFailure
+	}
+	if changeErr != nil || ctx.Err() != nil || after.MTU != mtu {
+		return after, routerVPNExternalFailure
+	}
+	return after, nil
+}
+
+func (o *routerVPNDesktopMTUOwner) VerifyExternal(ctx context.Context, expected mobilemtu.State) error {
+	state, err := o.Capture()
+	if err != nil || state != expected || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	err = o.lease.Verify(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
+		if tag != "custom-exit" || address != "1.1.1.1:443" {
+			return nil, routerVPNExternalFailure
+		}
+		return o.DialThroughTunnel(call, expected, "tcp", address)
+	})
+	after, captureErr := o.Capture()
+	if err != nil || captureErr != nil || after != expected || ctx.Err() != nil {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+
+func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
+	if network != "tcp" || address != hopmeasure.PublicAddress && address != "1.1.1.1:443" {
+		return nil, routerVPNExternalFailure
+	}
+	ctx, release, err := o.lease.Lifetime(parent)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	retained := false
+	defer func() {
+		if !retained {
+			release()
+		}
+	}()
+	targets := []string{address}
+	if address == hopmeasure.PublicAddress {
+		addresses, err := o.lease.Resolve(ctx, hopmeasure.PublicHost)
+		if err != nil {
+			return nil, routerVPNExternalFailure
+		}
+		targets = nil
+		for _, ip := range addresses {
+			if ip.IsValid() && ip.IsGlobalUnicast() && !ip.IsPrivate() && !ip.Is4In6() && ip.Zone() == "" {
+				targets = append(targets, net.JoinHostPort(ip.String(), "443"))
+			}
+		}
+	}
+	for _, target := range targets {
+		conn, err := o.dialBound(ctx, expected, target)
+		if err == nil && conn != nil {
+			owned := &routerVPNDesktopMTUSocket{Conn: conn, release: release, closed: make(chan struct{})}
+			owned.stop = context.AfterFunc(ctx, owned.closeOwned)
+			if ctx.Err() != nil || !o.lease.Healthy() {
+				_ = owned.Close()
+				return nil, routerVPNExternalFailure
+			}
+			retained = true
+			return owned, nil
+		}
+		if conn != nil {
+			_ = conn.Close()
+		}
+		if ctx.Err() != nil || !o.lease.Healthy() {
+			break
+		}
+	}
+	return nil, routerVPNExternalFailure
+}
+
+func (o *routerVPNDesktopMTUOwner) dialBound(ctx context.Context, expected mobilemtu.State, address string) (net.Conn, error) {
+	host, port, err := net.SplitHostPort(address)
+	ip, parseErr := netip.ParseAddr(host)
+	if err != nil || parseErr != nil || port != "443" || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.Is4In6() || ip.Zone() != "" {
+		return nil, routerVPNExternalFailure
+	}
+	network := "tcp4"
+	if ip.Is6() {
+		network = "tcp6"
+	}
+	dialer := net.Dialer{ControlContext: func(call context.Context, network, address string, raw syscall.RawConn) error {
+		o.mu.Lock()
+		defer o.mu.Unlock()
+		before, err := o.captureLocked()
+		if err != nil || before != expected || call.Err() != nil {
+			return routerVPNExternalFailure
+		}
+		name, index, _, err := o.inbound.RouterVPNDesktopMTUInterface()
+		if err != nil {
+			return routerVPNExternalFailure
+		}
+		if err := control.BindToInterface(nil, name, index)(network, address, raw); err != nil {
+			return routerVPNExternalFailure
+		}
+		after, err := o.captureLocked()
+		if err != nil || after != expected || call.Err() != nil {
+			return routerVPNExternalFailure
+		}
+		return nil
+	}}
+	conn, err := dialer.DialContext(ctx, network, address)
+	if err != nil {
+		return nil, routerVPNExternalFailure
+	}
+	after, err := o.Capture()
+	if err != nil || after != expected || ctx.Err() != nil {
+		_ = conn.Close()
+		return nil, routerVPNExternalFailure
+	}
+	return conn, nil
+}
+
+type routerVPNDesktopMTUSocket struct {
+	net.Conn
+	release context.CancelFunc
+	stop    func() bool
+	once    sync.Once
+	closed  chan struct{}
+	err     error
+}
+
+func (c *routerVPNDesktopMTUSocket) closeOwned() {
+	c.once.Do(func() { c.err = c.Conn.Close(); close(c.closed) })
+}
+func (c *routerVPNDesktopMTUSocket) Close() error {
+	c.stop()
+	c.closeOwned()
+	<-c.closed
+	c.release()
+	return c.err
+}
+
+var _ mobilemtu.ExternalOwner = (*routerVPNDesktopMTUOwner)(nil)
+var _ routerVPNDesktopMTUTUN = (*ntun.Inbound)(nil)

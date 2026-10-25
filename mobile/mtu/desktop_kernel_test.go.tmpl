@@ -1,0 +1,166 @@
+//go:build linux
+
+package box_test
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"os"
+	"sync/atomic"
+	"testing"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/option"
+	ntun "github.com/sagernet/sing-box/protocol/tun"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/netlink"
+)
+
+// This is an actual kernel TUN test. The driver creates a new network namespace
+// first; the test refuses the ordinary host environment and never uses a public
+// endpoint or a default route. Native candidate and rollback readers are real.
+func TestRouterVPNDesktopMTUKernel(t *testing.T) {
+	if os.Getenv("ROUTERVPN_MTU_KERNEL_TEST") != "isolated-network-namespace" {
+		t.Skip("requires the mandatory isolated Linux kernel MTU driver")
+	}
+	if _, err := os.Stat("/dev/net/tun"); err != nil {
+		t.Fatal("required kernel TUN device unavailable", err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, iface := range interfaces {
+		if iface.Name != "lo" {
+			t.Fatal("kernel MTU test was not started in an isolated network namespace")
+		}
+	}
+	loopback, err := netlink.LinkByName("lo")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = netlink.LinkSetUp(loopback); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	ctx = box.Context(ctx, include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"captured-tun","interface_name":"rvpn-mtu-test","address":["172.29.199.1/30"],"mtu":1280,"auto_route":false,"dns_mode":"disabled","stack":"system"}],"outbounds":[{"type":"direct","tag":"retained-direct"}],"route":{"final":"retained-direct"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	engine, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	closed := false
+	t.Cleanup(func() {
+		if closed { return }
+		if err := engine.Close(); err != nil {
+			t.Error("native kernel owner did not close", err)
+		}
+	})
+	if err := engine.Start(); err != nil {
+		t.Fatal(err)
+	}
+	first, ok := engine.Inbound().Get("captured-tun")
+	if !ok {
+		t.Fatal("actual native TUN not constructed")
+	}
+	tun := first.(*ntun.Inbound)
+	var pathChanged, rejectCandidate atomic.Bool
+	guard := func() bool {
+		if pathChanged.Load() {
+			return false
+		}
+		if rejectCandidate.Load() {
+			if _, err := net.InterfaceByName("rvpn-mtu-test"); err != nil {
+				return !rejectCandidate.CompareAndSwap(true, false)
+			}
+		}
+		return true
+	}
+	_, initialIndex, original, err := tun.RouterVPNDesktopMTU(guard)
+	if err != nil || initialIndex < 1 || original != 1280 {
+		t.Fatal("actual initial MTU readback", original, err)
+	}
+	endpoint, _ := engine.Outbound().Outbound("retained-direct")
+	transportCurrent := func() bool { current, _ := engine.Outbound().Outbound("retained-direct"); return current == endpoint }
+	current, err := engine.RouterVPNChangeMTU(context.Background(), tun, 1400)
+	if err != nil || current == first {
+		t.Fatal("real candidate was not adopted", err)
+	}
+	name, index, mtu, err := current.(*ntun.Inbound).RouterVPNDesktopMTUInterface()
+	if err != nil || name != "rvpn-mtu-test" || index < 1 || mtu != 1400 || !transportCurrent() {
+		t.Fatal("candidate changed transport or had no exact kernel readback", name, index, mtu, err)
+	}
+	stale, err := engine.RouterVPNChangeMTU(context.Background(), first, 1500)
+	if err == nil || stale != first {
+		t.Fatal("retired native pointer adopted another reader")
+	}
+	canceled, stop := context.WithCancel(context.Background())
+	stop()
+	unchanged, err := engine.RouterVPNChangeMTU(canceled, current, 1500)
+	if err == nil || unchanged != current {
+		t.Fatal("canceled transaction changed the kernel reader")
+	}
+	rejectCandidate.Store(true)
+	rollback, err := engine.RouterVPNChangeMTU(context.Background(), current, 1500)
+	if err == nil || rollback == nil || rollback == current {
+		t.Fatal("failed candidate did not execute its distinct rollback reader", err)
+	}
+	_, _, mtu, readErr := rollback.(*ntun.Inbound).RouterVPNDesktopMTUInterface()
+	if readErr != nil || mtu != 1400 {
+		t.Fatal("real rollback did not restore exact pre-test MTU", mtu, readErr)
+	}
+	pathChanged.Store(true)
+	unchanged, err = engine.RouterVPNChangeMTU(context.Background(), rollback, 1450)
+	if err == nil || unchanged != rollback {
+		t.Fatal("changed physical path restarted a reader")
+	}
+	pathChanged.Store(false)
+	_, _, mtu, readErr = rollback.(*ntun.Inbound).RouterVPNDesktopMTUInterface()
+	if readErr != nil || mtu != 1400 {
+		t.Fatal("stale path changed the owned interface")
+	}
+	// A distinct same-tag Box's TUN may never replace this Box's reader.
+	other, err := box.New(box.Options{Context: box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry()), Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer other.Close()
+	foreign, _ := other.Inbound().Get("captured-tun")
+	result, err := engine.RouterVPNChangeMTU(context.Background(), foreign, 1380)
+	if err == nil || result != foreign {
+		t.Fatal("foreign same-tag TUN was adopted")
+	}
+	still, _ := engine.Inbound().Get("captured-tun")
+	if still != rollback || !transportCurrent() {
+		t.Fatal("negative control changed captured ownership")
+	}
+	// Simulate an administrative/foreign replacement at the same alias while
+	// the retired native owner still has its original file descriptor. Cleanup
+	// must never remove addresses or routes from that replacement interface.
+	ownedLink, err := netlink.LinkByName("rvpn-mtu-test")
+	if err != nil { t.Fatal(err) }
+	if err = netlink.LinkDel(ownedLink); err != nil { t.Fatal(err) }
+	foreignLink := &netlink.Dummy{LinkAttrs: netlink.LinkAttrs{Name:"rvpn-mtu-test",MTU:1400}}
+	if err = netlink.LinkAdd(foreignLink); err != nil { t.Fatal(err) }
+	defer netlink.LinkDel(foreignLink)
+	if err = netlink.LinkSetUp(foreignLink); err != nil { t.Fatal(err) }
+	address, _ := netlink.ParseAddr("172.29.199.1/30")
+	if err = netlink.AddrAdd(foreignLink,address); err != nil { t.Fatal(err) }
+	if _, _, _, err := rollback.(*ntun.Inbound).RouterVPNDesktopMTUInterface(); err == nil { t.Fatal("same-name OS interface replacement adopted") }
+	if _, err := engine.RouterVPNChangeMTU(context.Background(),rollback,1500); err == nil { t.Fatal("retired owner mutated replacement OS interface") }
+	closed = true
+	if err = engine.Close(); err == nil { t.Fatal("uncertain replacement cleanup reported normal success") }
+	iface, err := net.InterfaceByName("rvpn-mtu-test")
+	if err != nil || iface.Index == index || iface.MTU != 1400 { t.Fatal("retired cleanup changed replacement interface",err) }
+	addresses, err := iface.Addrs()
+	if err != nil { t.Fatal(err) }
+	preserved := false
+	for _, actual := range addresses { prefix, e := netip.ParsePrefix(actual.String()); if e == nil && prefix == netip.MustParsePrefix("172.29.199.1/30") { preserved=true } }
+	if !preserved { t.Fatal("retired cleanup removed replacement's address") }
+}

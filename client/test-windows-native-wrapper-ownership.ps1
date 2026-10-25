@@ -37,7 +37,7 @@ function Stop-Process{param($InputObject,[switch]$Force,$ErrorAction);[IO.File]:
 function Stop-RouterVPNRecordedProcess($Path){[IO.File]::AppendAllText($env:WRAPPER_STOPPED,"replacement-registry-owner`n");return $true}
 # Windows PowerShell resolves this standard alias before a same-named
 # function. Retain that command environment on non-Windows test hosts too.
-Set-Alias -Name kill -Value Stop-Process -Scope Script
+Set-Alias -Name kill -Value Stop-Process -Scope Script -Option AllScope
 '@
 [IO.File]::WriteAllText((Join-Path $FixtureClient 'Private-RouterVPN-State.ps1'),(". '"+$RealPrivate+"'`n"+$Overrides),[Text.UTF8Encoding]::new($false))
 $Core=Join-Path $TaskRoot 'core.ps1'
@@ -66,7 +66,9 @@ exit 0
 '@
     [IO.File]::WriteAllText($KillSwitch,$Policy,[Text.UTF8Encoding]::new($false))
     function Stop-Process{throw 'Windows kill alias dispatched process teardown instead of the captured firewall helper.'}
-    Set-Alias -Name kill -Value Stop-Process -Scope Local
+    # Windows PowerShell 5.1's built-in alias already has AllScope. Preserve
+    # that option when reproducing its command resolution on other hosts.
+    Set-Alias -Name kill -Value Stop-Process -Scope Local -Option AllScope
     . ([ScriptBlock]::Create($Definitions[0].Extent.Text))
     $env:WRAPPER_POLICY_FAIL='0'
     foreach($Call in $Calls){& ([ScriptBlock]::Create($Call.Extent.Text))}

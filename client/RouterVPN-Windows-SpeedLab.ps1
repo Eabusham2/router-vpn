@@ -26,7 +26,7 @@ function ShowUnifiedSpeedLab{
    <Border Grid.Column="1" Background="#10243A" CornerRadius="14" Margin="4,0" Padding="14"><StackPanel><TextBlock Text="DOWNLOAD" Foreground="#63D7FF"/><TextBlock Name="DownBig" Text="-- Mbps" FontSize="30" FontWeight="Bold"/><TextBlock Name="DownDetail" Text="loaded -- ms" Foreground="#8FC9E8"/></StackPanel></Border>
    <Border Grid.Column="2" Background="#1D1D38" CornerRadius="14" Margin="8,0,0,0" Padding="14"><StackPanel><TextBlock Text="UPLOAD" Foreground="#B799FF"/><TextBlock Name="UpBig" Text="-- Mbps" FontSize="30" FontWeight="Bold"/><TextBlock Name="UpDetail" Text="loaded -- ms" Foreground="#BDB1E8"/></StackPanel></Border>
   </Grid>
-  <Border Grid.Row="2" Background="#0D1729" CornerRadius="14" Margin="0,12,0,0" Padding="12"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="160"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
+  <Border Grid.Row="2" Background="#0D1729" CornerRadius="14" Margin="0,12,0,0" Padding="12"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="Auto"/><ColumnDefinition Width="160"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="180"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
    <TextBlock Text="Test" VerticalAlignment="Center"/><ComboBox Name="Scope" Grid.Column="1" Margin="8,3"><ComboBoxItem Content="Current path" Tag="current" IsSelected="True"/><ComboBoxItem Content="Temporary config" Tag="temporary"/></ComboBox>
    <TextBlock Grid.Column="2" Text="Topology" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Topology" Grid.Column="3" Margin="8,3"><ComboBoxItem Content="System direct" Tag="system-direct"/><ComboBoxItem Content="Router VPN node" Tag="router" IsSelected="True"/><ComboBoxItem Content="Multihop" Tag="multihop"/><ComboBoxItem Content="External exit / hop" Tag="external"/></ComboBox>
    <TextBlock Grid.Column="4" Text="Mode" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Mode" Grid.Column="5" Margin="8,3" DisplayMemberPath="name" SelectedValuePath="id"/>
@@ -36,6 +36,8 @@ function ShowUnifiedSpeedLab{
    <TextBlock Grid.Row="2" Text="Base" VerticalAlignment="Center"/><ComboBox Name="Base" Grid.Row="2" Grid.Column="1" Margin="8,3"><ComboBoxItem Content="Auto" Tag="auto" IsSelected="True"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AmneziaWG" Tag="awg"/></ComboBox>
    <TextBlock Grid.Row="2" Grid.Column="2" Text="Exit transport" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="ExitMode" Grid.Row="2" Grid.Column="3" Margin="8,3"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks" IsSelected="True"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
    <TextBlock Grid.Row="2" Grid.Column="4" Text="CUSTOM layers" VerticalAlignment="Center" Margin="12,0,0,0"/><TextBox Name="Layers" Grid.Row="2" Grid.Column="5" Margin="8,3" ToolTip="Comma-separated exact layers; used only when Mode=CUSTOM"/>
+   <TextBlock Grid.Row="3" Text="Entry mode" VerticalAlignment="Center"/><ComboBox Name="EntryMode" Grid.Row="3" Grid.Column="1" Margin="8,3" DisplayMemberPath="name" SelectedValuePath="id"/>
+   <TextBlock Grid.Row="3" Grid.Column="2" Text="Execution" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Execution" Grid.Row="3" Grid.Column="3" Margin="8,3" DisplayMemberPath="name" SelectedValuePath="id" ToolTip="Server/Compare requires a Router entry, this exit's response probe, and separate packet/OpenVPN pairing. The controller proves the captured path before testing."/>
   </Grid></Border>
   <Border Grid.Row="3" Background="#0D1729" CornerRadius="14" Margin="0,10,0,0" Padding="12"><Grid><Grid.ColumnDefinitions><ColumnDefinition Width="150"/><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><Grid.RowDefinitions><RowDefinition/><RowDefinition/><RowDefinition/></Grid.RowDefinitions>
    <ComboBox Name="DurationMode" Grid.Column="0" Margin="0,0,12,5"><ComboBoxItem Content="Auto timing" Tag="auto" IsSelected="True"/><ComboBoxItem Content="Custom timing" Tag="custom"/></ComboBox>
@@ -44,34 +46,126 @@ function ShowUnifiedSpeedLab{
    <WrapPanel Grid.Row="2" Grid.ColumnSpan="4" Margin="0,8,0,0"><CheckBox Name="DAITA" Content="DAITA-like" Margin="0,0,14,0"/><CheckBox Name="Jumbo" Content="Jumbo" Margin="0,0,14,0"/><CheckBox Name="Encrypted" Content="Require encrypted AUTO" Margin="0,0,14,0"/><CheckBox Name="Obfuscated" Content="Require obfuscation AUTO"/></WrapPanel>
    <TextBlock Grid.Column="3" Grid.RowSpan="2" Text="Auto runs at least 4 s and up to 12 s per direction, stopping early only after throughput stabilizes. Custom allows 1–60 s." Width="260" TextWrapping="Wrap" Foreground="#8FA3C2" Margin="14,0,0,0"/>
   </Grid></Border>
-  <TextBox Name="Detail" Grid.Row="4" Margin="0,10,0,0" Background="#091321" Foreground="#C9D6EA" BorderBrush="#243B59" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="10" Text="Ready. Current path uses the path that is actually connected. Temporary config requires Router VPN to be disconnected."/>
+  <TextBox Name="Detail" Grid.Row="4" Margin="0,10,0,0" Background="#091321" Foreground="#C9D6EA" BorderBrush="#243B59" IsReadOnly="True" TextWrapping="Wrap" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" Padding="10" Text="Ready. Current path uses the path that is actually connected. Temporary tests capture and restore the complete connected path and its proved execution choice."/>
   <Grid Grid.Row="5" Margin="0,12,0,0"><Grid.ColumnDefinitions><ColumnDefinition/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/><ColumnDefinition Width="Auto"/></Grid.ColumnDefinitions><TextBlock Name="Status" VerticalAlignment="Center" Foreground="#8FA3C2" Text="Cloudflare Speed Test edge • no Mbps derived from RTT"/><Button Name="Advanced" Grid.Column="1" Content="Advanced node tests" Padding="11,7" Margin="5,0"/><Button Name="Run" Grid.Column="2" Content="Run Speed Lab" Padding="16,7" Margin="5,0" IsDefault="True"/><Button Name="Close" Grid.Column="3" Content="Close" Padding="11,7" Margin="5,0"/></Grid>
  </Grid>
 </Window>
 "@
  $Reader=New-Object System.Xml.XmlNodeReader $SX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
- $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
+ $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$EntryMode=$D.FindName('EntryMode');$Execution=$D.FindName('Execution');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
  function SelectedTag($Combo){if($null-eq$Combo.SelectedItem){return''};return [string]$Combo.SelectedItem.Tag}
- function NodeItems($Values,[string]$Kind){$out=New-Object System.Collections.ArrayList;foreach($n in @($Values)){if($Kind-and([string]$n.node_kind).ToLowerInvariant()-ne$Kind){continue};$ms=if([double]$n.latency_trimmed_mean_ms-gt0){' • {0:N1} ms'-f[double]$n.latency_trimmed_mean_ms}else{''};[void]$out.Add([pscustomobject]@{id=[string]$n.id;display=([string]$n.name+$ms);kind=[string]$n.node_kind})};return @($out)}
+ $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
+ function SpeedLabValue($Item,[string]$Name,$Default=''){
+  if($null-eq$Item){return $Default};$P=$Item.PSObject.Properties[$Name];if($null-eq$P-or$null-eq$P.Value){return $Default};return $P.Value
+ }
+ function SpeedLabKind($Item){return [string](SpeedLabValue $Item 'node_kind' 'router-vpn')}
+ function SpeedLabFind([string]$Key,[string]$ID){
+  if(-not$ID){return $null};$found=@($SpeedLabOptions[$Key]|Where-Object{[string]$_.id-ceq$ID});if($found.Count-ne1){return $null};return $found[0]
+ }
+ function NodeItems($Values,[string]$Kind){
+  $out=New-Object System.Collections.ArrayList;foreach($n in @($Values)){if($Kind-and(SpeedLabKind $n)-ne$Kind){continue};$ms=[double](SpeedLabValue $n 'latency_trimmed_mean_ms' 0);$suffix=if($ms-gt0){' • {0:N1} ms'-f$ms}else{''};[void]$out.Add([pscustomobject]@{id=[string]$n.id;display=([string]$n.name+$suffix);kind=(SpeedLabKind $n)})};return @($out)
+ }
+ function SelectSpeedLabChoice($Combo,[string]$ID){
+  $items=@($Combo.ItemsSource);if(@($items|Where-Object{[string]$_.id-ceq$ID}).Count-eq0){$Combo.ItemsSource=@($items)+@([pscustomobject]@{id=$ID;name=('Unavailable saved choice: '+$ID);display=('Unavailable saved choice: '+$ID)})};$Combo.SelectedValue=$ID
+ }
+ function SetSpeedLabEntryMode{
+  $entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$nodeValue=SpeedLabFind 'nodes' ([string]$Node.SelectedValue)
+  if($null-eq$entryValue-or(SpeedLabKind $entryValue)-ne'router-vpn'){$EntryMode.SelectedIndex=-1;return}
+  $modeValue='';if($null-ne$nodeValue-and([string]$Entry.SelectedValue)-ceq([string](SpeedLabValue $nodeValue 'multihop_entry_id'))){$modeValue=[string](SpeedLabValue $nodeValue 'multihop_entry_mode')}
+  if(-not$modeValue){$baseValue=[string](SpeedLabValue $entryValue 'base_tunnel');if($baseValue-notin@('wg','awg')){$baseValue=[string](SpeedLabValue $nodeValue 'base_tunnel')};$modeValue=if($baseValue-eq'awg'){'awg2-fast'}else{'wg'}}
+  SelectSpeedLabChoice $EntryMode $modeValue
+ }
+ function SetSpeedLabDefaults{
+  if($SpeedLabOptions.updating){return};$n=SpeedLabFind 'nodes' ([string]$Node.SelectedValue);if($null-eq$n){return}
+  $SpeedLabOptions.updating=$true
+  try{
+   $saved=[bool](SpeedLabValue $n 'multihop_enabled' $false);$top=SelectedTag $Topology
+   $baseValue=[string](SpeedLabValue $n 'base_tunnel' 'auto');if(-not$baseValue){$baseValue='auto'}
+   $Base.SelectedIndex=-1;for($i=0;$i-lt$Base.Items.Count;$i++){if([string]$Base.Items[$i].Tag-ceq$baseValue){$Base.SelectedIndex=$i;break}}
+   if($top-eq'external'){
+    $entryValue=if($saved){[string](SpeedLabValue $n 'multihop_entry_id')}else{''};SelectSpeedLabChoice $Entry $entryValue
+    $executionValue=if($saved){[string](SpeedLabValue $n 'multihop_execution' 'local')}else{'local'};if(-not$executionValue){$executionValue='local'};SelectSpeedLabChoice $Execution $executionValue;SetSpeedLabEntryMode
+   }elseif($top-eq'multihop'){
+    $entryValue=if($saved){[string](SpeedLabValue $n 'multihop_entry_id')}else{[string]$n.id};if(-not$entryValue){$entryValue=[string]$n.id};SelectSpeedLabChoice $Entry $entryValue
+    $exitValue=[string](SpeedLabValue $n 'multihop_exit_id');if($saved-and$exitValue){SelectSpeedLabChoice $Exit $exitValue}
+    $executionValue=if($saved){[string](SpeedLabValue $n 'multihop_execution' 'local')}else{'local'};if(-not$executionValue){$executionValue='local'};SelectSpeedLabChoice $Execution $executionValue
+   }
+  }finally{$SpeedLabOptions.updating=$false}
+ }
+ function SpeedLabPathChanged([string]$Changed){
+  if($SpeedLabOptions.updating){return}
+  if($Changed-eq'entry'){
+   $SpeedLabOptions.updating=$true
+   try{SetSpeedLabEntryMode;$n=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);if($null-eq$n-or(SpeedLabKind $n)-ne'router-vpn'){SelectSpeedLabChoice $Execution 'local'}}finally{$SpeedLabOptions.updating=$false}
+  }else{
+   if($Changed-eq'topology'){
+    $kind=if((SelectedTag $Topology)-eq'external'){'external'}else{'router-vpn'};$n=SpeedLabFind 'nodes' ([string]$Node.SelectedValue)
+    if($null-eq$n-or(SpeedLabKind $n)-ne$kind){$SpeedLabOptions.updating=$true;try{$Node.SelectedIndex=-1;$first=@($SpeedLabOptions.nodes|Where-Object{(SpeedLabKind $_)-eq$kind});if($first.Count){$Node.SelectedValue=[string]$first[0].id}}finally{$SpeedLabOptions.updating=$false}}
+   };SetSpeedLabDefaults
+  };RefreshSpeedLabControls
+ }
+ function SpeedLabServerReady($NodeValue){
+  if(-not[bool](SpeedLabValue $NodeValue 'has_response_probe' $false)){return $false};$protocol=[string](SpeedLabValue $NodeValue 'external_protocol')
+  if($protocol-in@('wireguard','amneziawg')){return [bool](SpeedLabValue $NodeValue 'has_server_peer' $false)}
+  if($protocol-eq'openvpn'){return [bool](SpeedLabValue $NodeValue 'has_openvpn_pairing' $false)}
+  return $protocol-in@('shadowsocks','hysteria2','socks5','http-connect','https-connect')
+ }
+ function NewSpeedLabRequest{
+  $scope=SelectedTag $Scope;$top=SelectedTag $Topology;$duration=SelectedTag $DurationMode;$payload=@{scope=$scope;duration_mode=$duration}
+  if($duration-eq'custom'){$payload.min_seconds=[Math]::Round($MinTime.Value);$payload.max_seconds=[Math]::Round($MaxTime.Value)}
+  if($scope-ne'temporary'){return $payload};$payload.topology=$top
+  if($top-eq'system-direct'){return $payload}
+  $n=SpeedLabFind 'nodes' ([string]$Node.SelectedValue);$entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$executionValue=[string]$Execution.SelectedValue
+  if($top-eq'router'){
+   if($null-eq$n-or(SpeedLabKind $n)-ne'router-vpn'){throw 'Select a linked Router VPN node.'}
+   $payload.node_id=[string]$Node.SelectedValue;$payload.mode=[string]$Mode.SelectedValue;$payload.base=SelectedTag $Base
+   if($payload.mode-eq'custom'){$payload.custom_layers=@(([string]$Layers.Text).Split(',')|ForEach-Object{$_.Trim()}|Where-Object{$_})}
+  }elseif($top-eq'multihop'){
+   $exitValue=SpeedLabFind 'nodes' ([string]$Exit.SelectedValue)
+   if($null-eq$entryValue-or$null-eq$exitValue-or(SpeedLabKind $entryValue)-ne'router-vpn'-or(SpeedLabKind $exitValue)-ne'router-vpn'-or([string]$Entry.SelectedValue)-ceq([string]$Exit.SelectedValue)){throw 'Select two different linked Router VPN nodes.'}
+   $payload.entry_id=[string]$Entry.SelectedValue;$payload.exit_id=[string]$Exit.SelectedValue;$payload.base=SelectedTag $Base;$payload.exit_mode=SelectedTag $ExitMode;$payload.execution=$executionValue
+  }elseif($top-eq'external'){
+   if($null-eq$n-or(SpeedLabKind $n)-ne'external'){throw 'Select a linked external exit.'}
+   $entryID=[string]$Entry.SelectedValue
+   if($entryID-and($null-eq$entryValue-or$entryID-ceq([string]$Node.SelectedValue))){throw 'Select a different linked entry, or Direct.'}
+   $payload.node_id=[string]$Node.SelectedValue;$payload.entry_id=$entryID;$payload.execution=$executionValue
+   if($null-ne$entryValue-and(SpeedLabKind $entryValue)-eq'router-vpn'){
+    $modeValue=[string]$EntryMode.SelectedValue;if($null-eq(SpeedLabFind 'router_vpn_entry_modes' $modeValue)){throw 'Select a supported Router entry mode.'};$payload.entry_mode=$modeValue
+    if($executionValue-ne'local'-and-not(SpeedLabServerReady $n)){throw "Server/Compare requires this exit's response probe and independent server pairing where required."}
+   }elseif($executionValue-ne'local'){throw 'Direct and ordinary external entry paths use Local execution.'}
+  }else{throw 'Select a supported test topology.'}
+  if($top-in@('multihop','external')){if($executionValue-notin@('local','server','auto')-or$null-eq(SpeedLabFind 'execution_choices' $executionValue)){throw 'Select Local, Server, or Compare both from the current capabilities.'}}
+  $payload.daita=[bool]$D.FindName('DAITA').IsChecked;$payload.jumbo=[bool]$D.FindName('Jumbo').IsChecked;$payload.require_encrypted=[bool]$D.FindName('Encrypted').IsChecked;$payload.require_obfuscation=[bool]$D.FindName('Obfuscated').IsChecked
+  return $payload
+ }
  function RefreshSpeedLabControls{
-  $temporary=(SelectedTag $Scope)-eq'temporary';foreach($c in @($Topology,$Mode,$Node,$Entry,$Exit,$Base,$ExitMode,$Layers,$D.FindName('DAITA'),$D.FindName('Jumbo'),$D.FindName('Encrypted'),$D.FindName('Obfuscated'))){$c.IsEnabled=$temporary}
+  $temporary=(SelectedTag $Scope)-eq'temporary';foreach($c in @($Topology,$Mode,$Node,$Entry,$Exit,$Base,$ExitMode,$EntryMode,$Execution,$Layers,$D.FindName('DAITA'),$D.FindName('Jumbo'),$D.FindName('Encrypted'),$D.FindName('Obfuscated'))){$c.IsEnabled=$temporary}
   $custom=(SelectedTag $DurationMode)-eq'custom';$MinTime.IsEnabled=$custom;$MaxTime.IsEnabled=$custom
-  $top=SelectedTag $Topology;$Entry.IsEnabled=$temporary-and($top-eq'multihop'-or$top-eq'external');$Exit.IsEnabled=$temporary-and$top-eq'multihop';$ExitMode.IsEnabled=$temporary-and$top-eq'multihop';$Layers.IsEnabled=$temporary-and([string]$Mode.SelectedValue)-eq'custom'
+  $top=SelectedTag $Topology;$Entry.IsEnabled=$temporary-and($top-eq'multihop'-or$top-eq'external');$Exit.IsEnabled=$temporary-and$top-eq'multihop';$ExitMode.IsEnabled=$temporary-and$top-eq'multihop';$Layers.IsEnabled=$temporary-and$top-eq'router'-and([string]$Mode.SelectedValue)-eq'custom'
+  $entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$routerEntry=$null-ne$entryValue-and(SpeedLabKind $entryValue)-eq'router-vpn';$EntryMode.IsEnabled=$temporary-and$top-eq'external'-and$routerEntry;$Execution.IsEnabled=$temporary-and($top-eq'multihop'-or($top-eq'external'-and$routerEntry));$Mode.IsEnabled=$temporary-and$top-eq'router';$Node.IsEnabled=$temporary-and$top-in@('router','external');$Base.IsEnabled=$temporary-and$top-in@('router','multihop')
  }
  $Run.IsEnabled=$false
  $D.Add_Loaded({
   if([string]$D.Tag-ne'initial'){return};$D.Tag='owned-options';$Status.Text='Loading Speed Lab paths…';$Detail.Text='Loading current node/mode capabilities without blocking the app.'
   $Success={param($Opt)
-   $Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
-   $Node.ItemsSource=NodeItems $Opt.nodes ''; $Entry.ItemsSource=NodeItems $Opt.nodes ''; $Exit.ItemsSource=NodeItems $Opt.nodes 'router-vpn'
-   if($Node.Items.Count){$Node.SelectedIndex=0};if($Entry.Items.Count){$Entry.SelectedIndex=0};if($Exit.Items.Count-gt1){$Exit.SelectedIndex=1}elseif($Exit.Items.Count){$Exit.SelectedIndex=0}
-   $Run.IsEnabled=$true;$D.Tag='ready';$Status.Text='Cloudflare Speed Test edge • no Mbps derived from RTT';$Detail.Text='Ready. Current path uses the path that is actually connected. Temporary config requires Router VPN to be disconnected.';RefreshSpeedLabControls
+   $SpeedLabOptions.updating=$true
+   try{
+    $SpeedLabOptions.nodes=@($Opt.nodes);$SpeedLabOptions.router_vpn_entry_modes=@(SpeedLabValue $Opt 'router_vpn_entry_modes' @());$SpeedLabOptions.execution_choices=@(SpeedLabValue $Opt 'execution_choices' @())
+    $Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
+    $EntryMode.ItemsSource=@($SpeedLabOptions.router_vpn_entry_modes);$Execution.ItemsSource=@($SpeedLabOptions.execution_choices);SelectSpeedLabChoice $Execution 'local'
+    $Node.ItemsSource=NodeItems $Opt.nodes ''; $Entry.ItemsSource=@([pscustomobject]@{id='';display='Direct / no entry';kind=''})+@(NodeItems $Opt.nodes ''); $Exit.ItemsSource=NodeItems $Opt.nodes 'router-vpn'
+    if($Node.Items.Count){$Node.SelectedIndex=0};if($Exit.Items.Count-gt1){$Exit.SelectedIndex=1}elseif($Exit.Items.Count){$Exit.SelectedIndex=0}
+    $selected=@($Opt.nodes|Where-Object{[bool](SpeedLabValue $_ 'selected' $false)});if($selected.Count-eq1){$Node.SelectedValue=[string]$selected[0].id}
+    $selectedNode=SpeedLabFind 'nodes' ([string]$Node.SelectedValue);$topDefault=if($null-ne$selectedNode-and(SpeedLabKind $selectedNode)-eq'external'){'external'}elseif([bool](SpeedLabValue $selectedNode 'multihop_enabled' $false)){'multihop'}else{'router'}
+    foreach($item in $Topology.Items){if([string]$item.Tag-ceq$topDefault){$Topology.SelectedItem=$item;break}}
+   }finally{$SpeedLabOptions.updating=$false};SetSpeedLabDefaults
+   $Run.IsEnabled=$true;$D.Tag='ready';$Status.Text='Cloudflare Speed Test edge • no Mbps derived from RTT';$Detail.Text='Ready. Current path uses the path that is actually connected. Temporary tests capture and restore the complete connected path and its proved execution choice.';RefreshSpeedLabControls
   }.GetNewClosure()
   $Failure={param($E)$Detail.Text='Could not load Speed Lab options: '+$E;$Status.Text='Speed Lab options unavailable.';$Run.IsEnabled=$false;$D.Tag='error'}.GetNewClosure()
   $Finally={if([string]$D.Tag-eq'owned-options'){$D.Tag='error'}}.GetNewClosure()
   if(-not(StartUnifiedApiAsync 'Loading Speed Lab options…' '/api/speed-lab/options' 'GET' $null 10 $Success $Failure $Finally)){$D.Tag='error';$Run.IsEnabled=$false}
  })
- $DurationMode.Add_SelectionChanged({RefreshSpeedLabControls});$Scope.Add_SelectionChanged({RefreshSpeedLabControls});$Topology.Add_SelectionChanged({RefreshSpeedLabControls});$Mode.Add_SelectionChanged({RefreshSpeedLabControls})
+ $DurationMode.Add_SelectionChanged({RefreshSpeedLabControls});$Scope.Add_SelectionChanged({RefreshSpeedLabControls});$Topology.Add_SelectionChanged({SpeedLabPathChanged 'topology'});$Node.Add_SelectionChanged({SpeedLabPathChanged 'node'});$Entry.Add_SelectionChanged({SpeedLabPathChanged 'entry'});$Mode.Add_SelectionChanged({RefreshSpeedLabControls})
  $MinTime.Add_ValueChanged({if($MinTime.Value-gt$MaxTime.Value){$MaxTime.Value=$MinTime.Value};$MinLabel.Text=('Min {0:N0} s'-f$MinTime.Value)})
  $MaxTime.Add_ValueChanged({if($MaxTime.Value-lt$MinTime.Value){$MinTime.Value=$MaxTime.Value};$MaxLabel.Text=('Max {0:N0} s'-f$MaxTime.Value)})
  RefreshSpeedLabControls
@@ -81,13 +175,7 @@ function ShowUnifiedSpeedLab{
   try{
    if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
    $Run.IsEnabled=$false;$Advanced.IsEnabled=$false;$D.Tag='owned-run';$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.'
-   $scope=SelectedTag $Scope;$top=SelectedTag $Topology;$duration=SelectedTag $DurationMode;$payload=@{scope=$scope;duration_mode=$duration}
-   if($duration-eq'custom'){$payload.min_seconds=[Math]::Round($MinTime.Value);$payload.max_seconds=[Math]::Round($MaxTime.Value)}
-   if($scope-eq'temporary'){
-    $payload.topology=$top;$payload.node_id=[string]$Node.SelectedValue;$payload.entry_id=[string]$Entry.SelectedValue;$payload.exit_id=[string]$Exit.SelectedValue;$payload.mode=[string]$Mode.SelectedValue;$payload.base=SelectedTag $Base;$payload.exit_mode=SelectedTag $ExitMode
-    if($payload.mode-eq'custom'){$payload.custom_layers=@(([string]$Layers.Text).Split(',')|ForEach-Object{$_.Trim()}|Where-Object{$_})}
-    $payload.daita=[bool]$D.FindName('DAITA').IsChecked;$payload.jumbo=[bool]$D.FindName('Jumbo').IsChecked;$payload.require_encrypted=[bool]$D.FindName('Encrypted').IsChecked;$payload.require_obfuscation=[bool]$D.FindName('Obfuscated').IsChecked
-   }
+   $payload=NewSpeedLabRequest;$duration=SelectedTag $DurationMode
    $timeout=if($duration-eq'custom'){[Math]::Max(90,[int]($MaxTime.Value*2+75))}else{110}
    $Success={param($R)
     $S=$R.summary;$M=$R.measurement

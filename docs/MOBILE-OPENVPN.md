@@ -3,7 +3,7 @@
 ## Implemented path
 
 Android and iOS/iPadOS compile a private inline `.ovpn` profile through
-`internal/nativeopenvpn.CompileEndpoint`, exposed by the unchanged
+`internal/nativeopenvpn.CompileEndpoint`, exposed by the existing
 `mobile/routervpn_openvpn.go` binding, into a native `openvpn-client` endpoint. The
 endpoint runs inside the application's existing Libbox runtime with
 `system: false`; it does not launch a command-line VPN or install a second OS
@@ -72,6 +72,22 @@ or real traffic tests.
 TCP/UDP OpenVPN exits), imported entry combinations, TLS/credential mutations,
 fallback transport rejection and nested MTU ownership.
 
+`deploy/test_external_openvpn_pairing.py` invokes the actual offline Go compiler
+and Python private-registry pairer. It verifies separate provider and pairing
+credentials, all three exit Start Layer selections, secret-free counterpart
+descriptors, strict raw JSON, source preservation and rejection of duplicate
+provider identities. The copied mobile binding tests exercise
+`RouterValidateExternalOpenVPNPairing` before Java or Swift private-store
+decoding can drop invalid fields.
+
+`deploy/test_external_openvpn_native.py --core PINNED_CORE_CHECKOUT` runs the
+real OpenVPN provider and both independently authenticated owners under the race
+detector. TCP and UDP each carry actual payloads with Off, AES and AES plus XOR
+layers; TCP uses TLS-auth and UDP uses TLS-crypt. The test includes wrong CA,
+name, control key and listener-secret rejection, simultaneous retained owners,
+deleted-lease replay and confirmed listener shutdown. No external provider,
+private router or system TUN is involved in this loopback fixture.
+
 The release audits preserve their existing weights and manual evidence gates.
 Their source score is not a percentage of all original features delivered.
 No physical-device, reconnect/leak/permission, off-LAN, private AI Board/Portainer,
@@ -79,11 +95,31 @@ live ASUS forwarding, signing or notarization result is asserted here.
 
 ## Multihop architecture boundary
 
-The current mobile paths compose client-owned entry and exit transports. A
-server-managed entry-to-exit route is also a possible architecture, but is not
-implemented by this OpenVPN change. Moving the second tunnel onto an entry
-server changes where that tunnel terminates and where exit credentials reside;
-it is not automatically equivalent to client-owned nested encryption. A future
-server-managed path must define per-client authorization, isolation, failure
-behavior, exit identity, DNS ownership and teardown explicitly. No existing
-client multihop feature is removed by this continuation.
+Local connections compose client-owned entry and exit transports. A captured
+Router VPN entry can also run an isolated OpenVPN Server candidate, or compare
+it with Local, when the imported node contains a complete
+`external.openvpn_pairing`. This private pairing holds the Local owner's
+dedicated X25519 key and the Server's public counterpart descriptor. The Server
+independently owns its original provider profile, TLS client key/certificate
+and/or username/password, plus its own dedicated pairing key. No Server private
+credentials are copied to the phone, and no Local private credentials survive
+in the server registry. Canonical certificate public keys, common names and
+usernames prevent duplicate provider sessions from impersonating independent
+paths. Pairing controls and commands are described in
+[MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md#external-openvpn-provider-sessions).
+
+The fresh authenticated entry challenge binds every acquisition to its boot
+epoch, observed peer, deadline and random attempt. Cancellation, renewal and
+confirmed teardown preserve the same owner. The Server engine uses a private
+authenticated listener and userspace OpenVPN endpoint; the device keeps one
+owned system VPN and its selected DNS, IPv6, LAN and MTU policy. Compare applies
+the required average of the last-node and same external response timings and
+repeats both probes for the chosen candidate. Restoring an already-proved
+Local/Server choice does not rerun Compare.
+
+Paired Server/Compare currently requires one public literal host across the
+original remote list so its last-node response proof identifies the actual
+provider. Multiple ports and transport fallbacks on that host remain supported;
+ordinary Local profiles retain different-host lists. Different-host paired
+comparison and external-entry Server execution remain open extensions with
+additional remote-observation and runtime ownership requirements.

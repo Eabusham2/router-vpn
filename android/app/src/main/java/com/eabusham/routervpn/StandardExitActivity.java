@@ -444,6 +444,14 @@ public final class StandardExitActivity extends Activity {
             form.addView(text("Separate WireGuard / AmneziaWG Server peer",14,true));form.addView(serverPeer);
             form.addView(text("Paste the public descriptor supplied when pairing this exit: public_key, addresses, mtu and optional persistent_keepalive_interval. This is the server-side client's identity, with different keys and assigned addresses from this device. Its private key and PSK stay on the Router entry. A matching HTTPS response probe is also required for Server / Compare.",13,false));
         }
+        EditText openVPNPairing=field("Private OpenVPN pairing JSON (optional for Local)",false);
+        if("openvpn".equals(captured.protocol)){
+            openVPNPairing.setSingleLine(false);openVPNPairing.setMinLines(5);
+            openVPNPairing.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            if(captured.openVPNPairing!=null)openVPNPairing.setText(captured.openVPNPairing.toString());
+            form.addView(text("Independent OpenVPN Server identity",14,true));form.addView(openVPNPairing);
+            form.addView(text("Paste this device's private pairing package supplied by your Router entry. It includes a dedicated local authentication key and a server descriptor. The server's OpenVPN password, certificate key and authentication key stay on the entry. Both OpenVPN profiles must use separate provider identities and the same verified remote policy. Leave blank for Local only.",13,false));
+        }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
         dialog.setOnShowListener(ignored->dialog.getButton(AlertDialog.BUTTON_POSITIVE).setOnClickListener(v->{
@@ -482,6 +490,7 @@ public final class StandardExitActivity extends Activity {
                     next.serverPeer=AndroidStandardExitStore.parseServerPeer(serverPeer.getText().toString());
                     AndroidStandardExitStore.validateServerPeer(next);
                 }
+                if("openvpn".equals(next.protocol))next.openVPNPairing=AndroidOpenVPN.pairing(next,openVPNPairing.getText().toString());
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
                 startup.apply(next);

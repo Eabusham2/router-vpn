@@ -57,6 +57,8 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
  case "external-prepare":value,err=mobilemultihop.PrepareExternalExecutionCapture(r.Config,r.Policy,r.Source)
  case "external-response-probe":err=mobilemultihop.ValidateExternalResponseProbe(r.Node,r.Config);value="checked"
+ case "private-node-json":err=nativeopenvpn.ValidatePrivateNodeJSON(r.Config);value="checked"
+ case "openvpn-pairing":var p nativeopenvpn.Profile;var pair nativeopenvpn.Pairing;err=json.Unmarshal([]byte(r.Config),&p);if err==nil{err=json.Unmarshal([]byte(r.Policy),&pair)};if err==nil{_,err=nativeopenvpn.ValidatePairing(p,pair)};value="checked"
  case "openvpn":value,err=nativeopenvpn.CompileEndpoint(r.Config,r.Files,r.Node,r.Mode,r.Source)
  case "predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
  case "predecessor-fingerprint":var proof *mobiletor.PredecessorProof;proof,err=mobiletor.NewPredecessorProof(r.Config);if err==nil{value=proof.Fingerprint()}
@@ -149,6 +151,12 @@ public func LibboxRouterApplyMultihopLANPolicy(_ config:String,_ policy:String,_
 }
 public func LibboxRouterApplyPerformancePolicy(_ config:String,_ policy:String,_ error:inout NSError?)->String {
  result(&error,["Op":"performance","Config":config,"Policy":policy])
+}
+public func LibboxRouterValidateExternalOpenVPNPairing(_ profile:String,_ pairing:String,_ error:inout NSError?)->Bool {
+ result(&error,["Op":"openvpn-pairing","Config":profile,"Policy":pairing]) == "checked"
+}
+public func LibboxRouterValidatePrivateNodeJSON(_ source:String,_ error:inout NSError?)->Bool {
+ result(&error,["Op":"private-node-json","Config":source]) == "checked"
 }
 public func LibboxRouterOpenVPNEndpoint(_ config:String,_ user:String,_ password:String,_ tag:String,_ detour:String,_ error:inout NSError?)->String {
  result(&error,["Op":"openvpn","Config":config,"Files":user,"Node":password,"Mode":tag,"Source":detour])
@@ -565,6 +573,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try importedAmneziaCreation()
   try responseProbeCreation()
   try packetServerPeerCreation()
+  try openVPNPairingCreation(maximum,composite)
   try ordinaryExternalPredecessors(maximum,composite)
   print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
@@ -683,7 +692,52 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let local=try JSONDecoder().decode(ClientBundle.self,from:model.saved!).routerProfiles[0]
   try check("Local packet node needs no separate server peer",local.external?.serverPeer==nil && local.external?.authenticatedServerExecution==false)
  }
+ @MainActor static func openVPNPairingCreation(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  let fixtures=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!)))["layers"] as! [String:[String:Any]]
+  let base=fixtures["off"]!["external"] as! [String:Any],original=base["openvpn"] as! [String:Any],pair=base["openvpn_pairing"] as! [String:Any]
+  let source=original["config"] as! String,username=original["username"] as! String,password=original["password"] as! String
+  let pairingText=String(decoding:try json(pair),as:UTF8.self),model=RouterVPNModel()
+  let privateBundle=String(decoding:try json(["routerProfiles":[["id":"private-import","external":base]]]),as:UTF8.self)
+  try IOSExternalExecution.validatePrivateNodeJSON(Data(privateBundle.utf8));checks+=1
+  for raw in ["null","[]",privateBundle+" {}",String(privateBundle.dropLast())+",\"routerProfiles\":[]}",String(privateBundle.dropLast())+",\"extra\":{\"openvpn_pairing\":{\"private_key\":\"one\",\"private_key\":\"two\"}}}"] {
+   reject("raw private import rejects ambiguous nested credentials before JSONDecoder"){try IOSExternalExecution.validatePrivateNodeJSON(Data(raw.utf8))}
+  }
+  var invalidUTF8=Data((String(privateBundle.dropLast())+",\"extra\":\"").utf8);invalidUTF8.append(255);invalidUTF8.append(Data("\"}".utf8))
+  reject("raw private import rejects malformed UTF-8"){try IOSExternalExecution.validatePrivateNodeJSON(invalidUTF8)}
+  func save(_ text:String,_ layer:String="off",_ config:String?=nil,_ probe:Bool=true)throws {
+   let external=fixtures[layer]!["external"] as! [String:Any],provision=external["start_layer"] as? [String:Any],transport=provision?["transport"] as? [String:Any]
+   try model.createIOSExternalNode(protocolName:"openvpn",name:"Independent OpenVPN owner",server:"203.0.113.20",port:1194,expectedPublicIP:external["expected_public_ip"] as! String,username:username,password:password,method:"",secret:"",tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:1280,openVPNConfig:config ?? source,responseProbeURL:probe ? (base["response_probe"] as! [String:Any])["url"] as! String:"",responseProbeServerName:probe ? "provider.example":"",exitStartLayer:layer,exitLayerAPI:provision?["api"] as? String ?? "",exitLayerPort:transport?["server_port"] as? Int ?? 0,exitLayerKey:transport?["password"] as? String ?? "",openVPNPairingJSON:text)
+  }
+  let entry=try JSONDecoder().decode(ClientBundle.self,from:json(root("wg","off",maximum,composite))).routerProfiles[0]
+  for layer in layers {
+   try save(pairingText,layer)
+   let imported=try JSONDecoder().decode(ClientBundle.self,from:model.saved!),profile=imported.routerProfiles[0],external=profile.external!
+   try IOSExternalExecution.validateImported(imported)
+   try check("native OpenVPN form preserves exact source, credentials and pairing",external.openVPN?.config==source && external.openVPN?.username==username && external.openVPN?.password==password && external.openVPNPairing?.privateKey==pair["private_key"] as? String && profile.startLayer==layer)
+   try check("independent OpenVPN pair is eligible before authenticated acquisition",IOSExternalExecution.eligible(entry:entry,exit:profile))
+   let roundtrip=try JSONDecoder().decode(ClientBundle.self,from:JSONEncoder().encode(imported))
+   try check("private saved OpenVPN profile roundtrip retains exact descriptor",json(object(JSONEncoder().encode(roundtrip)))==json(object(JSONEncoder().encode(imported))))
+  }
+  let saved=model.saved,writes=model.writes
+  for raw in ["null",pairingText+" {}",String(pairingText.dropLast())+",\"private_key\":\""+(pair["private_key"] as! String)+"\"}",String(pairingText.dropLast())+",\"unknown\":true}"] {
+   reject("OpenVPN editor rejects raw duplicate, unknown, null or trailing JSON"){try save(raw)}
+  }
+  for fault in ["provider-alias","server-private-key","changed-transport","null-server","missing-key"] {
+   var changed=pair,server=changed["server"] as! [String:Any]
+   if fault=="provider-alias" {server["provider_identity"]=["username":username]}
+   if fault=="server-private-key" {server["private_key"]=key(14)}
+   if fault=="changed-transport" {var transport=server["transport"] as! [String:Any];transport["auth"]="SHA512";server["transport"]=transport}
+   changed["server"]=server;if fault=="null-server" {changed["server"]=NSNull()}
+   if fault=="missing-key" {changed.removeValue(forKey:"private_key")}
+   reject("OpenVPN editor rejects invalid captured ownership "+fault){try save(String(decoding:json(changed),as:UTF8.self))}
+  }
+  try check("invalid OpenVPN editor never overwrites a private saved node",model.saved==saved && model.writes==writes)
+  try save("","off",source+"remote 203.0.113.21 443 tcp\n",false)
+  let local=try JSONDecoder().decode(ClientBundle.self,from:model.saved!).routerProfiles[0]
+  try check("plain Local OpenVPN keeps multi-host remotes without pairing",local.external?.openVPN?.config==source+"remote 203.0.113.21 443 tcp\n" && local.external?.openVPNPairing==nil && !IOSExternalExecution.eligible(entry:entry,exit:local))
+ }
  @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  let pairingFixtures=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!)))["layers"] as! [String:[String:Any]]
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   var failures:[String]=[]
   for mode in modes {for layer in layers {
@@ -699,7 +753,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
     do {
      let model=RouterVPNModel()
      let exitMTU=["wireguard","amneziawg","openvpn"].contains(kind) && packetEntry ? 1280:1380
-     let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
+     let openVPN="client\ndev tun\nproto udp\nremote 198.51.100.8 1194\nremote 198.51.100.9 443 tcp\nremote-random\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n"
      try model.createIOSExternalNode(protocolName:kind,name:"Captured ordinary exit",server:"198.51.100.8",port:kind=="wireguard" ? 51820:8443,expectedPublicIP:"203.0.113.88",username:" exact user ",password:" exact password ",method:"aes-256-gcm",secret:" exact transport secret ",tlsServerName:kind=="http-connect" ? "":"exit.example.test",wgPrivateKey:key(11),wgPeerPublicKey:key(12),wgPresharedKey:key(13),wgAddresses:["10.91.0.2/32","fd91::2/128"],wgAllowedIPs:["0.0.0.0/0","::/0"],wgDNS:[],wgMTU:exitMTU,openVPNConfig:kind=="openvpn" ? openVPN:"",wgKeepalive:29,awgParameters:kind=="amneziawg" ? ["jc":"3","jmin":"40","jmax":"900","s1":"56","s2":"48","s3":"24","s4":"32","h1":"10000000-19999999","h2":"20000000-29999999","h3":"30000000-39999999","h4":"40000000-49999999"]:[:])
      var exit=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
      try check("every new ordinary protocol retains Home DNS and IPv6 defaults",exit["dns_mode"] as? String=="home" && exit["ipv6_mode"] as? String=="on" && exit["home_lan_access"]==nil)
@@ -716,6 +770,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
      try check("complete entry graph captured byte for byte",capture["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(capture["entry"]!)==json(profile))
      try check("uncomposed source remains only the selected exit",(source["endpoints"] as! [[String:Any]]).count+(source["outbounds"] as! [[String:Any]]).count==1 && tagged(source,"custom-exit")["detour"]==nil)
      try check("shared native compiler connects final exit to full entry",tagged(graph,"custom-exit")["detour"] as? String=="external-entry" && (graph["inbounds"] as! [[String:Any]]).count==1)
+     if kind=="openvpn" {let endpoint=try tagged(graph,"custom-exit");try check("unpaired Local OpenVPN keeps distinct remotes and original credentials",(endpoint["servers"] as? [[String:Any]])?.count==2 && endpoint["username"] as? String==" exact user " && endpoint["password"] as? String==" exact password " && ((capture["profile"] as! [String:Any])["external"] as! [String:Any])["openvpn_pairing"]==nil)}
      try check("exact entry family remains",tagged(graph,"external-entry")["type"] as? String==tagged(previous,oldFinal)["type"] as? String)
      try check("the shared TUN retains the selected fixed MTU",meta["configured_mtu"] as? Int==exitMTU)
      for family in ["endpoints","outbounds"] {
@@ -744,6 +799,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
       for execution in ["server","auto"] {
        var selected=exit,external=selected["external"] as! [String:Any]
        external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"external.example.test"]
+       if kind=="openvpn" {external=pairingFixtures["off"]!["external"] as! [String:Any];selected["endpoint"]="203.0.113.20:1194"}
        if ExternalNodeConfig.packetProtocols.contains(kind) { external["server_peer"]=["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":max(1360,exitMTU),"persistent_keepalive_interval":25] }
        selected["external"]=external;selected["multihop_execution"]=execution
        var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-"+kind
@@ -753,7 +809,8 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
        let built=try owner.prepare(provider:launch,selectedProfile:selected,strict:true).runtime.policy!
        let graph=try object(Data(built.config.utf8)),captured=try object(Data(built.capture.utf8))
        try check("Server/Compare retains entire native entry mode and Start Layer",captured["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(captured["entry"]!)==json(profile))
-       try check("Server/Compare owns real local transport and selector",tagged(graph,"routervpn-execution-local")["type"] as? String==(kind=="socks5" ? "socks" : kind=="amneziawg" ? "routervpn-amneziawg" : ["http-connect","https-connect"].contains(kind) ? "http" : kind) && tagged(graph,"routervpn-execution-local")["detour"] as? String=="external-entry" && tagged(graph,"custom-exit")["type"] as? String=="selector")
+       try check("Server/Compare owns real local transport and selector",tagged(graph,"routervpn-execution-local")["type"] as? String==(kind=="socks5" ? "socks" : kind=="amneziawg" ? "routervpn-amneziawg" : kind=="openvpn" ? "openvpn-client" : ["http-connect","https-connect"].contains(kind) ? "http" : kind) && tagged(graph,"routervpn-execution-local")["detour"] as? String=="external-entry" && tagged(graph,"custom-exit")["type"] as? String=="selector")
+       if kind=="openvpn" {let endpoint=try tagged(graph,"routervpn-execution-local"),original=external["openvpn"] as! [String:Any],privateCapture=(captured["profile"] as! [String:Any])["external"] as! [String:Any];try check("OpenVPN comparison preserves Local credentials, remote list and private pairing",(endpoint["servers"] as? [[String:Any]])?.count==2 && endpoint["username"] as? String==original["username"] as? String && endpoint["password"] as? String==original["password"] as? String && json(privateCapture["openvpn_pairing"]!)==json(external["openvpn_pairing"]!) && json(privateCapture["openvpn"]!)==json(original));try check("OpenVPN pairing stays out of public metadata",!built.metadata.contains(original["password"] as! String) && !built.metadata.contains((external["openvpn_pairing"] as! [String:Any])["private_key"] as! String))}
        try check("external execution leaves entry graph cryptography intact",tagged(graph,"external-entry")["type"] as? String==tagged(previous,oldFinal)["type"] as? String && built.executionRequested==execution)
        if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
         let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+"-"+execution+".json")
@@ -766,8 +823,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
       for exitLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
        var selected=exit,external=selected["external"] as! [String:Any]
        external["response_probe"]=["url":"https://198.51.100.8:9443/response","server_name":"external.example.test"]
+       if kind=="openvpn" {external=pairingFixtures["off"]!["external"] as! [String:Any];selected["endpoint"]="203.0.113.20:1194"}
        if ExternalNodeConfig.packetProtocols.contains(kind) { external["server_peer"]=["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":max(1360,exitMTU),"persistent_keepalive_interval":25] }
-       external["start_layer"]=["mode":exitLayer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.8","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key(7)]]
+       let physicalServer=kind=="openvpn" ? "203.0.113.20" : "198.51.100.8"
+       external["start_layer"]=["mode":exitLayer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":physicalServer,"server_port":8388,"method":"2022-blake3-aes-256-gcm","password":key(7)]]
        selected["external"]=external;selected["start_layer"]=exitLayer;selected["multihop_execution"]=execution
        let frozen=try json(selected)
        var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-"+kind
@@ -776,8 +835,9 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
        defer {owner.multihopExecutionSource=nil}
        let built=try owner.prepare(provider:launch,selectedProfile:selected,strict:true).runtime.policy!,graph=try object(Data(built.config.utf8))
        let local=try tagged(graph,execution=="local" ? "custom-exit" : "routervpn-execution-local"),wrapper=try tagged(graph,"routervpn-exit-start-layer")
-       try check("independent entry and exit layers retain owned routing",(ExternalNodeConfig.packetProtocols.contains(kind) ? (local["peers"] as? [[String:Any]])?.first?["address"] as? String : local["server"] as? String)=="10.99.0.1" && local["detour"] as? String=="routervpn-exit-start-layer" && wrapper["detour"] as? String=="external-entry")
-       try check("the exit layer retains its selected protocol and server",wrapper["type"] as? String==(exitLayer=="aes-256-gcm" ? "shadowsocks" : "routervpn-aes-xor") && wrapper["server"] as? String=="198.51.100.8" && json(selected)==frozen)
+       let localServer=ExternalNodeConfig.packetProtocols.contains(kind) ? (local["peers"] as? [[String:Any]])?.first?["address"] as? String : kind=="openvpn" ? (local["servers"] as? [[String:Any]])?.first?["server"] as? String : local["server"] as? String
+       try check("independent entry and exit layers retain owned routing",localServer=="10.99.0.1" && local["detour"] as? String=="routervpn-exit-start-layer" && wrapper["detour"] as? String=="external-entry")
+       try check("the exit layer retains its selected protocol and server",wrapper["type"] as? String==(exitLayer=="aes-256-gcm" ? "shadowsocks" : "routervpn-aes-xor") && wrapper["server"] as? String==physicalServer && json(selected)==frozen)
        if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
         let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-"+kind+"-exit-"+exitLayer+"-"+execution+".json")
         try Data(built.config.utf8).write(to:file,options:.withoutOverwriting)
@@ -795,7 +855,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   }}
   if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
   try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==456)
-  try check("every native Router entry and Start Layer has an external execution owner",executionGraphs==798 && externalLayerGraphs==126)
+  try check("every native Router entry and Start Layer has an external execution owner",executionGraphs==912 && externalLayerGraphs==144)
  }
 }
 '''
@@ -856,6 +916,7 @@ def main():
         command += ['-Xlinker', '-rpath', '-Xlinker', str(work), *map(str, sources), str(source), '-o', str(work / 'tests')]
         subprocess.run(command, check=True, timeout=180)
         environment = dict(os.environ)
+        environment['ROUTERVPN_OPENVPN_CLIENT_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-client.json')
         if args.output:
             environment['ROUTERVPN_IOS_TOR_GRAPHS'] = str(args.output.resolve())
         if args.entry_output:
@@ -865,7 +926,7 @@ def main():
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
         if args.output:
             inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 798, 'external_exit_layer_graphs': 126, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 

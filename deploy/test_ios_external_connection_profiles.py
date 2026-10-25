@@ -5,6 +5,7 @@ Private file storage, node lookup and the final import are deterministic
 boundaries. No VPN, credentials, network or device state is opened.
 """
 from pathlib import Path
+import os
 import platform
 import shutil
 import subprocess
@@ -212,21 +213,28 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
   try check("whole-profile load restores exact hostname lookup choices",model.selectedNodeProfile?.dnsBootstrap==bootstrap && model.selectedNodeProfile?.dnsHost==p.dnsHost)
  }
  static func externalExecutionPersistence()throws {
-  for kind in ["wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
+  for kind in ["wireguard","amneziawg","shadowsocks","hysteria2","socks5","http-connect","https-connect","openvpn"] { for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
    var p=profile(kind)
+   if kind=="openvpn" {
+    let fixture=try json(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!))),layers=fixture["layers"] as! [String:[String:Any]]
+    p.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:data(layers[layer]!["external"]!));p.startLayer=layer
+   }
    if ExternalNodeConfig.packetProtocols.contains(kind) { p.external?.serverPeer=try JSONDecoder().decode(ExternalServerPeer.self,from:data(["public_key":"bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=","addresses":["10.94.0.3/32","fd94::3/128"],"mtu":1360,"persistent_keepalive_interval":25])) }
-   if layer != "off" {
+   if layer != "off" && kind != "openvpn" {
     let raw:[String:Any] = ["mode":layer,"api":"http://10.99.0.1:8787","transport":["type":"shadowsocks","tag":"provisioned-exit-layer","server":"198.51.100.1","server_port":8388,"method":"2022-blake3-aes-256-gcm","password":Data(repeating:77,count:32).base64EncodedString()]]
     p.external?.startLayer=try JSONDecoder().decode(ExternalStartLayer.self,from:data(raw));p.startLayer=layer
    }
-   p.external?.responseProbe=ExternalResponseProbe(url:"https://198.51.100.1:9443/response",serverName:"paired.example.test")
+   if kind != "openvpn" {p.external?.responseProbe=ExternalResponseProbe(url:"https://198.51.100.1:9443/response",serverName:"paired.example.test")}
    p.multihopEnabled=true;p.multihopEntryID="entry";p.multihopEntryMode="max-tls-awg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution=execution
    let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Saved external execution")
    let record=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
    try check("snapshot retains exact Server/Compare choice and native entry",saved.preferences?.multihopExecution==execution && saved.preferences?.multihopEntryMode=="max-tls-awg")
    try check("connection record refers to node transport and response endpoint",!record.contains("paired.example.test") && !record.contains("NEVER_COPY_PASSWORD") && !record.contains("response_probe") && !record.contains("server_peer") && !record.contains("bBq3qZ0192YFNiixFZqNRUwTqYBvfydnB3GJrDJliAg=") && !record.contains(Data(repeating:77,count:32).base64EncodedString()) && !record.contains("10.99.0.1") && saved.preferences?.startLayer==layer)
+   if let pairing=p.external?.openVPNPairing {
+    try check("complete OpenVPN connection profile stores references without copied pairing or credentials",!record.contains(pairing.privateKey) && !record.contains(pairing.server.pairingPublicKey) && !record.contains("openvpn_pairing") && !record.contains(p.external!.openVPN!.config) && !record.contains(p.external!.openVPN!.password!))
+   }
    var current=bundle(p);current.routerProfiles[0].multihopExecution="local";current.routerProfiles[0].external?.shadowsocks?.password="replacement private credential"
-   current.routerProfiles[0].external?.responseProbe?.url="https://198.51.100.1:9443/new-response"
+   current.routerProfiles[0].external?.responseProbe?.url=kind=="openvpn" ? "https://203.0.113.20/new-response":"https://198.51.100.1:9443/new-response"
    IOSNodeBundleStore.shared.bundles[p.id]=try JSONEncoder().encode(current)
    model.bundle=bundle(profile("socks5","unrelated"));let original=try encoded(model.bundle!)
    model.failGraph=true
@@ -284,7 +292,7 @@ def main():
         code = work / 'Tests.swift';code.write_text(source + '\n' + policy + BOUNDARIES)
         binary = work / 'tests'
         subprocess.run(options + [str(APP / 'Models.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
-        subprocess.run([str(binary)], check=True, timeout=30)
+        subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json')), check=True, timeout=30)
 
 
 if __name__ == '__main__':

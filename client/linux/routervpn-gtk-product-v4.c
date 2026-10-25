@@ -255,7 +255,7 @@ static char *external_path_current_body_v4(JsonObject *captured,JsonNode *curren
     }
     if(message==NULL&&(!id[0]||matches!=1||g_strcmp0(external_path_string_v4(found,"node_kind"),"external")!=0))message="The external node changed while this dialog was open. Reopen its path settings.";
     JsonObject *before=external_path_object_v4(captured,"external"),*after=external_path_object_v4(found,"external");
-    const char *identity[]={"id","node_kind","endpoint","start_layer","multihop_entry_mode"},*transport[]={"protocol","expected_public_ip"},*flags[]={"has_response_probe","has_server_peer"};
+    const char *identity[]={"id","node_kind","endpoint","start_layer","multihop_entry_mode"},*transport[]={"protocol","expected_public_ip"},*flags[]={"has_response_probe","has_server_peer","has_openvpn_pairing"};
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(identity);i++)if(g_strcmp0(external_path_string_v4(captured,identity[i]),external_path_string_v4(found,identity[i]))!=0)message="The external node changed while this dialog was open. Reopen its path settings.";
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(transport);i++)if(g_strcmp0(external_path_string_v4(before,transport[i]),external_path_string_v4(after,transport[i]))!=0)message="The external transport changed while this dialog was open. Reopen its path settings.";
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(flags);i++)if(external_path_flag_v4(before,flags[i])!=external_path_flag_v4(after,flags[i]))message="The external provisioning changed while this dialog was open. Reopen its path settings.";
@@ -263,9 +263,10 @@ static char *external_path_current_body_v4(JsonObject *captured,JsonNode *curren
     if(message==NULL&&g_strcmp0(execution,"local")!=0){
         const char *protocol=external_path_string_v4(after,"protocol"),*kind=external_path_string_v4(entry,"node_kind");
         gboolean packet=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0;
-        if(!packet&&g_strcmp0(protocol,"shadowsocks")!=0&&g_strcmp0(protocol,"hysteria2")!=0&&g_strcmp0(protocol,"socks5")!=0&&g_strcmp0(protocol,"http-connect")!=0&&g_strcmp0(protocol,"https-connect")!=0)message="Server / Compare requires a supported authenticated external transport.";
+        if(!packet&&g_strcmp0(protocol,"shadowsocks")!=0&&g_strcmp0(protocol,"hysteria2")!=0&&g_strcmp0(protocol,"socks5")!=0&&g_strcmp0(protocol,"http-connect")!=0&&g_strcmp0(protocol,"https-connect")!=0&&g_strcmp0(protocol,"openvpn")!=0)message="Server / Compare requires a supported authenticated external transport.";
         else if(!external_path_flag_v4(after,"has_response_probe"))message="Server / Compare requires this external node's HTTPS response probe.";
         else if(packet&&!external_path_flag_v4(after,"has_server_peer"))message="WireGuard / AmneziaWG Server / Compare requires a separately provisioned server peer.";
+        else if(g_strcmp0(protocol,"openvpn")==0&&!external_path_flag_v4(after,"has_openvpn_pairing"))message="OpenVPN Server / Compare requires private pairing with independent provider credentials.";
         else if(direct||(kind[0]&&g_strcmp0(kind,"router-vpn")!=0))message="Server / Compare requires a Router VPN entry.";
     }
     if(message!=NULL){if(error!=NULL)*error=g_strdup(message);return NULL;}

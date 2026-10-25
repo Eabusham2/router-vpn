@@ -18,6 +18,24 @@ permissions:
   contents: read
 
 jobs:
+  kernel-mtu:
+    name: Actual native TUN MTU ownership and rollback
+    if: inputs.platform == 'all' || inputs.platform == 'linux' || inputs.platform == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Require actual isolated kernel TUN transaction
+        run: |
+          test -c /dev/net/tun
+          python3 deploy/test_desktop_mtu_kernel.py
+
   targets:
     runs-on: ubuntu-24.04
     outputs:

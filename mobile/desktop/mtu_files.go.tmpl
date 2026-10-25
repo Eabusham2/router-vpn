@@ -1,0 +1,145 @@
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"os"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type routerVPNDesktopMTUInput struct {
+	info   os.FileInfo
+	digest [32]byte
+}
+type routerVPNDesktopMTUFiles struct {
+	files                   *routerVPNExternalFiles
+	owner                   *routerVPNDesktopMTU
+	session, source, config string
+	inputs                  map[string]routerVPNDesktopMTUInput
+}
+
+func routerVPNMTUStrict(raw []byte, value any) bool {
+	if _, err := applexray.Object(raw); err != nil {
+		return false
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	return decoder.Decode(value) == nil
+}
+func (f *routerVPNDesktopMTUFiles) read(name string, value any) bool {
+	raw, err := f.files.read(name, 4096)
+	if err != nil || !routerVPNMTUStrict(raw, value) {
+		return false
+	}
+	current := f.owner.record()
+	var identityControl routerVPNDesktopMTUControl
+	switch request := value.(type) {
+	case *routerVPNDesktopMTURequest:
+		identityControl = routerVPNDesktopMTUControl{Schema: request.Schema, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: request.Generation, Request: request.Request}
+		if request.Generation != current.Generation+1 && (request.Generation != current.Generation || request.Request != current.Status.Request) {
+			return false
+		}
+	case *routerVPNDesktopMTUControl:
+		identityControl = *request
+		if request.Generation != current.Generation || request.Request != current.Status.Request {
+			return false
+		}
+	default:
+		return false
+	}
+	if !f.identity(identityControl) {
+		return false
+	}
+	info, err := f.files.root.Lstat(name)
+	if err != nil {
+		return false
+	}
+	again, err := f.files.read(name, 4096)
+	if err != nil || !bytes.Equal(raw, again) {
+		return false
+	}
+	identity := routerVPNDesktopMTUInput{info: info, digest: sha256.Sum256(raw)}
+	if old, exists := f.inputs[name]; exists && (!os.SameFile(old.info, info) || old.digest != identity.digest) {
+		return false
+	}
+	f.inputs[name] = identity
+	return true
+}
+func (f *routerVPNDesktopMTUFiles) identity(control routerVPNDesktopMTUControl) bool {
+	return control.Schema == 1 && control.Session == f.session && control.SourceSHA256 == f.source && control.ConfigSHA256 == f.config && routerVPNExternalSession.MatchString(control.Request) && control.Generation > 0
+}
+func (f *routerVPNDesktopMTUFiles) retire() error {
+	for name, owned := range f.inputs {
+		info, err := f.files.root.Lstat(name)
+		if errors.Is(err, os.ErrNotExist) {
+			delete(f.inputs, name)
+			continue
+		}
+		raw, readErr := f.files.read(name, 4096)
+		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
+			return routerVPNExternalFailure
+		}
+		if err := f.files.root.Remove(name); err != nil {
+			return routerVPNExternalFailure
+		}
+		delete(f.inputs, name)
+	}
+	return nil
+}
+
+func (f *routerVPNDesktopMTUFiles) tick() error {
+	if f.owner.owner.invalid.Load() {
+		return routerVPNExternalFailure
+	}
+	previous := f.owner.record()
+	var request routerVPNDesktopMTURequest
+	if !previous.Status.Running && f.read("mtu-request.json", &request) && f.identity(routerVPNDesktopMTUControl{Schema: request.Schema, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: request.Generation, Request: request.Request}) && request.Generation != previous.Generation {
+		if err := f.owner.start(request); err != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	var cancel routerVPNDesktopMTUControl
+	if f.read("mtu-cancel.json", &cancel) && f.identity(cancel) && cancel.PathKey == "" && cancel.MTU == 0 {
+		_ = f.owner.cancel(cancel)
+	}
+	var commit routerVPNDesktopMTUControl
+	if f.read("mtu-commit.json", &commit) && f.identity(commit) && commit.PathKey != "" {
+		_ = f.owner.commit(commit)
+	}
+	record := f.owner.record()
+	record.Schema, record.Session, record.SourceSHA256, record.ConfigSHA256 = 1, f.session, f.source, f.config
+	if record.Status.Complete && !record.Status.Running {
+		if !record.Status.Measured && !record.Status.Restored && record.Generation > 0 {
+			actual, err := f.owner.owner.Capture()
+			f.owner.mu.Lock()
+			original := f.owner.original
+			f.owner.mu.Unlock()
+			if err != nil || actual.Session != original.Session || actual.Path != original.Path || actual.MTU != original.MTU {
+				f.owner.owner.invalid.Store(true)
+				return routerVPNExternalFailure
+			}
+		}
+		if err := f.retire(); err != nil {
+			return err
+		}
+	}
+	return f.files.publish("mtu-status.json", record)
+}
+
+func routerVPNOpenDesktopMTU(files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
+	provider, ok := owner.(routerVPNExternalMTUProvider)
+	if !ok {
+		return nil, nil
+	} // Fixture owners do not pretend to own an OS TUN.
+	mtu, err := provider.DesktopMTU()
+	if err != nil {
+		_ = files.publish("mtu-status.json", routerVPNDesktopMTURecord{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config, Status: mobilemtu.Status{Phase: "unavailable", Complete: true, Source: "unavailable-native-interface", Failure: "The captured native interface could not be granted MTU measurement ownership", Candidates: []mobilemtu.Candidate{}}})
+		return nil, err
+	}
+	result := &routerVPNDesktopMTUFiles{files: files, owner: mtu, session: session, source: source, config: config, inputs: map[string]routerVPNDesktopMTUInput{}}
+	return result, result.tick()
+}

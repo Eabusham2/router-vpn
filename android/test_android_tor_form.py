@@ -421,6 +421,25 @@ public final class TorFormHarness {
    String current=otherStore.storedSnapshot(selected.id);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&current.equals(otherStore.storedSnapshot(selected.id)),"stale external editor overwrote another owner or resurrected deletion: "+change);form.dismiss();
   }
  }
+ static void openVPNExecutionForms()throws Exception{
+  JSONObject fixtures=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_OPENVPN_CLIENT_FIXTURE")))).getJSONObject("layers");String[] layers={"off","aes-256-gcm","aes-256-gcm+xor-whitening"};String hint="Private OpenVPN pairing JSON (optional for Local)";
+  for(int layer=0;layer<layers.length;layer++){
+   JSONObject external=fixtures.getJSONObject(layers[layer]).getJSONObject("external"),original=external.getJSONObject("openvpn");
+   Path directory=Files.createTempDirectory(root,"openvpn-pairing-form-");StandardExitActivity editor=activity(directory,null);AndroidStandardExitStore.Entry selected=ordinary("openvpn");selected.openVPNConfig=original.getString("config");selected.username=original.getString("username");selected.password=original.getString("password");selected.expectedPublicIp=external.getString("expected_public_ip");selected.policy=AndroidExternalPolicy.editorPolicy(null);store(editor).save(selected);String before=AndroidStandardExitStore.snapshot(selected);
+   invoke(editor,"showExternalPolicyForm",selected);AlertDialog form=AlertDialog.last;String pairing=external.getJSONObject("openvpn_pairing").toString();field(form,hint).setText(pairing);field(form,"This server's HTTPS response URL (required for Server / Compare both)").setText(external.getJSONObject("response_probe").getString("url"));field(form,"Response TLS server name (optional)").setText("provider.example");spinner(form,"Off").setSelection(layer);
+   if(layer!=0){JSONObject provision=external.getJSONObject("start_layer"),transport=provision.getJSONObject("transport");field(form,"Provisioned private service API URL").setText(provision.getString("api"));field(form,"Provisioned AES port").setText(transport.getString("server_port"));field(form,"Provisioned AES-256-GCM key").setText(transport.getString("password"));}
+   form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"OpenVPN private pairing form failed native validation: "+displayed(form.view));check(before.equals(AndroidStandardExitStore.snapshot(selected)),"OpenVPN editor aliased its input capture");selected=store(editor).get(selected.id);String saved=AndroidStandardExitStore.snapshot(selected);
+   check(selected.openVPNConfig.equals(original.getString("config"))&&selected.username.equals(original.getString("username"))&&selected.password.equals(original.getString("password"))&&same(selected.openVPNPairing.toString(),pairing),"OpenVPN form changed original source, credentials or private pairing");
+   invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;check(same(field(form,hint).getText().toString(),pairing),"OpenVPN pairing missing after reopening");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"OpenVPN private pairing settings did not roundtrip");
+   for(String invalid:new String[]{"null",pairing+" {}",pairing.substring(0,pairing.length()-1)+",\"unknown\":true}",pairing.substring(0,pairing.length()-1)+",\"private_key\":\""+external.getJSONObject("openvpn_pairing").getString("private_key")+"\"}"}){
+    invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;field(form,hint).setText(invalid);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"invalid raw OpenVPN pairing overwrote the private node");form.dismiss();
+   }
+   for(int execution=0;execution<3;execution++){
+    Path target=Files.createTempDirectory(root,"openvpn-pairing-permission-");StandardExitActivity picker=activity(target,null);AndroidNodeStore.Node entry=node(target);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);invoke(picker,"chooseExecution",entry,exit,"wg");AlertDialog menu=AlertDialog.last;check(menu.itemsVisible()&&menu.items.length==3,"OpenVPN Local/Server/Compare menu unavailable");menu.clickItem(execution);Bundle state=new Bundle();picker.onSaveInstanceState(state);StandardExitActivity restored=activity(target,state);restored.onActivityResult(2101,Activity.RESULT_OK,null);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(restored).standardExit;
+    check(runtime.starts==1&&runtime.execution.equals(new String[]{"local","server","auto"}[execution])&&same(runtime.exit.openVPNPairing.toString(),pairing)&&runtime.exit.openVPNConfig.equals(exit.openVPNConfig)&&runtime.exit.password.equals(exit.password),"OpenVPN permission restoration substituted private pairing, source, credentials or execution");
+   }
+  }
+ }
  static void ordinaryPolicies()throws Exception{
   int ordinaryRoundtrips=0;
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
@@ -449,7 +468,7 @@ public final class TorFormHarness {
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"ordinary-mode-");StandardExitActivity picker=activity(directory,null);AndroidNodeStore.Node owned=node(directory);AndroidStandardExitStore.Entry e=ordinary(kind);e.policy.put("dns_mode","rescue");store(picker).save(e);
    invoke(picker,"chooseEntry",e);AlertDialog.last.clickItem(0);AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"ordinary external mode picker omitted a captured entry");int index=-1;for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"ordinary entry mode unavailable: "+mode);modes.clickItem(index);
-   if(List.of("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http","https").contains(kind)){AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"external execution choices disappeared");execution.clickItem(0);}
+   if(List.of("wireguard","amneziawg","shadowsocks","hysteria2","socks5","http","https","openvpn").contains(kind)){AlertDialog execution=AlertDialog.last;check(execution.itemsVisible()&&Arrays.equals(execution.items,new String[]{"Local","Server","Compare both"}),"external execution choices disappeared");execution.clickItem(0);}
    picker.onActivityResult(2101,Activity.RESULT_OK,null);
    AndroidStandardExitRuntime run=AndroidRuntimeRegistry.get(picker).standardExit;check(run.starts==1&&run.mode.equals(mode)&&run.entry.equals(owned.file)&&run.exit.protocol.equals(kind),"ordinary permission handoff changed selected mode or exit");
   }
@@ -563,7 +582,7 @@ public final class TorFormHarness {
   java.lang.reflect.Method parse=AndroidStandardExitStore.class.getDeclaredMethod("fromJson",JSONObject.class);parse.setAccessible(true);JSONObject old=new JSONObject(AndroidStandardExitStore.snapshot(ordinary("socks5")));old.remove("startup_mode");old.remove("auto_connect");AndroidStandardExitStore.Entry legacy=(AndroidStandardExitStore.Entry)parse.invoke(null,old);check(legacy.startupMode.equals("smart-auto")&&!legacy.autoConnect,"legacy external node gained automatic startup");
   for(String kind:List.of("string-bool","null-bool","number-mode","unknown","manual-on")){JSONObject malformed=new JSONObject(old.toString());malformed.put("startup_mode",kind.equals("number-mode")?3:kind.equals("unknown")?"random":kind.equals("manual-on")?"manual":"auto");malformed.put("auto_connect",kind.equals("string-bool")?"true":kind.equals("null-bool")?JSONObject.NULL:true);boolean rejected=false;try{parse.invoke(null,malformed);}catch(Exception expected){rejected=true;}check(rejected,"invalid external startup metadata accepted: "+kind);}
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -577,6 +596,7 @@ def main():
         code = T.GO.replace('"router-vpn/internal/mobiletor"', '"router-vpn/internal/mobiletor";nativeopenvpn "router-vpn/mobile"', 1)
         code = code.replace('case "tor-profile":', '''case "external-openvpn":var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
  case "external-execution":var p struct{Config,Capture,Restored string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(p.Config,p.Capture,p.Restored)}
+ case "external-openvpn-pairing":err=nativeopenvpn.RouterValidateExternalOpenVPNPairing(r.Config,r.Policy)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
  case "external-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy)
@@ -613,6 +633,7 @@ def main():
  public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
+ public static void routerValidateExternalOpenVPNPairing(String profile,String pairing)throws Exception{call("external-openvpn-pairing",profile,pairing);}
  public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
  public static void routerValidateExternalTransport(String source,String capture)throws Exception{call("external-transport",source,capture);}public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}
  public static String routerPrepareExternalExecutionCapture(String config,String capture,String restored)throws Exception{return call("external-execution",new JSONObject().put("Config",config).put("Capture",capture).put("Restored",restored).toString(),"");}
@@ -637,7 +658,7 @@ def main():
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(work / "classes"), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
-        environment = dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native))
+        environment = dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'))
         subprocess.run(["java", "-cp", str(work / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, check=True, timeout=120)
         # Reintroduce each actual defect only in isolated compiled fixtures.
         # These controls establish that the Activity/Go checks fail for the

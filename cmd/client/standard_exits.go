@@ -178,7 +178,7 @@ func validateStandardExit(e *standardExit) error {
 		return errors.New("AmneziaWG parameters cannot be discarded by another protocol")
 	}
 	if e.Protocol == "openvpn" {
-		if err := normalizeOpenVPNStandardExit(e); err != nil {
+		if err := normalizeNativeOpenVPNStandardExit(e); err != nil {
 			return err
 		}
 	}
@@ -349,7 +349,8 @@ func standardExitRuntimeParts(e standardExit, detour string) (map[string]any, ma
 		return nil, nil, errors.New("standard exit requires a controlled upstream detour")
 	}
 	if e.Protocol == "openvpn" {
-		return nil, nil, errors.New("OpenVPN standard exits use the native OpenVPN adapter, not the sing-box graph")
+		endpoint, err := desktopOpenVPNEndpoint(e, detour)
+		return endpoint, nil, err
 	}
 	if e.Protocol == "amneziawg" {
 		endpoint, err := desktopAmneziaEndpoint(e, detour)

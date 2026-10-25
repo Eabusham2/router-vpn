@@ -69,6 +69,8 @@ func mtuRetestLockFor(a *app) *sync.Mutex {
 
 func registerMTURetestRoute(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/mtu/retest", a.retestMTU)
+	h.HandleFunc("/api/mtu/status", a.desktopMTUStatus)
+	h.HandleFunc("/api/mtu/cancel", a.cancelDesktopMTURoute)
 	registerDNSPolicyRoute(h, a)
 	registerHomeSummaryRoute(h, a)
 	registerProfileSettingsRoute(h, a)
@@ -92,6 +94,10 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer lock.Unlock()
+	if launch := desktopExternalMTULaunch(a); launch != nil {
+		a.retestDesktopExternalMTU(w, r, launch)
+		return
+	}
 
 	snapshot, err := captureMTURetestSnapshot(a)
 	if err != nil {

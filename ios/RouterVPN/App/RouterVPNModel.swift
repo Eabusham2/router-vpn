@@ -134,6 +134,7 @@ final class RouterVPNModel: ObservableObject {
         guard iosSpeedLabOwnership.admit(.profile) else { throw CancellationError() }
         multihopProgressGeneration = UUID(); multihopProgressText = ""
         guard data.count <= 32 * 1024 * 1024 else { throw URLError(.dataLengthExceedsMaximum) }
+        try IOSExternalExecution.validatePrivateNodeJSON(data)
         let decoded = try JSONDecoder().decode(ClientBundle.self, from: data)
         try IOSExternalExecution.validateImported(decoded)
         let prepared = try IOSDNSRuntimePolicy.patch(decoded)

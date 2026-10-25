@@ -50,6 +50,11 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 			packetClients[protocol+"/"+layer] = client
 		}
 	}
+	for _, layer := range externalLayers {
+		client, server, _ := externalOpenVPNPair(t, layer)
+		configurations = append(configurations, server)
+		packetClients["openvpn/"+layer] = client
+	}
 	for _, exit := range configurations {
 		cfg := config()
 		cfg.Exits = []Exit{exit}
@@ -70,12 +75,16 @@ func TestExportPinnedCoreRelayConfigurations(t *testing.T) {
 			if e != nil {
 				t.Fatal(e)
 			}
-			if ExternalPacketMode(exit.Mode) {
+			if exit.External != nil {
 				challenge, err := m.PacketChallenge(netip.MustParseAddr("10.77.0.2"))
 				if err != nil {
 					t.Fatal(err)
 				}
-				q, e = ChallengeExternalPacketRequest(packetClients[exit.Mode+"/"+q.ExitStartLayer], q, challenge)
+				owner := exit
+				if ExternalIndependentMode(exit.Mode) {
+					owner = packetClients[exit.Mode+"/"+q.ExitStartLayer]
+				}
+				q, e = ChallengeExternalRequest(owner, q, challenge)
 				if e != nil {
 					t.Fatal(e)
 				}

@@ -240,6 +240,13 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			t.Fatal(err)
 		}
 	}
+	if policy.capture.Protocol == "openvpn" {
+		ext := policy.capture.Profile["external"].(map[string]any)
+		exit, err = multihoprelay.PairExternalOpenVPN(policy.capture.ExitID, ext, externalOpenVPNServerProfile(t, ext), exit.StartLayer)
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
 	runner := &externalExecutionRunner{}
 	m, err := multihoprelay.New(multihoprelay.Config{ListenIP: "10.77.0.1", FirstPort: 26240, LastPort: 26271, TTLSeconds: 90, Exits: []multihoprelay.Exit{exit}}, policy.capture.Execution.Request.EntryNodeID, runner)
 	if err != nil {

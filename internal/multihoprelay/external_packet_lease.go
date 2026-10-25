@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// Packet challenges are issued only on an authenticated, entry-routed GET.
+// External challenges are issued only on an authenticated, entry-routed GET.
 // Peer is the actual caller observed by that entry, not a client-supplied IP.
 // Epoch changes at every Manager restart. A short-lived, signed attempt can
 // acquire once; its live lease alone may renew past the acquisition deadline.
@@ -20,6 +20,8 @@ type ExternalPacketChallenge struct {
 
 const packetAcquireLifetime = 60 * time.Second
 const maxPacketAttempts = 4096
+
+var ErrExternalUpgradeRequired = errors.New("external relay acquisition requires an authenticated challenge; upgrade the client and entry server")
 
 func (c ExternalPacketChallenge) Validate() error {
 	peer, err := netip.ParseAddr(c.Peer)
@@ -44,7 +46,7 @@ func (m *Manager) PacketChallenge(peer netip.Addr) (ExternalPacketChallenge, err
 
 func validatePacketRequestShape(q Request, allowPrepared bool) error {
 	empty := q.ExternalEpoch == "" && q.ExternalPeer == "" && q.ExternalExpiresAt == 0 && q.ExternalAttempt == ""
-	if !ExternalPacketMode(q.ExitMode) {
+	if !externalRequestRequiresChallenge(q) {
 		if !empty {
 			return ErrOwnership
 		}
@@ -53,17 +55,34 @@ func validatePacketRequestShape(q Request, allowPrepared bool) error {
 	if empty && allowPrepared {
 		return nil
 	}
+	if empty {
+		return ErrExternalUpgradeRequired
+	}
 	if !nonce.MatchString(q.ExternalAttempt) || q.ExternalFingerprint == "" {
 		return ErrOwnership
 	}
 	return (ExternalPacketChallenge{Epoch: q.ExternalEpoch, Peer: q.ExternalPeer, ExpiresAt: q.ExternalExpiresAt}).Validate()
 }
 
+func externalRequestRequiresChallenge(q Request) bool {
+	// Native Router exits share some protocol names with external exits. Their
+	// separately authenticated node requests must retain their existing shape.
+	return q.ExternalFingerprint != "" || ExternalIndependentMode(q.ExitMode)
+}
+
 // ChallengeExternalPacketRequest creates a fresh acquisition identity while
 // retaining the captured session, private peer, final listener and graph.
 // Compare's repeated winner proof must acquire a new attempt after trial close.
 func ChallengeExternalPacketRequest(exit Exit, q Request, challenge ExternalPacketChallenge) (Request, error) {
-	if !ExternalPacketMode(exit.Mode) || exit.External == nil || exit.External.Packet == nil || exit.External.Packet.Owner != "client" || challenge.Validate() != nil {
+	return ChallengeExternalRequest(exit, q, challenge)
+}
+
+// ChallengeExternalRequest preserves existing paired v1/v2 secrets and public
+// fingerprints while binding every new external acquisition to one entry
+// restart, observed peer, deadline and random attempt. Unsafe old unchallenged
+// requests are not a compatibility fallback.
+func ChallengeExternalRequest(exit Exit, q Request, challenge ExternalPacketChallenge) (Request, error) {
+	if !ExternalMode(exit.Mode) || exit.External == nil || ExternalIndependentMode(exit.Mode) && externalIndependentOwner(exit) != "client" || challenge.Validate() != nil {
 		return Request{}, ErrOwnership
 	}
 	// AuthenticateExternalRequest validates the complete immutable capture.
@@ -87,7 +106,7 @@ func (m *Manager) sweepPacketAttemptsLocked() {
 }
 
 func (m *Manager) validateNewPacketAttemptLocked(q Request) error {
-	if !ExternalPacketMode(q.ExitMode) {
+	if !externalRequestRequiresChallenge(q) {
 		return nil
 	}
 	now := m.now()
@@ -104,7 +123,7 @@ func (m *Manager) validateNewPacketAttemptLocked(q Request) error {
 }
 
 func (m *Manager) rememberPacketAttemptLocked(q Request) error {
-	if !ExternalPacketMode(q.ExitMode) {
+	if !externalRequestRequiresChallenge(q) {
 		return nil
 	}
 	m.sweepPacketAttemptsLocked()

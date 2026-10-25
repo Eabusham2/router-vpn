@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/mobilepq"
+	"router-vpn/internal/nativeopenvpn"
 	"strconv"
 	"strings"
 )
@@ -97,7 +98,14 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 			return nil, nil, err
 		}
 	}
-	inner, e := copyMap(transport)
+	var inner map[string]any
+	if mode == "openvpn" {
+		// Validate original bytes before JSON copying, and retain the original
+		// inline compiler's 256 KiB source / 512 KiB emitted endpoint bound.
+		inner, e = nativeopenvpn.ValidateEndpoint(transport)
+	} else {
+		inner, e = copyMap(transport)
+	}
 	if e != nil || len(inner) == 0 {
 		return nil, nil, bad
 	}
@@ -105,13 +113,16 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 	if !ok || !ident.MatchString(rawTag) || rawTag == tag {
 		return nil, nil, bad
 	}
-	checked, e := copyMap(inner)
+	checked := inner
+	if mode != "openvpn" {
+		checked, e = copyMap(inner)
+	}
 	if e != nil {
 		return nil, nil, bad
 	}
 	// Mobile packet endpoints explicitly say system=false. Validate that value
 	// rather than silently discarding a second-OS-interface request.
-	if value, exists := checked["system"]; exists {
+	if value, exists := checked["system"]; exists && mode != "openvpn" {
 		if value != false {
 			return nil, nil, bad
 		}
@@ -123,11 +134,21 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 		}
 		delete(checked, "listen_port")
 	}
-	if _, e = validateTransportForSelection(Exit{Mode: mode, NodeID: stringValue(checked["node_id"]), DNS: address.String(), Transport: checked}, allowHostname); e != nil {
+	if mode == "openvpn" {
+		// The entire original native endpoint was validated above.
+	} else {
+		_, e = validateTransportForSelection(Exit{Mode: mode, NodeID: stringValue(checked["node_id"]), DNS: address.String(), Transport: checked}, allowHostname)
+	}
+	if e != nil {
 		return nil, nil, bad
 	}
 	var host string
-	if PacketMode(mode) {
+	if mode == "openvpn" {
+		host, e = nativeopenvpn.SameRemoteHost(inner)
+		if e != nil {
+			return nil, nil, bad
+		}
+	} else if PacketMode(mode) {
 		host, _ = inner["peers"].([]any)[0].(map[string]any)["address"].(string)
 	} else if applexray.SingleTransportMode(mode) {
 		raw, _ := inner["config_json"].(string)
@@ -174,7 +195,15 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 			return nil, nil, bad
 		}
 	}
-	if PacketMode(mode) {
+	if mode == "openvpn" {
+		if remotes, exists := inner["servers"].([]any); exists {
+			for _, raw := range remotes {
+				raw.(map[string]any)["server"] = address.String()
+			}
+		} else {
+			inner["server"] = address.String()
+		}
+	} else if PacketMode(mode) {
 		inner["peers"].([]any)[0].(map[string]any)["address"] = address.String()
 		if mobilepq.IsMode(mode) {
 			pq := inner["pq"].(map[string]any)

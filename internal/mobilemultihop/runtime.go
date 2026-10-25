@@ -82,7 +82,7 @@ func (c *Controller) prove(ctx context.Context, tag, api, token, node string) (t
 func (c *Controller) leaseRequest(ctx context.Context, method string, body []byte) ([]byte, error) {
 	target, _ := url.Parse(c.meta.EntryAPI)
 	target.Path = "/api/multihop/lease"
-	if method == "GET" && c.external != nil && multihoprelay.ExternalPacketMode(c.meta.ExitMode) {
+	if method == "GET" && c.external != nil {
 		target.RawQuery = "external_packet=1"
 	}
 	data, _, e := c.exchangeBounded(ctx, c.meta.EntryTag, method, target.String(), c.meta.EntryToken, body, multihoprelay.LeaseResponseLimit(method))
@@ -144,15 +144,15 @@ func (c *Controller) acquire(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if c.external != nil && multihoprelay.ExternalPacketMode(c.meta.ExitMode) {
+	if c.external != nil {
 		if caps.PacketChallenge == nil {
-			return errors.New("packet relay requires its authenticated entry challenge")
+			return errors.New("external relay requires an authenticated entry challenge; upgrade the client and entry server")
 		}
 		paired, err := externalRelaySelection(c.external.capture)
 		if err != nil {
 			return err
 		}
-		proposal, err := multihoprelay.ChallengeExternalPacketRequest(paired, c.proposal, *caps.PacketChallenge)
+		proposal, err := multihoprelay.ChallengeExternalRequest(paired, c.proposal, *caps.PacketChallenge)
 		if err != nil {
 			return err
 		}

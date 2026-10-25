@@ -43,6 +43,7 @@ type speedLabRestorePlan struct {
 }
 
 type speedLabExternalRestore struct {
+	mtu         int
 	source      []byte
 	predecessor string
 	profile     common.RouterProfile
@@ -163,6 +164,9 @@ func compileSpeedLabExternalRestore(saved *speedLabExternalRestore, exit standar
 		return nil, err
 	}
 	launch.root, launch.external.network, launch.external.selection = saved.root, saved.network, saved.execution
+	if saved.mtu != 0 {
+		launch.external.mtu = &desktopMTUSession{restoreMTU: saved.mtu}
+	}
 	return launch, nil
 }
 
@@ -334,9 +338,17 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 			captured.mu.Lock()
 			plan.external = &speedLabExternalRestore{source: append([]byte(nil), captured.source...), predecessor: captured.predecessor, profile: cloneRouterProfile(captured.profile), entry: cloneRouterProfile(captured.entry), direct: captured.direct, execution: proof.Execution, root: launch.root, network: captured.network}
 			captured.mu.Unlock()
+			plan.external.mtu, err = captureDesktopMTURestore(launch)
+			if err != nil {
+				return plan, err
+			}
 			plan.request.EntryID, plan.request.Execution = "", plan.external.execution
+			plan.request.EntryMode = ""
 			if !plan.external.direct {
 				plan.request.EntryID = plan.external.entry.ID
+				if plan.external.entry.NodeKind == "" || plan.external.entry.NodeKind == "router-vpn" {
+					plan.request.EntryMode = plan.external.profile.MultihopEntryMode
+				}
 			}
 		} else if profile.MultihopExecution != "" && profile.MultihopExecution != "local" {
 			return plan, errors.New("previous external execution cannot be restored without its native proof receipt")

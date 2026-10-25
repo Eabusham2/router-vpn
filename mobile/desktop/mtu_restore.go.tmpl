@@ -1,0 +1,137 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+)
+
+type routerVPNDesktopMTUEngine struct {
+	owner *routerVPNDesktopMTUOwner
+	state mobilemtu.State
+}
+
+func (e *routerVPNDesktopMTUEngine) Identity() string {
+	current, err := e.owner.Capture()
+	if err != nil || current != e.state {
+		return ""
+	}
+	return fmt.Sprintf("%s:%s:%s:%d", current.Session, current.Path, current.Interface, current.MTU)
+}
+func (e *routerVPNDesktopMTUEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
+	if tag != "custom-exit" || e.Identity() == "" {
+		return nil, routerVPNExternalFailure
+	}
+	return e.owner.DialThroughTunnel(ctx, e.state, "tcp", address)
+}
+func (m *routerVPNDesktopMTU) restoreCaptured(ctx context.Context, request routerVPNDesktopMTURequest, before mobilemtu.State) {
+	defer func() {
+		m.mu.Lock()
+		if m.restoreCancel != nil {
+			m.restoreCancel()
+		}
+		m.restoreCancel = nil
+		m.mu.Unlock()
+	}()
+	current, err := m.owner.ChangeMTU(ctx, before, request.RestoreMTU)
+	status := mobilemtu.Status{Request: request.Request, Complete: true, OriginalMTU: before.MTU, EffectiveMTU: before.MTU, Phase: "failed", Source: "unmeasured", Candidates: []mobilemtu.Candidate{}}
+	if err == nil {
+		err = m.owner.VerifyExternal(ctx, current)
+	}
+	if err == nil {
+		var authority struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal([]byte(m.owner.lease.Authority()), &authority) != nil || authority.ID == "" {
+			err = routerVPNExternalFailure
+		} else {
+			result, measureErr := hopmeasure.MeasurePath(ctx, &routerVPNDesktopMTUEngine{owner: m.owner, state: current}, hopmeasure.Hop{ID: authority.ID, Role: "exit", Tag: "custom-exit", Kind: "public-path", Label: "Restored captured system TUN MTU"}, 256<<10)
+			if measureErr != nil || !result.Ready || result.Idle == nil || result.Download == nil || result.Upload == nil {
+				err = routerVPNExternalFailure
+			} else {
+				status.Candidates = []mobilemtu.Candidate{{MTU: request.RestoreMTU, Working: true, LatencyKind: "https-response", MedianRTT: result.Idle.Median, Download: result.Download, Upload: result.Upload}}
+			}
+		}
+	}
+	if err == nil {
+		err = m.owner.VerifyExternal(ctx, current)
+	}
+	if err == nil && ctx.Err() == nil {
+		status.Phase, status.Source, status.EffectiveMTU, status.Restored = "restored-captured-mtu", "restored-captured-system-tun", request.RestoreMTU, true
+	} else {
+		rollback, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		actual, captureErr := m.owner.Capture()
+		if captureErr == nil && actual.Session == before.Session && actual.Path == before.Path {
+			state, changeErr := m.owner.ChangeMTU(rollback, actual, before.MTU)
+			if changeErr == nil && state.MTU == before.MTU && m.owner.VerifyExternal(rollback, state) == nil {
+				status.Restored, status.Source, status.Phase = true, "restored-unmeasured", "restored"
+			}
+		}
+		cancel()
+		status.Failure = "Captured MTU restoration did not complete its fresh selected-path verification"
+		if !status.Restored {
+			status.EffectiveMTU = 0
+			m.owner.invalid.Store(true)
+		}
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.rolling, m.restoring = false, false
+	if m.closed || request.Request != m.request.Request {
+		return
+	}
+	if status.Restored {
+		_ = m.controller.Close()
+		fresh, err := m.recapture()
+		if err != nil {
+			m.owner.invalid.Store(true)
+			status.Restored, status.EffectiveMTU = false, 0
+			status.Failure = "Restored native MTU controller could not be recaptured"
+		} else {
+			m.controller = fresh
+		}
+	}
+	m.restored = &status
+}
+
+// Recreate only the optimizer's current readback config. The original source,
+// proof identity, keys, selector, lease and active Box remain immutable.
+func (m *routerVPNDesktopMTU) recapture() (*mobilemtu.Controller, error) {
+	state, err := m.owner.Capture()
+	if err != nil {
+		return nil, err
+	}
+	var graph struct {
+		Inbounds []struct {
+			Type string `json:"type"`
+			MTU  int    `json:"mtu"`
+		} `json:"inbounds"`
+	}
+	if json.Unmarshal([]byte(m.owner.lease.Config()), &graph) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	configured, count := 0, 0
+	for _, inbound := range graph.Inbounds {
+		if inbound.Type == "tun" {
+			configured = inbound.MTU
+			count++
+		}
+	}
+	if count != 1 {
+		return nil, routerVPNExternalFailure
+	}
+	plan, err := mobilemtu.NewPlan(m.owner.lease.Config(), configured)
+	if err != nil {
+		return nil, err
+	}
+	config, err := plan.Config(state.MTU)
+	if err != nil {
+		return nil, err
+	}
+	return mobilemtu.NewExternal(m.owner, config, m.owner.lease.Authority(), m.cache)
+}

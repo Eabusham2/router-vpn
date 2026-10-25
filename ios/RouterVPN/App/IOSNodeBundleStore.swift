@@ -49,6 +49,7 @@ final class IOSNodeBundleStore {
     func link(_ incomingData: Data, preserving current: ClientBundle?,
               prepare: (ClientBundle) throws -> ClientBundle) throws -> (bundle: ClientBundle, data: Data) {
         try ensureStorageReady()
+        try IOSExternalExecution.validatePrivateNodeJSON(incomingData)
         let incoming = try JSONDecoder().decode(ClientBundle.self, from: incomingData)
         return try store(incoming, replaceExistingRecord: true, preserving: current, prepare: prepare)
     }
@@ -144,11 +145,12 @@ final class IOSNodeBundleStore {
         expectedExternal: ExternalNodeConfig? = nil,
         responseProbe: ExternalResponseProbe? = nil,
         startLayerUpdate: ExternalStartLayerUpdate? = nil,
-        serverPeerUpdate: ExternalServerPeerUpdate? = nil
+        serverPeerUpdate: ExternalServerPeerUpdate? = nil,
+        openVPNPairingUpdate: ExternalOpenVPNPairingUpdate? = nil
     ) throws -> Data {
         try ensureStorageReady()
         let available = readableRecords(current: current)
-        guard (startLayerUpdate == nil && serverPeerUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
+        guard (startLayerUpdate == nil && serverPeerUpdate == nil && openVPNPairingUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
@@ -156,7 +158,7 @@ final class IOSNodeBundleStore {
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == wanted }) else { continue }
             if let expectedExternal {
                 guard bundle.routerProfiles[index].normalizedNodeKind == "external",
-                      expectedExternal.serverExecutionHost != nil,
+                      ExternalNodeConfig.serverExecutionProtocols.contains(expectedExternal.protocolName),
                       bundle.routerProfiles[index].external == expectedExternal else {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "The external node changed while its editor was open. Reopen Edit Node before saving."])
                 }
@@ -172,6 +174,14 @@ final class IOSNodeBundleStore {
                         throw NSError(domain: "RouterVPN.NodeStore", code: 8, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the separate server peer used by Server or Compare."])
                     }
                     bundle.routerProfiles[index].external?.serverPeer = serverPeerUpdate.peer
+                }
+                if let openVPNPairingUpdate {
+                    guard expectedExternal.protocolName == "openvpn" else { throw IOSExternalExecution.issue() }
+                    if openVPNPairingUpdate.pairing == nil, bundle.routerProfiles[index].multihopEnabled == true,
+                       ["server", "auto"].contains(bundle.routerProfiles[index].multihopExecution ?? "local") {
+                        throw NSError(domain: "RouterVPN.NodeStore", code: 8, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing OpenVPN pairing used by Server or Compare."])
+                    }
+                    bundle.routerProfiles[index].external?.openVPNPairing = openVPNPairingUpdate.pairing
                 }
                 if let startLayerUpdate {
                     guard (bundle.routerProfiles[index].startLayer ?? "off") == startLayerUpdate.expectedMode else {

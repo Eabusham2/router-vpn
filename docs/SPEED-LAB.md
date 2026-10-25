@@ -33,7 +33,10 @@ If Router VPN is disconnected, Current config measures the raw system Internet p
 
 ## Temporary config
 
-Desktop platforms and Android can create a temporary test-only path while Router VPN is disconnected. Depending on the platform's real dataplane, choices can include:
+Desktop, Android and iPhone/iPad can capture the original connection, pause it,
+and create a temporary test-only path. A disconnected starting state stays
+disconnected after restoration. Depending on the platform's real dataplane,
+choices include:
 
 - system direct;
 - one Router VPN node;
@@ -46,15 +49,56 @@ Desktop platforms and Android can create a temporary test-only path while Router
 - CUSTOM required layers;
 - DAITA-like, Jumbo and AUTO encrypted/obfuscation requirements where that dataplane supports them.
 
-Temporary tests are transactions, not profile edits. The path is built and proved, measurement runs, the path is torn down, and the previous disconnected setup is restored. Temporary Speed Lab suppresses durable ranking/startup/usage side effects. Persistence/cleanup failures are surfaced instead of being described as a successful restore.
+Temporary tests are transactions, not profile edits. The exact original
+session and private configuration are captured before suspension. The test
+path is built and proved, measurement runs, test traffic drains, and the owned
+temporary path is torn down. The original runtime is then restored with fresh
+proof while its captured owner remains current. A user's Disconnect keeps the
+application disconnected; a newer connection or profile choice takes priority
+over restoration. An already-proved Local/Server execution is restored directly
+without rerunning Compare both.
+
+Temporary Speed Lab suppresses durable ranking/startup/usage side effects.
+Persistence, cleanup and reproof failures are surfaced instead of being
+described as a successful restore. Cancel joins the owned traffic and cleanup
+before the transaction completes.
 
 The desktop controller also restores the previous private profile store before measurement so the test-only selection cannot become the user's saved selection.
+
+### Desktop path choices
+
+Windows, macOS and Linux load the entry-mode and execution catalogs from the
+controller. For a Router VPN entry to an external exit, the form retains the
+saved raw entry mode and offers Local, Server and Compare both. Server/Compare
+requires the exit's valid pairing and response-proof configuration. A direct
+external path or an ordinary external entry uses its supported Local execution;
+a Router entry mode is not attached to either path. Router VPN multihop has its
+own execution selector.
+
+A saved node, entry mode or execution that is no longer valid remains visibly
+unavailable and cannot silently select another route. Current path and System
+direct requests omit unrelated entry/exit and execution fields. Cancel or
+closing the window cancels that window's owned request; stale completions cannot
+update a replacement window or start another connection.
+
+Native external paths capture the live effective MTU before a temporary test.
+Auto-MTU is held while Speed Lab owns the path, and the captured value is
+restored and re-proved with the original execution. A historical saved MTU is
+not substituted for that live readback.
 
 ### iPhone/iPad
 
 iOS/iPadOS has a native Speed Lab for the actual PacketTunnel path plus supported temporary system-direct, Router VPN and external paths. It also has a private recovery journal so interrupted temporary tests can restore persistent state on next launch.
 
-The unpublished iOS two-hop candidate adds **Saved multihop graph** as a temporary topology. Choose an exit with a graph saved in Multihop: raw WireGuard entry → Router VPN Shadowsocks/Hysteria2 exit. The runner requires the real `multihop-libbox` session and both-node proof, then retains the existing measurement, teardown and persistent-state recovery sequence. An ordinary one-node test rejects a graph-enabled node rather than silently measuring extra hops. End-to-end measurement does not imply independent iOS per-hop measurements; those remain unfinished. Native/device certification for this candidate is pending; see `docs/IOS.md`.
+**Saved multihop graph** tests the saved entry mode, exit and execution choice,
+including supported external and Tor exits. The runner uses the same
+`multihop-libbox` or `external-libbox` PacketTunnel as the normal connection,
+and requires its node, DNS and exit/circuit proof before measuring. An ordinary
+one-node test rejects a graph-enabled node rather than silently measuring extra
+hops. Restoration retains the exact captured native runtime and already-proved
+execution choice. The separately exposed routed-hop measurement action is
+described below. Native build, physical-device networking and off-LAN acceptance
+remain separate requirements; see `docs/IOS.md`.
 
 ## Auto/default and custom time
 

@@ -28,7 +28,7 @@ $Expected=@{jc='3';jmin='40';jmax='900';s1='56';s2='48';s3='24';s4='32';h1='1000
 $Private=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('p'*32)))
 $Peer=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('q'*32)))
 $Fields=@{}
-foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive')){
+foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing')){
     $Fields[$Name]=[pscustomobject]@{Text='';Password=''}
 }
 $Fields.ExtStartLayer=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='off'}}
@@ -120,9 +120,28 @@ foreach($Packet in @('wireguard','amneziawg')){foreach($Layer in @('off','aes-25
 }}
 foreach($Pair in @(@('ExtServerPeerPublic',''),@('ExtServerPeerPublic','invalid'),@('ExtServerPeerAddresses',''),@('ExtServerPeerMTU',''),@('ExtServerPeerMTU','1279'),@('ExtServerPeerMTU','9001'),@('ExtServerPeerMTU','bad'),@('ExtServerPeerKeepalive','-1'),@('ExtServerPeerKeepalive','65536'))){$Old=$Fields[$Pair[0]].Text;$Fields[$Pair[0]].Text=$Pair[1];$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Incomplete or invalid server descriptor reached controller.';$Fields[$Pair[0]].Text=$Old;$Count++}
 $Protocol.SelectedItem.Tag='shadowsocks';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Proxy accepted packet-only server descriptor.';$Count++
-foreach($Name in @('ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive')){$Fields[$Name].Text=''}
+foreach($Name in @('ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing')){$Fields[$Name].Text=''}
 $Fields.ExtStartLayer.SelectedItem.Tag='off';$Fields.ExtLayerAPI.Text='';$Fields.ExtLayerPort.Text='';$Fields.ExtLayerKey.Password=''
 $Protocol.SelectedItem.Tag='shadowsocks';$Fields.ExtResponseURL.Text='';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Partial response endpoint reached controller.';$Count++
+$OpenVPNFixtures=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'deploy/fixtures/external-openvpn-client.json')|ConvertFrom-Json
+foreach($Layer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
+    $External=$OpenVPNFixtures.layers.$Layer.external;$Original=$External.openvpn
+    $Protocol.SelectedItem.Tag='openvpn';$Fields.ExtServer.Text='203.0.113.20';$Fields.ExtExpected.Text=$External.expected_public_ip
+    $Fields.ExtOpenVPNConfig.Text=$Original.config;$Fields.ExtOpenVPNPairing.Text=$External.openvpn_pairing|ConvertTo-Json -Depth 32
+    $Fields.ExtUser.Text=$Original.username;$Fields.ExtPassword.Password=$Original.password
+    $Fields.ExtResponseURL.Text=$External.response_probe.url;$Fields.ExtResponseName.Text=$External.response_probe.server_name;$Fields.ExtStartLayer.SelectedItem.Tag=$Layer
+    $Fields.ExtLayerAPI.Text='';$Fields.ExtLayerPort.Text='';$Fields.ExtLayerKey.Password=''
+    if($Layer -cne 'off'){$Fields.ExtLayerAPI.Text=$External.start_layer.api;$Fields.ExtLayerPort.Text=[string]$External.start_layer.transport.server_port;$Fields.ExtLayerKey.Password=$External.start_layer.transport.password}
+    $script:Saved=$null;& $Save;Check ($null -ne $Saved) ('OpenVPN form rejected: '+$Status.Text)
+    Check ($Saved.openvpn.config -ceq $Original.config -and $Saved.openvpn.username -ceq $Original.username -and $Saved.openvpn.password -ceq $Original.password -and $Saved.openvpn_pairing_json -ceq $Fields.ExtOpenVPNPairing.Text) 'OpenVPN source or raw private pairing changed.'
+    if($Output){[IO.File]::WriteAllText((Join-Path $Output ('openvpn-'+$Layer+'.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+}
+$Fields.ExtOpenVPNPairing.Text='';$Fields.ExtOpenVPNConfig.Text+="remote 203.0.113.21 443 tcp`n";$Fields.ExtResponseURL.Text='';$Fields.ExtResponseName.Text='';$Fields.ExtStartLayer.SelectedItem.Tag='off';$Fields.ExtLayerAPI.Text='';$Fields.ExtLayerPort.Text='';$Fields.ExtLayerKey.Password=''
+$script:Saved=$null;& $Save;Check ($null -ne $Saved -and -not $Saved.ContainsKey('openvpn_pairing_json')) 'Plain Local multiremote incorrectly requires pairing.'
+if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-local-multiremote.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$Protocol.SelectedItem.Tag='shadowsocks';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Changing protocol discarded private OpenVPN source.';$Count++
+$Fields.ExtOpenVPNConfig.Text='';$Protocol.SelectedItem.Tag='openvpn';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Empty OpenVPN source reached controller.';$Count++
+$Protocol.SelectedItem.Tag='shadowsocks'
 $Profile=[pscustomobject]@{id='captured-exit';node_kind='external';multihop_execution='local'}
 foreach($Choice in @('local','server','auto')){
     $Profile.multihop_execution=$Choice
@@ -152,12 +171,14 @@ $Dialog=[pscustomobject]@{Tag=$null;Closed=0};$Dialog|Add-Member ScriptMethod Cl
 $ErrorText=[pscustomobject]@{Text=''};$RequireEntry=$false;$HasProbe=$true
 # Deliberately unrelated Router controls must never supply this request.
 $MultihopEntryCombo=[pscustomobject]@{SelectedValue='unrelated-router'};$script:UnifiedExecution='unrelated-execution'
-foreach($ProtocolID in @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect')){
+$Captured.external|Add-Member NoteProperty has_openvpn_pairing $false -Force
+foreach($ProtocolID in @('wireguard','amneziawg','shadowsocks','hysteria2','socks5','http-connect','https-connect','openvpn')){
     foreach($Choice in @('local','server','auto')){
-        $Captured.external.protocol=$ProtocolID;$Execution.SelectedItem.Tag=$Choice;$Dialog.Tag=$null;& $ConfirmPath
+        $Captured.external.protocol=$ProtocolID;$Captured.external.has_openvpn_pairing=$ProtocolID -ceq 'openvpn';$Execution.SelectedItem.Tag=$Choice;$Dialog.Tag=$null;& $ConfirmPath
         Check ($null -ne $Dialog.Tag -and $Dialog.Tag.profile_id -ceq 'captured-exit' -and $Dialog.Tag.entry_id -ceq 'captured-entry' -and $Dialog.Tag.execution -ceq $Choice) ('Actual path callback changed the captured route: '+$ErrorText.Text);$Count++
     }
 }
+$Fresh=$Captured|ConvertTo-Json -Depth 6|ConvertFrom-Json;$Fresh.external.has_openvpn_pairing=$false;$script:CurrentPathCatalog=@($Fresh,$Choices[1],$Choices[2]);$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Stale OpenVPN pairing eligibility reached controller.';$Count++;$script:CurrentPathCatalog=$null;$Captured.external.has_openvpn_pairing=$false
 $Execution.SelectedItem.Tag='server';$Captured.external.has_response_probe=$false;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback accepted a missing probe.';$Count++
 $Captured.external.has_response_probe=$true;$Entry.SelectedValue='external-entry';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback used an ordinary external Server entry.';$Count++
 $Entry.SelectedValue='captured-entry';$Captured.external.protocol='wireguard';$Captured.external.has_server_peer=$false;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Packet Server accepted a missing independent peer.';$Count++;$Captured.external.has_server_peer=$true
@@ -172,7 +193,7 @@ foreach($Changed in @('removed','duplicate','protocol','peer','probe','entry')){
     if($Changed -eq 'entry'){$script:CurrentPathCatalog=@($Fresh,$Choices[2])}
     $Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) ('Stale path identity accepted: '+$Changed);$Count++
 };$script:CurrentPathCatalog=$null
-$Entry.SelectedValue='captured-entry';$Captured.external.protocol='openvpn';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback exposed an unimplemented Server protocol.';$Count++
+$Entry.SelectedValue='captured-entry';$Captured.external.protocol='openvpn';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback accepted missing independent OpenVPN pairing.';$Count++
 $Captured.external.protocol='shadowsocks';$script:Connected=$true;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback ignored a changed VPN owner.';$Count++
 $script:Connected=$false;$Entry.SelectedValue='';$Execution.SelectedItem.Tag='local';$RequireEntry=$true;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Via-entry action silently became Direct.';$Count++
 $RequireEntry=$false;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -ne $Dialog.Tag -and $Dialog.Tag.direct -and $Dialog.Tag.execution -ceq 'local' -and -not $Dialog.Tag.ContainsKey('entry_id')) 'Direct callback did not clear the previous entry/execution.';$Count++

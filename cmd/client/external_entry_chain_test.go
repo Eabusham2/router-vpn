@@ -1,7 +1,6 @@
 package main
 
 import (
-	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
@@ -28,33 +27,62 @@ func TestExternalEntryChainsToEverySingBoxStandardExit(t *testing.T) {
 				exit := validTestStandardExit(exitProtocol)
 				exit.ID = "exit-test"
 				cfg, err := buildExternalEntryStandardExitConfig(control, entry, exit)
-				if err != nil { t.Fatal(err) }
-				if cfg["route"].(map[string]any)["final"] != "custom-exit" { t.Fatalf("unexpected final route: %#v", cfg["route"]) }
+				if err != nil {
+					t.Fatal(err)
+				}
+				if cfg["route"].(map[string]any)["final"] != "custom-exit" {
+					t.Fatalf("unexpected final route: %#v", cfg["route"])
+				}
 				endpoints := cfg["endpoints"].([]any)
 				outbounds := cfg["outbounds"].([]any)
 				entryItem := taggedRuntimeItem(endpoints, "external-entry")
-				if entryItem == nil { entryItem = taggedRuntimeItem(outbounds, "external-entry") }
-				if entryItem == nil { t.Fatalf("external entry tag missing: endpoints=%#v outbounds=%#v", endpoints, outbounds) }
+				if entryItem == nil {
+					entryItem = taggedRuntimeItem(outbounds, "external-entry")
+				}
+				if entryItem == nil {
+					t.Fatalf("external entry tag missing: endpoints=%#v outbounds=%#v", endpoints, outbounds)
+				}
 				if entryProtocol == "http-connect" || entryProtocol == "https-connect" {
-					if entryItem["type"] != "http" { t.Fatalf("%s entry is not HTTP CONNECT: %#v", entryProtocol, entryItem) }
+					if entryItem["type"] != "http" {
+						t.Fatalf("%s entry is not HTTP CONNECT: %#v", entryProtocol, entryItem)
+					}
 					_, hasTLS := entryItem["tls"]
-					if entryProtocol == "https-connect" && !hasTLS { t.Fatalf("HTTPS entry lost TLS/SNI: %#v", entryItem) }
-					if entryProtocol == "http-connect" && hasTLS { t.Fatalf("plain HTTP entry gained TLS: %#v", entryItem) }
+					if entryProtocol == "https-connect" && !hasTLS {
+						t.Fatalf("HTTPS entry lost TLS/SNI: %#v", entryItem)
+					}
+					if entryProtocol == "http-connect" && hasTLS {
+						t.Fatalf("plain HTTP entry gained TLS: %#v", entryItem)
+					}
 				}
 				exitItem := taggedRuntimeItem(endpoints, "custom-exit")
-				if exitItem == nil { exitItem = taggedRuntimeItem(outbounds, "custom-exit") }
-				if exitItem == nil || exitItem["detour"] != "external-entry" { t.Fatalf("final exit does not detour through external entry: %#v", exitItem) }
+				if exitItem == nil {
+					exitItem = taggedRuntimeItem(outbounds, "custom-exit")
+				}
+				if exitItem == nil || exitItem["detour"] != "external-entry" {
+					t.Fatalf("final exit does not detour through external entry: %#v", exitItem)
+				}
 				dns := cfg["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)
-				if dns["detour"] != "custom-exit" { t.Fatalf("DNS escaped final external exit: %#v", dns) }
+				if dns["detour"] != "custom-exit" {
+					t.Fatalf("DNS escaped final external exit: %#v", dns)
+				}
 			})
 		}
 	}
 }
 
-func TestExternalOpenVPNEntryFailsClosed(t *testing.T) {
+func TestExternalOpenVPNEntryOwnsOnlyItsNativeDialer(t *testing.T) {
 	entry := validTestStandardExit("openvpn")
-	if _, _, _, err := externalEntryGraph(entry); err == nil || !strings.Contains(err.Error(), "not yet as an upstream hop") {
-		t.Fatalf("external OpenVPN entry must fail closed, got %v", err)
+	endpoints, outbounds, tag, err := externalEntryGraph(entry)
+	if err != nil || len(endpoints) != 1 || len(outbounds) != 0 || tag != "external-entry" {
+		t.Fatal("native OpenVPN entry missing", err)
+	}
+	endpoint := endpoints[0].(map[string]any)
+	if endpoint["type"] != "openvpn-client" || endpoint["system"] != false || endpoint["tag"] != tag {
+		t.Fatal("OpenVPN entry acquired an independent OS tunnel")
+	}
+	entry.OpenVPNConfig += "script-security 2\n"
+	if _, _, _, err := externalEntryGraph(entry); err == nil {
+		t.Fatal("OpenVPN entry bypassed strict source validation")
 	}
 }
 
@@ -63,14 +91,22 @@ func TestOpenVPNBridgeCanUseExternalStandardEntries(t *testing.T) {
 		t.Run(protocol, func(t *testing.T) {
 			entry := validTestStandardExit(protocol)
 			cfg, err := externalEntryBridgeConfig(entry, openVPNEntrySOCKSPort)
-			if err != nil { t.Fatal(err) }
+			if err != nil {
+				t.Fatal(err)
+			}
 			inbounds := cfg["inbounds"].([]any)
-			if len(inbounds) != 1 || inbounds[0].(map[string]any)["listen"] != "127.0.0.1" { t.Fatalf("bridge is not loopback-only: %#v", inbounds) }
+			if len(inbounds) != 1 || inbounds[0].(map[string]any)["listen"] != "127.0.0.1" {
+				t.Fatalf("bridge is not loopback-only: %#v", inbounds)
+			}
 			final, _ := cfg["route"].(map[string]any)["final"].(string)
-			if final != "external-entry" && final != "external-entry-egress" { t.Fatalf("unexpected bridge final: %q", final) }
+			if final != "external-entry" && final != "external-entry-egress" {
+				t.Fatalf("unexpected bridge final: %q", final)
+			}
 			if final == "external-entry-egress" {
 				out := taggedRuntimeItem(cfg["outbounds"].([]any), final)
-				if out == nil || out["detour"] != "external-entry" { t.Fatalf("WireGuard bridge does not detour through entry endpoint: %#v", out) }
+				if out == nil || out["detour"] != "external-entry" {
+					t.Fatalf("WireGuard bridge does not detour through entry endpoint: %#v", out)
+				}
 			}
 		})
 	}

@@ -9,8 +9,6 @@ import (
 	"runtime"
 	"strings"
 	"time"
-
-	"router-vpn/internal/common"
 )
 
 func registerSpeedLabRoutes(h *http.ServeMux, a *app) {
@@ -25,7 +23,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	selectedID := a.profiles.SelectedID
 	st := a.state
 	a.mu.Unlock()
@@ -44,13 +42,22 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		if kind == "external" && strings.EqualFold(strings.TrimSpace(protocol), "tor-bridge") {
 			endpoint = ""
 		}
-		nodes = append(nodes, map[string]any{
+		node := map[string]any{
 			"id": p.ID, "name": p.Name, "node_kind": kind, "external_protocol": protocol,
 			"endpoint": endpoint, "location": p.Location, "base_tunnel": p.BaseTunnel,
 			"latitude": p.Latitude, "longitude": p.Longitude,
 			"latency_median_ms": p.LatencyMedianMs, "latency_trimmed_mean_ms": p.LatencyTrimmedMeanMs,
-			"selected": p.ID == selectedID,
-		})
+			"selected":         p.ID == selectedID,
+			"multihop_enabled": p.MultihopEnabled, "multihop_exit_id": p.MultihopExitID,
+			"multihop_entry_id": p.MultihopEntryID, "multihop_entry_mode": p.MultihopEntryMode,
+			"multihop_execution": p.MultihopExecution,
+		}
+		if p.External != nil {
+			node["has_response_probe"] = p.External.ResponseProbe != nil
+			node["has_server_peer"] = p.External.ServerPeer != nil
+			node["has_openvpn_pairing"] = p.External.OpenVPNPairing != nil
+		}
+		nodes = append(nodes, node)
 	}
 
 	logical := a.logicalStatuses()
@@ -84,13 +91,17 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":            true,
-		"name":          "Router VPN Speed Lab",
-		"provider":      "Cloudflare Speed Test edge",
-		"current":       current,
-		"nodes":         nodes,
-		"logical_modes": logicalModes,
-		"raw_modes":     rawModes,
+		"ok":                     true,
+		"name":                   "Router VPN Speed Lab",
+		"provider":               "Cloudflare Speed Test edge",
+		"current":                current,
+		"nodes":                  nodes,
+		"logical_modes":          logicalModes,
+		"raw_modes":              rawModes,
+		"router_vpn_entry_modes": a.externalRouterEntryModes(),
+		"execution_choices": []map[string]string{
+			{"id": "local", "name": "Local"}, {"id": "server", "name": "Server"}, {"id": "auto", "name": "Compare both"},
+		},
 		"topologies": []map[string]any{
 			{"id": "system-direct", "name": "System direct / no Router VPN", "temporary": true},
 			{"id": "router", "name": "Direct Router VPN node", "temporary": true},
@@ -339,6 +350,12 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishMeasurement()
+	releaseMTU, err := a.holdDesktopMTUForMeasurement(r.Context())
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	defer releaseMTU()
 	var path speedLabPath
 	var measurement speedLabMeasurement
 	var hops []speedLabHopMeasurement

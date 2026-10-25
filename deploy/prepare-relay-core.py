@@ -30,10 +30,16 @@ pq_spec.loader.exec_module(PQ)
 composite_spec = importlib.util.spec_from_file_location('relay_composite', ROOT/'deploy/prepare-mobile-composite.py')
 COMPOSITE = importlib.util.module_from_spec(composite_spec)
 composite_spec.loader.exec_module(COMPOSITE)
+openvpn_spec = importlib.util.spec_from_file_location('relay_openvpn_close', ROOT/'deploy/mobile_openvpn_close_policy.py')
+OPENVPN_CLOSE = importlib.util.module_from_spec(openvpn_spec)
+openvpn_spec.loader.exec_module(OPENVPN_CLOSE)
+strategy_spec = importlib.util.spec_from_file_location('relay_native_strategy', ROOT/'deploy/prepare-mobile-strategy.py')
+STRATEGY = importlib.util.module_from_spec(strategy_spec)
+strategy_spec.loader.exec_module(STRATEGY)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 def inputs():
-    files = [Path(__file__).resolve()] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs()
+    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl'] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + STRATEGY.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
 
@@ -81,6 +87,8 @@ def prepare_native(vendor, xray):
     XRAY.prepare(vendor, xray)
     PQ.prepare(vendor)
     COMPOSITE.prepare(vendor)
+    OPENVPN_CLOSE.prepare(vendor)
+    STRATEGY.prepare(vendor, mobile=False)
     subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
     subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
     license = xray/'LICENSE'

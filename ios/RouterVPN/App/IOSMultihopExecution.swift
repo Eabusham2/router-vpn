@@ -50,8 +50,13 @@ enum IOSMultihopExecution {
                       configuration["tor_entry_mode"] == nil,
                       configuration["external_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
                       ["server", "auto"].contains(exitProfile["multihop_execution"] as? String ?? ""),
-                      ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect"].contains(exitMode), let selected = exitProfile["external"] as? [String: Any],
+                      ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(exitMode), let selected = exitProfile["external"] as? [String: Any],
                       selected["protocol"] as? String == exitMode, selected["response_probe"] is [String: Any] else { throw issue() }
+                if exitMode == "openvpn" {
+                    guard let pairing = selected["openvpn_pairing"] as? [String: Any],
+                          Set(pairing.keys) == ["private_key", "server"], pairing["private_key"] is String,
+                          pairing["server"] is [String: Any] else { throw issue() }
+                }
                 if ["wireguard", "amneziawg"].contains(exitMode) {
                     guard let peer = selected["server_peer"] as? [String: Any],
                           Set(["public_key", "addresses", "mtu"]).isSubset(of: Set(peer.keys)),

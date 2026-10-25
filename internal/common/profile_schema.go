@@ -104,7 +104,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.TorBridge != nil { blocks++ }
 	if ext.Protocol == "tor" {
 		if blocks != 0 { return fmt.Errorf("plain Tor cannot contain another protocol or bridge block") }
-		if ext.ResponseProbe != nil || ext.StartLayer != nil || ext.ServerPeer != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint, packet server peer or proxy Start Layer") }
+		if ext.ResponseProbe != nil || ext.StartLayer != nil || ext.ServerPeer != nil || ext.OpenVPNPairing != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint, server pairing or proxy Start Layer") }
 		return nil
 	}
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
@@ -128,8 +128,8 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		if err := normalizeExternalAmnezia(ext.AmneziaWG, ext.ExpectedPublicIP); err != nil { return err }
 	case "openvpn":
 		if ext.OpenVPN == nil || ext.WireGuard != nil || ext.Shadowsocks != nil || ext.SOCKS5 != nil || !noHTTP || ext.Hysteria2 != nil { return fmt.Errorf("external openvpn node requires only the openvpn block") }
-		o := ext.OpenVPN; o.Config = strings.TrimSpace(o.Config); o.Username = strings.TrimSpace(o.Username)
-		if o.Config == "" { return fmt.Errorf("external openvpn config is empty") }
+		o := ext.OpenVPN
+		if strings.TrimSpace(o.Config) == "" { return fmt.Errorf("external openvpn config is empty") }
 		if len(o.Config) > 256*1024 { return fmt.Errorf("external openvpn config exceeds 256 KiB") }
 		if strings.IndexByte(o.Config, 0) >= 0 { return fmt.Errorf("external openvpn config contains NUL") }
 		if (o.Username == "") != (o.Password == "") { return fmt.Errorf("external openvpn username/password must be supplied together") }
@@ -160,9 +160,12 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 		return fmt.Errorf("unsupported external protocol %q", ext.Protocol)
 	}
 	if err := validateExternalServerPeer(ext); err != nil { return err }
+	if err := validateExternalOpenVPNPairing(ext); err != nil { return err }
 	if ext.ResponseProbe != nil {
 		if !externalExecutionProtocol(ext.Protocol) { return fmt.Errorf("node response probe requires a supported external execution protocol") }
-		if err := ValidateExternalResponseProbe(externalNodeEndpoint(ext), ext.ResponseProbe); err != nil { return err }
+		host := externalNodeEndpoint(ext)
+		if ext.Protocol == "openvpn" { var err error; host, err = externalOpenVPNProofHost(ext); if err != nil { return err } }
+		if err := ValidateExternalResponseProbe(host, ext.ResponseProbe); err != nil { return err }
 	}
 	return nil
 }
@@ -186,6 +189,7 @@ func externalNodeEndpoint(ext *ExternalNodeConfig) string {
 	case "hysteria2":
 		if ext.Hysteria2 != nil { return strings.TrimSpace(ext.Hysteria2.Server) }
 	case "openvpn":
+		if host := externalOpenVPNFirstHost(ext); host != "" { return host }
 		if ext.OpenVPN != nil { for _, line := range strings.Split(ext.OpenVPN.Config, "\n") { fields := strings.Fields(strings.TrimSpace(line)); if len(fields) >= 2 && strings.EqualFold(fields[0], "remote") { return strings.Trim(fields[1], "[]") } } }
 	case "tor-bridge":
 		if ext.TorBridge != nil { if host, err := normalizeExternalTorBridge(ext.TorBridge); err == nil { return host } }

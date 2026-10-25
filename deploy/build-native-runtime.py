@@ -18,6 +18,7 @@ import shlex
 import shutil
 import struct
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,13 +53,40 @@ WINDOWS_SYSTEM_DLLS = frozenset((
     'ole32.dll', 'secur32.dll', 'shell32.dll', 'shlwapi.dll', 'user32.dll',
     'userenv.dll', 'winhttp.dll', 'winmm.dll', 'ws2_32.dll',
 ))
+MAX_BUILD_DIAGNOSTIC = 64*1024
 
 
 def run(command, *, cwd=None, env=None, timeout=1800):
     # Cargo/Go metadata is UTF-8 even on Windows. Keep stdout binary until the
     # child is joined; a locale reader thread must not discard its output.
-    output = subprocess.check_output([str(arg) for arg in command], cwd=cwd, env=env,
-                                     timeout=timeout).decode('utf-8')
+    try:
+        completed = subprocess.run([str(arg) for arg in command], cwd=cwd, env=env,
+                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                   timeout=timeout, check=True)
+    except subprocess.CalledProcessError as error:
+        # A native test failure must expose its actual diagnostic, not only
+        # check_output's traceback. Retain both stream tails within one bound;
+        # leave the exception's code, argv and full captured bytes untouched.
+        stdout, stderr = error.stdout or b'', error.stderr or b''
+        def diagnostic_tail(raw, limit):
+            # Replacement characters must not expand malformed bytes beyond
+            # the logging bound, or split a retained UTF-8 character.
+            encoded = raw[-limit:].decode('utf-8', errors='replace').encode('utf-8')
+            return encoded[-limit:].decode('utf-8', errors='ignore')
+        stderr_tail = diagnostic_tail(stderr, MAX_BUILD_DIAGNOSTIC//2 if stdout else MAX_BUILD_DIAGNOSTIC)
+        stdout_tail = diagnostic_tail(stdout, MAX_BUILD_DIAGNOSTIC-len(stderr_tail.encode('utf-8'))) if stdout else ''
+        for name, value in (('stdout', stdout_tail), ('stderr', stderr_tail)):
+            if value:
+                sys.stderr.write('Native build failure '+name+' (bounded tail):\n')
+                sys.stderr.write(value+'\n')
+        sys.stderr.flush()
+        raise
+    # Successful metadata must remain stdout-only: a Cargo/Go warning must
+    # never be concatenated into JSON or version text consumed by the builder.
+    if completed.stderr:
+        sys.stderr.write(completed.stderr.decode('utf-8', errors='replace'))
+        sys.stderr.flush()
+    output = completed.stdout.decode('utf-8')
     return output.replace('\r\n', '\n').replace('\r', '\n').strip()
 
 
@@ -422,8 +450,11 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
             # These execute the actual command owner and Box proof factory.
             # Run before installing the executable-only Cronet loader, whose
             # sealed adjacent library belongs to the final package location.
-            run(['go', 'test', '-mod=readonly', '-tags='+','.join(tags(target)),
-                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPNDesktopExternal',
+            # The pinned Go toolchain supports race on all shipped native
+            # desktop hosts except Windows ARM64 (internal/platform/supported.go).
+            race = [] if target == 'windows/arm64' else ['-race']
+            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPNDesktop(External|MTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
         ldflags = '-s -w -buildid= -checklinkname=0 -X github.com/sagernet/sing-box/constant.Version='+marker(policy)
         if library_name(target):

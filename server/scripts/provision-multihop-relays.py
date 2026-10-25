@@ -407,7 +407,7 @@ def pair(bundle, alias, selected=None, server_peer_profile=None):
     if isinstance(profile, dict) and profile.get('node_kind') == 'external':
         return pair_external(profile, alias, server_peer_profile)
     if server_peer_profile is not None:
-        raise ValueError('A separate server peer profile belongs only to an external WG/AWG pairing')
+        raise ValueError('A separate server peer profile belongs only to an external WG/AWG/OpenVPN pairing')
     if not isinstance(profile, dict) or profile.get('node_kind', 'router-vpn') != 'router-vpn':
         raise ValueError('select one Router VPN exit bundle profile')
     node = profile.get('node_proof_id') or bundle.get('nodeProofId')
@@ -565,6 +565,28 @@ def pair_external_packet(profile, alias, server_peer_profile):
     # before atomic publication. No input profile or new client key is persisted.
     return [paired]
 
+def pair_external_openvpn(profile, alias, server_peer_profile):
+    """Compile independent owned TLS/provider identities through the native parser."""
+    bad = ValueError('External OpenVPN pairing requires its independent private provider profile and dedicated pairing key')
+    ext = profile.get('external')
+    if not isinstance(server_peer_profile, dict) or not isinstance(ext, dict) or profile.get('node_proof_id') or profile.get('router_api') or profile.get('api_token'):
+        raise bad
+    payload = json.dumps(dict(alias=alias, external=ext, server_peer_profile=server_peer_profile,
+                              selected_layer=profile.get('start_layer', 'off')), allow_nan=False).encode('utf-8')
+    if len(payload) > 2 << 20: raise bad
+    try:
+        result = subprocess.run(['/usr/local/bin/router-vpn-agent', 'compile-external-openvpn-pair'],
+                                input=payload, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+                                check=True, timeout=20)
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, OSError):
+        raise bad from None
+    if not result.stdout or len(result.stdout) > (2 << 20) + 1: raise bad
+    paired = decode(result.stdout)
+    if not isinstance(paired, dict) or paired.get('id') != alias or paired.get('mode') != 'openvpn' or paired.get('node_id') != '' or paired.get('dns_server') != '': raise bad
+    external = paired.get('external')
+    if not isinstance(external, dict) or not isinstance(external.get('openvpn'), dict) or external['openvpn'].get('owner') != 'server': raise bad
+    return [paired]
+
 def pair_external(profile, alias, server_peer_profile=None):
     """Privately pair native exit credentials and the exact selected layer."""
     ext = profile.get('external')
@@ -573,9 +595,10 @@ def pair_external(profile, alias, server_peer_profile=None):
     protocol = ext.get('protocol')
     if protocol in ('wireguard', 'amneziawg'):
         return pair_external_packet(profile, alias, server_peer_profile)
+    if protocol == 'openvpn':
+        return pair_external_openvpn(profile, alias, server_peer_profile)
     if server_peer_profile is not None: raise bad
     if protocol not in ('shadowsocks', 'hysteria2', 'socks5', 'http-connect', 'https-connect'):
-        # OpenVPN session identities need a separately authenticated pairing.
         raise bad
     block = protocol.replace('-', '_')
     if set(ext) - {'protocol', 'expected_public_ip', block, 'response_probe', 'start_layer'} or not {'protocol', 'expected_public_ip', block, 'response_probe'} <= set(ext):
@@ -629,13 +652,13 @@ def main():
     parser.add_argument('--bundle', type=Path, required=True)
     parser.add_argument('--exit-id', required=True, help='ID used for this exit in client profiles')
     parser.add_argument('--bundle-profile')
-    parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG server peer JSON; never a client bundle')
+    parser.add_argument('--server-peer-profile', type=Path, help='separate private WG/AWG/OpenVPN server peer JSON; never a client bundle')
     parser.add_argument('--agent-config', type=Path, default=Path('/etc/router-vpn/router-agent.json'))
     parser.add_argument('--registry', type=Path, default=Path('/etc/router-vpn/multihop-relays.json'))
     parser.add_argument('--listen-ip', required=True, help='entry tunnel IP used by clients for the Router API')
     args = parser.parse_args()
     read, write, _ = helpers()
-    server_peer = decode(read(args.server_peer_profile, 256 << 10)) if args.server_peer_profile is not None else None
+    server_peer = decode(read(args.server_peer_profile, 512 << 10)) if args.server_peer_profile is not None else None
     entries = pair(decode(read(args.bundle, 32 << 20)), args.exit_id, args.bundle_profile, server_peer)
     agent = decode(read(args.agent_config, 1 << 20))
     listen = ipaddress.ip_address(literal(args.listen_ip))

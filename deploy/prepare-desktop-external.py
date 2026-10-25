@@ -27,14 +27,15 @@ EXTERNAL = load('prepare-mobile-external-policy')
 MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 RELAY = load('prepare-relay-core')
+DESKTOP_MTU = load('prepare-desktop-mtu')
 SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtuprobe')))
-PURE = ('common', 'mobiletor', 'awgpolicy')
+PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 
 
 def inputs():
     files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
-             ROOT/'mobile/desktop/external.go.tmpl', ROOT/'mobile/desktop/external_test.go.tmpl']
+             ROOT/'deploy/prepare-desktop-mtu.py', *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
     for package in (*PURE, 'dnsmeasure'):
         files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
@@ -83,10 +84,12 @@ def prepare(vendor):
         write(vendor, 'routervpn_tor'+('_test' if name.endswith('_test.go') else '')+'.go',
               (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes())
     MTU.prepare(vendor, mobile=False)
+    DESKTOP_MTU.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
     EXTERNAL.prepare(vendor, mobile=False)
-    for name in ('external.go', 'external_test.go'):
-        write(vendor, 'cmd/sing-box/routervpn_'+name, (ROOT/'mobile/desktop'/(name+'.tmpl')).read_bytes())
+    templates = [ROOT/'mobile/desktop/external.go.tmpl', ROOT/'mobile/desktop/external_test.go.tmpl', *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
+    for template in templates:
+        write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
     print('Desktop native external proof source:', digest())
 
 

@@ -21,6 +21,7 @@ import (
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilepq"
 	"router-vpn/internal/nativecomposite"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 var ident = regexp.MustCompile(`^[A-Za-z0-9_.-]{1,128}$`)
@@ -127,14 +128,14 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	}
 	seen := map[string]bool{}
 	for _, e := range c.Exits {
-		if ExternalPacketMode(e.Mode) && e.External == nil {
+		if ExternalIndependentMode(e.Mode) && e.External == nil {
 			return nil, errors.New("external packet mode requires its explicit paired identity")
 		}
 		if !ident.MatchString(e.ID) || (e.External == nil && (!proofID.MatchString(e.NodeID) || e.NodeID == node)) || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
 			return nil, errors.New("relay exits require distinct paired identities and unique modes")
 		}
 		if e.External != nil {
-			if ExternalPacketMode(e.Mode) && (e.External.Packet == nil || e.External.Packet.Owner != "server") {
+			if ExternalIndependentMode(e.Mode) && externalIndependentOwner(e) != "server" {
 				return nil, errors.New("private packet registry requires only its separately provisioned server credential owner")
 			}
 			if _, err := ExternalFingerprint(e); err != nil {
@@ -213,7 +214,7 @@ func (m *Manager) validate(peer netip.Addr, q Request) error {
 	if err := validatePacketRequestShape(q, false); err != nil {
 		return err
 	}
-	if ExternalPacketMode(q.ExitMode) && (q.ExternalEpoch != m.packetEpoch || q.ExternalPeer != PeerKey(peer)) {
+	if externalRequestRequiresChallenge(q) && (q.ExternalEpoch != m.packetEpoch || q.ExternalPeer != PeerKey(peer)) {
 		return ErrOwnership
 	}
 	if (q.ExternalFingerprint == "") != (q.ExternalAuthentication == "") || q.ExternalFingerprint != "" && (!proofID.MatchString(q.ExternalFingerprint) || !proofID.MatchString(q.ExternalAuthentication)) {
@@ -287,6 +288,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		return Lease{}, err
 	}
 	if err := m.validateNewPacketAttemptLocked(q); err != nil {
+		return Lease{}, err
+	}
+	if err := m.validateOpenVPNConcurrentOwnerLocked(*exit); err != nil {
 		return Lease{}, err
 	}
 	if PacketMode(exit.Mode) || CompleteMAXMode(exit.Mode) {
@@ -402,7 +406,7 @@ func (m *Manager) Delete(ctx context.Context, peer netip.Addr, q Request) error 
 	key := PeerKey(peer)
 	s := m.leases[key]
 	if s == nil {
-		if ExternalPacketMode(q.ExitMode) {
+		if externalRequestRequiresChallenge(q) {
 			var paired *Exit
 			for i := range m.cfg.Exits {
 				e := &m.cfg.Exits[i]
@@ -550,6 +554,17 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 		}
 		return copyMap(e.Transport)
 	}
+	if e.Mode == "openvpn" {
+		if _, exists := e.Transport["detour"]; exists {
+			return nil, errExternalOpenVPN
+		}
+		p, err := nativeopenvpn.ValidateEndpoint(e.Transport)
+		if err != nil {
+			return nil, errExternalOpenVPN
+		}
+		p["tag"] = "exit"
+		return p, nil
+	}
 	// Validate before JSON copying: encoding/json normalizes invalid UTF-8,
 	// which would silently change an authentication credential.
 	if NaiveMode(e.Mode) {
@@ -682,7 +697,7 @@ func validPort(v any) bool {
 }
 func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 	if exit.External != nil {
-		if ExternalPacketMode(exit.Mode) && (exit.External.Packet == nil || exit.External.Packet.Owner != "server") {
+		if ExternalIndependentMode(exit.Mode) && externalIndependentOwner(exit) != "server" {
 			return nil, errors.New("external packet relay cannot run the client's local credentials")
 		}
 		if err := ValidateExternalRequest(exit, lease.Request); err != nil {
@@ -737,7 +752,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 			return nil, err
 		}
 		config["outbounds"] = append([]any{owner}, children...)
-	} else if PacketMode(exit.Mode) {
+	} else if PacketMode(exit.Mode) || exit.Mode == "openvpn" {
 		config["endpoints"] = []any{transport}
 		config["outbounds"] = []any{}
 	} else {
@@ -748,7 +763,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if PacketMode(exit.Mode) {
+		if PacketMode(exit.Mode) || exit.Mode == "openvpn" {
 			config["endpoints"] = []any{inner}
 			config["outbounds"] = []any{outer}
 		} else {

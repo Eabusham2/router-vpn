@@ -96,7 +96,7 @@ def darwin_apply(*, spawn_watch: bool = True) -> int:
         return 0
 
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    endpoint_ips = _linux.resolve_literal_endpoint(endpoint)
+    endpoint_ips = _linux.captured_endpoint_ips(endpoint)
     lan = bool(control_profile.get("home_lan_access", False))
     _stop_watcher(previous)
     extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run())
@@ -197,6 +197,7 @@ def darwin_reassert() -> int:
     os.environ["HOMEVPN_PROFILE_ID"] = runtime_id
     os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
     os.environ["HOMEVPN_ENDPOINT"] = str(state.get("endpoint") or "")
+    os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
     return darwin_apply(spawn_watch=False)
 
 

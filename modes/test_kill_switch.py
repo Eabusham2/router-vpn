@@ -21,6 +21,50 @@ with mock.patch('socket.getaddrinfo', return_value=[]) as resolver:
     assert resolver.call_count == 0, 'strict endpoint validation leaked pre-tunnel DNS'
 
 
+# Only an owned native physical path can supply additional literal remotes. No
+# invalid list may trigger a lookup or partially widen the firewall exception.
+native_env = {
+    'HOMEVPN_STANDARD_ENGINE': 'native',
+    'HOMEVPN_EXTERNAL_SESSION': 'a' * 32,
+    'HOMEVPN_NATIVE_ENDPOINTS_JSON': '["203.0.113.7","198.51.100.20","2001:db8::7"]',
+}
+with mock.patch.dict(os.environ, native_env), mock.patch('socket.getaddrinfo') as resolver:
+    captured = mod.captured_endpoint_ips('203.0.113.7')
+    assert [str(ip) for ip in captured] == ['203.0.113.7', '198.51.100.20', '2001:db8::7']
+    rules = mod.render_rules(captured, False, False)
+    assert 'ip daddr { 203.0.113.7, 198.51.100.20 } accept' in rules
+    assert 'ip6 daddr { 2001:db8::7 } accept' in rules
+    assert 'policy drop' in rules and '192.168.0.0/16' not in rules
+    invalid = ['null', '{}', '[]', '"203.0.113.7"', '["198.51.100.20"]',
+               '["203.0.113.7","203.0.113.7"]', '["203.0.113.7",null]',
+               '["203.0.113.7",7]', '["203.0.113.7",["198.51.100.20"]]',
+               json.dumps(['203.0.113.7'] * 17)]
+    invalid += [json.dumps(['203.0.113.7', value]) for value in (
+        'vpn.example.test', '198.51.100.20/24', ' 198.51.100.20', '127.0.0.1',
+        '0.0.0.0', '255.255.255.255', '224.0.0.1', '169.254.1.2', '::', '::1',
+        'ff02::1', 'fe80::1', 'fe80::1%eth0', '::ffff:198.51.100.20', '2001:DB8::7')]
+    for raw in invalid:
+        with mock.patch.dict(os.environ, {'HOMEVPN_NATIVE_ENDPOINTS_JSON': raw}):
+            try:
+                mod.captured_endpoint_ips('203.0.113.7')
+            except RuntimeError:
+                pass
+            else:
+                raise AssertionError('unsafe native remote list was accepted: ' + raw)
+    for overrides in ({'HOMEVPN_STANDARD_ENGINE': 'openvpn'},
+                      {'HOMEVPN_EXTERNAL_SESSION': ''},
+                      {'HOMEVPN_EXTERNAL_SESSION': 'A' * 32},
+                      {'HOMEVPN_NATIVE_ENDPOINTS_JSON': ' ' * 1025}):
+        with mock.patch.dict(os.environ, overrides):
+            try:
+                mod.captured_endpoint_ips('203.0.113.7')
+            except RuntimeError as exc:
+                assert 'captured external session' in str(exc), str(exc)
+            else:
+                raise AssertionError('unowned native endpoint exceptions were accepted')
+    resolver.assert_not_called()
+
+
 def write_private_json(path, value):
     path.write_text(json.dumps(value)+'\n')
     os.chmod(path,0o600)
@@ -41,6 +85,37 @@ with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-') as td:
     p=subprocess.run([sys.executable,str(SCRIPT),'apply'],env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr
     state=json.loads((root/'run'/'kill-switch.json').read_text());assert state['policy']=='on-connect' and state['endpoint_ips']==['203.0.113.7'] and state['policy_profile_id']=='node'
     p=subprocess.run([sys.executable,str(SCRIPT),'release'],env=env,text=True,capture_output=True);assert p.returncode==0,p.stderr;assert not (root/'run'/'kill-switch.json').exists()
+
+# Execute both shipping Unix dispatchers with their normal persisted state. The
+# dry-run boundary omits privileged nft/PF installation, not path validation.
+for darwin in (False, True):
+    with tempfile.TemporaryDirectory(prefix='router-vpn-native-remotes-') as td:
+        root=pathlib.Path(td);(root/'run').mkdir()
+        write_private_json(root/'routers.json', {'selected_id':'node','profiles':[
+            {'id':'node','endpoint':'203.0.113.7','kill_switch_policy':'always','home_lan_access':False}]})
+        env=os.environ.copy();env.update(native_env)
+        env.update({'HOMEVPN_ROOT':str(root),'HOMEVPN_PROFILE_ID':'node',
+            'HOMEVPN_ENDPOINT':'203.0.113.7','HOMEVPN_KILLSWITCH_DRY_RUN':'1',
+            'HOMEVPN_KILLSWITCH_DARWIN_TEST':'1' if darwin else '0',
+            'HOMEVPN_KILLSWITCH_DARWIN_UTUNS':'', 'HOMEVPN_KILLSWITCH_DARWIN_PHYSICAL_INTERFACES':'en0'})
+        script=SCRIPT.with_name('kill-switch-platform.py') if darwin else SCRIPT
+        p=subprocess.run([sys.executable,str(script),'apply'],env=env,text=True,capture_output=True)
+        assert p.returncode==0,p.stderr
+        state_path=root/'run'/'kill-switch.json'
+        state=json.loads(state_path.read_text())
+        assert state['endpoint_ips']==['203.0.113.7','198.51.100.20','2001:db8::7'],state
+        assert state['home_lan_access'] is False
+        # An independently reasserted policy cannot inherit a former session's
+        # environment authority, even when its session token is well formed.
+        p=subprocess.run([sys.executable,str(script),'reassert'],env=env,text=True,capture_output=True)
+        assert p.returncode==0,p.stderr
+        state=json.loads(state_path.read_text())
+        assert state['endpoint_ips']==['203.0.113.7'],state
+        previous=state_path.read_bytes()
+        env['HOMEVPN_NATIVE_ENDPOINTS_JSON']='["203.0.113.7","vpn.example.test"]'
+        p=subprocess.run([sys.executable,str(script),'apply'],env=env,text=True,capture_output=True)
+        assert p.returncode!=0 and 'captured literal physical remotes' in p.stderr,p.stderr
+        assert state_path.read_bytes()==previous,'rejected remote list changed active firewall state'
 
 with tempfile.TemporaryDirectory(prefix='router-vpn-killswitch-hostname-') as td:
     root=pathlib.Path(td);(root/'run').mkdir();write_private_json(root/'routers.json',{'selected_id':'node','profiles':[{'id':'node','endpoint':'example.com','kill_switch_policy':'on-connect'}]})

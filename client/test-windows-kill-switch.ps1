@@ -2,6 +2,12 @@ $ErrorActionPreference = 'Stop'
 $script = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-killswitch-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
+$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON')
+$originalNative = @{}
+foreach ($name in $nativeNames) {
+  $originalNative[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
+  Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue
+}
 try {
   $plan = (& $script -Action plan -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -TunnelAlias 'router-vpn' -StateRoot $temp | ConvertFrom-Json)
   if ($plan.policy -ne 'on-connect') { throw 'plan did not retain on-connect policy' }
@@ -12,6 +18,69 @@ try {
 
   $lanPlan = (& $script -Action plan -Endpoint '2001:db8::7' -Policy 'always' -HomeLANAccess 'true' -TunnelAlias 'router-vpn-max' -StateRoot $temp | ConvertFrom-Json)
   if (-not $lanPlan.home_lan_access -or $lanPlan.policy -ne 'always') { throw 'LAN/always plan is wrong' }
+
+  $env:HOMEVPN_STANDARD_ENGINE = 'native'
+  $env:HOMEVPN_EXTERNAL_SESSION = ('a' * 32)
+  $validEndpoints = '["203.0.113.7","198.51.100.20","2001:db8::7"]'
+  $env:HOMEVPN_NATIVE_ENDPOINTS_JSON = $validEndpoints
+  $nativePlan = (& $script -Action plan -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -TunnelAlias 'router-vpn' -StateRoot $temp | ConvertFrom-Json)
+  if (($nativePlan.endpoint_ips -join ',') -cne '203.0.113.7,198.51.100.20,2001:db8::7') { throw 'native plan lost captured physical failover remotes' }
+  if ($nativePlan.default_outbound -ne 'Block' -or $nativePlan.home_lan_access) { throw 'native remote list changed kill-switch or LAN policy' }
+
+  # Exercise the shipping rule builder, doubling only the Windows firewall
+  # cmdlets. This also runs under PowerShell 5.1 in the native Windows gate.
+  $tokens=$null; $parseErrors=$null
+  $tree=[Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$parseErrors)
+  if ($parseErrors.Count) { throw 'Windows kill-switch parse failed' }
+  foreach ($functionName in @('Remove-Rules','Add-Rule','Install-AllowRules')) {
+    $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
+    if (-not $definition) { throw "Missing shipping function $functionName" }
+    Invoke-Expression $definition.Extent.Text
+  }
+  $script:capturedRules = @()
+  function Get-NetFirewallRule { param($Group,$ErrorAction) }
+  function Remove-NetFirewallRule { param($ErrorAction) }
+  function New-NetFirewallRule {
+    param($DisplayName,$Group,$Direction,$Action,$Profile,$RemoteAddress,$Protocol,$LocalPort,$RemotePort,$IcmpType,$InterfaceAlias)
+    $script:capturedRules += @{} + $PSBoundParameters
+  }
+  $RuleGroup='Router VPN test'; $RulePrefix='Router VPN test '
+  Install-AllowRules $nativePlan
+  $nodeRule=@($script:capturedRules | Where-Object { $_.DisplayName -eq 'Router VPN test selected node' })
+  if ($nodeRule.Count -ne 1 -or ($nodeRule[0].RemoteAddress -join ',') -cne '203.0.113.7,198.51.100.20,2001:db8::7') { throw 'firewall cmdlet did not receive exactly the captured physical remotes' }
+  if (@($script:capturedRules | Where-Object { $_.RemoteAddress -contains 'LocalSubnet' }).Count) { throw 'native path unexpectedly opened the LAN' }
+  foreach ($rule in $script:capturedRules) {
+    if ($rule.Direction -ne 'Outbound' -or $rule.Action -ne 'Allow') { throw 'native path created an unexpected firewall rule' }
+  }
+
+  $badLists=@('null','{}','[]','"203.0.113.7"','["198.51.100.20"]',
+    '["203.0.113.7","203.0.113.7"]','["203.0.113.7",null]',
+    '["203.0.113.7",7]','["203.0.113.7",["198.51.100.20"]]')
+  $badLists += '[' + ((@('"203.0.113.7"') * 17) -join ',') + ']'
+  foreach ($address in @('vpn.example.test','198.51.100.20/24',' 198.51.100.20',
+    '127.0.0.1','0.0.0.0','255.255.255.255','224.0.0.1','169.254.1.2',
+    '::','::1','ff02::1','fe80::1','fe80::1%3','::ffff:198.51.100.20','2001:DB8::7')) {
+    $badLists += '["203.0.113.7","' + $address + '"]'
+  }
+  foreach ($raw in $badLists) {
+    $env:HOMEVPN_NATIVE_ENDPOINTS_JSON=$raw
+    $rejected=$false
+    try { & $script -Action plan -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -StateRoot $temp | Out-Null } catch { $rejected=$true }
+    if (-not $rejected) { throw "Unsafe native physical list was accepted: $raw" }
+  }
+  foreach ($badOwner in @('engine','missing','uppercase','oversized')) {
+    $env:HOMEVPN_STANDARD_ENGINE='native'; $env:HOMEVPN_EXTERNAL_SESSION=('a' * 32); $env:HOMEVPN_NATIVE_ENDPOINTS_JSON=$validEndpoints
+    switch ($badOwner) {
+      'engine' { $env:HOMEVPN_STANDARD_ENGINE='openvpn' }
+      'missing' { Remove-Item Env:HOMEVPN_EXTERNAL_SESSION }
+      'uppercase' { $env:HOMEVPN_EXTERNAL_SESSION=('A' * 32) }
+      'oversized' { $env:HOMEVPN_NATIVE_ENDPOINTS_JSON=(' ' * 1025) }
+    }
+    $rejected=$false
+    try { & $script -Action plan -Endpoint '203.0.113.7' -Policy 'on-connect' -HomeLANAccess 'false' -StateRoot $temp | Out-Null } catch { $rejected=$true }
+    if (-not $rejected) { throw "Unowned native physical list was accepted: $badOwner" }
+  }
+  foreach ($name in $nativeNames) { Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue }
 
   $caught = $null
   try {
@@ -62,5 +131,9 @@ try {
 
   Write-Host 'Windows kill-switch plan/rollback/private-state contract: OK'
 } finally {
+  foreach ($name in $nativeNames) {
+    if ($null -eq $originalNative[$name]) { Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue }
+    else { [Environment]::SetEnvironmentVariable($name,$originalNative[$name],'Process') }
+  }
   Remove-Item -LiteralPath $temp -Recurse -Force -ErrorAction SilentlyContinue
 }

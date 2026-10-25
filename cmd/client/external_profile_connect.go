@@ -36,18 +36,22 @@ func registerExternalProfileRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/external-profile/capabilities", a.externalProfileCapabilities)
 }
 
-func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
-		return
-	}
-	w.Header().Set("content-type", "application/json")
+func (a *app) externalRouterEntryModes() []map[string]string {
 	entryModes := []map[string]string{}
 	for _, mode := range a.modes {
 		if mobilemultihop.NodeProfileMode(mode.ID) {
 			entryModes = append(entryModes, map[string]string{"id": mode.ID, "name": mode.Name})
 		}
 	}
+	return entryModes
+}
+
+func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request) {
+	if r.Method != http.MethodGet {
+		http.Error(w, "GET only", http.StatusMethodNotAllowed)
+		return
+	}
+	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"node_kind":                "external",
 		"desktop_runtime":          runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
@@ -55,8 +59,8 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 		"direct":                   true,
 		"router_vpn_entry_hop":     true,
 		"external_entry_hop":       true,
-		"external_entry_protocols": []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2"},
-		"router_vpn_entry_modes":   entryModes,
+		"external_entry_protocols": []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"},
+		"router_vpn_entry_modes":   a.externalRouterEntryModes(),
 		"entry_requirement":        "captured native Router VPN entry with its selected mode, base and Start Layer, or a supported external standard entry",
 	})
 }
@@ -93,8 +97,6 @@ func externalDNSPolicyForPath(policy, entry common.RouterProfile, direct bool) (
 	}
 	var err error
 	switch policy.External.Protocol {
-	case "openvpn":
-		_, err = openVPNDNSLines(policy, direct)
 	case "tor-bridge":
 		_, err = selectedTorBridgeDNS(policy)
 	default:
@@ -236,32 +238,13 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 				http.Error(w, "Tor bridge is not yet supported as an upstream external entry hop; refusing an unproved nested Tor graph", http.StatusNotImplemented)
 				return
 			}
-			entryExit, entryErr := standardExitFromExternalProfile(entry)
+			_, entryErr := standardExitFromExternalProfile(entry)
 			if entryErr != nil {
 				http.Error(w, "invalid external entry: "+entryErr.Error(), http.StatusBadRequest)
 				return
 			}
-			if entryExit.Protocol == "openvpn" {
-				http.Error(w, "external OpenVPN is supported as a direct/final exit but not yet as an upstream hop; refusing competing default tunnels", http.StatusNotImplemented)
-				return
-			}
 		default:
 			http.Error(w, "unsupported entry node kind", http.StatusBadRequest)
-			return
-		}
-	}
-
-	if exit.Protocol == "openvpn" {
-		cap := openVPNRuntimeCapability()
-		if runtime.GOOS == "windows" {
-			cap = windowsOpenVPNRuntimeCapability()
-		}
-		if !cap.Supported {
-			http.Error(w, cap.Reason, http.StatusNotImplemented)
-			return
-		}
-		if !direct && !openVPNProtocolIsTCP(exit.Method) {
-			http.Error(w, "OpenVPN final-exit hopping currently supports TCP OpenVPN profiles only; UDP remains fail-closed instead of bypassing the entry", http.StatusBadRequest)
 			return
 		}
 	}
@@ -302,7 +285,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	var cmdErr error
 	var proofErr error
 	var startedCmd *exec.Cmd
-	if exit.Protocol == "openvpn" {
+	if exit.Protocol == "openvpn" && native == nil {
 		var cmd *exec.Cmd
 		if runtime.GOOS == "windows" {
 			cmd, err = windowsOpenVPNStandardExitCommand(a, policy, entry, exit, direct)
@@ -512,6 +495,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 	persistErr := a.persistProfilesLocked()
 	if persistErr != nil {
 		a.rollbackProfilesLocked(previousStore)
+	} else if native != nil {
+		captureDesktopMTUBaselineLocked(a, native)
 	}
 	a.mu.Unlock()
 	if persistErr != nil {

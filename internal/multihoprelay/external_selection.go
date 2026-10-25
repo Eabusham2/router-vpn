@@ -15,7 +15,7 @@ import (
 // additionally require an independently provisioned public server-peer capture.
 func ExternalMode(mode string) bool {
 	switch mode {
-	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
+	case "wireguard", "amneziawg", "openvpn", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
 		return true
 	}
 	return false
@@ -87,6 +87,13 @@ func ExternalSelection(id, protocol string, external map[string]any, layer *Star
 		}
 		exit.External.Packet = pair
 	}
+	if protocol == "openvpn" {
+		pair, err := externalOpenVPNSelection(external)
+		if err != nil {
+			return Exit{}, err
+		}
+		exit.External.OpenVPN = pair
+	}
 	validated, err := externalTransport(exit)
 	if err != nil {
 		return Exit{}, err
@@ -112,6 +119,9 @@ func ExternalTransport(protocol string, external map[string]any) (map[string]any
 	}
 	if ExternalPacketMode(protocol) {
 		return externalPacketTransport(protocol, external)
+	}
+	if protocol == "openvpn" {
+		return externalOpenVPNTransport(external)
 	}
 	block := protocol
 	if protocol == "http-connect" {
@@ -277,9 +287,15 @@ func externalTransport(exit Exit) (map[string]any, error) {
 		return nil, bad
 	}
 	if ExternalPacketMode(exit.Mode) {
+		if exit.External.OpenVPN != nil {
+			return nil, bad
+		}
 		return validateExternalPacket(exit)
 	}
-	if exit.External.Packet != nil {
+	if exit.Mode == "openvpn" {
+		return validateExternalOpenVPN(exit)
+	}
+	if exit.External.Packet != nil || exit.External.OpenVPN != nil {
 		return nil, bad
 	}
 	// Reject invalid bytes before JSON copying can replace them with U+FFFD.

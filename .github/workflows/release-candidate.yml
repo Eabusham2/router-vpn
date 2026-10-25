@@ -145,6 +145,33 @@ jobs:
           sh -n server/scripts/run-setup-center.sh
           sh -n server/scripts/configure-ai-help.sh
 
+  paired-openvpn:
+    name: Paired native OpenVPN encrypted paths and lease ownership
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.3'
+          cache: false
+      - name: Execute both native owners, Start Layers and replay controls
+        shell: bash
+        run: |
+          set -euo pipefail
+          VENDOR="$RUNNER_TEMP/routervpn-paired-openvpn"
+          git init -q "$VENDOR"
+          git -C "$VENDOR" remote add origin https://github.com/SagerNet/sing-box.git
+          git -C "$VENDOR" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
+          git -C "$VENDOR" checkout --detach FETCH_HEAD
+          python3 deploy/test_external_openvpn_native.py --core "$VENDOR" 2>&1 | tee "$RUNNER_TEMP/paired-openvpn.log"
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: paired-openvpn-${{ github.sha }}
+          path: ${{ runner.temp }}/paired-openvpn.log
+          retention-days: 1
+
   generic-builds:
     needs: native-runtimes
     name: Generic desktop and Windows packages
@@ -420,7 +447,7 @@ jobs:
 
   aggregate:
     name: Aggregate one-SHA native release candidate
-    needs: [source-audit, generic-builds, windows-native-smoke, android, ios, macos, linux]
+    needs: [source-audit, paired-openvpn, generic-builds, windows-native-smoke, android, ios, macos, linux]
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4

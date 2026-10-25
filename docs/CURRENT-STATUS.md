@@ -1,53 +1,71 @@
 # Current implementation status
 
-Updated October 24, 2026 (America/Chicago). This file describes committed source
+Updated October 25, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
-The October 24 continuation expands paired external Server/Compare from
-Shadowsocks to Hysteria2 and authenticated SOCKS5/HTTP/HTTPS CONNECT in the shared
-relay, native compiler, Android service and Apple PacketTunnel. Exact protocol
-credentials, TLS identity, response endpoint and separately provisioned entry
-and exit Start Layers remain captured. Private pairing validates the actual
-native relay configuration before its atomic registry update. Missing or
-failed measurements do not receive a score, and restoration retains an already
-proved Local/Server choice. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md).
+The October 25 continuation adds paired OpenVPN Local/Server/Compare execution
+through the shared native runtime, desktop controller, Android service and Apple
+PacketTunnel. Local and Server use independently provisioned private client
+profiles; the client bundle contains only the public identity of the server
+session. Pairing validates certificate/key identity, exact inline credentials,
+transport and response endpoint before committing the registry. Native imports
+validate the complete raw JSON object before platform decoders can collapse
+ambiguous duplicate fields. Existing proxy and WG/AWG leases also retain the
+captured authenticated peer, manager epoch, fresh attempt and bounded deadline.
+See [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md) and
+[MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md) for supported profiles and the
+remaining different-host OpenVPN comparison boundary.
 
-Desktop ordinary graph builders now apply imported external layers with the
-verified complete engine. Complete external connection profiles retain the
-layer selection without copying private keys. Session copies detach imported
-AWG parameters, layer credentials and response probes from later node edits.
-Desktop external Server/Compare adoption remains separate work; this source
-checkpoint does not close that desktop requirement.
+Desktop external paths now use their owned native runtime for Direct, Local,
+Server and Compare both. Router VPN entries retain all 19 supported saved entry
+modes, independent entry/exit Start Layers, DNS and device policy. OpenVPN can
+also be an ordinary external entry or exit inside that runtime without taking
+over a second system VPN. Physical firewall exceptions capture only the
+transport actually leaving the device, including a bounded set of OpenVPN
+fallback remotes; they cannot inherit another process's endpoint exceptions.
+The legacy standard-exit API retains its separate seven-protocol entry contract.
+The native external API exposes the implemented eighth protocol, OpenVPN.
 
-The next paired-execution checkpoint adds WG/AWG Server/Compare to the shared
-relay, Android service and Apple PacketTunnel. Local and Server use separately
-provisioned private keys and preshared keys; the client retains only the public
-descriptor of the server peer. X25519 agreement authenticates the captured graph,
-and acquisition binds the authenticated source peer, a manager epoch, a bounded
-deadline and a fresh attempt. Retired attempts cannot reacquire after cleanup;
-failed cleanup retains the process and canonical packet/PQ identity ownership,
-including complete MAX bases. Compare repeats the winning measurements, and
-restoration retains the already-proved execution without another comparison.
+Desktop native external MTU now has Auto/Fixed/Retest/Cancel ownership through
+the actual TUN instance, immutable source/configuration and physical-network
+identity. Provisional results require a parent profile commit before the child
+retains them. Cancellation, failed proof, profile replacement and stale results
+roll back only their captured owner. Speed Lab captures the effective live MTU
+and the already-proved Local/Server execution; restoration reapplies that value
+and proves the original path without running another comparison. A mandatory
+Linux namespace job exercises actual kernel TUN replacement and rollback; the
+local container has no TUN device, so local controller/native tests alone do not
+establish that kernel gate or Windows/macOS device behavior.
 
-The shipping Android and Apple producers each supplied 1,380 captured graphs to
-the actual pinned native runtime, with all WG/AWG, QUIC, gVisor, OpenVPN, Naive
-and Tor registrations. Both sets passed native construction and the matching
-1,380 missing-engine controls. Real local encrypted WG/AWG traffic also passed
-IPv4/IPv6 TCP/UDP, Start Layer, wrong-key and teardown cases. These Linux native
-tests do not establish APK/Xcode packaging, physical-device networking or a
-private deployment. OpenVPN Server/Compare remains implementation work.
+Windows, macOS and Linux Speed Lab now send explicit entry-mode and execution
+choices through their native forms to the real controller. Saved choices are
+retained, and invalid choices cannot silently become a different path. macOS
+owns and cancels its loopback URLSession and rejects stale UI completions.
+Temporary tests restore the captured connection after traffic drains, while a
+newer user connection or Disconnect takes priority. See [SPEED-LAB.md](SPEED-LAB.md).
 
-Focused validation includes actual loopback HTTP/TLS comparison and negative
-controls under the Go race detector, the real shared native compiler used by
-Java/Swift fixtures, private relay lifecycle and pairing checks, and the common
-and desktop controller regression suites. Generated pinned-core configuration,
-exact-commit native packaging/release, private deployment and device acceptance
-remain distinct evidence. The successful `745b3e41` release predates these
-changes and does not certify their packages.
+The real pinned native OpenVPN fixture transfers encrypted TCP and UDP with
+Off, AES-256-GCM and AES-256-GCM plus XOR Start Layers. Wrong certificate,
+control-channel key, remote identity and listener key cases must fail. Focused
+race tests exercise replay rejection, cleanup, profile transactions, restoration
+and native MTU mailbox ownership. Both shipping Java and Swift producers supplied
+1,512 captured graphs to the actual pinned native runtime. Each accepted all
+1,512 graphs and rejected all 1,512 missing-engine controls with stable source,
+module and native-library provenance. These constructor results remain separate
+from APK/Xcode builds and physical traffic.
+
+Published desktop lifecycle work is in `f3beb47b`. Commit `d16b862a` fixes the
+Windows built-in `kill` alias collision, OpenVPN named dispatch and canonical
+cross-platform native source fingerprints. Commit `16070d14` gives the actual
+Linux action harness a valid selected-node fixture. These changes preserve
+negative controls; they do not replace physical-device or off-LAN acceptance.
+The successful `745b3e41` release predates this continuation and does not certify
+its packages. Exact-commit native packaging, release publication, private
+deployment and device acceptance require their own evidence.
 
 The source has advanced beyond the old WireGuard-only mobile multihop and
 mobile-Tor exclusions. Those historical restrictions no longer describe the

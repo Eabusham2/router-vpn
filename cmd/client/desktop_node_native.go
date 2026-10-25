@@ -269,7 +269,7 @@ func desktopNativeEnvironment(environment []string, root, profile, endpoint stri
 	for _, entry := range result {
 		name, _, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" {
+		if name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" {
 			continue
 		}
 		clean = append(clean, entry)
@@ -418,6 +418,13 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 			}
 		}
 		cmd.Env = append(clean, "HOMEVPN_POLICY_PROFILE_ID="+launch.policyProfileID, "HOMEVPN_EXTERNAL_SESSION="+launch.external.session)
+		if len(launch.external.physicalEndpoints) > 1 {
+			encoded, err := json.Marshal(launch.external.physicalEndpoints)
+			if err != nil {
+				return err
+			}
+			cmd.Env = append(cmd.Env, "HOMEVPN_NATIVE_ENDPOINTS_JSON="+string(encoded))
+		}
 	}
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr

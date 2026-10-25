@@ -46,7 +46,9 @@ stub(APP,'NativeXrayController','class NativeXrayController {String state="DOWN"
 stub(APP,'AndroidRuntimeRegistry','class AndroidRuntimeRegistry {static AndroidRuntimeRegistry instance;NativeWireGuardController wireGuard;NativeAmneziaWGController amneziaWG;NativeSingBoxController singBox=new NativeSingBoxController();NativeXrayController xray=new NativeXrayController();static AndroidRuntimeRegistry get(android.content.Context c){return instance;}}')
 stub(APP,'AndroidSpeedLabHopMeter','class AndroidSpeedLabHopMeter {static class Hop{String id;int bytes;double downloadMbps,uploadMbps;}interface Callback{void done(java.util.List<Hop> hops,Throwable error);}AndroidSpeedLabHopMeter(android.content.Context c){}void measure(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,int bytes,Callback callback){throw new UnsupportedOperationException();}}')
 stub('io.nekohasekai.libbox','CommandServer','class CommandServer {}')
-stub('io.nekohasekai.libbox','Libbox','class Libbox {public static boolean running=true;public static String routerXrayInvoke(String r){try{return new org.json.JSONObject().put("data",new org.json.JSONObject().put("running",running)).toString();}catch(Exception error){throw new IllegalStateException(error);}}}')
+# Structural import validation is exercised against real Go in the connection
+# profile fixture; telemetry tests retain their explicit native boundary double.
+stub('io.nekohasekai.libbox','Libbox','class Libbox {public static void routerValidatePrivateNodeJSON(String source){}public static boolean running=true;public static String routerXrayInvoke(String r){try{return new org.json.JSONObject().put("data",new org.json.JSONObject().put("running",running)).toString();}catch(Exception error){throw new IllegalStateException(error);}}}')
 # Retained owner checks from both production raw native controllers compile
 # unchanged; only the native config/backend boundary is a deterministic double.
 for package,name in [('com.wireguard','WireGuard'),('org.amnezia.awg','AmneziaWG')]:

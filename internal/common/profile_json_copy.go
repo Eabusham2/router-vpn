@@ -34,6 +34,8 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 	}
 	e := out.External
 	e.ResponseProbe = copyProfileJSONPointer(e.ResponseProbe)
+	e.OpenVPNPairing = copyProfileJSONPointer(e.OpenVPNPairing)
+	if e.OpenVPNPairing != nil { e.OpenVPNPairing.Server.Transport = copyProfileJSONMap(e.OpenVPNPairing.Server.Transport) }
 	e.ServerPeer = copyProfileJSONPointer(e.ServerPeer)
 	if e.ServerPeer != nil {
 		e.ServerPeer.Addresses = slices.Clone(e.ServerPeer.Addresses)

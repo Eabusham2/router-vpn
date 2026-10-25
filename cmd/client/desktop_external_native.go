@@ -30,6 +30,8 @@ type desktopExternalRuntime struct {
 	session, network, selection, execution string
 	expected                               mobilemultihop.ExternalProofResult
 	profile, entry                         common.RouterProfile
+	physicalEndpoints                      []string
+	mtu                                    *desktopMTUSession
 	direct                                 bool
 	started                                time.Time
 	checkedAt                              int64
@@ -105,7 +107,7 @@ func desktopConnectionProcessDone(a *app, command *exec.Cmd) <-chan struct{} {
 
 func desktopExternalNativeProtocol(protocol string) bool {
 	switch protocol {
-	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect":
+	case "wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn":
 		return true
 	}
 	return false
@@ -230,12 +232,16 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 	if !direct {
 		physicalID, endpoint = entry.ID, entry.Endpoint
 	}
+	physicalEndpoints, err := desktopExternalPhysicalEndpoints(profile, entry, direct, endpoint)
+	if err != nil {
+		return nil, err
+	}
 	selection := profile.MultihopExecution
 	if restored != "" {
 		selection = restored // Restoring an already proved winner never reruns Compare.
 	}
 	progress := &comparisonOwner{value: routeComparisonProgress{ID: session, Stage: "starting", Measurements: []routechoice.Measurement{}}}
-	return &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, direct: direct, progress: progress}}, nil
+	return &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, physicalEndpoints: physicalEndpoints, direct: direct, progress: progress}}, nil
 }
 
 func prepareDesktopExternalLaunch(a *app, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {
@@ -586,6 +592,7 @@ func desktopExternalLiteralEndpoint(profile common.RouterProfile) bool {
 }
 
 func (a *app) monitorDesktopExternalRuntime(launch *desktopNodeLaunch) {
+	a.startDesktopExternalAutomaticMTU(launch)
 	go func() {
 		ticker := time.NewTicker(500 * time.Millisecond)
 		defer ticker.Stop()
