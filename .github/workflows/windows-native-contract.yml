@@ -23,6 +23,8 @@ jobs:
           $ErrorActionPreference = 'Stop'
           $files = @(
             'client/Private-RouterVPN-State.ps1',
+            'client/Private-RouterVPN-Job.ps1',
+            'client/test-windows-private-job.ps1',
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
             'client/test-windows-home-dns.ps1',
@@ -128,6 +130,14 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Tor cleanup regressions failed' }
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-tor-adoption.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Tor adoption regressions failed' }
+      - name: Windows suspended-process Job ownership
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-private-job.ps1 -SourceRoot $env:GITHUB_WORKSPACE
+            if($LASTEXITCODE -ne 0){throw "Windows suspended-process Job tests failed in $shell"}
+          }
       - name: Windows firewall primitives
         shell: pwsh
         run: |

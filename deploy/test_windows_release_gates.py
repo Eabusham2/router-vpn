@@ -105,9 +105,32 @@ def check_workspace_gate(job: str) -> None:
         raise AssertionError("Windows cleanup gate no longer blocks a failed native test")
 
 
+def check_private_job_gate(job: str, packaged: bool) -> None:
+    name = "Execute packaged suspended-process Job ownership" if packaged else "Windows suspended-process Job ownership"
+    marker = "      - name: " + name + "\n"
+    if job.count(marker) != 1:
+        raise AssertionError("Windows suspended-process Job gate is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    required = ["shell: pwsh", "foreach($shell in @('pwsh','powershell.exe'))", "if($LASTEXITCODE -ne 0){throw"]
+    if packaged:
+        required += [
+            "installed-$arch", "$roots.Count -ne 1",
+            "$test=Join-Path $roots[0].FullName 'client/test-windows-private-job.ps1'",
+            "Test-Path -LiteralPath $test -PathType Leaf",
+            "& $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName",
+        ]
+    else:
+        required.append("& $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-private-job.ps1 -SourceRoot $env:GITHUB_WORKSPACE")
+    if any(value not in gate for value in required):
+        raise AssertionError("Windows Job gate lost an actual shell or captured source boundary")
+    if "-compileonly" in gate.lower() or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
+        raise AssertionError("Windows Job gate omitted real kernel execution or became nonblocking")
+
+
 def check_workflow(candidate: str, build_all: str) -> None:
     windows = workflow_job(candidate, "windows-native-smoke")
     check_workspace_gate(windows)
+    check_private_job_gate(windows, True)
     if "    needs: generic-builds\n" not in windows:
         raise AssertionError("Windows gates lost their exact run's package dependency")
     if "uses: actions/setup-python@v5" not in windows or "python-version: '3.12'" not in windows:
@@ -155,13 +178,31 @@ class WindowsReleaseGateTests(unittest.TestCase):
             with self.subTest(new=new), self.assertRaises(AssertionError):
                 check_workspace_gate(job.replace(old, new, 1))
 
+    def test_private_jobs_use_both_real_shells_and_the_captured_package(self):
+        for filename, job_name, packaged in (("windows-native-contract.yml", "native-windows", False), ("release-candidate.yml", "windows-native-smoke", True)):
+            workflow = (REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8")
+            job = workflow_job(workflow, job_name)
+            check_private_job_gate(job, packaged)
+            source = "$roots[0].FullName" if packaged else "$env:GITHUB_WORKSPACE"
+            for old, new in (
+                ("foreach($shell in @('pwsh','powershell.exe'))", "foreach($shell in @('pwsh'))"),
+                ("-SourceRoot " + source, "-CompileOnly -SourceRoot " + source),
+                ("-SourceRoot " + source, "-SourceRoot 'different source'"),
+            ):
+                # Change only this exact Job step, never an earlier DNS step.
+                name = "Execute packaged suspended-process Job ownership" if packaged else "Windows suspended-process Job ownership"
+                marker = "      - name: " + name + "\n"
+                before, after = job.split(marker, 1)
+                with self.subTest(filename=filename, mutation=new), self.assertRaises(AssertionError):
+                    check_private_job_gate(before + marker + after.replace(old, new, 1), packaged)
+
     def test_broken_release_edges_and_weakened_commands_are_rejected(self):
         candidate = (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
         build_all = (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8")
         variants = (
             ("cleanup", "DesktopRuntimeWorkspace|DesktopTor", "DesktopTor"),
             ("matrix", "{arch: arm64, runner: windows-11-arm}", "{arch: other, runner: windows-latest}"),
-            ("shell", "@('pwsh','powershell.exe')", "@('pwsh')"),
+            ("shell", "foreach($shell in @('pwsh','powershell.exe')){\n            python deploy/test_windows_release_gates.py", "foreach($shell in @('pwsh')){\n            python deploy/test_windows_release_gates.py"),
             ("source", "--package-root $roots[0].FullName", "--package-root $env:GITHUB_WORKSPACE"),
             ("mutants", "--shell $shell", "--shell $shell --shipping-only"),
             ("blocking", "      - name: Execute packaged device and DNS ownership gates\n", "      - name: Execute packaged device and DNS ownership gates\n        continue-on-error: true\n"),
