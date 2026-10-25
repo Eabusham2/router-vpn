@@ -104,7 +104,7 @@ def prove_node(profile: dict[str, Any]) -> None:
 
 def enforce_kill_switch() -> None:
     helper = Path(__file__).with_name("kill-switch.py")
-    proc = subprocess.run([sys.executable, str(helper), "apply"], text=True, capture_output=True, check=False)
+    proc = subprocess.run([sys.executable, str(helper), "apply"], env=mtu_kill_switch_environment(), text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError("strict kill switch could not be enforced before MTU optimization" + (": " + detail if detail else ""))
@@ -135,47 +135,152 @@ def route_interface(host: str) -> str:
 
 
 def interface_mtu(alias: str, family: int) -> int:
-    system = platform.system().lower()
-    if system == "linux":
-        return int((Path("/sys/class/net") / alias / "mtu").read_text().strip())
-    if system == "darwin":
-        out = subprocess.check_output(["ifconfig", alias], text=True, timeout=3)
-        match = re.search(r"\bmtu\s+(\d+)", out)
-        if match:
-            return int(match.group(1))
-    if system == "windows":
-        fam = "IPv6" if family == 6 else "IPv4"
-        escaped = alias.replace("'", "''")
-        cmd = f"(Get-NetIPInterface -InterfaceAlias '{escaped}' -AddressFamily {fam} | Sort-Object InterfaceMetric | Select-Object -First 1).NlMtuBytes"
-        out = subprocess.check_output(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", cmd], text=True, timeout=6).strip()
-        if out.isdigit():
-            return int(out)
-    raise RuntimeError("could not read current tunnel MTU")
+    return owner_state(alias, family)["mtu"]
+
+
+MTU_GRAPH_FIELDS = ("HOMEVPN_MTU_GRAPH_TOKEN", "HOMEVPN_MTU_GRAPH_SCOPE", "HOMEVPN_MTU_CONTROL_PROFILE_ID",
+                    "HOMEVPN_MTU_PHYSICAL_ENTRY_ID", "HOMEVPN_MTU_PHYSICAL_ENTRY_ENDPOINT")
+
+
+def mtu_graph_context() -> dict[str, str] | None:
+    present = [name in os.environ for name in MTU_GRAPH_FIELDS]
+    if not any(present):
+        return None
+    if not all(present):
+        raise RuntimeError("incomplete captured MTU graph identity")
+    values = {name: os.environ[name] for name in MTU_GRAPH_FIELDS}
+    token, scope, control, entry, endpoint = (values[name] for name in MTU_GRAPH_FIELDS)
+    if not re.fullmatch(r"[0-9a-f]{64}", token) or scope != "multihop-exit-path":
+        raise RuntimeError("invalid captured MTU graph identity")
+    try:
+        if validate_profile_id(control, default="") != control or validate_profile_id(entry, default="") != entry:
+            raise ValueError("noncanonical identity")
+        physical = ipaddress.ip_address(endpoint)
+        if "%" in endpoint or str(physical) != endpoint or entry == os.environ.get("HOMEVPN_PROFILE_ID", ""):
+            raise ValueError("invalid physical entry")
+    except ValueError as exc:
+        raise RuntimeError("invalid captured MTU graph entry or control identity") from exc
+    return {"token": token, "scope": scope, "control_id": control, "entry_id": entry, "endpoint": endpoint}
+
+
+def mtu_kill_switch_environment() -> dict[str, str]:
+    graph = mtu_graph_context()
+    store, profile = load_profile(root_dir())
+    runtime_id = str(profile.get("id") or "")
+    control_id = runtime_id
+    endpoint = str(profile.get("endpoint") or "")
+    if graph is not None:
+        runtime_id, control_id, endpoint = graph["entry_id"], graph["control_id"], graph["endpoint"]
+        profiles = [item for item in store.get("profiles", []) if isinstance(item, dict)]
+        entry = next((item for item in profiles if item.get("id") == runtime_id), None)
+        control = next((item for item in profiles if item.get("id") == control_id), None)
+        try:
+            same_entry = entry is not None and str(ipaddress.ip_address(str(entry.get("endpoint") or "").strip("[]"))) == endpoint
+        except ValueError:
+            same_entry = False
+        if control is None or not same_entry:
+            raise RuntimeError("captured MTU graph guard profiles or physical entry changed")
+    # Firewall reassertion uses the physical entry and selected control policy.
+    # Exit proof/benchmark keeps its own HOMEVPN_PROFILE_ID in this process.
+    # Neither a stale external egress exception nor a mutation capability is
+    # inherited by the firewall helper.
+    environment = {name: value for name, value in os.environ.items()
+                   if not name.startswith(("HOMEVPN_MTU_", "HOMEVPN_NATIVE_", "HOMEVPN_NODE_"))
+                   and name not in {"HOMEVPN_EXTERNAL_SESSION", "HOMEVPN_PROFILE_ID", "HOMEVPN_POLICY_PROFILE_ID", "HOMEVPN_ENDPOINT"}}
+    environment.update({"HOMEVPN_PROFILE_ID": runtime_id, "HOMEVPN_POLICY_PROFILE_ID": control_id, "HOMEVPN_ENDPOINT": endpoint})
+    return environment
+
+
+def minimum_mtu(*, captured: bool = False) -> int:
+    raw = os.environ.get("HOMEVPN_MTU_MINIMUM", "")
+    if not raw and not captured:
+        return 576  # Algorithm-only self-tests have no runtime capability.
+    if not re.fullmatch(r"[0-9]{3,4}", raw) or not 576 <= int(raw) <= 1280:
+        raise RuntimeError("invalid captured MTU minimum")
+    return int(raw)
+
+
+def owner_capability() -> tuple[str, str]:
+    # The controller keeps the actual native TUN/sysfs descriptor/Windows LUID.
+    # This subprocess receives only the capability for that captured operation;
+    # an interface alias is never sufficient authority for a write or rollback.
+    from urllib.parse import urlsplit
+    token = os.environ.get("HOMEVPN_MTU_OWNER_TOKEN", "")
+    endpoint = os.environ.get("HOMEVPN_MTU_OWNER_URL", "")
+    helper = os.environ.get("HOMEVPN_MTU_OWNER_HELPER", "")
+    mtu_graph_context()
+    minimum_mtu(captured=True)
+    if not re.fullmatch(r"[0-9a-f]{32}", token):
+        raise RuntimeError("missing captured MTU operation capability")
+    try:
+        parsed = urlsplit(endpoint)
+        valid_url = (parsed.scheme == "http" and parsed.hostname == "127.0.0.1"
+                     and parsed.port is not None and 1 <= parsed.port <= 65535
+                     and parsed.netloc == f"127.0.0.1:{parsed.port}"
+                     and parsed.path == "/mtu" and not parsed.query and not parsed.fragment)
+    except ValueError:
+        valid_url = False
+    path = Path(helper)
+    if (not valid_url or not path.is_absolute() or path.is_symlink()
+            or not path.is_file() or not os.access(path, os.X_OK)):
+        raise RuntimeError("invalid captured MTU helper or operation endpoint")
+    return helper, token
+
+
+def owner_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate MTU owner reply field")
+        result[key] = value
+    return result
+
+
+def owner_state(alias: str, family: int, mtu: int | None = None) -> dict[str, Any]:
+    helper, token = owner_capability()
+    if not alias or family not in {4, 6} or type(family) is not int:
+        raise RuntimeError("invalid captured MTU interface request")
+    arguments = [helper, "--mtu-owner-read"]
+    if mtu is not None:
+        if type(mtu) is not int or not minimum_mtu(captured=True) <= mtu <= 9000:
+            raise RuntimeError("invalid captured live MTU")
+        arguments = [helper, "--mtu-owner-set", str(mtu)]
+    try:
+        proc = subprocess.run(arguments, capture_output=True, timeout=18, check=False)
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise RuntimeError("captured MTU helper is unavailable") from exc
+    if proc.returncode != 0 or proc.stderr or not 0 < len(proc.stdout) <= 4096:
+        raise RuntimeError("captured MTU operation was rejected")
+    try:
+        reply = json.loads(proc.stdout.decode("utf-8"), object_pairs_hook=owner_json_object)
+    except (UnicodeError, ValueError) as exc:
+        raise RuntimeError("invalid captured MTU owner reply") from exc
+    if (not isinstance(reply, dict)
+            or set(reply) != {"owner_token", "interface", "family", "index", "mtu", "identity"}
+            or reply["owner_token"] != token or reply["interface"] != alias
+            or type(reply["family"]) is not int or reply["family"] != family
+            or type(reply["index"]) is not int or not 0 < reply["index"] <= 0x7fffffff
+            or type(reply["mtu"]) is not int or not minimum_mtu(captured=True) <= reply["mtu"] <= 9000
+            or not isinstance(reply["identity"], str) or not 0 < len(reply["identity"]) <= 256
+            or any(character in reply["identity"] for character in "\x00\r\n")
+            or mtu is not None and reply["mtu"] != mtu):
+        raise RuntimeError("captured MTU owner or exact kernel readback changed")
+    # The native engine may replace its own TUN reader while changing MTU. Its
+    # new index/identity is accepted only through the same captured capability.
+    return reply
 
 
 def set_interface_mtu(alias: str, family: int, mtu: int) -> None:
-    if not MIN_OPT_MTU <= mtu <= 9000:
-        raise RuntimeError(f"refusing invalid live MTU {mtu}")
-    system = platform.system().lower()
-    if system == "linux":
-        cmd = ["ip", "link", "set", "dev", alias, "mtu", str(mtu)]
-    elif system == "darwin":
-        cmd = ["ifconfig", alias, "mtu", str(mtu)]
-    elif system == "windows":
-        fam = "IPv6" if family == 6 else "IPv4"
-        escaped = alias.replace("'", "''")
-        ps = f"Set-NetIPInterface -InterfaceAlias '{escaped}' -AddressFamily {fam} -NlMtuBytes {mtu} -ErrorAction Stop"
-        cmd = ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps]
-    else:
-        raise RuntimeError("live MTU optimization is not implemented for this platform")
-    proc = subprocess.run(cmd, text=True, capture_output=True, timeout=8, check=False)
-    if proc.returncode != 0:
-        raise RuntimeError((proc.stderr or proc.stdout or "could not set live tunnel MTU").strip())
+    # Validate the caller's alias/family before a set, since the helper itself
+    # deliberately addresses only its captured owner, never a supplied alias.
+    owner_state(alias, family)
+    owner_state(alias, family, mtu)
 
 
 def candidate_mtus(ceiling: int) -> list[int]:
-    ceiling = max(MIN_OPT_MTU, min(MAX_OPT_MTU, int(ceiling)))
-    floor = max(MIN_OPT_MTU, ceiling - STEP * (MAX_CANDIDATES - 1))
+    minimum = max(MIN_OPT_MTU, minimum_mtu())
+    ceiling = max(minimum, min(MAX_OPT_MTU, int(ceiling)))
+    floor = max(minimum, ceiling - STEP * (MAX_CANDIDATES - 1))
     values = list(range(floor, ceiling + 1, STEP))
     for preferred in (1280, 1320, 1360, 1380, 1400, 1420, 1440, 1460, 1480, 1500):
         if floor <= preferred <= ceiling:
@@ -282,7 +387,8 @@ def pick_winner(results: list[dict[str, Any]]) -> dict[str, Any]:
 
 def path_context(profile: dict[str, Any], root: Path | None = None) -> tuple[str, str, str]:
     root = root or root_dir()
-    endpoint = str(profile.get("endpoint") or os.environ.get("HOMEVPN_ENDPOINT", "")).strip()
+    graph = mtu_graph_context()
+    endpoint = graph["endpoint"] if graph is not None else str(profile.get("endpoint") or os.environ.get("HOMEVPN_ENDPOINT", "")).strip()
     mode = os.environ.get("HOMEVPN_MODE", "").strip()
     profile_id = str(profile.get("id") or os.environ.get("HOMEVPN_PROFILE_ID", "")).strip()
     family = os.environ.get("HOMEVPN_IP_FAMILY", "").strip().lower()
@@ -296,7 +402,10 @@ def path_context(profile: dict[str, Any], root: Path | None = None) -> tuple[str
         generated = generated_profile_fingerprint(root, profile_id, mode)
     except RuntimeError:
         generated = hashlib.sha256(f"unavailable|{profile_id}|{mode}".encode("utf-8")).hexdigest()[:24]
-    raw = "|".join([
+    graph_identity = "" if graph is None else "|".join(graph[name] for name in ("scope", "token", "control_id", "entry_id", "endpoint"))
+    if graph is not None:
+        generated = hashlib.sha256(("mtu-owned-graph-v1\0" + generated + "\0" + graph_identity).encode("utf-8")).hexdigest()[:24]
+    parts = [
         endpoint.lower(),
         mode.lower(),
         os.environ.get("HOMEVPN_LOGICAL_MODE", "").strip().lower(),
@@ -305,7 +414,10 @@ def path_context(profile: dict[str, Any], root: Path | None = None) -> tuple[str
         profile_id.lower(),
         network,
         generated,
-    ])
+    ]
+    if graph is not None:
+        parts.append(graph_identity)
+    raw = "|".join(parts)
     return hashlib.sha256(raw.encode("utf-8")).hexdigest()[:24], network, generated
 
 
@@ -371,7 +483,7 @@ def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
     alias = route_interface(host)
     original = interface_mtu(alias, family)
     ceiling = int(profile.get("effective_mtu") or 0)
-    if not MIN_OPT_MTU <= ceiling <= MAX_OPT_MTU:
+    if not max(MIN_OPT_MTU, minimum_mtu(captured=True)) <= ceiling <= MAX_OPT_MTU:
         ceiling = min(MAX_OPT_MTU, original)
     candidates = candidate_mtus(ceiling)
     results: list[dict[str, Any]] = []
@@ -394,6 +506,7 @@ def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
             persist(root, store, profile, winner, results)
         return {
             "ok": True,
+            "owner_token": owner_capability()[1],
             "interface": alias,
             "family": family,
             "original_mtu": original,
@@ -405,8 +518,8 @@ def optimize(*, defer_adopt: bool = False) -> dict[str, Any]:
     except Exception:
         try:
             set_interface_mtu(alias, family, original)
-        except Exception:
-            pass
+        except Exception as restore_error:
+            raise RuntimeError("MTU optimization failed and captured interface rollback was not confirmed") from restore_error
         raise
 
 
@@ -423,7 +536,7 @@ def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
     previous = interface_mtu(raw_alias, family)
     if rollback:
         set_interface_mtu(raw_alias, family, value)
-        return {"ok": True, "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, "rollback": True}
+        return {"ok": True, "owner_token": owner_capability()[1], "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, "rollback": True}
 
     policy = str(profile.get("mtu_policy") or "default").strip().lower()
     if policy != "auto":
@@ -446,10 +559,10 @@ def apply_measured_result(*, rollback: bool = False) -> dict[str, Any]:
     except Exception:
         try:
             set_interface_mtu(raw_alias, family, previous)
-        except Exception:
-            pass
+        except Exception as restore_error:
+            raise RuntimeError("MTU adoption failed and captured interface rollback was not confirmed") from restore_error
         raise
-    return {"ok": True, "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, **current, "rollback": False}
+    return {"ok": True, "owner_token": owner_capability()[1], "interface": raw_alias, "family": family, "previous_mtu": previous, "applied_mtu": value, **current, "rollback": False}
 
 
 def main() -> int:

@@ -87,7 +87,7 @@ static void linux_unified_settings_v8(GtkButton *button, gpointer data) { on_pro
 static void linux_unified_auto_requirements_v8(GtkButton *button, gpointer data) { LinuxUnifiedV8 *state=data; if(state!=NULL)on_linux_auto_requirements_v11(button,state->app); }
 static void linux_unified_multihop_v8(GtkButton *button, gpointer data) { on_linux_multihop_v7(button, ((LinuxUnifiedV8 *)data)->app); }
 static void linux_unified_external_path_v8(GtkButton *button, gpointer data) { (void)button;linux_external_path_dialog_v4(((LinuxUnifiedV8 *)data)->app,FALSE); }
-static void linux_unified_mtu_v8(GtkButton *button, gpointer data) { (void)button; post_and_log(((LinuxUnifiedV8 *)data)->app, "/api/mtu/retest", "{}", 130000, "MTU Retest for current config/path"); }
+static void linux_unified_mtu_v8(GtkButton *button, gpointer data) { (void)button; linux_mtu_dialog_v20(((LinuxUnifiedV8 *)data)->app); }
 
 static char *linux_unified_custom_layers_for_mode_v8(const char *mode) {
     if (mode == NULL || !g_str_has_prefix(mode, "custom:")) return NULL;

@@ -7,7 +7,6 @@ import (
 	"io/fs"
 	"net"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -238,23 +237,6 @@ func prepareNativeMultihop(root string, sel multihopSelection) (string, string, 
 	return stageNativeMultihopCapture(root, sel)
 }
 
-func nativeWindowsMultihopCommand(a *app, sel multihopSelection) (*exec.Cmd, error) {
-	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
-		return nil, err
-	}
-	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	runtimeDir, tunAlias, err := prepareNativeMultihop(root, sel)
-	if err != nil {
-		return nil, err
-	}
-	helper := filepath.Join(root, "client", "native-multihop-windows.ps1")
-	if _, err = os.Stat(helper); err != nil {
-		helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-multihop-windows.ps1")
-	}
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", runtimeDir, "-Endpoint", sel.Native.endpoint, "-TunnelAlias", tunAlias)
-	cmd.Dir = root
-	cmd.Env = nativeMultihopEnvironment(root, sel)
-	cmd.Stdout = os.Stdout
-	cmd.Stderr = os.Stderr
-	return cmd, nil
+func nativeWindowsMultihopCommand(a *app, sel multihopSelection) (*desktopNodeLaunch, error) {
+	return prepareOwnedNativeMultihopCommand(a, sel, nil)
 }

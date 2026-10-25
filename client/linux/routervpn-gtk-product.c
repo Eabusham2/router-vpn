@@ -4,6 +4,7 @@
 #include <json-glib/json-glib.h>
 #include <math.h>
 #include <signal.h>
+#include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -49,6 +50,8 @@ typedef struct {
     guint64 event_seq;
     pid_t controller_pid;
     gboolean owns_controller;
+    char controller_owner[33];
+    gpointer controller_shutdown;
     gboolean suppress_router_change;
     char *package_root;
 } App;
@@ -65,8 +68,15 @@ static size_t write_cb(void *contents, size_t size, size_t nmemb, void *userp) {
     return total;
 }
 
+static atomic_bool controller_exit_pending=ATOMIC_VAR_INIT(FALSE);
+
 static gboolean api_request(const char *path, const char *method, const char *body,
                             long timeout_ms, Buffer *out, char **error_out) {
+    if (atomic_load_explicit(&controller_exit_pending,memory_order_acquire)) {
+        if (out != NULL) memset(out,0,sizeof(*out));
+        if (error_out != NULL) *error_out=g_strdup("Router VPN is waiting for checked controller cleanup.");
+        return FALSE;
+    }
     CURL *curl = curl_easy_init();
     if (curl == NULL) {
         if (error_out != NULL) *error_out = g_strdup("libcurl initialization failed");
@@ -607,12 +617,18 @@ static gboolean resolve_package_root(App *app, const char *argv0) {
     return TRUE;
 }
 
+#include "routervpn-controller-shutdown-v1.inc"
+
 static gboolean ensure_controller(App *app, char **error_out) {
     if (api_ready()) return TRUE;
     char *controller = g_build_filename(app->package_root, "router-vpn-client", NULL);
     char *config = g_build_filename(app->package_root, "client.json", NULL);
     if (access(controller, X_OK) != 0 || access(config, R_OK) != 0) {
         if (error_out != NULL) *error_out = g_strdup("Router VPN GTK must stay beside router-vpn-client and client.json in its package.");
+        g_free(controller); g_free(config); return FALSE;
+    }
+    if (!controller_owner_token_create(app->controller_owner)) {
+        if (error_out != NULL) *error_out = g_strdup("Could not create the local controller launch identity");
         g_free(controller); g_free(config); return FALSE;
     }
     pid_t pid = fork();
@@ -624,6 +640,7 @@ static gboolean ensure_controller(App *app, char **error_out) {
         if (setenv("HOMEVPN_ROOT", app->package_root, 1) != 0 ||
             setenv("HOMEVPN_CLIENT_CONFIG", config, 1) != 0 ||
             setenv("HOMEVPN_NATIVE_APP", "linux-gtk-product", 1) != 0 ||
+            setenv("HOMEVPN_CONTROLLER_OWNER", app->controller_owner, 1) != 0 ||
             chdir(app->package_root) != 0) _exit(126);
         execl(controller, controller, (char *)NULL);
         _exit(127);
@@ -632,36 +649,25 @@ static gboolean ensure_controller(App *app, char **error_out) {
     app->owns_controller = TRUE;
     g_free(controller); g_free(config);
     for (int i = 0; i < 60; i++) {
+        if (controller_child_observe(pid) != 0) {
+            int status = 0;
+            if (waitpid(pid, &status, WNOHANG) == pid) { app->owns_controller=FALSE;app->controller_pid=0; }
+            break;
+        }
         if (api_ready()) return TRUE;
-        int status = 0;
-        if (waitpid(pid, &status, WNOHANG) == pid) break;
         g_usleep(200000);
     }
-    (void)kill(pid, SIGTERM);
+    if (app->owns_controller) { shutdown_controller(app); gtk_main(); }
     if (error_out != NULL) *error_out = g_strdup("Local Router VPN controller did not become ready on 127.0.0.1:8788.");
     return FALSE;
-}
-
-static void shutdown_controller(App *app) {
-    if (!app->owns_controller || app->controller_pid <= 0) return;
-    Buffer out = {0};
-    (void)api_request("/api/emergency-stop", "POST", "{}", 1800, &out, NULL);
-    free(out.data);
-    (void)kill(app->controller_pid, SIGTERM);
-    for (int i = 0; i < 20; i++) {
-        int status = 0;
-        if (waitpid(app->controller_pid, &status, WNOHANG) == app->controller_pid) return;
-        g_usleep(100000);
-    }
-    (void)kill(app->controller_pid, SIGKILL);
-    (void)waitpid(app->controller_pid, NULL, 0);
 }
 
 static void on_destroy(GtkWidget *widget, gpointer data) {
     (void)widget;
     App *app = data;
-    shutdown_controller(app);
-    gtk_main_quit();
+    app->window = NULL;
+    if (app->owns_controller) { shutdown_controller(app); return; }
+    if (gtk_main_level() > 0) gtk_main_quit();
 }
 
 static int self_test(void) {
@@ -710,6 +716,7 @@ int main(int argc, char **argv) {
         return 3;
     }
     build_ui(&app);
+    g_signal_connect(app.window, "delete-event", G_CALLBACK(on_delete), &app);
     g_signal_connect(app.window, "destroy", G_CALLBACK(on_destroy), &app);
     refresh_all(&app);
     (void)g_timeout_add_seconds(2, refresh_timer, &app);

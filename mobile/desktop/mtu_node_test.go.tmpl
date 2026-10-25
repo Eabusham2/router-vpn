@@ -1,0 +1,674 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+// Reuse the native retained-TUN readback fixture. Only the engine boundary is
+// substituted: every command, ownership check, reader adoption and deadline
+// below runs the shipping routerVPNNodeMTU implementation in cmd/sing-box.
+type desktopNodeMTUEngineFixture struct {
+	current  adapter.Inbound
+	readErr  error
+	values   []int
+	expected []adapter.Inbound
+	lastCtx  context.Context
+	change   func(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
+}
+
+func (engine *desktopNodeMTUEngineFixture) Current() (adapter.Inbound, error) {
+	return engine.current, engine.readErr
+}
+
+func (engine *desktopNodeMTUEngineFixture) Change(ctx context.Context, expected adapter.Inbound, value int) (adapter.Inbound, error) {
+	if ctx.Err() != nil || expected != engine.current {
+		return expected, errors.New("fixture owner is stale")
+	}
+	engine.lastCtx = ctx
+	engine.values = append(engine.values, value)
+	engine.expected = append(engine.expected, expected)
+	if engine.change != nil {
+		return engine.change(ctx, expected, value)
+	}
+	old := expected.(*desktopMTUTUNFixture)
+	next := &desktopMTUTUNFixture{index: old.index + 1, mtu: value, guard: old.guard}
+	engine.current = next
+	return next, nil
+}
+
+func desktopNodeMTUFixture(t *testing.T) (*routerVPNNodeMTU, *desktopNodeMTUEngineFixture, *atomic.Bool) {
+	t.Helper()
+	valid := &atomic.Bool{}
+	valid.Store(true)
+	engine := &desktopNodeMTUEngineFixture{current: &desktopMTUTUNFixture{index: 17, mtu: 1420}}
+	owner, err := newRouterVPNNodeMTU(engine, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), valid.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return owner, engine, valid
+}
+
+func desktopNodeMTURequest(owner *routerVPNNodeMTU, action string, value int) routerVPNNodeMTUCommand {
+	lease := owner.record.Lease
+	if lease == "" {
+		lease = strings.Repeat("d", 32)
+	}
+	return routerVPNNodeMTUCommand{
+		Schema: 1, Session: owner.record.Session, Config: owner.record.Config, Path: owner.record.Path,
+		Generation: owner.record.Generation + 1, Request: strings.Repeat("e", 32), Lease: lease,
+		Action: action, Reader: owner.record.Reader, MTU: owner.record.MTU, Value: value,
+	}
+}
+
+func desktopNodeMTUApply(t *testing.T, owner *routerVPNNodeMTU, action string, value int) routerVPNNodeMTUCommand {
+	t.Helper()
+	request := desktopNodeMTURequest(owner, action, value)
+	if err := owner.command(request); err != nil {
+		t.Fatalf("native %s command failed: %v", action, err)
+	}
+	// The production file consumer advances these acknowledgement fields after
+	// command returns. They are independent from the native reader transaction.
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	return request
+}
+
+func TestRouterVPNNodeMTURetainsExactReaderAcrossSetAndRollback(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	original := owner.inbound
+	if owner.record.Schema != 1 || owner.record.Reader != 1 || owner.record.Generation != 0 || owner.record.Interface != "router-vpn" || owner.record.Index != 17 || owner.record.MTU != 1420 || owner.record.Active || owner.record.Restored {
+		t.Fatal("initial readback did not capture the native interface", owner.record)
+	}
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	if !owner.record.Active || owner.record.Restored || owner.original != 1420 {
+		t.Fatal("lease did not retain the original readback", owner.record)
+	}
+	first := desktopNodeMTUApply(t, owner, "set", 1360)
+	changed := owner.inbound
+	if changed == original || engine.current != changed || owner.record.Reader != 2 || owner.record.Index != 18 || owner.record.MTU != 1360 || owner.record.Restored {
+		t.Fatal("candidate did not adopt its exact native replacement", owner.record)
+	}
+	if len(engine.expected) != 1 || engine.expected[0] != original || owner.current() != nil {
+		t.Fatal("native change used another reader")
+	}
+	if deadline, ok := engine.lastCtx.Deadline(); !ok || time.Until(deadline) > 10*time.Second || engine.lastCtx.Err() == nil {
+		t.Fatal("native mutation lost its bounded, canceled operation context")
+	}
+	// An earlier accepted request cannot mutate its replacement reader again.
+	if err := owner.command(first); err == nil || len(engine.values) != 1 {
+		t.Fatal("replayed candidate mutated the winner", err)
+	}
+	desktopNodeMTUApply(t, owner, "rollback", 0)
+	if owner.inbound == changed || owner.inbound == original || engine.current != owner.inbound || owner.record.Reader != 3 || owner.record.Index != 19 || owner.record.MTU != 1420 || owner.record.Active || !owner.record.Restored || owner.current() != nil {
+		t.Fatal("rollback did not attest to the exact restored native reader", owner.record)
+	}
+	if len(engine.values) != 2 || engine.values[0] != 1360 || engine.values[1] != 1420 || engine.expected[1] != changed {
+		t.Fatal("rollback restarted or replaced an unrelated interface", engine.values)
+	}
+	if err := owner.command(desktopNodeMTURequest(owner, "begin", 0)); err == nil {
+		t.Fatal("retired lease identity was reused")
+	}
+}
+
+func TestRouterVPNNodeMTUCommitRetainsCandidateWithoutClaimingRollback(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1380)
+	reader := owner.inbound
+	desktopNodeMTUApply(t, owner, "commit", 0)
+	if owner.record.Active || owner.record.Restored || owner.record.MTU != 1380 || owner.inbound != reader || len(engine.values) != 1 {
+		t.Fatal("commit fabricated a rollback or replaced the retained winner", owner.record)
+	}
+	if err := owner.command(desktopNodeMTURequest(owner, "rollback", 0)); err == nil || owner.record.MTU != 1380 || owner.inbound != reader || len(engine.values) != 1 {
+		t.Fatal("ordinary rollback changed a confirmed inactive commit", err)
+	}
+	if err := owner.expire(time.Now().Add(time.Hour)); err != nil || owner.inbound != reader || len(engine.values) != 1 {
+		t.Fatal("a committed inactive lease was later rolled back", err)
+	}
+	request := desktopNodeMTURequest(owner, "begin", 0)
+	request.Lease = strings.Repeat("f", 32)
+	if err := owner.command(request); err != nil || !owner.record.Active || owner.record.Restored || owner.original != 1380 {
+		t.Fatal("a new lease did not capture the retained readback", err, owner.record)
+	}
+}
+
+func TestRouterVPNNodeMTUCommandsRejectWrongCapturedIdentity(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*routerVPNNodeMTUCommand)
+	}{
+		{"schema", func(q *routerVPNNodeMTUCommand) { q.Schema = 2 }},
+		{"session", func(q *routerVPNNodeMTUCommand) { q.Session = strings.Repeat("f", 32) }},
+		{"config", func(q *routerVPNNodeMTUCommand) { q.Config = strings.Repeat("f", 64) }},
+		{"physical-path", func(q *routerVPNNodeMTUCommand) { q.Path = strings.Repeat("f", 64) }},
+		{"old-generation", func(q *routerVPNNodeMTUCommand) { q.Generation-- }},
+		{"future-generation", func(q *routerVPNNodeMTUCommand) { q.Generation++ }},
+		{"request", func(q *routerVPNNodeMTUCommand) { q.Request = "invalid" }},
+		{"lease-shape", func(q *routerVPNNodeMTUCommand) { q.Lease = "invalid" }},
+		{"foreign-lease", func(q *routerVPNNodeMTUCommand) { q.Lease = strings.Repeat("f", 32) }},
+		{"reader", func(q *routerVPNNodeMTUCommand) { q.Reader++ }},
+		{"readback", func(q *routerVPNNodeMTUCommand) { q.MTU-- }},
+		{"action", func(q *routerVPNNodeMTUCommand) { q.Action = "replace" }},
+		{"too-small", func(q *routerVPNNodeMTUCommand) { q.Value = 1279 }},
+		{"too-large", func(q *routerVPNNodeMTUCommand) { q.Value = 9001 }},
+		{"commit-value", func(q *routerVPNNodeMTUCommand) { q.Action = "commit" }},
+		{"rollback-value", func(q *routerVPNNodeMTUCommand) { q.Action = "rollback" }},
+		{"active-begin", func(q *routerVPNNodeMTUCommand) { q.Action, q.Value = "begin", 0 }},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			owner, engine, _ := desktopNodeMTUFixture(t)
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			before, original := owner.record, owner.inbound
+			request := desktopNodeMTURequest(owner, "set", 1360)
+			test.edit(&request)
+			if err := owner.command(request); err == nil {
+				t.Fatal("invalid command was accepted")
+			}
+			if owner.record != before || owner.inbound != original || engine.current != original || len(engine.values) != 0 {
+				t.Fatal("rejected command altered its captured lease or native interface", owner.record)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUUnownedBeginAndInactiveActionsCannotStart(t *testing.T) {
+	for _, action := range []string{"set", "commit", "rollback"} {
+		t.Run(action, func(t *testing.T) {
+			owner, engine, _ := desktopNodeMTUFixture(t)
+			if err := owner.command(desktopNodeMTURequest(owner, action, 0)); err == nil || owner.record.Active || len(engine.values) != 0 {
+				t.Fatal("inactive action acquired a native lease")
+			}
+		})
+	}
+	for _, bounded := range []bool{false, true} {
+		owner, engine, _ := desktopNodeMTUFixture(t)
+		request := desktopNodeMTURequest(owner, "begin", 0)
+		if bounded {
+			for i := 0; i < 4096; i++ {
+				owner.used[string(rune(i))] = true
+			}
+		} else {
+			request.Value = 1360
+		}
+		if err := owner.command(request); err == nil || owner.record.Active || len(engine.values) != 0 {
+			t.Fatal("unbounded or malformed begin acquired ownership")
+		}
+	}
+}
+
+func TestRouterVPNNodeMTURejectsRetiredOrReplacedNativeReader(t *testing.T) {
+	for _, change := range []string{"guard", "pointer", "index", "mtu", "read-error"} {
+		t.Run(change, func(t *testing.T) {
+			owner, engine, valid := desktopNodeMTUFixture(t)
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			original := owner.inbound.(*desktopMTUTUNFixture)
+			switch change {
+			case "guard":
+				valid.Store(false)
+			case "pointer":
+				// Identical name/index/MTU does not make a new object this owner.
+				engine.current = &desktopMTUTUNFixture{index: original.index, mtu: original.mtu, guard: original.guard}
+			case "index":
+				original.index++
+			case "mtu":
+				original.mtu--
+			case "read-error":
+				engine.readErr = errors.New("fixture readback failed")
+			}
+			if owner.current() == nil || owner.command(desktopNodeMTURequest(owner, "set", 1360)) == nil || len(engine.values) != 0 {
+				t.Fatal("stale owner mutated a different native path")
+			}
+			if err := owner.expire(owner.deadline); err == nil || owner.record.Active || owner.record.Restored || len(engine.values) != 0 {
+				t.Fatal("retired lease falsely confirmed rollback", owner.record)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTULeaseExpiresAfter150SecondsWithoutExtension(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	before := time.Now()
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	after := time.Now()
+	deadline := owner.deadline
+	if deadline.Before(before.Add(150*time.Second)) || deadline.After(after.Add(150*time.Second)) {
+		t.Fatal("lease does not have the bounded 150-second lifetime", deadline.Sub(before))
+	}
+	desktopNodeMTUApply(t, owner, "set", 1360)
+	if owner.deadline != deadline {
+		t.Fatal("candidate changes extended the captured lease")
+	}
+	if err := owner.expire(deadline.Add(-time.Nanosecond)); err != nil || !owner.record.Active || len(engine.values) != 1 {
+		t.Fatal("lease expired before its fixed deadline", err)
+	}
+	if err := owner.expire(deadline); err != nil || owner.record.Active || !owner.record.Restored || owner.record.MTU != 1420 || owner.current() != nil || len(engine.values) != 2 || engine.values[1] != 1420 {
+		t.Fatal("expiry did not restore the exact original readback", err, owner.record)
+	}
+	if !strings.Contains(owner.record.Failure, "expired") || !strings.Contains(owner.record.Failure, "original MTU restored") {
+		t.Fatal("expiry hid its rollback result", owner.record)
+	}
+	if err := owner.expire(deadline.Add(time.Hour)); err != nil || len(engine.values) != 2 {
+		t.Fatal("inactive lease performed a second rollback")
+	}
+}
+
+func TestRouterVPNNodeMTUExpiredLeaseRejectsCommandsBeforeTheNextTick(t *testing.T) {
+	for _, action := range []string{"set", "commit", "rollback"} {
+		t.Run(action, func(t *testing.T) {
+			owner, engine, _ := desktopNodeMTUFixture(t)
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			desktopNodeMTUApply(t, owner, "set", 1360)
+			owner.deadline = time.Now().Add(-time.Nanosecond)
+			value := 0
+			if action == "set" {
+				value = 1280
+			}
+			before := owner.record
+			if err := owner.command(desktopNodeMTURequest(owner, action, value)); err == nil || owner.record != before || len(engine.values) != 1 {
+				t.Fatal("expired lease accepted a command before the expiry tick", action, owner.record)
+			}
+			if err := owner.expire(time.Now()); err != nil || owner.record.Active || !owner.record.Restored || owner.record.MTU != 1420 || len(engine.values) != 2 {
+				t.Fatal("expiry after a rejected command lost the owned rollback", err, owner.record)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTUFailedChangeRetainsExactNativeRollbackReader(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1360)
+	previous := owner.inbound
+	var rollback *desktopMTUTUNFixture
+	engine.change = func(_ context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
+		old := expected.(*desktopMTUTUNFixture)
+		rollback = &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard}
+		engine.current = rollback
+		return rollback, errors.New("candidate failed after native rollback")
+	}
+	request := desktopNodeMTURequest(owner, "set", 1280)
+	if err := owner.command(request); err == nil {
+		t.Fatal("failed native change was reported successful")
+	}
+	if rollback == nil || owner.inbound != rollback || engine.current != rollback || owner.inbound == previous || owner.record.Reader != 3 || owner.record.MTU != 1360 || !owner.record.Active || owner.record.Restored || owner.current() != nil {
+		t.Fatal("failed change lost its exact rollback reader", owner.record)
+	}
+	// A rejected but consumed command is acknowledged by the file consumer;
+	// the next command must address the new native reader and next generation.
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	engine.change = nil
+	desktopNodeMTUApply(t, owner, "rollback", 0)
+	if owner.record.Active || !owner.record.Restored || owner.record.MTU != 1420 || owner.record.Reader != 4 || owner.current() != nil || engine.expected[len(engine.expected)-1] != rollback {
+		t.Fatal("subsequent rollback addressed the retired pre-error reader", owner.record)
+	}
+}
+
+func TestRouterVPNNodeMTUExpiryCannotClaimFailedNativeRollback(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1360)
+	engine.change = func(_ context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
+		old := expected.(*desktopMTUTUNFixture)
+		engine.current = &desktopMTUTUNFixture{index: old.index + 1, mtu: 1360, guard: old.guard}
+		return engine.current, errors.New("original MTU could not be restored")
+	}
+	if err := owner.expire(owner.deadline); err == nil || owner.record.Active || owner.record.Restored || owner.record.MTU != 1360 || owner.record.Reader != 3 || engine.current != owner.inbound || owner.current() != nil {
+		t.Fatal("failed expiry discarded its last exact reader or claimed restoration", owner.record)
+	}
+	if !strings.Contains(owner.record.Failure, "without confirmed rollback") {
+		t.Fatal("failed native rollback was labelled restored", owner.record)
+	}
+}
+
+func TestRouterVPNNodeMTUFailedChangeCannotAdoptReplacementOwner(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	original := owner.inbound.(*desktopMTUTUNFixture)
+	returned := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard}
+	replacement := &desktopMTUTUNFixture{index: 18, mtu: 1360, guard: original.guard}
+	engine.change = func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+		engine.current = replacement
+		return returned, errors.New("another owner replaced the candidate")
+	}
+	if err := owner.command(desktopNodeMTURequest(owner, "set", 1360)); err == nil || owner.inbound != original || owner.record.Reader != 1 || owner.current() == nil {
+		t.Fatal("a foreign current reader was adopted as this command's result", owner.record)
+	}
+	if err := owner.expire(owner.deadline); err == nil || owner.record.Restored || len(engine.values) != 1 || engine.current != replacement {
+		t.Fatal("stale expiry mutated the replacement owner", owner.record)
+	}
+}
+
+func desktopNodeMTUActualBox(t *testing.T) *box.Box {
+	t.Helper()
+	ctx := box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","mtu":1280,"address":["172.29.97.1/30"],"auto_route":true,"strict_route":true,"stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close() })
+	return instance
+}
+
+func TestRouterVPNNodeMTUBoxAdapterRejectsForeignActualNativeTUN(t *testing.T) {
+	live := &routerVPNNodeMTUBox{instance: desktopNodeMTUActualBox(t), tag: "tun-in"}
+	old := &routerVPNNodeMTUBox{instance: desktopNodeMTUActualBox(t), tag: "tun-in"}
+	current, err := live.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	foreign, err := old.Current()
+	if err != nil || foreign == current {
+		t.Fatal("native boxes did not construct independent readers", err)
+	}
+	result, err := live.Change(context.Background(), foreign, 1360)
+	if err == nil || result != foreign {
+		t.Fatal("actual Box adopted a foreign TUN as a failed mutation result", err)
+	}
+	still, err := live.Current()
+	if err != nil || still != current {
+		t.Fatal("stale adapter mutation changed the actual registered TUN", err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	result, err = live.Change(canceled, current, 1360)
+	if err == nil || result != current {
+		t.Fatal("canceled native mutation lost its captured reader", err)
+	}
+	// Construction is deliberately unstarted: it must not expose an interface
+	// readback or open a privileged host TUN merely to satisfy this test.
+	if _, err := newRouterVPNNodeMTU(live, strings.Repeat("a", 32), strings.Repeat("b", 64), strings.Repeat("c", 64), func() bool { return true }); err == nil {
+		t.Fatal("unstarted native TUN reported a retained live interface")
+	}
+	live.tag = "missing-tun"
+	if _, err := live.Current(); err == nil {
+		t.Fatal("missing native TUN tag returned an unrelated inbound")
+	}
+}
+
+func desktopNodeMTUPrivateWorkspace(t *testing.T) (string, string) {
+	t.Helper()
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	raw := []byte(`{"log":{"disabled":true},"inbounds":[{"type":"tun","tag":"tun-in","interface_name":"rvpn-node-test","mtu":1420,"address":["172.29.199.1/30"],"auto_route":false,"dns_mode":"disabled","stack":"system"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"final":"direct"}}`)
+	if err := os.WriteFile(filepath.Join(directory, "sing-box.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	sum := sha256.Sum256(raw)
+	return directory, hex.EncodeToString(sum[:])
+}
+
+func desktopNodeMTUStopped(t *testing.T, directory, digest string) {
+	t.Helper()
+	var result struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	raw := desktopExternalWaitFile(t, directory, "stopped.json")
+	if json.Unmarshal(raw, &result) != nil || result.Schema != 1 || result.Session != desktopExternalSession || result.SourceSHA256 != digest || !result.Closed {
+		t.Fatal("native cleanup did not acknowledge its exact captured source/session")
+	}
+	if strings.Contains(string(raw), "private constructor") || strings.Contains(string(raw), "private cleanup") {
+		t.Fatal("native cleanup acknowledgement leaked a private failure")
+	}
+	info, err := os.Stat(filepath.Join(directory, "stopped.json"))
+	if err != nil || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		t.Fatal("native cleanup acknowledgement was not private", err)
+	}
+}
+
+func TestRouterVPNNodeMTUStopBeforeStartupDoesNotConstructBox(t *testing.T) {
+	directory, digest := desktopNodeMTUPrivateWorkspace(t)
+	desktopExternalStopFile(t, directory, desktopExternalSession, digest)
+	registry := include.InboundRegistry()
+	var constructors atomic.Int32
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(context.Context, adapter.Router, log.ContextLogger, string, option.TunInboundOptions) (adapter.Inbound, error) {
+		constructors.Add(1)
+		return nil, errors.New("private constructor should not run")
+	})
+	previous := globalCtx
+	globalCtx = box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	defer func() { globalCtx = previous }()
+	if err := routerVPNRunNodeMTU(context.Background(), directory, desktopExternalSession, digest); err != nil || constructors.Load() != 0 {
+		t.Fatal("canceled native command constructed a Box before honoring its owned stop", constructors.Load(), err)
+	}
+	desktopNodeMTUStopped(t, directory, digest)
+}
+
+type desktopNodeMTUPartialManager struct {
+	adapter.ServiceManager
+	attempts chan int32
+	allow    chan struct{}
+	calls    atomic.Int32
+}
+
+func (manager *desktopNodeMTUPartialManager) Close() error {
+	count := manager.calls.Add(1)
+	select {
+	case manager.attempts <- count:
+	default:
+	}
+	select {
+	case <-manager.allow:
+		return manager.ServiceManager.Close()
+	default:
+		return errors.New("private cleanup still owned")
+	}
+}
+
+func TestRouterVPNNodeMTUStoppedAcknowledgementWaitsForPartialNativeCleanup(t *testing.T) {
+	directory, digest := desktopNodeMTUPrivateWorkspace(t)
+	partial := &desktopNodeMTUPartialManager{attempts: make(chan int32, 8), allow: make(chan struct{})}
+	registry := include.InboundRegistry()
+	inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, _ string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		// Use the real Box constructor/context and retain its real service
+		// manager behind one deterministic retryable resource boundary.
+		partial.ServiceManager = service.FromContext[adapter.ServiceManager](ctx)
+		if partial.ServiceManager == nil {
+			return nil, errors.New("missing constructed native manager")
+		}
+		service.MustRegister[adapter.ServiceManager](ctx, partial)
+		return nil, errors.New("private constructor failed after allocating managers")
+	})
+	previous := globalCtx
+	globalCtx = box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	defer func() { globalCtx = previous }()
+	done := make(chan error, 1)
+	go func() { done <- routerVPNRunNodeMTU(context.Background(), directory, desktopExternalSession, digest) }()
+	released := false
+	defer func() {
+		if !released {
+			close(partial.allow)
+			_ = desktopExternalWait(t, done)
+		}
+	}()
+	for attempt := int32(1); attempt <= 2; attempt++ {
+		select {
+		case actual := <-partial.attempts:
+			if actual != attempt {
+				t.Fatal("native partial cleanup lost an exact retry", actual)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("actual failed Box construction did not retry its retained resource")
+		}
+		if _, err := os.Lstat(filepath.Join(directory, "stopped.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("stopped acknowledgement preceded native cleanup", err)
+		}
+		select {
+		case <-done:
+			t.Fatal("partial native ownership was abandoned before cleanup")
+		default:
+		}
+	}
+	close(partial.allow)
+	released = true
+	if err := desktopExternalWait(t, done); err == nil || strings.Contains(err.Error(), "private constructor") || strings.Contains(err.Error(), "private cleanup") {
+		t.Fatal("failed constructor was reported as success or leaked a private failure", err)
+	}
+	if partial.calls.Load() < 3 {
+		t.Fatal("owned partial resource was not retried after permission to close")
+	}
+	desktopNodeMTUStopped(t, directory, digest)
+	if _, err := os.Lstat(filepath.Join(directory, "node-mtu-status.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("a failed constructor published a live MTU owner", err)
+	}
+}
+
+type desktopNodeMTUCloseService struct {
+	boxService.Adapter
+	closes atomic.Int32
+}
+
+func (*desktopNodeMTUCloseService) Start(adapter.StartStage) error { return nil }
+func (fixture *desktopNodeMTUCloseService) Close() error {
+	fixture.closes.Add(1)
+	return errors.New("private native close failure")
+}
+
+func TestRouterVPNNodeMTUNativeBoxCloseFailureRemainsUnacknowledged(t *testing.T) {
+	fixture := &desktopNodeMTUCloseService{}
+	registry := include.ServiceRegistry()
+	boxService.Register[struct{}](registry, "routervpn-node-close-fixture", func(_ context.Context, _ log.ContextLogger, tag string, _ struct{}) (adapter.Service, error) {
+		fixture.Adapter = boxService.NewAdapter("routervpn-node-close-fixture", tag)
+		return fixture, nil
+	})
+	ctx, cancel := context.WithCancel(box.Context(context.Background(), include.InboundRegistry(), include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), registry, include.CertificateProviderRegistry()))
+	defer cancel()
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(`{"log":{"disabled":true},"outbounds":[{"type":"direct","tag":"direct"}],"services":[{"type":"routervpn-node-close-fixture","tag":"owned-close"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = instance.Close() })
+	if err := instance.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	owner := &routerVPNExternalNative{box: instance, cancel: cancel}
+	for retry := 0; retry < 2; retry++ {
+		if err := owner.Close(); err == nil || fixture.closes.Load() != 1 {
+			t.Fatal("a failed native Box close became a clean acknowledgement or re-entered its retired managers", err)
+		}
+	}
+}
+
+type desktopNodeMTUStartupInbound struct {
+	inbound.Adapter
+	ctx      context.Context
+	entered  chan struct{}
+	force    chan struct{}
+	canceled atomic.Bool
+	closes   atomic.Int32
+}
+
+func (fixture *desktopNodeMTUStartupInbound) waitForCancellation() error {
+	close(fixture.entered)
+	select {
+	case <-fixture.ctx.Done():
+		fixture.canceled.Store(true)
+		return fixture.ctx.Err()
+	case <-fixture.force:
+		return errors.New("test-only failed-start release")
+	}
+}
+func (fixture *desktopNodeMTUStartupInbound) Start(stage adapter.StartStage) error {
+	if stage == adapter.StartStateStart {
+		return fixture.waitForCancellation()
+	}
+	return nil
+}
+func (fixture *desktopNodeMTUStartupInbound) Close() error {
+	fixture.closes.Add(1)
+	return nil
+}
+
+func TestRouterVPNNodeMTUOwnedCancellationInterruptsNativeStartup(t *testing.T) {
+	for _, phase := range []string{"construction", "start"} {
+		for _, trigger := range []string{"stop-file", "parent-context"} {
+			t.Run(phase+"/"+trigger, func(t *testing.T) {
+				directory, digest := desktopNodeMTUPrivateWorkspace(t)
+				fixture := &desktopNodeMTUStartupInbound{entered: make(chan struct{}), force: make(chan struct{})}
+				registry := include.InboundRegistry()
+				inbound.Register[option.TunInboundOptions](registry, C.TypeTun, func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+					fixture.Adapter, fixture.ctx = inbound.NewAdapter(C.TypeTun, tag), ctx
+					if phase == "construction" {
+						return nil, fixture.waitForCancellation()
+					}
+					return fixture, nil
+				})
+				previous := globalCtx
+				globalCtx = box.Context(context.Background(), registry, include.OutboundRegistry(), include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+				defer func() { globalCtx = previous }()
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				done := make(chan error, 1)
+				go func() { done <- routerVPNRunNodeMTU(ctx, directory, desktopExternalSession, digest) }()
+				var release sync.Once
+				finished := false
+				defer func() {
+					release.Do(func() { close(fixture.force) })
+					cancel()
+					if !finished {
+						_ = desktopExternalWait(t, done)
+					}
+				}()
+				select {
+				case <-fixture.entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("actual native constructor/start did not enter its captured wait")
+				}
+				if trigger == "stop-file" {
+					desktopExternalStopFile(t, directory, desktopExternalSession, digest)
+				} else {
+					cancel()
+				}
+				select {
+				case err := <-done:
+					finished = true
+					if err != nil && strings.Contains(err.Error(), "test-only") {
+						t.Fatal("native startup returned the emergency fixture release")
+					}
+				case <-time.After(3 * time.Second):
+					t.Fatal("owned cancellation did not reach the in-flight native context")
+				}
+				if !fixture.canceled.Load() || phase == "start" && fixture.closes.Load() != 1 {
+					t.Fatal("native cancellation did not drain its exact startup owner", fixture.canceled.Load(), fixture.closes.Load())
+				}
+				desktopNodeMTUStopped(t, directory, digest)
+				if _, err := os.Stat(filepath.Join(directory, "node-mtu-status.json")); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("canceled startup published a running MTU owner", err)
+				}
+			})
+		}
+	}
+}

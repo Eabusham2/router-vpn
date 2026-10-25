@@ -1,7 +1,6 @@
 package main
 
 import (
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -83,9 +82,13 @@ func main() {
 	started := false
 	var cmd *exec.Cmd
 	if !controllerReady(250 * time.Millisecond) {
+		ownerToken, err := portableControllerToken()
+		if err != nil {
+			portableFatal(dataDir, selfTest, err)
+		}
 		cmd = exec.Command(binary)
 		cmd.Dir = dataDir
-		cmd.Env = append(os.Environ(),
+		cmd.Env = append(portableControllerEnvironment(os.Environ(), ownerToken),
 			"HOMEVPN_ROOT="+dataDir,
 			"HOMEVPN_CLIENT_CONFIG="+filepath.Join(dataDir, "client.json"),
 			"HOMEVPN_PORTABLE=1",
@@ -97,43 +100,37 @@ func main() {
 		if err := cmd.Start(); err != nil {
 			portableFatal(dataDir, selfTest, err)
 		}
+		trackPortableController(cmd, ownerToken)
 		started = true
 	}
-	if !waitForController(30 * time.Second) {
-		if started && cmd != nil && cmd.Process != nil {
-			_ = cmd.Process.Kill()
-			_, _ = cmd.Process.Wait()
+	stopOwned := func(cause error) error {
+		if started {
+			return errors.Join(cause, stopPortableController(cmd))
 		}
-		portableFatal(dataDir, selfTest, errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788 within 30 seconds"))
+		return cause
+	}
+	if !waitForController(30 * time.Second) {
+		portableFatal(dataDir, selfTest, stopOwned(errors.New("local Router VPN controller did not become ready on 127.0.0.1:8788 within 30 seconds")))
 	}
 	if selfTest {
 		if err := runSelfTest(dataDir, nativeApp); err != nil {
-			if started {
-				stopPortableController(cmd)
-			}
-			portableFatal(dataDir, selfTest, err)
+			portableFatal(dataDir, selfTest, stopOwned(err))
 		}
-		if started {
-			stopPortableController(cmd)
+		if err := stopOwned(nil); err != nil {
+			portableFatal(dataDir, selfTest, err)
 		}
 		fmt.Println("Router VPN Portable self-test: OK")
 		return
 	}
 	nativeCmd, err := openNativeApp(nativeApp)
 	if err != nil {
-		if started {
-			stopPortableController(cmd)
-		}
-		fatal(err)
+		fatal(stopOwned(err))
 	}
 	if err = nativeCmd.Wait(); err != nil {
-		if started {
-			stopPortableController(cmd)
-		}
-		fatal(fmt.Errorf("native Windows app exited unsuccessfully: %w", err))
+		fatal(stopOwned(fmt.Errorf("native Windows app exited unsuccessfully: %w", err)))
 	}
-	if started {
-		stopPortableController(cmd)
+	if err := stopOwned(nil); err != nil {
+		fatal(err)
 	}
 }
 
@@ -341,20 +338,6 @@ func openNativeApp(script string) (*exec.Cmd, error) {
 		return nil, fmt.Errorf("start native Windows app: %w", err)
 	}
 	return cmd, nil
-}
-
-func stopPortableController(cmd *exec.Cmd) {
-	client := &http.Client{Timeout: 2 * time.Second}
-	req, _ := http.NewRequest(http.MethodPost, localURL+"api/emergency-stop", bytes.NewReader(nil))
-	req.Header.Set("content-type", "application/json")
-	if resp, err := client.Do(req); err == nil {
-		_, _ = io.Copy(io.Discard, resp.Body)
-		_ = resp.Body.Close()
-	}
-	if cmd != nil && cmd.Process != nil {
-		_ = cmd.Process.Kill()
-		_, _ = cmd.Process.Wait()
-	}
 }
 
 func portableFatal(dataDir string, selfTest bool, err error) {

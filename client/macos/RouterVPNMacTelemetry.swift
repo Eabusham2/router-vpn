@@ -328,7 +328,7 @@ extension ProductWindowController {
     }
 
     @objc private func telemetryMtuPerformance(_ sender: NSButton) {
-        telemetryAsync(sender, label: "Retesting current path MTU and bounded MTU throughput…") { try self.api.request("/api/mtu/retest", method: "POST", body: [:], timeout: 130) }
+        showMTUPanel(retest: true)
     }
 
     private func telemetryWalk(_ view: NSView?, id: String) -> NSView? {

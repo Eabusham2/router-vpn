@@ -1,0 +1,458 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/option"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
+)
+
+// Ordinary Router-node MTU uses the same retained native TUN transaction as
+// external paths. The existing authenticated private-node optimizer retains
+// its measurement protocol; only this exact Box may replace its TUN reader.
+type routerVPNNodeMTURecord struct {
+	Schema     int    `json:"schema"`
+	Session    string `json:"session_id"`
+	Config     string `json:"config_sha256"`
+	Path       string `json:"path_id"`
+	Generation uint64 `json:"generation"`
+	Request    string `json:"request_id"`
+	Lease      string `json:"lease_id"`
+	Active     bool   `json:"active"`
+	Restored   bool   `json:"restored"`
+	Expired    bool   `json:"expired,omitempty"`
+	Reader     uint64 `json:"reader"`
+	Interface  string `json:"interface"`
+	Index      int    `json:"index"`
+	MTU        int    `json:"mtu"`
+	Heartbeat  int64  `json:"heartbeat_at"`
+	Failure    string `json:"failure,omitempty"`
+}
+type routerVPNNodeMTUCommand struct {
+	Schema           int    `json:"schema"`
+	Session          string `json:"session_id"`
+	Config           string `json:"config_sha256"`
+	Path             string `json:"path_id"`
+	Generation       uint64 `json:"generation"`
+	Request          string `json:"request_id"`
+	Lease            string `json:"lease_id"`
+	Action           string `json:"action"`
+	Reader           uint64 `json:"reader"`
+	MTU              int    `json:"expected_mtu"`
+	Value            int    `json:"value,omitempty"`
+	RevertToken      string `json:"revert_token,omitempty"`
+	CommitRequest    string `json:"commit_request,omitempty"`
+	CommitGeneration uint64 `json:"commit_generation,omitempty"`
+}
+
+func (request *routerVPNNodeMTUCommand) UnmarshalJSON(raw []byte) error {
+	type plain routerVPNNodeMTUCommand
+	var value plain
+	if !routerVPNMTUStrict(raw, &value) {
+		return routerVPNExternalFailure
+	}
+	var fields map[string]json.RawMessage
+	if json.Unmarshal(raw, &fields) != nil {
+		return routerVPNExternalFailure
+	}
+	for name, raw := range fields {
+		switch name {
+		case "schema", "session_id", "config_sha256", "path_id", "generation", "request_id", "lease_id", "action", "reader", "expected_mtu", "value", "revert_token", "commit_request", "commit_generation":
+		default:
+			return routerVPNExternalFailure
+		}
+		if bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
+			return routerVPNExternalFailure
+		}
+	}
+	*request = routerVPNNodeMTUCommand(value)
+	return nil
+}
+
+type routerVPNNodeCommitRevert struct {
+	request    string
+	generation uint64
+	tokenHash  [32]byte
+}
+type routerVPNNodeMTUEngine interface {
+	Current() (adapter.Inbound, error)
+	Change(context.Context, adapter.Inbound, int) (adapter.Inbound, error)
+}
+type routerVPNNodeMTUBox struct {
+	instance *box.Box
+	tag      string
+}
+
+func (engine *routerVPNNodeMTUBox) Current() (adapter.Inbound, error) {
+	current, ok := engine.instance.Inbound().Get(engine.tag)
+	if !ok {
+		return nil, routerVPNExternalFailure
+	}
+	return current, nil
+}
+func (engine *routerVPNNodeMTUBox) Change(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	return engine.instance.RouterVPNChangeMTU(ctx, expected, mtu)
+}
+
+type routerVPNNodeMTU struct {
+	engine       routerVPNNodeMTUEngine
+	inbound      routerVPNDesktopMTUTUN
+	record       routerVPNNodeMTURecord
+	guard        func() bool
+	used         map[string]bool
+	original     int
+	deadline     time.Time
+	commitRevert *routerVPNNodeCommitRevert
+}
+
+func newRouterVPNNodeMTU(engine routerVPNNodeMTUEngine, session, config, path string, guard func() bool) (*routerVPNNodeMTU, error) {
+	if engine == nil || !routerVPNExternalSession.MatchString(session) || len(config) != 64 || len(path) != 64 || guard == nil || !guard() {
+		return nil, routerVPNExternalFailure
+	}
+	current, err := engine.Current()
+	if err != nil {
+		return nil, err
+	}
+	inbound, ok := current.(routerVPNDesktopMTUTUN)
+	if !ok || inbound.Type() != "tun" {
+		return nil, routerVPNExternalFailure
+	}
+	name, index, mtu, err := inbound.RouterVPNDesktopMTU(guard)
+	if err != nil {
+		return nil, err
+	}
+	owner := &routerVPNNodeMTU{engine: engine, inbound: inbound, guard: guard, used: map[string]bool{}, record: routerVPNNodeMTURecord{Schema: 1, Session: session, Config: config, Path: path, Reader: 1, Interface: name, Index: index, MTU: mtu}}
+	if err = owner.current(); err != nil {
+		return nil, err
+	}
+	return owner, nil
+}
+func (owner *routerVPNNodeMTU) current() error {
+	if !owner.guard() {
+		return routerVPNExternalFailure
+	}
+	actual, err := owner.engine.Current()
+	if err != nil || actual != owner.inbound {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := owner.inbound.RouterVPNDesktopMTUInterface()
+	if err != nil || name != owner.record.Interface || index != owner.record.Index || mtu != owner.record.MTU || !owner.guard() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+func (owner *routerVPNNodeMTU) change(value int) error {
+	return owner.changeBefore(value, time.Time{})
+}
+func (owner *routerVPNNodeMTU) changeBefore(value int, deadline time.Time) error {
+	if owner.current() != nil || value < 1280 || value > 9000 {
+		return routerVPNExternalFailure
+	}
+	if value == owner.record.MTU {
+		return nil
+	}
+	limit := time.Now().Add(10 * time.Second)
+	if !deadline.IsZero() && deadline.Before(limit) {
+		limit = deadline
+	}
+	ctx, cancel := context.WithDeadline(context.Background(), limit)
+	defer cancel()
+	next, changeErr := owner.engine.Change(ctx, owner.inbound, value)
+	actual, err := owner.engine.Current()
+	reader, ok := next.(routerVPNDesktopMTUTUN)
+	if err != nil || !ok || actual != next || reader.Tag() != owner.inbound.Tag() || reader.Type() != "tun" {
+		return routerVPNExternalFailure
+	}
+	name, index, mtu, err := reader.RouterVPNDesktopMTUInterface()
+	if err != nil || name != owner.record.Interface || index < 1 || mtu < 1280 || mtu > 9000 {
+		return routerVPNExternalFailure
+	}
+	owner.inbound = reader
+	owner.record.Reader++
+	owner.record.Index = index
+	owner.record.MTU = mtu
+	if changeErr != nil || ctx.Err() != nil || mtu != value || owner.current() != nil {
+		return routerVPNExternalFailure
+	}
+	return nil
+}
+func (owner *routerVPNNodeMTU) expire(now time.Time) error {
+	if !now.Before(owner.deadline) {
+		owner.commitRevert = nil
+	}
+	if !owner.record.Active || now.Before(owner.deadline) {
+		return nil
+	}
+	err := owner.change(owner.original)
+	owner.record.Active = false
+	owner.record.Expired = true
+	owner.record.Restored = err == nil
+	owner.record.Failure = "captured MTU lease expired; original MTU restored"
+	if err != nil {
+		owner.record.Failure = "captured MTU lease expired without confirmed rollback"
+	}
+	return err
+}
+func (owner *routerVPNNodeMTU) command(request routerVPNNodeMTUCommand) error {
+	if request.Schema != 1 || request.Session != owner.record.Session || request.Config != owner.record.Config || request.Path != owner.record.Path || request.Generation != owner.record.Generation+1 || !routerVPNExternalSession.MatchString(request.Request) || !routerVPNExternalSession.MatchString(request.Lease) {
+		return routerVPNExternalFailure
+	}
+	if request.Action != "begin" && request.Action != "set" && request.Action != "commit" && request.Action != "rollback" && request.Action != "revert-unconfirmed-commit" {
+		return routerVPNExternalFailure
+	}
+	if request.Action != "commit" && request.Action != "revert-unconfirmed-commit" && request.RevertToken != "" || request.Action != "revert-unconfirmed-commit" && (request.CommitRequest != "" || request.CommitGeneration != 0) {
+		return routerVPNExternalFailure
+	}
+	if request.RevertToken != "" && !routerVPNExternalSession.MatchString(request.RevertToken) {
+		return routerVPNExternalFailure
+	}
+	if request.Reader != owner.record.Reader || request.MTU != owner.record.MTU || owner.current() != nil {
+		return routerVPNExternalFailure
+	}
+	if request.Action == "begin" {
+		if owner.record.Active || owner.used[request.Lease] || len(owner.used) >= 4096 || request.Value != 0 {
+			return routerVPNExternalFailure
+		}
+		owner.used[request.Lease] = true
+		owner.record.Lease = request.Lease
+		owner.record.Active = true
+		owner.record.Restored = false
+		owner.record.Expired = false
+		owner.commitRevert = nil
+		owner.original = owner.record.MTU
+		owner.deadline = time.Now().Add(150 * time.Second)
+	} else if request.Action == "revert-unconfirmed-commit" {
+		capture := owner.commitRevert
+		if owner.record.Active || owner.record.Restored || capture == nil || request.Lease != owner.record.Lease || !time.Now().Before(owner.deadline) || request.Value != owner.original || request.CommitRequest != capture.request || request.CommitGeneration != capture.generation || !routerVPNExternalSession.MatchString(request.RevertToken) {
+			return routerVPNExternalFailure
+		}
+		hash := sha256.Sum256([]byte(request.RevertToken))
+		if subtle.ConstantTimeCompare(hash[:], capture.tokenHash[:]) != 1 {
+			return routerVPNExternalFailure
+		}
+		if err := owner.changeBefore(owner.original, owner.deadline); err != nil {
+			return err
+		}
+		owner.record.Restored = true
+		owner.commitRevert = nil
+	} else {
+		if !owner.record.Active || request.Lease != owner.record.Lease || !time.Now().Before(owner.deadline) {
+			return routerVPNExternalFailure
+		}
+		if request.Action == "set" {
+			if err := owner.change(request.Value); err != nil {
+				return err
+			}
+		} else {
+			if request.Value != 0 {
+				return routerVPNExternalFailure
+			}
+			if request.Action == "rollback" {
+				if err := owner.change(owner.original); err != nil {
+					return err
+				}
+				owner.record.Restored = true
+				owner.commitRevert = nil
+			} else if request.RevertToken != "" {
+				owner.commitRevert = &routerVPNNodeCommitRevert{request: request.Request, generation: request.Generation, tokenHash: sha256.Sum256([]byte(request.RevertToken))}
+			}
+			owner.record.Active = false
+		}
+	}
+	return nil
+}
+
+func init() {
+	var directory, session, config string
+	command := &cobra.Command{Use: "routervpn-node", Short: "Run one captured Router VPN node and its retained TUN", Args: cobra.NoArgs, SilenceUsage: true, RunE: func(*cobra.Command, []string) error {
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		return routerVPNRunNodeMTU(ctx, directory, session, config)
+	}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private runtime directory")
+	command.Flags().StringVar(&session, "session", "", "captured runtime identity")
+	command.Flags().StringVar(&config, "config-sha256", "", "captured configuration digest")
+	mainCommand.AddCommand(command)
+}
+
+func routerVPNRunNodeMTU(parent context.Context, directory, session, config string) (failure error) {
+	decoded, decodeErr := hex.DecodeString(config)
+	if parent == nil || !routerVPNExternalSession.MatchString(session) || decodeErr != nil || len(decoded) != 32 || hex.EncodeToString(decoded) != config {
+		return routerVPNExternalFailure
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		return err
+	}
+	defer files.root.Close()
+	for _, name := range []string{"node-mtu-status.json", "node-mtu-request.json", "stopped.json"} {
+		if _, err := files.root.Lstat(name); !errors.Is(err, os.ErrNotExist) {
+			return routerVPNExternalFailure
+		}
+	}
+	raw, err := files.read("sing-box.json", 4<<20)
+	if err != nil {
+		return err
+	}
+	digest := sha256.Sum256(raw)
+	if hex.EncodeToString(digest[:]) != config {
+		return routerVPNExternalFailure
+	}
+	ctx := globalCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(context.WithoutCancel(ctx))))
+	defer cancel()
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	for _, existing := range routerVPNExternalConstructed(ctx) {
+		if existing != nil {
+			return routerVPNExternalFailure
+		}
+	}
+	native := &routerVPNExternalNative{cancel: cancel}
+	var stopped atomic.Bool
+	defer func() {
+		stopped.Store(true)
+		// Partial construction and Box teardown retain ownership until every
+		// close succeeds. Only then may the parent retire this workspace.
+		for native.Close() != nil {
+			failure = routerVPNExternalFailure
+			time.Sleep(100 * time.Millisecond)
+		}
+		closed := struct {
+			routerVPNExternalStop
+			Closed bool `json:"closed"`
+		}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: config}, true}
+		if files.publish("stopped.json", closed) != nil {
+			failure = routerVPNExternalFailure
+		}
+	}()
+	if parent.Err() != nil || files.stopRequested(session, config) {
+		return nil
+	}
+	watchStop, watchDone := make(chan struct{}), make(chan struct{})
+	go func() {
+		defer close(watchDone)
+		ticker := time.NewTicker(25 * time.Millisecond)
+		defer ticker.Stop()
+		for {
+			if parent.Err() != nil || files.stopRequested(session, config) {
+				cancel()
+				return
+			}
+			select {
+			case <-watchStop:
+				return
+			case <-parent.Done():
+				cancel()
+				return
+			case <-ticker.C:
+			}
+		}
+	}()
+	defer func() { close(watchStop); <-watchDone }()
+	instance, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		for _, partial := range routerVPNExternalConstructed(ctx) {
+			if closer, ok := partial.(io.Closer); ok {
+				native.partial = append(native.partial, closer)
+			}
+		}
+		return routerVPNExternalFailure
+	}
+	native.box = instance
+	if err = instance.RouterVPNStrategyStart(); err != nil {
+		return routerVPNExternalFailure
+	}
+	var inbound adapter.Inbound
+	for _, candidate := range instance.Inbound().Inbounds() {
+		if candidate.Type() == "tun" {
+			if inbound != nil {
+				return routerVPNExternalFailure
+			}
+			inbound = candidate
+		}
+	}
+	if inbound == nil {
+		return routerVPNExternalFailure
+	}
+	path := routerVPNDesktopPhysicalPath(instance)
+	guard := func() bool {
+		return !stopped.Load() && parent.Err() == nil && ctx.Err() == nil && path != "" && path == routerVPNDesktopPhysicalPath(instance)
+	}
+	owner, err := newRouterVPNNodeMTU(&routerVPNNodeMTUBox{instance: instance, tag: inbound.Tag()}, session, config, path, guard)
+	if err != nil {
+		return routerVPNExternalFailure
+	}
+	ticker := time.NewTicker(25 * time.Millisecond)
+	defer ticker.Stop()
+	var heartbeat time.Time
+	for {
+		if parent.Err() != nil || files.stopRequested(session, config) {
+			return nil
+		}
+		if owner.expire(time.Now()) != nil || owner.current() != nil {
+			if parent.Err() != nil || files.stopRequested(session, config) {
+				return nil
+			}
+			return routerVPNExternalFailure
+		}
+		var consumed os.FileInfo
+		if raw, readErr := files.read("node-mtu-request.json", 4096); readErr == nil {
+			var request routerVPNNodeMTUCommand
+			if routerVPNMTUStrict(raw, &request) && request.Schema == 1 && request.Session == session && request.Config == config && request.Generation == owner.record.Generation+1 {
+				info, statErr := files.root.Lstat("node-mtu-request.json")
+				again, againErr := files.read("node-mtu-request.json", 4096)
+				if statErr != nil || againErr != nil || string(raw) != string(again) {
+					return routerVPNExternalFailure
+				}
+				consumed = info
+				operationErr := owner.command(request)
+				owner.record.Generation, owner.record.Request = request.Generation, request.Request
+				owner.record.Failure = ""
+				if operationErr != nil {
+					owner.record.Failure = "captured TUN operation rejected"
+				}
+			}
+		}
+		if consumed != nil || time.Since(heartbeat) >= 250*time.Millisecond {
+			heartbeat = time.Now()
+			owner.record.Heartbeat = heartbeat.UnixMilli()
+			if err = files.publish("node-mtu-status.json", owner.record); err != nil {
+				return routerVPNExternalFailure
+			}
+		}
+		if consumed != nil {
+			current, err := files.root.Lstat("node-mtu-request.json")
+			if err != nil || !os.SameFile(current, consumed) || files.root.Remove("node-mtu-request.json") != nil {
+				return routerVPNExternalFailure
+			}
+		}
+		select {
+		case <-parent.Done():
+			return nil
+		case <-ticker.C:
+		}
+	}
+}

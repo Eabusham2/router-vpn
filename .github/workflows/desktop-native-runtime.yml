@@ -20,6 +20,7 @@ permissions:
 jobs:
   kernel-mtu:
     name: Actual native TUN MTU ownership and rollback
+    needs: runtime
     if: inputs.platform == 'all' || inputs.platform == 'linux' || inputs.platform == ''
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -34,7 +35,23 @@ jobs:
       - name: Require actual isolated kernel TUN transaction
         run: |
           test -c /dev/net/tun
+          python3 deploy/test_desktop_node_mtu_kernel_contract.py
           python3 deploy/test_desktop_mtu_kernel.py
+      - uses: actions/download-artifact@v4
+        with:
+          name: RouterVPN-native-runtime-linux-amd64-${{ github.sha }}
+          path: native-mtu-runtime
+      - name: Require shipping node command private-file MTU and checked cleanup
+        run: |
+          python3 deploy/native-runtime-bundle.py extract linux/amd64 native-mtu-runtime/native-linux-amd64.tar.gz native-mtu-runtime/verified
+          python3 deploy/test_desktop_node_mtu_kernel.py --bundle native-mtu-runtime/verified --receipt native-mtu-evidence/node-kernel.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: RouterVPN-node-kernel-MTU-${{ github.sha }}
+          path: native-mtu-evidence
+          if-no-files-found: warn
+          retention-days: 14
 
   targets:
     runs-on: ubuntu-24.04

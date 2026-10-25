@@ -18,7 +18,7 @@ func TestPortableCleanExitSourceContract(t *testing.T) {
 		"nativeCmd.Wait()",
 		"-SelfTest",
 		"stopPortableController(cmd)",
-		`localURL+"api/emergency-stop"`,
+		"trackPortableController(cmd, ownerToken)",
 		"http://10.77.0.1:8787/health",
 	} {
 		if !strings.Contains(s, required) {
@@ -34,6 +34,7 @@ func TestPortableCleanExitSourceContract(t *testing.T) {
 		"chrome.exe",
 		"--app=",
 		"BrowserProfile",
+		".Process.Kill()",
 	} {
 		if strings.Contains(s, forbidden) {
 			t.Fatalf("portable launcher contains retired browser/path fallback %q", forbidden)

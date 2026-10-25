@@ -26,6 +26,7 @@ jobs:
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
             'client/Optimize-RouterVPN-MTU.ps1',
+            'client/RouterVPN-Windows-MTU.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
             'client/test-private-router-vpn-state.ps1',
@@ -56,6 +57,14 @@ jobs:
           ./client/test-windows-help-binding.ps1
           & powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-windows-help-binding.ps1
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 composed Help binding regressions failed' }
+      - name: Native MTU progress, exact cancellation and final rollback receipts
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python deploy/test_desktop_mtu.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 MTU ownership regressions failed' }
+          python deploy/test_desktop_mtu.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 MTU ownership regressions failed' }
       - name: Tor helper test cleanup regressions
         shell: pwsh
         run: |
@@ -105,7 +114,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Continue'
-          $output = & go test -v ./cmd/portable-launcher ./internal/common 2>&1
+          $output = & go test -v ./cmd/portable-launcher ./internal/controllerprocess ./internal/common 2>&1
           $exit = $LASTEXITCODE
           $output | ForEach-Object { Write-Host $_ }
           if ($exit -ne 0) {
@@ -119,3 +128,11 @@ jobs:
           $ErrorActionPreference = 'Continue'
           & go test -v -count=1 -timeout=180s ./cmd/client -run '^TestRuntimeUtilityStartup$'
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - name: Packaged recovery uses the owned Windows launcher
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          python deploy/test_windows_recovery_launcher.py --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 7 recovery launcher dispatch failed' }
+          python deploy/test_windows_recovery_launcher.py --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'PowerShell 5.1 recovery launcher dispatch failed' }

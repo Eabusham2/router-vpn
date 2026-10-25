@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
-	"os/exec"
 	"runtime"
 	"strings"
 	"time"
@@ -17,7 +16,7 @@ func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 	registerPairingRoute(h, a)
 	registerPlatformStandardExitRoutes(h, a)
 	registerExternalProfileRoutes(h, a)
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
 		registerMultihopRoutes(h, a)
 		return
 	}
@@ -26,7 +25,7 @@ func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 }
 
 func nativeMultihopPlatformSupported() bool {
-	return runtime.GOOS == "windows" || runtime.GOOS == "darwin"
+	return retainedNativeMultihopSelected()
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
@@ -70,7 +69,7 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	}
 	base := resolveMultihopEntryBase(control, entry, q.Base)
 	if base != "wg" && base != "awg" {
-		return multihopSelection{}, errors.New("native Windows/macOS multihop requires a captured WireGuard or AmneziaWG entry")
+		return multihopSelection{}, errors.New("native desktop multihop requires a captured WireGuard or AmneziaWG entry")
 	}
 	exitMode := strings.TrimSpace(q.ExitMode)
 	if exitMode == "auto" && q.Execution == "auto" {
@@ -149,24 +148,17 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*exec.Cmd, error) {
-	var cmd *exec.Cmd
-	var err error
+func nativeMultihopPlatformCommand(a *app, sel multihopSelection) (*desktopNodeLaunch, error) {
 	switch runtime.GOOS {
 	case "windows":
-		cmd, err = nativeWindowsMultihopCommand(a, sel)
+		return nativeWindowsMultihopCommand(a, sel)
 	case "darwin":
-		cmd, err = nativeDarwinMultihopCommand(a, sel)
+		return nativeDarwinMultihopCommand(a, sel)
+	case "linux":
+		return prepareOwnedNativeMultihopCommand(a, sel, nil)
 	default:
-		return nil, errors.New("real native multihop is not implemented on this desktop platform")
+		return nil, errors.New("native multihop has no retained desktop runtime on this platform")
 	}
-	if err != nil {
-		return nil, err
-	}
-	if err := registerNativeMultihopDNSRuntime(a, sel, cmd); err != nil {
-		return nil, fmt.Errorf("register native multihop DNS runtime identity: %w", err)
-	}
-	return cmd, nil
 }
 
 func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
@@ -214,9 +206,24 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	network := physicalNetworkIdentity()
+	if network == "" {
+		http.Error(w, "could not capture the physical multihop network", http.StatusConflict)
+		return
+	}
 	sel, err = captureNativeMultihopForApp(a, sel, []string{sel.ExitMode})
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	native, err := preflightOwnedNativeMultihopCommand(a, sel, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	defer func() { _ = retireUnstartedNativeMultihop(native) }()
+	if network != physicalNetworkIdentity() || a.checkConnectionOperation() != nil {
+		http.Error(w, "multihop network or request changed before launch", http.StatusConflict)
 		return
 	}
 
@@ -228,12 +235,17 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd, err := nativeMultihopPlatformCommand(a, sel)
+	if network != physicalNetworkIdentity() {
+		err = errors.New("multihop physical network changed during prior cleanup")
+	} else {
+		err = stageOwnedNativeMultihopCommand(a, sel, native)
+	}
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	cmd := native.command
 	if err = a.checkConnectionOperation(); err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -249,6 +261,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	desktopNodeOwners.Store(a, native)
 	a.mu.Lock()
 	a.cmd = cmd
 	a.state.Mode = "multihop"
@@ -261,6 +274,12 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.state.LastError = ""
 	a.mu.Unlock()
 	setActiveMultihopGraph(a, sel)
+	if err = bindNativeMultihopRuntime(a, native, sel, network); err != nil {
+		message, _ := a.multihopStopFailure(cmd, err.Error())
+		sessionTrackerFor(a).markRequestFailure(message)
+		http.Error(w, message, http.StatusConflict)
+		return
+	}
 	if err = a.checkConnectionOperation(); err != nil {
 		message, cleanupFailed := a.multihopStopFailure(cmd, err.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -305,7 +324,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	a.mu.Lock()
 	if a.cmd != cmd {
 		a.mu.Unlock()
-		clearActiveMultihopGraph(a)
+		retireNativeMultihopGraph(a, native)
 		sessionTrackerFor(a).markRequestFailure("multihop runtime changed during exit proof")
 		http.Error(w, "multihop runtime changed during exit proof", http.StatusConflict)
 		return
@@ -335,6 +354,7 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
+	a.startRouterNodeAutomaticMTU()
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "entry_mode": sel.Native.entryMode, "exit_mode": sel.ExitMode, "exit_path_proof": "passed-through-exit-only-local-proxy", "route": "client TUN -> captured exit proxy -> captured entry endpoint -> exit node -> Internet"})
 }

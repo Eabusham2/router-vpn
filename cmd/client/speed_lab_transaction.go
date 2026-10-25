@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
-	"runtime"
 	"strings"
 	"sync"
 	"time"
@@ -69,7 +68,7 @@ func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTempor
 	}
 	a.mu.Lock()
 	st := a.state
-	busy := st.Connected && st.Phase != "connected" || !st.Connected && profileSettingsBusy(st.Connected, st.Phase) || a.connectionContext != nil
+	busy := a.closing || st.Connected && st.Phase != "connected" || !st.Connected && profileSettingsBusy(st.Connected, st.Phase) || a.connectionContext != nil
 	a.mu.Unlock()
 	if busy {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("wait for the current VPN transition before a temporary Speed Lab test")
@@ -90,7 +89,7 @@ func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTempor
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("temporary Speed Lab could not capture the physical network")
 	}
 	a.mu.Lock()
-	if a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
+	if a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
 		a.mu.Unlock()
 		cancelTest()
 		cancelIntent()
@@ -296,22 +295,10 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 			return plan, err
 		}
 		selection.Control, selection.Entry, selection.Exit = cloneRouterProfile(selection.Control), cloneRouterProfile(selection.Entry), cloneRouterProfile(selection.Exit)
-		if runtime.GOOS != "linux" {
-			selection, err = captureNativeMultihopForApp(a, selection, []string{graph.ExitMode})
+		if retainedNativeMultihopSelected() {
+			selection, err = captureNativeMultihopRestore(a, snapshot.Runtime, graph, selection.Control, selection.Entry, selection.Exit)
 			if err != nil {
 				return plan, err
-			}
-			if selection.Native.source != graph.SourceSHA {
-				// Compare can capture both exit families in a single immutable
-				// proposal. Recreate that same capture before stopping it, while
-				// still restoring only the selected transport/execution below.
-				selection, err = captureNativeMultihopForApp(a, selection, []string{"shadowsocks", "hysteria2"})
-				if err != nil {
-					return plan, err
-				}
-			}
-			if selection.Native.source != graph.SourceSHA || selection.Native.entryMode != graph.EntryMode {
-				return plan, errors.New("previous multihop source changed before its Speed Lab restore capture")
 			}
 		}
 		plan.multihop = &selection
@@ -382,7 +369,13 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 			clear(metadata)
 			return plan, errors.New("previous native configuration differs from its captured identity")
 		}
-		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: config, metadata: metadata}
+		restoredConfig, restoredMetadata, err := capturedDesktopNodeRestoreGraph(launch, config, metadata)
+		clear(config)
+		clear(metadata)
+		if err != nil {
+			return plan, err
+		}
+		plan.native = &desktopNodeLaunch{root: launch.root, endpoint: launch.endpoint, profileID: launch.profileID, mode: launch.mode, config: restoredConfig, metadata: restoredMetadata}
 	}
 	if err := validateSpeedLabIdentity(a, identity); err != nil {
 		clearSpeedLabRestorePlan(plan)

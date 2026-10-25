@@ -332,7 +332,8 @@ extension ProductWindowController {
         let settingsRow = unifiedLabeledRow(title: "Settings")
         let settingsButton = NSButton(title: "Open settings", target: self, action: #selector(openUnifiedSettings)); settingsButton.bezelStyle = .rounded; settingsRow.addArrangedSubview(settingsButton)
         let requirementsSummary = NSTextField(labelWithString: "AUTO requirements: Off"); requirementsSummary.identifier = NSUserInterfaceItemIdentifier("unified-auto-requirements"); requirementsSummary.textColor = .secondaryLabelColor; requirementsSummary.lineBreakMode = .byTruncatingTail; settingsRow.addArrangedSubview(requirementsSummary)
-        let mtu = NSButton(title: "Retest MTU", target: self, action: #selector(retestMTU)); mtu.bezelStyle = .rounded; settingsRow.addArrangedSubview(mtu); controls.addArrangedSubview(settingsRow)
+        let mtu = NSButton(title: "Retest MTU", target: self, action: #selector(retestMTU)); mtu.bezelStyle = .rounded; settingsRow.addArrangedSubview(mtu)
+        let mtuStatus = NSButton(title: "Auto MTU status", target: self, action: #selector(observeMTU)); mtuStatus.bezelStyle = .rounded; settingsRow.addArrangedSubview(mtuStatus); controls.addArrangedSubview(settingsRow)
 
         let compactMode = NSPopUpButton(frame: .zero, pullsDown: false); compactMode.identifier = NSUserInterfaceItemIdentifier("unified-mode-popup"); compactMode.target = self; compactMode.action = #selector(unifiedModeChanged(_:))
         let modeRow = unifiedLabeledRow(title: "Mode"); modeRow.addArrangedSubview(compactMode)

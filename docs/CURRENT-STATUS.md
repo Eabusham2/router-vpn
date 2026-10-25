@@ -7,6 +7,14 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
+The current source also includes Apple candidate-measurement repair `7484eec1`
+and macOS Tor editor integration `b94f5df9`. The Apple probe receives an immutable
+Sendable target while private profiles remain on MainActor; its executable
+fixture compiles the shipping files separately and rejects the original unsafe
+actor crossing. The macOS builder now runs the Tor UI transformation after
+session hardening and compiles the resulting Nodes controls. These source and
+local-test results still require the current commit's Xcode/AppKit CI evidence.
+
 The October 25 continuation adds paired OpenVPN Local/Server/Compare execution
 through the shared native runtime, desktop controller, Android service and Apple
 PacketTunnel. Local and Server use independently provisioned private client
@@ -63,6 +71,26 @@ passed with a real TUN on `3151083fc89b5670e98ad5a54c838425bb7a26ef` in
 including the same-name replacement and stale-owner cases. This verifies that
 kernel transaction on that source; it does not establish Windows/macOS physical
 networking or private-server performance.
+
+Desktop Router-node paths and compatible Router-to-Router multihop now retain
+their native system TUN for Auto/Fixed/Retest/Cancel. Windows, macOS and Linux
+have native progress/cancel views tied to the exact request, session and profile.
+Multihop measures the exit-path system TUN, retains both node identities and the
+proved Local/Server choice, and persists only that exit's measurement fields.
+The entry's MTU, selected DNS, credentials and physical firewall owner remain
+captured. Native Auto resumes correctly when a temporary hold wins before view
+registration or before the previous waiting worker finishes. See
+[DESKTOP-MTU.md](DESKTOP-MTU.md) for the source and executable-test boundaries.
+
+Speed Lab captures the actual ordinary-node/multihop TUN readback as well as
+external native paths. Its restoration updates that TUN value within the
+captured graph and retains the proved execution instead of rerunning Compare.
+Native cleanup failure keeps an operation pending until the retained owner
+closes. Controller and launcher exit now use the same checked drain; the
+launcher requires its own nonce/PID receipt and actual child exit rather than
+terminating the controller while rollback is pending. The expanded actual
+native-command kernel gate is separate from earlier passed low-level TUN
+evidence and requires the new commit's CI result.
 
 Desktop measurements also use a separate fresh-path mailbox bound to the exact
 session, source/configuration hashes, request nonce and generation. Its worker

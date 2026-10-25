@@ -23,6 +23,7 @@ WINDOWS_NATIVE_HELPERS=(
  "client/RouterVPN-Windows-UnifiedShell.ps1",
  "client/RouterVPN-Windows-Telemetry.ps1",
  "client/RouterVPN-Windows-ProfileSettings.ps1",
+ "client/RouterVPN-Windows-MTU.ps1",
  "client/RouterVPN-Windows-Product-v2.ps1",
 )
 

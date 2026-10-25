@@ -30,6 +30,9 @@ EXTERNAL_SESSION=${HOMEVPN_EXTERNAL_SESSION:-}
 if [[ -n "$EXTERNAL_SESSION" ]]; then
   [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$EXTERNAL_SESSION" =~ ^[a-f0-9]{32}$ ]] || { echo 'Invalid captured external native owner' >&2; exit 1; }
   if [[ "$ACTION" == down ]]; then exit 0; fi
+elif [[ -n ${HOMEVPN_NODE_SESSION:-} ]]; then
+  [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$HOMEVPN_NODE_SESSION" =~ ^[a-f0-9]{32}$ && ${HOMEVPN_NODE_CONFIG_SHA256:-} =~ ^[a-f0-9]{64}$ ]] || { echo 'Invalid captured Router node owner' >&2; exit 1; }
+  if [[ "$ACTION" == down ]]; then exit 0; fi
 fi
 
 [[ -f "$CONFIG" && ! -L "$CONFIG" ]] || { echo 'prepared multihop sing-box.json is missing or unsafe' >&2; exit 1; }
@@ -91,6 +94,9 @@ python3 "$OWNER_HELPER" prune "$ROOT" "$PID_MODE"
 if [[ -n ${HOMEVPN_EXTERNAL_SESSION:-} ]]; then
   [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$HOMEVPN_EXTERNAL_SESSION" =~ ^[a-f0-9]{32}$ ]] || { echo 'Invalid captured external native owner' >&2; exit 1; }
   "$SING_BOX" routervpn-external --runtime-dir "$RUNTIME_DIR" --session "$HOMEVPN_EXTERNAL_SESSION" &
+elif [[ -n ${HOMEVPN_NODE_SESSION:-} ]]; then
+  [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && "$HOMEVPN_NODE_SESSION" =~ ^[a-f0-9]{32}$ && ${HOMEVPN_NODE_CONFIG_SHA256:-} =~ ^[a-f0-9]{64}$ ]] || { echo 'Invalid captured Router node TUN owner' >&2; exit 1; }
+  "$SING_BOX" routervpn-node --runtime-dir "$RUNTIME_DIR" --session "$HOMEVPN_NODE_SESSION" --config-sha256 "$HOMEVPN_NODE_CONFIG_SHA256" &
 else
   "$SING_BOX" run -D "$RUNTIME_DIR" -c "$CONFIG" &
 fi

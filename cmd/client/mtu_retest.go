@@ -30,12 +30,15 @@ type mtuRetestSnapshot struct {
 	Profile      common.RouterProfile
 	State        state
 	Mode         string
+	Multihop     *mtuMultihopSnapshot
+	persistence  *mtuMeasurementPersistence
 }
 
 type mtuLiveSnapshot struct {
 	Interface   string
 	Family      int
 	OriginalMTU int
+	Owner       *mtuLiveOwner
 }
 
 type mtuWinner struct {
@@ -47,6 +50,7 @@ type mtuWinner struct {
 }
 
 type mtuMeasurementResult struct {
+	OwnerToken         string      `json:"owner_token"`
 	OK                 bool        `json:"ok"`
 	Interface          string      `json:"interface"`
 	Family             int         `json:"family"`
@@ -88,13 +92,35 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
+	request, err := readMTUViewRequest(w, r)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	lock := mtuRetestLockFor(a)
 	if !lock.TryLock() {
+		if mtuSuspended(a) {
+			retryHeldAutomaticMTU(r.Context())
+		}
 		http.Error(w, "an MTU Retest is already running for this client", http.StatusConflict)
 		return
 	}
 	defer lock.Unlock()
+	if mtuSuspended(a) {
+		retryHeldAutomaticMTU(r.Context())
+		http.Error(w, "MTU is held by a captured measurement or connection transition", http.StatusConflict)
+		return
+	}
 	if launch := desktopExternalMTULaunch(a); launch != nil {
+		identity := mtuViewIdentity{Session: launch.external.session, Profile: launch.external.expected.ExitID, Native: true}
+		ctx, operation, err := beginMTUViewOperation(a, r.Context(), request, identity)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+		writer := &mtuViewResponse{ResponseWriter: w, operation: operation}
+		defer writer.finish()
+		w, r = writer, r.WithContext(ctx)
 		a.retestDesktopExternalMTU(w, r, launch)
 		return
 	}
@@ -104,6 +130,14 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	viewContext, operation, err := beginMTUViewOperation(a, r.Context(), request, mtuViewIdentity{Session: snapshot.SessionID, Profile: snapshot.Profile.ID})
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
+	writer := &mtuViewResponse{ResponseWriter: w, operation: operation}
+	defer writer.finish()
+	w, r = writer, r.WithContext(viewContext)
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", filepath.Dir(a.cfg.ProfilesFile)))
 	if _, err := mtuRetestCommand(a.cfg.ScriptsDir, "measure"); err != nil {
 		http.Error(w, err.Error(), http.StatusNotImplemented)
@@ -119,9 +153,19 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
+	liveSnapshot.Owner, err = captureMTULiveOwner(a, snapshot, liveSnapshot)
+	if liveSnapshot.Owner != nil {
+		defer finishMTULiveOwner(w, liveSnapshot.Owner)
+	}
+	if err != nil {
+		http.Error(w, "MTU Retest could not capture its kernel interface owner: "+err.Error(), http.StatusConflict)
+		return
+	}
+	baseEnv = append(baseEnv, liveSnapshot.Owner.Environment()...)
 
 	ctx, cancel := context.WithTimeout(r.Context(), mtuRetestTimeout)
 	defer cancel()
+	updateMTUViewPhase(ctx, "measuring", liveSnapshot.OriginalMTU)
 	out, runErr := runMTURetestAction(ctx, a.cfg.ScriptsDir, "measure", baseEnv)
 	if ctx.Err() != nil {
 		status := http.StatusRequestTimeout
@@ -137,12 +181,17 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		failMTURetestWithLiveRollback(w, http.StatusBadGateway, "MTU Retest failed closed: "+boundedMTUDetail(out), liveSnapshot)
 		return
 	}
+	updateMTUViewPhase(ctx, "validating", 0)
 	measurement, rawResult, err := decodeMTUMeasurement(out)
 	if err != nil {
 		failMTURetestWithLiveRollback(w, http.StatusBadGateway, "MTU Retest returned an invalid measurement: "+err.Error(), liveSnapshot)
 		return
 	}
 	if err := validateMTUMeasurementAgainstLiveSnapshot(measurement, liveSnapshot); err != nil {
+		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
+		return
+	}
+	if err := liveSnapshot.Owner.ValidateMTU(liveSnapshot.OriginalMTU); err != nil {
 		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
 		return
 	}
@@ -157,6 +206,7 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		"HOMEVPN_MTU_APPLY_FAMILY="+strconv.Itoa(measurement.Family),
 		"HOMEVPN_MTU_APPLY_VALUE="+strconv.Itoa(measurement.Winner.MTU),
 	)
+	updateMTUViewPhase(ctx, "applying", 0)
 	applyOut, applyErr := runMTURetestAction(ctx, a.cfg.ScriptsDir, "apply", applyEnv)
 	if ctx.Err() != nil {
 		status := http.StatusRequestTimeout
@@ -172,11 +222,15 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		failMTURetestWithLiveRollback(w, http.StatusConflict, "MTU Retest measured a winner but refused to adopt it: "+boundedMTUDetail(applyOut), liveSnapshot)
 		return
 	}
+	if err := liveSnapshot.Owner.ValidateMTU(measurement.Winner.MTU); err != nil {
+		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
+		return
+	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 		failMTURetestWithLiveRollback(w, http.StatusConflict, err.Error(), liveSnapshot)
 		return
 	}
-
+	updateMTUViewPhase(ctx, "saving", 0)
 	updated, persistErr := persistMTUMeasurement(a, snapshot, measurement)
 	if persistErr != nil {
 		failMTURetestWithLiveRollback(w, http.StatusInternalServerError, "MTU Retest could not persist the fresh measured result: "+persistErr.Error(), liveSnapshot)
@@ -184,6 +238,7 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 	}
 	if err := validateMTURetestSnapshot(a, snapshot); err != nil {
 		liveRollbackErr := restoreMTULiveSnapshot(liveSnapshot)
+		recordMTUViewRollback(w, liveSnapshot, liveRollbackErr)
 		durableRollbackErr := restoreMTUMeasurementFields(a, snapshot)
 		if liveRollbackErr != nil || durableRollbackErr != nil {
 			detail := err.Error()
@@ -200,6 +255,21 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if ctx.Err() != nil || liveSnapshot.Owner.ValidateMTU(measurement.Winner.MTU) != nil || liveSnapshot.Owner.Commit() != nil {
+		liveRollbackErr := restoreMTULiveSnapshot(liveSnapshot)
+		recordMTUViewRollback(w, liveSnapshot, liveRollbackErr)
+		durableRollbackErr := restoreMTUMeasurementFields(a, snapshot)
+		if liveRollbackErr != nil || durableRollbackErr != nil {
+			http.Error(w, "MTU result could not commit and its rollback was incomplete", http.StatusInternalServerError)
+		} else {
+			http.Error(w, "MTU operation was canceled or its captured interface retired before commit", http.StatusConflict)
+		}
+		return
+	}
+	if err := liveSnapshot.Owner.Close(); err != nil {
+		http.Error(w, "MTU operation completed but its captured owner did not close", http.StatusInternalServerError)
+		return
+	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok": true, "mode": snapshot.Mode,
@@ -217,6 +287,7 @@ func captureMTURetestSnapshot(a *app) (mtuRetestSnapshot, error) {
 	p, ok := a.profileByIDLocked(selectedID)
 	p = common.CloneRouterProfile(p)
 	st := a.state
+	command := a.cmd
 	a.mu.Unlock()
 	if !ok {
 		return mtuRetestSnapshot{}, errors.New("add and select your home router first")
@@ -231,7 +302,7 @@ func captureMTURetestSnapshot(a *app) (mtuRetestSnapshot, error) {
 		return mtuRetestSnapshot{}, errors.New("connect the selected Router VPN node first; MTU Retest benchmarks only the proven private tunnel path")
 	}
 	if st.Mode == "multihop" || st.LogicalMode == "multihop" {
-		return mtuRetestSnapshot{}, errors.New("disconnect multihop and retest each single-hop path separately; one MTU result must not be mislabeled as both hops")
+		return captureMTUMultihopSnapshot(a, p, st, command)
 	}
 	if st.RouterID != "" && st.RouterID != p.ID {
 		return mtuRetestSnapshot{}, errors.New("active Router VPN path does not match the selected node; refusing MTU Retest")
@@ -262,7 +333,7 @@ func captureMTURetestSnapshot(a *app) (mtuRetestSnapshot, error) {
 	return mtuRetestSnapshot{
 		SessionID: session.ID, SelectedID: selectedID,
 		ProfileToken: mtuProfileSnapshotToken(p), StateToken: mtuStateSnapshotToken(st),
-		Profile: p, State: st, Mode: mode,
+		Profile: p, State: st, Mode: mode, persistence: &mtuMeasurementPersistence{},
 	}, nil
 }
 
@@ -297,12 +368,18 @@ func validateMTURetestSnapshot(a *app, snapshot mtuRetestSnapshot) error {
 	if sessionTrackerFor(a).snapshot(0).ID != snapshot.SessionID {
 		return errors.New("VPN session changed while MTU Retest was running; stale result was not adopted")
 	}
+	if err := validateMTUMultihopSource(a, snapshot); err != nil {
+		return err
+	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	if a.profiles.SelectedID != snapshot.SelectedID {
 		return errors.New("selected Router VPN node changed while MTU Retest was running; stale result was not adopted")
 	}
-	current, ok := a.profileByIDLocked(snapshot.SelectedID)
+	if err := validateMTUMultihopLocked(a, snapshot); err != nil {
+		return err
+	}
+	current, ok := a.profileByIDLocked(snapshot.Profile.ID)
 	if !ok || mtuProfileSnapshotToken(current) != snapshot.ProfileToken {
 		return errors.New("Router VPN profile identity/path policy changed while MTU Retest was running; stale result was not adopted")
 	}
@@ -360,6 +437,9 @@ func decodeMTUMeasurement(out []byte) (mtuMeasurementResult, map[string]any, err
 }
 
 func validateMTUMeasurementAgainstLiveSnapshot(measurement mtuMeasurementResult, live mtuLiveSnapshot) error {
+	if live.Owner != nil && measurement.OwnerToken != live.Owner.token {
+		return errors.New("MTU result belongs to a different captured interface operation")
+	}
 	if measurement.Interface != live.Interface || measurement.Family != live.Family || measurement.OriginalMTU != live.OriginalMTU {
 		return errors.New("MTU measurement live interface/family/original value changed after the controller snapshot; stale result was not adopted")
 	}
@@ -372,8 +452,14 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if err := validateMTUMultihopLocked(a, snapshot); err != nil {
+		return common.RouterProfile{}, err
+	}
+	if snapshot.persistence == nil {
+		return common.RouterProfile{}, errors.New("MTU persistence has no captured operation owner")
+	}
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID != snapshot.SelectedID {
+		if a.profiles.Profiles[i].ID != snapshot.Profile.ID {
 			continue
 		}
 		x := &a.profiles.Profiles[i]
@@ -383,6 +469,10 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 		}
 		x.EffectiveMTU = measurement.Winner.MTU
 		x.EffectiveMTUSource = "auto-throughput"
+		if snapshot.Multihop != nil {
+			x.EffectiveMTUSource = "auto-throughput-multihop-exit-path"
+			x.EffectiveUnderlayPMTU = 0
+		}
 		x.EffectiveMTUPathKey = measurement.PathKey
 		x.EffectiveMTUNetworkFingerprint = measurement.NetworkFingerprint
 		x.EffectiveMTUProfileFingerprint = measurement.ProfileFingerprint
@@ -394,7 +484,8 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 			*x = previous
 			return common.RouterProfile{}, err
 		}
-		return *x, nil
+		snapshot.persistence.applied = mtuMeasurementFieldsDigest(*x)
+		return common.CloneRouterProfile(*x), nil
 	}
 	return common.RouterProfile{}, errors.New("selected Router VPN node disappeared before MTU result persistence")
 }
@@ -402,30 +493,45 @@ func persistMTUMeasurement(a *app, snapshot mtuRetestSnapshot, measurement mtuMe
 func restoreMTUMeasurementFields(a *app, snapshot mtuRetestSnapshot) error {
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if snapshot.persistence == nil || snapshot.persistence.applied == "" {
+		return nil
+	}
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID != snapshot.SelectedID {
+		if a.profiles.Profiles[i].ID != snapshot.Profile.ID {
 			continue
 		}
 		x := &a.profiles.Profiles[i]
 		if mtuProfileSnapshotToken(*x) != snapshot.ProfileToken {
 			return errors.New("profile identity changed; refusing to overwrite newer profile state during MTU rollback")
 		}
+		if mtuMeasurementFieldsDigest(*x) != snapshot.persistence.applied {
+			return errors.New("MTU rollback would replace another operation's saved measurement")
+		}
+		previous := common.CloneRouterProfile(*x)
 		x.EffectiveMTU = snapshot.Profile.EffectiveMTU
 		x.EffectiveMTUSource = snapshot.Profile.EffectiveMTUSource
 		x.EffectiveMTUPathKey = snapshot.Profile.EffectiveMTUPathKey
+		x.EffectiveUnderlayPMTU = snapshot.Profile.EffectiveUnderlayPMTU
 		x.EffectiveMTUNetworkFingerprint = snapshot.Profile.EffectiveMTUNetworkFingerprint
 		x.EffectiveMTUProfileFingerprint = snapshot.Profile.EffectiveMTUProfileFingerprint
 		x.EffectiveMTUTestedAt = snapshot.Profile.EffectiveMTUTestedAt
 		x.EffectiveMTUMbps = snapshot.Profile.EffectiveMTUMbps
 		x.EffectiveMTUMedianRTTMs = snapshot.Profile.EffectiveMTUMedianRTTMs
 		x.EffectiveMTUSuccessRatio = snapshot.Profile.EffectiveMTUSuccessRatio
-		return a.persistProfilesLocked()
+		if err := a.persistProfilesLocked(); err != nil {
+			*x = previous
+			return err
+		}
+		snapshot.persistence.applied = ""
+		return nil
 	}
 	return nil
 }
 
 func failMTURetestWithLiveRollback(w http.ResponseWriter, status int, message string, live mtuLiveSnapshot) {
-	if err := restoreMTULiveSnapshot(live); err != nil {
+	err := restoreMTULiveSnapshot(live)
+	recordMTUViewRollback(w, live, err)
+	if err != nil {
 		http.Error(w, message+"; live MTU rollback failed: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -433,44 +539,10 @@ func failMTURetestWithLiveRollback(w http.ResponseWriter, status int, message st
 }
 
 func restoreMTULiveSnapshot(live mtuLiveSnapshot) error {
-	if err := validateMTULiveInterface(live.Interface); err != nil {
-		return err
+	if live.Owner == nil {
+		return errors.New("MTU rollback requires its retained kernel owner")
 	}
-	if (live.Family != 4 && live.Family != 6) || live.OriginalMTU < 576 || live.OriginalMTU > 9000 {
-		return errors.New("refusing invalid MTU rollback snapshot")
-	}
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-	defer cancel()
-	value := strconv.Itoa(live.OriginalMTU)
-	var cmd *exec.Cmd
-	switch runtime.GOOS {
-	case "linux":
-		cmd = exec.CommandContext(ctx, "ip", "link", "set", "dev", live.Interface, "mtu", value)
-	case "darwin":
-		cmd = exec.CommandContext(ctx, "ifconfig", live.Interface, "mtu", value)
-	case "windows":
-		family := "IPv4"
-		if live.Family == 6 {
-			family = "IPv6"
-		}
-		escaped := strings.ReplaceAll(live.Interface, "'", "''")
-		ps := fmt.Sprintf("Set-NetIPInterface -InterfaceAlias '%s' -AddressFamily %s -NlMtuBytes %d -ErrorAction Stop", escaped, family, live.OriginalMTU)
-		cmd = exec.CommandContext(ctx, "powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps)
-	default:
-		return errors.New("live MTU rollback is not implemented on this platform")
-	}
-	out, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("could not restore %s to MTU %d: %s", live.Interface, live.OriginalMTU, boundedMTUDetail(out))
-	}
-	current, err := readMTULiveValue(live.Interface, live.Family)
-	if err != nil {
-		return fmt.Errorf("restored MTU but could not verify it: %w", err)
-	}
-	if current != live.OriginalMTU {
-		return fmt.Errorf("MTU rollback verification read %d instead of %d", current, live.OriginalMTU)
-	}
-	return nil
+	return live.Owner.Restore()
 }
 
 func mtuRouteInterface(host string) (string, error) {
@@ -647,7 +719,14 @@ func runMTURetestAction(ctx context.Context, scriptsDir, action string, env []st
 		return nil, err
 	}
 	cmd = exec.CommandContext(ctx, cmd.Path, cmd.Args[1:]...)
-	cmd.Env = append(os.Environ(), env...)
+	for _, value := range os.Environ() {
+		name, _, _ := strings.Cut(value, "=")
+		upper := strings.ToUpper(name)
+		if !strings.HasPrefix(upper, "HOMEVPN_MTU_") {
+			cmd.Env = append(cmd.Env, value)
+		}
+	}
+	cmd.Env = append(cmd.Env, env...)
 	return cmd.CombinedOutput()
 }
 
@@ -689,6 +768,15 @@ func mtuRetestEnvironment(root string, p common.RouterProfile, st state, mode st
 			"HOMEVPN_MTU_OPERATION_PROFILE_TOKEN="+s.ProfileToken,
 			"HOMEVPN_MTU_OPERATION_STATE_TOKEN="+s.StateToken,
 		)
+		if path := s.Multihop; path != nil {
+			env = append(env,
+				"HOMEVPN_MTU_GRAPH_TOKEN="+path.Token,
+				"HOMEVPN_MTU_GRAPH_SCOPE=multihop-exit-path",
+				"HOMEVPN_MTU_CONTROL_PROFILE_ID="+s.SelectedID,
+				"HOMEVPN_MTU_PHYSICAL_ENTRY_ID="+path.Entry.ID,
+				"HOMEVPN_MTU_PHYSICAL_ENTRY_ENDPOINT="+path.PhysicalEntry,
+			)
+		}
 	}
 	return env
 }

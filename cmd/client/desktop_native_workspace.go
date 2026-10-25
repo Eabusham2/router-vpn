@@ -164,7 +164,8 @@ func desktopRuntimeOwnedFile(name string) bool {
 	switch name {
 	case "sing-box.json", "source.json", "capture.json", "proof.json", "progress.json", "stop.json", "stopped.json", "native-multihop.process.json",
 		".proof.json.pending", ".progress.json.pending", ".stopped.json.pending", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", "mtu-status.json", ".mtu-status.json.pending",
-		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending":
+		"path-request.json", "path-cancel.json", "path-status.json", ".path-status.json.pending",
+		"node-mtu-request.json", "node-mtu-status.json", ".node-mtu-status.json.pending":
 		return true
 	}
 	return false

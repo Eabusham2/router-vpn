@@ -359,6 +359,11 @@ func (a *app) viaEntryCandidatesWith(w http.ResponseWriter, r *http.Request, dep
 	defer a.operationMu.Unlock()
 	c := viaEntryControlFor(a)
 	c.mu.Lock()
+	if a.controllerClosing() {
+		c.mu.Unlock()
+		http.Error(w, errControllerClosing.Error(), http.StatusServiceUnavailable)
+		return
+	}
 	c.pruneNoncesLocked()
 	_, repeated := c.seen[q.RequestID]
 	if repeated || len(c.seen) >= 1024 || (c.owner != nil && (c.owner.running || !c.owner.drained)) {
@@ -624,7 +629,7 @@ func (a *app) viaEntryCandidatesValidate(w http.ResponseWriter, r *http.Request)
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	owner := c.owner
-	if owner == nil || owner.id != q.RequestID || owner.entry != q.EntryID || owner.running || owner.cancelled || !owner.drained || owner.receipt == nil || time.Now().After(owner.receipt.ExpiresAt) || !owner.snapshot.candidates[q.ExitID] || owner.snapshot.validate(a, owner.network) != nil {
+	if a.controllerClosing() || owner == nil || owner.id != q.RequestID || owner.entry != q.EntryID || owner.running || owner.cancelled || !owner.drained || owner.receipt == nil || time.Now().After(owner.receipt.ExpiresAt) || !owner.snapshot.candidates[q.ExitID] || owner.snapshot.validate(a, owner.network) != nil {
 		http.Error(w, "candidate receipt is stale; retest before adopting a measured selection", http.StatusConflict)
 		return
 	}

@@ -19,6 +19,8 @@ $PidFile=Join-Path $RuntimeDir 'native-multihop.process.json'
 $HoldKillSwitch=([string]$env:HOMEVPN_KILLSWITCH_HOLD -eq '1')
 $ExternalSession=[string]$env:HOMEVPN_EXTERNAL_SESSION
 if($ExternalSession-and(([string]$env:HOMEVPN_STANDARD_ENGINE-ne'native')-or($ExternalSession-cnotmatch'^[a-f0-9]{32}$'))){throw 'Invalid captured external native owner.'}
+$NodeSession=[string]$env:HOMEVPN_NODE_SESSION
+if($NodeSession-and(([string]$env:HOMEVPN_STANDARD_ENGINE-ne'native')-or($NodeSession-cnotmatch'^[a-f0-9]{32}$')-or([string]$env:HOMEVPN_NODE_CONFIG_SHA256-cnotmatch'^[a-f0-9]{64}$'))){throw 'Invalid captured Router node owner.'}
 # A bare `Kill` function loses command resolution to Windows PowerShell's
 # built-in kill -> Stop-Process alias, including during read-only checks.
 function Invoke-RouterVPNNativeKillSwitch([string]$Kind){& $KillSwitch -Action $Kind -Root $Root -Endpoint $Endpoint -TunnelAlias $TunnelAlias;if($LASTEXITCODE-ne 0){throw "Windows kill-switch $Kind failed."}}
@@ -33,7 +35,7 @@ function Stop-Owned{
 }
 function Remove-PrivateRuntime{if(Test-Path -LiteralPath $RuntimeDir){[IO.Directory]::Delete($RuntimeDir,$true)}}
 if($Action-eq'down'){
-  if($ExternalSession){Write-Output 'Captured external teardown belongs to the controller after native close acknowledgement.';exit 0}
+  if($ExternalSession-or$NodeSession){Write-Output 'Captured native teardown belongs to the controller after native close acknowledgement.';exit 0}
   [void](Stop-RouterVPNRecordedProcess $PidFile)
   if(-not$HoldKillSwitch){try{Invoke-RouterVPNNativeKillSwitch 'release'}catch{Write-Warning $_.Exception.Message}}
   else{Write-Output 'Windows multihop teardown is holding kill-switch ownership for a fail-closed transition.'}
@@ -58,6 +60,10 @@ try{
   $quoted='"'+$Config+'"'
   $nativeArguments=@('run','-D',('"'+$RuntimeDir+'"'),'-c',$quoted)
   if($ExternalSession){$nativeArguments=@('routervpn-external','--runtime-dir',('"'+$RuntimeDir+'"'),'--session',$ExternalSession)}
+  elseif($env:HOMEVPN_NODE_SESSION){
+    if($env:HOMEVPN_STANDARD_ENGINE-ne'native'-or$env:HOMEVPN_NODE_SESSION-cnotmatch'^[a-f0-9]{32}$'-or$env:HOMEVPN_NODE_CONFIG_SHA256-cnotmatch'^[a-f0-9]{64}$'){throw 'Invalid captured Router node TUN owner.'}
+    $nativeArguments=@('routervpn-node','--runtime-dir',('"'+$RuntimeDir+'"'),'--session',$env:HOMEVPN_NODE_SESSION,'--config-sha256',$env:HOMEVPN_NODE_CONFIG_SHA256)
+  }
   $p=Start-Process -FilePath $SingBox -ArgumentList $nativeArguments -WorkingDirectory $RuntimeDir -PassThru -WindowStyle Hidden
   $OwnedProcess=$p;$OwnedIdentity=Get-RouterVPNProcessIdentity $p
   Write-RouterVPNProcessRecord $PidFile $p

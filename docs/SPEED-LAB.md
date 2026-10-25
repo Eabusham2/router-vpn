@@ -81,10 +81,15 @@ direct requests omit unrelated entry/exit and execution fields. Cancel or
 closing the window cancels that window's owned request; stale completions cannot
 update a replacement window or start another connection.
 
-Native external paths capture the live effective MTU before a temporary test.
-Auto-MTU is held while Speed Lab owns the path, and the captured value is
-restored and re-proved with the original execution. A historical saved MTU is
-not substituted for that live readback.
+Native ordinary-node, compatible Router VPN multihop and external paths capture
+the live effective system-TUN MTU before a temporary test. Auto-MTU is held
+while Speed Lab owns the path, and the captured value is restored and re-proved
+with the original execution. For Router VPN multihop this changes only the
+system TUN: independent entry values, both nodes, DNS and credentials stay in
+the captured graph. A historical saved MTU or the initial configuration's MTU
+is not substituted for that live readback. Holds that interrupt Auto before
+request registration still resume it after the temporary transaction drains.
+See [DESKTOP-MTU.md](DESKTOP-MTU.md).
 
 ### iPhone/iPad
 

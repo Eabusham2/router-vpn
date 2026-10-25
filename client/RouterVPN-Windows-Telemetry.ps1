@@ -157,7 +157,7 @@ function ShowUnifiedPerformance{
  $D.FindName('Durable').Add_Click({try{$P=SelectedNode;&$RunPerf 'Testing 50-sample node latency…' '/api/profile/latency' @{id=[string]$P.id;samples=50} 180 6 $true}catch{$Result.Text=$_.Exception.Message}})
  $D.FindName('Speed').Add_Click({&$RunPerf 'Testing real path speed…' '/api/connection/speed-test' @{bytes=8388608} 45 8 $false})
  $D.FindName('HopSpeed').Add_Click({try{$Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue;if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Choose different multihop entry and exit nodes first.'};&$RunPerf 'Testing routed hop speeds…' '/api/multihop/speed-test' @{entry_id=$Entry;exit_id=$Exit;bytes=4194304} 70 10 $false}catch{$Result.Text=$_.Exception.Message}})
- $D.FindName('Mtu').Add_Click({&$RunPerf 'Retesting throughput + Auto MTU…' '/api/mtu/retest' @{} 130 8 $true})
+ $D.FindName('Mtu').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $D})
  $D.FindName('Close').Add_Click({if([string]$D.Tag-eq'owned'-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
  [void]$D.ShowDialog()
 }

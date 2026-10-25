@@ -331,6 +331,10 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 	if err != nil {
 		return result, err
 	}
+	if operation := mtuViewOperationFrom(parent); operation != nil {
+		identifier = operation.request
+	}
+	updateMTUViewPhase(ctx, "waiting-native-mtu", 0)
 	initial, err := a.waitDesktopMTUIdle(ctx, launch)
 	if err != nil {
 		return result, err
@@ -364,6 +368,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 	if err := writeDesktopMTUControl(launch, "mtu-request.json", request); err != nil {
 		return result, err
 	}
+	updateMTUViewPhase(ctx, "measuring", initial.Status.EffectiveMTU)
 	var written *common.RouterProfile
 	adopted := false
 	defer func() {
@@ -394,6 +399,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 		if err == nil && record.Generation == generation && record.Status.Request == identifier {
 			result = record
 			if record.WaitingCommit && written == nil {
+				updateMTUViewPhase(ctx, "saving", 0)
 				if !a.operationMu.TryLock() {
 					return result, errors.New("connection transition started before MTU adoption")
 				}
@@ -419,6 +425,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				}
 			}
 			if record.Status.Complete && !record.Status.Running {
+				updateMTUViewPhase(ctx, "verifying", 0)
 				if !record.Status.Measured || written == nil || record.Status.EffectiveMTU != written.EffectiveMTU || record.Status.PathKey != written.EffectiveMTUPathKey {
 					return result, errors.New("native MTU did not adopt a freshly verified result")
 				}
@@ -562,6 +569,9 @@ func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
 			return
 		}
 		defer lock.Unlock()
+		if mtuSuspended(a) {
+			return
+		}
 		owner.mu.Lock()
 		if owner.automatic {
 			owner.mu.Unlock()
@@ -577,49 +587,19 @@ func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
 // measurements and restoration have drained. Automatic/Retest work cannot
 // change the interface halfway through a throughput or restoration snapshot.
 func (a *app) holdDesktopMTUForMeasurement(ctx context.Context) (func(), error) {
-	lock := mtuRetestLockFor(a)
-	deadline := time.NewTimer(15 * time.Second)
-	defer deadline.Stop()
-	ticker := time.NewTicker(25 * time.Millisecond)
-	defer ticker.Stop()
-	for !lock.TryLock() {
-		if launch := desktopExternalMTULaunch(a); launch != nil {
-			launch.external.mu.Lock()
-			owner := launch.external.mtu
-			launch.external.mu.Unlock()
-			if owner != nil {
-				owner.mu.Lock()
-				if owner.cancel != nil {
-					if owner.activeAutomatic {
-						owner.automatic = false
-					}
-					owner.cancel()
-				}
-				owner.mu.Unlock()
-			}
-		}
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		case <-deadline.C:
-			return nil, errors.New("MTU cancellation has not drained; measurement was not started")
-		case <-ticker.C:
-		}
-	}
-	var once sync.Once
-	return func() {
-		once.Do(func() {
-			lock.Unlock()
-			if launch := desktopExternalMTULaunch(a); launch != nil {
-				a.startDesktopExternalAutomaticMTU(launch)
-			}
-		})
-	}, nil
+	return a.holdCapturedMTU(ctx)
 }
 
 func (a *app) retestDesktopExternalMTU(w http.ResponseWriter, r *http.Request, launch *desktopNodeLaunch) {
 	result, err := a.runDesktopExternalMTU(r.Context(), launch, true)
 	if err != nil {
+		if operation := mtuViewOperationFrom(r.Context()); operation != nil {
+			if restored, readErr := readDesktopMTURecord(launch); readErr == nil && restored.Status.Request == operation.request && restored.Status.Restored && restored.Status.Complete {
+				operation.mu.Lock()
+				operation.status = restored.Status
+				operation.mu.Unlock()
+			}
+		}
 		http.Error(w, "Native MTU Retest: "+err.Error(), http.StatusConflict)
 		return
 	}
@@ -627,44 +607,28 @@ func (a *app) retestDesktopExternalMTU(w http.ResponseWriter, r *http.Request, l
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "effective_mtu": result.Status.EffectiveMTU, "effective_mtu_source": result.Status.Source, "result": result.Status, "note": "Selected-path HTTPS response and transferred-byte throughput through the owned system TUN; interface MTU readback is separate from an authenticated UDP path-MTU measurement."})
 }
 func (a *app) desktopMTUStatus(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodGet {
-		http.Error(w, "GET only", http.StatusMethodNotAllowed)
-		return
-	}
-	launch := desktopExternalMTULaunch(a)
-	if launch == nil {
-		http.Error(w, "no active native external MTU session", http.StatusConflict)
-		return
-	}
-	if _, err := a.readDesktopExternalProof(launch); err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	record, err := readDesktopMTURecord(launch)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusConflict)
-		return
-	}
-	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"requested": record.Requested, "waiting_commit": record.WaitingCommit, "status": record.Status})
+	a.writeDesktopMTUViewStatus(w, r)
 }
 func (a *app) cancelDesktopMTURoute(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var request struct {
-		Request string `json:"request_id"`
-	}
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 1024))
-	decoder.DisallowUnknownFields()
-	if decoder.Decode(&request) != nil || !desktopMTURequestPattern.MatchString(request.Request) {
+	request, err := readMTUViewRequest(w, r)
+	if err != nil || !desktopMTURequestPattern.MatchString(request.Request) {
 		http.Error(w, "a captured MTU request_id is required", http.StatusBadRequest)
+		return
+	}
+	if cancelMTUViewOperation(a, w, request) {
 		return
 	}
 	launch := desktopExternalMTULaunch(a)
 	if launch == nil {
 		http.Error(w, "native MTU session retired", http.StatusConflict)
+		return
+	}
+	if request.Session != "" && request.Session != launch.external.session || request.Profile != "" && request.Profile != launch.external.expected.ExitID {
+		http.Error(w, "MTU cancellation belongs to another connection", http.StatusConflict)
 		return
 	}
 	launch.external.mu.Lock()

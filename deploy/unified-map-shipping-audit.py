@@ -138,13 +138,20 @@ need(
     "currentPathMs",
 )
 
-# Windows: the packaged launcher copies the native client tree, starts the WPF
-# app, then composes unified-shell and telemetry transforms into Product-v2.
+# Windows: the package and recovery script reach the same owned native
+# launcher, which starts the WPF app and its unified-shell/telemetry composition.
 need(
     "deploy/package-builds.sh",
     'cp -a "$ROOT/client" "$dir/client"',
-    "RouterVPN-Windows-App.ps1",
+    "$launcher=Join-Path $Root 'RouterVPN.exe'",
+    "$process=Start-Process @start",
     "normal native Windows Router VPN app",
+)
+need(
+    "cmd/windows-app-launcher/main.go",
+    'filepath.Join(root, "client", "RouterVPN-Windows-App.ps1")',
+    'ui := hiddenCommand("powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", app, "-BaseUrl", localBaseURL)',
+    "ui.Wait()",
 )
 need(
     "client/RouterVPN-Windows-App.ps1",
@@ -194,7 +201,7 @@ need(
     "RouterVPNConnectionProfiles.swift",
     "RouterVPNConnectionProfileChrome.swift",
     "RouterVPNProfileSettings.swift",
-    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
+    '"$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$MTU_TRANSPORT_SRC" "$MTU_CONTROLLER_SRC" "$MTU_PANEL_SRC" "$GLOBE_SRC" "$PROFILE_SRC"',
     "buildUnifiedUI(); installUnifiedTelemetryUI(); installUnifiedSpeedLabUI(); installUnifiedMapChrome(); installUnifiedConnectionProfileChrome()",
 )
 need(
@@ -221,6 +228,7 @@ need(
     "client/linux/build-native-app.sh",
     "routervpn-auto-requirements-v11.inc",
     "routervpn-unified-shell-v8.inc",
+    "routervpn-mtu-v20.inc",
     "routervpn-telemetry-v9.inc",
     "routervpn-globe-v10.inc",
     "linux_install_telemetry_v9(&app)",
@@ -237,8 +245,13 @@ need(
     '"Settings"',
     '"Mode"',
     '"DNS"',
-    "/api/mtu/retest",
+    "linux_mtu_dialog_v20(((LinuxUnifiedV8 *)data)->app)",
     "Add / manage nodes",
+)
+need(
+    "client/linux/routervpn-mtu-v20.inc",
+    "/api/mtu/retest", "/api/mtu/status", "/api/mtu/cancel",
+    "session_id", "request_id", "waiting_commit", "job_completion", "rv_http_cancel_v16",
 )
 
 # Setup Center/onboarding may never cover the map controls. It is an explicit,

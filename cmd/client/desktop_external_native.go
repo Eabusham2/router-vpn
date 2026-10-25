@@ -101,8 +101,13 @@ func desktopExternalProcessExited(launch *desktopNodeLaunch) bool {
 
 func desktopConnectionProcessDone(a *app, command *exec.Cmd) <-chan struct{} {
 	if raw, ok := desktopNodeOwners.Load(a); ok {
-		if launch, ok := raw.(*desktopNodeLaunch); ok && launch.command == command && launch.external != nil {
-			return desktopExternalProcessDone(launch)
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch.command == command {
+			if launch.external != nil {
+				return desktopExternalProcessDone(launch)
+			}
+			if launch.mtuSession != "" {
+				return desktopNodeProcessDone(launch)
+			}
 		}
 	}
 	done := make(chan struct{})

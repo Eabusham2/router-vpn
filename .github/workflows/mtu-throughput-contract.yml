@@ -8,13 +8,17 @@ on:
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
       - 'modes/test_generated_profile_fingerprint_fail_closed.py'
+      - 'modes/test_mtu_optimizer_owner.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
       - 'client/Optimize-RouterVPN-MTU.ps1'
+      - 'client/test-mtu-optimizer-owner.ps1'
+      - 'deploy/testfixtures/mtu-owner/**'
       - 'client/Private-RouterVPN-State.ps1'
-      - 'cmd/client/mtu_retest.go'
-      - 'cmd/client/mtu_retest_test.go'
+      - 'cmd/client/mtu_*.go'
+      - 'cmd/client/desktop_node_mtu*.go'
+      - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
       - 'deploy/package-builds.sh'
       - '.github/workflows/mtu-throughput-contract.yml'
@@ -24,12 +28,16 @@ on:
       - 'modes/mtu-policy.py'
       - 'modes/test_mtu_policy.py'
       - 'modes/test_generated_profile_fingerprint_fail_closed.py'
+      - 'modes/test_mtu_optimizer_owner.py'
       - 'modes/mtu-throughput-tuner.py'
       - 'modes/mtu-throughput-tuner-platform.py'
       - 'modes/kill-switch-platform.py'
       - 'client/Optimize-RouterVPN-MTU.ps1'
-      - 'cmd/client/mtu_retest.go'
-      - 'cmd/client/mtu_retest_test.go'
+      - 'client/test-mtu-optimizer-owner.ps1'
+      - 'deploy/testfixtures/mtu-owner/**'
+      - 'cmd/client/mtu_*.go'
+      - 'cmd/client/desktop_node_mtu*.go'
+      - 'mobile/desktop/mtu_node*.go.tmpl'
       - 'cmd/client/extras.go'
       - 'deploy/package-builds.sh'
       - '.github/workflows/mtu-throughput-contract.yml'
@@ -48,11 +56,13 @@ jobs:
           go-version: '1.24.x'
           cache: false
       - name: Compile MTU policy and optimizers
-        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py modes/test_generated_profile_fingerprint_fail_closed.py
+        run: python3 -m py_compile modes/network_context.py modes/mtu-policy.py modes/mtu-throughput-tuner.py modes/mtu-throughput-tuner-platform.py modes/test_mtu_policy.py modes/test_generated_profile_fingerprint_fail_closed.py modes/test_mtu_optimizer_owner.py
       - name: Run deterministic MTU policy/network tests
         run: |
           python3 modes/test_mtu_policy.py
           python3 modes/test_generated_profile_fingerprint_fail_closed.py
+      - name: Execute captured MTU helper and retired-owner controls
+        run: python3 modes/test_mtu_optimizer_owner.py -v
       - name: Run deterministic direct and platform-wrapper optimizer self-tests
         run: |
           python3 modes/mtu-throughput-tuner.py --self-test
@@ -94,11 +104,15 @@ jobs:
     runs-on: windows-2022
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.24.x'
+          cache: false
       - name: Parse with Windows PowerShell 5.1
         shell: powershell
         run: |
           $tokens=$null;$errors=$null
-          foreach($file in @('client/Private-RouterVPN-State.ps1','client/Optimize-RouterVPN-MTU.ps1')){
+          foreach($file in @('client/Private-RouterVPN-State.ps1','client/Optimize-RouterVPN-MTU.ps1','client/test-mtu-optimizer-owner.ps1')){
             $tokens=$null;$errors=$null
             [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path $file),[ref]$tokens,[ref]$errors)|Out-Null
             if($errors.Count){$errors|ForEach-Object{Write-Error $_};exit 1}
@@ -106,6 +120,11 @@ jobs:
       - name: Run deterministic Windows self-test
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/Optimize-RouterVPN-MTU.ps1 -Action self-test
+      - name: Execute actual owned MTU helper, adoption and rollback on PowerShell 5.1
+        shell: powershell
+        run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-mtu-optimizer-owner.ps1
+      - name: Verify Windows SDK MTU row and captured LUID mutation contracts
+        run: go test ./cmd/client -count=1 -run '^TestMTUKernel'
       - name: Test private Windows profile-store reader
         shell: powershell
         run: powershell.exe -NoProfile -ExecutionPolicy Bypass -File client/test-private-router-vpn-state.ps1
@@ -113,10 +132,10 @@ jobs:
         shell: powershell
         run: |
           $s=Get-Content -Raw client/Optimize-RouterVPN-MTU.ps1
-          foreach($marker in @('Prove-Node $profile','Ensure-KillSwitch $profile $alias','Set-Mtu $alias $family $original','Find-NetRoute','Set-NetIPInterface','Get-NetworkFingerprint','Get-GeneratedProfileFingerprint','HOMEVPN_NETWORK_CONTEXT','Private-RouterVPN-State.ps1','Get-RouterVPNSelectedProfile','durable_owner=''Router VPN Go controller /api/mtu/retest''')){
+          foreach($marker in @('Prove-Node $profile','Ensure-KillSwitch $profile $alias','Set-Mtu $alias $family $original','Find-NetRoute','Invoke-MtuOwner','--mtu-owner-set','HOMEVPN_MTU_OWNER_TOKEN','Get-NetworkFingerprint','Get-GeneratedProfileFingerprint','HOMEVPN_NETWORK_CONTEXT','Private-RouterVPN-State.ps1','Get-RouterVPNSelectedProfile','durable_owner=''Router VPN Go controller /api/mtu/retest''')){
             if(-not $s.Contains($marker)){throw "missing contract marker: $marker"}
           }
-          foreach($forbidden in @('Persist-Winner','$Ctx.Path+''.mtu.tmp''','Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force')){
+          foreach($forbidden in @('Set-NetIPInterface','Persist-Winner','$Ctx.Path+''.mtu.tmp''','Move-Item -LiteralPath $tmp -Destination $Ctx.Path -Force')){
             if($s.Contains($forbidden)){throw "Windows MTU helper regained direct profile-store persistence: $forbidden"}
           }
           $private=Get-Content -Raw client/Private-RouterVPN-State.ps1

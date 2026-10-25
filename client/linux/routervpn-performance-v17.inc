@@ -83,7 +83,7 @@ static void linux_performance_response_v17(GtkDialog *dialog, int response, gpoi
         path="/api/profile/latency";body=owned;timeout=180000;
     }else if(response==3){path="/api/connection/speed-test";body="{\"bytes\":8388608}";timeout=45000;}
     else if(response==4){path="/api/multihop/status";p->preflight=TRUE;timeout=5000;}
-    else if(response==5){path="/api/mtu/retest";timeout=130000;}
+    else if(response==5){linux_mtu_dialog_v20(p->app);return;}
     if(path!=NULL)linux_performance_begin_v17(p,path,body,timeout,p->preflight);
     g_free(owned);
 }

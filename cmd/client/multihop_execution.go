@@ -18,7 +18,6 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
-	"runtime"
 	"sort"
 	"strings"
 	"sync"
@@ -120,6 +119,7 @@ type desktopExecutionSession struct {
 	candidate     routechoice.Candidate
 	selection     multihopSelection
 	command       *exec.Cmd
+	native        *desktopNodeLaunch
 	descriptorDir string
 	generation    string
 	relay         *desktopRelayOwner
@@ -240,6 +240,9 @@ func (s *desktopExecutionSession) Close(ctx context.Context) error {
 			return errors.New("server lease cleanup is still owned")
 		}
 	}
+	if err := retireUnstartedNativeMultihop(s.native); err != nil {
+		return err
+	}
 	if s.descriptorDir != "" {
 		if err := os.RemoveAll(s.descriptorDir); err != nil {
 			return err
@@ -303,7 +306,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		descriptor = &desktopExecutionDescriptor{Execution: "server", Lease: lease}
 		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q}
 	}
-	s.command, s.descriptorDir, err = desktopExecutionCommand(d.a, sel, descriptor)
+	s.command, s.descriptorDir, s.native, err = desktopExecutionCommand(d.a, sel, descriptor)
 	if err != nil {
 		return s, err
 	}
@@ -312,6 +315,9 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	}
 	if err = s.command.Start(); err != nil {
 		return s, errors.New("owned multihop helper failed to start")
+	}
+	if s.native != nil {
+		desktopNodeOwners.Store(d.a, s.native)
 	}
 	d.a.mu.Lock()
 	d.a.cmd = s.command
@@ -327,6 +333,11 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 	graph, _ := getActiveMultihopGraph(d.a)
 	graph.Execution = string(c.Execution)
 	activeMultihopGraphs.Store(d.a, graph)
+	if s.native != nil {
+		if err := bindNativeMultihopRuntime(d.a, s.native, sel, d.network); err != nil {
+			return s, err
+		}
+	}
 	if s.relay != nil {
 		s.relay.command = s.command
 	}
@@ -555,7 +566,7 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 	if q.ExitMode == "auto" && execution == "auto" {
 		modes = []string{"shadowsocks", "hysteria2"}
 	}
-	if runtime.GOOS != "linux" {
+	if retainedNativeMultihopSelected() {
 		sel, err = captureNativeMultihopForApp(a, sel, modes)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
@@ -684,6 +695,7 @@ func (a *app) runMultihopExecution(w http.ResponseWriter, r *http.Request, sel m
 		http.Error(w, "winner could not be persisted", 500)
 		return
 	}
+	a.startRouterNodeAutomaticMTU()
 	progress.mu.Lock()
 	progress.value.Stage = "selected"
 	progress.mu.Unlock()

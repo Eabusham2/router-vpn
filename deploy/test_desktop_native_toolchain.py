@@ -373,7 +373,7 @@ class DarwinNativeEnvironment(unittest.TestCase):
                         commands.append((args, env.copy()))
                         raise CompilerBoundary()
                     if args[:2] == ['go', 'test']:
-                        self.assertIn('^TestRouterVPNDesktop(External|MTU)', args)
+                        self.assertIn('^TestRouterVPN(Desktop(External|MTU)|NodeMTU)', args)
                         self.assertIn('./cmd/sing-box', args)
                         return ''
                     self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])

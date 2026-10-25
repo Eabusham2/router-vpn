@@ -18,7 +18,7 @@ SPEC.loader.exec_module(CORE)
 
 def enforce_platform_kill_switch() -> None:
     helper = HERE / "kill-switch-platform.py"
-    proc = subprocess.run([sys.executable, str(helper), "apply"], text=True, capture_output=True, check=False)
+    proc = subprocess.run([sys.executable, str(helper), "apply"], env=CORE.mtu_kill_switch_environment(), text=True, capture_output=True, check=False)
     if proc.returncode != 0:
         detail = (proc.stderr or proc.stdout or "").strip()
         raise RuntimeError("strict platform kill switch could not be enforced before MTU optimization" + (": " + detail if detail else ""))

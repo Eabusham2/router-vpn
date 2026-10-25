@@ -385,10 +385,10 @@ func (a *app) startSpeedLabRouterPath(q speedLabRequest) (path speedLabPath, res
 
 func (a *app) resolveSpeedLabMultihop(q speedLabRequest, control common.RouterProfile, profiles []common.RouterProfile) (multihopSelection, error) {
 	request := multihopConnectRequest{EntryID: q.EntryID, ExitID: q.ExitID, Base: q.Base, ExitMode: q.ExitMode, Execution: q.Execution}
-	if runtime.GOOS == "linux" {
+	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
 		return resolveMultihopSelection(control, profiles, request)
 	}
-	if runtime.GOOS == "windows" || runtime.GOOS == "darwin" {
+	if retainedNativeMultihopSelected() {
 		return resolveNativeMultihopSelection(control, profiles, request)
 	}
 	return multihopSelection{}, errors.New("temporary desktop multihop Speed Lab is unavailable on this platform")
@@ -421,7 +421,7 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 	if q.ExitMode == "auto" && execution == "auto" {
 		modes = []string{"shadowsocks", "hysteria2"}
 	}
-	if runtime.GOOS != "linux" && sel.Native == nil {
+	if retainedNativeMultihopSelected() && sel.Native == nil {
 		sel, err = captureNativeMultihopForApp(a, sel, modes)
 		if err != nil {
 			return speedLabPath{}, err

@@ -161,7 +161,7 @@ require_combined(
     ("client/linux/routervpn-unified-shell-v8.inc", "client/linux/routervpn-home-summary-v1.inc", "client/linux/routervpn-telemetry-v9.inc", "client/linux/routervpn-connection-profiles-v11.inc"),
     "/api/profile/settings", "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
     "linux_unified_settings_v8", "linux_unified_auto_requirements_v8", "AUTO requirements", "on_linux_auto_requirements_v11",
-    "Kill switch", "MTU Retest", "/api/connection-profile/setup/load",
+    "Kill switch", "linux_mtu_dialog_v20", "/api/connection-profile/setup/load",
 )
 
 android_settings = require(

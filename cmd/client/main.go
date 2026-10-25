@@ -47,6 +47,7 @@ type app struct {
 	profiles          common.RouterProfileStore
 	mu                sync.Mutex
 	operationMu       sync.Mutex
+	closing           bool // protected by mu; terminal controller shutdown admission
 	connectionContext context.Context
 	connectionCancel  context.CancelFunc
 	state             state
@@ -55,6 +56,13 @@ type app struct {
 }
 
 func main() {
+	if handled, err := mtuOwnerUtility(os.Args[1:]); handled {
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	if handled, err := bundledNativeUtility(os.Args[1:]); handled {
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -153,7 +161,9 @@ func main() {
 	h.HandleFunc("/api/forward/clear", a.clearForward)
 	extraRoutes(h, a)
 	log.Printf("Router VPN client UI: http://%s", c.Listen)
-	log.Fatal(http.ListenAndServe(c.Listen, h))
+	if err := runClientHTTP(a, c.Listen, h); err != nil {
+		log.Fatal(err) // All owned runtimes have completed checked cleanup.
+	}
 }
 
 func persistClientConfig(path string, c common.ClientConfig) error {
@@ -1069,6 +1079,11 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 	a.state.Phase = "checking"
 	a.mu.Unlock()
 	latency, healthErr := a.testHealth(p)
+	if healthErr == nil && native != nil && native.external == nil && native.mtuSession != "" {
+		if _, err := readDesktopNodeMTU(native); err != nil {
+			healthErr = fmt.Errorf("captured native TUN readback is not ready: %w", err)
+		}
+	}
 	if healthErr != nil {
 		if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
 			a.stopOwnedConnectionRuntime(cmd)
@@ -1102,6 +1117,7 @@ func (a *app) startModeAttempt(id string, holdOnFailure bool) error {
 		a.startCoverTraffic(p)
 	}
 	log.Printf("mode %s selected-router path proof OK in %.2f ms", id, float64(latency.Microseconds())/1000)
+	a.startRouterNodeAutomaticMTU()
 	return nil
 }
 
@@ -1110,15 +1126,20 @@ func (a *app) stopMode() error {
 }
 
 func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
-	a.mu.Lock()
-	relayOwner := a.cmd
-	a.mu.Unlock()
+	releaseMTU, relayOwner, err := a.holdMTUForStop()
+	if err != nil {
+		return err
+	}
+	defer releaseMTU()
 	if err := prepareDesktopExternalStop(a, relayOwner); err != nil {
 		a.mu.Lock()
 		a.state.Connected = false
 		a.state.Phase = "failed"
 		a.state.LastError = err.Error()
 		a.mu.Unlock()
+		return err
+	}
+	if err := prepareDesktopNodeStop(a, relayOwner); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -1389,7 +1410,7 @@ func proxyJSON(a *app, w http.ResponseWriter, r *http.Request, path string) {
 		return
 	}
 	body, _ := io.ReadAll(http.MaxBytesReader(w, r.Body, 8192))
-	req, err := http.NewRequest(http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+path, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodPost, strings.TrimRight(p.RouterAPI, "/")+path, bytes.NewReader(body))
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return

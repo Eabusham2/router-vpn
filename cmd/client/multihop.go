@@ -34,6 +34,9 @@ type multihopSelection struct {
 	Base     string
 	ExitMode string
 	Native   *nativeMultihopCapture
+	// A live system-TUN readback captured before a temporary test. This is
+	// applied only to a newly owned restore graph, never to the entry endpoint.
+	restoreMTU int
 }
 
 type multihopNodeSummary struct {
@@ -73,7 +76,11 @@ func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	homeExitProofs.Delete(a)
 }
 
-func clearActiveMultihopGraph(a *app) { activeMultihopGraphs.Delete(a); homeExitProofs.Delete(a) }
+func clearActiveMultihopGraph(a *app) {
+	activeMultihopGraphs.Delete(a)
+	nativeMultihopOwners.Delete(a)
+	homeExitProofs.Delete(a)
+}
 
 func getActiveMultihopGraph(a *app) (activeMultihopGraph, bool) {
 	value, ok := activeMultihopGraphs.Load(a)

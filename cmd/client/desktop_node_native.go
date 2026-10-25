@@ -30,11 +30,15 @@ type desktopNodeLaunch struct {
 	root, endpoint             string
 	config, metadata           []byte
 	configSHA256               string
+	mtuSession                 string
 	policyProfileID            string
 	external                   *desktopExternalRuntime
 	directoryInfo              os.FileInfo
 	directoryRoot              *os.Root
 	workspaceMu                sync.Mutex
+	nodeWaitOnce               sync.Once
+	nodeWaitDone               chan struct{}
+	nodeStopAcknowledged       bool
 }
 
 var desktopNodeOwners sync.Map // map[*app]*desktopNodeLaunch; retained until checked cleanup
@@ -269,7 +273,7 @@ func desktopNativeEnvironment(environment []string, root, profile, endpoint stri
 	for _, entry := range result {
 		name, _, _ := strings.Cut(entry, "=")
 		name = strings.ToUpper(name)
-		if name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" {
+		if name == "HOMEVPN_STANDARD_ENGINE" || name == "HOMEVPN_ROOT" || name == "HOMEVPN_PROFILE_ID" || name == "HOMEVPN_POLICY_PROFILE_ID" || name == "HOMEVPN_ENDPOINT" || name == "HOMEVPN_NATIVE_ENDPOINTS_JSON" || name == "HOMEVPN_NATIVE_EGRESS_JSON" || name == "HOMEVPN_NODE_SESSION" || name == "HOMEVPN_NODE_CONFIG_SHA256" {
 			continue
 		}
 		clean = append(clean, entry)
@@ -368,6 +372,13 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 		return errors.New("native launch graph differs from its captured configuration digest")
 	}
 	launch.configSHA256 = configSHA256
+	if launch.external == nil {
+		identifier, err := randomHex(16)
+		if err != nil {
+			return err
+		}
+		launch.mtuSession = identifier
+	}
 	root, endpoint := launch.root, launch.endpoint
 	directory, err := newPrivateRuntimeDir(root, "native-node")
 	if err != nil {
@@ -409,6 +420,9 @@ func stageDesktopNodeLaunch(a *app, launch *desktopNodeLaunch) error {
 	cmd := exec.Command(args[0], args[1:]...)
 	cmd.Dir = root
 	cmd.Env = desktopNativeEnvironment(os.Environ(), root, launch.profileID, endpoint)
+	if launch.external == nil {
+		cmd.Env = nativeNodeMTUEnvironment(cmd.Env, launch.mtuSession, configSHA256)
+	}
 	if launch.external != nil {
 		clean := cmd.Env[:0]
 		for _, value := range cmd.Env {
@@ -463,7 +477,7 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 		return true, errors.New("native desktop cleanup lost its captured owner")
 	}
 	if _, err := os.Lstat(owner.directory); err == nil {
-		if owner.external != nil {
+		if owner.external != nil || owner.mtuSession != "" {
 			if err := desktopExternalDirectoryCurrent(owner); err != nil {
 				return true, err
 			}
@@ -482,6 +496,16 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 			owner.external.mu.Unlock()
 			if !acknowledged || !desktopExternalProcessExited(owner) {
 				return true, errors.New("native external cleanup has no closed process and lease acknowledgement")
+			}
+			if err := cleanupDesktopNodeLaunch(owner); err != nil {
+				return true, err
+			}
+		} else if owner.mtuSession != "" {
+			owner.workspaceMu.Lock()
+			acknowledged := owner.nodeStopAcknowledged
+			owner.workspaceMu.Unlock()
+			if owner.command.Process != nil && (!acknowledged || !desktopNodeProcessExited(owner)) {
+				return true, errors.New("native Router node cleanup lacks a checked close acknowledgement")
 			}
 			if err := cleanupDesktopNodeLaunch(owner); err != nil {
 				return true, err

@@ -110,6 +110,7 @@ func deterministicLinuxMultihopDNSRuntime(a *app, profileID, runtimeID string) (
 	runtimeID = strings.TrimSpace(runtimeID)
 	a.mu.Lock()
 	st := a.state
+	command := a.cmd
 	a.mu.Unlock()
 	if !st.Connected || st.Phase != "connected" || st.Mode != "multihop" || st.RouterID != profileID || st.RuntimeMode != runtimeID {
 		return activeDNSRuntimeIdentity{}, false, nil
@@ -117,6 +118,13 @@ func deterministicLinuxMultihopDNSRuntime(a *app, profileID, runtimeID string) (
 	graph, ok := getActiveMultihopGraph(a)
 	if !ok || graph.ExitID != profileID || graph.ExitMode != runtimeID {
 		return activeDNSRuntimeIdentity{}, false, nil
+	}
+	if graph.SourceSHA != "" {
+		owner, err := capturedNativeMultihopRuntime(a, command, graph)
+		if err != nil {
+			return activeDNSRuntimeIdentity{}, true, err
+		}
+		return activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: filepath.Join(owner.launch.directory, "sing-box.json")}, true, nil
 	}
 	configPath := filepath.Join(clientRoot(a), "run", "multihop", "exit", "sing-box.json")
 	configPath, err := runtimeConfigUnderPrivateRun(a, configPath)

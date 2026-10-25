@@ -12,28 +12,19 @@ write_provenance(){ python3 "$ROOT/server/scripts/source_provenance.py" "$1" --f
 package_zip(){ local name=$1 dir=$2;(cd "$(dirname "$dir")"&&zip -qr "$OUT/$name.zip" "$(basename "$dir")");}
 package_tgz(){ local name=$1 dir=$2;tar -C "$(dirname "$dir")" -czf "$OUT/$name.tar.gz" "$(basename "$dir")";}
 write_windows_app_launcher(){ local file=$1;cat >"$file" <<'PS1'
+param([switch]$SelfTest)
 $ErrorActionPreference='Stop'
 $Root=Split-Path -Parent $MyInvocation.MyCommand.Path
-$env:HOMEVPN_ROOT=$Root
-$env:HOMEVPN_CLIENT_CONFIG=Join-Path $Root 'client.json'
-$client=Join-Path $Root 'router-vpn-client.exe'
-$app=Join-Path $Root 'client\RouterVPN-Windows-App.ps1'
-if(-not(Test-Path -LiteralPath $app)){throw'Native Router VPN Windows app is missing from this package.'}
-function Test-RouterVPNReady{try{$r=Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/api/status' -TimeoutSec 1;return $r.StatusCode-ge 200-and$r.StatusCode-lt 300}catch{return$false}}
-$owned=$false;$controller=$null
-try{
-  if(-not(Test-RouterVPNReady)){$controller=Start-Process $client -WorkingDirectory $Root -PassThru -WindowStyle Hidden;$owned=$true}
-  $deadline=(Get-Date).AddSeconds(12)
-  while((Get-Date)-lt$deadline-and-not(Test-RouterVPNReady)){Start-Sleep -Milliseconds 200}
-  if(-not(Test-RouterVPNReady)){throw'Router VPN controller did not become ready on 127.0.0.1:8788'}
-  & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $app -BaseUrl 'http://127.0.0.1:8788'
-  if($LASTEXITCODE-ne 0){throw"Router VPN native Windows app exited with code $LASTEXITCODE"}
-}finally{
-  if($owned){
-    try{Invoke-WebRequest -UseBasicParsing -Uri 'http://127.0.0.1:8788/api/emergency-stop' -Method Post -ContentType 'application/json' -Body '{}' -TimeoutSec 2|Out-Null}catch{}
-    if($controller-and-not$controller.HasExited){Stop-Process -InputObject $controller -Force -ErrorAction SilentlyContinue;try{$controller.WaitForExit(3000)|Out-Null}catch{}}
-  }
-}
+$launcher=Join-Path $Root 'RouterVPN.exe'
+if(-not(Test-Path -LiteralPath $launcher -PathType Leaf)){throw'RouterVPN.exe is missing from this package.'}
+# The native launcher owns the controller nonce, checked shutdown and process
+# exit. Keep this recovery entry point on that same lifecycle.
+$start=@{FilePath=$launcher;WorkingDirectory=$Root;Wait=$true;PassThru=$true}
+if($SelfTest){$start.ArgumentList=@('--self-test')}
+$process=Start-Process @start
+$process.Refresh()
+if($null-eq$process.ExitCode){throw'Router VPN launcher did not report its exit status.'}
+exit ([int]$process.ExitCode)
 PS1
 }
 # Package the native Windows Router VPN WPF app and its recovery launcher.

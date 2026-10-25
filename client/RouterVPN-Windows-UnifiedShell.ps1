@@ -680,7 +680,7 @@ $Body=@{entry_id=$Entry;exit_id=$Exit;base=(BaseChoice);exit_mode=(MultihopExitM
 $Result=Api '/api/mtu/retest' 'POST' @{} 130;Log ("MTU Retest: effective=$($Result.effective_mtu) source=$($Result.effective_mtu_source) tested=$($Result.effective_mtu_tested_at)")
 '@
     $legacyMtuNew = @'
-[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source) tested=$($R.effective_mtu_tested_at)")} {param($E)Log ("MTU Retest failed: $E")} $null)
+Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $Window
 '@
     $legacyAutoOld = @'
 $Result=Api '/api/auto' 'POST' @{} 120;Log ("AUTO runtime=$($Result.runtime_mode)")
@@ -753,7 +753,7 @@ $Window.Add_Closing({param($Sender,$Event)if($null-ne$script:UnifiedCandidates){
 (Control 'UnifiedPresetsButton').Add_Click({OpenUnifiedDetail 2})
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
 (Control 'UnifiedSettingsButton').Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
-(Control 'UnifiedMtuButton').Add_Click({if(UnifiedAsyncBusy){Log 'MTU Retest refused: another Router VPN action is running.';return};[void](StartUnifiedApiAsync 'Retesting MTU…' '/api/mtu/retest' 'POST' @{} 130 {param($R)Log ("MTU Retest: effective=$($R.effective_mtu) source=$($R.effective_mtu_source)")} {param($E)Log ('MTU Retest failed: '+$E)} $null)})
+(Control 'UnifiedMtuButton').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $Window})
 (Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})
 $Window.Add_Closed({
     $script:UnifiedAsyncClosed=$true

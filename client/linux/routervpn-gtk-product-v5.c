@@ -84,9 +84,11 @@ static void on_run_tutorial_v5(GtkButton *button, gpointer data) {
     show_onboarding_v5((App *)data, TRUE);
 }
 
+static void linux_mtu_dialog_v20(App *app);
+
 static void on_mtu_retest_v5(GtkButton *button, gpointer data) {
     (void)button;
-    post_and_log((App *)data, "/api/mtu/retest", "{}", 130000, "MTU Retest");
+    linux_mtu_dialog_v20((App *)data);
 }
 
 static GtkWidget *find_button_v5(GtkWidget *root, const char *label) {

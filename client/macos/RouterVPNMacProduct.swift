@@ -62,6 +62,7 @@ private final class MultihopProgressTransportDelegate: NSObject, URLSessionTaskD
 
 final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let api: ProductAPI
+    var mtuPanel: RouterVPNMacMTUPanel?
     let statusLabel = NSTextField(labelWithString: "Checking…")
     let detailLabel = NSTextField(wrappingLabelWithString: "")
     let errorLabel = NSTextField(wrappingLabelWithString: "")
@@ -161,7 +162,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func advancedView() -> NSView {
         let s = NSStackView(); s.orientation = .vertical; s.spacing = 10; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Real Router VPN multihop path: client TUN → exit transport → entry WireGuard → exit node → Internet. External hops use the separate validated external-connect path in Nodes & Map. MTU Retest is only accepted while a single Router VPN node is connected with Auto MTU; it compares bounded private-node loss/RTT/throughput candidates and never claims MTU caused an earlier cellular regression."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
+        let note = NSTextField(wrappingLabelWithString: "Real multihop uses the captured entry mode and exit transport. External hops use the validated external-connect path in Nodes & Map. MTU opens a live progress panel for this connected path, with reported candidate measurements and cancellation that waits for rollback."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
         let selectors = NSStackView(); selectors.orientation = .horizontal; selectors.spacing = 8
         let entry = NSStackView(); entry.orientation = .vertical; entry.addArrangedSubview(label("Entry node")); entry.addArrangedSubview(multihopEntryPopup)
         let exit = NSStackView(); exit.orientation = .vertical; exit.addArrangedSubview(label("Exit node")); exit.addArrangedSubview(multihopExitPopup)
@@ -298,7 +299,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let presets: [(String,String)] = [("",""),("1.1.1.1","cloudflare-dns.com"),("2606:4700:4700::1111","cloudflare-dns.com"),("8.8.8.8","dns.google"),("2001:4860:4860::8888","dns.google"),("9.9.9.9","dns.quad9.net"),("2620:fe::fe","dns.quad9.net")]
         let i = max(0, min(dnsPresetPopup.indexOfSelectedItem, presets.count - 1)); guard i > 0 else { return }; dnsHostField.stringValue = presets[i].0; dnsServerNameField.stringValue = presets[i].1
     }
-    @objc func retestMTU() { asyncAction { String(data: try self.api.request("/api/mtu/retest", method: "POST", body: [:], timeout: 125), encoding: .utf8) ?? "MTU Retest completed" } }
+    @objc func retestMTU() { showMTUPanel(retest: true) }
     @objc func emergencyStop() { asyncAction { _ = try self.api.request("/api/emergency-stop", method: "POST", body: [:], timeout: 20); return "Emergency stop completed." } }
     @objc func refreshAction() { refreshAll() }
     @objc func refreshAdvancedAction() { refreshAdvanced() }
@@ -373,16 +374,82 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func renderMap() { map.removeAnnotations(map.annotations); var annotations: [RouterAnnotation] = []; for p in profiles { let lat = (p["latitude"] as? NSNumber)?.doubleValue ?? 0; let lon = (p["longitude"] as? NSNumber)?.doubleValue ?? 0; guard CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)), !(lat == 0 && lon == 0) else { continue }; annotations.append(RouterAnnotation(id: p["id"] as? String ?? "", name: p["name"] as? String ?? "Router", location: p["location"] as? String ?? "", latency: (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0, lat: lat, lon: lon)) }; map.addAnnotations(annotations); if !annotations.isEmpty { map.showAnnotations(annotations, animated: false) } }
     func refreshModes() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let modes = try api.json("/api/logical-modes", timeout: 12) as? [[String: Any]] else { return }; let ready = modes.filter { $0["available"] as? Bool == true }; DispatchQueue.main.async { self.modeIDs = ready.compactMap { $0["id"] as? String }; self.modePopup.removeAllItems(); self.modePopup.addItems(withTitles: ready.map { $0["name"] as? String ?? $0["id"] as? String ?? "Mode" }); self.modesText.string = modes.map { mode in var layerSet = Set<String>(); if let variants = mode["variants"] as? [String: Any] { for value in variants.values { if let variant = value as? [String: Any], let raw = variant["mode"] as? [String: Any], let layers = raw["layers"] as? [String] { for layer in layers { if !layer.isEmpty { layerSet.insert(layer) } } } } }; let layers = layerSet.sorted().isEmpty ? "—" : layerSet.sorted().joined(separator: " • "); let pingMin=(mode["ping_min_ms"] as? NSNumber)?.doubleValue ?? 0, pingMax=(mode["ping_max_ms"] as? NSNumber)?.doubleValue ?? 0, trafficMin=(mode["traffic_min_pct"] as? NSNumber)?.doubleValue ?? 0, trafficMax=(mode["traffic_max_pct"] as? NSNumber)?.doubleValue ?? 0, speedMin=(mode["speed_loss_min_pct"] as? NSNumber)?.doubleValue ?? 0, speedMax=(mode["speed_loss_max_pct"] as? NSNumber)?.doubleValue ?? 0; let available=mode["available"] as? Bool ?? false; let bases=(mode["ready_bases"] as? [String] ?? []).joined(separator: ", "); let reason=(mode["reason"] as? String ?? "").isEmpty ? (available ? "selected variant is runnable; final Connected still requires selected-path proof" : "no runnable variant") : (mode["reason"] as? String ?? ""); return "\(available ? "✓" : "—") \(mode["name"] as? String ?? "Mode")\n  \(mode["description"] as? String ?? "")\n  layers: \(layers)\n  added latency \(String(format: "%.1f–%.1f ms", pingMin,pingMax)) • traffic \(String(format: "+%.1f–%.1f%%",trafficMin,trafficMax)) • speed loss \(String(format: "%.1f–%.1f%%",speedMin,speedMax))\n  readiness: \(available ? "Ready" : "Unavailable")\(bases.isEmpty ? "" : " • bases: \(bases)")\n  reason: \(reason)" }.joined(separator: "\n\n") } } catch { } } }
-    func refreshAdvanced() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { let data = try api.request("/api/multihop/status", timeout: 10); guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }; let nodes = obj["nodes"] as? [[String: Any]] ?? []; let ids = nodes.compactMap { $0["id"] as? String }; let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; let savedEntry = obj["entry_id"] as? String ?? ""; let savedExit = obj["exit_id"] as? String ?? ""; let prettyData = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]); let pretty = String(data: prettyData, encoding: .utf8) ?? ""; DispatchQueue.main.async { let oldEntry = self.multihopEntryPopup.indexOfSelectedItem >= 0 && self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem] : savedEntry; let oldExit = self.multihopExitPopup.indexOfSelectedItem >= 0 && self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem] : savedExit; self.multihopNodeIDs = ids; self.multihopEntryPopup.removeAllItems(); self.multihopExitPopup.removeAllItems(); self.populateIdentityPopup(self.multihopEntryPopup, names: names, ids: ids); self.populateIdentityPopup(self.multihopExitPopup, names: names, ids: ids); if let i = ids.firstIndex(of: oldEntry) { self.multihopEntryPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedEntry) { self.multihopEntryPopup.selectItem(at: i) }; if let i = ids.firstIndex(of: oldExit) { self.multihopExitPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedExit) { self.multihopExitPopup.selectItem(at: i) }; self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(obj); self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest is available above only for a connected single Router VPN node with Auto MTU. Results are network/path-specific and report effective MTU plus measured private-node throughput/RTT/success. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof." } } catch { DispatchQueue.main.async { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" } } } }
+    func refreshAdvanced() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { let data = try api.request("/api/multihop/status", timeout: 10); guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }; let nodes = obj["nodes"] as? [[String: Any]] ?? []; let ids = nodes.compactMap { $0["id"] as? String }; let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; let savedEntry = obj["entry_id"] as? String ?? ""; let savedExit = obj["exit_id"] as? String ?? ""; let prettyData = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]); let pretty = String(data: prettyData, encoding: .utf8) ?? ""; DispatchQueue.main.async { let oldEntry = self.multihopEntryPopup.indexOfSelectedItem >= 0 && self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem] : savedEntry; let oldExit = self.multihopExitPopup.indexOfSelectedItem >= 0 && self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem] : savedExit; self.multihopNodeIDs = ids; self.multihopEntryPopup.removeAllItems(); self.multihopExitPopup.removeAllItems(); self.populateIdentityPopup(self.multihopEntryPopup, names: names, ids: ids); self.populateIdentityPopup(self.multihopExitPopup, names: names, ids: ids); if let i = ids.firstIndex(of: oldEntry) { self.multihopEntryPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedEntry) { self.multihopEntryPopup.selectItem(at: i) }; if let i = ids.firstIndex(of: oldExit) { self.multihopExitPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedExit) { self.multihopExitPopup.selectItem(at: i) }; self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(obj); self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest opens the captured-path progress panel. Auto status, reported candidate measurements, effective MTU and cancellation remain tied to that connection until rollback and the owned request finish. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof." } } catch { DispatchQueue.main.async { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" } } } }
     func appendHelp(_ message: String) { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; helpText.textStorage?.append(NSAttributedString(string: "[\(f.string(from: Date()))] \(message.trimmingCharacters(in: .whitespacesAndNewlines))\n")); helpText.scrollToEndOfDocument(nil) }
 }
 
-final class ProductDelegate: NSObject, NSApplicationDelegate {
+@MainActor final class ProductDelegate: NSObject, NSApplicationDelegate {
     let api = ProductAPI(); var wc: ProductWindowController?; var controller: Process?; var ownsController = false
+    var controllerOwnerToken = ""
+    var shutdown: RouterVPNMacShutdownController?
+    var shutdownPanel: RouterVPNMacShutdownPanel?
+    private var terminationReplyPending = false
     func applicationDidFinishLaunching(_ notification: Notification) { NSApp.setActivationPolicy(.regular); do { try ensureController(); let w = ProductWindowController(api: api); wc = w; w.showWindow(nil); w.window?.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true) } catch { let a = NSAlert(); a.alertStyle = .critical; a.messageText = "Router VPN could not start"; a.informativeText = error.localizedDescription; a.runModal(); NSApp.terminate(nil) } }
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool { true }
-    func applicationWillTerminate(_ notification: Notification) { guard ownsController else { return }; _ = try? api.request("/api/emergency-stop", method: "POST", body: [:], timeout: 2); if let controller, controller.isRunning { controller.terminate() } }
-    func ensureController() throws { if api.ready() { return }; let root = Bundle.main.bundleURL.deletingLastPathComponent(); let binary = root.appendingPathComponent("router-vpn-client"); let config = root.appendingPathComponent("client.json"); guard FileManager.default.isExecutableFile(atPath: binary.path), FileManager.default.fileExists(atPath: config.path) else { throw NSError(domain: "RouterVPNMac", code: 10, userInfo: [NSLocalizedDescriptionKey: "RouterVPN.app must stay beside router-vpn-client and client.json in its package."]) }; let p = Process(); p.executableURL = binary; p.currentDirectoryURL = root; var env = ProcessInfo.processInfo.environment; env["HOMEVPN_ROOT"] = root.path; env["HOMEVPN_CLIENT_CONFIG"] = config.path; env["HOMEVPN_NATIVE_APP"] = "macos-appkit-product"; p.environment = env; p.standardOutput = FileHandle.nullDevice; p.standardError = FileHandle.nullDevice; try p.run(); controller = p; ownsController = true; let deadline = Date().addingTimeInterval(12); while Date() < deadline { if api.ready() { return }; if !p.isRunning { break }; Thread.sleep(forTimeInterval: 0.2) }; if p.isRunning { p.terminate() }; throw NSError(domain: "RouterVPNMac", code: 11, userInfo: [NSLocalizedDescriptionKey: "Local Router VPN controller did not become ready on 127.0.0.1:8788."]) }
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        guard ownsController else { return .terminateNow }
+        guard let process = controller else { return .terminateCancel }
+        if terminationReplyPending { return .terminateLater }
+        let identity = RouterVPNMacShutdownIdentity(processID: process.processIdentifier, token: controllerOwnerToken)
+        if let previous = shutdown, previous.process !== process || previous.identity != identity {
+            previous.retire(); shutdown = nil
+        }
+        let flow: RouterVPNMacShutdownController
+        if let existing = shutdown { flow = existing }
+        else {
+            flow = RouterVPNMacShutdownController(baseURL: routerVPNProductBaseURL, identity: identity, process: process,
+                isCurrent: { [weak self, weak process] in
+                    guard let self, let process else { return false }
+                    return self.ownsController && self.controller === process && self.controllerOwnerToken == identity.token
+                })
+            shutdown = flow
+        }
+        if shutdownPanel == nil { shutdownPanel = RouterVPNMacShutdownPanel() }
+        shutdownPanel?.onRetry = { [weak sender] in sender?.terminate(nil) }
+        flow.onUpdate = { [weak self, weak flow] in
+            guard let self, let flow, self.shutdown === flow else { return }
+            self.shutdownPanel?.present(flow)
+        }
+        flow.onFinish = { [weak self, weak sender, weak flow] allowed in
+            guard let self, let flow, self.shutdown === flow, self.terminationReplyPending else { return }
+            self.terminationReplyPending = false
+            sender?.reply(toApplicationShouldTerminate: allowed)
+        }
+        terminationReplyPending = true
+        flow.start()
+        return .terminateLater
+    }
+    func applicationWillTerminate(_ notification: Notification) {
+        // The terminateLater callback already required the checked receipt and
+        // this exact Process exit. No signal or emergency timeout belongs here.
+    }
+    func ensureController() throws {
+        if api.ready() { return }
+        let root = Bundle.main.bundleURL.deletingLastPathComponent()
+        let binary = root.appendingPathComponent("router-vpn-client")
+        let config = root.appendingPathComponent("client.json")
+        guard FileManager.default.isExecutableFile(atPath: binary.path), FileManager.default.fileExists(atPath: config.path) else {
+            throw NSError(domain: "RouterVPNMac", code: 10, userInfo: [NSLocalizedDescriptionKey: "RouterVPN.app must stay beside router-vpn-client and client.json in its package."])
+        }
+        let token = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let process = Process(); process.executableURL = binary; process.currentDirectoryURL = root
+        var environment = ProcessInfo.processInfo.environment
+        environment["HOMEVPN_ROOT"] = root.path; environment["HOMEVPN_CLIENT_CONFIG"] = config.path
+        environment["HOMEVPN_NATIVE_APP"] = "macos-appkit-product"; environment["HOMEVPN_CONTROLLER_OWNER"] = token
+        process.environment = environment
+        process.standardOutput = FileHandle.nullDevice; process.standardError = FileHandle.nullDevice
+        try process.run()
+        controller = process; controllerOwnerToken = token; ownsController = true
+        let deadline = Date().addingTimeInterval(12)
+        while Date() < deadline {
+            if !process.isRunning { break }
+            if api.ready() { return }
+            Thread.sleep(forTimeInterval: 0.2)
+        }
+        // A slow startup may already own native resources. The termination
+        // callback uses the same checked shutdown protocol instead of killing it.
+        throw NSError(domain: "RouterVPNMac", code: 11, userInfo: [NSLocalizedDescriptionKey: "Local Router VPN controller did not become ready on 127.0.0.1:8788. Router VPN will wait for checked cleanup before closing."])
+    }
 }
 
 func runProductSelfTest() -> Int32 {

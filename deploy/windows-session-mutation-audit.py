@@ -78,7 +78,7 @@ for marker in (
     '$script:UnifiedAsyncClient.SendAsync($Req,$Cts.Token)',
     "'Cancel / Disconnect'",
     "StartUnifiedApiAsync 'Disconnecting…'",
-    "StartUnifiedApiAsync 'Retesting MTU…'",
+    "Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $Window",
     "function StartUnifiedRefreshAsync",
     "function CancelUnifiedRefreshAsync",
     "function ApplyUnifiedRefreshSnapshot",
@@ -144,7 +144,7 @@ for forbidden in (
 
 for marker in (
     "StartUnifiedApiAsync 'Connecting multihop…'",
-    "StartUnifiedApiAsync 'Retesting MTU…'",
+    "Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $Window",
     "StartUnifiedApiAsync 'Legacy AUTO…'",
     "StartUnifiedApiAsync 'Connecting selected mode…'",
     "StartUnifiedApiAsync 'Retesting DNS…'",

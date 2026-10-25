@@ -28,6 +28,10 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 	if !a.operationMu.TryLock() {
 		return nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
+	if a.controllerClosing() {
+		a.operationMu.Unlock()
+		return nil, errControllerClosing
+	}
 	if err := guardViaEntryDecision(a); err != nil {
 		a.operationMu.Unlock()
 		return nil, err
@@ -36,6 +40,9 @@ func (a *app) beginNodeBoundOperation() (func(), error) {
 }
 
 func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
+	if a.controllerClosing() {
+		return nil, errControllerClosing
+	}
 	if hasInternalMutationContext(r) {
 		return func() {}, nil
 	}
@@ -43,8 +50,13 @@ func (a *app) beginMutationOperation(r *http.Request) (func(), error) {
 		return nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
 	a.mu.Lock()
+	closing := a.closing
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
+	if closing {
+		a.operationMu.Unlock()
+		return nil, errControllerClosing
+	}
 	if busy {
 		a.operationMu.Unlock()
 		return nil, errors.New("disconnect and wait for Router VPN to become fully idle before changing session or profile state")
@@ -77,8 +89,13 @@ func (a *app) beginConnectionOperation() (context.Context, func(), error) {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
 	a.mu.Lock()
+	closing := a.closing
 	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
 	a.mu.Unlock()
+	if closing {
+		a.operationMu.Unlock()
+		return nil, nil, errControllerClosing
+	}
 	if busy {
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN is connected or transitioning; disconnect before starting another connection")
@@ -100,7 +117,7 @@ func (a *app) beginConnectionOperation() (context.Context, func(), error) {
 	// connection context/state. operationMu keeps competing Router VPN operations
 	// out, while this second check protects against any independent state change.
 	a.mu.Lock()
-	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
+	if a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		a.operationMu.Unlock()
 		return nil, nil, errors.New("Router VPN state changed while validating private connection runtime")
@@ -137,6 +154,9 @@ func (a *app) connectionOperationContextOrBackground() context.Context {
 }
 
 func (a *app) checkConnectionOperation() error {
+	if a.controllerClosing() {
+		return errConnectionOperationCancelled
+	}
 	if err := a.connectionOperationContextOrBackground().Err(); err != nil {
 		return errConnectionOperationCancelled
 	}

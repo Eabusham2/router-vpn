@@ -4,7 +4,6 @@
 package main
 
 import (
-	"bytes"
 	"errors"
 	"fmt"
 	"net"
@@ -14,6 +13,8 @@ import (
 	"path/filepath"
 	"syscall"
 	"time"
+
+	"router-vpn/internal/controllerprocess"
 )
 
 const localBaseURL = "http://127.0.0.1:8788"
@@ -31,7 +32,7 @@ func localClient(timeout time.Duration) *http.Client {
 	return &http.Client{
 		Timeout: timeout,
 		Transport: &http.Transport{
-			Proxy: nil,
+			Proxy:       nil,
 			DialContext: dialer.DialContext,
 		},
 	}
@@ -54,18 +55,6 @@ func waitReady(deadline time.Time) bool {
 		time.Sleep(200 * time.Millisecond)
 	}
 	return ready()
-}
-
-func emergencyStop() {
-	req, err := http.NewRequest(http.MethodPost, localBaseURL+"/api/emergency-stop", bytes.NewBufferString("{}"))
-	if err != nil {
-		return
-	}
-	req.Header.Set("Content-Type", "application/json")
-	resp, err := localClient(2 * time.Second).Do(req)
-	if err == nil {
-		_ = resp.Body.Close()
-	}
 }
 
 func hiddenCommand(name string, args ...string) *exec.Cmd {
@@ -137,7 +126,7 @@ func stopChild(cmd *exec.Cmd) {
 	_, _ = cmd.Process.Wait()
 }
 
-func run() error {
+func run() (runErr error) {
 	root, err := packageRoot()
 	if err != nil {
 		return err
@@ -153,16 +142,20 @@ func run() error {
 	owned := false
 	var child *exec.Cmd
 	if !ready() {
+		ownerToken, err := controllerprocess.NewToken()
+		if err != nil {
+			return err
+		}
 		child = hiddenCommand(controller)
 		child.Dir = root
-		child.Env = append(os.Environ(), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-launcher")
+		child.Env = append(controllerprocess.Environment(os.Environ(), ownerToken), "HOMEVPN_ROOT="+root, "HOMEVPN_CLIENT_CONFIG="+filepath.Join(root, "client.json"), "HOMEVPN_NATIVE_APP=windows-launcher")
 		if err := child.Start(); err != nil {
 			return fmt.Errorf("start local Router VPN controller: %w", err)
 		}
+		controllerprocess.Track(child, ownerToken)
 		owned = true
 		defer func() {
-			emergencyStop()
-			stopChild(child)
+			runErr = errors.Join(runErr, controllerprocess.Stop(child))
 		}()
 	}
 	if !waitReady(time.Now().Add(12 * time.Second)) {

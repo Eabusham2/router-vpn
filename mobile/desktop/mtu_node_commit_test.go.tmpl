@@ -1,0 +1,197 @@
+package main
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+)
+
+func desktopNodeCommitWithRevert(t *testing.T, owner *routerVPNNodeMTU) routerVPNNodeMTUCommand {
+	t.Helper()
+	request := desktopNodeMTURequest(owner, "commit", 0)
+	request.RevertToken = strings.Repeat("f", 32)
+	if err := owner.command(request); err != nil {
+		t.Fatal(err)
+	}
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	return request
+}
+
+func desktopNodeRevertRequest(owner *routerVPNNodeMTU, commit routerVPNNodeMTUCommand) routerVPNNodeMTUCommand {
+	request := desktopNodeMTURequest(owner, "revert-unconfirmed-commit", owner.original)
+	request.RevertToken, request.CommitRequest, request.CommitGeneration = commit.RevertToken, commit.Request, commit.Generation
+	return request
+}
+
+func TestRouterVPNNodeMTUUnconfirmedCommitCapabilityRestoresOnlyItsOriginalReader(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	deadline := owner.deadline
+	desktopNodeMTUApply(t, owner, "set", 1380)
+	committedReader := owner.inbound
+	commit := desktopNodeCommitWithRevert(t, owner)
+	raw, _ := json.Marshal(owner.record)
+	if bytes.Contains(raw, []byte(commit.RevertToken)) || owner.record.Active || owner.record.Restored || owner.commitRevert == nil {
+		t.Fatal("commit leaked its private revert authority or claimed rollback")
+	}
+	if err := owner.command(desktopNodeMTURequest(owner, "rollback", 0)); err == nil || owner.inbound != committedReader {
+		t.Fatal("ordinary inactive rollback acquired commit-revert authority")
+	}
+	request := desktopNodeRevertRequest(owner, commit)
+	if err := owner.command(request); err != nil {
+		t.Fatal(err)
+	}
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	if owner.record.Active || !owner.record.Restored || owner.record.Expired || owner.record.MTU != 1420 || owner.record.Reader != 3 || owner.inbound == committedReader || owner.commitRevert != nil || owner.deadline != deadline || len(engine.expected) != 2 || engine.expected[1] != committedReader || owner.current() != nil {
+		t.Fatal("unconfirmed commit revert did not preserve its exact native lineage", owner.record)
+	}
+	if err := owner.command(desktopNodeRevertRequest(owner, commit)); err == nil || len(engine.values) != 2 {
+		t.Fatal("consumed commit capability was reusable")
+	}
+}
+
+func TestRouterVPNNodeMTUCommitRevertRejectsForeignExpiredAndReplacedOwners(t *testing.T) {
+	cases := []struct {
+		name string
+		edit func(*routerVPNNodeMTU, *desktopNodeMTUEngineFixture, *routerVPNNodeMTUCommand)
+	}{
+		{"missing-token", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.RevertToken = ""
+		}},
+		{"wrong-token", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.RevertToken = strings.Repeat("0", 32)
+		}},
+		{"invalid-token", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.RevertToken = strings.Repeat("F", 32)
+		}},
+		{"commit-request", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.CommitRequest = strings.Repeat("0", 32)
+		}},
+		{"commit-generation", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.CommitGeneration--
+		}},
+		{"lease", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.Lease = strings.Repeat("0", 32)
+		}},
+		{"session", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.Session = strings.Repeat("0", 32)
+		}},
+		{"config", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.Config = strings.Repeat("0", 64)
+		}},
+		{"path", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			q.Path = strings.Repeat("0", 64)
+		}},
+		{"generation", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) { q.Generation-- }},
+		{"old-reader", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) { q.Reader-- }},
+		{"future-reader", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) { q.Reader++ }},
+		{"readback", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) { q.MTU-- }},
+		{"original", func(_ *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) { q.Value = 1400 }},
+		{"expired", func(o *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, _ *routerVPNNodeMTUCommand) {
+			o.deadline = time.Now().Add(-time.Nanosecond)
+		}},
+		{"confirmed-without-capability", func(o *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, _ *routerVPNNodeMTUCommand) {
+			o.commitRevert = nil
+		}},
+		{"replacement-reader", func(o *routerVPNNodeMTU, e *desktopNodeMTUEngineFixture, _ *routerVPNNodeMTUCommand) {
+			old := o.inbound.(*desktopMTUTUNFixture)
+			e.current = &desktopMTUTUNFixture{index: old.index, mtu: old.mtu, guard: old.guard}
+		}},
+		{"new-lease", func(o *routerVPNNodeMTU, _ *desktopNodeMTUEngineFixture, q *routerVPNNodeMTUCommand) {
+			begin := desktopNodeMTURequest(o, "begin", 0)
+			begin.Lease = strings.Repeat("0", 32)
+			if err := o.command(begin); err != nil {
+				t.Fatal(err)
+			}
+			o.record.Generation, o.record.Request = begin.Generation, begin.Request
+			q.Generation = o.record.Generation + 1
+		}},
+	}
+	for _, test := range cases {
+		t.Run(test.name, func(t *testing.T) {
+			owner, engine, _ := desktopNodeMTUFixture(t)
+			desktopNodeMTUApply(t, owner, "begin", 0)
+			desktopNodeMTUApply(t, owner, "set", 1380)
+			commit := desktopNodeCommitWithRevert(t, owner)
+			request := desktopNodeRevertRequest(owner, commit)
+			test.edit(owner, engine, &request)
+			before, reader := owner.record, owner.inbound
+			if err := owner.command(request); err == nil || owner.record != before || owner.inbound != reader || len(engine.values) != 1 {
+				t.Fatal("invalid commit revert mutated a confirmed or replacement owner", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNNodeMTURevertKeepsOriginalDeadlineAndFailedReaderOwnership(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1380)
+	commit := desktopNodeCommitWithRevert(t, owner)
+	deadline := time.Now().Add(5 * time.Second)
+	owner.deadline = deadline
+	engine.change = func(ctx context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
+		actualDeadline, ok := ctx.Deadline()
+		if !ok || !actualDeadline.Equal(deadline) {
+			t.Fatal("revert extended the original native lease deadline")
+		}
+		old := expected.(*desktopMTUTUNFixture)
+		next := &desktopMTUTUNFixture{index: old.index + 1, mtu: old.mtu, guard: old.guard}
+		engine.current = next
+		return next, errors.New("fixture native rollback failed after owned reader replacement")
+	}
+	request := desktopNodeRevertRequest(owner, commit)
+	if err := owner.command(request); err == nil || owner.record.Restored || owner.record.Active || owner.commitRevert == nil || owner.record.Reader != 3 || owner.current() != nil {
+		t.Fatal("failed revert discarded its retained native reader or claimed success")
+	}
+	owner.record.Generation, owner.record.Request = request.Generation, request.Request
+	engine.change = nil
+	if err := owner.command(desktopNodeRevertRequest(owner, commit)); err != nil || owner.record.MTU != 1420 || !owner.record.Restored || owner.record.Reader != 4 || owner.commitRevert != nil || owner.deadline != deadline {
+		t.Fatal("same commit capability could not finish its owned rollback", err)
+	}
+}
+
+func TestRouterVPNNodeMTUCommitCapabilityExpiresWithoutRevertingConfirmedWinner(t *testing.T) {
+	owner, engine, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	desktopNodeMTUApply(t, owner, "set", 1380)
+	commit := desktopNodeCommitWithRevert(t, owner)
+	if err := owner.expire(owner.deadline); err != nil || owner.commitRevert != nil || owner.record.MTU != 1380 || owner.record.Restored || owner.record.Expired || len(engine.values) != 1 {
+		t.Fatal("expiry rolled back an inactive committed winner")
+	}
+	if err := owner.command(desktopNodeRevertRequest(owner, commit)); err == nil || len(engine.values) != 1 {
+		t.Fatal("expired commit capability changed the native interface")
+	}
+}
+
+func TestRouterVPNNodeMTUCommitCapabilityJSONIsPrivateAndStrict(t *testing.T) {
+	owner, _, _ := desktopNodeMTUFixture(t)
+	desktopNodeMTUApply(t, owner, "begin", 0)
+	command := desktopNodeMTURequest(owner, "commit", 0)
+	command.RevertToken = strings.Repeat("f", 32)
+	raw, _ := json.Marshal(command)
+	for _, changed := range []string{
+		strings.Replace(string(raw), `"revert_token":"`+command.RevertToken+`"`, `"revert_token":null`, 1),
+		strings.Replace(string(raw), `"revert_token"`, `"Revert_Token"`, 1),
+		strings.TrimSuffix(string(raw), "}") + `,"revert_token":"` + command.RevertToken + `"}`,
+		strings.TrimSuffix(string(raw), "}") + `,"commit_request":null}`,
+		strings.TrimSuffix(string(raw), "}") + `,"commit_generation":null}`,
+		strings.TrimSuffix(string(raw), "}") + `,"another_owner":true}`,
+		string(raw) + `{}`,
+	} {
+		var parsed routerVPNNodeMTUCommand
+		if routerVPNMTUStrict([]byte(changed), &parsed) {
+			t.Fatal("ambiguous private commit capability was accepted")
+		}
+	}
+	var parsed routerVPNNodeMTUCommand
+	if !routerVPNMTUStrict(raw, &parsed) || parsed != command {
+		t.Fatal("exact commit capability did not survive its private command decoder")
+	}
+}
