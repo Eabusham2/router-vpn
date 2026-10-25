@@ -1,8 +1,8 @@
-# Captured mobile DNS comparison
+# Captured native DNS comparison
 
 This package measures real DNS answers through an already-proved native Tor or
 ordinary external connection. It contains no system dialer, resolver fallback,
-profile writer or connection starter. The mobile native adapter supplies the
+profile writer or connection starter. The native adapter supplies the
 exact captured final outbound, selected DNS router and activity lifetime.
 
 ## What a result measures
@@ -73,6 +73,26 @@ stops the timer. This does not release a separate native-runtime quarantine or
 infer cleanup from an operating-system disconnect; process death before a
 receipt is written remains unknown.
 
+Desktop ordinary external connections use the same proved Box factory and
+service. The native command owns a bounded private-file mailbox: every request,
+cancel and status identifies its exact native session, compiled source/config,
+monotonic generation and fresh nonce. Cancellation and native shutdown retain
+the DNS activity until all workers and sockets close. Only cleanup may follow
+the pinned old directory handle after a rename; it cannot write into a
+replacement directory or authorize result adoption there.
+
+The desktop controller exposes `/api/dns/measurement` for initial capture,
+asynchronous Start and captured status, with `/cancel` and `/select` subroutes.
+Cancel also records a tombstone for a request not yet admitted and returns an
+explicit no-work/drained receipt. Thus a closed panel cannot reopen work through
+a delayed Start, and a timed-out HTTP request does not imply cleanup. The
+controller suspends automatic MTU changes until actual native DNS drain.
+
+Desktop Tor still uses a different standalone process owner. This adapter does
+not claim that process as an embedded native Tor owner or use the system
+resolver as a substitute. Its dedicated desktop measurement integration remains
+required separately; mobile Tor uses the proved adapter described above.
+
 ## Result adoption and verification
 
 Hosts validate the receipt's schema, identities, transport, bounded fixed catalog,
@@ -86,6 +106,13 @@ Selectable results expire after 120 seconds using a monotonic clock. A chosen
 draft can survive an explicit Disconnect, but Save rechecks its exact saved
 external source and paired entry. Changing that source invalidates the draft;
 the editor does not silently attach old measurements to a new path.
+
+Desktop draft saves carry `measurement_id` and `result_id` alongside the exact
+resolver fields and selected source revision. The controller checks the full
+fixed catalog, current source/entry and physical network, native receipt and
+monotonic expiry before saving. A connection-start transaction invalidates old
+results. Cancellation is serialized with the final persistence boundary; failed
+persistence rolls back only the DNS fields of the current profile.
 
 The Go race tests exercise real DNS framing, certificate verification, local
 TLS/HTTP exchanges, identity changes, cancellation and retained socket failures.

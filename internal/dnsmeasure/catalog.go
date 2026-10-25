@@ -55,6 +55,15 @@ func candidates(transport, routeLabel string) []Endpoint {
 	return result
 }
 
+// PublicEndpoints returns the exact comparison identities for result adoption.
+// It is a copy of the closed measurement catalog, never a resolver fallback.
+func PublicEndpoints(transport, routeLabel string) []Endpoint {
+	if transport != "tcp" && transport != "tls" && transport != "https" {
+		return nil
+	}
+	return candidates(transport, routeLabel)
+}
+
 // AllowedPublicAddress lets the native adapter enforce the same closed catalog
 // at its dial boundary. A host cannot supply an arbitrary destination or port.
 func AllowedPublicAddress(address string) bool {

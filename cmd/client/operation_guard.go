@@ -124,6 +124,7 @@ func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	// Re-check under the app lock after filesystem validation before publishing
 	// connection context/state. operationMu keeps competing Router VPN operations
 	// out, while this second check protects against any independent state change.
+	invalidateDesktopDNSResults(a)
 	a.mu.Lock()
 	if a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()

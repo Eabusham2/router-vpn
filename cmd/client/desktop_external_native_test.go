@@ -299,10 +299,12 @@ func TestDesktopExternalProcessFixture(t *testing.T) {
 	checked := time.Now().UnixMilli()
 	mtuTick := desktopMTUChildFixture(kind, dir, expected, write)
 	pathTick := desktopPathChildFixture(kind, dir, expected, write)
+	dnsTick := desktopDNSChildFixture(kind, dir, expected, write)
 	write("progress.json", desktopExternalProgressRecord{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving", Progress: mobilemultihop.Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}})
 	for {
 		mtuTick()
 		pathTick()
+		dnsTick()
 		data, err := os.ReadFile(filepath.Join(dir, "stop.json"))
 		if err == nil {
 			var stop desktopExternalStop
@@ -328,6 +330,11 @@ func desktopExternalRunningFixture(t *testing.T, kind string) (*app, *desktopNod
 	if err != nil {
 		t.Fatal(err)
 	}
+	return desktopExternalRunCompiledFixture(t, kind, root, launch)
+}
+
+func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *desktopNodeLaunch) (*app, *desktopNodeLaunch) {
+	t.Helper()
 	launch.root, launch.external.network = root, physicalNetworkIdentity()
 	a := &app{cfg: common.ClientConfig{ScriptsDir: filepath.Join(root, "modes")}}
 	if err := stageDesktopNodeLaunch(a, launch); err != nil {

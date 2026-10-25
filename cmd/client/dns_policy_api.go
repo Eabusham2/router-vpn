@@ -13,14 +13,16 @@ import (
 )
 
 type dnsPolicyRequest struct {
-	ProfileID    string `json:"profile_id,omitempty"`
-	ProfileToken string `json:"profile_token,omitempty"`
-	Mode         string `json:"mode"`
-	Protocol     string `json:"protocol,omitempty"`
-	Host         string `json:"host,omitempty"`
-	Port         int    `json:"port,omitempty"`
-	ServerName   string `json:"server_name,omitempty"`
-	Path         string `json:"path,omitempty"`
+	ProfileID     string `json:"profile_id,omitempty"`
+	ProfileToken  string `json:"profile_token,omitempty"`
+	Mode          string `json:"mode"`
+	Protocol      string `json:"protocol,omitempty"`
+	Host          string `json:"host,omitempty"`
+	Port          int    `json:"port,omitempty"`
+	ServerName    string `json:"server_name,omitempty"`
+	Path          string `json:"path,omitempty"`
+	MeasurementID string `json:"measurement_id,omitempty"`
+	ResultID      string `json:"result_id,omitempty"`
 }
 
 type dnsPolicyPreset struct {
@@ -50,6 +52,9 @@ type dnsPolicyResponse struct {
 
 func registerDNSPolicyRoute(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/dns/policy", a.dnsPolicy)
+	h.HandleFunc("/api/dns/measurement", a.desktopDNSMeasurement)
+	h.HandleFunc("/api/dns/measurement/cancel", a.cancelDesktopDNSMeasurement)
+	h.HandleFunc("/api/dns/measurement/select", a.selectDesktopDNSResult)
 }
 
 func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
@@ -98,6 +103,11 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	draftOperation, err := a.captureDesktopDNSDraftRequest(request, profile, entry)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	updated, err := applyCapturedDNSPolicy(profile, entry, request)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -110,6 +120,12 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 		a.closing || r.Context().Err() != nil || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
 		http.Error(w, "node, entry or connection changed; refresh DNS settings when disconnected", http.StatusConflict)
+		return
+	}
+	releaseDraft, err := draftOperation.beginDraftCommitLocked(a, request)
+	if err != nil {
+		a.mu.Unlock()
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	// Measurement and display changes outside the revision belong to the
@@ -127,6 +143,7 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 		}
 		break
 	}
+	releaseDraft()
 	a.mu.Unlock()
 	if err != nil {
 		http.Error(w, "could not save DNS policy", http.StatusInternalServerError)

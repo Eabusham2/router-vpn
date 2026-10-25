@@ -88,6 +88,7 @@ func (c *controllerShutdown) begin() {
 		c.a.closing = true
 		c.a.mu.Unlock()
 		c.cancelWork()
+		invalidateDesktopDNSResults(c.a)
 		c.a.cancelConnectionOperation()
 		cancelCapturedMTU(c.a)
 		go c.drain()

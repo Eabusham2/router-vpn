@@ -1,0 +1,213 @@
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"os"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+)
+
+type routerVPNDesktopDNSRequest struct {
+	Schema       int    `json:"schema"`
+	Session      string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+	ConfigSHA256 string `json:"config_sha256"`
+	Generation   uint64 `json:"generation"`
+	Request      string `json:"request_id"`
+	Transport    string `json:"public_transport"`
+}
+
+type routerVPNDesktopDNSRecord struct {
+	routerVPNDesktopDNSRequest
+	Status dnsmeasure.Status `json:"status"`
+}
+
+type routerVPNDesktopDNSProvider interface {
+	DesktopDNS() (*dnsmeasure.Service, error)
+}
+
+// The service uses the proved Box's actual DNS router and final outbound. The
+// callback refers to that immutable proof, not this owner's mutex: service
+// cancellation and Close may call Identity while holding their own locks.
+func (n *routerVPNExternalNative) DesktopDNS() (*dnsmeasure.Service, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.box == nil || n.boxClosed || n.proof == nil || !n.proof.Healthy() {
+		return nil, routerVPNExternalFailure
+	}
+	if n.dns == nil {
+		proof := n.proof
+		service, err := n.box.RouterVPNExternalDNSMeasurement(proof, n.source, n.capture, n.session, proof.Healthy)
+		if err != nil {
+			return nil, routerVPNExternalFailure
+		}
+		n.dns = service
+	}
+	return n.dns, nil
+}
+
+// Only the native command loop reads, retires and publishes mailbox files.
+// The retained service owns its workers and sockets, and reports Drained only
+// after they have really joined. A busy measurement does not stop the VPN.
+type routerVPNDesktopDNSFiles struct {
+	files   *routerVPNExternalFiles
+	service *dnsmeasure.Service
+	record  routerVPNDesktopDNSRecord
+	inputs  map[string]routerVPNDesktopPathInput
+	used    map[string]bool
+	started bool
+}
+
+func routerVPNOpenDesktopDNS(files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopDNSFiles, error) {
+	provider, ok := owner.(routerVPNDesktopDNSProvider)
+	if !ok {
+		// Fixture or older owners must not manufacture a native DNS capability.
+		return nil, nil
+	}
+	service, err := provider.DesktopDNS()
+	if err != nil || service == nil {
+		return nil, routerVPNExternalFailure
+	}
+	f := &routerVPNDesktopDNSFiles{files: files, service: service, inputs: map[string]routerVPNDesktopPathInput{}, used: map[string]bool{}, record: routerVPNDesktopDNSRecord{
+		routerVPNDesktopDNSRequest: routerVPNDesktopDNSRequest{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config},
+	}}
+	if json.Unmarshal([]byte(service.StatusJSON()), &f.record.Status) != nil {
+		return nil, routerVPNExternalFailure
+	}
+	f.record.Status.Complete, f.record.Status.Drained = true, true
+	return f, f.publish()
+}
+
+func (f *routerVPNDesktopDNSFiles) read(name string, matches func(routerVPNDesktopDNSRequest) bool) (routerVPNDesktopDNSRequest, bool) {
+	raw, err := f.files.read(name, 2048)
+	if err != nil {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	if _, err := applexray.Object(raw); err != nil {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	var request routerVPNDesktopDNSRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	base := f.record.routerVPNDesktopDNSRequest
+	if decoder.Decode(&request) != nil || request.Schema != 1 || request.Session != base.Session || request.SourceSHA256 != base.SourceSHA256 || request.ConfigSHA256 != base.ConfigSHA256 || request.Generation == 0 || !routerVPNExternalSession.MatchString(request.Request) ||
+		(request.Transport != "tcp" && request.Transport != "tls" && request.Transport != "https") || !matches(request) {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	info, err := f.files.root.Lstat(name)
+	if err != nil {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	again, err := f.files.read(name, 2048)
+	if err != nil || !bytes.Equal(raw, again) {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	input := routerVPNDesktopPathInput{info: info, digest: sha256.Sum256(raw)}
+	if previous, exists := f.inputs[name]; exists && (!os.SameFile(previous.info, info) || previous.digest != input.digest) {
+		return routerVPNDesktopDNSRequest{}, false
+	}
+	f.inputs[name] = input
+	return request, true
+}
+
+func (f *routerVPNDesktopDNSFiles) retire() error {
+	for name, owned := range f.inputs {
+		info, err := f.files.root.Lstat(name)
+		raw, readErr := f.files.read(name, 2048)
+		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
+			return routerVPNExternalFailure
+		}
+		if err := f.files.root.Remove(name); err != nil {
+			return routerVPNExternalFailure
+		}
+		delete(f.inputs, name)
+	}
+	return nil
+}
+
+func (f *routerVPNDesktopDNSFiles) publish() error {
+	return f.files.publish("dns-status.json", f.record)
+}
+
+func (f *routerVPNDesktopDNSFiles) tick() error {
+	if f.record.Status.Complete && f.record.Status.Drained {
+		request, ok := f.read("dns-request.json", func(request routerVPNDesktopDNSRequest) bool {
+			return f.record.Generation != ^uint64(0) && request.Generation == f.record.Generation+1
+		})
+		if !ok {
+			// A parent can cancel after an uncertain write or before its queued
+			// request arrives. Retire the nonce without opening any sockets.
+			request, ok = f.read("dns-cancel.json", func(request routerVPNDesktopDNSRequest) bool {
+				return f.record.Generation != ^uint64(0) && request.Generation == f.record.Generation+1
+			})
+		}
+		if ok {
+			old := f.record.Status
+			f.record = routerVPNDesktopDNSRecord{routerVPNDesktopDNSRequest: request, Status: dnsmeasure.Status{
+				Schema: 1, NodeID: old.NodeID, SessionID: old.SessionID, Request: request.Request, PublicTransport: request.Transport, Stage: "starting", Results: []dnsmeasure.Result{},
+			}}
+			f.started = false
+		}
+	}
+	if f.record.Generation == 0 {
+		return nil
+	}
+	_, cancelled := f.read("dns-cancel.json", func(request routerVPNDesktopDNSRequest) bool { return request == f.record.routerVPNDesktopDNSRequest })
+	if !f.started && !f.record.Status.Complete {
+		request := f.record.Request
+		if cancelled || f.used[request] || len(f.used) >= 256 {
+			f.service.Cancel(request)
+			f.record.Status.Stage, f.record.Status.Failure = "cancelled", "DNS request was cancelled or already retired"
+			f.record.Status.Complete, f.record.Status.Drained = true, true
+		} else if err := f.service.Start(request, f.record.Transport); err != nil {
+			f.record.Status.Stage, f.record.Status.Failure = "failed", "Native DNS activity is busy or its captured proof retired"
+			f.record.Status.Complete, f.record.Status.Drained = true, true
+		} else {
+			f.started = true
+		}
+		if len(f.used) < 256 {
+			f.used[request] = true
+		}
+	}
+	if f.started {
+		if cancelled {
+			f.service.Cancel(f.record.Request)
+		}
+		var status dnsmeasure.Status
+		raw := f.service.StatusJSON()
+		if len(raw) > 64<<10 || json.Unmarshal([]byte(raw), &status) != nil || status.Request != f.record.Request || status.SessionID != f.record.Session || status.NodeID != f.record.Status.NodeID || status.PublicTransport != f.record.Transport {
+			return routerVPNExternalFailure
+		}
+		f.record.Status = status
+	}
+	if f.record.Status.Complete && f.record.Status.Drained {
+		if err := f.retire(); err != nil {
+			return err
+		}
+	}
+	return f.publish()
+}
+
+// Called only after owner.Close has acknowledged all DNS workers and sockets.
+// Preserve any replacement input; its pathname is never cleanup authority.
+func (f *routerVPNDesktopDNSFiles) close() error {
+	if f == nil {
+		return nil
+	}
+	if err := f.service.Close(); err != nil {
+		return err
+	}
+	if f.started {
+		if json.Unmarshal([]byte(f.service.StatusJSON()), &f.record.Status) != nil || !f.record.Status.Drained {
+			return routerVPNExternalFailure
+		}
+	} else {
+		f.record.Status.Stage, f.record.Status.Failure = "invalidated", "The captured native DNS path ended"
+		f.record.Status.Complete, f.record.Status.Drained, f.record.Status.Results = true, true, []dnsmeasure.Result{}
+	}
+	return errors.Join(f.retire(), f.publish())
+}

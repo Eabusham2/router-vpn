@@ -1,0 +1,291 @@
+package main
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+// These in-memory DNS peers answer real framed questions. They are explicitly
+// fixture transports; the production owner is the proved Box factory above.
+type desktopDNSFixtureEngine struct {
+	base     *desktopExternalFixture
+	active   atomic.Bool
+	dials    atomic.Int32
+	selected atomic.Int32
+	entered  chan struct{}
+	release  chan struct{}
+	once     sync.Once
+}
+
+func (e *desktopDNSFixtureEngine) Identity() string {
+	if !e.base.Healthy() {
+		return ""
+	}
+	return "captured-native-dns-fixture"
+}
+func (e *desktopDNSFixtureEngine) BeginMeasurement(ctx context.Context) (context.Context, func(), error) {
+	if !e.active.CompareAndSwap(false, true) {
+		return nil, nil, errors.New("activity already retained")
+	}
+	return ctx, func() { e.active.Store(false) }, nil
+}
+func (e *desktopDNSFixtureEngine) SelectedDNS(ctx context.Context) error {
+	e.selected.Add(1)
+	if e.entered != nil {
+		e.once.Do(func() { close(e.entered) })
+		<-ctx.Done()
+		<-e.release
+		return ctx.Err()
+	}
+	return nil
+}
+func (e *desktopDNSFixtureEngine) Dial(ctx context.Context, address string) (net.Conn, error) {
+	if !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("unexpected destination")
+	}
+	e.dials.Add(1)
+	client, peer := net.Pipe()
+	go func() {
+		defer peer.Close()
+		stop := context.AfterFunc(ctx, func() { _ = peer.Close() })
+		defer stop()
+		var size [2]byte
+		if _, err := io.ReadFull(peer, size[:]); err != nil {
+			return
+		}
+		query := make([]byte, int(binary.BigEndian.Uint16(size[:])))
+		if len(query) > 512 || len(query) < 12 {
+			return
+		}
+		if _, err := io.ReadFull(peer, query); err != nil {
+			return
+		}
+		answer := append([]byte{}, query...)
+		answer[2], answer[3], answer[6], answer[7] = 0x81, 0x80, 0, 1
+		answer = append(answer, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 1, 0, 4, 93, 184, 216, 34)
+		binary.BigEndian.PutUint16(size[:], uint16(len(answer)))
+		_, _ = peer.Write(append(size[:], answer...))
+	}()
+	return client, nil
+}
+
+type desktopDNSFixtureOwner struct {
+	*desktopExternalFixture
+	measurement *dnsmeasure.Service
+}
+
+func (o *desktopDNSFixtureOwner) DesktopDNS() (*dnsmeasure.Service, error) { return o.measurement, nil }
+
+func desktopDNSFixture(t *testing.T, blocked bool) (string, *mobilemultihop.ExternalPolicy, *desktopDNSFixtureOwner, *desktopDNSFixtureEngine) {
+	t.Helper()
+	directory, policy := desktopExternalWorkspace(t)
+	base := desktopExternalOwner(t, policy, false)
+	base.healthy.Store(true)
+	engine := &desktopDNSFixtureEngine{base: base}
+	if blocked {
+		engine.entered, engine.release = make(chan struct{}), make(chan struct{})
+	}
+	measurement, err := dnsmeasure.New(engine, dnsmeasure.Description{NodeID: "selected-exit", SessionID: desktopExternalSession, RouteLabel: "Current external exit", IPv6Enabled: false, Selected: dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: "1.1.1.1", Port: 443, Transport: "https", ServerName: "cloudflare-dns.com", Path: "/dns-query", Route: "custom-exit", RouteLabel: "Selected DNS via custom-exit"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, policy, &desktopDNSFixtureOwner{desktopExternalFixture: base, measurement: measurement}, engine
+}
+
+func desktopDNSRunFixture(t *testing.T, directory string, owner *desktopDNSFixtureOwner) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+			return owner, nil
+		})
+	}()
+	return done
+}
+
+func desktopDNSNativeInput(t *testing.T, directory, name string, request routerVPNDesktopDNSRequest) {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil || os.WriteFile(filepath.Join(directory, name), raw, 0600) != nil {
+		t.Fatal("DNS fixture input failed", err)
+	}
+}
+
+func desktopDNSNativeRecord(t *testing.T, directory string, predicate func(routerVPNDesktopDNSRecord) bool) routerVPNDesktopDNSRecord {
+	t.Helper()
+	deadline := time.NewTimer(4 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		raw, err := os.ReadFile(filepath.Join(directory, "dns-status.json"))
+		var record routerVPNDesktopDNSRecord
+		if err == nil && json.Unmarshal(raw, &record) == nil && predicate(record) {
+			return record
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("native DNS fixture did not reach the required lifecycle", err, record.Status)
+		case <-tick.C:
+		}
+	}
+}
+
+func TestRouterVPNDesktopDNSUsesRealServiceSamplesAndFreshGeneration(t *testing.T) {
+	directory, policy, owner, engine := desktopDNSFixture(t, false)
+	done := desktopDNSRunFixture(t, directory, owner)
+	initial := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("b", 32), "tcp"
+	desktopDNSNativeInput(t, directory, "dns-request.json", request)
+	result := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool {
+		return r.Generation == 1 && r.Status.Complete && r.Status.Drained
+	})
+	if result.Status.Stage != "complete" || len(result.Status.Results) != 13 || engine.active.Load() || engine.selected.Load() != 3 || engine.dials.Load() != 18 {
+		t.Fatal("real query samples or retained native activity were lost", result.Status, engine.dials.Load())
+	}
+	for _, row := range result.Status.Results {
+		if row.ID == "selected" {
+			if row.Transport != "https" || row.Port != 443 || !row.Ready || row.Samples != 3 {
+				t.Fatal("selected actual policy was reinterpreted as the comparison transport", row)
+			}
+		} else if strings.Contains(row.ID, "6") {
+			if row.Ready || row.Median != nil || row.Failed != 3 {
+				t.Fatal("disabled IPv6 received a score", row)
+			}
+		} else if !row.Ready || row.Transport != "tcp" || row.Port != 53 || row.Median == nil || *row.Median <= 0 || row.Samples != 3 {
+			t.Fatal("framed DNS exchange did not produce a typed ready row", row)
+		}
+	}
+	// A reused nonce may advance the mailbox generation but never dial again.
+	request.Generation = 2
+	desktopDNSNativeInput(t, directory, "dns-request.json", request)
+	reused := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 2 && r.Status.Drained })
+	if reused.Status.Stage != "cancelled" || len(reused.Status.Results) != 0 || engine.dials.Load() != 18 {
+		t.Fatal("old nonce reopened native DNS work")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopDNSCancelBeforeStartAndWrongSessionCannotDial(t *testing.T) {
+	directory, policy, owner, engine := desktopDNSFixture(t, false)
+	done := desktopDNSRunFixture(t, directory, owner)
+	initial := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("b", 32), "tls"
+	wrong := request
+	wrong.Session = strings.Repeat("c", 32)
+	desktopDNSNativeInput(t, directory, "dns-request.json", wrong)
+	desktopDNSNativeInput(t, directory, "dns-cancel.json", request)
+	result := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 1 && r.Status.Drained })
+	if result.Status.Stage != "cancelled" || engine.selected.Load() != 0 || engine.dials.Load() != 0 || engine.active.Load() {
+		t.Fatal("cancel-before-request or wrong owner opened a native query")
+	}
+	foreign, err := os.ReadFile(filepath.Join(directory, "dns-request.json"))
+	expected, _ := json.Marshal(wrong)
+	if err != nil || string(foreign) != string(expected) {
+		t.Fatal("retiring cancellation removed another request")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopDNSCancelRetainsWorkersAndHealthyVPNUntilActualDrain(t *testing.T) {
+	directory, policy, owner, engine := desktopDNSFixture(t, true)
+	done := desktopDNSRunFixture(t, directory, owner)
+	initial := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("b", 32), "tcp"
+	desktopDNSNativeInput(t, directory, "dns-request.json", request)
+	select {
+	case <-engine.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("selected real DNS router was never queried")
+	}
+	desktopDNSNativeInput(t, directory, "dns-cancel.json", request)
+	result := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Status.Stage == "cancelled" })
+	if result.Status.Drained || len(result.Status.Results) != 0 || !engine.active.Load() || !owner.Healthy() || owner.closes.Load() != 0 {
+		t.Fatal("cancel falsely released workers or closed a healthy VPN")
+	}
+	close(engine.release)
+	desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool {
+		return r.Generation == 1 && r.Status.Complete && r.Status.Drained
+	})
+	if engine.active.Load() || !owner.Healthy() {
+		t.Fatal("completed DNS cleanup changed VPN ownership")
+	}
+	for _, name := range []string{"dns-request.json", "dns-cancel.json"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("consumed DNS input retained", name, err)
+		}
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopDNSShutdownAndReplacementInputRetainActualDrain(t *testing.T) {
+	directory, policy, owner, engine := desktopDNSFixture(t, true)
+	done := desktopDNSRunFixture(t, directory, owner)
+	initial := desktopDNSNativeRecord(t, directory, func(r routerVPNDesktopDNSRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("b", 32), "tcp"
+	desktopDNSNativeInput(t, directory, "dns-request.json", request)
+	select {
+	case <-engine.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("DNS native work never started")
+	}
+	foreign := []byte(`{"replacement":"preserved"}`)
+	if os.WriteFile(filepath.Join(directory, "replacement.pending"), foreign, 0600) != nil || os.Rename(filepath.Join(directory, "replacement.pending"), filepath.Join(directory, "dns-request.json")) != nil {
+		t.Fatal("could not replace owned input fixture")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	select {
+	case <-owner.cancel:
+	case <-time.After(3 * time.Second):
+		t.Fatal("shutdown never cancelled native ownership")
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stopped.json")); !errors.Is(err, os.ErrNotExist) || !engine.active.Load() {
+		t.Fatal("native close acknowledged before retained worker joined")
+	}
+	close(engine.release)
+	if err := desktopExternalWait(t, done); err == nil {
+		t.Fatal("replacement mailbox was accepted as owned cleanup")
+	}
+	if engine.active.Load() {
+		t.Fatal("shutdown lost native activity")
+	}
+	actual, err := os.ReadFile(filepath.Join(directory, "dns-request.json"))
+	if err != nil || string(actual) != string(foreign) {
+		t.Fatal("shutdown removed a replacement file")
+	}
+}
+
+func TestRouterVPNDesktopDNSFactoryRequiresActualProvedBox(t *testing.T) {
+	for _, native := range []*routerVPNExternalNative{{}, {boxClosed: true}} {
+		if service, err := native.DesktopDNS(); err == nil || service != nil {
+			t.Fatal("native DNS accepted a host boolean without its running Box/proof")
+		}
+	}
+}

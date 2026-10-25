@@ -29,6 +29,9 @@ type desktopExternalRuntime struct {
 	pathMu                                 sync.Mutex
 	pathGeneration                         uint64
 	pathFailed                             bool
+	dnsMu                                  sync.Mutex
+	dnsGeneration                          uint64
+	dnsFailed                              bool
 	source, capture                        []byte
 	predecessor                            string
 	session, network, selection, execution string

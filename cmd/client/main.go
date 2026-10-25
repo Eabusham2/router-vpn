@@ -53,6 +53,7 @@ type app struct {
 	state             state
 	cmd               *exec.Cmd
 	daitaCancel       context.CancelFunc
+	dnsMeasurements   *desktopDNSSlot // protected by mu; bounded current native DNS operation
 }
 
 func main() {
