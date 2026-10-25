@@ -429,6 +429,10 @@ struct ExternalOpenVPNResponseProbesUpdate {
     let probes: [String: ExternalResponseProbe]?
 }
 
+struct ExternalOpenVPNStartLayersUpdate {
+    let layers: [String: ExternalStartLayer]?
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -446,6 +450,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var serverPeer: ExternalServerPeer?
     var openVPNPairing: ExternalOpenVPNPairing?
     var openVPNResponseProbes: [String: ExternalResponseProbe]?
+    var openVPNStartLayers: [String: ExternalStartLayer]?
 
     static let packetProtocols: Set<String> = ["wireguard", "amneziawg"]
     static let serverExecutionProtocols: Set<String> = ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"]
@@ -499,7 +504,20 @@ struct ExternalNodeConfig: Codable, Hashable {
 
     func matchesStartLayer(_ selected: String?) -> Bool {
         let mode = selected ?? "off"
-        if mode.isEmpty || mode == "off" { return startLayer == nil }
+        if mode.isEmpty || mode == "off" { return startLayer == nil && openVPNStartLayers == nil }
+        if let layers = openVPNStartLayers {
+            guard protocolName == "openvpn", startLayer == nil, responseProbe == nil,
+                  let probes = openVPNResponseProbes, (2...16).contains(layers.count),
+                  Set(layers.keys) == Set(probes.keys),
+                  ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(mode) else { return false }
+            return layers.allSatisfy { host, layer in
+                layer.mode == mode && !layer.api.isEmpty && layer.api.utf8.count <= 4096 &&
+                layer.transport.type == "shadowsocks" && layer.transport.server == host &&
+                layer.transport.method == "2022-blake3-aes-256-gcm" && !layer.transport.tag.isEmpty &&
+                (1...65535).contains(layer.transport.serverPort) && !layer.transport.password.isEmpty &&
+                layer.transport.password.utf8.count <= 4096 && !layer.transport.password.contains("\0")
+            }
+        }
         guard Self.serverExecutionProtocols.contains(protocolName),
               let layer = startLayer, ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(mode),
               layer.mode == mode, !layer.api.isEmpty, layer.api.utf8.count <= 4096,
@@ -532,9 +550,17 @@ struct ExternalNodeConfig: Codable, Hashable {
         serverPeer = c.contains(.serverPeer) ? try c.decode(ExternalServerPeer.self, forKey: .serverPeer) : nil
         openVPNPairing = c.contains(.openVPNPairing) ? try c.decode(ExternalOpenVPNPairing.self, forKey: .openVPNPairing) : nil
         openVPNResponseProbes = c.contains(.openVPNResponseProbes) ? try c.decode([String: ExternalResponseProbe].self, forKey: .openVPNResponseProbes) : nil
+        openVPNStartLayers = c.contains(.openVPNStartLayers) ? try c.decode([String: ExternalStartLayer].self, forKey: .openVPNStartLayers) : nil
         if let probes = openVPNResponseProbes {
             guard protocolName == "openvpn", (2...16).contains(probes.count), responseProbe == nil, startLayer == nil else {
-                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN remote response endpoints require 2–16 hosts, no single response endpoint, and Start Layer Off."))
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN remote response endpoints require 2–16 hosts and no single response endpoint or single-server layer."))
+            }
+        }
+        if let layers = openVPNStartLayers {
+            guard protocolName == "openvpn", (2...16).contains(layers.count),
+                  let probes = openVPNResponseProbes, Set(layers.keys) == Set(probes.keys),
+                  responseProbe == nil, startLayer == nil else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN per-remote layers require their exact private response map."))
             }
         }
         guard openVPNPairing == nil || protocolName == "openvpn" else {
@@ -558,6 +584,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case serverPeer = "server_peer"
         case openVPNPairing = "openvpn_pairing"
         case openVPNResponseProbes = "openvpn_response_probes"
+        case openVPNStartLayers = "openvpn_start_layers"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

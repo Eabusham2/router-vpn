@@ -44,7 +44,8 @@ def populate(folder):
 class AppleTorNativeGate(unittest.TestCase):
     def test_exact_matrix_asset_and_session_ownership(self):
         mutations = ('missing', 'extra', 'renamed', 'empty', 'oversized', 'linked-root',
-                     'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'missing-home-dns', 'stale-source')
+                     'linked-graph', 'linked-asset', 'missing-trust', 'wrong-session', 'wrong-mode', 'missing-home-dns', 'stale-source',
+                     'missing-openvpn-binding', 'changed-openvpn-binding', 'extra-source')
         for mutation in mutations:
             with self.subTest(mutation=mutation), tempfile.TemporaryDirectory() as temporary:
                 root = Path(temporary); folder = root/'graphs'; folder.mkdir(); populate(folder)
@@ -71,6 +72,17 @@ class AppleTorNativeGate(unittest.TestCase):
                     (entry/'fixture.json').write_text(json.dumps(data))
                 elif mutation == 'missing-home-dns':
                     data = json.loads((folder/'source-evidence.json').read_text()); del data['home_dns_combinations']
+                    (folder/'source-evidence.json').write_text(json.dumps(data))
+                elif mutation in ('missing-openvpn-binding', 'changed-openvpn-binding', 'extra-source'):
+                    data = json.loads((folder/'source-evidence.json').read_text())
+                    key = 'mobile/routervpn_openvpn.go'
+                    self.assertIn(key, data['sources'])
+                    if mutation == 'missing-openvpn-binding':
+                        del data['sources'][key]
+                    elif mutation == 'changed-openvpn-binding':
+                        data['sources'][key] = '0'*64
+                    else:
+                        data['sources']['unowned-bridge.go'] = '0'*64
                     (folder/'source-evidence.json').write_text(json.dumps(data))
                 else:
                     data = json.loads((folder/'source-evidence.json').read_text())

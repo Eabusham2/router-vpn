@@ -446,6 +446,9 @@ public final class StandardExitActivity extends Activity {
         }
         EditText openVPNPairing=field("Private OpenVPN pairing JSON (optional for Local)",false);
         EditText openVPNProbes=field("OpenVPN per-remote HTTPS response map JSON (optional)",false);
+        EditText openVPNLayers=field("Private OpenVPN per-remote Start Layer map JSON (optional)",false);
+        openVPNPairing.setSaveEnabled(false);openVPNLayers.setSaveEnabled(false);layerKey.setSaveEnabled(false);
+        if(android.os.Build.VERSION.SDK_INT>=26){openVPNPairing.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);openVPNLayers.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);layerKey.setImportantForAutofill(View.IMPORTANT_FOR_AUTOFILL_NO);}
         if("openvpn".equals(captured.protocol)){
             openVPNPairing.setSingleLine(false);openVPNPairing.setMinLines(5);
             openVPNPairing.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
@@ -456,7 +459,12 @@ public final class StandardExitActivity extends Activity {
             openVPNProbes.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             if(captured.openVPNResponseProbes!=null)openVPNProbes.setText(captured.openVPNResponseProbes.toString());
             form.addView(text("Response endpoints for multiple remote hosts",14,true));form.addView(openVPNProbes);
-            form.addView(text("For an OpenVPN profile with different remote hosts, paste every remote IP and its verified HTTPS response endpoint. Use this map instead of the single response URL above. Every original host must appear once; the map stays private with this node. A multi-host map cannot use a single-server exit Start Layer.",13,false));
+            form.addView(text("For an OpenVPN profile with different remote hosts, paste every remote IP and its verified HTTPS response endpoint. Use this map instead of the single response URL above. Every original host must appear once; the map stays private with this node. Exit encryption for these hosts uses the separate per-remote Start Layer map below.",13,false));
+            openVPNLayers.setSingleLine(false);openVPNLayers.setMinLines(5);
+            openVPNLayers.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            if(captured.openVPNStartLayers!=null)openVPNLayers.setText(captured.openVPNStartLayers.toString());
+            form.addView(text("Start Layers for multiple remote hosts",14,true));form.addView(openVPNLayers);
+            form.addView(text("Choose AES or AES + XOR above, then paste one provisioned layer for every original remote IP. Each record needs the same selected mode and its own api and transport. Keep the single-service API, port and key fields empty. These keys stay private with this node. To turn the layer Off, clear this map as well.",13,false));
         }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
@@ -485,8 +493,9 @@ public final class StandardExitActivity extends Activity {
                 String fixed=mtu.getText().toString().trim();p.put("mtu_policy",fixed.isEmpty()?"auto":"fixed");if(!fixed.isEmpty())p.put("manual_mtu",Integer.parseInt(fixed));AndroidExternalPolicy.checkPolicy(p);next.policy=p;
                 if(AndroidStandardExitStore.serverExecutionProtocol(next.protocol)){
                     int selectedLayer=exitLayer.getSelectedItemPosition();String chosenLayer=new String[]{"off","aes-256-gcm","aes-256-gcm+xor-whitening"}[selectedLayer];p.put("start_layer",chosenLayer);next.startLayer=null;
-                    if(selectedLayer!=0){String tag=captured.startLayer==null?"provisioned-exit-layer":captured.startLayer.getJSONObject("transport").getString("tag");JSONObject transport=new JSONObject().put("type","shadowsocks").put("tag",tag).put("server",next.server).put("server_port",Integer.parseInt(layerPort.getText().toString().trim())).put("method","2022-blake3-aes-256-gcm").put("password",layerKey.getText().toString());next.startLayer=new JSONObject().put("mode",chosenLayer).put("api",layerAPI.getText().toString().trim()).put("transport",transport);}
-                    AndroidStandardExitStore.validateStartLayer(next);
+                    boolean mappedLayers="openvpn".equals(next.protocol)&&!openVPNLayers.getText().toString().trim().isEmpty();
+                    if(mappedLayers&&(!layerAPI.getText().toString().trim().isEmpty()||!layerPort.getText().toString().trim().isEmpty()||!layerKey.getText().toString().isEmpty()))throw new IllegalArgumentException("Use either a single-server exit layer or a complete per-remote layer map.");
+                    if(selectedLayer!=0&&!mappedLayers){String tag=captured.startLayer==null?"provisioned-exit-layer":captured.startLayer.getJSONObject("transport").getString("tag");JSONObject transport=new JSONObject().put("type","shadowsocks").put("tag",tag).put("server",next.server).put("server_port",Integer.parseInt(layerPort.getText().toString().trim())).put("method","2022-blake3-aes-256-gcm").put("password",layerKey.getText().toString());next.startLayer=new JSONObject().put("mode",chosenLayer).put("api",layerAPI.getText().toString().trim()).put("transport",transport);}
                 }
                 if(AndroidStandardExitStore.serverExecutionProtocol(next.protocol)){
                     String url=responseURL.getText().toString().trim(),tls=responseName.getText().toString().trim();next.responseProbe=new JSONObject();
@@ -496,14 +505,15 @@ public final class StandardExitActivity extends Activity {
                     next.serverPeer=AndroidStandardExitStore.parseServerPeer(serverPeer.getText().toString());
                     AndroidStandardExitStore.validateServerPeer(next);
                 }
-                if("openvpn".equals(next.protocol)){next.openVPNPairing=AndroidOpenVPN.pairing(next,openVPNPairing.getText().toString());next.openVPNResponseProbes=AndroidOpenVPN.responseProbes(next,openVPNProbes.getText().toString());AndroidOpenVPN.validateResponseProbes(next);}
+                if("openvpn".equals(next.protocol)){next.openVPNPairing=AndroidOpenVPN.pairing(next,openVPNPairing.getText().toString());next.openVPNResponseProbes=AndroidOpenVPN.responseProbes(next,openVPNProbes.getText().toString());next.openVPNStartLayers=AndroidOpenVPN.startLayers(next,openVPNLayers.getText().toString());AndroidOpenVPN.validateResponseProbes(next);}
+                AndroidStandardExitStore.validateStartLayer(next);
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
                 startup.apply(next);
                 AndroidExternalPolicy.validateDraft(next);
                 exitStore.saveIfUnchanged(next,storedSource);dialog.dismiss();refresh();toast("Saved "+next.name+" connection settings");
             }catch(Exception invalid){error.setText("Save failed: "+safe(invalid));}
-        }));dialog.show();
+        }));dialog.setOnDismissListener(ignored->{openVPNPairing.setText("");openVPNLayers.setText("");layerKey.setText("");});dialog.show();
     }
 
     private void requestDirect(AndroidStandardExitStore.Entry exit) {

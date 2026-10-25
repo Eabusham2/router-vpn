@@ -91,6 +91,9 @@ func validateExternalStartLayer(profile *RouterProfile) error {
 	if profile.External == nil {
 		return errors.New("external Start Layer requires its private node configuration")
 	}
+	if profile.External.OpenVPNStartLayers != nil {
+		return validateExternalOpenVPNStartLayers(profile)
+	}
 	layer := profile.External.StartLayer
 	if profile.StartLayer == StartLayerOff {
 		if layer != nil {

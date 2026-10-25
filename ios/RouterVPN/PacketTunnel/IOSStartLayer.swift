@@ -36,6 +36,30 @@ enum IOSStartLayer {
         let raw = profile["start_layer"]
         guard raw == nil || raw is String else { throw error("External Start Layer selection must be text.") }
         let mode = raw as? String ?? off
+        if let captured = external["openvpn_start_layers"] {
+            guard [aes, aesXOR].contains(mode), external["protocol"] as? String == "openvpn",
+                  external["start_layer"] == nil, external["response_probe"] == nil,
+                  let original = external["openvpn"] as? [String: Any],
+                  let probes = external["openvpn_response_probes"] as? [String: Any],
+                  let layers = captured as? [String: Any] else {
+                throw error("Per-remote OpenVPN Start Layers require their complete private response map and exact selected mode.")
+            }
+            // Validate the same captured provider identities used by the app.
+            // The shared compiler will construct and own the native mapper;
+            // this gate must never flatten it to a single private destination.
+            #if canImport(Libbox)
+            let source = String(decoding: try JSONSerialization.data(withJSONObject: original), as: UTF8.self)
+            let responses = String(decoding: try JSONSerialization.data(withJSONObject: probes), as: UTF8.self)
+            let provision = String(decoding: try JSONSerialization.data(withJSONObject: layers), as: UTF8.self)
+            var failure: NSError?
+            let valid = LibboxRouterValidateExternalOpenVPNStartLayers(source, responses, provision, mode, &failure)
+            if let failure { throw failure }
+            guard valid else { throw error("The native per-remote OpenVPN Start Layer validator rejected this capture.") }
+            return
+            #else
+            throw error("Per-remote OpenVPN Start Layers require the pinned native validator.")
+            #endif
+        }
         if mode.isEmpty || mode == off {
             guard external["start_layer"] == nil else { throw error("The provisioned external Start Layer needs its exact selected mode.") }
             return

@@ -3,6 +3,7 @@
 from pathlib import Path
 from unittest import mock
 import copy
+import base64
 import importlib.util
 import json
 import os
@@ -48,7 +49,7 @@ class OpenVPNPairing(unittest.TestCase):
             return PAIR.pair(bundle, 'exit', server_peer_profile=server)
 
     def test_actual_pairer_preserves_each_layer_and_only_server_owned_provider_credentials(self):
-        self.assertEqual(set(self.fixtures), {'off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening', 'mapped'})
+        self.assertEqual(set(self.fixtures), {'off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening', 'mapped', 'mapped-aes-256-gcm', 'mapped-aes-256-gcm+xor-whitening'})
         for name, fixture in self.fixtures.items():
             with self.subTest(layer=name):
                 external, server = copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile'])
@@ -96,6 +97,32 @@ class OpenVPNPairing(unittest.TestCase):
             self.assertEqual(completed.stderr, b'')
             for secret in (server['openvpn']['password'], server['pairing_private_key'], 'client_key', 'client_certificate', 'control_wrap_key'):
                 self.assertNotIn(secret, completed.stdout.decode())
+
+    def test_actual_per_host_layer_pairer_preserves_keys_and_rejects_ambiguous_ownership(self):
+        for mode in ('aes-256-gcm', 'aes-256-gcm+xor-whitening'):
+            fixture = self.fixtures['mapped-'+mode]
+            paired, = self.pair(copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile']), mode)
+            self.assertEqual(paired['external']['openvpn_start_layers'], fixture['external']['openvpn_start_layers'])
+            self.assertNotIn('start_layer', paired)
+            self.assertNotEqual(paired['external']['openvpn_start_layers']['203.0.113.20']['transport']['password'], paired['external']['openvpn_start_layers']['203.0.113.21']['transport']['password'])
+            for fault in ('wrong-selection', 'missing-host', 'foreign-host', 'mixed-mode', 'wrong-outer-host', 'null-singular', 'null-legacy', 'missing-probes', 'pairing-private-key', 'pairing-private-alias'):
+                with self.subTest(mode=mode, fault=fault):
+                    external, server = copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile'])
+                    selected = mode
+                    layers = external['openvpn_start_layers']
+                    if fault == 'wrong-selection': selected = 'off'
+                    if fault == 'missing-host': del layers['203.0.113.21']
+                    if fault == 'foreign-host': layers['203.0.113.22'] = copy.deepcopy(layers['203.0.113.21'])
+                    if fault == 'mixed-mode': layers['203.0.113.21']['mode'] = 'aes-256-gcm+xor-whitening' if mode == 'aes-256-gcm' else 'aes-256-gcm'
+                    if fault == 'wrong-outer-host': layers['203.0.113.21']['transport']['server'] = '203.0.113.20'
+                    if fault == 'null-singular': external['start_layer'] = None
+                    if fault == 'null-legacy': external['response_probe'] = None
+                    if fault == 'missing-probes': del external['openvpn_response_probes']
+                    if fault in ('pairing-private-key', 'pairing-private-alias'):
+                        key = bytearray(base64.b64decode(external['openvpn_pairing']['private_key']))
+                        if fault == 'pairing-private-alias': key[0] ^= 7
+                        layers['203.0.113.21']['transport']['password'] = base64.b64encode(key).decode()
+                    with self.assertRaises(ValueError): self.pair(external, server, selected)
 
     def test_actual_compiler_rejects_missing_reused_substituted_and_secret_bearing_counterparts(self):
         for fault in ('missing-file', 'local-profile', 'same-username', 'wrong-auth-key', 'changed-remote', 'changed-mtu', 'missing-pairing', 'hidden-key', 'extra-profile-field', 'extra-server-field', 'wrong-layer'):

@@ -352,8 +352,8 @@ for every distinct original public literal host:
 
 The map contains two to sixteen exact hosts. Missing, extra, duplicate,
 noncanonical or unrelated hosts are rejected before private JSON decoding can
-discard them. It cannot coexist with `response_probe` or an exit Start Layer,
-including explicit null fields. The map remains private through native import,
+discard them. It cannot coexist with the legacy `response_probe` or singular
+`start_layer`, including explicit null fields. The map remains private through native import,
 saved profiles, pairing and capture; public profile views expose eligibility
 only. Both owners retain their original remote order, ports, transport fallback,
 TLS, cipher, control wrapping, keepalive, fragment and MTU options.
@@ -377,10 +377,40 @@ operations perform fresh checks at capture and result-adoption boundaries;
 the background health watch alone cannot certify a new measurement.
 
 Single-host Off, AES-256-GCM and AES-256-GCM plus XOR exit Start Layers use the
-same owned native graph. Different-host mapped pairing currently permits Off
-at the exit; the captured Router entry may still have either Start Layer.
-Mapped exit layers require an explicit physical-to-inner-host proof contract
-and remain an unfinished graph capability. The private relay runs a userspace `openvpn-client` endpoint with
+same owned native graph. Different-host mapped profiles retain v5 for Off and
+use v6 when `external.openvpn_start_layers` supplies a complete private layer
+map. This map has two to sixteen canonical original public hosts, with exactly
+the same coverage as `openvpn_response_probes`, and at most 128 KiB of raw JSON.
+Each value has the existing `mode`, private `api` and authenticated `transport`
+fields. Every value must match the selected exit mode, either AES-256-GCM or
+AES-256-GCM plus XOR; the Router entry's separately captured layer is independent.
+A singular layer, explicit null, duplicate key or incomplete map is invalid.
+
+The native `routervpn-openvpn-layer-map` owns one authenticated outer child for
+each original host. It routes only exact captured original host/port/network
+tuples, preserving the complete ordered OpenVPN server list. Only the chosen
+child's dial target changes to that host's private service address and original
+OpenVPN port. Two providers with identical private addresses remain distinct.
+The native configured event and fresh remote receipt retain the original tuple
+and immutable transport generation, including UDP/TCP fallback and reconnects.
+No user-provided per-remote detour tag can substitute another runtime owner.
+
+V6 requires the entry's `captured-per-remote-v1` capability in addition to the
+fresh connected-transport capability. The fingerprint binds both provider public
+identities, every response endpoint and all public layer policy; the private
+lease authentication additionally binds every host's outer key. No public
+password digest is exposed. Outer keys cannot reuse either dedicated Local or
+Server pairing private identity, including canonical X25519 aliases. Existing
+v4 single-host and v5 mapped-Off fingerprints remain byte compatible.
+
+The mapper bounds pending/adopted sockets, cancels late dials and closes only
+its owned children. Failed closure retains the owner and prevents a replacement
+provider session. Physical desktop exceptions use the compiled outer
+host/port/network tuples, including the whitening listener's actual port. The
+MTU envelope uses the largest allowed per-host wrapper and private address
+family; it never treats that conservative bound as a fresh path measurement.
+
+The private relay runs a userspace `openvpn-client` endpoint with
 `system: false`; it does not create another system VPN or change the entry's
 global default route. The client proves its selected DNS and exit through the
 chosen path. Configured interface/fragment bounds account for the enclosing
@@ -469,8 +499,11 @@ shared Go compiler and policy package, malformed-input and ownership negatives,
 and native graph schema tests in both pinned Android/Apple builds. JVM tests
 double Android OS handles and the node store, not the graph/compiler/DNS policy.
 They do not replace physical-device routing, leak or network-transition tests.
-Additional helper/PQ/MAX/ALL, AWG-entry and mobile Tor dataplanes remain open;
-this addition does not waive or claim those broader requirements.
+That September 27 addition did not yet cover helper/PQ/MAX/ALL, AWG-entry or
+mobile Tor dataplanes. Later shared native composition supersedes those source
+exclusions; the current entry matrix and platform evidence above describe the
+implemented paths. This historical checkpoint is not a current missing-feature
+list or proof of physical-device acceptance.
 
 ## Native AWG exit source integration
 

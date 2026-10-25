@@ -10,6 +10,12 @@ PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 spec = importlib.util.spec_from_file_location('openvpn_module_generation', ROOT/'deploy/mobile_openvpn_module_policy.py')
 MODULE = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(MODULE)
+layers_spec = importlib.util.spec_from_file_location('openvpn_layers', ROOT/'deploy/mobile_openvpn_layers_policy.py')
+LAYERS = importlib.util.module_from_spec(layers_spec)
+layers_spec.loader.exec_module(LAYERS)
+stack_spec = importlib.util.spec_from_file_location('openvpn_stack_drain', ROOT/'deploy/mobile_openvpn_stack_policy.py')
+STACK = importlib.util.module_from_spec(stack_spec)
+stack_spec.loader.exec_module(STACK)
 SOURCE_SHA = '03f8e07a0fb478220ad0a1860acb499dd3b797bb'
 CLOSE_OLD='err := E.Errors(c.client.Close(), c.device.Close())'
 CLOSE_NEW='err := E.Errors(routerVPNOpenVPNCloseError(c.client.Close()), c.device.Close())'
@@ -17,7 +23,7 @@ CLOSE_NEW='err := E.Errors(routerVPNOpenVPNCloseError(c.client.Close()), c.devic
 
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_remote_native.py', ROOT/'deploy/test_mobile_openvpn_remote_policy.py', ROOT/'mobile/routervpn_openvpn_remote.go.tmpl',
-            ROOT/'mobile/routervpn_openvpn_remote_fixture.go.tmpl', *MODULE.inputs()]
+            ROOT/'mobile/routervpn_openvpn_remote_fixture.go.tmpl', *MODULE.inputs(), *LAYERS.inputs(), *STACK.inputs()]
 
 
 def digest():
@@ -104,6 +110,8 @@ def prepare(vendor):
     if target.is_symlink(): raise ValueError('Linked native OpenVPN remote boundary')
     source=patch(target.read_text())
     MODULE.prepare(vendor)
+    LAYERS.prepare(vendor)
+    STACK.prepare(vendor)
     target.write_text(source)
     for name in ('remote','remote_fixture'):
         output=vendor/'protocol/openvpn'/('routervpn_'+name+'.go')

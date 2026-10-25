@@ -17,6 +17,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
 )
 
@@ -34,6 +35,7 @@ type desktopExternalRuntime struct {
 	expected                               mobilemultihop.ExternalProofResult
 	profile, entry                         common.RouterProfile
 	physicalEndpoints                      []string
+	physicalEgress                         []nativeopenvpn.LayerEgress
 	mtu                                    *desktopMTUSession
 	direct                                 bool
 	started                                time.Time
@@ -239,12 +241,16 @@ func compileDesktopExternalGraphWithPredecessor(graph map[string]any, profile, e
 	if err != nil {
 		return nil, err
 	}
+	physicalEgress, err := desktopExternalPhysicalEgress(profile, entry, direct)
+	if err != nil {
+		return nil, err
+	}
 	selection := profile.MultihopExecution
 	if restored != "" {
 		selection = restored // Restoring an already proved winner never reruns Compare.
 	}
 	progress := &comparisonOwner{value: routeComparisonProgress{ID: session, Stage: "starting", Measurements: []routechoice.Measurement{}}}
-	return &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, physicalEndpoints: physicalEndpoints, direct: direct, progress: progress}}, nil
+	return &desktopNodeLaunch{profileID: physicalID, policyProfileID: policyID, endpoint: endpoint, mode: "external-" + exit.Protocol, config: []byte(compiled.Config()), metadata: []byte(compiled.Metadata()), external: &desktopExternalRuntime{source: source, capture: []byte(prepared), predecessor: predecessor, session: session, selection: selection, expected: expected, profile: profile, entry: entry, physicalEndpoints: physicalEndpoints, physicalEgress: physicalEgress, direct: direct, progress: progress}}, nil
 }
 
 func prepareDesktopExternalLaunch(a *app, profile, entry common.RouterProfile, exit standardExit, direct bool, restored string) (*desktopNodeLaunch, error) {

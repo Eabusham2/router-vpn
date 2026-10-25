@@ -1,0 +1,429 @@
+// Captured per-host OpenVPN Start Layers preserve the original provider tuple.
+// Each child is owned by this mapper, never an arbitrary replaceable graph tag.
+package routervpnopenvpnlayers
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"net/url"
+	"sort"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type Options = nativeopenvpn.LayerMap
+
+func RegisterOutbound(registry *outbound.Registry) {
+	outbound.Register[Options](registry, nativeopenvpn.LayerMapType, NewOutbound)
+}
+
+var errOwner = errors.New("captured OpenVPN Start Layer owner is unavailable")
+
+type branch struct {
+	child  adapter.Outbound
+	target netip.Addr
+}
+
+type Outbound struct {
+	outbound.Adapter
+	ctx           context.Context
+	cancel        context.CancelFunc
+	dialContext   context.Context
+	cancelDials   context.CancelFunc
+	manager       adapter.OutboundManager
+	entry         adapter.Outbound
+	detour        string
+	remotes       map[nativeopenvpn.Remote]branch
+	children      map[string]adapter.Outbound
+	mu            sync.Mutex
+	closeMu       sync.Mutex
+	generation    uint64
+	closing       bool
+	cleanupFailed bool
+	opening       int
+	drained       chan struct{}
+	drainedClosed bool
+	connections   map[io.Closer]bool
+}
+
+func NewOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options) (adapter.Outbound, error) {
+	if ctx == nil || options.Validate() != nil || tag == "" || tag == options.Detour || len(tag) > 96 {
+		return nil, errOwner
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	h := &Outbound{Adapter: outbound.NewAdapterWithDialerOptions(nativeopenvpn.LayerMapType, tag, []string{N.NetworkTCP, N.NetworkUDP}, option.DialerOptions{Detour: options.Detour}), ctx: ctx, cancel: cancel,
+		manager: service.FromContext[adapter.OutboundManager](ctx), detour: options.Detour, remotes: map[nativeopenvpn.Remote]branch{}, children: map[string]adapter.Outbound{}, generation: 1, drained: make(chan struct{}), connections: map[io.Closer]bool{}}
+	h.dialContext, h.cancelDials = context.WithCancel(ctx)
+	if options.Detour != "" && h.manager == nil {
+		cancel()
+		return nil, errOwner
+	}
+	childContext := ctx
+	if h.detour != "" {
+		// Children receive the captured predecessor pointer. A lazy native
+		// detour lookup must never adopt a replacement with the same tag.
+		childContext = service.ContextWith[adapter.OutboundManager](service.ExtendContext(ctx), &capturedEntryManager{OutboundManager: h.manager, owner: h})
+	}
+	hosts := make([]string, 0, len(options.Layers))
+	for host := range options.Layers {
+		hosts = append(hosts, host)
+	}
+	sort.Strings(hosts)
+	for index, host := range hosts {
+		layer := options.Layers[host]
+		port := uint16(layer.Transport["server_port"].(float64))
+		server := option.ServerOptions{Server: host, ServerPort: port}
+		childTag := fmt.Sprintf("%s-%d", tag, index)
+		var child adapter.Outbound
+		var err error
+		if layer.Mode == "aes-256-gcm+xor-whitening" {
+			server.ServerPort = 8389
+			child, err = routervpnwhitening.NewOutbound(childContext, router, logger, childTag, routervpnwhitening.Options{ServerOptions: server, Detour: options.Detour, Method: "2022-blake3-aes-256-gcm", Password: layer.Transport["password"].(string)})
+		} else {
+			child, err = shadowsocks.NewOutbound(childContext, router, logger, childTag, option.ShadowsocksOutboundOptions{DialerOptions: option.DialerOptions{Detour: options.Detour}, ServerOptions: server, Method: "2022-blake3-aes-256-gcm", Password: layer.Transport["password"].(string)})
+		}
+		if err != nil {
+			cancel()
+			return nil, errors.Join(errOwner, h.Close())
+		}
+		h.children[host] = child
+	}
+	for _, remote := range options.Remotes {
+		api, _ := url.Parse(options.Layers[remote.Host].API)
+		h.remotes[remote] = branch{child: h.children[remote.Host], target: netip.MustParseAddr(api.Hostname())}
+	}
+	return h, nil
+}
+
+type capturedEntryManager struct {
+	adapter.OutboundManager
+	owner *Outbound
+}
+
+func (m *capturedEntryManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.owner.mu.Lock()
+	defer m.owner.mu.Unlock()
+	if tag != m.owner.detour || m.owner.closing || m.owner.cleanupFailed || m.owner.ctx.Err() != nil || m.owner.entry == nil {
+		return nil, false
+	}
+	return m.owner.entry, true
+}
+
+func (h *Outbound) currentEntry() adapter.Outbound {
+	if h.detour == "" {
+		return nil
+	}
+	current, ok := h.manager.Outbound(h.detour)
+	if !ok {
+		return nil
+	}
+	return current
+}
+
+func (h *Outbound) acceptsEntryLocked(current adapter.Outbound) bool {
+	if h.detour == "" {
+		return true
+	}
+	if current == nil {
+		return false
+	}
+	if h.entry == nil {
+		h.entry = current
+	}
+	return current == h.entry
+}
+
+func (h *Outbound) begin(ctx context.Context, network string, destination M.Socksaddr) (branch, nativeopenvpn.Remote, uint64, context.Context, context.CancelFunc, error) {
+	remote := nativeopenvpn.Remote{Host: destination.Addr.String(), Port: int(destination.Port), Network: N.NetworkName(network)}
+	current := h.currentEntry()
+	h.mu.Lock()
+	b, exists := h.remotes[remote]
+	if ctx == nil || ctx.Err() != nil || h.closing || h.cleanupFailed || h.opening+len(h.connections) >= 64 || h.ctx.Err() != nil || !exists || remote.Validate() != nil || !h.acceptsEntryLocked(current) {
+		h.mu.Unlock()
+		return branch{}, nativeopenvpn.Remote{}, 0, nil, nil, errOwner
+	}
+	h.opening++
+	generation := h.generation
+	owned, cancel := context.WithTimeout(ctx, 10*time.Second)
+	stop := context.AfterFunc(h.dialContext, cancel)
+	h.mu.Unlock()
+	release := func() { stop(); cancel() }
+	return b, remote, generation, owned, release, nil
+}
+
+func (h *Outbound) finishLocked() {
+	h.opening--
+	if h.closing && h.opening == 0 && !h.drainedClosed {
+		close(h.drained)
+		h.drainedClosed = true
+	}
+}
+
+func (h *Outbound) adopt(owner io.Closer, generation uint64, ctx context.Context) bool {
+	h.mu.Lock()
+	valid := owner != nil && !h.closing && h.ctx.Err() == nil && ctx.Err() == nil && h.generation == generation
+	if owner != nil {
+		// Transfer a returned socket into explicit ownership before completing
+		// its pending dial. Manager removal may hold its own lock while closing
+		// us; it must be able to drain this socket without waiting for a manager
+		// lookup by an unfinished dial.
+		h.connections[owner] = true
+	}
+	h.finishLocked()
+	h.mu.Unlock()
+	if valid {
+		current := h.currentEntry()
+		h.mu.Lock()
+		valid = !h.closing && !h.cleanupFailed && h.ctx.Err() == nil && ctx.Err() == nil && h.generation == generation && h.connections[owner] && h.acceptsEntryLocked(current)
+		h.mu.Unlock()
+	}
+	if !valid && owner != nil {
+		_ = owner.Close()
+	}
+	return valid
+}
+
+func (h *Outbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	b, remote, generation, owned, release, err := h.begin(ctx, network, destination)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	target := M.Socksaddr{Addr: b.target, Port: uint16(remote.Port)}
+	raw, err := b.child.DialContext(owned, remote.Network, target)
+	var connection *ownedConn
+	if raw != nil {
+		connection = &ownedConn{Conn: raw, owner: h, remote: remote}
+	}
+	if err != nil || raw == nil {
+		if connection != nil {
+			h.adopt(connection, ^uint64(0), owned)
+		} else {
+			h.adopt(nil, ^uint64(0), owned)
+		}
+		if err == nil {
+			err = errOwner
+		}
+		return nil, err
+	}
+	if !h.adopt(connection, generation, owned) {
+		return nil, errOwner
+	}
+	return connection, nil
+}
+
+func (h *Outbound) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	b, remote, generation, owned, release, err := h.begin(ctx, N.NetworkUDP, destination)
+	if err != nil {
+		return nil, err
+	}
+	defer release()
+	target := M.Socksaddr{Addr: b.target, Port: uint16(remote.Port)}
+	raw, err := b.child.ListenPacket(owned, target)
+	var connection *ownedPacketConn
+	if raw != nil {
+		connection = &ownedPacketConn{PacketConn: raw, owner: h, remote: remote, target: target}
+	}
+	if err != nil || raw == nil {
+		if connection != nil {
+			h.adopt(connection, ^uint64(0), owned)
+		} else {
+			h.adopt(nil, ^uint64(0), owned)
+		}
+		if err == nil {
+			err = errOwner
+		}
+		return nil, err
+	}
+	if !h.adopt(connection, generation, owned) {
+		return nil, errOwner
+	}
+	return connection, nil
+}
+
+func (h *Outbound) remove(connection io.Closer) {
+	h.mu.Lock()
+	delete(h.connections, connection)
+	h.mu.Unlock()
+}
+func (h *Outbound) failedClose() { h.mu.Lock(); h.cleanupFailed = true; h.mu.Unlock() }
+
+func completedClose(err error) bool {
+	if err == nil {
+		return true
+	}
+	if joined, ok := err.(interface{ Unwrap() []error }); ok {
+		children := joined.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !completedClose(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if wrapped, ok := err.(interface{ Unwrap() error }); ok {
+		inner := wrapped.Unwrap()
+		return inner != nil && completedClose(inner)
+	}
+	return errors.Is(err, net.ErrClosed)
+}
+
+func (h *Outbound) closeConnections() error {
+	h.mu.Lock()
+	connections := make([]io.Closer, 0, len(h.connections))
+	for connection := range h.connections {
+		connections = append(connections, connection)
+	}
+	h.mu.Unlock()
+	var failures []error
+	for _, connection := range connections {
+		if err := connection.Close(); !completedClose(err) {
+			failures = append(failures, errOwner)
+		} else {
+			h.remove(connection)
+		}
+	}
+	return errors.Join(failures...)
+}
+
+func (h *Outbound) InterfaceUpdated(ctx context.Context) {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
+	h.mu.Lock()
+	h.cancelDials()
+	h.dialContext, h.cancelDials = context.WithCancel(h.ctx)
+	h.generation++
+	h.mu.Unlock()
+	_ = h.closeConnections()
+	for _, child := range h.children {
+		if updated, ok := child.(interface{ InterfaceUpdated(context.Context) }); ok {
+			updated.InterfaceUpdated(ctx)
+		}
+	}
+}
+
+func (h *Outbound) Close() error {
+	h.closeMu.Lock()
+	defer h.closeMu.Unlock()
+	h.mu.Lock()
+	h.closing = true
+	h.cancel()
+	if h.opening == 0 && !h.drainedClosed {
+		close(h.drained)
+		h.drainedClosed = true
+	}
+	h.mu.Unlock()
+	timer := time.NewTimer(2 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-h.drained:
+	case <-timer.C:
+		return errOwner
+	}
+	if err := h.closeConnections(); err != nil {
+		return err
+	}
+	var failures []error
+	for host, child := range h.children {
+		if closer, ok := child.(io.Closer); ok {
+			if err := closer.Close(); !completedClose(err) {
+				failures = append(failures, errOwner)
+				continue
+			}
+		}
+		delete(h.children, host)
+	}
+	return errors.Join(failures...)
+}
+
+type ownedConn struct {
+	net.Conn
+	owner  *Outbound
+	remote nativeopenvpn.Remote
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *ownedConn) RemoteAddr() net.Addr {
+	address := M.Socksaddr{Addr: netip.MustParseAddr(c.remote.Host), Port: uint16(c.remote.Port)}
+	if c.remote.Network == N.NetworkUDP {
+		return address.UDPAddr()
+	}
+	return address.TCPAddr()
+}
+func (c *ownedConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	err := c.Conn.Close()
+	if completedClose(err) {
+		c.closed = true
+		c.owner.remove(c)
+		return nil
+	}
+	c.owner.failedClose()
+	return err
+}
+
+type ownedPacketConn struct {
+	net.PacketConn
+	owner  *Outbound
+	remote nativeopenvpn.Remote
+	target M.Socksaddr
+	mu     sync.Mutex
+	closed bool
+}
+
+func (c *ownedPacketConn) ReadFrom(buffer []byte) (int, net.Addr, error) {
+	n, address, err := c.PacketConn.ReadFrom(buffer)
+	if err != nil {
+		return n, address, err
+	}
+	if M.SocksaddrFromNet(address) != c.target {
+		return 0, nil, errOwner
+	}
+	original := M.Socksaddr{Addr: netip.MustParseAddr(c.remote.Host), Port: uint16(c.remote.Port)}
+	return n, original.UDPAddr(), nil
+}
+func (c *ownedPacketConn) WriteTo(buffer []byte, address net.Addr) (int, error) {
+	wanted := M.Socksaddr{Addr: netip.MustParseAddr(c.remote.Host), Port: uint16(c.remote.Port)}
+	if M.SocksaddrFromNet(address) != wanted {
+		return 0, errOwner
+	}
+	return c.PacketConn.WriteTo(buffer, c.target.UDPAddr())
+}
+func (c *ownedPacketConn) Close() error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed {
+		return nil
+	}
+	err := c.PacketConn.Close()
+	if completedClose(err) {
+		c.closed = true
+		c.owner.remove(c)
+		return nil
+	}
+	c.owner.failedClose()
+	return err
+}

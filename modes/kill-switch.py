@@ -183,6 +183,79 @@ def captured_endpoint_ips(endpoint: str) -> list[ipaddress._BaseAddress]:
         raise RuntimeError("native endpoint list must retain its captured literal physical remotes") from None
 
 
+def validate_native_egress(value: Any, endpoint_ips: list[ipaddress._BaseAddress]) -> list[dict[str, Any]]:
+    """Accept only complete literal tuples; never coerce an invalid list to all ports."""
+    failure = RuntimeError("native egress must retain exact captured physical host, port and transport tuples")
+    if not isinstance(value, list) or not 1 <= len(value) <= 16:
+        raise failure
+    hosts = {str(address) for address in endpoint_ips}
+    seen: set[tuple[str, int, str]] = set()
+    result = []
+    for item in value:
+        if not isinstance(item, dict) or set(item) != {"host", "port", "network"}:
+            raise failure
+        host, port, network = item["host"], item["port"], item["network"]
+        if (not isinstance(host, str) or host not in hosts or type(port) is not int
+                or not 1 <= port <= 65535 or network not in ("tcp", "udp")):
+            raise failure
+        identity = (host, port, network)
+        if identity in seen:
+            raise failure
+        seen.add(identity)
+        result.append({"host": host, "port": port, "network": network})
+    if {item["host"] for item in result} != hosts:
+        raise failure
+    return result
+
+
+def _unique_json_members(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("duplicate native egress member")
+        result[key] = value
+    return result
+
+
+def captured_native_egress(endpoint_ips: list[ipaddress._BaseAddress]) -> list[dict[str, Any]] | None:
+    raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
+    if raw is None:
+        return None
+    session = os.environ.get("HOMEVPN_EXTERNAL_SESSION", "")
+    if (len(raw) > 4096 or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
+            or len(session) != 32 or any(c not in "0123456789abcdef" for c in session)):
+        raise RuntimeError("native egress has no captured external session")
+    try:
+        return validate_native_egress(json.loads(raw, object_pairs_hook=_unique_json_members), endpoint_ips)
+    except (ValueError, TypeError):
+        raise RuntimeError("native egress must retain exact captured physical host, port and transport tuples") from None
+
+
+def retained_native_policy(state: dict[str, Any], endpoint: str):
+    """Reassert an owned always guard without widening its saved outer ports."""
+    if "native_egress" not in state:
+        return None
+    if state.get("endpoint") != endpoint:
+        raise RuntimeError("saved native egress physical owner changed; reconnect before reasserting")
+    values = state.get("endpoint_ips")
+    if not isinstance(values, list) or not 1 <= len(values) <= 16:
+        raise RuntimeError("saved native egress lost its captured physical hosts")
+    addresses = []
+    for value in values:
+        if not isinstance(value, str):
+            raise RuntimeError("saved native egress physical host is invalid")
+        address = resolve_literal_endpoint(value)[0]
+        if (str(address) != value or address.is_unspecified or address.is_multicast
+                or address.is_loopback or address.is_link_local or '%' in value
+                or value == '255.255.255.255' or getattr(address, 'ipv4_mapped', None) is not None
+                or address in addresses):
+            raise RuntimeError("saved native egress physical host is invalid")
+        addresses.append(address)
+    if addresses[0] != resolve_literal_endpoint(endpoint)[0]:
+        raise RuntimeError("saved native egress lost its primary physical host")
+    return addresses, validate_native_egress(state["native_egress"], addresses)
+
+
 def nft_prefix() -> list[str]:
     nft = shutil.which("nft")
     if nft is None:
@@ -209,7 +282,7 @@ def table_exists() -> bool:
         return False
 
 
-def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, replace: bool) -> str:
+def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, replace: bool, native_egress=None) -> str:
     lines: list[str] = []
     if replace:
         lines.append(f"delete table inet {TABLE}")
@@ -223,10 +296,15 @@ def render_rules(endpoint_ips: list[ipaddress._BaseAddress], lan_access: bool, r
     ]
     v4 = [str(ip) for ip in endpoint_ips if ip.version == 4]
     v6 = [str(ip) for ip in endpoint_ips if ip.version == 6]
-    if v4:
-        lines.append(f"add rule inet {TABLE} output ip daddr {{ {', '.join(v4)} }} accept")
-    if v6:
-        lines.append(f"add rule inet {TABLE} output ip6 daddr {{ {', '.join(v6)} }} accept")
+    if native_egress is not None:
+        for item in validate_native_egress(native_egress, endpoint_ips):
+            family = "ip6" if ipaddress.ip_address(item["host"]).version == 6 else "ip"
+            lines.append(f"add rule inet {TABLE} output {family} daddr {item['host']} {item['network']} dport {item['port']} accept")
+    else:
+        if v4:
+            lines.append(f"add rule inet {TABLE} output ip daddr {{ {', '.join(v4)} }} accept")
+        if v6:
+            lines.append(f"add rule inet {TABLE} output ip6 daddr {{ {', '.join(v6)} }} accept")
     if lan_access:
         lines.append(f"add rule inet {TABLE} output ip daddr {{ {', '.join(PRIVATE_V4)} }} accept")
         lines.append(f"add rule inet {TABLE} output ip6 daddr {{ {', '.join(PRIVATE_V6)} }} accept")
@@ -381,7 +459,7 @@ def policy_value(profile: dict[str, Any]) -> str:
     return policy
 
 
-def apply() -> int:
+def apply(*, retained_state: dict[str, Any] | None = None) -> int:
     root = root_dir()
     store = read_store(root)
     runtime_id = safe_profile_id()
@@ -400,9 +478,14 @@ def apply() -> int:
     if not sys.platform.startswith("linux"):
         raise RuntimeError(f"strict kill switch is not implemented for {sys.platform}; refusing protected connect")
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    endpoint_ips = captured_endpoint_ips(endpoint)
+    retained = retained_native_policy(retained_state, endpoint) if retained_state is not None else None
+    if retained is None:
+        endpoint_ips = captured_endpoint_ips(endpoint)
+        native_egress = captured_native_egress(endpoint_ips)
+    else:
+        endpoint_ips, native_egress = retained
     lan_access = bool(control_profile.get("home_lan_access", False))
-    rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False)
+    rules = render_rules(endpoint_ips, lan_access, replace=table_exists() if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1" else False, native_egress=native_egress)
     if os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1":
         with tempfile.NamedTemporaryFile("w", encoding="utf-8", delete=False, prefix="router-vpn-killswitch-", suffix=".nft") as f:
             f.write(rules)
@@ -415,7 +498,7 @@ def apply() -> int:
                 os.unlink(temp_name)
             except FileNotFoundError:
                 pass
-    write_state(root, {
+    state = {
         "policy": policy,
         "profile_id": runtime_id,
         "policy_profile_id": control_id,
@@ -424,7 +507,10 @@ def apply() -> int:
         "home_lan_access": lan_access,
         "platform": sys.platform,
         "enforced": os.environ.get("HOMEVPN_KILLSWITCH_DRY_RUN") != "1",
-    })
+    }
+    if native_egress is not None:
+        state["native_egress"] = native_egress
+    write_state(root, state)
     print(f"strict kill switch {policy} applied for physical entry {endpoint}", file=sys.stderr)
     return 0
 
@@ -498,7 +584,8 @@ def reassert() -> int:
     os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
     os.environ["HOMEVPN_ENDPOINT"] = str(runtime_profile.get("endpoint") or state.get("endpoint") or "")
     os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
-    return apply()
+    os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
+    return apply(retained_state=state)
 
 
 def status() -> int:

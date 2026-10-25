@@ -105,6 +105,11 @@ func (e *ExternalNodeConfig) UnmarshalJSON(data []byte) error {
 		if _, legacy := fields["response_probe"]; legacy { return fmt.Errorf("OpenVPN remote response map cannot include a legacy response field") }
 		if _, layered := fields["start_layer"]; layered { return fmt.Errorf("OpenVPN remote response map requires an unambiguous physical remote mapping") }
 	}
+	if _, layered := fields["openvpn_start_layers"]; layered {
+		if _, mapped := fields["openvpn_response_probes"]; !mapped { return fmt.Errorf("OpenVPN Start Layers require a complete captured remote response map") }
+		if _, legacy := fields["response_probe"]; legacy { return fmt.Errorf("OpenVPN Start Layers cannot include a legacy response field") }
+		if _, singular := fields["start_layer"]; singular { return fmt.Errorf("OpenVPN Start Layers cannot include a singular layer field") }
+	}
 	var decoded externalNodeConfigJSON
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err

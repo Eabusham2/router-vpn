@@ -44,6 +44,8 @@ def inputs() -> list[Path]:
             ROOT/'deploy/test_ios_tor_profile.py',
             ROOT/'deploy/fixtures/external-openvpn-client.json',
             ROOT/'deploy/fixtures/external-openvpn-multihost-client.json',
+            ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json',
+            ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json',
             *sorted((ROOT/'android/app/src/main/java/com/eabusham/routervpn').glob('*.java')),
             *sorted((ROOT/'ios/RouterVPN/App').glob('*.swift')),
             *sorted((ROOT/'ios/RouterVPN/PacketTunnel').glob('*.swift'))] + HOST.inputs()
@@ -70,7 +72,9 @@ def expected_names(target: str) -> set[str]:
     # through every Router predecessor and entry layer for all execution choices.
     mapped = {mode+'-'+layer+'-openvpn-mapped-'+execution+'.json'
               for mode, layer, execution in itertools.product(MODES, LAYERS, ('local', *EXECUTIONS))}
-    return local | paired | layered | mapped
+    mapped_layers = {mode+'-'+entry+'-openvpn-mapped-exit-'+layer+'-'+execution+'.json'
+                     for mode, entry, layer, execution in itertools.product(MODES, LAYERS, LAYERS[1:], ('local', *EXECUTIONS))}
+    return local | paired | layered | mapped | mapped_layers
 
 
 def require_matrix(directory: Path, target: str) -> int:
@@ -133,8 +137,14 @@ def run(vendor: Path, target: str, package: Path, go: str, clang: str | None = N
                     diagnostics.append(line)
                     continue
                 output = event.get('Output', '')
-                if event.get('Action') == 'fail' or 'native registry rejected' in output:
-                    diagnostics.append(event.get('Test', '')+': '+output.strip())
+                # Go emits compiler/linker diagnostics as build-output or
+                # package-level output, before a fail event with no Output.
+                # Keep those messages too; the final tail remains bounded.
+                label = event.get('Test') or event.get('Package') or event.get('ImportPath') or event.get('Action', 'go')
+                if output.strip():
+                    diagnostics.append(label+': '+output.strip())
+                elif event.get('Action') == 'fail':
+                    diagnostics.append(label+': failed')
             raise RuntimeError('Native external graph constructors failed:\n'+'\n'.join(diagnostics)[-18000:])
         passed = set()
         for line in result.stdout.splitlines():

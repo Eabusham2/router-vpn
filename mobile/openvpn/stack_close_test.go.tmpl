@@ -1,0 +1,115 @@
+//go:build with_gvisor && routervpn_openvpn_remote_test
+
+package openvpn
+
+import (
+	"context"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/gvisor/pkg/buffer"
+	"github.com/sagernet/gvisor/pkg/tcpip"
+	"github.com/sagernet/gvisor/pkg/tcpip/network/ipv4"
+	"github.com/sagernet/gvisor/pkg/tcpip/stack"
+)
+
+type routerVPNPausedStackDelivery struct {
+	stack.NetworkDispatcher
+	stack   *stack.Stack
+	entered chan struct{}
+	release chan struct{}
+	abort   chan struct{}
+	calls   atomic.Int32
+}
+
+func (d *routerVPNPausedStackDelivery) DeliverNetworkPacket(protocol tcpip.NetworkProtocolNumber, packet *stack.PacketBuffer) {
+	if d.calls.Add(1) != 1 {
+		return
+	}
+	close(d.entered)
+	<-d.release
+	select {
+	case <-d.abort: // Only failure cleanup may abandon this test callback.
+		return
+	default:
+	}
+	// The real IPv4 handler takes this same stack read lock. Keeping a delivery
+	// paused makes the old Stack.Wait -> Attach(nil) lock cycle deterministic.
+	d.stack.FindNICNameFromID(1)
+	d.NetworkDispatcher.DeliverNetworkPacket(protocol, packet)
+}
+
+func TestRouterVPNOpenVPNStackCloseDrainsDeliveryBeforeStackLock(t *testing.T) {
+	device, err := newStackDevice(DeviceOptions{Context: context.Background(), MTU: 1400})
+	if err != nil {
+		t.Fatal(err)
+	}
+	endpoint := device.endpoint
+	paused := &routerVPNPausedStackDelivery{NetworkDispatcher: endpoint.dispatcher, stack: device.stack,
+		entered: make(chan struct{}), release: make(chan struct{}), abort: make(chan struct{})}
+	endpoint.Attach(paused)
+	packet := stack.NewPacketBuffer(stack.PacketBufferOptions{Payload: buffer.MakeWithData(make([]byte, 20))})
+	delivered := make(chan struct{})
+	closed := make(chan error, 1)
+	lookedUp := make(chan struct{})
+	var release sync.Once
+	defer func() {
+		close(paused.abort)
+		release.Do(func() { close(paused.release) })
+		select {
+		case <-delivered:
+			packet.DecRef()
+		case <-time.After(time.Second):
+			t.Error("captured packet callback did not drain during fixture cleanup")
+		}
+		select {
+		case <-closed:
+		case <-time.After(time.Second):
+			t.Error("captured stack did not drain during fixture cleanup")
+		}
+	}()
+	go func() {
+		endpoint.deliverNetworkPackets([]tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber}, []*stack.PacketBuffer{packet})
+		close(delivered)
+	}()
+	select {
+	case <-paused.entered:
+	case <-time.After(time.Second):
+		t.Fatal("real link delivery did not enter")
+	}
+	go func() { closed <- device.Close() }()
+	// There is exactly one writer: this owner's Close detaching the endpoint.
+	// A pending writer makes TryRLock fail while our paused delivery owns RLock.
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	for endpoint.dispatcherAccess.TryRLock() {
+		endpoint.dispatcherAccess.RUnlock()
+		select {
+		case <-deadline.C:
+			t.Fatal("native close did not begin captured link detachment")
+		case <-time.After(time.Millisecond):
+		}
+	}
+	go func() { device.stack.FindNICNameFromID(1); close(lookedUp) }()
+	select {
+	case <-lookedUp:
+	case <-time.After(time.Second):
+		t.Fatal("native close held the gVisor stack lock while waiting for captured packet delivery")
+	}
+	release.Do(func() { close(paused.release) })
+	select {
+	case err := <-closed:
+		closed <- err
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("native close did not drain after its packet completed")
+	}
+	endpoint.deliverNetworkPackets([]tcpip.NetworkProtocolNumber{ipv4.ProtocolNumber}, []*stack.PacketBuffer{packet})
+	if endpoint.IsAttached() || paused.calls.Load() != 1 {
+		t.Fatal("closed native link delivered another packet")
+	}
+}

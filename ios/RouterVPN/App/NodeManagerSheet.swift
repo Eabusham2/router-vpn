@@ -251,6 +251,7 @@ private struct RouterVPNNodeMetadataEditor: View {
     @State private var serverPeerJSON: String
     @State private var openVPNPairingJSON: String
     @State private var openVPNResponseProbesJSON: String
+    @State private var openVPNStartLayersJSON: String
     @State private var errorText = ""
 
     init(profile: RouterProfile) {
@@ -268,6 +269,7 @@ private struct RouterVPNNodeMetadataEditor: View {
         _serverPeerJSON = State(initialValue: IOSExternalExecution.serverPeerText(profile.external?.serverPeer))
         _openVPNPairingJSON = State(initialValue: IOSExternalExecution.openVPNPairingText(profile.external?.openVPNPairing))
         _openVPNResponseProbesJSON = State(initialValue: IOSExternalExecution.openVPNResponseProbesText(profile.external?.openVPNResponseProbes))
+        _openVPNStartLayersJSON = State(initialValue: IOSExternalExecution.openVPNStartLayersText(profile.external?.openVPNStartLayers))
     }
 
     var body: some View {
@@ -335,7 +337,12 @@ private struct RouterVPNNodeMetadataEditor: View {
                             TextEditor(text: $openVPNResponseProbesJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 120)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                                 .accessibilityLabel("Private OpenVPN remote response endpoints JSON")
-                            Text("A profile with multiple remote IPs needs one HTTPS response endpoint for every remote IP. Use the private map supplied with the node; leave the single URL and certificate fields blank and keep Exit Start Layer Off. Choose Local before removing this map from a Server or Compare graph.")
+                            Text("A profile with multiple remote IPs needs one HTTPS response endpoint for every remote IP. Use the private map supplied with the node; leave the single URL and certificate fields blank. Exit encryption uses the per-remote layer map below. Choose Local before removing this map from a Server or Compare graph.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            TextEditor(text: $openVPNStartLayersJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 140)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityLabel("Private OpenVPN per-remote Start Layer map JSON")
+                            Text("Select AES or AES + XOR above and supply every original remote IP's provisioned mode, api and transport. All entries must match the selected mode. Keep the single-service API, port and key fields empty. Clear this map to turn the layer Off; keys remain private with the linked node.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -358,7 +365,8 @@ private struct RouterVPNNodeMetadataEditor: View {
                             exitLayerKey: external != nil && exitStartLayer != "off" ? exitLayerKey : "",
                             serverPeerJSON: ExternalNodeConfig.packetProtocols.contains(external?.protocolName ?? "") ? serverPeerJSON : nil,
                             openVPNPairingJSON: external?.protocolName == "openvpn" ? openVPNPairingJSON : nil,
-                            openVPNResponseProbesJSON: external?.protocolName == "openvpn" ? openVPNResponseProbesJSON : nil) { dismiss() }
+                            openVPNResponseProbesJSON: external?.protocolName == "openvpn" ? openVPNResponseProbesJSON : nil,
+                            openVPNStartLayersJSON: external?.protocolName == "openvpn" ? openVPNStartLayersJSON : nil) { dismiss() }
                         else { errorText = model.message }
                     }
                     .disabled(model.profileMutationBlocked)

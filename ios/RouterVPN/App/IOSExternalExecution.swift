@@ -22,7 +22,10 @@ enum IOSExternalExecution {
                       external.responseProbe == nil, external.startLayer == nil else { throw issue() }
                 _ = try openVPNResponseProbes(String(decoding: JSONEncoder().encode(probes), as: UTF8.self), profile: original)
             }
-            if external.startLayer != nil || external.serverPeer != nil || external.openVPNPairing != nil || external.openVPNResponseProbes != nil || (external.protocolName == "openvpn" && external.responseProbe != nil) { try validateLayerDraft(profile) }
+            if let layers = external.openVPNStartLayers, let original = external.openVPN {
+                _ = try openVPNStartLayers(String(decoding: JSONEncoder().encode(layers), as: UTF8.self), profile: original, probes: external.openVPNResponseProbes, selectedMode: profile.startLayer ?? "off")
+            }
+            if external.startLayer != nil || external.openVPNStartLayers != nil || external.serverPeer != nil || external.openVPNPairing != nil || external.openVPNResponseProbes != nil || (external.protocolName == "openvpn" && external.responseProbe != nil) { try validateLayerDraft(profile) }
             guard let probe = external.responseProbe else { continue }
             let host = try host(external)
             try validate(probe, host: host)
@@ -84,6 +87,25 @@ enum IOSExternalExecution {
         guard let probes else { return "" }
         let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
         return (try? String(decoding: encoder.encode(probes), as: UTF8.self)) ?? ""
+    }
+
+    static func openVPNStartLayers(_ text: String, profile: ExternalOpenVPNConfig,
+                                   probes: [String: ExternalResponseProbe]?, selectedMode: String) throws -> [String: ExternalStartLayer]? {
+        if text.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { return nil }
+        guard text.utf8.count <= 128 * 1024, let probes else { throw issue() }
+        let source = String(decoding: try JSONEncoder().encode(profile), as: UTF8.self)
+        let responses = String(decoding: try JSONEncoder().encode(probes), as: UTF8.self)
+        var failure: NSError?
+        let valid = LibboxRouterValidateExternalOpenVPNStartLayers(source, responses, text, selectedMode, &failure)
+        if let failure { throw failure }
+        guard valid else { throw issue() }
+        return try JSONDecoder().decode([String: ExternalStartLayer].self, from: Data(text.utf8))
+    }
+
+    static func openVPNStartLayersText(_ layers: [String: ExternalStartLayer]?) -> String {
+        guard let layers else { return "" }
+        let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys, .prettyPrinted]
+        return (try? String(decoding: encoder.encode(layers), as: UTF8.self)) ?? ""
     }
 
     static func responseProbe(host: String, url: String, serverName: String) throws -> ExternalResponseProbe? {
@@ -203,6 +225,6 @@ enum IOSExternalExecution {
 
     static func issue() -> NSError {
         NSError(domain: "RouterVPN.ExternalExecution", code: 1,
-            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated external exit with an HTTPS response URL on its exact server IP. WireGuard and AmneziaWG require a separately provisioned server peer. OpenVPN requires private pairing with independent provider and authentication identities; different fallback hosts require a response URL for every host and exit Start Layer Off. Configure this exit in the entry's private relay registry before connecting."])
+            userInfo: [NSLocalizedDescriptionKey: "Server and Compare require a paired Router VPN entry and an authenticated external exit with an HTTPS response URL on its exact server IP. WireGuard and AmneziaWG require a separately provisioned server peer. OpenVPN requires private pairing with independent provider and authentication identities; different fallback hosts require a response URL for every host. Selecting an exit Start Layer also requires matching private layer settings for every host. Configure this exit in the entry's private relay registry before connecting."])
     }
 }

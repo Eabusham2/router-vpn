@@ -12,7 +12,7 @@ if ($PreserveJsonArrays) {
 $script = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-killswitch-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
-$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON')
+$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON')
 $originalNative = @{}
 foreach ($name in $nativeNames) {
   $originalNative[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
@@ -42,13 +42,14 @@ try {
   $tokens=$null; $parseErrors=$null
   $tree=[Management.Automation.Language.Parser]::ParseFile($script,[ref]$tokens,[ref]$parseErrors)
   if ($parseErrors.Count) { throw 'Windows kill-switch parse failed' }
-  foreach ($functionName in @('Remove-Rules','Add-Rule','Install-AllowRules')) {
+  foreach ($functionName in @('Assert-NativeEgress','Remove-Rules','Add-Rule','Install-AllowRules')) {
     $definition=$tree.Find({param($node) $node -is [Management.Automation.Language.FunctionDefinitionAst] -and $node.Name -eq $functionName},$true)
     if (-not $definition) { throw "Missing shipping function $functionName" }
     Invoke-Expression $definition.Extent.Text
   }
   $script:capturedRules = @()
-  function Get-NetFirewallRule { param($Group,$ErrorAction) }
+  $script:firewallReads=0
+  function Get-NetFirewallRule { param($Group,$ErrorAction) $script:firewallReads++ }
   function Remove-NetFirewallRule { param($ErrorAction) }
   function New-NetFirewallRule {
     param($DisplayName,$Group,$Direction,$Action,$Profile,$RemoteAddress,$Protocol,$LocalPort,$RemotePort,$IcmpType,$InterfaceAlias)
@@ -62,6 +63,45 @@ try {
   foreach ($rule in $script:capturedRules) {
     if ($rule.Direction -ne 'Outbound' -or $rule.Action -ne 'Allow') { throw 'native path created an unexpected firewall rule' }
   }
+
+  $egress='[{"host":"203.0.113.7","port":8388,"network":"udp"},{"host":"198.51.100.20","port":8390,"network":"tcp"},{"host":"2001:db8::7","port":8389,"network":"udp"}]'
+  $env:HOMEVPN_NATIVE_EGRESS_JSON=$egress
+  $egressPlan=(& $script -Action plan -Endpoint '203.0.113.7' -Policy 'always' -HomeLANAccess 'false' -TunnelAlias 'router-vpn' -StateRoot $temp | ConvertFrom-Json)
+  if(@($egressPlan.native_egress).Count-ne3){throw 'Captured egress lost its array shape.'}
+  $script:capturedRules=@();Install-AllowRules $egressPlan
+  $outer=@($script:capturedRules|Where-Object{$_.DisplayName-like'Router VPN test native outer *'})
+  if($outer.Count-ne3-or@($script:capturedRules|Where-Object{$_.DisplayName-eq'Router VPN test selected node'}).Count){throw 'Mapped egress widened into an all-port host rule.'}
+  for($i=0;$i-lt3;$i++){
+    $expected=$egressPlan.native_egress[$i]
+    if(@($outer[$i].RemoteAddress).Count-ne1-or$outer[$i].RemoteAddress[0]-cne$expected.host-or$outer[$i].RemotePort-cne[string]$expected.port-or$outer[$i].Protocol-cne$expected.network.ToUpperInvariant()){throw 'Firewall cmdlet lost exact compiled outer tuple.'}
+  }
+  $badEgress=@('null','{}','[]','[[{"host":"203.0.113.7","port":8388,"network":"udp"}]]',
+    '[{"host":"203.0.113.7","port":8388,"network":"udp"}]',
+    $egress.Replace('"port":8388','"port":0'),$egress.Replace('"port":8388','"port":65536'),
+    $egress.Replace('"port":8388','"port":"8388"'),$egress.Replace('"port":8388','"port":8388.0'),
+    $egress.Replace('"port":8388','"port":true'),$egress.Replace('"network":"udp"','"network":"UDP"'),
+    $egress.Replace('"network":"udp"','"network":"icmp"'),$egress.Replace('203.0.113.7','vpn.example.test'),
+    $egress.Replace('"port":8388','"port":8388,"port":8390'),
+    $egress.Replace('"port":8388','"port":8388,"unknown":1'),
+    $egress.Replace('203.0.113.7','203.0.113.8'),$egress.Substring(0,$egress.Length-1)+','+$egress.Substring(1),
+    (' '*4097))
+  foreach($raw in $badEgress){
+    $env:HOMEVPN_NATIVE_EGRESS_JSON=$raw;$rejected=$false
+    try{& $script -Action plan -Endpoint '203.0.113.7' -Policy 'always' -HomeLANAccess 'false' -StateRoot $temp|Out-Null}catch{$rejected=$true}
+    if(-not$rejected){throw 'Malformed native egress reached a permissive plan.'}
+  }
+  foreach($owner in @('engine','session')){
+    $env:HOMEVPN_NATIVE_EGRESS_JSON=$egress;$env:HOMEVPN_STANDARD_ENGINE='native';$env:HOMEVPN_EXTERNAL_SESSION=('a'*32)
+    if($owner-eq'engine'){$env:HOMEVPN_STANDARD_ENGINE='openvpn'}else{$env:HOMEVPN_EXTERNAL_SESSION=('A'*32)}
+    $rejected=$false;try{& $script -Action plan -Endpoint '203.0.113.7' -Policy 'always' -HomeLANAccess 'false' -StateRoot $temp|Out-Null}catch{$rejected=$true}
+    if(-not$rejected){throw 'Unowned native egress reached a permissive plan.'}
+  }
+  $beforeReads=$script:firewallReads
+  $invalidPlan=[pscustomobject]@{endpoint_ips=@('203.0.113.7');native_egress=@();home_lan_access=$false;tunnel_alias='router-vpn'}
+  $rejected=$false;try{Install-AllowRules $invalidPlan}catch{$rejected=$true}
+  if(-not$rejected-or$script:firewallReads-ne$beforeReads){throw 'Malformed retained tuple list changed firewall rules before rejection.'}
+  Remove-Item Env:HOMEVPN_NATIVE_EGRESS_JSON
+  $env:HOMEVPN_STANDARD_ENGINE='native';$env:HOMEVPN_EXTERNAL_SESSION=('a'*32)
 
   $badLists=@('null','{}','[]','"203.0.113.7"','["198.51.100.20"]',
     '["203.0.113.7","203.0.113.7"]','["203.0.113.7",null]',

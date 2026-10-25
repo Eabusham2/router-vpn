@@ -53,6 +53,8 @@ type externalProfileCreateRequest struct {
 	OpenVPNPairingJSON        string                               `json:"openvpn_pairing_json,omitempty"`
 	OpenVPNResponseProbes     common.ExternalOpenVPNResponseProbes `json:"openvpn_response_probes,omitempty"`
 	OpenVPNResponseProbesJSON string                               `json:"openvpn_response_probes_json,omitempty"`
+	OpenVPNStartLayers        common.ExternalOpenVPNStartLayers    `json:"openvpn_start_layers,omitempty"`
+	OpenVPNStartLayersJSON    string                               `json:"openvpn_start_layers_json,omitempty"`
 }
 
 const externalProfileCreateMaxBytes = 2 << 20
@@ -66,9 +68,20 @@ func decodeExternalProfileCreate(raw []byte) (externalProfileCreateRequest, erro
 	if err != nil {
 		return externalProfileCreateRequest{}, bad
 	}
-	for _, field := range []string{"openvpn", "openvpn_pairing", "openvpn_pairing_json", "openvpn_response_probes", "openvpn_response_probes_json"} {
+	for _, field := range []string{"openvpn", "openvpn_pairing", "openvpn_pairing_json", "openvpn_response_probes", "openvpn_response_probes_json", "openvpn_start_layers", "openvpn_start_layers_json"} {
 		if value, exists := object[field]; exists && value == nil {
 			return externalProfileCreateRequest{}, bad
+		}
+	}
+	_, mappedLayers := object["openvpn_start_layers"]
+	if text, ok := object["openvpn_start_layers_json"].(string); ok && strings.TrimSpace(text) != "" {
+		mappedLayers = true
+	}
+	if mappedLayers {
+		for _, field := range []string{"start_layer_provision", "response_probe"} {
+			if _, exists := object[field]; exists {
+				return externalProfileCreateRequest{}, bad
+			}
 		}
 	}
 	var request externalProfileCreateRequest
@@ -104,7 +117,7 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	}
 
 	protocol := normalizeStandardExitProtocol(q.Protocol)
-	if protocol != "openvpn" && (q.OpenVPN != nil || q.OpenVPNPairing != nil || q.OpenVPNPairingJSON != "" || q.OpenVPNResponseProbes != nil || q.OpenVPNResponseProbesJSON != "") {
+	if protocol != "openvpn" && (q.OpenVPN != nil || q.OpenVPNPairing != nil || q.OpenVPNPairingJSON != "" || q.OpenVPNResponseProbes != nil || q.OpenVPNResponseProbesJSON != "" || q.OpenVPNStartLayers != nil || q.OpenVPNStartLayersJSON != "") {
 		return common.RouterProfile{}, errors.New("OpenVPN source and pairing belong only to the OpenVPN protocol")
 	}
 	if q.OpenVPNPairingJSON != "" {
@@ -130,6 +143,22 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	if q.OpenVPNResponseProbes != nil && q.ResponseProbe != nil {
 		return common.RouterProfile{}, errors.New("choose the per-host OpenVPN response-proof map or a single response endpoint")
 	}
+	if q.OpenVPNStartLayersJSON != "" {
+		if len(q.OpenVPNStartLayersJSON) > nativeopenvpn.MaxStartLayersBytes {
+			return common.RouterProfile{}, errors.New("OpenVPN Start Layer map exceeds its private editor limit")
+		}
+		if q.OpenVPNStartLayers != nil {
+			return common.RouterProfile{}, errors.New("provide one OpenVPN Start Layer map representation")
+		}
+		var layers common.ExternalOpenVPNStartLayers
+		if err := json.Unmarshal([]byte(q.OpenVPNStartLayersJSON), &layers); err != nil {
+			return common.RouterProfile{}, errors.New("OpenVPN Start Layer map JSON is invalid")
+		}
+		q.OpenVPNStartLayers = layers
+	}
+	if q.OpenVPNStartLayers != nil && q.StartLayerProvision != nil {
+		return common.RouterProfile{}, errors.New("choose the per-host OpenVPN Start Layer map or a single provision")
+	}
 	if protocol != "amneziawg" && len(q.AWGParameters) != 0 {
 		return common.RouterProfile{}, errors.New("AmneziaWG parameters require the AmneziaWG protocol")
 	}
@@ -137,7 +166,7 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 		ID:         newID(),
 		Name:       q.Name,
 		NodeKind:   "external",
-		External:   &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP), ResponseProbe: q.ResponseProbe, StartLayer: q.StartLayerProvision, ServerPeer: q.ServerPeer, OpenVPNPairing: q.OpenVPNPairing, OpenVPNResponseProbes: q.OpenVPNResponseProbes},
+		External:   &common.ExternalNodeConfig{Protocol: protocol, ExpectedPublicIP: strings.TrimSpace(q.ExpectedPublicIP), ResponseProbe: q.ResponseProbe, StartLayer: q.StartLayerProvision, ServerPeer: q.ServerPeer, OpenVPNPairing: q.OpenVPNPairing, OpenVPNResponseProbes: q.OpenVPNResponseProbes, OpenVPNStartLayers: q.OpenVPNStartLayers},
 		StartLayer: q.StartLayer,
 		Location:   q.Location,
 		Latitude:   latitude,

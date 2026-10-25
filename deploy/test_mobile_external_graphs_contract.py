@@ -27,25 +27,30 @@ def names(target):
                for entry in G.LAYERS for protocol in protocols for layer in ('aes-256-gcm', 'aes-256-gcm+xor-whitening') for execution in ('local', 'server', 'auto')}
     mapped = {mode+'-'+layer+'-openvpn-mapped-'+execution+'.json'
               for mode in G.MODES for layer in G.LAYERS for execution in ('local', 'server', 'auto')}
-    return local, paired, layered, mapped
+    mapped_layers = {mode+'-'+entry+'-openvpn-mapped-exit-'+layer+'-'+execution+'.json'
+                     for mode in G.MODES for entry in G.LAYERS for layer in G.LAYERS[1:] for execution in ('local', 'server', 'auto')}
+    return local, paired, layered, mapped, mapped_layers
 
 
 class ExternalGraphGate(unittest.TestCase):
     def test_every_mode_layer_and_supported_execution_is_required(self):
         for target in ('android', 'ios'):
-            local, paired, layered, mapped = names(target)
-            self.assertEqual((len(local), len(paired), len(layered), len(mapped)), (456, 912, 144, 171))
+            local, paired, layered, mapped, mapped_layers = names(target)
+            self.assertEqual((len(local), len(paired), len(layered), len(mapped), len(mapped_layers)), (456, 912, 144, 171, 342))
             self.assertFalse(local & paired)
             self.assertFalse(layered & (local | paired))
             self.assertFalse(mapped & (local | paired | layered))
-            self.assertEqual(G.expected_names(target), local | paired | layered | mapped)
-            self.assertEqual(len(G.expected_names(target)), 1683)
+            self.assertFalse(mapped_layers & (local | paired | layered | mapped))
+            self.assertEqual(G.expected_names(target), local | paired | layered | mapped | mapped_layers)
+            self.assertEqual(len(G.expected_names(target)), 2025)
             self.assertIn('max-quic-awg-aes-256-gcm+xor-whitening-shadowsocks-auto.json', paired)
             self.assertIn('max-tls-wg-aes-256-gcm-amneziawg-server.json', paired)
             self.assertIn('max-off-openvpn-auto.json', paired)
             self.assertIn('max-off-openvpn-mapped-auto.json', mapped)
             self.assertIn('max-quic-awg-aes-256-gcm+xor-whitening-openvpn-mapped-server.json', mapped)
             self.assertIn('wg-off-openvpn-mapped-local.json', mapped)
+            self.assertIn('max-quic-awg-aes-256-gcm+xor-whitening-openvpn-mapped-exit-aes-256-gcm+xor-whitening-auto.json', mapped_layers)
+            self.assertIn('wg-off-openvpn-mapped-exit-aes-256-gcm-local.json', mapped_layers)
             self.assertIn('wg-aes-256-gcm-openvpn-exit-aes-256-gcm+xor-whitening-auto.json', layered)
             self.assertIn('wg-aes-256-gcm-wireguard-exit-aes-256-gcm+xor-whitening-auto.json', layered)
 
@@ -54,11 +59,11 @@ class ExternalGraphGate(unittest.TestCase):
             with tempfile.TemporaryDirectory(prefix='external-matrix-contract-') as tmp:
                 directory = Path(tmp)/'graphs'
                 directory.mkdir()
-                local, paired, layered, mapped = names(target)
-                for name in local | paired | layered | mapped:
+                local, paired, layered, mapped, mapped_layers = names(target)
+                for name in local | paired | layered | mapped | mapped_layers:
                     (directory/name).write_text('{}')
-                self.assertEqual(G.require_matrix(directory, target), 1683)
-                for name in ('wg-off-wireguard.json', 'wg-off-shadowsocks-server.json', 'wg-off-shadowsocks-auto.json', 'wg-aes-256-gcm-socks5-exit-aes-256-gcm+xor-whitening-server.json', 'wg-off-wireguard-server.json', 'max-quic-awg-off-amneziawg-auto.json', 'wg-aes-256-gcm-wireguard-exit-aes-256-gcm+xor-whitening-auto.json', 'wg-off-openvpn-server.json', 'max-off-openvpn-auto.json', 'wg-aes-256-gcm-openvpn-exit-aes-256-gcm+xor-whitening-auto.json', 'wg-off-openvpn-mapped-local.json', 'max-off-openvpn-mapped-auto.json', 'max-quic-awg-aes-256-gcm+xor-whitening-openvpn-mapped-server.json'):
+                self.assertEqual(G.require_matrix(directory, target), 2025)
+                for name in ('wg-off-wireguard.json', 'wg-off-shadowsocks-server.json', 'wg-off-shadowsocks-auto.json', 'wg-aes-256-gcm-socks5-exit-aes-256-gcm+xor-whitening-server.json', 'wg-off-wireguard-server.json', 'max-quic-awg-off-amneziawg-auto.json', 'wg-aes-256-gcm-wireguard-exit-aes-256-gcm+xor-whitening-auto.json', 'wg-off-openvpn-server.json', 'max-off-openvpn-auto.json', 'wg-aes-256-gcm-openvpn-exit-aes-256-gcm+xor-whitening-auto.json', 'wg-off-openvpn-mapped-local.json', 'max-off-openvpn-mapped-auto.json', 'max-quic-awg-aes-256-gcm+xor-whitening-openvpn-mapped-server.json', 'wg-off-openvpn-mapped-exit-aes-256-gcm-local.json', 'max-quic-awg-aes-256-gcm+xor-whitening-openvpn-mapped-exit-aes-256-gcm+xor-whitening-auto.json'):
                     file = directory/name
                     file.unlink()
                     with self.assertRaisesRegex(ValueError, '1 missing, 0 extra'):
@@ -133,15 +138,25 @@ class ExternalGraphGate(unittest.TestCase):
                         (directory/'wg-off-openvpn-server.json').unlink()
                     if fault == 'missing-mapped':
                         (directory/'max-off-openvpn-mapped-auto.json').unlink()
+                    if fault == 'missing-mapped-layer':
+                        (directory/'max-off-openvpn-mapped-exit-aes-256-gcm-auto.json').unlink()
                     return subprocess.CompletedProcess(command, 0)
                 self.assertEqual(Path(cwd), vendor)
                 self.assertEqual(command[:4], ['go', 'test', '-mod=readonly', '-json'])
                 self.assertEqual(command[command.index('-run')+1], '^TestRouterExternalGeneratedNativeGraphs$')
-                self.assertEqual(env['ROUTERVPN_NATIVE_EXTERNAL_GRAPH_COUNT'], '1683')
+                self.assertEqual(env['ROUTERVPN_NATIVE_EXTERNAL_GRAPH_COUNT'], '2025')
                 self.assertEqual(env['ROUTERVPN_REQUIRE_EXTERNAL_GRAPHS'], '1')
                 self.assertEqual(Path(env['ROUTERVPN_NATIVE_EXTERNAL_GRAPHS']), generated[0])
                 if fault == 'native':
                     return subprocess.CompletedProcess(command, 1, 'native constructor failed')
+                if fault == 'native-build':
+                    events = [
+                        {'Action': 'build-output', 'ImportPath': 'native/fixture', 'Output': 'x'*20000},
+                        {'Action': 'build-output', 'ImportPath': 'native/fixture', 'Output': 'compile: no space left on device\n'},
+                        {'Action': 'output', 'Package': 'native/fixture', 'Output': 'FAIL native/fixture [build failed]\n'},
+                        {'Action': 'fail', 'Package': 'native/fixture'},
+                    ]
+                    return subprocess.CompletedProcess(command, 1, '\n'.join(json.dumps(event) for event in events))
                 passed = set.union(*names(target))
                 if fault == 'missing-native-paired':
                     passed.remove('wg-off-shadowsocks-auto.json')
@@ -151,6 +166,8 @@ class ExternalGraphGate(unittest.TestCase):
                     passed.remove('wg-off-openvpn-auto.json')
                 if fault == 'missing-native-mapped':
                     passed.remove('max-off-openvpn-mapped-auto.json')
+                if fault == 'missing-native-mapped-layer':
+                    passed.remove('max-off-openvpn-mapped-exit-aes-256-gcm+xor-whitening-auto.json')
                 if fault == 'module-changed':
                     (vendor/'go.sum').write_text('changed during verification')
                 events = [{'Action': 'pass', 'Test': G.TEST+'/'+name} for name in sorted(passed)]
@@ -161,8 +178,13 @@ class ExternalGraphGate(unittest.TestCase):
                  patch.object(G.subprocess, 'check_output', return_value='wrong-pin' if fault == 'pin' else G.PIN), \
                  patch.object(G.subprocess, 'run', side_effect=run), contextlib.redirect_stdout(io.StringIO()):
                 if fault:
-                    with self.assertRaises((ValueError, RuntimeError, subprocess.CalledProcessError)):
+                    with self.assertRaises((ValueError, RuntimeError, subprocess.CalledProcessError)) as failure:
                         G.run(vendor, target, package, 'go')
+                    if fault == 'native-build':
+                        diagnostic = str(failure.exception)
+                        self.assertIn('native/fixture: compile: no space left on device', diagnostic)
+                        self.assertIn('native/fixture: FAIL native/fixture [build failed]', diagnostic)
+                        self.assertLessEqual(len(diagnostic), 18000+len('Native external graph constructors failed:\n'))
                 else:
                     G.run(vendor, target, package, 'go')
                     self.assertEqual(verified, [(package, 'host-test'), (package, 'host-test')])
@@ -170,16 +192,16 @@ class ExternalGraphGate(unittest.TestCase):
                 self.assertFalse(directory.exists(), 'captured private graphs survived gate completion')
             return len(calls)
 
-    def test_actual_runner_verifies_all_1683_native_results_on_both_hosts(self):
+    def test_actual_runner_verifies_all_2025_native_results_on_both_hosts(self):
         for target in ('android', 'ios'):
             with self.subTest(target=target):
                 self.assertEqual(self.exercise(target), 2)
 
     def test_native_success_cannot_hide_a_missing_execution_or_source_change(self):
-        for fault in ('pin', 'reader', 'host', 'missing-paired', 'missing-packet', 'missing-openvpn', 'missing-mapped', 'native', 'missing-native-paired', 'missing-native-packet', 'missing-native-openvpn', 'missing-native-mapped', 'module-changed'):
+        for fault in ('pin', 'reader', 'host', 'missing-paired', 'missing-packet', 'missing-openvpn', 'missing-mapped', 'missing-mapped-layer', 'native', 'native-build', 'missing-native-paired', 'missing-native-packet', 'missing-native-openvpn', 'missing-native-mapped', 'missing-native-mapped-layer', 'module-changed'):
             with self.subTest(fault=fault):
                 calls = self.exercise(fault=fault)
-                self.assertEqual(calls, 0 if fault in ('pin', 'reader') else 1 if fault in ('host', 'missing-paired', 'missing-packet', 'missing-openvpn', 'missing-mapped') else 2)
+                self.assertEqual(calls, 0 if fault in ('pin', 'reader') else 1 if fault in ('host', 'missing-paired', 'missing-packet', 'missing-openvpn', 'missing-mapped', 'missing-mapped-layer') else 2)
 
 
 if __name__ == '__main__':

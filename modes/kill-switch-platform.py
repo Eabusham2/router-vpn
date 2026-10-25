@@ -77,7 +77,7 @@ def _spawn_watcher() -> int:
     return int(proc.pid)
 
 
-def darwin_apply(*, spawn_watch: bool = True) -> int:
+def darwin_apply(*, spawn_watch: bool = True, retained_state=None) -> int:
     root = _linux.root_dir()
     store = _linux.read_store(root)
     runtime_id = _linux.safe_profile_id()
@@ -96,11 +96,18 @@ def darwin_apply(*, spawn_watch: bool = True) -> int:
         return 0
 
     endpoint = os.environ.get("HOMEVPN_ENDPOINT") or str(runtime_profile.get("endpoint") or "")
-    endpoint_ips = _linux.captured_endpoint_ips(endpoint)
+    retained = _linux.retained_native_policy(retained_state, endpoint) if retained_state is not None else None
+    if retained is None:
+        endpoint_ips = _linux.captured_endpoint_ips(endpoint)
+        native_egress = _linux.captured_native_egress(endpoint_ips)
+    else:
+        endpoint_ips, native_egress = retained
     lan = bool(control_profile.get("home_lan_access", False))
     _stop_watcher(previous)
-    extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run())
+    extra = _darwin.apply_darwin(endpoint_ips, lan, previous, refresh=False, dry_run=_dry_run(), native_egress=native_egress)
     state = _darwin_state_base(runtime_id, control_id, endpoint, endpoint_ips, lan, policy)
+    if native_egress is not None:
+        state["native_egress"] = native_egress
     state.update(extra)
     state["darwin_watcher_pid"] = 0
     _linux.write_state(root, state)
@@ -120,12 +127,17 @@ def darwin_watch() -> int:
             return 0
         try:
             endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
+            retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
+            native_egress = None
+            if retained is not None:
+                endpoint_ips, native_egress = retained
             extra = _darwin.apply_darwin(
                 endpoint_ips,
                 bool(state.get("home_lan_access", False)),
                 state,
                 refresh=True,
                 dry_run=_dry_run(),
+                native_egress=native_egress,
             )
         except Exception:
             time.sleep(0.2)
@@ -170,12 +182,17 @@ def darwin_release(force: bool = False) -> int:
         # Remove the old tunnel-interface permission but retain the fail-closed
         # pre-connect endpoint exception while disconnected.
         endpoint_ips = [_linux.ipaddress.ip_address(x) for x in state.get("endpoint_ips", [])]
+        retained = _linux.retained_native_policy(state, str(state.get("endpoint") or ""))
+        native_egress = None
+        if retained is not None:
+            endpoint_ips, native_egress = retained
         extra = _darwin.apply_darwin(
             endpoint_ips,
             bool(state.get("home_lan_access", False)),
             state,
             refresh=False,
             dry_run=_dry_run(),
+            native_egress=native_egress,
         )
         state.update(extra)
         state["darwin_watcher_pid"] = 0
@@ -198,7 +215,8 @@ def darwin_reassert() -> int:
     os.environ["HOMEVPN_POLICY_PROFILE_ID"] = control_id
     os.environ["HOMEVPN_ENDPOINT"] = str(state.get("endpoint") or "")
     os.environ.pop("HOMEVPN_NATIVE_ENDPOINTS_JSON", None)
-    return darwin_apply(spawn_watch=False)
+    os.environ.pop("HOMEVPN_NATIVE_EGRESS_JSON", None)
+    return darwin_apply(spawn_watch=False, retained_state=state)
 
 
 def darwin_status() -> int:

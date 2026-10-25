@@ -91,7 +91,7 @@ func PrepareExternalExecutionCapture(source, capture, restored string) (string, 
 		return "", err
 	}
 	port := 26240 + int(seed[0])%32
-	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: session, EntryNodeID: entryNode, ExitID: selected.ExitID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.LayerMode(exit.StartLayer), Port: port, Username: user, Password: password})
+	request, err := multihoprelay.AuthenticateExternalRequest(exit, multihoprelay.Request{SessionID: session, EntryNodeID: entryNode, ExitID: selected.ExitID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.ExitLayerMode(exit), Port: port, Username: user, Password: password})
 	if err != nil {
 		return "", err
 	}

@@ -21,6 +21,7 @@ type ExternalAmneziaWGConfig struct { ExternalWireGuardConfig; Parameters map[st
 type ExternalOpenVPNConfig = nativeopenvpn.Profile
 type ExternalOpenVPNPairing = nativeopenvpn.Pairing
 type ExternalOpenVPNResponseProbes = nativeopenvpn.ResponseProbes
+type ExternalOpenVPNStartLayers = nativeopenvpn.StartLayers
 type ExternalShadowsocksConfig struct { Server string `json:"server"`; Port int `json:"port"`; Method string `json:"method"`; Password string `json:"password"` }
 type ExternalSOCKS5Config struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"` }
 type ExternalHTTPConnectConfig struct { Host string `json:"host"`; Port int `json:"port"`; Username string `json:"username,omitempty"`; Password string `json:"password,omitempty"`; TLSServerName string `json:"tls_server_name,omitempty"` }
@@ -50,6 +51,7 @@ type ExternalNodeConfig struct {
 	ServerPeer *ExternalServerPeer `json:"server_peer,omitempty"`
 	OpenVPNPairing *ExternalOpenVPNPairing `json:"openvpn_pairing,omitempty"`
 	OpenVPNResponseProbes ExternalOpenVPNResponseProbes `json:"openvpn_response_probes,omitempty"`
+	OpenVPNStartLayers ExternalOpenVPNStartLayers `json:"openvpn_start_layers,omitempty"`
 	WireGuard *ExternalWireGuardConfig `json:"wireguard,omitempty"`
 	AmneziaWG *ExternalAmneziaWGConfig `json:"amneziawg,omitempty"`
 	OpenVPN *ExternalOpenVPNConfig `json:"openvpn,omitempty"`

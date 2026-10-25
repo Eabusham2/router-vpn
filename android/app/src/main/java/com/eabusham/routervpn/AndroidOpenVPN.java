@@ -34,8 +34,23 @@ final class AndroidOpenVPN {
         return new JSONObject(raw);
     }
 
+    static JSONObject startLayers(AndroidStandardExitStore.Entry entry, String raw) throws Exception {
+        if (raw == null || raw.trim().isEmpty()) return null;
+        if (entry == null || !"openvpn".equals(entry.protocol) || entry.openVPNResponseProbes == null
+                || raw.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > 128 * 1024)
+            throw new IllegalArgumentException("Per-remote Start Layers require their complete private OpenVPN response map.");
+        JSONObject profile = new JSONObject().put("config", entry.openVPNConfig).put("username", entry.username).put("password", entry.password);
+        String mode = entry.policy == null ? "off" : entry.policy.optString("start_layer", "off");
+        // The copied native binding validates the original bytes, exact remote
+        // coverage and selected layer before JSONObject can collapse members.
+        Libbox.routerValidateExternalOpenVPNStartLayers(profile.toString(), entry.openVPNResponseProbes.toString(), raw, mode);
+        return new JSONObject(raw);
+    }
+
     static void validateResponseProbes(AndroidStandardExitStore.Entry entry) throws Exception {
         if (entry.openVPNResponseProbes == null) {
+            if (entry.openVPNStartLayers != null)
+                throw new IllegalArgumentException("Per-remote Start Layers require their complete private response map.");
             if ("openvpn".equals(entry.protocol) && entry.responseProbe != null && entry.responseProbe.length() != 0) {
                 JSONObject transport = endpoint(entry, "");
                 org.json.JSONArray remotes = transport.optJSONArray("servers");
@@ -46,12 +61,18 @@ final class AndroidOpenVPN {
             }
             return;
         }
-        if (!"openvpn".equals(entry.protocol) || entry.responseProbe == null || entry.responseProbe.length() != 0)
-            throw new IllegalArgumentException("Choose either one response endpoint or a complete OpenVPN per-remote map.");
-        String selectedLayer = entry.policy == null ? "off" : entry.policy.optString("start_layer", "off");
-        if (entry.startLayer != null || !selectedLayer.isEmpty() && !"off".equals(selectedLayer))
-            throw new IllegalArgumentException("A multi-host OpenVPN response map cannot borrow a single-server exit Start Layer.");
+        if (!"openvpn".equals(entry.protocol) || entry.responseProbe == null || entry.responseProbe.length() != 0 || entry.startLayer != null)
+            throw new IllegalArgumentException("A complete OpenVPN remote map cannot borrow a single response endpoint or single-server exit layer.");
         responseProbes(entry, entry.openVPNResponseProbes.toString());
+        String selectedLayer = entry.policy == null ? "off" : entry.policy.optString("start_layer", "off");
+        if (selectedLayer.isEmpty() || "off".equals(selectedLayer)) {
+            if (entry.openVPNStartLayers != null)
+                throw new IllegalArgumentException("Per-remote Start Layers require their exact selected encryption mode.");
+        } else {
+            if (entry.openVPNStartLayers == null)
+                throw new IllegalArgumentException("Every original OpenVPN remote needs its own provisioned exit Start Layer.");
+            startLayers(entry, entry.openVPNStartLayers.toString());
+        }
     }
 
     static JSONObject endpoint(AndroidStandardExitStore.Entry entry, String detour) throws Exception {

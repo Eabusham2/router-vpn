@@ -93,7 +93,7 @@ func checkRelayRegistry(registryPath, agentPath string) (int, error) {
 // Offline checks must use the same layer identity required by a live lease.
 func relayValidationLease(exit multihoprelay.Exit, host string, port int, entryNodeID string) (multihoprelay.Lease, error) {
 	lease := multihoprelay.Lease{
-		Request: multihoprelay.Request{ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.LayerMode(exit.StartLayer)},
+		Request: multihoprelay.Request{ExitID: exit.ID, ExitMode: exit.Mode, ExitStartLayer: multihoprelay.ExitLayerMode(exit)},
 		Host:    host, Port: port, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48),
 	}
 	if exit.External != nil {

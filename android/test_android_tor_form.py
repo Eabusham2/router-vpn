@@ -486,6 +486,38 @@ public final class TorFormHarness {
   }
 
  }
+ static void openVPNLayerMaps()throws Exception{
+  String hint="Private OpenVPN per-remote Start Layer map JSON (optional)",probeHint="OpenVPN per-remote HTTPS response map JSON (optional)",pairHint="Private OpenVPN pairing JSON (optional for Local)";
+  String[] modes={"aes-256-gcm","aes-256-gcm+xor-whitening"};
+  for(int index=0;index<modes.length;index++){
+   String mode=modes[index];JSONObject fixture=new JSONObject(Files.readString(Path.of(System.getenv(index==0?"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE":"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE")))),external=fixture.getJSONObject("external"),inline=external.getJSONObject("openvpn"),layers=external.getJSONObject("openvpn_start_layers");String raw=layers.toString();
+   Path directory=Files.createTempDirectory(root,"openvpn-layer-map-form-");StandardExitActivity editor=activity(directory,null);AndroidStandardExitStore.Entry original=ordinary("openvpn");original.openVPNConfig=inline.getString("config");original.username=inline.getString("username");original.password=inline.getString("password");original.expectedPublicIp=external.getString("expected_public_ip");original.policy=policy("custom","tcp");store(editor).save(original);String originalSnapshot=AndroidStandardExitStore.snapshot(original);
+   invoke(editor,"showExternalPolicyForm",original);AlertDialog form=AlertDialog.last;EditText privateMap=field(form,hint);check(!privateMap.isSaveEnabled()&&privateMap.getImportantForAutofill()==View.IMPORTANT_FOR_AUTOFILL_NO,"private OpenVPN layer keys entered Android saved/autofill state");
+   field(form,pairHint).setText(external.getJSONObject("openvpn_pairing").toString());field(form,probeHint).setText(external.getJSONObject("openvpn_response_probes").toString());privateMap.setText(raw);spinner(form,"Off").setSelection(index+1);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!form.showing,"OpenVPN per-remote layer form failed native validation: "+mode+" "+displayed(form.view));check(privateMap.getText().length()==0,"OpenVPN layer keys survived dialog dismissal");check(originalSnapshot.equals(AndroidStandardExitStore.snapshot(original)),"layer-map form aliased its source");
+   AndroidStandardExitStore.Entry selected=store(editor).get(original.id);String saved=AndroidStandardExitStore.snapshot(selected);check(same(raw,selected.openVPNStartLayers.toString())&&selected.policy.getString("start_layer").equals(mode)&&selected.startLayer==null&&selected.responseProbe.length()==0,"layer-map form mixed singular and per-remote ownership");
+   check(selected.openVPNConfig.equals(inline.getString("config"))&&selected.username.equals(inline.getString("username"))&&selected.password.equals(inline.getString("password")),"layer-map form rewrote original OpenVPN transport or credentials");check(!selected.summary().has("openvpn_start_layers")&&!selected.summary().toString().contains(layers.getJSONObject("203.0.113.20").getJSONObject("transport").getString("password")),"per-remote layer keys entered public node summary");
+   JSONObject capture=AndroidExternalPolicy.profile(selected);check(same(raw,capture.getJSONObject("external").getJSONObject("openvpn_start_layers").toString()),"native capture omitted per-remote layers");
+   invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;check(same(raw,field(form,hint).getText().toString())&&field(form,"Provisioned private service API URL").getText().length()==0&&field(form,"Provisioned AES-256-GCM key").getText().length()==0,"reopened layer map became a singular provision");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&same(saved,AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"per-remote layer map changed on unrelated save");selected=store(editor).get(selected.id);saved=AndroidStandardExitStore.snapshot(selected);
+   String duplicate=raw.substring(0,raw.length()-1)+",\"203.0.113.20\":"+layers.getJSONObject("203.0.113.20")+"}";JSONObject missing=new JSONObject(raw);missing.remove("203.0.113.21");JSONObject foreign=new JSONObject(raw);foreign.put("203.0.113.22",foreign.remove("203.0.113.21"));JSONObject wrongServer=new JSONObject(raw);wrongServer.getJSONObject("203.0.113.21").getJSONObject("transport").put("server","203.0.113.20");JSONObject wrongMode=new JSONObject(raw);wrongMode.getJSONObject("203.0.113.21").put("mode",index==0?modes[1]:modes[0]);
+   for(String invalid:new String[]{"null","{}","[]",raw+" {}",duplicate,missing.toString(),foreign.toString(),wrongServer.toString(),wrongMode.toString(),raw.replace("\"api\":","\"unknown\":true,\"api\":"),raw.replace("\"api\":","\"api\":null,\"api\":"),raw+" ".repeat(131073)}){
+    invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;field(form,hint).setText(invalid);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"malformed OpenVPN layer map changed saved private node");form.dismiss();
+   }
+   for(String conflict:new String[]{"singular","off","missing-probes","missing-layers"}){
+    invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;if(conflict.equals("singular"))field(form,"Provisioned private service API URL").setText("http://10.93.0.1:8787");if(conflict.equals("off"))spinner(form,"Off").setSelection(0);if(conflict.equals("missing-probes"))field(form,probeHint).setText("");if(conflict.equals("missing-layers"))field(form,hint).setText("");form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&saved.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"conflicting per-remote layer selection changed saved node: "+conflict);form.dismiss();
+   }
+   AndroidStandardExitStore.Entry cloned=AndroidStandardExitStore.copy(selected);cloned.openVPNStartLayers.getJSONObject("203.0.113.20").put("api","http://10.93.0.2:8787");check(saved.equals(AndroidStandardExitStore.snapshot(selected)),"private layer map aliased a mutable snapshot");
+   for(int execution=0;execution<3;execution++)for(boolean recreate:new boolean[]{false,true}){
+    Path target=Files.createTempDirectory(root,"openvpn-layer-map-permission-");StandardExitActivity picker=activity(target,null);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);invoke(picker,"chooseExecution",node(target),exit,"max-quic-awg");AlertDialog.last.clickItem(execution);Bundle state=new Bundle();picker.onSaveInstanceState(state);if(recreate)picker=activity(target,state);picker.onActivityResult(2101,Activity.RESULT_OK,null);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(picker).standardExit;
+    check(runtime.starts==1&&runtime.execution.equals(new String[]{"local","server","auto"}[execution])&&runtime.mode.equals("max-quic-awg")&&same(raw,runtime.exit.openVPNStartLayers.toString())&&runtime.exit.policy.getString("start_layer").equals(mode),"permission restoration substituted per-remote layer owner or execution");
+   }
+   for(String mutation:new String[]{"api","key"})for(boolean recreate:new boolean[]{false,true}){
+    Path target=Files.createTempDirectory(root,"openvpn-layer-map-stale-");StandardExitActivity picker=activity(target,null);AndroidStandardExitStore.Entry exit=AndroidStandardExitStore.copy(selected);store(picker).save(exit);invoke(picker,"chooseExecution",node(target),exit,"wg");AlertDialog.last.clickItem(2);Bundle state=new Bundle();picker.onSaveInstanceState(state);AndroidStandardExitStore.Entry replacement=store(picker).get(exit.id);JSONObject provision=replacement.openVPNStartLayers.getJSONObject("203.0.113.21");if(mutation.equals("api"))provision.put("api","http://10.93.0.2:8787");else provision.getJSONObject("transport").put("password",Base64.getEncoder().encodeToString("q".repeat(32).getBytes(StandardCharsets.UTF_8)));store(picker).save(replacement);if(recreate)picker=activity(target,state);picker.onActivityResult(2101,Activity.RESULT_OK,null);check(AndroidRuntimeRegistry.get(picker).standardExit.starts==0,"permission restored a replaced per-remote layer owner");
+   }
+   invoke(editor,"showExternalPolicyForm",selected);form=AlertDialog.last;AndroidStandardExitStore.Entry newer=AndroidStandardExitStore.copy(selected);newer.openVPNStartLayers.getJSONObject("203.0.113.20").put("api","http://10.93.0.2:8787");store(editor).save(newer);String newerSnapshot=AndroidStandardExitStore.snapshot(newer);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(form.showing&&newerSnapshot.equals(AndroidStandardExitStore.snapshot(store(editor).get(selected.id))),"stale layer-map editor overwrote replacement keys");form.dismiss();
+   invoke(editor,"showExternalPolicyForm",newer);form=AlertDialog.last;field(form,hint).setText("");spinner(form,"Off").setSelection(0);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing&&store(editor).get(selected.id).openVPNStartLayers==null&&store(editor).get(selected.id).policy.getString("start_layer").equals("off")&&store(editor).get(selected.id).openVPNResponseProbes!=null,"explicit Off did not clear only the private layer map");
+  }
+ }
  static void ordinaryPolicies()throws Exception{
   int ordinaryRoundtrips=0;
   for(String kind:new String[]{"wireguard","amneziawg","socks5","http","https","shadowsocks","hysteria2","openvpn"})for(String dns:new String[]{"rescue","tcp","dot","doh","doh3"}){
@@ -628,7 +660,7 @@ public final class TorFormHarness {
   java.lang.reflect.Method parse=AndroidStandardExitStore.class.getDeclaredMethod("fromJson",JSONObject.class);parse.setAccessible(true);JSONObject old=new JSONObject(AndroidStandardExitStore.snapshot(ordinary("socks5")));old.remove("startup_mode");old.remove("auto_connect");AndroidStandardExitStore.Entry legacy=(AndroidStandardExitStore.Entry)parse.invoke(null,old);check(legacy.startupMode.equals("smart-auto")&&!legacy.autoConnect,"legacy external node gained automatic startup");
   for(String kind:List.of("string-bool","null-bool","number-mode","unknown","manual-on")){JSONObject malformed=new JSONObject(old.toString());malformed.put("startup_mode",kind.equals("number-mode")?3:kind.equals("unknown")?"random":kind.equals("manual-on")?"manual":"auto");malformed.put("auto_connect",kind.equals("string-bool")?"true":kind.equals("null-bool")?JSONObject.NULL:true);boolean rejected=false;try{parse.invoke(null,malformed);}catch(Exception expected){rejected=true;}check(rejected,"invalid external startup metadata accepted: "+kind);}
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 
@@ -643,6 +675,7 @@ def main():
         code = code.replace('case "tor-profile":', '''case "external-openvpn":var p struct{Config,Username,Password,Tag,Detour string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=nativeopenvpn.RouterOpenVPNEndpoint(p.Config,p.Username,p.Password,p.Tag,p.Detour)}
  case "external-execution":var p struct{Config,Capture,Restored string};err=json.Unmarshal([]byte(r.Config),&p);if err==nil{value,err=mobilemultihop.PrepareExternalExecutionCapture(p.Config,p.Capture,p.Restored)}
  case "external-openvpn-probes":err=nativeopenvpn.RouterValidateExternalOpenVPNResponseProbes(r.Config,r.Policy)
+ case "external-openvpn-layers":var layers struct{Probes,Layers,Mode string};err=json.Unmarshal([]byte(r.Policy),&layers);if err==nil{err=nativeopenvpn.RouterValidateExternalOpenVPNStartLayers(r.Config,layers.Probes,layers.Layers,layers.Mode)}
  case "external-openvpn-pairing":err=nativeopenvpn.RouterValidateExternalOpenVPNPairing(r.Config,r.Policy)
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-response":err=mobilemultihop.ValidateExternalResponseProbe(r.Config,r.Policy)
@@ -682,6 +715,7 @@ def main():
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
  public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("external-openvpn-probes",profile,probes);}
+ public static void routerValidateExternalOpenVPNStartLayers(String profile,String probes,String layers,String mode)throws Exception{call("external-openvpn-layers",profile,new JSONObject().put("probes",probes).put("layers",layers).put("mode",mode).toString());}
  public static void routerValidateExternalOpenVPNPairing(String profile,String pairing)throws Exception{call("external-openvpn-pairing",profile,pairing);}
  public static void routerValidateExternalResponseProbe(String host,String probe)throws Exception{call("external-response",host,probe);}
  public static void routerValidateExternalTransport(String source,String capture)throws Exception{call("external-transport",source,capture);}public static void routerValidateExternalDNS(String profile,String entry)throws Exception{call("external-dns",profile,entry);}
@@ -707,12 +741,16 @@ def main():
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(work / "classes"), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
-        environment = dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'))
+        environment = dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native), ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json'))
         subprocess.run(["java", "-cp", str(work / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.TorFormHarness", str(data)], env=environment, check=True, timeout=120)
         # Reintroduce each actual defect only in isolated compiled fixtures.
         # These controls establish that the Activity/Go checks fail for the
         # original behavior; neither working source nor positive classes change.
         controls = (
+            ("openvpn-layer-raw", "AndroidOpenVPN.java",
+             'Libbox.routerValidateExternalOpenVPNStartLayers(profile.toString(), entry.openVPNResponseProbes.toString(), raw, mode);',
+             '// omitted raw layer map validation before JSON conversion',
+             "malformed OpenVPN layer map changed saved private node"),
             ("openvpn-response-raw", "AndroidOpenVPN.java",
              'Libbox.routerValidateExternalOpenVPNResponseProbes(profile.toString(), raw);',
              '// omitted raw map validation before JSON conversion',

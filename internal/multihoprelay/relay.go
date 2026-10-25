@@ -132,7 +132,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		if ExternalIndependentMode(e.Mode) && e.External == nil {
 			return nil, errors.New("external packet mode requires its explicit paired identity")
 		}
-		if !ident.MatchString(e.ID) || (e.External == nil && (!proofID.MatchString(e.NodeID) || e.NodeID == node)) || seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] {
+		if !ident.MatchString(e.ID) || (e.External == nil && (!proofID.MatchString(e.NodeID) || e.NodeID == node)) || seen[e.ID+"/"+e.Mode+"/"+ExitLayerMode(e)] {
 			return nil, errors.New("relay exits require distinct paired identities and unique modes")
 		}
 		if e.External != nil {
@@ -162,7 +162,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 				}
 			}
 		}
-		seen[e.ID+"/"+e.Mode+"/"+LayerMode(e.StartLayer)] = true
+		seen[e.ID+"/"+e.Mode+"/"+ExitLayerMode(e)] = true
 	}
 	// Copy the supplied private configuration so callers cannot mutate live plans.
 	raw, _ := json.Marshal(c)
@@ -191,8 +191,9 @@ func (m *Manager) Available() []map[string]string {
 		if OpenVPNRemoteRequired(e) {
 			item["openvpn_remote"] = "fresh-connected-transport-v1"
 		}
-		if e.StartLayer != nil {
-			item["exit_start_layer"] = e.StartLayer.Mode
+		if OpenVPNLayersRequired(e) { item["openvpn_layers"] = "captured-per-remote-v1" }
+		if layer := ExitLayerMode(e); layer != "" {
+			item["exit_start_layer"] = layer
 		}
 		transport := e.Transport
 		if CompleteMAXMode(e.Mode) {
@@ -280,7 +281,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	var exit *Exit
 	for i := range m.cfg.Exits {
 		e := &m.cfg.Exits[i]
-		if e.ID == q.ExitID && e.Mode == q.ExitMode && LayerMode(e.StartLayer) == q.ExitStartLayer {
+		if e.ID == q.ExitID && e.Mode == q.ExitMode && ExitLayerMode(*e) == q.ExitStartLayer {
 			exit = e
 			break
 		}
@@ -312,7 +313,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer || (!PacketMode(paired.Mode) && !CompleteMAXMode(paired.Mode)) {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || ExitLayerMode(paired) != active.ExitStartLayer || (!PacketMode(paired.Mode) && !CompleteMAXMode(paired.Mode)) {
 					continue
 				}
 				other, err := clientIdentity(relayPacketTransport(paired))
@@ -335,7 +336,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 				continue
 			}
 			for _, paired := range m.cfg.Exits {
-				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || LayerMode(paired.StartLayer) != active.ExitStartLayer {
+				if paired.ID != active.ExitID || paired.Mode != active.ExitMode || ExitLayerMode(paired) != active.ExitStartLayer {
 					continue
 				}
 				other, err := pqIdentity(relayPacketTransport(paired))
@@ -420,7 +421,7 @@ func (m *Manager) Delete(ctx context.Context, peer netip.Addr, q Request) error 
 			var paired *Exit
 			for i := range m.cfg.Exits {
 				e := &m.cfg.Exits[i]
-				if e.ID == q.ExitID && e.Mode == q.ExitMode && LayerMode(e.StartLayer) == q.ExitStartLayer {
+				if e.ID == q.ExitID && e.Mode == q.ExitMode && ExitLayerMode(*e) == q.ExitStartLayer {
 					paired = e
 					break
 				}
@@ -717,7 +718,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 			return nil, err
 		}
 	}
-	if LayerMode(exit.StartLayer) != lease.ExitStartLayer {
+	if ExitLayerMode(exit) != lease.ExitStartLayer {
 		return nil, errors.New("relay lease does not match paired exit encryption")
 	}
 	transport, err := validateTransport(exit)
@@ -760,7 +761,7 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		owner, children, err := nativecomposite.Relabel(plan, exit.Mode, exit.NodeID, LayerMode(exit.StartLayer), "exit", CompositePrefix, "")
+		owner, children, err := nativecomposite.Relabel(plan, exit.Mode, exit.NodeID, ExitLayerMode(exit), "exit", CompositePrefix, "")
 		if err != nil {
 			return nil, err
 		}
@@ -782,6 +783,12 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 		} else {
 			config["outbounds"] = []any{inner, outer}
 		}
+	}
+	if OpenVPNLayersRequired(exit) {
+		inner, mapping, err := WrapOpenVPNStartLayers(transport, exit.External.OpenVPNResponseProbes, exit.External.OpenVPNStartLayers, ExitLayerMode(exit), OpenVPNStartLayerMapTag, "")
+		if err != nil { return nil, err }
+		config["endpoints"] = []any{inner}
+		config["outbounds"] = []any{mapping}
 	}
 	return json.Marshal(config)
 }

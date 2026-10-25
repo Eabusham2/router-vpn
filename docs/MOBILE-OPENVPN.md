@@ -89,6 +89,21 @@ strict request/source/receipt file ownership. Its dependency patch is applied
 only to a private module copy whose entire unmodified source is checked against
 the pinned Go checksum; module-cache source is unchanged. Repeated preparation
 in either order preserves the existing close policy and generation policy.
+The mapped-layer cases use the actual authenticated outer engines and include
+concurrent UDP-to-TCP failover/close, exact predecessor retention during native
+manager replacement, and immediate cancellation of pending dials from a retired
+network generation. A joined already-closed error cannot hide a separate cleanup
+failure. The five-second owned-close deadline is unchanged; a timeout records
+native goroutine diagnostics instead of reporting successful teardown.
+
+Those diagnostics exposed a native OpenVPN/gVisor lock cycle: packet delivery
+held the link-dispatcher read lock while entering the stack, and stack shutdown
+held the stack lock while detaching that dispatcher. The exact-pinned
+`mobile_openvpn_stack_policy.py` now detaches and drains the captured link before
+stack shutdown. Its actual-stack regression pauses packet delivery and checks
+that teardown leaves the stack lock available; restoring the original order
+fails that control. The transport credentials, remote-generation proof and
+individual teardown deadline are unchanged.
 
 `deploy/test_external_openvpn_native.py --core PINNED_CORE_CHECKOUT` runs the
 real OpenVPN provider and both independently authenticated owners under the race
@@ -137,9 +152,33 @@ requires a fresh process-owned response to each request and retires a retained
 proof when the provider reconnects, even to the same address. The same fresh
 boundary protects MTU, DNS Retest and Speed Lab result adoption.
 
-Different-host mapped OpenVPN currently requires the exit Start Layer to be
-Off; Router entry Start Layers remain supported. Mapped exit layers require
-additional physical-to-inner-host proof semantics and remain unfinished.
+Different-host profiles can also capture `external.openvpn_start_layers` with
+one separately provisioned AES-256-GCM or AES-256-GCM plus XOR layer for every
+original host. All entries use the selected exit mode; the independently
+selected Router entry layer is unchanged. The strict private map is limited to
+128 KiB and two to sixteen canonical original hosts, exactly matching the
+response map. Missing, extra, duplicate, null, mixed-mode and singular-layer
+combinations are rejected before platform decoding can discard them.
+
+The native mapper leaves the original ordered OpenVPN remotes intact. It chooses
+an owned authenticated child from the original host, port and TCP/UDP network,
+then translates only that child's inner destination to the captured private
+service address. Providers may share the same private address without sharing
+identity. The connected receipt still identifies the original remote and its
+immutable generation. Every per-host key participates in v6 lease
+authentication; the public fingerprint includes policy and counterpart public
+identities without publishing password hashes. Outer keys cannot alias either
+role's private pairing key, including alternate X25519 encodings of one identity.
+Legacy single-host v4 and mapped-Off v5 identity formats are preserved.
+
+Each mapper owns its pending dials and encrypted connections. Cancellation,
+network changes and closure revoke stale generations; failed cleanup retains
+ownership and rejects replacement dials. Desktop firewall exceptions capture the
+actual outer host, port and network. MTU configuration bounds include the largest
+permitted wrapper branch, private IPv4/IPv6 address and identity-header overhead.
+They are not a measured path MTU. The real native gate exercises encrypted
+TCP/UDP fallback, independent Local/Server provider credentials, AES and XOR,
+colliding private addresses, reconnects and stale configured callbacks.
 External-entry Server execution requires an authenticated administrative
 runtime owner on that entry. An ordinary unmanaged provider import alone
 cannot install or authorize that execution owner. These qualifications do not

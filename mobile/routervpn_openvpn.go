@@ -24,6 +24,12 @@ func RouterValidateExternalOpenVPNResponseProbes(profileJSON, probesJSON string)
 	return nativeopenvpn.ValidateResponseProbesJSON(profileJSON, probesJSON)
 }
 
+// RouterValidateExternalOpenVPNStartLayers validates the original provider
+// host map and every private layer before native JSON conversion.
+func RouterValidateExternalOpenVPNStartLayers(profileJSON, responseProbesJSON, layersJSON, selectedMode string) error {
+	return nativeopenvpn.ValidateStartLayers(profileJSON, responseProbesJSON, layersJSON, selectedMode)
+}
+
 // RouterValidatePrivateNodeJSON validates raw object structure before native
 // bundle decoding. Typed schema and captured policy validation follow it.
 func RouterValidatePrivateNodeJSON(raw string) error {

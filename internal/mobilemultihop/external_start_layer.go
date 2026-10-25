@@ -7,6 +7,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 const ExternalEntryStartLayerTag = "routervpn-external-entry-start-layer"
@@ -18,6 +19,13 @@ const ExternalEntryStartLayerTag = "routervpn-external-entry-start-layer"
 func externalPacketLayerOverhead(profile map[string]any) (int, error) {
 	ext, _ := profile["external"].(map[string]any)
 	protocol, _ := ext["protocol"].(string)
+	if _, mapped := ext["openvpn_start_layers"]; mapped {
+		_, layers, _, err := externalCapturedOpenVPNLayers(externalPolicyCapture{Profile: profile, Protocol: protocol})
+		if err != nil {
+			return 0, err
+		}
+		return layers.DatagramOverhead()
+	}
 	layer, err := externalCapturedStartLayer(externalPolicyCapture{Profile: profile, Protocol: protocol})
 	if err != nil || layer == nil {
 		return 0, err
@@ -63,6 +71,10 @@ func externalCapturedStartLayer(selected externalPolicyCapture) (*multihoprelay.
 	if !ok {
 		return nil, bad
 	}
+	if _, mapped := external["openvpn_start_layers"]; mapped {
+		_, _, _, err := externalCapturedOpenVPNLayers(selected)
+		return nil, err
+	}
 	raw, present := external["start_layer"]
 	if mode == "" {
 		if present {
@@ -103,6 +115,11 @@ func externalApplyEntryStartLayer(graph, entry map[string]any, selected external
 }
 
 func externalApplyOwnedStartLayer(graph, transport map[string]any, selected externalPolicyCapture, tag, via string) (string, error) {
+	if external, ok := selected.Profile["external"].(map[string]any); ok {
+		if _, mapped := external["openvpn_start_layers"]; mapped {
+			return externalApplyOpenVPNLayers(graph, transport, selected, tag+"-map", via)
+		}
+	}
 	layer, err := externalCapturedStartLayer(selected)
 	if err != nil || layer == nil {
 		return "", err
@@ -131,4 +148,65 @@ func externalApplyOwnedStartLayer(graph, transport map[string]any, selected exte
 	values, _ := graph["outbounds"].([]any)
 	graph["outbounds"] = append(values, outer)
 	return layer.Mode, nil
+}
+
+func externalCapturedOpenVPNLayers(selected externalPolicyCapture) (nativeopenvpn.ResponseProbes, nativeopenvpn.StartLayers, string, error) {
+	bad := errors.New("OpenVPN Start Layers require their exact selected mode and captured private host map")
+	external, ok := selected.Profile["external"].(map[string]any)
+	if !ok || selected.Protocol != "openvpn" || selected.Profile["node_kind"] != "external" {
+		return nil, nil, "", bad
+	}
+	mode, err := externalOptionalString(selected.Profile, "start_layer")
+	if err != nil || !multihoprelay.ValidLayerMode(mode) {
+		return nil, nil, "", bad
+	}
+	if _, present := external["start_layer"]; present {
+		return nil, nil, "", bad
+	}
+	if _, present := external["response_probe"]; present {
+		return nil, nil, "", bad
+	}
+	transport, err := multihoprelay.ExternalTransport("openvpn", external)
+	if err != nil {
+		return nil, nil, "", bad
+	}
+	rawProbes, err1 := json.Marshal(external["openvpn_response_probes"])
+	rawLayers, err2 := json.Marshal(external["openvpn_start_layers"])
+	var probes nativeopenvpn.ResponseProbes
+	var layers nativeopenvpn.StartLayers
+	if err1 != nil || err2 != nil || json.Unmarshal(rawProbes, &probes) != nil || json.Unmarshal(rawLayers, &layers) != nil || layers.Validate(transport, probes, mode) != nil {
+		return nil, nil, "", bad
+	}
+	return probes, layers, mode, nil
+}
+
+func externalApplyOpenVPNLayers(graph, transport map[string]any, selected externalPolicyCapture, tag, via string) (string, error) {
+	probes, layers, mode, err := externalCapturedOpenVPNLayers(selected)
+	if err != nil {
+		return "", err
+	}
+	for _, family := range []string{"endpoints", "outbounds"} {
+		values, _ := graph[family].([]any)
+		for _, raw := range values {
+			value, ok := raw.(map[string]any)
+			if !ok || value["tag"] == tag {
+				return "", errors.New("OpenVPN layer mapper tag belongs to another captured transport")
+			}
+		}
+	}
+	original := predecessorCopy(transport)
+	delete(original, "detour")
+	inside, mapping, err := multihoprelay.WrapOpenVPNStartLayers(original, probes, layers, mode, tag, via)
+	if err != nil {
+		return "", err
+	}
+	for field := range transport {
+		delete(transport, field)
+	}
+	for field, value := range inside {
+		transport[field] = value
+	}
+	values, _ := graph["outbounds"].([]any)
+	graph["outbounds"] = append(values, mapping)
+	return mode, nil
 }

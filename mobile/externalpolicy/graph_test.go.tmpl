@@ -21,8 +21,8 @@ func TestRouterExternalGeneratedNativeGraphs(t *testing.T) {
 		t.Skip("the Android and Apple package gates supply their exact emitted graph matrices")
 	}
 	expected, err := strconv.Atoi(os.Getenv("ROUTERVPN_NATIVE_EXTERNAL_GRAPH_COUNT"))
-	// The host-owned manifest covers 1,683 graphs across eight paired execution
-	// protocols and independent entry/exit Start Layers, with distinct packet and OpenVPN owners.
+	// The host-owned manifest covers 2,025 graphs across eight paired execution
+	// protocols and independent entry/exit Start Layers, including per-remote OpenVPN layers.
 	if err != nil || expected < 1 || expected > 2048 {
 		t.Fatal("invalid required external graph count")
 	}

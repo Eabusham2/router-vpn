@@ -29,11 +29,12 @@ SWIFT = r'''
   let predecessor=try source()["entryBundle"] as! Data
   return ["engine":"external-libbox","mode":"external-"+kind,"bundle":try JSONSerialization.data(withJSONObject:root),"external_entry_bundle":predecessor,"external_entry_mode":"max-tls-awg"]
  }
- static func mapped(_ requested:String="auto")throws->[String:Any]{
+ static func mapped(_ requested:String="auto",_ layer:String="off")throws->[String:Any]{
   var value=try external(requested,"openvpn"),root=try JSONSerialization.jsonObject(with:value["bundle"] as! Data) as! [String:Any]
-  let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))) as! [String:Any]
+  let index=layer=="off" ? 1:layer=="aes-256-gcm" ? 2:3
+  let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[index]))) as! [String:Any]
   var profiles=root["routerProfiles"] as! [[String:Any]]
-  profiles[0]["external"]=fixture["external"];profiles[0]["start_layer"]="off";root["routerProfiles"]=profiles
+  profiles[0]["external"]=fixture["external"];profiles[0]["start_layer"]=layer;root["routerProfiles"]=profiles
   value["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
   return value
  }
@@ -131,28 +132,37 @@ SWIFT = r'''
    }
   }}}
   for kind in ["wireguard","amneziawg","openvpn","unknown"] {reject("unsupported external protocol cannot acquire restoration owner"){_ = try IOSMultihopExecution.Source(configuration:external("server",kind),digest:digest)}}
-  for requested in ["server","auto"] {
-   let original=try mapped(requested),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
+  for layer in ["off","aes-256-gcm","aes-256-gcm+xor-whitening"] { for requested in ["server","auto"] {
+   let original=try mapped(requested,layer),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
    let needsReceipt=try IOSMultihopExecution.requiresCapture(configuration:original)
    check("paired mapped OpenVPN captures the proved runtime owner",needsReceipt && source.requested==requested)
    for winner in ["local","server"] where requested=="auto" || requested==winner {
     let receipt=try IOSMultihopExecution.Capture(source:source,execution:winner,session:session,request:request),bytes=try receipt.encoded()
     let restored=try IOSMultihopExecution.restoredExecution(option:String(decoding:bytes,as:UTF8.self) as NSString,source:source,mtuHold:hold)
     check("mapped OpenVPN restores the proved winner without rerunning Compare",restored==winner && source.requested==requested)
-    check("mapped receipt omits private map, provider identities and pairing",!String(decoding:bytes,as:UTF8.self).contains("provider.example") && !String(decoding:bytes,as:UTF8.self).contains("openvpn_response_probes") && !String(decoding:bytes,as:UTF8.self).contains("private_key"))
-    for field in ["probe","provider","pairing","remote","entry"] {
+    check("mapped receipt omits private map, provider identities and pairing",!String(decoding:bytes,as:UTF8.self).contains("provider.example") && !String(decoding:bytes,as:UTF8.self).contains("openvpn_response_probes") && !String(decoding:bytes,as:UTF8.self).contains("private_key") && !String(decoding:bytes,as:UTF8.self).contains("openvpn_start_layers") && !String(decoding:bytes,as:UTF8.self).contains("10.93.0.1"))
+    for field in ["probe","provider","pairing","remote","entry"]+(layer=="off" ? []:["layer-key","layer-api","layer-port","layer-host","entry-layer"]) {
      var changed=original,root=try JSONSerialization.jsonObject(with:original["bundle"] as! Data) as! [String:Any],profiles=root["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any]
      if field=="probe" {var map=ext["openvpn_response_probes"] as! [String:Any],probe=map["203.0.113.21"] as! [String:Any];probe["server_name"]="replacement.example";map["203.0.113.21"]=probe;ext["openvpn_response_probes"]=map}
      if field=="provider" {var value=ext["openvpn"] as! [String:Any];value["password"]="replacement credential";ext["openvpn"]=value}
      if field=="pairing" {var pair=ext["openvpn_pairing"] as! [String:Any];pair["private_key"]=Data(repeating:4,count:32).base64EncodedString();ext["openvpn_pairing"]=pair}
      if field=="remote" {var value=ext["openvpn"] as! [String:Any];value["config"]=(value["config"] as! String).replacingOccurrences(of:"443 tcp",with:"8443 tcp");ext["openvpn"]=value}
+     if field.hasPrefix("layer-") {
+      var layers=ext["openvpn_start_layers"] as! [String:Any],provision=layers["203.0.113.21"] as! [String:Any],transport=provision["transport"] as! [String:Any]
+      if field=="layer-key" {transport["password"]=Data(repeating:9,count:32).base64EncodedString()}
+      if field=="layer-api" {provision["api"]="http://10.94.0.1:8787"}
+      if field=="layer-port" {transport["server_port"]=8443}
+      if field=="layer-host" {transport["server"]="203.0.113.99"}
+      provision["transport"]=transport;layers["203.0.113.21"]=provision;ext["openvpn_start_layers"]=layers
+     }
      profiles[0]["external"]=ext;root["routerProfiles"]=profiles;changed["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
      if field=="entry" {var entry=try JSONSerialization.jsonObject(with:original["external_entry_bundle"] as! Data) as! [String:Any];entry["profiles"]=["private":"replacement entry credential"];changed["external_entry_bundle"]=try JSONSerialization.data(withJSONObject:entry,options:.sortedKeys)}
+     if field=="entry-layer" {var entry=try JSONSerialization.jsonObject(with:original["external_entry_bundle"] as! Data) as! [String:Any],nodes=entry["routerProfiles"] as! [[String:Any]];nodes[0]["start_layer"]="aes-256-gcm";entry["routerProfiles"]=nodes;changed["external_entry_bundle"]=try JSONSerialization.data(withJSONObject:entry,options:.sortedKeys)}
      let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
      reject("mapped OpenVPN receipt cannot adopt changed captured "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement)}
     }
    }
-   for fault in ["missing-pair","null-pair","legacy-probe","null-map","one-host","bad-value","exit-layer","selected-layer","foreign-protocol"] {
+   for fault in ["missing-pair","null-pair","legacy-probe","null-map","one-host","bad-value","exit-layer","selected-layer","foreign-protocol"]+(layer=="off" ? []:["missing-layer-map","null-layer-map","partial-layer-map","mixed-layer-mode","unknown-layer-field","foreign-layer-host","layered-no-probes"]) {
     var changed=original,root=try JSONSerialization.jsonObject(with:original["bundle"] as! Data) as! [String:Any],profiles=root["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any]
     switch fault {
     case "missing-pair":ext.removeValue(forKey:"openvpn_pairing")
@@ -162,13 +172,20 @@ SWIFT = r'''
     case "one-host":ext["openvpn_response_probes"]=["203.0.113.20":["url":"https://203.0.113.20/response"]]
     case "bad-value":ext["openvpn_response_probes"]=["203.0.113.20":NSNull(),"203.0.113.21":NSNull()]
     case "exit-layer":ext["start_layer"]=["mode":"aes-256-gcm"]
-    case "selected-layer":profiles[0]["start_layer"]="aes-256-gcm"
+    case "selected-layer":profiles[0]["start_layer"]=layer=="off" ? "aes-256-gcm":"off"
+    case "missing-layer-map":ext.removeValue(forKey:"openvpn_start_layers")
+    case "null-layer-map":ext["openvpn_start_layers"]=NSNull()
+    case "partial-layer-map":var layers=ext["openvpn_start_layers"] as! [String:Any];layers.removeValue(forKey:"203.0.113.21");ext["openvpn_start_layers"]=layers
+    case "mixed-layer-mode":var layers=ext["openvpn_start_layers"] as! [String:Any],provision=layers["203.0.113.21"] as! [String:Any];provision["mode"]=layer=="aes-256-gcm" ? "aes-256-gcm+xor-whitening":"aes-256-gcm";layers["203.0.113.21"]=provision;ext["openvpn_start_layers"]=layers
+    case "unknown-layer-field":var layers=ext["openvpn_start_layers"] as! [String:Any],provision=layers["203.0.113.21"] as! [String:Any];provision["unknown"]=true;layers["203.0.113.21"]=provision;ext["openvpn_start_layers"]=layers
+    case "foreign-layer-host":var layers=ext["openvpn_start_layers"] as! [String:Any];layers["203.0.113.99"]=layers.removeValue(forKey:"203.0.113.21");ext["openvpn_start_layers"]=layers
+    case "layered-no-probes":ext.removeValue(forKey:"openvpn_response_probes")
     default:ext["protocol"]="shadowsocks"
     }
     profiles[0]["external"]=ext;root["routerProfiles"]=profiles;changed["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
     reject("mapped restore rejects incompatible captured contract "+fault){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
    }
-  }
+  }}
   let local=try external("local"),needsLocal=try IOSMultihopExecution.requiresCapture(configuration:local)
   check("plain external Local does not invent lease ownership",!needsLocal)
   reject("plain external Local cannot adopt an unrelated execution receipt"){_ = try IOSMultihopExecution.Source(configuration:local,digest:digest)}
@@ -185,7 +202,8 @@ def main():
         path, binary = Path(folder)/'test.swift', Path(folder)/'test'
         path.write_text((APP/'IOSMultihopExecution.swift').read_text()+'\n'+SWIFT)
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(path), '-o', str(binary)], check=True, timeout=90)
-        subprocess.run([str(binary), str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json')], check=True, timeout=20)
+        fixtures=[ROOT/'deploy/fixtures'/name for name in ['external-openvpn-multihost-client.json','external-openvpn-multihost-layered-aes-client.json','external-openvpn-multihost-layered-xor-client.json']]
+        subprocess.run([str(binary), *map(str,fixtures)], check=True, timeout=20)
     provider = (ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
     assert 'currentPathProofGuard() === guardState' in provider
     assert 'engine.bindMultihopExecutionSource(source, metadata: hopMetadata)' in provider

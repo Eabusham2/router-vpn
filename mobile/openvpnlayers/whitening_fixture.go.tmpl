@@ -1,0 +1,7 @@
+//go:build routervpn_openvpn_layer_test
+
+package routervpnwhitening
+
+import N "github.com/sagernet/sing/common/network"
+
+func (h *Outbound) RouterVPNTestLayerPhysical(physical N.Dialer) { h.dialer = physical }

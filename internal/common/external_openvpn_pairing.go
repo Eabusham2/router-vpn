@@ -18,6 +18,7 @@ func validateExternalOpenVPNPairing(external *ExternalNodeConfig) error {
 
 func validateExternalOpenVPNResponseProbes(external *ExternalNodeConfig) error {
 	if external.OpenVPNResponseProbes == nil {
+		if external.OpenVPNStartLayers != nil { return errors.New("OpenVPN Start Layers require a complete captured remote response map") }
 		return nil
 	}
 	if external.Protocol != "openvpn" || external.OpenVPN == nil || external.ResponseProbe != nil || external.StartLayer != nil {
@@ -28,6 +29,22 @@ func validateExternalOpenVPNResponseProbes(external *ExternalNodeConfig) error {
 		return err
 	}
 	return external.OpenVPNResponseProbes.Validate(endpoint)
+}
+
+func validateExternalOpenVPNStartLayers(profile *RouterProfile) error {
+	external := profile.External
+	if external == nil || external.Protocol != "openvpn" || external.OpenVPN == nil || external.ResponseProbe != nil || external.StartLayer != nil || external.OpenVPNResponseProbes == nil {
+		return errors.New("OpenVPN Start Layers require their original OpenVPN profile and complete private response map")
+	}
+	endpoint, err := nativeopenvpn.CompileProfile(*external.OpenVPN, "exit", "")
+	if err != nil { return err }
+	if err := external.OpenVPNStartLayers.Validate(endpoint, external.OpenVPNResponseProbes, profile.StartLayer); err != nil { return err }
+	if external.OpenVPNPairing != nil {
+		local, err := nativeopenvpn.ValidatePairing(*external.OpenVPN, *external.OpenVPNPairing)
+		if err != nil { return err }
+		return external.OpenVPNStartLayers.ValidatePairingKeys(local.PairingPublicKey, external.OpenVPNPairing.Server.PairingPublicKey)
+	}
+	return nil
 }
 
 func externalOpenVPNProofHost(external *ExternalNodeConfig) (string, error) {

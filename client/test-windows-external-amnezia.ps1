@@ -28,7 +28,7 @@ $Expected=@{jc='3';jmin='40';jmax='900';s1='56';s2='48';s3='24';s4='32';h1='1000
 $Private=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('p'*32)))
 $Peer=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('q'*32)))
 $Fields=@{}
-foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing','ExtOpenVPNResponseProbes')){
+foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing','ExtOpenVPNResponseProbes','ExtOpenVPNStartLayers')){
     $Fields[$Name]=[pscustomobject]@{Text='';Password=''}
 }
 $Fields.ExtStartLayer=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='off'}}
@@ -149,6 +149,33 @@ $FirstHost=@($Multi.external.openvpn_response_probes.PSObject.Properties.Name|So
 $Fields.ExtOpenVPNResponseProbes.Text='{"'+$FirstHost+'":'+$FirstProbe+','+$MapText.Substring(1)
 $script:Saved=$null;& $Save;Check ($null -ne $Saved -and $Saved.openvpn_response_probes_json -ceq $Fields.ExtOpenVPNResponseProbes.Text) 'Native OpenVPN callback parsed or changed raw duplicate map before strict controller validation.'
 if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-multihost-duplicate.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$Fields.ExtOpenVPNResponseProbes.Text=$MapText
+$LayerMapText='';$FirstLayerText=''
+foreach($Mode in @('aes-256-gcm','aes-256-gcm+xor-whitening')){
+    $FixtureName=if($Mode-ceq'aes-256-gcm'){'external-openvpn-multihost-layered-aes-client.json'}else{'external-openvpn-multihost-layered-xor-client.json'}
+    $LayerFixture=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root ('deploy/fixtures/'+$FixtureName))|ConvertFrom-Json
+    $LayerMap=$LayerFixture.external.openvpn_start_layers
+    Check ($LayerFixture.selected_layer-ceq$Mode -and $LayerFixture.external.openvpn.config-ceq$Multi.external.openvpn.config) 'Layer fixture changed original provider source.'
+    $LayerMapText=$LayerMap|ConvertTo-Json -Depth 8 -Compress;$FirstLayerText=$LayerMap.PSObject.Properties[$FirstHost].Value|ConvertTo-Json -Depth 8 -Compress
+    $Fields.ExtOpenVPNStartLayers.Text="`n"+$LayerMapText+"`n";$Fields.ExtStartLayer.SelectedItem.Tag=$Mode
+    $script:Saved=$null;& $Save;Check ($null -ne $Saved) ('Mapped OpenVPN layer rejected: '+$Status.Text)
+    Check ($Saved.openvpn_start_layers_json -ceq $Fields.ExtOpenVPNStartLayers.Text -and $Saved.start_layer -ceq $Mode -and -not $Saved.ContainsKey('start_layer_provision') -and -not $Saved.ContainsKey('response_probe') -and $Saved.openvpn.config -ceq $Multi.external.openvpn.config -and $Saved.openvpn.username -ceq $Multi.external.openvpn.username -and $Saved.openvpn.password -ceq $Multi.external.openvpn.password) 'Layer map changed raw fields, credentials, or added single-host provision.'
+    $LayerFile=if($Mode-ceq'aes-256-gcm'){'openvpn-multihost-aes.json'}else{'openvpn-multihost-xor.json'}
+    if($Output){[IO.File]::WriteAllText((Join-Path $Output $LayerFile),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+}
+$Fields.ExtOpenVPNStartLayers.Text='{"'+$FirstHost+'":'+$FirstLayerText+','+$LayerMapText.Substring(1)
+$script:Saved=$null;& $Save;Check ($null -ne $Saved -and $Saved.openvpn_start_layers_json -ceq $Fields.ExtOpenVPNStartLayers.Text) 'Native form parsed or changed a raw duplicate layer map.'
+if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-multihost-duplicate-layer.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$Fields.ExtOpenVPNStartLayers.Text=$LayerMapText
+foreach($Field in @('ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey')){
+    if($Field-ceq'ExtLayerKey'){$Fields[$Field].Password='conflicting-single-host-field'}else{$Fields[$Field].Text='conflicting-single-host-field'}
+    $script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Mapped layer retained a single-host field.';$Count++
+    if($Field-ceq'ExtLayerKey'){$Fields[$Field].Password=''}else{$Fields[$Field].Text=''}
+}
+$Fields.ExtStartLayer.SelectedItem.Tag='off';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Off silently retained a layer map.';$Count++;$Fields.ExtStartLayer.SelectedItem.Tag='aes-256-gcm+xor-whitening'
+$Fields.ExtOpenVPNResponseProbes.Text='';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Layer map omitted matching response map.';$Count++;$Fields.ExtOpenVPNResponseProbes.Text=$MapText
+$Fields.ExtOpenVPNStartLayers.Text='x'*131073;$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Oversized OpenVPN layer map reached controller.';$Count++
+$Fields.ExtOpenVPNStartLayers.Text='';$Fields.ExtStartLayer.SelectedItem.Tag='off'
 $Fields.ExtOpenVPNResponseProbes.Text='x'*40961;$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Oversized OpenVPN map reached controller.';$Count++;$Fields.ExtOpenVPNResponseProbes.Text=''
 $Protocol.SelectedItem.Tag='shadowsocks';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Changing protocol discarded private OpenVPN source.';$Count++
 $Fields.ExtOpenVPNConfig.Text='';$Protocol.SelectedItem.Tag='openvpn';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Empty OpenVPN source reached controller.';$Count++

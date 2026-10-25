@@ -32,6 +32,7 @@ type Capability struct {
 	ExternalFingerprint string `json:"external_fingerprint,omitempty"`
 	ExpectedPublicIP    string `json:"expected_public_ip,omitempty"`
 	OpenVPNRemote       string `json:"openvpn_remote,omitempty"`
+	OpenVPNLayers       string `json:"openvpn_layers,omitempty"`
 }
 
 type Capabilities struct {
@@ -61,9 +62,11 @@ func (c Capabilities) Validate(expectedNode string) error {
 		if external && (e.NodeID != "" || !ExternalMode(e.Mode) || (ExternalPacketMode(e.Mode) && !canonicalPacketPublic(e.PublicKey)) || (!ExternalPacketMode(e.Mode) && e.PublicKey != "") || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
 			return bad
 		}
-		if e.OpenVPNRemote != "" && (!external || e.Mode != "openvpn" || e.Layer != "" || e.OpenVPNRemote != "fresh-connected-transport-v1") {
+		if e.OpenVPNRemote != "" && (!external || e.Mode != "openvpn" || e.OpenVPNRemote != "fresh-connected-transport-v1") {
 			return bad
 		}
+		if e.OpenVPNLayers != "" && (e.OpenVPNRemote != "fresh-connected-transport-v1" || !ValidLayerMode(e.Layer) || e.OpenVPNLayers != "captured-per-remote-v1") { return bad }
+		if e.OpenVPNRemote != "" && e.Layer != "" && e.OpenVPNLayers != "captured-per-remote-v1" { return bad }
 		identity := e.ID + "/" + e.Mode + "/" + e.Layer
 		if seen[identity] {
 			return bad

@@ -65,7 +65,8 @@ extension RouterVPNModel {
         exitLayerKey: String = "",
         serverPeerJSON: String = "",
         openVPNPairingJSON: String = "",
-        openVPNResponseProbesJSON: String = ""
+        openVPNResponseProbesJSON: String = "",
+        openVPNStartLayersJSON: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -203,11 +204,18 @@ extension RouterVPNModel {
             }
         }
         if !openVPNResponseProbesJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            guard protocolName == "openvpn", responseProbeURL.isEmpty, responseProbeServerName.isEmpty,
-                  exitStartLayer == "off" else { throw IOSExternalExecution.issue() }
+            guard protocolName == "openvpn", responseProbeURL.isEmpty, responseProbeServerName.isEmpty else { throw IOSExternalExecution.issue() }
             let original = ExternalOpenVPNConfig(config: openVPNConfig, username: username, password: password)
             if let probes = try IOSExternalExecution.openVPNResponseProbes(openVPNResponseProbesJSON, profile: original) {
                 external["openvpn_response_probes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(probes))
+            }
+        }
+        if !openVPNStartLayersJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard protocolName == "openvpn", let rawProbes = external["openvpn_response_probes"] else { throw IOSExternalExecution.issue() }
+            let original = ExternalOpenVPNConfig(config: openVPNConfig, username: username, password: password)
+            let probes = try JSONDecoder().decode([String: ExternalResponseProbe].self, from: JSONSerialization.data(withJSONObject: rawProbes))
+            if let layers = try IOSExternalExecution.openVPNStartLayers(openVPNStartLayersJSON, profile: original, probes: probes, selectedMode: exitStartLayer) {
+                external["openvpn_start_layers"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(layers))
             }
         }
         if ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
@@ -220,9 +228,14 @@ extension RouterVPNModel {
         if exitStartLayer != "off" {
             guard ExternalNodeConfig.serverExecutionProtocols.contains(protocolName),
                   ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(exitStartLayer) else { throw IOSExternalExecution.issue() }
-            external["start_layer"] = ["mode": exitStartLayer, "api": exitLayerAPI,
-                "transport": ["type": "shadowsocks", "tag": "provisioned-exit-layer", "server": server,
-                    "server_port": exitLayerPort, "method": "2022-blake3-aes-256-gcm", "password": exitLayerKey]]
+            if external["openvpn_start_layers"] != nil {
+                guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
+            } else {
+                guard external["openvpn_response_probes"] == nil else { throw IOSExternalExecution.issue() }
+                external["start_layer"] = ["mode": exitStartLayer, "api": exitLayerAPI,
+                    "transport": ["type": "shadowsocks", "tag": "provisioned-exit-layer", "server": server,
+                        "server_port": exitLayerPort, "method": "2022-blake3-aes-256-gcm", "password": exitLayerKey]]
+            }
         } else {
             guard exitLayerAPI.isEmpty, exitLayerPort == 0, exitLayerKey.isEmpty else { throw IOSExternalExecution.issue() }
         }
@@ -358,6 +371,7 @@ struct IOSExternalNodeBuilderView: View {
     @State private var serverPeerJSON = ""
     @State private var openVPNPairingJSON = ""
     @State private var openVPNResponseProbesJSON = ""
+    @State private var openVPNStartLayersJSON = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -463,7 +477,12 @@ struct IOSExternalNodeBuilderView: View {
                             TextEditor(text: $openVPNResponseProbesJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 120)
                                 .textInputAutocapitalization(.never).autocorrectionDisabled()
                                 .accessibilityLabel("Private OpenVPN remote response endpoints JSON")
-                            Text("For a profile with multiple remote IPs, paste one HTTPS response endpoint for each of its 2–16 IPs. Use an object keyed by remote IP, with url and optional server_name for each endpoint. Leave the single URL and certificate fields blank and keep Exit Start Layer Off. This map stays in the private node.")
+                            Text("For a profile with multiple remote IPs, paste one HTTPS response endpoint for each of its 2–16 IPs. Use an object keyed by remote IP, with url and optional server_name for each endpoint. Leave the single URL and certificate fields blank. Exit encryption uses the per-remote layer map below. This response map stays in the private node.")
+                                .font(.caption).foregroundStyle(.secondary)
+                            TextEditor(text: $openVPNStartLayersJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 140)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityLabel("Private OpenVPN per-remote Start Layer map JSON")
+                            Text("For AES or AES + XOR, provide every original remote IP's provisioned mode, api and transport. Each record must match the selected exit mode. Keep the single-service API, port and key fields empty. Leave this map empty when Exit Start Layer is Off.")
                                 .font(.caption).foregroundStyle(.secondary)
                         }
                     }
@@ -553,7 +572,8 @@ struct IOSExternalNodeBuilderView: View {
                 exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : "",
                 serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : "",
                 openVPNPairingJSON: selected == .openvpn ? openVPNPairingJSON : "",
-                openVPNResponseProbesJSON: selected == .openvpn ? openVPNResponseProbesJSON : ""
+                openVPNResponseProbesJSON: selected == .openvpn ? openVPNResponseProbesJSON : "",
+                openVPNStartLayersJSON: selected == .openvpn ? openVPNStartLayersJSON : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

@@ -96,6 +96,7 @@ final class AndroidExternalPolicy {
         if(exit.serverPeer!=null)ext.put("server_peer",copy(exit.serverPeer));
         if(exit.openVPNPairing!=null)ext.put("openvpn_pairing",copy(exit.openVPNPairing));
         if(exit.openVPNResponseProbes!=null)ext.put("openvpn_response_probes",copy(exit.openVPNResponseProbes));
+        if(exit.openVPNStartLayers!=null)ext.put("openvpn_start_layers",copy(exit.openVPNStartLayers));
         JSONObject transport;
         switch (exit.protocol) {
             case "wireguard": case "amneziawg":

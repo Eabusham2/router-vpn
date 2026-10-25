@@ -57,7 +57,7 @@ func (m *Manager) OpenVPNRemote(ctx context.Context, peer netip.Addr, q Request)
 	var selected *Exit
 	for i := range m.cfg.Exits {
 		exit := &m.cfg.Exits[i]
-		if exit.ID == q.ExitID && exit.Mode == q.ExitMode && LayerMode(exit.StartLayer) == q.ExitStartLayer {
+		if exit.ID == q.ExitID && exit.Mode == q.ExitMode && ExitLayerMode(*exit) == q.ExitStartLayer {
 			selected = exit
 			break
 		}

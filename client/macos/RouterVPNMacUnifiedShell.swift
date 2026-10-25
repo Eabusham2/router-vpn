@@ -459,7 +459,9 @@ extension ProductWindowController {
         let note = NSTextField(wrappingLabelWithString: "One node is selected for normal connections. Router nodes and Custom / external exits share the catalog; nodes without real coordinates stay list-only and never receive a fabricated map pin."); note.textColor = .secondaryLabelColor; content.addArrangedSubview(note)
         content.addArrangedSubview(scroll(nodesText)); content.addArrangedSubview(nodePopup)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 6
-        row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectNode))); row.addArrangedSubview(button("External direct", #selector(connectExternalDirect))); row.addArrangedSubview(button("External via entry…", #selector(connectExternalViaEntry))); row.addArrangedSubview(button("Remove", #selector(removeNode))); row.addArrangedSubview(button("50-sample latency", #selector(latencySelected))); content.addArrangedSubview(row)
+        row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectNode))); row.addArrangedSubview(button("Add external node…", #selector(addExternalNode))); content.addArrangedSubview(row)
+        let pathRow = NSStackView(); pathRow.orientation = .horizontal; pathRow.spacing = 6
+        pathRow.addArrangedSubview(button("External direct", #selector(connectExternalDirect))); pathRow.addArrangedSubview(button("External via entry…", #selector(connectExternalViaEntry))); pathRow.addArrangedSubview(button("Remove", #selector(removeNode))); pathRow.addArrangedSubview(button("50-sample latency", #selector(latencySelected))); content.addArrangedSubview(pathRow)
         presentUnifiedDetail(title: "Nodes", view: content, width: 820, height: 560)
     }
 

@@ -147,11 +147,12 @@ final class IOSNodeBundleStore {
         startLayerUpdate: ExternalStartLayerUpdate? = nil,
         serverPeerUpdate: ExternalServerPeerUpdate? = nil,
         openVPNPairingUpdate: ExternalOpenVPNPairingUpdate? = nil,
-        openVPNResponseProbesUpdate: ExternalOpenVPNResponseProbesUpdate? = nil
+        openVPNResponseProbesUpdate: ExternalOpenVPNResponseProbesUpdate? = nil,
+        openVPNStartLayersUpdate: ExternalOpenVPNStartLayersUpdate? = nil
     ) throws -> Data {
         try ensureStorageReady()
         let available = readableRecords(current: current)
-        guard (startLayerUpdate == nil && serverPeerUpdate == nil && openVPNPairingUpdate == nil && openVPNResponseProbesUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
+        guard (startLayerUpdate == nil && serverPeerUpdate == nil && openVPNPairingUpdate == nil && openVPNResponseProbesUpdate == nil && openVPNStartLayersUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
@@ -162,6 +163,10 @@ final class IOSNodeBundleStore {
                       ExternalNodeConfig.serverExecutionProtocols.contains(expectedExternal.protocolName),
                       bundle.routerProfiles[index].external == expectedExternal else {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "The external node changed while its editor was open. Reopen Edit Node before saving."])
+                }
+                if let openVPNStartLayersUpdate {
+                    guard expectedExternal.protocolName == "openvpn" else { throw IOSExternalExecution.issue() }
+                    bundle.routerProfiles[index].external?.openVPNStartLayers = openVPNStartLayersUpdate.layers
                 }
                 if let openVPNResponseProbesUpdate {
                     guard expectedExternal.protocolName == "openvpn" else { throw IOSExternalExecution.issue() }

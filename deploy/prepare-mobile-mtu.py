@@ -10,7 +10,7 @@ PIN='1ac1a339cb1223e9c70eae14c44411c75033c02d'
 spec=importlib.util.spec_from_file_location('retained_tun',ROOT/'deploy/prepare-retained-tun.py')
 RETAINED=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(RETAINED)
-PACKAGES=('mobilemtu','mtuprobe','hopmeasure')
+PACKAGES=('mobilemtu','mtuprobe','hopmeasure','nativeopenvpn')
 GO_SOURCE_HASHES={
  'src/runtime/pprof/proto.go':'7db7c755f02551e22207987a6d5a6d25038fcc5119e9005e7be4f56fdcbc54dc',
  'src/runtime/pprof/elf.go':'43a1284bfc363574cb0843d2d632ea86dff94fdf5388070f3d32c1fc6329f8d6',

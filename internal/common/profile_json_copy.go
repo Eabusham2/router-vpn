@@ -39,6 +39,14 @@ func copyProfileForJSON(source RouterProfile) RouterProfile {
 		for host, probe := range e.OpenVPNResponseProbes { probes[host] = probe }
 		e.OpenVPNResponseProbes = probes
 	}
+	if e.OpenVPNStartLayers != nil {
+		layers := make(ExternalOpenVPNStartLayers, len(e.OpenVPNStartLayers))
+		for host, layer := range e.OpenVPNStartLayers {
+			layer.Transport = copyProfileJSONMap(layer.Transport)
+			layers[host] = layer
+		}
+		e.OpenVPNStartLayers = layers
+	}
 	e.OpenVPNPairing = copyProfileJSONPointer(e.OpenVPNPairing)
 	if e.OpenVPNPairing != nil { e.OpenVPNPairing.Server.Transport = copyProfileJSONMap(e.OpenVPNPairing.Server.Transport) }
 	e.ServerPeer = copyProfileJSONPointer(e.ServerPeer)

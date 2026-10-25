@@ -177,6 +177,7 @@ type externalExecutionEngine struct {
 	leaseRequests              []multihoprelay.Request
 	badPacketChallenge         string
 	badOpenVPNCapability       string
+	badOpenVPNLayerCapability  string
 	remotes                    map[string]nativeopenvpn.RemoteReceipt
 	remoteQueries              int
 	nodeDials                  map[string][]string
@@ -329,6 +330,7 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			result := map[string]any{"node_id": node, "execution": "server", "exits": m.Available()}
 			e.mu.Lock()
 			remoteCapability := e.badOpenVPNCapability
+			layerCapability := e.badOpenVPNLayerCapability
 			e.mu.Unlock()
 			if remoteCapability != "" {
 				for _, capability := range result["exits"].([]map[string]string) {
@@ -337,6 +339,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 					} else {
 						capability["openvpn_remote"] = remoteCapability
 					}
+				}
+			}
+			if layerCapability != "" {
+				for _, capability := range result["exits"].([]map[string]string) {
+					if layerCapability == "missing" { delete(capability, "openvpn_layers") } else { capability["openvpn_layers"] = layerCapability }
 				}
 			}
 			if r.URL.RawQuery == "external_packet=1" {

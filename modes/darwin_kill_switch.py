@@ -120,6 +120,7 @@ def render_pf_rules(
     endpoint_ips: list[ipaddress._BaseAddress],
     lan_access: bool,
     tunnel_interfaces: list[str],
+    native_egress=None,
 ) -> str:
     lines = [
         "pass out quick on lo0 all",
@@ -129,10 +130,28 @@ def render_pf_rules(
     ]
     v4 = [str(ip) for ip in endpoint_ips if ip.version == 4]
     v6 = [str(ip) for ip in endpoint_ips if ip.version == 6]
-    if v4:
-        lines.append("pass out quick inet to { " + ", ".join(v4) + " }")
-    if v6:
-        lines.append("pass out quick inet6 to { " + ", ".join(v6) + " }")
+    if native_egress is not None:
+        if not isinstance(native_egress, list) or not 1 <= len(native_egress) <= 16:
+            raise RuntimeError("invalid captured native egress")
+        seen = set()
+        for item in native_egress:
+            if not isinstance(item, dict) or set(item) != {"host", "port", "network"}:
+                raise RuntimeError("invalid captured native egress tuple")
+            host, port, network = item["host"], item["port"], item["network"]
+            if host not in v4 + v6 or type(port) is not int or not 1 <= port <= 65535 or network not in ("tcp", "udp"):
+                raise RuntimeError("invalid captured native egress tuple")
+            if (host, port, network) in seen:
+                raise RuntimeError("duplicate captured native egress tuple")
+            seen.add((host, port, network))
+            family = "inet6" if host in v6 else "inet"
+            lines.append(f"pass out quick {family} proto {network} to {host} port {port}")
+        if {item[0] for item in seen} != set(v4 + v6):
+            raise RuntimeError("captured native egress omitted a physical host")
+    else:
+        if v4:
+            lines.append("pass out quick inet to { " + ", ".join(v4) + " }")
+        if v6:
+            lines.append("pass out quick inet6 to { " + ", ".join(v6) + " }")
     for interface in sorted(set(tunnel_interfaces)):
         if not re.fullmatch(r"utun[0-9]+", interface):
             raise RuntimeError(f"unsafe macOS tunnel interface name: {interface!r}")
@@ -171,6 +190,7 @@ def apply_darwin(
     *,
     refresh: bool,
     dry_run: bool,
+    native_egress=None,
 ) -> dict[str, Any]:
     current = current_utuns()
     if refresh:
@@ -198,7 +218,7 @@ def apply_darwin(
                 "strict macOS kill switch could not prove the pre-tunnel public interface; refusing unscoped PF state invalidation"
             )
 
-    rules = render_pf_rules(endpoint_ips, lan_access, tunnel_interfaces)
+    rules = render_pf_rules(endpoint_ips, lan_access, tunnel_interfaces, native_egress)
     if dry_run:
         token = str(previous_state.get("pf_token") or "dry-run")
         return {

@@ -198,6 +198,41 @@ function Captured-EndpointAddresses([string]$Primary) {
     return $result
   } catch { throw 'Native endpoint list must retain its captured literal physical remotes.' }
 }
+function Assert-NativeEgress($Items,[string[]]$Addresses) {
+  $values=@($Items);$result=@();$seen=@{};$hosts=@{}
+  if($values.Count-lt1-or$values.Count-gt16-or$Addresses.Count-lt1-or$Addresses.Count-gt16){throw 'Invalid captured native egress count.'}
+  foreach($item in $values){
+    if($null-eq$item-or$item-is[string]-or$item-is[Array]){throw 'Invalid captured native egress tuple.'}
+    $names=@($item.PSObject.Properties.Name)
+    if($names.Count-ne3-or@($names|Where-Object{$_-cnotin@('host','port','network')}).Count-ne0){throw 'Invalid captured native egress members.'}
+    $address=$null
+    if($item.host-isnot[string]-or$Addresses-cnotcontains$item.host-or-not[Net.IPAddress]::TryParse($item.host,[ref]$address)-or$address.ToString()-cne$item.host){throw 'Native egress host differs from captured physical remotes.'}
+    if([Net.IPAddress]::IsLoopback($address)-or$address.Equals([Net.IPAddress]::Any)-or$address.Equals([Net.IPAddress]::IPv6Any)-or$address.Equals([Net.IPAddress]::Broadcast)){throw 'Native egress host must be unicast.'}
+    $bytes=$address.GetAddressBytes()
+    if($address.AddressFamily-eq[Net.Sockets.AddressFamily]::InterNetworkV6){
+      if($address.IsIPv6Multicast-or$address.IsIPv6LinkLocal-or$address.IsIPv4MappedToIPv6-or$address.ScopeId-ne0){throw 'Native egress host must be unicast.'}
+    }elseif(($bytes[0]-ge224-and$bytes[0]-le239)-or($bytes[0]-eq169-and$bytes[1]-eq254)){throw 'Native egress host must be unicast.'}
+    if(($item.port-isnot[int]-and$item.port-isnot[long])-or$item.port-lt1-or$item.port-gt65535-or$item.network-cnotin@('tcp','udp')){throw 'Native egress requires an exact port and transport.'}
+    $identity=$item.host+'|'+$item.port+'|'+$item.network
+    if($seen.ContainsKey($identity)){throw 'Duplicate captured native egress tuple.'}
+    $seen[$identity]=$true;$hosts[$item.host]=$true
+    $result += [pscustomobject]@{host=[string]$item.host;port=[int]$item.port;network=[string]$item.network}
+  }
+  if($hosts.Count-ne$Addresses.Count){throw 'Native egress omitted a captured physical host.'}
+  return $result
+}
+function Captured-NativeEgress([string[]]$Addresses) {
+  $raw=$env:HOMEVPN_NATIVE_EGRESS_JSON
+  if($null-eq$raw){return}
+  if($raw.Length-gt4096-or$env:HOMEVPN_STANDARD_ENGINE-cne'native'-or$env:HOMEVPN_EXTERNAL_SESSION-cnotmatch'^[a-f0-9]{32}$'){throw 'Native egress has no captured external session.'}
+  # Only the controller's canonical struct encoding reaches this environment.
+  # An exact grammar rejects duplicate members before either PowerShell JSON
+  # implementation can silently collapse them or change top-level array shape.
+  $tuple='\{"host":"[0-9a-f:.]+","port":[1-9][0-9]{0,4},"network":"(?:tcp|udp)"\}'
+  if(-not[regex]::IsMatch($raw,('\A\['+$tuple+'(?:,'+$tuple+')*\]\z'))){throw 'Native egress requires canonical captured tuples.'}
+  $parsed=ConvertFrom-Json -InputObject ('{"egress":'+$raw+'}')
+  return Assert-NativeEgress @($parsed.egress) $Addresses
+}
 function Resolve-Settings {
   $profile = $null
   if (-not $Endpoint -or -not $Policy -or -not $HomeLANAccess) {
@@ -210,13 +245,15 @@ function Resolve-Settings {
   if ($effectivePolicy -ne 'off' -and -not [System.Net.IPAddress]::TryParse($effectiveEndpoint.Trim().Trim('[',']'), [ref]$ip)) {
     throw 'Strict Windows kill switch requires the selected Router VPN endpoint to be a literal IPv4/IPv6 address; a hostname would require pre-tunnel DNS.'
   }
-  [pscustomobject]@{
+  $settings=[pscustomobject]@{
     endpoint = $effectiveEndpoint.Trim().Trim('[',']')
     endpoint_ips = @(Captured-EndpointAddresses $effectiveEndpoint.Trim().Trim('[',']'))
     policy = $effectivePolicy
     home_lan_access = $effectiveLAN
     tunnel_alias = $TunnelAlias
   }
+  if($null-ne$env:HOMEVPN_NATIVE_EGRESS_JSON){$settings|Add-Member -NotePropertyName native_egress -NotePropertyValue @(Captured-NativeEgress @($settings.endpoint_ips))}
+  return $settings
 }
 function Firewall-Profiles {
   return @(Get-NetFirewallProfile -PolicyStore ActiveStore | Where-Object { $_.Name -in @('Domain','Private','Public') } | ForEach-Object {
@@ -232,8 +269,14 @@ function Add-Rule([string]$Name,[hashtable]$RuleArguments) {
   New-NetFirewallRule @params | Out-Null
 }
 function Install-AllowRules($settings) {
+  $restricted=$null
+  if($null-ne$settings.PSObject.Properties['native_egress']){$restricted=@(Assert-NativeEgress $settings.native_egress @($settings.endpoint_ips))}
   Remove-Rules
-  if ($settings.endpoint_ips.Count -gt 0) { Add-Rule 'selected node' @{ RemoteAddress=@($settings.endpoint_ips) } }
+  if($null-ne$restricted){
+    for($index=0;$index-lt$restricted.Count;$index++){
+      $tuple=$restricted[$index];Add-Rule ('native outer '+$index) @{RemoteAddress=@($tuple.host);RemotePort=[string]$tuple.port;Protocol=$tuple.network.ToUpperInvariant()}
+    }
+  }elseif ($settings.endpoint_ips.Count -gt 0) { Add-Rule 'selected node' @{ RemoteAddress=@($settings.endpoint_ips) } }
   Add-Rule 'loopback' @{ RemoteAddress=@('127.0.0.1','::1') }
   Add-Rule 'DHCPv4' @{ Protocol='UDP'; LocalPort='68'; RemotePort='67' }
   Add-Rule 'IPv6 link maintenance' @{ Protocol='ICMPv6'; IcmpType=@('133','134','135','136') }
@@ -263,7 +306,7 @@ if ($Action -in @('plan','check','prepare')) { $settings = Resolve-Settings }
 
 switch ($Action) {
   'plan' {
-    [pscustomobject]@{
+    $plan=[pscustomobject]@{
       policy = $settings.policy
       endpoint = $settings.endpoint
       endpoint_ips = @($settings.endpoint_ips)
@@ -272,7 +315,9 @@ switch ($Action) {
       default_outbound = if ($settings.policy -eq 'off') { 'unchanged' } else { 'Block' }
       rule_group = $RuleGroup
       state_path = Get-StatePath
-    } | ConvertTo-Json -Depth 8
+    }
+    if($null-ne$settings.PSObject.Properties['native_egress']){$plan|Add-Member -NotePropertyName native_egress -NotePropertyValue @($settings.native_egress)}
+    $plan | ConvertTo-Json -Depth 8
     exit 0
   }
   'check' {
@@ -304,6 +349,7 @@ switch ($Action) {
       original_profiles = $original
       updated_at = [DateTime]::UtcNow.ToString('o')
     }
+    if($null-ne$settings.PSObject.Properties['native_egress']){$state|Add-Member -NotePropertyName native_egress -NotePropertyValue @($settings.native_egress)}
     Write-State $state
     try {
       Install-AllowRules $settings

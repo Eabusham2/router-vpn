@@ -1,0 +1,35 @@
+//go:build routervpn_openvpn_layer_test
+
+package routervpnopenvpnlayers
+
+import (
+	"context"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/protocol/routervpnwhitening"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// Only the final OS socket is redirected to this test's loopback server. The
+// production constructor, original public hosts, per-host keys, cipher and
+// mapper ownership all remain the actual compiled implementation.
+func RouterVPNTestPhysicalOutbound(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options Options, physical N.Dialer) (adapter.Outbound, error) {
+	result, err := NewOutbound(ctx, router, logger, tag, options)
+	if err != nil {
+		return nil, err
+	}
+	owner := result.(*Outbound)
+	for _, child := range owner.children {
+		switch typed := child.(type) {
+		case *shadowsocks.Outbound:
+			typed.RouterVPNTestLayerPhysical(physical)
+		case *routervpnwhitening.Outbound:
+			typed.RouterVPNTestLayerPhysical(physical)
+		default:
+			_ = owner.Close()
+			return nil, errOwner
+		}
+	}
+	return result, nil
+}

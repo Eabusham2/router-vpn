@@ -7,6 +7,7 @@ import (
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 func compileExternalOpenVPNPair(input io.Reader, output io.Writer) error {
@@ -36,7 +37,12 @@ func compileExternalOpenVPNPair(input io.Reader, output io.Writer) error {
 		return bad
 	}
 	var layer *multihoprelay.StartLayer
-	if selected == "" || selected == "off" {
+	if _, mapped := external["openvpn_start_layers"]; mapped {
+		profile, err1 := json.Marshal(external["openvpn"])
+		probes, err2 := json.Marshal(external["openvpn_response_probes"])
+		layers, err3 := json.Marshal(external["openvpn_start_layers"])
+		if err1 != nil || err2 != nil || err3 != nil || nativeopenvpn.ValidateStartLayers(string(profile), string(probes), string(layers), selected) != nil { return bad }
+	} else if selected == "" || selected == "off" {
 		if _, exists := external["start_layer"]; exists {
 			return bad
 		}

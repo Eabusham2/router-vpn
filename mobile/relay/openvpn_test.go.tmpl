@@ -10,6 +10,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
@@ -23,7 +24,9 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -148,41 +151,112 @@ func remoteNativeFactory(parent context.Context, raw []byte, physical N.Dialer, 
 	return &routerVPNRelayBox{Box: owner, cancel: cancel, stop: stop}, nil
 }
 
+var remoteNativePorts = struct {
+	sync.Mutex
+	used map[int]bool
+}{used: make(map[int]bool)}
+
 func remoteNativePort(t *testing.T) int {
 	t.Helper()
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatal(err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	_ = listener.Close()
-	return port
-}
-func remoteNativeStart(t *testing.T, root map[string]any) *routerVPNRelayBox {
-	t.Helper()
-	raw, _ := json.Marshal(root)
-	owner, err := remoteNativeFactory(context.Background(), raw, nil, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err = owner.Start(); err != nil {
-		_ = owner.Close()
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := owner.Close(); !remoteNativeOnlyClosed(err) {
-			t.Error(err)
+	remoteNativePorts.Lock()
+	defer remoteNativePorts.Unlock()
+	// Native providers and encrypted Start Layers may bind both protocols.
+	// A free TCP ephemeral port alone can already be a live UDP source port.
+	// Retain a process-wide claim after releasing the probe sockets so parallel
+	// fixture owners cannot deliberately choose the same number later.
+	for attempt := 0; attempt < 128; attempt++ {
+		listener, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatal(err)
 		}
-	})
-	return owner
+		port := listener.Addr().(*net.TCPAddr).Port
+		if remoteNativePorts.used[port] {
+			_ = listener.Close()
+			continue
+		}
+		packet, err := net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+		_ = listener.Close()
+		if errors.Is(err, syscall.EADDRINUSE) {
+			continue
+		}
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = packet.Close()
+		remoteNativePorts.used[port] = true
+		return port
+	}
+	t.Fatal("no distinct TCP/UDP fixture port available")
+	return 0
+}
+func remoteNativeStartPort(t *testing.T, build func(int) map[string]any) int {
+	t.Helper()
+	// The OS can still allocate an unrelated ephemeral socket between probing
+	// and the real native bind. Retry only that exact bind collision, after the
+	// partially started native owner has drained. Constructor/runtime failures
+	// and ambiguous cleanup remain fatal; no actual tunnel test is retried.
+	for attempt := 0; attempt < 16; attempt++ {
+		port := remoteNativePort(t)
+		raw, err := json.Marshal(build(port))
+		if err != nil {
+			t.Fatal(err)
+		}
+		owner, err := remoteNativeFactory(context.Background(), raw, nil, nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = owner.Start(); err != nil {
+			if closeErr := owner.Close(); !remoteNativeOnlyClosed(closeErr) {
+				t.Fatal("failed fixture bind did not drain", closeErr)
+			}
+			if errors.Is(err, syscall.EADDRINUSE) {
+				continue
+			}
+			t.Fatal(err)
+		}
+		t.Cleanup(func() {
+			if err := owner.Close(); !remoteNativeOnlyClosed(err) {
+				t.Error(err)
+			}
+		})
+		return port
+	}
+	t.Fatal("native fixture bind remained unavailable")
+	return 0
 }
 
 func remoteNativeProvider(t *testing.T, pki remoteNativeOpenVPNNativeCertificates, network string, echoPort int) int {
 	t.Helper()
-	port := remoteNativePort(t)
 	tls := map[string]any{"certificate": []string{pki.provider}, "key": []string{pki.providerKey}, "client_certificate": []string{pki.ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client"}
-	remoteNativeStart(t, map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false, "listen": "127.0.0.1", "listen_port": port, "network": network, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"}, "tls": tls}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "egress"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"192.0.2.123/32"}, "port": []int{80}, "action": "route", "outbound": "egress", "override_address": "127.0.0.1", "override_port": echoPort}, map[string]any{"action": "reject"}}}})
-	return port
+	return remoteNativeStartPort(t, func(port int) map[string]any {
+		return map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false, "listen": "127.0.0.1", "listen_port": port, "network": network, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"}, "tls": tls}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "egress"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"192.0.2.123/32"}, "port": []int{80}, "action": "route", "outbound": "egress", "override_address": "127.0.0.1", "override_port": echoPort}, map[string]any{"action": "reject"}}}}
+	})
+}
+
+func TestRouterVPNRelayNativeFixtureRetriesOnlyActualBindCollision(t *testing.T) {
+	var occupied net.PacketConn
+	attempts := 0
+	password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+	port := remoteNativeStartPort(t, func(port int) map[string]any {
+		attempts++
+		if attempts == 1 {
+			var err error
+			occupied, err = net.ListenPacket("udp", fmt.Sprintf("127.0.0.1:%d", port))
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = occupied.Close() })
+		}
+		return map[string]any{"log": map[string]any{"disabled": true}, "inbounds": []any{map[string]any{"type": "shadowsocks", "tag": "owned-layer", "listen": "127.0.0.1", "listen_port": port, "method": "2022-blake3-aes-256-gcm", "password": password}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "provider"}}}
+	})
+	if attempts != 2 || port == occupied.LocalAddr().(*net.UDPAddr).Port {
+		t.Fatal("fixture failed to move its dual-network listener after the real UDP bind collision")
+	}
+	connection, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", port), time.Second)
+	if err != nil {
+		t.Fatal("replacement native listener unavailable", err)
+	}
+	_ = connection.Close()
 }
 
 func remoteNativeGraph(t *testing.T, pki remoteNativeOpenVPNNativeCertificates, network string, port int) map[string]any {
@@ -230,15 +304,17 @@ func remoteNativeQuery(t *testing.T, directory string, capture multihoprelay.Nat
 	defer ticker.Stop()
 	deadline := time.NewTimer(timeout)
 	defer deadline.Stop()
+	var lastReadError error
 	for {
 		raw, err := os.ReadFile(filepath.Join(directory, routerVPNRelayRemoteName))
+		lastReadError = err
 		var receipt multihoprelay.NativeOpenVPNReceipt
 		if err == nil && json.Unmarshal(raw, &receipt) == nil && receipt.RequestID == query.RequestID && receipt.Validate(capture, time.Now()) == nil {
 			return receipt, nil
 		}
 		select {
 		case <-deadline.C:
-			return receipt, errors.New("fresh native receipt was not produced")
+			return receipt, fmt.Errorf("fresh native receipt was not produced (last read: %v)", lastReadError)
 		case <-ticker.C:
 		}
 	}
@@ -461,6 +537,14 @@ func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *test
 	close(releaseNew)
 	receipt, err := remoteNativeQuery(t, directory, capture, 5*time.Second)
 	if err != nil || receipt.Remote.Generation != second {
+		remote, remoteErr := endpoint.RouterVPNConnectedRemote()
+		t.Log("captured endpoint at failed receipt", endpoint.RouterVPNTestTransportGeneration(), remote, remoteErr)
+		select {
+		case stopped := <-done:
+			done <- stopped
+			t.Log("native relay ended before receipt", stopped)
+		default:
+		}
 		t.Fatal("actual new TLS callback did not prove its own generation", err, receipt.Remote)
 	}
 }
@@ -487,7 +571,7 @@ func remoteNativeOnlyClosed(err error) bool {
 	if one, ok := err.(interface{ Unwrap() error }); ok {
 		return remoteNativeOnlyClosed(one.Unwrap())
 	}
-	return errors.Is(err, net.ErrClosed)
+	return errors.Is(err, net.ErrClosed) || errors.Is(err, os.ErrClosed)
 }
 
 func TestRouterVPNRelayNativeUnverifiedTLSNeverProducesRemoteReceipt(t *testing.T) {
@@ -566,5 +650,8 @@ func TestRouterVPNRelayNativePrivateSourceBoundaryPrecedesConstruction(t *testin
 	}
 	if remoteNativeOnlyClosed(errors.Join(net.ErrClosed, errors.New("real failure"))) {
 		t.Fatal("auxiliary provider cleanup masked an unrelated error")
+	}
+	if !remoteNativeOnlyClosed(errors.Join(net.ErrClosed, os.ErrClosed)) || remoteNativeOnlyClosed(errors.Join(os.ErrClosed, errors.New("real failure"))) {
+		t.Fatal("fixture repeated-close policy did not distinguish already closed files from cleanup failure")
 	}
 }

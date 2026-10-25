@@ -63,7 +63,7 @@ final class Form {
     let username = Field(""); let password = Field(""); let method = Field(""); let secret = Field(""); let tlsName = Field("")
     let responseURL = Field(""); let responseName = Field(""); let startLayer = Popup()
     let layerAPI = Field(""); let layerPort = Field(""); let layerKey = Field("")
-    let openVPNConfig = TextArea(); let openVPNPairing = TextArea(); let openVPNResponseProbes = TextArea()
+    let openVPNConfig = TextArea(); let openVPNPairing = TextArea(); let openVPNResponseProbes = TextArea(); let openVPNStartLayers = TextArea()
     let serverPeerPublic = Field(""); let serverPeerAddresses = Field(""); let serverPeerMTU = Field(""); let serverPeerKeepalive = Field("")
     let wgPrivate = Field(Data(repeating: 112, count: 32).base64EncodedString())
     let wgPeer = Field(Data(repeating: 113, count: 32).base64EncodedString())
@@ -202,6 +202,32 @@ let firstHost = probes.keys.sorted()[0], firstProbe = String(decoding: try JSONS
 form.openVPNResponseProbes.string = "{\"" + firstHost + "\":" + firstProbe + "," + String(mapText.dropFirst()); form.save()
 check(form.result != nil && form.result!["openvpn_response_probes_json"] as? String == form.openVPNResponseProbes.string, "Native OpenVPN callback parsed or changed raw duplicate map before strict controller validation")
 try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-multihost-duplicate.json")); count += 1
+form.openVPNResponseProbes.string = mapText
+var layerMapText = "", firstLayerText = ""
+for (index, mode) in layers.enumerated() where index > 0 {
+    let fixtureName = index == 1 ? "external-openvpn-multihost-layered-aes-client.json" : "external-openvpn-multihost-layered-xor-client.json"
+    let fixture = try JSONSerialization.jsonObject(with: Data(contentsOf: output.appendingPathComponent(fixtureName))) as! [String: Any]
+    let layered = fixture["external"] as! [String: Any], provision = layered["openvpn_start_layers"] as! [String: Any]
+    check(fixture["selected_layer"] as? String == mode && layered["openvpn"] as? [String: String] == multiInline, "Layer fixture changed original provider source")
+    layerMapText = String(decoding: try JSONSerialization.data(withJSONObject: provision, options: [.sortedKeys]), as: UTF8.self)
+    firstLayerText = String(decoding: try JSONSerialization.data(withJSONObject: provision[firstHost]!, options: [.sortedKeys]), as: UTF8.self)
+    form.openVPNStartLayers.string = "\n" + layerMapText + "\n"; form.startLayer.indexOfSelectedItem = index; form.save()
+    check(form.result != nil, form.message)
+    let captured = form.result!
+    check(captured["openvpn_start_layers_json"] as? String == form.openVPNStartLayers.string && captured["start_layer"] as? String == mode && captured["start_layer_provision"] == nil && captured["response_probe"] == nil && captured["openvpn"] as? [String: String] == multiInline, "Layer map changed raw fields, credentials, or added single-host provision")
+    try JSONSerialization.data(withJSONObject: captured, options: [.sortedKeys]).write(to: output.appendingPathComponent(index == 1 ? "openvpn-multihost-aes.json" : "openvpn-multihost-xor.json")); count += 1
+}
+form.openVPNStartLayers.string = "{\"" + firstHost + "\":" + firstLayerText + "," + String(layerMapText.dropFirst()); form.save()
+check(form.result != nil && form.result!["openvpn_start_layers_json"] as? String == form.openVPNStartLayers.string, "Native form parsed or changed a raw duplicate layer map")
+try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-multihost-duplicate-layer.json")); count += 1
+form.openVPNStartLayers.string = layerMapText
+for field in [form.responseURL, form.responseName, form.layerAPI, form.layerPort, form.layerKey] {
+    field.stringValue = "conflicting-single-host-field"; form.save(); check(form.result == nil, "Mapped layer retained a single-host field"); field.stringValue = ""; count += 1
+}
+form.startLayer.indexOfSelectedItem = 0; form.save(); check(form.result == nil, "Off silently retained a layer map"); count += 1; form.startLayer.indexOfSelectedItem = 2
+form.openVPNResponseProbes.string = ""; form.save(); check(form.result == nil, "Layer map omitted matching response map"); count += 1; form.openVPNResponseProbes.string = mapText
+form.openVPNStartLayers.string = String(repeating: "x", count: 131073); form.save(); check(form.result == nil, "Oversized OpenVPN layer map reached controller"); count += 1
+form.openVPNStartLayers.string = ""; form.startLayer.indexOfSelectedItem = 0
 form.openVPNResponseProbes.string = String(repeating: "x", count: 40961); form.save(); check(form.result == nil, "Oversized OpenVPN map reached controller"); count += 1; form.openVPNResponseProbes.string = ""
 form.selected = "shadowsocks"; form.save(); check(form.result == nil, "Changing protocol discarded private OpenVPN source"); count += 1
 form.openVPNConfig.string = ""; form.selected = "openvpn"; form.save(); check(form.result == nil, "Empty OpenVPN source reached controller"); count += 1
@@ -380,6 +406,9 @@ def main():
             directory = Path(temporary)
             shutil.copyfile(ROOT/'deploy/fixtures/external-openvpn-client.json', directory/'external-openvpn-client.json')
             shutil.copyfile(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json', directory/'external-openvpn-multihost-client.json')
+            for flavor in ('aes', 'xor'):
+                name = 'external-openvpn-multihost-layered-'+flavor+'-client.json'
+                shutil.copyfile(ROOT/'deploy/fixtures'/name, directory/name)
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
             subprocess.run(['go', 'test', '-count=1', './cmd/client', '-run', '^TestDesktopExternalEntryModeFormCatalog$'], cwd=ROOT, env=env, check=True, timeout=180)
             if args.platform == 'linux':

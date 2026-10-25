@@ -1,0 +1,430 @@
+package routervpnopenvpnlayers
+
+import (
+	"context"
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"net"
+	"net/netip"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type controlledChild struct {
+	outbound.Adapter
+	dial   func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	packet func(context.Context, M.Socksaddr) (net.PacketConn, error)
+	calls  atomic.Int32
+}
+
+func (c *controlledChild) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	c.calls.Add(1)
+	return c.dial(ctx, network, destination)
+}
+func (c *controlledChild) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	c.calls.Add(1)
+	return c.packet(ctx, destination)
+}
+
+type controlledConn struct {
+	net.Conn
+	closes atomic.Int32
+	fail   atomic.Bool
+}
+
+func (c *controlledConn) Close() error {
+	c.closes.Add(1)
+	if c.fail.Load() {
+		return errors.Join(net.ErrClosed, errors.New("owned close failed"))
+	}
+	return c.Conn.Close()
+}
+
+func testLayerOptions() Options {
+	layers := nativeopenvpn.StartLayers{}
+	remotes := []nativeopenvpn.Remote{{Host: "192.0.2.1", Port: 1194, Network: "tcp"}, {Host: "192.0.2.2", Port: 1443, Network: "udp"}}
+	for index, remote := range remotes {
+		layers[remote.Host] = nativeopenvpn.StartLayer{Mode: "aes-256-gcm", API: "http://10.93.0.1:8787", Transport: map[string]any{"type": "shadowsocks", "tag": "private-start", "server": remote.Host, "server_port": float64(8388 + index*2), "method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(rune('a'+index)), 32)))}}
+	}
+	return Options{Mode: "aes-256-gcm", Remotes: remotes, Layers: layers}
+}
+
+func testLayerMapper(t *testing.T, child *controlledChild) *Outbound {
+	t.Helper()
+	result, err := NewOutbound(context.Background(), nil, log.NewNOPFactory().Logger(), "owned-mapper", testLayerOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := result.(*Outbound)
+	for key, value := range h.remotes {
+		value.child = child
+		h.remotes[key] = value
+	}
+	t.Cleanup(func() {
+		if err := h.Close(); err != nil {
+			t.Error("mapper ownership did not close", err)
+		}
+	})
+	return h
+}
+
+func testLayerConn(t *testing.T) *controlledConn {
+	t.Helper()
+	client, peer := net.Pipe()
+	t.Cleanup(func() { _ = peer.Close(); _ = client.Close() })
+	return &controlledConn{Conn: client}
+}
+
+func TestRouterVPNOpenVPNLayerRejectsUnownedTupleBeforeChildDial(t *testing.T) {
+	child := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return nil, errors.New("unexpected child dial")
+	}}
+	h := testLayerMapper(t, child)
+	for _, request := range []struct{ network, target string }{{"tcp", "192.0.2.3:1194"}, {"tcp", "192.0.2.1:1443"}, {"udp", "192.0.2.1:1194"}, {"tcp", "10.93.0.1:1194"}, {"tcp", "provider.example:1194"}} {
+		if connection, err := h.DialContext(context.Background(), request.network, M.ParseSocksaddr(request.target)); err == nil || connection != nil {
+			t.Fatal("unowned original tuple accepted")
+		}
+	}
+	if child.calls.Load() != 0 {
+		t.Fatal("invalid map route reached encrypted child")
+	}
+}
+
+func TestRouterVPNOpenVPNLayerCancellationAndGenerationCloseLateConnections(t *testing.T) {
+	for _, event := range []string{"cancel", "network", "close"} {
+		t.Run(event, func(t *testing.T) {
+			started, release, revoked := make(chan struct{}), make(chan struct{}), make(chan struct{})
+			connection := testLayerConn(t)
+			child := &controlledChild{dial: func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+				if network != "tcp" || destination.String() != "10.93.0.1:1194" {
+					t.Error("private target rewrite changed original service port")
+				}
+				close(started)
+				go func() { <-ctx.Done(); close(revoked) }()
+				<-release
+				return connection, nil
+			}}
+			h := testLayerMapper(t, child)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := make(chan error, 1)
+			go func() {
+				owned, err := h.DialContext(ctx, "tcp", M.ParseSocksaddr("192.0.2.1:1194"))
+				if owned != nil {
+					_ = owned.Close()
+					if err == nil {
+						err = errors.New("late socket returned")
+					}
+				}
+				done <- err
+			}()
+			<-started
+			closed := make(chan error, 1)
+			switch event {
+			case "cancel":
+				cancel()
+			case "network":
+				h.InterfaceUpdated(context.Background())
+			case "close":
+				go func() { closed <- h.Close() }()
+				deadline := time.NewTimer(time.Second)
+				defer deadline.Stop()
+				for {
+					h.mu.Lock()
+					closing := h.closing
+					h.mu.Unlock()
+					if closing {
+						break
+					}
+					select {
+					case <-deadline.C:
+						t.Fatal("close did not revoke pending dial")
+					case <-time.After(time.Millisecond):
+					}
+				}
+			}
+			select {
+			case <-revoked:
+			case <-time.After(time.Second):
+				t.Fatal("retired generation did not cancel its pending encrypted dial")
+			}
+			close(release)
+			if err := <-done; err == nil {
+				t.Fatal("retired generation published connection")
+			}
+			if connection.closes.Load() != 1 {
+				t.Fatal("late connection was not closed exactly once")
+			}
+			if event == "close" {
+				if err := <-closed; err != nil {
+					t.Fatal(err)
+				}
+			}
+			h.mu.Lock()
+			remaining := len(h.connections) + h.opening
+			h.mu.Unlock()
+			if remaining != 0 {
+				t.Fatal("retired dial retained an adopted owner")
+			}
+		})
+	}
+}
+
+func TestRouterVPNOpenVPNLayerFailedCloseRetainsOwnershipAndBlocksReplacement(t *testing.T) {
+	connection := testLayerConn(t)
+	connection.fail.Store(true)
+	child := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) { return connection, nil }}
+	h := testLayerMapper(t, child)
+	owned, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if owned.RemoteAddr().String() != "192.0.2.1:1194" {
+		t.Fatal("original remote replaced by colliding private address")
+	}
+	if owned.Close() == nil {
+		t.Fatal("close failure disappeared")
+	}
+	if replacement, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194")); err == nil || replacement != nil || child.calls.Load() != 1 {
+		t.Fatal("failed old owner allowed duplicate provider session")
+	}
+	if h.Close() == nil {
+		t.Fatal("failed socket cleanup acknowledged success")
+	}
+	h.mu.Lock()
+	remaining := len(h.connections)
+	h.mu.Unlock()
+	if remaining != 1 {
+		t.Fatal("failed owner was forgotten")
+	}
+	connection.fail.Store(false)
+	if h.Close() != nil {
+		t.Fatal("retry did not drain exact retained owner")
+	}
+	h.mu.Lock()
+	remaining = len(h.connections)
+	h.mu.Unlock()
+	if remaining != 0 {
+		t.Fatal("confirmed close retained owner")
+	}
+}
+
+func TestRouterVPNOpenVPNLayerConnectionBoundAndExactClose(t *testing.T) {
+	child := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) { return testLayerConn(t), nil }}
+	h := testLayerMapper(t, child)
+	for index := 0; index < 64; index++ {
+		if _, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194")); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if connection, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194")); err == nil || connection != nil || child.calls.Load() != 64 {
+		t.Fatal("mapper connection ownership was unbounded")
+	}
+	if err := h.Close(); err != nil {
+		t.Fatal(err)
+	}
+	h.mu.Lock()
+	remaining := len(h.connections)
+	h.mu.Unlock()
+	if remaining != 0 {
+		t.Fatal("mapper leaked encrypted sockets")
+	}
+}
+
+type controlledPacket struct {
+	target  net.Addr
+	written net.Addr
+	closed  bool
+}
+
+func (p *controlledPacket) ReadFrom(buffer []byte) (int, net.Addr, error) {
+	copy(buffer, "owned")
+	return 5, p.target, nil
+}
+func (p *controlledPacket) WriteTo(buffer []byte, address net.Addr) (int, error) {
+	p.written = address
+	return len(buffer), nil
+}
+func (p *controlledPacket) Close() error { p.closed = true; return nil }
+func (*controlledPacket) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1234}
+}
+func (*controlledPacket) SetDeadline(time.Time) error      { return nil }
+func (*controlledPacket) SetReadDeadline(time.Time) error  { return nil }
+func (*controlledPacket) SetWriteDeadline(time.Time) error { return nil }
+
+func TestRouterVPNOpenVPNLayerPacketAddressesStayBoundToOriginalRemote(t *testing.T) {
+	packet := &controlledPacket{target: M.Socksaddr{Addr: netip.MustParseAddr("10.93.0.1"), Port: 1443}.UDPAddr()}
+	child := &controlledChild{packet: func(_ context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+		if destination.String() != "10.93.0.1:1443" {
+			t.Fatal("wrong private service destination")
+		}
+		return packet, nil
+	}}
+	h := testLayerMapper(t, child)
+	original := M.ParseSocksaddr("192.0.2.2:1443").UDPAddr()
+	owned, err := h.ListenPacket(context.Background(), M.ParseSocksaddr(original.String()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	buffer := make([]byte, 16)
+	count, address, err := owned.ReadFrom(buffer)
+	if err != nil || count != 5 || address.String() != original.String() {
+		t.Fatal("private source escaped as provider receipt")
+	}
+	if _, err := owned.WriteTo([]byte("owned"), original); err != nil || packet.written.String() != "10.93.0.1:1443" {
+		t.Fatal("UDP destination did not use captured host mapping")
+	}
+	if _, err := owned.WriteTo([]byte("unowned"), M.ParseSocksaddr("192.0.2.1:1443").UDPAddr()); err == nil {
+		t.Fatal("packet crossed provider ownership")
+	}
+	packet.target = M.ParseSocksaddr("10.93.0.1:1194").UDPAddr()
+	if _, _, err := owned.ReadFrom(buffer); err == nil {
+		t.Fatal("foreign service packet adopted")
+	}
+	if err := h.Close(); err != nil || !packet.closed {
+		t.Fatal("packet owner not closed", err)
+	}
+}
+
+type lookupManager struct {
+	adapter.OutboundManager
+	lookup func(string) (adapter.Outbound, bool)
+}
+
+func (m *lookupManager) Outbound(tag string) (adapter.Outbound, bool) { return m.lookup(tag) }
+
+func TestRouterVPNOpenVPNLayerNativeManagerRemovalDrainsDuringEntryLookup(t *testing.T) {
+	connection := testLayerConn(t)
+	child := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) { return connection, nil }}
+	h := testLayerMapper(t, child)
+	h.detour = "entry"
+	h.Adapter = outbound.NewAdapterWithDialerOptions(nativeopenvpn.LayerMapType, "owned-mapper", []string{"tcp", "udp"}, option.DialerOptions{Detour: "entry"})
+	entry := &controlledChild{Adapter: outbound.NewAdapter("fixture", "entry", []string{"tcp", "udp"}, nil)}
+	registry := outbound.NewRegistry()
+	outbound.Register[Options](registry, "fixture", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ Options) (adapter.Outbound, error) {
+		if tag == "entry" {
+			return entry, nil
+		}
+		return h, nil
+	})
+	logger := log.NewNOPFactory().Logger()
+	manager := outbound.NewManager(logger, registry, nil, "entry")
+	for _, tag := range []string{"entry", "owned-mapper"} {
+		if err := manager.Create(context.Background(), nil, logger, tag, "fixture", &Options{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := manager.Start(adapter.StartStateInitialize); err != nil {
+		t.Fatal(err)
+	}
+	lookupStarted, releaseLookup := make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	unblock := func() { release.Do(func() { close(releaseLookup) }) }
+	defer unblock()
+	var calls atomic.Int32
+	h.manager = &lookupManager{OutboundManager: manager, lookup: func(tag string) (adapter.Outbound, bool) {
+		if calls.Add(1) == 2 {
+			close(lookupStarted)
+			<-releaseLookup
+		}
+		return manager.Outbound(tag)
+	}}
+	dialed := make(chan error, 1)
+	go func() {
+		owned, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194"))
+		if owned != nil {
+			_ = owned.Close()
+			err = errors.New("removed mapper returned a socket")
+		}
+		dialed <- err
+	}()
+	select {
+	case <-lookupStarted:
+	case <-time.After(time.Second):
+		t.Fatal("final entry lookup not reached")
+	}
+	removed := make(chan error, 1)
+	go func() { removed <- manager.Remove("owned-mapper") }()
+	select {
+	case err := <-removed:
+		if err != nil {
+			t.Error("native manager removal failed to drain captured socket", err)
+		}
+	case <-time.After(time.Second):
+		unblock()
+		t.Fatal("manager close waited for a callback into its own locked registry")
+	}
+	unblock()
+	select {
+	case err := <-dialed:
+		if err == nil {
+			t.Fatal("removed owner was adopted")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("retired dial did not finish")
+	}
+	if connection.closes.Load() != 1 {
+		t.Fatal("removed mapper did not close its exact socket once")
+	}
+}
+
+func TestRouterVPNOpenVPNLayerChildNeverUsesReplacementEntry(t *testing.T) {
+	connection := testLayerConn(t)
+	oldEntry := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) { return connection, nil }}
+	replacement := &controlledChild{dial: func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		return nil, errors.New("replacement entry must never be dialed")
+	}}
+	var calls atomic.Int32
+	manager := &lookupManager{lookup: func(string) (adapter.Outbound, bool) {
+		if calls.Add(1) == 1 {
+			return oldEntry, true
+		}
+		return replacement, true
+	}}
+	ctx := service.ContextWith[adapter.OutboundManager](context.Background(), manager)
+	options := testLayerOptions()
+	options.Detour = "entry"
+	result, err := NewOutbound(ctx, nil, log.NewNOPFactory().Logger(), "owned-mapper", options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := result.(*Outbound)
+	defer h.Close()
+	owned, err := h.DialContext(context.Background(), "tcp", M.ParseSocksaddr("192.0.2.1:1194"))
+	if err == nil || owned != nil {
+		t.Fatal("replacement entry authorized old session")
+	}
+	if oldEntry.calls.Load() != 1 || replacement.calls.Load() != 0 {
+		t.Fatal("encrypted child escaped its captured predecessor")
+	}
+	if connection.closes.Load() == 0 {
+		t.Fatal("retired encrypted child retained physical socket")
+	}
+}
+
+func TestRouterVPNOpenVPNLayerJoinedCleanupFailureIsNotAcknowledged(t *testing.T) {
+	unexpected := errors.New("unfinished cleanup")
+	for _, err := range []error{nil, net.ErrClosed, fmt.Errorf("closed: %w", net.ErrClosed), errors.Join(net.ErrClosed, net.ErrClosed)} {
+		if !completedClose(err) {
+			t.Fatal("completed close was rejected")
+		}
+	}
+	for _, err := range []error{unexpected, errors.Join(net.ErrClosed, unexpected), fmt.Errorf("wrapped: %w", errors.Join(net.ErrClosed, unexpected))} {
+		if completedClose(err) {
+			t.Fatal("genuine cleanup failure was discarded")
+		}
+	}
+}

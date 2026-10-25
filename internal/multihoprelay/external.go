@@ -26,6 +26,7 @@ type ExternalExit struct {
 	Packet                *ExternalPacketPair          `json:"packet,omitempty"`
 	OpenVPN               *ExternalOpenVPNPair         `json:"openvpn,omitempty"`
 	OpenVPNResponseProbes nativeopenvpn.ResponseProbes `json:"openvpn_response_probes,omitempty"`
+	OpenVPNStartLayers nativeopenvpn.StartLayers `json:"openvpn_start_layers,omitempty"`
 }
 
 type ResponseProbe struct {
@@ -71,6 +72,9 @@ func ExternalFingerprint(exit Exit) (string, error) {
 		value = []any{"routervpn-external-openvpn-v4", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
 		if exit.External.OpenVPNResponseProbes != nil {
 			value = []any{"routervpn-external-openvpn-v5", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, exit.External.ExpectedPublicIP, exit.External.OpenVPNResponseProbes}
+			if exit.External.OpenVPNStartLayers != nil {
+				value = []any{"routervpn-external-openvpn-v6", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, exit.External.ExpectedPublicIP, exit.External.OpenVPNResponseProbes, externalPublicOpenVPNLayers(exit.External.OpenVPNStartLayers)}
+			}
 		}
 	} else if ExternalPacketMode(exit.Mode) {
 		value = []any{"routervpn-external-packet-v3", exit.Mode, exit.External.Packet.Local, exit.External.Packet.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
@@ -111,7 +115,7 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 	if err != nil {
 		return Request{}, err
 	}
-	if request.ExitID != exit.ID || request.ExitMode != exit.Mode || request.ExitStartLayer != LayerMode(exit.StartLayer) ||
+	if request.ExitID != exit.ID || request.ExitMode != exit.Mode || request.ExitStartLayer != ExitLayerMode(exit) ||
 		!nonce.MatchString(request.SessionID) || !proofID.MatchString(request.EntryNodeID) ||
 		request.Port < 1024 || request.Port > 65535 || !listenerSecret.MatchString(request.Username) || !listenerSecret.MatchString(request.Password) || request.Username == request.Password {
 		return Request{}, ErrOwnership

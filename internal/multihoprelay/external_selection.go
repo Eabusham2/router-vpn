@@ -76,6 +76,12 @@ func ExternalSelection(id, protocol string, external map[string]any, layer *Star
 			return Exit{}, bad
 		}
 		exit.External.OpenVPNResponseProbes = probes
+		if rawLayers, present := external["openvpn_start_layers"]; present {
+			encoded, err := json.Marshal(rawLayers)
+			var layers nativeopenvpn.StartLayers
+			if err != nil || layer != nil || json.Unmarshal(encoded, &layers) != nil || layers.Validate(transport, probes, layers.Mode()) != nil { return Exit{}, bad }
+			exit.External.OpenVPNStartLayers = layers
+		}
 	} else {
 		rawProbe, ok := external["response_probe"].(map[string]any)
 		if !ok {

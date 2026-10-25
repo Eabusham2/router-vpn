@@ -115,6 +115,9 @@ func (c *Controller) acquire(ctx context.Context) error {
 			if c.openvpnResponses != nil && exit.OpenVPNRemote != "fresh-connected-transport-v1" {
 				return errors.New("multi-host OpenVPN requires fresh connected-remote support on the entry server")
 			}
+			if c.openvpnResponses != nil && c.meta.ExitStartLayer != "" && exit.OpenVPNLayers != "captured-per-remote-v1" {
+				return errors.New("mapped OpenVPN Start Layers require captured per-remote support on the entry server")
+			}
 			if c.external != nil && exit.ExpectedPublicIP != c.external.capture.ExpectedPublicIP {
 				return errors.New("paired external public proof changed")
 			}

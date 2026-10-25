@@ -92,7 +92,7 @@ func externalOpenVPNTransport(external map[string]any) (map[string]any, error) {
 	if external["protocol"] != "openvpn" {
 		return nil, errExternalOpenVPN
 	}
-	allowed := map[string]bool{"protocol": true, "openvpn": true, "openvpn_pairing": true, "openvpn_response_probes": true, "expected_public_ip": true, "response_probe": true, "start_layer": true}
+	allowed := map[string]bool{"protocol": true, "openvpn": true, "openvpn_pairing": true, "openvpn_response_probes": true, "openvpn_start_layers": true, "expected_public_ip": true, "response_probe": true, "start_layer": true}
 	for key := range external {
 		if !allowed[key] {
 			return nil, errExternalOpenVPN
@@ -117,6 +117,13 @@ func externalOpenVPNTransport(external map[string]any) (map[string]any, error) {
 		if err != nil || json.Unmarshal(encoded, &probes) != nil || probes.Validate(transport) != nil {
 			return nil, errExternalOpenVPN
 		}
+		if rawLayers, present := external["openvpn_start_layers"]; present {
+			encoded, err := json.Marshal(rawLayers)
+			var layers nativeopenvpn.StartLayers
+			if err != nil || json.Unmarshal(encoded, &layers) != nil || layers.Validate(transport, probes, layers.Mode()) != nil { return nil, errExternalOpenVPN }
+		}
+	} else if _, layered := external["openvpn_start_layers"]; layered {
+		return nil, errExternalOpenVPN
 	}
 	return transport, nil
 }
@@ -148,12 +155,19 @@ func ValidateExternalOpenVPNPairing(protocol string, external map[string]any) er
 	if protocol != "openvpn" {
 		return errExternalOpenVPN
 	}
-	_, err := externalOpenVPNSelection(external)
-	return err
+	pair, err := externalOpenVPNSelection(external)
+	if err != nil { return err }
+	if raw, present := external["openvpn_start_layers"]; present {
+		encoded, err := json.Marshal(raw)
+		var layers nativeopenvpn.StartLayers
+		if err != nil || json.Unmarshal(encoded, &layers) != nil || layers.ValidatePairingKeys(pair.Local.PairingPublicKey, pair.Server.PairingPublicKey) != nil { return errExternalOpenVPN }
+	}
+	return nil
 }
 
 func ValidateExternalOpenVPNResponseProbes(protocol string, external map[string]any) error {
 	if _, exists := external["openvpn_response_probes"]; !exists {
+		if _, layered := external["openvpn_start_layers"]; layered { return errExternalOpenVPN }
 		return nil
 	}
 	if protocol != "openvpn" {
@@ -192,7 +206,12 @@ func validateExternalOpenVPN(exit Exit) (map[string]any, error) {
 		if exit.External.ResponseProbe != (ResponseProbe{}) || exit.StartLayer != nil || exit.External.OpenVPNResponseProbes.Validate(transport) != nil {
 			return nil, errExternalOpenVPN
 		}
+		if exit.External.OpenVPNStartLayers != nil {
+			if exit.External.OpenVPNStartLayers.ValidatePairingKeys(pair.Local.PairingPublicKey, pair.Server.PairingPublicKey) != nil { return nil, errExternalOpenVPN }
+			if _, _, err := WrapOpenVPNStartLayers(transport, exit.External.OpenVPNResponseProbes, exit.External.OpenVPNStartLayers, ExitLayerMode(exit), OpenVPNStartLayerMapTag, ""); err != nil { return nil, errExternalOpenVPN }
+		}
 	} else {
+		if exit.External.OpenVPNStartLayers != nil { return nil, errExternalOpenVPN }
 		host, err := nativeopenvpn.SameRemoteHost(transport)
 		if err != nil || exit.External.ResponseProbe.Validate(host) != nil {
 			return nil, errExternalOpenVPN
@@ -221,6 +240,9 @@ func externalOpenVPNAuthKey(exit Exit, fingerprint string) ([]byte, error) {
 	if exit.StartLayer != nil {
 		layerSecret = exit.StartLayer.Transport["password"]
 	}
+	if exit.External.OpenVPNStartLayers != nil {
+		layerSecret = externalOpenVPNLayerSecrets(exit.External.OpenVPNStartLayers)
+	}
 	version := externalOpenVPNVersion(exit)
 	raw, _ := json.Marshal([]any{"routervpn-external-openvpn-salt-" + version, fingerprint, layerSecret})
 	salt := sha256.Sum256(raw)
@@ -229,6 +251,7 @@ func externalOpenVPNAuthKey(exit Exit, fingerprint string) ([]byte, error) {
 }
 
 func externalOpenVPNVersion(exit Exit) string {
+	if OpenVPNLayersRequired(exit) { return "v6" }
 	if OpenVPNRemoteRequired(exit) {
 		return "v5"
 	}
@@ -300,7 +323,7 @@ func (m *Manager) validateOpenVPNConcurrentOwnerLocked(exit Exit) error {
 			continue
 		}
 		for _, other := range m.cfg.Exits {
-			if other.ID != active.ExitID || other.Mode != active.ExitMode || LayerMode(other.StartLayer) != active.ExitStartLayer {
+			if other.ID != active.ExitID || other.Mode != active.ExitMode || ExitLayerMode(other) != active.ExitStartLayer {
 				continue
 			}
 			if other.External == nil || other.External.OpenVPN == nil {

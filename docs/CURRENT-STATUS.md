@@ -27,9 +27,18 @@ callbacks cannot retain proof for the previous transport. DNS Retest, both
 comparison probes, winner repetition, MTU and Speed Lab verify that generation
 at their measurement and adoption boundaries. The original remote list, inline
 credentials and independently provisioned Server identity remain captured.
-Mapped exit Start Layers still require per-host layer support; the supported
-mapped path currently uses exit Start Layer Off and retains every Router entry
-Start Layer. Single-host exit AES and AES plus XOR remain supported.
+Mapped exit AES and AES plus XOR now use a complete private per-host layer map
+and the v6 authenticated lease contract. The native mapper preserves the original
+ordered remote tuples and configured-event generations even when independent
+providers share one private service address. It owns each encrypted child and
+its pending sockets; a failed close retains ownership and blocks replacement.
+Every host's layer secret is authenticated without copying independent provider
+or pairing credentials between Local and Server. Off retains v5, and single-host
+pairings retain v4. Entry layers remain separately captured.
+Native OpenVPN teardown also drains its captured packet dispatcher before
+gVisor stack shutdown. A reproduced lock cycle is covered by an actual-stack
+regression and an original-order negative control; increasing the close timeout
+is not part of the repair.
 
 Desktop external paths now use their owned native runtime for Direct, Local,
 Server and Compare both. Router VPN entries retain all 19 supported saved entry
@@ -80,12 +89,15 @@ The real pinned native OpenVPN fixture transfers encrypted TCP and UDP with
 Off, AES-256-GCM and AES-256-GCM plus XOR Start Layers. Wrong certificate,
 control-channel key, remote identity and listener key cases must fail. Focused
 race tests exercise replay rejection, cleanup, profile transactions, restoration
-and native MTU mailbox ownership. Both shipping Java and Swift producers supplied
-1,683 captured graphs to the actual pinned native runtime. Each accepted all
-1,683 graphs and rejected all 1,683 missing-engine controls with stable source,
-module and native-library provenance. These constructor results remain separate
-from APK/Xcode builds and physical traffic. The 171 additional mapped OpenVPN
-graphs preserve all 1,512 earlier combinations. Real encrypted fallback tests
+and native MTU mailbox ownership. At the published mapped-Off checkpoint
+`f686454f`, both shipping Java and Swift producers supplied 1,683 captured graphs
+to the actual pinned native runtime. Each accepted all 1,683 graphs and rejected
+all 1,683 missing-engine controls with stable source, module and native-library
+provenance. The current mandatory matrix adds 342 mapped exit-layer combinations
+and requires all 2,025 graphs plus 2,025 missing-engine controls for each host.
+These constructor gates remain separate from APK/Xcode builds and physical
+traffic. The earlier 171 mapped-Off graphs preserve all 1,512 preceding
+combinations. Real encrypted fallback tests
 also exercise TCP/UDP, same-host reconnects, stale TLS callbacks and incorrect
 certificates, names and keys. An initialized native DNS cache negative control
 confirms that selected-DNS measurements require fresh routed answers.
@@ -103,6 +115,12 @@ Commit `90254368` aligns the macOS oversized-response fixture with the shipping
 JSON endpoint while preserving an untyped partial-body case, and makes the
 Windows test completion output compatible with its CP1252 console. Actual
 Darwin/Windows CI remains distinct from local fixture verification.
+Commit `6ef1079` preserves the router-agent's declared Go 1.24 support with
+pinned-directory relay file operations, repairs Windows/Android test fixture
+semantics and gives the Apple empty private-bundle fixture a fresh factory.
+Exact-SHA CI for that repair was running when this checkpoint was recorded;
+this document does not assert that all of its workflows or release assets passed.
+
 The successful `745b3e41` release predates this continuation and does not certify
 its packages. Exact-commit native packaging, release publication, private
 deployment and device acceptance require their own evidence.

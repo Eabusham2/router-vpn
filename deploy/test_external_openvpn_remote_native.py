@@ -6,6 +6,7 @@ import importlib.util
 import os
 import platform
 import subprocess
+import tempfile
 
 ROOT=Path(__file__).resolve().parents[1]
 PIN='1ac1a339cb1223e9c70eae14c44411c75033c02d'
@@ -27,7 +28,11 @@ def run(core):
     load('prepare-mobile-openvpn.py').prepare(core)
     load('mobile_openvpn_close_policy.py').prepare(core)
     subprocess.run(['go','mod','tidy'],cwd=core,check=True,timeout=180)
-    subprocess.run(['go','test','-race','-count=1','-timeout=120s','-ldflags=-checklinkname=0','-tags','with_openvpn,with_wireguard,with_quic,with_gvisor,routervpn_openvpn_remote_test','./cmd/sing-box','-run','^TestRouterVPNRelayNative','-v'],cwd=core,check=True,timeout=180)
+    with tempfile.TemporaryDirectory(prefix='router-openvpn-mapped-layer-') as temporary:
+        binary=Path(temporary)/'start-layer-relay'
+        subprocess.run(['go','build','-buildvcs=false','-o',str(binary),'./cmd/start-layer-relay'],cwd=ROOT,check=True,timeout=120)
+        environment=dict(os.environ,ROUTER_VPN_WHITENING_TEST_BINARY=str(binary))
+        subprocess.run(['go','test','-race','-count=1','-parallel=4','-timeout=240s','-ldflags=-checklinkname=0','-tags','with_openvpn,with_wireguard,with_quic,with_gvisor,routervpn_openvpn_remote_test,routervpn_openvpn_layer_test','./cmd/sing-box','./protocol/routervpnopenvpnlayers','./transport/openvpn','-run','^(TestRouterVPNRelayNative|TestRouterVPNOpenVPNLayer|TestRouterVPNOpenVPNStack)','-v'],cwd=core,env=environment,check=True,timeout=300)
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('--core',type=Path,required=True);run(parser.parse_args().core)

@@ -8,6 +8,7 @@ import (
 	"net/netip"
 	"net/url"
 	"regexp"
+	"router-vpn/internal/nativeopenvpn"
 	"strconv"
 	"strings"
 )
@@ -252,6 +253,15 @@ func NewPlan(config string, actual int) (*Plan, error) {
 				}
 				ceiling = min(ceiling, (outer-overhead)/16*16)
 			}
+		}
+	}
+	if packet["type"] == "openvpn-client" {
+		if detour, _ := packet["detour"].(string); all[detour] != nil && all[detour]["type"] == nativeopenvpn.LayerMapType {
+			bound, err := openVPNMappedCeiling(packet, all[detour], all)
+			if err != nil {
+				return nil, err
+			}
+			ceiling = min(ceiling, bound)
 		}
 	}
 	if ceiling < MinMTU || actual > ceiling {

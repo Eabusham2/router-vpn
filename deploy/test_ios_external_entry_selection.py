@@ -6,6 +6,7 @@ the separate Swift/Go policy gate validates compiled native configurations.
 """
 from pathlib import Path
 import importlib.util
+import os
 import platform
 import subprocess
 import tempfile
@@ -283,6 +284,43 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
   serverSelection.routerProfiles[0].multihopExecution="local";mapEditor.bundle=serverSelection;IOSNodeBundleStore.shared.nodes[mapped.id]=try encoded(serverSelection)
   try check("Local can explicitly remove private response map",mapEditor.updateNodeMetadata(id:mapped.id,name:"Local",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,openVPNResponseProbesJSON:""))
   try check("removing map retains original multi-host OpenVPN credentials",mapEditor.bundle!.routerProfiles[0].external?.openVPNResponseProbes==nil && mapEditor.bundle!.routerProfiles[0].external?.openVPN==mapOriginal.openVPN)
+  for (fixtureName,mode) in [("AES","aes-256-gcm"),("XOR","aes-256-gcm+xor-whitening")] {
+   let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_"+fixtureName+"_FIXTURE"]!))) as! [String:Any],external=try JSONDecoder().decode(ExternalNodeConfig.self,from:encoded(fixture["external"]!)),raw=IOSExternalExecution.openVPNStartLayersText(external.openVPNStartLayers)
+   var selected=try profile("layer-map-"+fixtureName,"external","openvpn");selected.external=external;selected.external?.openVPNStartLayers=nil
+   let editor=RouterVPNModel(),original=selected.external!;editor.bundle=bundle(selected);IOSNodeBundleStore.shared.nodes=[selected.id:try encoded(editor.bundle!)]
+   try check("native editor installs exact private per-remote layers",editor.updateNodeMetadata(id:selected.id,name:"Layers",location:"",latitudeText:"",longitudeText:"",expectedExternal:original,expectedStartLayer:"off",exitStartLayer:mode,openVPNStartLayersJSON:raw))
+   let current=editor.bundle!.routerProfiles[0].external!,currentBytes=try encoded(editor.bundle!),currentRecords=IOSNodeBundleStore.shared.nodes
+   try check("editor preserves original source and uniform chosen layer",current==external && editor.bundle!.routerProfiles[0].startLayer==mode && current.openVPNStartLayers?["203.0.113.20"]?.api==current.openVPNStartLayers?["203.0.113.21"]?.api && current.openVPNStartLayers?["203.0.113.20"]?.transport.password != current.openVPNStartLayers?["203.0.113.21"]?.transport.password)
+   let duplicate=String(raw.trimmingCharacters(in:.whitespacesAndNewlines).dropLast())+",\"203.0.113.20\":"+String(decoding:try JSONEncoder().encode(current.openVPNStartLayers!["203.0.113.20"]!),as:UTF8.self)+"}"
+   var missing=current.openVPNStartLayers!;missing.removeValue(forKey:"203.0.113.21")
+   var foreign=current.openVPNStartLayers!;foreign["203.0.113.99"]=foreign.removeValue(forKey:"203.0.113.21")
+   var disagreement=current.openVPNStartLayers!;disagreement["203.0.113.21"]?.mode=mode=="aes-256-gcm" ? "aes-256-gcm+xor-whitening":"aes-256-gcm"
+   for invalid in ["null","{}",raw+" {}",duplicate,IOSExternalExecution.openVPNStartLayersText(missing),IOSExternalExecution.openVPNStartLayersText(foreign),IOSExternalExecution.openVPNStartLayersText(disagreement),raw+String(repeating:" ",count:131073)] {
+    try check("raw malformed layer map cannot overwrite saved node",!editor.updateNodeMetadata(id:selected.id,name:"Invalid",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:mode,openVPNStartLayersJSON:invalid))
+   }
+   try check("map cannot borrow singular layer fields",!editor.updateNodeMetadata(id:selected.id,name:"Mixed",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:mode,exitLayerAPI:"http://10.93.0.1:8787",openVPNStartLayersJSON:raw))
+   try check("Off requires removal of per-remote layers",!editor.updateNodeMetadata(id:selected.id,name:"Wrong Off",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:"off",openVPNStartLayersJSON:raw))
+   try check("selected encryption requires its complete map",!editor.updateNodeMetadata(id:selected.id,name:"Missing",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:mode,openVPNStartLayersJSON:""))
+   try check("layered map cannot lose response identities",!editor.updateNodeMetadata(id:selected.id,name:"Missing probes",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,openVPNResponseProbesJSON:""))
+   try check("rejected layer edits preserve active and stored bytes",encoded(editor.bundle!)==currentBytes && IOSNodeBundleStore.shared.nodes==currentRecords)
+   let ambiguous=String(decoding:currentRecords[selected.id]!,as:UTF8.self).replacingOccurrences(of:"\"openvpn_start_layers\":{",with:"\"openvpn_start_layers\":{\"203.0.113.20\":"+String(decoding:try JSONEncoder().encode(current.openVPNStartLayers!["203.0.113.20"]!),as:UTF8.self)+",")
+   IOSNodeBundleStore.shared.nodes[selected.id]=Data(ambiguous.utf8)
+   try check("stored layer map duplicate cannot normalize on metadata edit",!editor.updateNodeMetadata(id:selected.id,name:"Ambiguous",location:"",latitudeText:"",longitudeText:"",expectedExternal:current))
+   try check("ambiguous private record was not rewritten",IOSNodeBundleStore.shared.nodes[selected.id]==Data(ambiguous.utf8) && encoded(editor.bundle!)==currentBytes)
+   IOSNodeBundleStore.shared.nodes=currentRecords
+   try check("metadata edit retains exact per-remote map",editor.updateNodeMetadata(id:selected.id,name:"Renamed",location:"",latitudeText:"",longitudeText:"",expectedExternal:current) && editor.bundle!.routerProfiles[0].external==current)
+   var replacement=current.openVPNStartLayers!;replacement["203.0.113.21"]?.transport.password=Data(repeating:114,count:32).base64EncodedString()
+   try check("current owner may rotate one captured layer key",editor.updateNodeMetadata(id:selected.id,name:"Rotated",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:mode,openVPNStartLayersJSON:IOSExternalExecution.openVPNStartLayersText(replacement)))
+   let rotated=editor.bundle!.routerProfiles[0].external!,rotatedBytes=try encoded(editor.bundle!),rotatedRecords=IOSNodeBundleStore.shared.nodes
+   try check("stale editor cannot replace rotated private keys",!editor.updateNodeMetadata(id:selected.id,name:"Stale",location:"",latitudeText:"",longitudeText:"",expectedExternal:current,expectedStartLayer:mode,exitStartLayer:mode,openVPNStartLayersJSON:raw))
+   try check("stale layer rejection preserves new owner",encoded(editor.bundle!)==rotatedBytes && IOSNodeBundleStore.shared.nodes==rotatedRecords)
+   IOSNodeBundleStore.shared.failWrite=true
+   try check("failed layer-map publication leaves current node usable",!editor.updateNodeMetadata(id:selected.id,name:"Write failure",location:"",latitudeText:"",longitudeText:"",expectedExternal:rotated,expectedStartLayer:mode,exitStartLayer:"off",openVPNStartLayersJSON:""))
+   IOSNodeBundleStore.shared.failWrite=false
+   try check("write failure preserves all private map references",encoded(editor.bundle!)==rotatedBytes && IOSNodeBundleStore.shared.nodes==rotatedRecords)
+   try check("explicit Off clears only layer map",editor.updateNodeMetadata(id:selected.id,name:"Off",location:"",latitudeText:"",longitudeText:"",expectedExternal:rotated,expectedStartLayer:mode,exitStartLayer:"off",openVPNStartLayersJSON:""))
+   try check("cleared layer retains original multiremote profile and response proof",editor.bundle!.routerProfiles[0].startLayer=="off" && editor.bundle!.routerProfiles[0].external?.openVPNStartLayers==nil && editor.bundle!.routerProfiles[0].external?.openVPN==rotated.openVPN && editor.bundle!.routerProfiles[0].external?.openVPNResponseProbes==rotated.openVPNResponseProbes && editor.bundle!.routerProfiles[0].external?.openVPNPairing==rotated.openVPNPairing)
+  }
   print("Apple external entry selection: PASS (\(checks) shipping Swift checks; storage/native-readiness boundaries doubled)")
  }
 }
@@ -309,7 +347,7 @@ def main():
         suffix = '.dylib' if platform.system() == 'Darwin' else '.so'
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-emit-module', '-emit-library', '-module-name', 'Libbox', str(library), '-emit-module-path', str(work/'Libbox.swiftmodule'), '-o', str(work/('libLibbox'+suffix))], check=True, timeout=90)
         subprocess.run(['swiftc', '-swift-version', '6', '-module-cache-path', str(work/'module-cache'), '-I', str(work), '-L', str(work), '-lLibbox', '-Xlinker', '-rpath', '-Xlinker', str(work), str(APP / 'Models.swift'), str(APP / 'IOSExternalExecution.swift'), str(APP / 'IOSMultihopStartLayer.swift'), str(source), '-o', str(work / 'test')], check=True, timeout=90)
-        subprocess.run([str(work / 'test'), str(compiler)], check=True, timeout=30)
+        subprocess.run([str(work / 'test'), str(compiler)], env=dict(os.environ, ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-aes-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-layered-xor-client.json')), check=True, timeout=30)
 
 
 if __name__ == '__main__':

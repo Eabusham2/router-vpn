@@ -45,6 +45,7 @@ typedef struct {
     GtkWidget *openvpn_config;
     GtkWidget *openvpn_pairing;
     GtkWidget *openvpn_response_probes;
+    GtkWidget *openvpn_start_layers;
     GtkWidget *status;
 } LinuxExternalNodeV14;
 
@@ -55,19 +56,21 @@ static char *linux_external_text_v14(GtkWidget *view) {
 }
 
 static gboolean linux_external_openvpn_v14(LinuxExternalNodeV14 *state,JsonBuilder *builder,const char *protocol,char **error) {
-    g_autofree char *config=linux_external_text_v14(state->openvpn_config),*pairing=linux_external_text_v14(state->openvpn_pairing),*probes=linux_external_text_v14(state->openvpn_response_probes);
-    g_autofree char *trimmed=g_strdup(pairing),*trimmed_probes=g_strdup(probes);g_strstrip(trimmed);g_strstrip(trimmed_probes);
+    g_autofree char *config=linux_external_text_v14(state->openvpn_config),*pairing=linux_external_text_v14(state->openvpn_pairing),*probes=linux_external_text_v14(state->openvpn_response_probes),*layers=linux_external_text_v14(state->openvpn_start_layers);
+    g_autofree char *trimmed=g_strdup(pairing),*trimmed_probes=g_strdup(probes),*trimmed_layers=g_strdup(layers);g_strstrip(trimmed);g_strstrip(trimmed_probes);g_strstrip(trimmed_layers);
     if(g_strcmp0(protocol,"openvpn")!=0){
-        if(config[0]||trimmed[0]||trimmed_probes[0]){if(error!=NULL)*error=g_strdup("OpenVPN profile, pairing, and response-map fields belong only to OpenVPN.");return FALSE;}
+        if(config[0]||trimmed[0]||trimmed_probes[0]||trimmed_layers[0]){if(error!=NULL)*error=g_strdup("OpenVPN profile, pairing, response-map, and layer-map fields belong only to OpenVPN.");return FALSE;}
         return TRUE;
     }
-    if(!config[0]||strlen(config)>256*1024||strlen(pairing)>512*1024||strlen(probes)>40*1024){if(error!=NULL)*error=g_strdup("Paste a bounded inline OpenVPN profile, optional private pairing package, and optional per-remote response map.");return FALSE;}
+    if(!config[0]||strlen(config)>256*1024||strlen(pairing)>512*1024||strlen(probes)>40*1024||strlen(layers)>128*1024){if(error!=NULL)*error=g_strdup("Paste a bounded inline OpenVPN profile and private pairing, response-map, or layer-map fields.");return FALSE;}
+    if(trimmed_layers[0]&&!trimmed_probes[0]){if(error!=NULL)*error=g_strdup("A per-host Start Layer map requires the complete response map for those same OpenVPN hosts.");return FALSE;}
     json_builder_set_member_name(builder,"openvpn");json_builder_begin_object(builder);
     json_builder_set_member_name(builder,"config");json_builder_add_string_value(builder,config);
     json_builder_set_member_name(builder,"username");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->username)));
     json_builder_set_member_name(builder,"password");json_builder_add_string_value(builder,gtk_entry_get_text(GTK_ENTRY(state->password)));json_builder_end_object(builder);
     if(trimmed[0]){json_builder_set_member_name(builder,"openvpn_pairing_json");json_builder_add_string_value(builder,pairing);}
     if(trimmed_probes[0]){json_builder_set_member_name(builder,"openvpn_response_probes_json");json_builder_add_string_value(builder,probes);}
+    if(trimmed_layers[0]){json_builder_set_member_name(builder,"openvpn_start_layers_json");json_builder_add_string_value(builder,layers);}
     return TRUE;
 }
 
@@ -186,9 +189,17 @@ static gboolean linux_external_transport_fields_v14(LinuxExternalNodeV14 *state,
     const char *api=gtk_entry_get_text(GTK_ENTRY(state->layer_api));
     const char *port=gtk_entry_get_text(GTK_ENTRY(state->layer_port));
     const char *key=gtk_entry_get_text(GTK_ENTRY(state->layer_key));
+    g_autofree char *layers=linux_external_text_v14(state->openvpn_start_layers);g_strstrip(layers);
     const char *message=NULL;
     gboolean supported=g_strcmp0(protocol,"wireguard")==0||g_strcmp0(protocol,"amneziawg")==0||g_strcmp0(protocol,"shadowsocks")==0||g_strcmp0(protocol,"hysteria2")==0||g_strcmp0(protocol,"socks5")==0||g_strcmp0(protocol,"http-connect")==0||g_strcmp0(protocol,"https-connect")==0||g_strcmp0(protocol,"openvpn")==0;
     gboolean off=g_strcmp0(layer,"off")==0;
+    if(layers[0]){
+        if(g_strcmp0(protocol,"openvpn")!=0||off||(g_strcmp0(layer,"aes-256-gcm")!=0&&g_strcmp0(layer,"aes-256-gcm+xor-whitening")!=0)||probe[0]||name[0]||api[0]||port[0]||key[0]){
+            if(validation_error!=NULL){*validation_error=g_strdup("Choose the matching active Start Layer for the OpenVPN host map and leave single-server response and layer fields blank.");}
+            return FALSE;
+        }
+        json_builder_set_member_name(builder,"start_layer");json_builder_add_string_value(builder,layer);return TRUE;
+    }
     if(!off&&g_strcmp0(layer,"aes-256-gcm")!=0&&g_strcmp0(layer,"aes-256-gcm+xor-whitening")!=0)message="Choose a supported external Start Layer.";
     else if(!supported&&(probe[0]||name[0]||!off||api[0]||port[0]||key[0]))message="Response probes and external Start Layers require a supported external transport.";
     else if(name[0]&&!probe[0])message="Supply the HTTPS response URL with its certificate server name.";
@@ -294,9 +305,9 @@ static void on_linux_external_node_v14(GtkButton *button, gpointer data) {
     state.server_peer_public=linux_external_field_v14("Separate server-side client public key",FALSE);state.server_peer_addresses=linux_external_field_v14("Server peer CIDRs, one per family, comma separated",FALSE);state.server_peer_mtu=linux_external_field_v14("Server peer MTU — required with descriptor, 1280..9000",FALSE);state.server_peer_keepalive=linux_external_field_v14("Server peer keepalive seconds — optional, 0..65535",FALSE);
     GtkWidget *peer_fields[]={state.server_peer_public,state.server_peer_addresses,state.server_peer_mtu,state.server_peer_keepalive};for(guint i=0;i<G_N_ELEMENTS(peer_fields);i++)gtk_box_pack_start(GTK_BOX(box),peer_fields[i],FALSE,FALSE,0);
     GtkWidget *openvpn_note=gtk_label_new("OpenVPN: paste the original inline profile and use the username/password fields above. Server / Compare additionally needs this device's private pairing JSON and a separate provider identity on the Router entry. The controller validates the original profile and JSON before saving; scripts and file paths are rejected. Leave pairing blank for Local only.");gtk_label_set_line_wrap(GTK_LABEL(openvpn_note),TRUE);gtk_label_set_xalign(GTK_LABEL(openvpn_note),0.0f);gtk_box_pack_start(GTK_BOX(box),openvpn_note,FALSE,FALSE,0);
-    GtkWidget *probes_note=gtk_label_new("For multiple OpenVPN remote hosts, paste the complete private map of every remote IP to its verified HTTPS response endpoint. Use the map instead of the single response URL above. A multi-host map cannot use a single-server exit Start Layer.");gtk_label_set_line_wrap(GTK_LABEL(probes_note),TRUE);gtk_label_set_xalign(GTK_LABEL(probes_note),0.0f);gtk_box_pack_start(GTK_BOX(box),probes_note,FALSE,FALSE,0);
-    state.openvpn_config=gtk_text_view_new();state.openvpn_pairing=gtk_text_view_new();state.openvpn_response_probes=gtk_text_view_new();
-    GtkWidget *openvpn_fields[]={state.openvpn_config,state.openvpn_pairing,state.openvpn_response_probes};const char *openvpn_labels[]={"Private inline OpenVPN profile","Private OpenVPN pairing JSON","Private OpenVPN per-remote response map JSON"};
+    GtkWidget *probes_note=gtk_label_new("For multiple OpenVPN remote hosts, supply a response endpoint for every original remote IP. To add encryption or whitening, paste the matching per-host Start Layer map, choose its AES mode above, and leave single-server response and layer fields blank. Every host needs its own provisioned layer; the original OpenVPN fallback order and credentials are preserved.");gtk_label_set_line_wrap(GTK_LABEL(probes_note),TRUE);gtk_label_set_xalign(GTK_LABEL(probes_note),0.0f);gtk_box_pack_start(GTK_BOX(box),probes_note,FALSE,FALSE,0);
+    state.openvpn_config=gtk_text_view_new();state.openvpn_pairing=gtk_text_view_new();state.openvpn_response_probes=gtk_text_view_new();state.openvpn_start_layers=gtk_text_view_new();
+    GtkWidget *openvpn_fields[]={state.openvpn_config,state.openvpn_pairing,state.openvpn_response_probes,state.openvpn_start_layers};const char *openvpn_labels[]={"Private inline OpenVPN profile","Private OpenVPN pairing JSON","Private OpenVPN per-remote response map JSON","Private OpenVPN per-host Start Layer map JSON"};
     for(guint i=0;i<G_N_ELEMENTS(openvpn_fields);i++){
         gtk_box_pack_start(GTK_BOX(box),gtk_label_new(openvpn_labels[i]),FALSE,FALSE,0);
         gtk_text_view_set_wrap_mode(GTK_TEXT_VIEW(openvpn_fields[i]),GTK_WRAP_WORD_CHAR);

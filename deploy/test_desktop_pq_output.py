@@ -127,7 +127,7 @@ class NativeRuntimeOutput(unittest.TestCase):
                         'manifest_path': str(source/'rosenpass/Cargo.toml')}
 
     def metadata(self, stdout, stderr=b'', exit_code=0):
-        real_output = subprocess.check_output
+        real_run = subprocess.run
         env = {**os.environ, 'ROUTERVPN_NATIVE_LICENSE_TEST': 'captured'}
         expected = ['cargo', 'metadata', '--locked', '--format-version=1',
                     '--manifest-path', str(ROOT/'mobile/rosenpass/Cargo.toml')]
@@ -139,14 +139,20 @@ class NativeRuntimeOutput(unittest.TestCase):
             self.assertEqual(kwargs['timeout'], 1800)
             # Exercise the shipping license collector and real pipe/exit
             # handling. Only replace the Cargo executable at its boundary.
-            self.assertNotIn('stderr', kwargs)
+            self.assertEqual(kwargs['stdout'], subprocess.PIPE)
+            self.assertEqual(kwargs['stderr'], subprocess.PIPE)
+            self.assertTrue(kwargs['check'])
+            self.assertNotIn('text', kwargs)
+            self.assertNotIn('encoding', kwargs)
             calls.append(command)
-            return real_output(self.child(stdout, stderr, exit_code), **kwargs)
+            return real_run(self.child(stdout, stderr, exit_code), **kwargs)
 
         with mock.patch.object(subprocess, '_text_encoding', return_value='cp1252'), \
-                mock.patch.object(subprocess, 'check_output', side_effect=execute):
-            NATIVE.stage_pq_licenses(self.stage, env)
-        self.assertEqual(len(calls), 1)
+                mock.patch.object(subprocess, 'run', side_effect=execute):
+            try:
+                NATIVE.stage_pq_licenses(self.stage, env)
+            finally:
+                self.assertEqual(len(calls), 1)
 
     def encoded(self, packages=None):
         return json.dumps({'packages': [self.package] if packages is None else packages},

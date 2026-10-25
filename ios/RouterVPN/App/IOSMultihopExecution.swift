@@ -54,11 +54,25 @@ enum IOSMultihopExecution {
                       selected["protocol"] as? String == exitMode else { throw issue() }
                 if let probes = selected["openvpn_response_probes"] {
                     guard exitMode == "openvpn", selected["response_probe"] == nil,
-                          selected["start_layer"] == nil, ["", "off"].contains(exitProfile["start_layer"] as? String ?? "off"),
+                          selected["start_layer"] == nil,
                           let map = probes as? [String: Any], (2...16).contains(map.count),
                           map.values.allSatisfy({ $0 is [String: Any] }) else { throw issue() }
+                    let mode = exitProfile["start_layer"] as? String ?? "off"
+                    if let provision = selected["openvpn_start_layers"] {
+                        guard ["aes-256-gcm", "aes-256-gcm+xor-whitening"].contains(mode),
+                              let layers = provision as? [String: Any], Set(layers.keys) == Set(map.keys),
+                              layers.values.allSatisfy({ value in
+                                  guard let layer = value as? [String: Any] else { return false }
+                                  return Set(layer.keys) == Set(["mode", "api", "transport"]) &&
+                                      layer["mode"] as? String == mode && layer["api"] is String &&
+                                      layer["transport"] is [String: Any]
+                              }) else { throw issue() }
+                    } else {
+                        guard ["", "off"].contains(mode) else { throw issue() }
+                    }
                 } else {
-                    guard selected["response_probe"] is [String: Any] else { throw issue() }
+                    guard selected["openvpn_start_layers"] == nil,
+                          selected["response_probe"] is [String: Any] else { throw issue() }
                 }
                 if exitMode == "openvpn" {
                     guard let pairing = selected["openvpn_pairing"] as? [String: Any],
