@@ -106,24 +106,24 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	defer prelaunch.close()
-	err = a.checkConnectionOperation()
-	if err == nil && startup != nil {
-		err = startup.current(a)
-	}
+	err = prelaunch.start(func() error {
+		if err := a.checkConnectionOperation(); err != nil {
+			return err
+		}
+		if startup != nil {
+			return startup.current(a)
+		}
+		return nil
+	})
 	if err != nil {
-		err = errors.Join(err, prelaunch.cleanup())
 		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusConflict)
+		status := http.StatusInternalServerError
+		if errors.Is(err, errTorPrelaunchRejected) {
+			status = http.StatusConflict
+		}
+		http.Error(w, err.Error(), status)
 		return
 	}
-	if err = cmd.Start(); err != nil {
-		err = errors.Join(err, prelaunch.cleanup())
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	prelaunch.close() // The started native launcher now owns this workspace.
 	a.mu.Lock()
 	a.cmd = cmd
 	a.state.Mode = "external-node"

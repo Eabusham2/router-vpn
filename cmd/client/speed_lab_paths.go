@@ -826,14 +826,12 @@ func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfi
 	if err := a.speedLabStopRuntime(true); err != nil {
 		return speedLabPath{}, err
 	}
-	command, err := torBridgeCommand(a, policy, profile)
+	current := a.speedLabTorPrelaunchCheck(profile)
+	command, prelaunch, err := prepareTorBridgeCommand(a, policy, profile)
 	if err != nil {
 		return speedLabPath{}, err
 	}
-	if err := a.checkConnectionOperation(); err != nil {
-		return speedLabPath{}, err
-	}
-	if err := command.Start(); err != nil {
+	if err := prelaunch.start(current); err != nil {
 		return speedLabPath{}, err
 	}
 	a.mu.Lock()
@@ -843,6 +841,9 @@ func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfi
 	a.mu.Unlock()
 	if err := a.speedLabOwnRuntime(command); err != nil {
 		return speedLabPath{}, err
+	}
+	if err := a.checkConnectionOperation(); err != nil {
+		return speedLabPath{}, err // The temporary transaction drains its owned child.
 	}
 	if _, err := a.proveTorBridgeExit(); err != nil {
 		return speedLabPath{}, err

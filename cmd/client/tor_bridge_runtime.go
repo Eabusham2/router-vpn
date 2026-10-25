@@ -280,14 +280,6 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	}, nil
 }
 
-func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, error) {
-	command, owner, err := prepareTorBridgeCommand(a, policy, profile)
-	if owner != nil {
-		owner.close()
-	}
-	return command, err
-}
-
 func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	prepared, err := prepareTorBridgeRuntime(root, policy, profile)

@@ -21,6 +21,8 @@ type torBridgePrelaunch struct {
 	retired   bool
 }
 
+var errTorPrelaunchRejected = errors.New("captured Tor prelaunch operation was rejected")
+
 func captureTorBridgePrelaunch(a *app, profileID, directory string) (*torBridgePrelaunch, error) {
 	workspace := &desktopNodeLaunch{}
 	if err := captureDesktopRuntimeDirectory(workspace, directory); err != nil {
@@ -47,6 +49,28 @@ func (owner *torBridgePrelaunch) close() {
 	if owner != nil && owner.workspace != nil && owner.workspace.directoryRoot != nil {
 		_ = owner.workspace.directoryRoot.Close()
 	}
+}
+
+// The caller owns its connection transaction. Prelaunch failures retire only
+// this unstarted workspace; a successful Start transfers it to native teardown.
+func (owner *torBridgePrelaunch) start(check func() error) error {
+	if owner == nil {
+		return errors.New("Tor launch has no captured prepared workspace")
+	}
+	defer owner.close()
+	if owner.command == nil || check == nil {
+		return errors.Join(errors.New("Tor launch has no captured command or operation guard"), owner.cleanup())
+	}
+	if err := check(); err != nil {
+		return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+	}
+	if err := owner.validate(); err != nil {
+		return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+	}
+	if err := owner.command.Start(); err != nil {
+		return errors.Join(err, owner.cleanup())
+	}
+	return nil
 }
 
 func (owner *torBridgePrelaunch) validate() error {
