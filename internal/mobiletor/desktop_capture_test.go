@@ -53,6 +53,9 @@ func TestDesktopBridgeCaptureReconstructsExactDisabledInputs(t *testing.T) {
 			if lines["Bridge"] != "" || lines["ClientTransportPlugin"] != "" || strings.Contains(input.Torrc(), desktopIsolation) || input.Defaults() != "\n" {
 				t.Fatal("Tor startup contains live transport, credentials or inherited defaults")
 			}
+			if lines["Log"] != "notice stdout" || strings.Contains(input.Torrc(), "tor.log") {
+				t.Fatal("Tor startup acquired an unbounded persistent diagnostic file")
+			}
 			if _, err := os.Stat(directory); !os.IsNotExist(err) {
 				t.Fatal("pure capture compiler created a private workspace", err)
 			}

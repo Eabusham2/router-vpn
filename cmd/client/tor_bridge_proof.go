@@ -15,7 +15,7 @@ const torCheckURL = "https://check.torproject.org/api/ip"
 
 func publicTorExit(value string) (string, error) {
 	ip := net.ParseIP(strings.TrimSpace(value))
-	if ip == nil || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
+	if ip == nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsUnspecified() {
 		return "", errors.New("Tor check returned an invalid/non-public exit address")
 	}
 	return ip.String(), nil

@@ -120,7 +120,7 @@ func desktopConnectionProcessDone(a *app, command *exec.Cmd) <-chan struct{} {
 			if launch.external != nil {
 				return desktopExternalProcessDone(launch)
 			}
-			if launch.mtuSession != "" {
+			if launch.mtuSession != "" || launch.tor != nil {
 				return desktopNodeProcessDone(launch)
 			}
 		}

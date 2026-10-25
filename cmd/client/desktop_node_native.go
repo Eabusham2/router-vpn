@@ -33,6 +33,7 @@ type desktopNodeLaunch struct {
 	mtuSession                 string
 	policyProfileID            string
 	external                   *desktopExternalRuntime
+	tor                        *desktopTorRuntime
 	directoryInfo              os.FileInfo
 	directoryRoot              *os.Root
 	workspaceMu                sync.Mutex
@@ -476,6 +477,9 @@ func stopDesktopNodeRuntime(a *app, cmd *exec.Cmd) (bool, error) {
 		return false, nil
 	}
 	owner, ok := raw.(*desktopNodeLaunch)
+	if ok && owner != nil && owner.tor != nil {
+		return true, stopDesktopTorRuntime(a, owner, cmd)
+	}
 	if !ok || owner == nil || owner.command == nil || len(owner.stop) == 0 || cmd != nil && owner.command != cmd {
 		return true, errors.New("native desktop cleanup lost its captured owner")
 	}

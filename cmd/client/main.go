@@ -1132,6 +1132,12 @@ func (a *app) stopModeWithIntent(holdKillSwitch bool) error {
 		return err
 	}
 	defer releaseMTU()
+	if err := prepareDesktopTorStop(a, relayOwner); err != nil {
+		a.mu.Lock()
+		a.state.Connected, a.state.Phase, a.state.LastError = false, "failed", err.Error()
+		a.mu.Unlock()
+		return err
+	}
 	if err := prepareDesktopExternalStop(a, relayOwner); err != nil {
 		a.mu.Lock()
 		a.state.Connected = false

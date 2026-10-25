@@ -98,7 +98,9 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 		"DataDirectory " + torQuote(filepath.Join(runtimeDir, "tor-data")),
 		"CookieAuthFile " + torQuote(filepath.Join(runtimeDir, "tor-control.cookie")),
 		"ControlPortWriteToFile " + torQuote(filepath.Join(runtimeDir, "tor-control.port")),
-		"Log notice file " + torQuote(filepath.Join(runtimeDir, "tor.log")),
+		// The native process owns bounded child diagnostics. A persistent log is
+		// neither a bootstrap proof nor an unbounded private workspace payload.
+		"Log notice stdout",
 	}, "\n") + "\n"
 	input := &DesktopBridgeInputs{capture: capture, policy: policy, json: rawCapture, torrc: torrc, dir: runtimeDir}
 	input.digests = DesktopBridgeInputDigests{
