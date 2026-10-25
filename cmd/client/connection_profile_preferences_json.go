@@ -148,10 +148,18 @@ func normalizeSavedConnectionDNS(p *connectionProfilePreferences) error {
 		return nil
 	}
 	probe := common.RouterProfile{AdGuardIPv4: "10.77.0.1", FastestDNSHost: "1.1.1.1"}
-	validated, err := applyDNSPolicyToProfile(probe, dnsPolicyRequest{
+	request := dnsPolicyRequest{
 		Mode: mode, Protocol: p.DNSProtocol, Host: p.DNSHost, Port: p.DNSPort,
 		ServerName: p.DNSServerName, Path: p.DNSPath,
-	})
+	}
+	if mode == "home" || mode == "fastest" {
+		// Legacy Router connection preferences reference a node-derived preset,
+		// not the concrete resolver left in an older snapshot. Validate that
+		// preset after discarding those stale transport/address fields. Explicit
+		// custom and encrypted policies still pass every selected-field check.
+		request = dnsPolicyRequest{Mode: mode}
+	}
+	validated, err := applyDNSPolicyToProfile(probe, request)
 	if err != nil {
 		return fmt.Errorf("invalid saved DNS policy: %w", err)
 	}
