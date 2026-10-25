@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class NativeShippingAuditTests(unittest.TestCase):
     def setUp(self):
         self.changes = {}
-        weighted = ast.parse((ROOT / "deploy/weighted-release-audit.py").read_text())
+        weighted = ast.parse((ROOT / "deploy/weighted-release-audit.py").read_text(encoding="utf-8"))
         functions = [node for node in weighted.body if isinstance(node, ast.FunctionDef)
                      and node.name in ("windows_owned_package", "retained_native_multihop_platform")]
         self.assertEqual(len(functions), 2)
@@ -27,7 +27,7 @@ class NativeShippingAuditTests(unittest.TestCase):
             if name in ("Windows native WPF app + Portable lifecycle", "macOS native AppKit packages"):
                 self.legacy[name] = eval(compile(ast.Expression(node.args[2]), "native-shipping-gate", "eval"), self.scope)
         self.assertEqual(len(self.legacy), 2)
-        recovered = ast.parse((ROOT / "deploy/recovered-release-audit-v3.py").read_text())
+        recovered = ast.parse((ROOT / "deploy/recovered-release-audit-v3.py").read_text(encoding="utf-8"))
         functions = [node for node in recovered.body if isinstance(node, ast.FunctionDef)
                      and node.name in ("windows_shipping_has", "controller_multihop_platform")]
         self.assertEqual(len(functions), 2)
@@ -38,7 +38,7 @@ class NativeShippingAuditTests(unittest.TestCase):
         exec(compile(ast.Module(body=functions, type_ignores=[]), "recovered-shipping-predicates", "exec"), self.recovered)
 
     def body(self, path):
-        return self.changes[path] if path in self.changes else (ROOT / path).read_text()
+        return self.changes[path] if path in self.changes else (ROOT / path).read_text(encoding="utf-8")
 
     def has(self, path, *markers):
         text = self.body(path)

@@ -44,7 +44,7 @@ def run(command, **options):
 
 
 def generate(package):
-    source = (ROOT/'deploy/package-builds.sh').read_text()
+    source = (ROOT/'deploy/package-builds.sh').read_text(encoding='utf-8')
     found = re.search(r"^write_windows_app_launcher\(\)\{.*?\nPS1\n\}", source, re.M | re.S)
     require(found is not None, 'Actual package recovery writer is missing')
     script = package/'Start-RouterVPN.ps1'
@@ -52,7 +52,7 @@ def generate(package):
     # sourced: it also removes/rebuilds dist, which is unrelated to this fixture.
     run(['bash', '-c', found.group(0)+'\nwrite_windows_app_launcher "$1"\n', '--', script.as_posix()])
     require(script.is_file(), 'Actual package writer did not emit its recovery entry point')
-    emitted = script.read_text()
+    emitted = script.read_text(encoding='utf-8')
     for forbidden in ('/api/emergency-stop', 'Stop-Process', 'router-vpn-client.exe', 'HOMEVPN_CONTROLLER_OWNER'):
         require(forbidden not in emitted, 'Recovery script still owns a separate controller lifecycle: '+forbidden)
     return script
@@ -61,13 +61,13 @@ def generate(package):
 
 def audit_contracts():
     audit = ROOT/'deploy/full-audit-v4.py'
-    tree = ast.parse(audit.read_text(), filename=str(audit))
+    tree = ast.parse(audit.read_text(encoding='utf-8'), filename=str(audit))
     nodes = [node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'windows_controller_lifecycle']
     require(len(nodes) == 1, 'Actual checked-launcher audit function is missing')
     code = compile(ast.Module(body=nodes, type_ignores=[]), str(audit), 'exec')
     paths = ('cmd/portable-launcher/main.go', 'cmd/portable-launcher/controller_shutdown.go',
              'cmd/windows-app-launcher/main.go', 'internal/controllerprocess/client.go', 'deploy/package-builds.sh')
-    sources = {name: (ROOT/name).read_text() for name in paths}
+    sources = {name: (ROOT/name).read_text(encoding='utf-8') for name in paths}
     def verify(changes=None):
         content = {**sources, **(changes or {})}; errors = []
         def need(path, *parts):
@@ -103,7 +103,7 @@ def main():
         package = root/'Package with spaces'/'RouterVPN-Windows-fixture'
         package.mkdir(parents=True)
         script = generate(package)
-        source = root/'fixture.go'; source.write_text(FIXTURE)
+        source = root/'fixture.go'; source.write_text(FIXTURE, encoding='utf-8')
         executable = package/'RouterVPN.exe'
         command = ['go', 'build', '-trimpath']
         if sys.platform == 'win32':
@@ -122,7 +122,7 @@ def main():
             result = subprocess.run(invocation, cwd=root, env=child_env, capture_output=True, text=True, timeout=30)
             require(result.returncode == code, f'Recovery exit status {result.returncode} differs from owned launcher {code}:\n'+result.stdout+result.stderr)
             require(record.is_file(), 'Recovery entry point did not invoke the adjacent native launcher')
-            value = json.loads(record.read_text())
+            value = json.loads(record.read_text(encoding='utf-8'))
             require(value['args'] == (['--self-test'] if self_test else []), 'Recovery arguments were changed or lost')
             require(os.path.normcase(str(Path(value['cwd']).resolve())) == os.path.normcase(str(package.resolve())), 'Recovery dispatched from another package directory')
             require(type(value['pid']) is int and value['pid'] > 0, 'No actual native process was executed')

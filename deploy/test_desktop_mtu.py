@@ -188,7 +188,7 @@ def windows(directory, shell):
         prefix += ['-STA']
     prefix += ['-ExecutionPolicy', 'Bypass', '-File', test]
     run(prefix)
-    source = helper.read_text()
+    source = helper.read_text(encoding='utf-8')
     mutations = {
         'session': ("if($State.Session-and($State.Session-cne$Session-or$State.Profile-cne$Profile))", 'if($false)'),
         'commit': ('$ID-and$Complete-and-not$Running-and-not$Waiting', '$ID-and$Complete-and-not$Running'),
@@ -201,7 +201,7 @@ def windows(directory, shell):
     for name, (before, after) in mutations.items():
         assert source.count(before) == 1, name
         path = directory/('windows-'+name+'.ps1')
-        path.write_text(source.replace(before, after))
+        path.write_text(source.replace(before, after), encoding='utf-8')
         run([*prefix, '-Source', path], expect_failure=True)
     for scenario in ('accepted', 'early', 'replaced'):
         with controller(scenario):
@@ -211,7 +211,7 @@ def windows(directory, shell):
 
 def linux(directory):
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'libcurl', 'json-glib-1.0'], text=True).split()
-    source = (ROOT/'client/linux/routervpn-mtu-v20.inc').read_text()
+    source = (ROOT/'client/linux/routervpn-mtu-v20.inc').read_text(encoding='utf-8')
     def build(name, extra=()):
         binary = directory/name
         run(['cc', '-std=c11', '-D_GNU_SOURCE', '-O1', '-g', '-Wall', '-Wextra', '-Werror', '-Wno-unused-function',
@@ -228,7 +228,7 @@ def linux(directory):
     }
     for name,(before,after) in mutations.items():
         assert source.count(before)==1,name
-        path=directory/('linux-'+name+'.inc');path.write_text(source.replace(before,after))
+        path=directory/('linux-'+name+'.inc');path.write_text(source.replace(before,after),encoding='utf-8')
         run(build('gtk-'+name, ['-DROUTERVPN_MTU_SOURCE="'+str(path)+'"']),expect_failure=True)
     live=build('gtk-live',['-DROUTERVPN_MTU_LIVE'])
     for scenario in ('accepted','early','replaced'):
@@ -239,18 +239,18 @@ def linux(directory):
 
 def integration(platform):
     if platform == 'windows':
-        launcher=(ROOT/'client/RouterVPN-Windows-App.ps1').read_text()
+        launcher=(ROOT/'client/RouterVPN-Windows-App.ps1').read_text(encoding='utf-8')
         assert "'RouterVPN-Windows-MTU.ps1'" in launcher and '$MTUSource=Get-Content -LiteralPath $MTUHelpers -Raw -Encoding UTF8' in launcher
         for file, count in [('RouterVPN-Windows-ProfileSettings.ps1',1),('RouterVPN-Windows-UnifiedShell.ps1',2),('RouterVPN-Windows-Telemetry.ps1',1)]:
-            source=(ROOT/'client'/file).read_text()
+            source=(ROOT/'client'/file).read_text(encoding='utf-8')
             assert source.count('Show-RouterVPNMTUDialog -BaseUrl $BaseUrl')==count,file
-        settings=(ROOT/'client/RouterVPN-Windows-ProfileSettings.ps1').read_text()
+        settings=(ROOT/'client/RouterVPN-Windows-ProfileSettings.ps1').read_text(encoding='utf-8')
         assert settings.index('Name="MtuRetest"')>settings.index('</StackPanel>\n<Button Name="MtuRetest"')
         assert "'/api/mtu/retest') -Method Post" not in settings
     else:
         for file, call in [('routervpn-gtk-product-v5.c','linux_mtu_dialog_v20((App *)data)'),('routervpn-unified-shell-v8.inc','linux_mtu_dialog_v20(((LinuxUnifiedV8 *)data)->app)'),('routervpn-performance-v17.inc','linux_mtu_dialog_v20(p->app)')]:
-            assert call in (ROOT/'client/linux'/file).read_text(),file
-        build=(ROOT/'client/linux/build-native-app.sh').read_text()
+            assert call in (ROOT/'client/linux'/file).read_text(encoding='utf-8'),file
+        build=(ROOT/'client/linux/build-native-app.sh').read_text(encoding='utf-8')
         assert '#include "routervpn-mtu-v20.inc"' in build and '"$MTU_INC"' in build
 
 
