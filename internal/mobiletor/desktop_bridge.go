@@ -50,6 +50,23 @@ type DesktopBridgeMetadata struct {
 	ConfiguredMTU    int              `json:"configured_mtu"`
 }
 
+// DesktopBridgeProof is the native child receipt. A control bootstrap status
+// alone cannot fill it: the native host must own the TUN readback and prove the
+// exact selected DNS plus the public Tor path before setting Healthy.
+type DesktopBridgeProof struct {
+	Schema         int                   `json:"schema"`
+	SessionID      string                `json:"session_id"`
+	SourceSHA256   string                `json:"source_sha256"`
+	ConfigSHA256   string                `json:"config_sha256"`
+	Policy         DesktopBridgeMetadata `json:"policy"`
+	Proof          Proof                 `json:"proof"`
+	InterfaceName  string                `json:"interface_name"`
+	InterfaceIndex int                   `json:"interface_index"`
+	EffectiveMTU   int                   `json:"effective_mtu"`
+	Healthy        bool                  `json:"healthy"`
+	HeartbeatAt    int64                 `json:"heartbeat_at"`
+}
+
 func (p *DesktopBridgePolicy) Config() string                  { return p.config }
 func (p *DesktopBridgePolicy) SourceSHA256() string            { return p.metadata.SourceSHA256 }
 func (p *DesktopBridgePolicy) Metadata() DesktopBridgeMetadata { return p.metadata }
@@ -103,7 +120,11 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 		return nil, err
 	}
 	root, tun, _, _ := torPredecessor("")
-	if targetOS != "darwin" {
+	if targetOS == "linux" {
+		// The strict desktop forwarding helper already owns this exact native
+		// alias. Do not widen its egress exception for a new Tor-only name.
+		tun["interface_name"] = "router-vpn"
+	} else if targetOS == "windows" {
 		tun["interface_name"] = "router-vpn-tor"
 	}
 	selected["tag"], selected["detour"] = profileDNS, ProfileOutboundTag
@@ -135,6 +156,14 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 		}
 	}
 	route["rules"] = rules
+	sourceBytes, _ := json.Marshal([]string{"routervpn-desktop-tor-policy-v1", source, sessionID, isolationSecret, targetOS})
+	sourceSHA := desktopDigest(sourceBytes)
+	// This exact Box service retires the native physical/PT generation on
+	// every network reset, including resets whose addresses are unchanged.
+	root["services"] = []any{map[string]any{
+		"type": "routervpn-desktop-tor-network", "tag": "routervpn-tor-physical",
+		"session_id": sessionID, "source_sha256": sourceSHA,
+	}}
 	encoded, err := json.Marshal(root)
 	if err != nil || len(encoded) > 4<<20 {
 		return nil, errors.New("desktop Tor configuration exceeds its bound")
@@ -158,9 +187,8 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	}
 	lan, _ := profile["home_lan_access"].(bool)
 	kill, _ := desktopBridgeKillPolicy(profile, plan)
-	sourceBytes, _ := json.Marshal([]string{"routervpn-desktop-tor-policy-v1", source, sessionID, isolationSecret, targetOS})
 	metadata := DesktopBridgeMetadata{
-		Schema: 1, NodeID: profileString(profile, "id"), SessionID: sessionID, SourceSHA256: desktopDigest(sourceBytes), ConfigSHA256: desktopDigest(encoded),
+		Schema: 1, NodeID: profileString(profile, "id"), SessionID: sessionID, SourceSHA256: sourceSHA, ConfigSHA256: desktopDigest(encoded),
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
 		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu,
 	}

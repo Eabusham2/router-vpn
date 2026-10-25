@@ -38,6 +38,11 @@ PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl')
+BOX_TEMPLATES = {
+    'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
+    'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
+    'tor_box_integration_test.go.tmpl': 'routervpn_desktop_tor_box_integration_test.go',
+}
 NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
 \tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
 \t\tfor _, owned := range manager.Services() {
@@ -132,6 +137,12 @@ def pt_copies():
         if path.is_symlink() or not raw.startswith(b'package routervpndesktoppt\n'):
             raise ValueError('Desktop PT adapter package boundary changed')
         content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
+    for name, relative in BOX_TEMPLATES.items():
+        path = ROOT/'mobile/desktop'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or not raw.startswith(b'package box\n'):
+            raise ValueError('Desktop Tor Box package boundary changed')
+        content[relative] = raw
     return content
 
 
@@ -187,7 +198,7 @@ def preflight_pt_files(vendor, content):
             raise ValueError('Desktop PT ownership record is invalid')
         previous = record['files']
         for relative, checksum in previous.items():
-            if not relative.startswith(PT_NAMESPACES) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+            if (not relative.startswith(PT_NAMESPACES) and relative not in BOX_TEMPLATES.values()) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
                 raise ValueError('Desktop PT cannot own unrelated native source')
             path = TOR.destination(vendor, relative)
             if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:

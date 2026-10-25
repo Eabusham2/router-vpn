@@ -85,6 +85,9 @@ class DesktopPTPreparation(unittest.TestCase):
         for name in PREP.PT_TEMPLATES:
             self.assertEqual((self.vendor/'routervpn/desktoppt'/name.removesuffix('.tmpl')).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
+        for name, relative in PREP.BOX_TEMPLATES.items():
+            self.assertEqual((self.vendor/relative).read_bytes(),
+                             (ROOT/'mobile/desktop'/name).read_bytes())
         for name in ('network.go', 'upstream.go'):
             self.assertEqual((self.vendor/'routervpn/desktoppt'/name).read_bytes(),
                              (ROOT/'mobile/toroutbound'/(name+'.tmpl')).read_bytes().replace(
@@ -213,6 +216,18 @@ class DesktopPTPreparation(unittest.TestCase):
             self.skipTest('Symlink creation unavailable on this host')
         self.rejected_without_writes('Linked')
         self.assertEqual(outside.read_text(), 'must remain unchanged\n')
+
+    def test_native_box_inputs_require_exact_owned_root_files(self):
+        self.prepare()
+        target = self.vendor/'routervpn_desktop_tor_box.go'
+        original = target.read_bytes()
+        target.write_bytes(original+b'\n// replaced native Box proof\n')
+        self.rejected_without_writes('changed desktop PT')
+        target.write_bytes(original)
+        self.prepare()
+        record = json.loads((self.vendor/PREP.PT_OWNER).read_bytes())
+        for relative in PREP.BOX_TEMPLATES.values():
+            self.assertEqual(record['files'][relative], hashlib.sha256((self.vendor/relative).read_bytes()).hexdigest())
 
     def test_wrong_core_namespace_type_and_root_alias_fail_without_writes(self):
         with patch.object(PREP.subprocess, 'check_output', return_value='different-native-core\n'):

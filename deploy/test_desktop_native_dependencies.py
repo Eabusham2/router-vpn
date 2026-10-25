@@ -370,8 +370,14 @@ class WindowsDependencyDelivery(unittest.TestCase):
                         builds.append((args, env.copy()))
                         raise CompilerBoundary()
                     if args[:2] == ['go', 'test']:
-                        self.assertIn('^TestRouterVPN(Desktop(External|MTU|DNS)|NodeMTU)', args)
-                        self.assertIn('./cmd/sing-box', args)
+                        package = args[args.index('-ldflags=-checklinkname=0')+1]
+                        expected = {
+                            './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS)|NodeMTU)',
+                            './routervpn/desktoppt': '^Test(RouterVPNDesktopTorPT|DesktopTorNetworkOwner)',
+                            '.': '^TestRouterVPNDesktopTor',
+                        }
+                        self.assertIn(package, expected)
+                        self.assertIn(expected[package], args)
                         return ''
                     self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])
                     return ''

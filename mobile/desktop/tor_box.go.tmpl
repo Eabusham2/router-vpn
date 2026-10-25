@@ -1,0 +1,457 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"runtime"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+type routerVPNDesktopTorTUN interface {
+	RouterVPNDesktopMTU(func() bool) (string, int, int, error)
+	RouterVPNDesktopMTUInterface() (string, int, int, error)
+}
+
+type routerVPNDesktopTorSession interface {
+	Metadata() mobiletor.DesktopBridgeMetadata
+	Configure(context.Context, map[string]string) error
+	EnableNetwork(context.Context) error
+	WaitBootstrap(context.Context) (mobiletor.Bootstrap, error)
+	Verify(context.Context) (mobiletor.Bootstrap, error)
+	Current() bool
+}
+
+// RouterVPNDesktopTor captures the already-started real Box and its one TUN,
+// resolver, isolated SOCKS outbound and physical generation. Tor itself stays a
+// separate child owned and joined by the desktop command. Closing this object
+// drains native PT/proof/DNS work; it does not stand in for Tor or Box teardown.
+type RouterVPNDesktopTor struct {
+	ctx                         context.Context
+	cancel                      context.CancelFunc
+	policy                      *mobiletor.DesktopBridgePolicy
+	engine                      *routerVPNExternalNativeEngine
+	network                     *routervpndesktoppt.NetworkOwner
+	pt                          *routervpndesktoppt.Owner
+	tun                         routerVPNDesktopTorTUN
+	name                        string
+	index, mtu                  int
+	mu                          sync.Mutex
+	startUsed, runUsed, closing bool
+	session                     routerVPNDesktopTorSession
+	proofNetwork                *mobiletor.Network
+	workers                     sync.WaitGroup
+	joined                      chan struct{}
+	joinOnce                    sync.Once
+	started                     atomic.Bool
+	proved                      atomic.Bool
+	retired                     atomic.Bool
+	dns                         *dnsmeasure.Service
+	activity                    routerVPNExternalActivity
+}
+
+// RouterVPNDesktopTorCreate is single-use for this exact service generation.
+// It cannot be called before native Started or against a similar configuration
+// with another policy/credential/TUN/service. No Tor networking is enabled here.
+func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (owner *RouterVPNDesktopTor, failure error) {
+	if s == nil || policy == nil || s.ctx == nil || s.ctx.Err() != nil || s.routerVPNTorOptions == "" || s.service == nil {
+		return nil, errors.New("desktop Tor requires its complete started native Box")
+	}
+	compiled, err := json.UnmarshalExtendedContext[option.Options](s.ctx, []byte(policy.Config()))
+	if err != nil || routerVPNCapturedOptions(s.ctx, compiled) != s.routerVPNTorOptions {
+		return nil, errors.New("desktop Tor source does not match the running native graph")
+	}
+	meta := policy.Metadata()
+	if meta.TargetOS != runtime.GOOS {
+		return nil, errors.New("desktop Tor policy belongs to another native operating system")
+	}
+	engine, err := s.routerVPNCapturedEngine("", meta.TUNTag, meta.FinalTag, "routervpn-tor-dns", compiled)
+	if err != nil || engine.Identity() == "" {
+		return nil, errors.New("desktop Tor native graph owners are unavailable")
+	}
+	raw, exists := s.service.Get(routervpndesktoppt.NetworkOwnerTag)
+	observer, ok := raw.(*routervpndesktoppt.NetworkOwner)
+	if !exists || !ok || observer == nil || !observer.Matches(meta.SessionID, meta.SourceSHA256) {
+		return nil, errors.New("desktop Tor physical observer differs from the captured session")
+	}
+	captured, err := observer.Activate(meta.SessionID, meta.SourceSHA256)
+	if err != nil {
+		return nil, err
+	}
+	defer func() {
+		if failure != nil {
+			_ = observer.Close()
+		}
+	}()
+	ctx, cancel := context.WithCancel(captured)
+	defer func() {
+		if failure != nil {
+			cancel()
+		}
+	}()
+	owner = &RouterVPNDesktopTor{ctx: ctx, cancel: cancel, policy: policy, engine: engine, network: observer, joined: make(chan struct{})}
+	tun, ok := engine.tun.(routerVPNDesktopTorTUN)
+	if !ok {
+		return nil, errors.New("desktop Tor TUN has no native interface readback")
+	}
+	name, index, mtu, err := tun.RouterVPNDesktopMTU(owner.currentNative)
+	if err != nil || name == "" || index < 1 || mtu != meta.ConfiguredMTU || meta.InterfaceName != "" && name != meta.InterfaceName {
+		return nil, errors.New("desktop Tor native interface does not match its selected MTU")
+	}
+	owner.tun, owner.name, owner.index, owner.mtu = tun, name, index, mtu
+	plan, err := policy.Plan()
+	if err != nil {
+		return nil, err
+	}
+	resolver := option.DomainResolveOptions{Server: meta.BootstrapDNSTag}
+	if meta.IPv6Mode == "off" {
+		resolver.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
+	}
+	owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+	if err != nil {
+		return nil, err
+	}
+	if !owner.currentNative() {
+		_ = owner.pt.Close(context.Background())
+		return nil, errors.New("desktop Tor native capture retired during admission")
+	}
+	return owner, nil
+}
+
+func (r *RouterVPNDesktopTor) currentNative() bool {
+	return r != nil && !r.retired.Load() && r.ctx != nil && r.ctx.Err() == nil && r.engine != nil && r.engine.Identity() != "" && r.network != nil && r.network.Current()
+}
+
+func (r *RouterVPNDesktopTor) Start(session *mobiletor.DesktopBridgeSession) error {
+	if session == nil {
+		return errors.New("desktop Tor requires the authenticated standalone child")
+	}
+	return r.start(session)
+}
+
+func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure error) {
+	if r == nil || session == nil {
+		return errors.New("desktop Tor native owner or child is unavailable")
+	}
+	r.mu.Lock()
+	if r.startUsed || r.closing || !r.currentNative() || session.Metadata() != r.policy.Metadata() {
+		r.mu.Unlock()
+		return errors.New("desktop Tor child does not belong to this unused native owner")
+	}
+	r.startUsed = true
+	r.session = session
+	r.workers.Add(1)
+	r.mu.Unlock()
+	defer r.workers.Done()
+	defer func() {
+		if failure != nil {
+			r.Cancel()
+		}
+	}()
+	if err := r.pt.Start(); err != nil {
+		return err
+	}
+	listeners, err := r.pt.Listeners()
+	if err != nil {
+		return err
+	}
+	if err = session.Configure(r.ctx, listeners); err != nil {
+		return err
+	}
+	if !r.currentNative() || !r.pt.Current() {
+		return errors.New("desktop Tor PT capture retired before network enable")
+	}
+	if err = session.EnableNetwork(r.ctx); err != nil {
+		return err
+	}
+	r.started.Store(true)
+	if !r.live() {
+		return errors.New("desktop Tor network enable completed after retirement")
+	}
+	return nil
+}
+
+func (r *RouterVPNDesktopTor) live() bool {
+	if !r.currentNative() || !r.started.Load() || r.pt == nil || !r.pt.Current() {
+		return false
+	}
+	// started publishes this immutable session after the sole Start call has
+	// finished. It is never replaced, including during Close.
+	session := r.session
+	return session != nil && session.Current()
+}
+
+func (r *RouterVPNDesktopTor) Run() (mobiletor.DesktopBridgeProof, error) {
+	return r.run(mobiletor.Prove)
+}
+
+// The private proof argument is only a test seam. Shipping callers always use
+// mobiletor.Prove with its fixed Tor Project origin and platform trust roots.
+func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)) (result mobiletor.DesktopBridgeProof, failure error) {
+	if r == nil || prove == nil {
+		return result, errors.New("desktop Tor proof owner is unavailable")
+	}
+	r.mu.Lock()
+	if r.runUsed || r.closing || !r.started.Load() {
+		r.mu.Unlock()
+		return result, errors.New("desktop Tor proof is unavailable or already used")
+	}
+	r.runUsed = true
+	session := r.session
+	r.workers.Add(1)
+	r.mu.Unlock()
+	defer r.workers.Done()
+	defer func() {
+		if failure != nil {
+			r.Cancel()
+		}
+	}()
+	ctx, cancel := context.WithTimeout(r.ctx, 3*time.Minute)
+	defer cancel()
+	if !r.live() {
+		return result, errors.New("desktop Tor proof belongs to a retired native graph")
+	}
+	if _, err := session.WaitBootstrap(ctx); err != nil {
+		return result, err
+	}
+	if !r.live() {
+		return result, errors.New("desktop Tor bootstrap finished after native retirement")
+	}
+	if err := r.engine.DNSProof(ctx, r.policy.Metadata().TUNTag); err != nil {
+		return result, err
+	}
+	if !r.live() {
+		return result, errors.New("desktop Tor selected DNS proof became stale")
+	}
+	proofNetwork, err := mobiletor.NewNetwork(ctx, r.proofDial, nil)
+	if err != nil {
+		return result, err
+	}
+	r.mu.Lock()
+	r.proofNetwork = proofNetwork
+	r.mu.Unlock()
+	defer func() {
+		// Keep the proof worker counted until every actual native socket and
+		// its close result is accounted for; timeout alone cannot release it.
+		if err := proofNetwork.Close(context.Background()); err != nil {
+			result, failure = mobiletor.DesktopBridgeProof{}, errors.New("desktop Tor proof socket cleanup is not confirmed")
+		}
+	}()
+	proof, err := prove(ctx, r.policy.Metadata().SessionID, proofNetwork.DialContext)
+	if err != nil || proof.SessionID != r.policy.Metadata().SessionID || !proof.IsTor || proof.CheckedAt.IsZero() {
+		return result, errors.New("desktop Tor did not prove its current public exit")
+	}
+	if _, err = session.Verify(ctx); err != nil {
+		return result, err
+	}
+	name, index, mtu, err := r.readback()
+	if err != nil || ctx.Err() != nil || !r.live() {
+		return result, errors.New("desktop Tor proof lost its captured native interface")
+	}
+	proof.DNSProven = true
+	meta := r.policy.Metadata()
+	r.proved.Store(true)
+	if !r.Healthy() {
+		return result, errors.New("desktop Tor proof completed after cancellation")
+	}
+	return mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta, Proof: proof,
+		InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
+}
+
+func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || address != "check.torproject.org:443" || !r.live() {
+		return nil, errors.New("desktop Tor proof attempted an unowned destination")
+	}
+	owner := r.engine.routes[r.policy.Metadata().FinalTag]
+	if owner == nil {
+		return nil, errors.New("desktop Tor final native SOCKS owner is unavailable")
+	}
+	connection, err := owner.DialContext(ctx, network, M.ParseSocksaddr(address))
+	if err != nil || ctx.Err() != nil || !r.live() {
+		return connection, errors.New("desktop Tor final dial failed or became stale")
+	}
+	return connection, nil
+}
+
+func (r *RouterVPNDesktopTor) readback() (string, int, int, error) {
+	if !r.currentNative() || r.tun == nil {
+		return "", 0, 0, errors.New("desktop Tor native interface retired")
+	}
+	name, index, mtu, err := r.tun.RouterVPNDesktopMTUInterface()
+	if err != nil || name != r.name || index != r.index || mtu != r.mtu || !r.currentNative() {
+		return "", 0, 0, errors.New("desktop Tor native interface identity or MTU changed")
+	}
+	return name, index, mtu, nil
+}
+
+func (r *RouterVPNDesktopTor) Healthy() bool { return r != nil && r.proved.Load() && r.live() }
+
+func (r *RouterVPNDesktopTor) VerifyCurrentPath(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || !r.Healthy() {
+		return errors.New("desktop Tor proof is retired")
+	}
+	r.mu.Lock()
+	session := r.session
+	r.mu.Unlock()
+	if _, err := session.Verify(ctx); err != nil {
+		r.Cancel()
+		return err
+	}
+	if _, _, _, err := r.readback(); err != nil || ctx.Err() != nil || !r.Healthy() {
+		r.Cancel()
+		return errors.New("desktop Tor path changed during verification")
+	}
+	return nil
+}
+
+func (r *RouterVPNDesktopTor) Cancel() {
+	if r != nil && r.retired.CompareAndSwap(false, true) {
+		r.proved.Store(false)
+		r.cancel()
+	}
+}
+
+// The command calls this only while retaining its Tor process and Box. A
+// timeout is not cleanup: retries continue waiting for the same owned workers.
+func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
+	if r == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("desktop Tor close requires a context")
+	}
+	r.mu.Lock()
+	r.closing = true
+	measurement := r.dns
+	r.mu.Unlock()
+	r.Cancel()
+	r.joinOnce.Do(func() { go func() { r.workers.Wait(); close(r.joined) }() })
+	select {
+	case <-r.joined:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	r.mu.Lock()
+	proofNetwork := r.proofNetwork
+	r.mu.Unlock()
+	if proofNetwork != nil {
+		if err := proofNetwork.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if measurement != nil {
+		// The service's bounded Close retains its workers and sockets on a
+		// timeout. Propagate that result so a later owner Close retries the
+		// same drain; the caller's expired context is never a cleanup receipt.
+		if err := measurement.Close(); err != nil {
+			return err
+		}
+	}
+	if r.pt != nil {
+		if err := r.pt.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if r.network != nil {
+		return r.network.Close()
+	}
+	return nil
+}
+
+func (r *RouterVPNDesktopTor) DNSMeasurement() (*dnsmeasure.Service, error) {
+	if r == nil || !r.Healthy() {
+		return nil, errors.New("desktop Tor DNS retest requires a current proved path")
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.closing || !r.currentNative() {
+		return nil, errors.New("desktop Tor DNS owner retired")
+	}
+	if r.dns != nil {
+		return r.dns, nil
+	}
+	meta := r.policy.Metadata()
+	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNS.Address, Port: meta.DNS.Port, Transport: meta.DNS.Transport, ServerName: meta.DNS.ServerName, Path: meta.DNS.Path, Route: meta.FinalTag, RouteLabel: "Selected DNS via captured Tor exit"}
+	engine := &routerVPNDesktopTorDNS{owner: r, ipv6: meta.IPv6Mode != "off"}
+	measurement, err := dnsmeasure.New(engine, dnsmeasure.Description{NodeID: meta.NodeID, SessionID: meta.SessionID, RouteLabel: "Current Tor connection", Selected: selected, IPv6Enabled: engine.ipv6})
+	if err != nil {
+		return nil, err
+	}
+	r.dns = measurement
+	return measurement, nil
+}
+
+type routerVPNDesktopTorDNS struct {
+	owner *RouterVPNDesktopTor
+	ipv6  bool
+}
+
+func (e *routerVPNDesktopTorDNS) Identity() string {
+	if e == nil || e.owner == nil || !e.owner.Healthy() {
+		return ""
+	}
+	return e.owner.engine.Identity() + ":desktop-tor-dns:" + e.owner.policy.Metadata().SessionID
+}
+func (e *routerVPNDesktopTorDNS) VerifyMeasurement(ctx context.Context) error {
+	return e.owner.VerifyCurrentPath(ctx)
+}
+func (e *routerVPNDesktopTorDNS) BeginMeasurement(parent context.Context) (context.Context, func(), error) {
+	if parent == nil || parent.Err() != nil || e.Identity() == "" {
+		return nil, nil, errors.New("desktop Tor DNS path retired")
+	}
+	release, err := e.owner.activity.beginMeasurement()
+	if err != nil {
+		return nil, nil, err
+	}
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(e.owner.ctx, cancel)
+	var once sync.Once
+	end := func() { once.Do(func() { stop(); cancel(); release() }) }
+	if ctx.Err() != nil || e.Identity() == "" {
+		end()
+		return nil, nil, errors.New("desktop Tor DNS admission became stale")
+	}
+	return ctx, end, nil
+}
+func (e *routerVPNDesktopTorDNS) Dial(ctx context.Context, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" || !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("desktop Tor DNS measurement destination or owner is unavailable")
+	}
+	host, _, _ := net.SplitHostPort(address)
+	ip, err := netip.ParseAddr(host)
+	if err != nil || ip.Is6() && !e.ipv6 {
+		return nil, errors.New("desktop Tor DNS measurement violates captured family policy")
+	}
+	owner := e.owner.engine.routes[e.owner.policy.Metadata().FinalTag]
+	if owner == nil {
+		return nil, errors.New("desktop Tor DNS final outbound is unavailable")
+	}
+	connection, err := owner.DialContext(ctx, "tcp", M.ParseSocksaddr(address))
+	if err != nil || ctx.Err() != nil || e.Identity() == "" {
+		return connection, errors.New("desktop Tor DNS dial failed or became stale")
+	}
+	return connection, nil
+}
+func (e *routerVPNDesktopTorDNS) SelectedDNS(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("desktop Tor selected DNS path retired")
+	}
+	if err := e.owner.engine.DNSProof(ctx, e.owner.policy.Metadata().TUNTag); err != nil {
+		return err
+	}
+	if e.Identity() == "" {
+		return errors.New("desktop Tor selected DNS proof became stale")
+	}
+	return nil
+}

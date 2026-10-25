@@ -1,0 +1,328 @@
+package box
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"net/netip"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/socks"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+)
+
+const desktopTorBoxSession = "0123456789abcdef0123456789abcdef"
+const desktopTorBoxIsolation = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+
+type desktopTorBoxTUN struct {
+	inbound.Adapter
+	mu                     sync.Mutex
+	name                   string
+	index, mtu             int
+	ready, claimed, closed bool
+	guard                  func() bool
+}
+
+func (t *desktopTorBoxTUN) Start(stage adapter.StartStage) error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if stage == adapter.StartStateStarted {
+		t.ready = true
+	}
+	return nil
+}
+func (t *desktopTorBoxTUN) Close() error {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.closed = true
+	t.ready = false
+	return nil
+}
+func (t *desktopTorBoxTUN) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || t.claimed || guard == nil || !guard() {
+		return "", 0, 0, errors.New("fixture TUN is not ready or already claimed")
+	}
+	t.claimed = true
+	t.guard = guard
+	return t.name, t.index, t.mtu, nil
+}
+func (t *desktopTorBoxTUN) RouterVPNDesktopMTUInterface() (string, int, int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if !t.ready || t.closed || !t.claimed || !t.guard() {
+		return "", 0, 0, errors.New("fixture TUN retired")
+	}
+	return t.name, t.index, t.mtu, nil
+}
+
+type desktopTorBoxChild struct {
+	meta       mobiletor.DesktopBridgeMetadata
+	active     atomic.Bool
+	configure  func(context.Context, map[string]string) error
+	enable     func(context.Context) error
+	bootstrap  func(context.Context) (mobiletor.Bootstrap, error)
+	verify     func(context.Context) (mobiletor.Bootstrap, error)
+	configured atomic.Int32
+}
+
+func (s *desktopTorBoxChild) Metadata() mobiletor.DesktopBridgeMetadata { return s.meta }
+func (s *desktopTorBoxChild) Current() bool                             { return s.active.Load() }
+func (s *desktopTorBoxChild) Configure(ctx context.Context, listeners map[string]string) error {
+	s.configured.Add(1)
+	if s.configure != nil {
+		return s.configure(ctx, listeners)
+	}
+	if len(listeners) != 1 || listeners["obfs4"] == "" {
+		return errors.New("native PT listener plan was not captured")
+	}
+	// Control exchanges are doubled here; the production public entry point
+	// accepts only the authenticated DesktopBridgeSession tested separately.
+	address, err := netip.ParseAddrPort(listeners["obfs4"])
+	if err != nil || !address.Addr().Is4() || !address.Addr().IsLoopback() || address.Port() == 0 {
+		return errors.New("PT configuration escaped the private native listener")
+	}
+	return ctx.Err()
+}
+func (s *desktopTorBoxChild) EnableNetwork(ctx context.Context) error {
+	if s.configure == nil && s.configured.Load() != 1 {
+		return errors.New("native child enabled without configure")
+	}
+	if s.enable != nil {
+		if err := s.enable(ctx); err != nil {
+			return err
+		}
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	s.active.Store(true)
+	return nil
+}
+func (s *desktopTorBoxChild) WaitBootstrap(ctx context.Context) (mobiletor.Bootstrap, error) {
+	if s.bootstrap != nil {
+		return s.bootstrap(ctx)
+	}
+	return s.Verify(ctx)
+}
+func (s *desktopTorBoxChild) Verify(ctx context.Context) (mobiletor.Bootstrap, error) {
+	if s.verify != nil {
+		return s.verify(ctx)
+	}
+	if ctx.Err() != nil || !s.active.Load() {
+		return mobiletor.Bootstrap{}, errors.New("fixture child retired")
+	}
+	return mobiletor.Bootstrap{Progress: 100, CircuitEstablished: true}, nil
+}
+
+type desktopTorBoxFixture struct {
+	box     *Box
+	policy  *mobiletor.DesktopBridgePolicy
+	options option.Options
+	ctx     context.Context
+	tun     *desktopTorBoxTUN
+	child   *desktopTorBoxChild
+	socks   *desktopTorBoxSOCKS
+}
+
+func newDesktopTorBoxFixture(t *testing.T, edit func(map[string]any)) *desktopTorBoxFixture {
+	t.Helper()
+	server := newDesktopTorBoxSOCKS(t)
+	_, portText, _ := net.SplitHostPort(server.listener.Addr().String())
+	port, _ := strconv.Atoi(portText)
+	profile := map[string]any{"id": "tor-fixture", "node_kind": "external", "external": map[string]any{"protocol": "tor-bridge", "tor_bridge": map[string]any{"transport": "obfs4", "socks_port": port, "bridges": []string{"obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=" + strings.Repeat("A", 70) + " iat-mode=0"}}},
+		"dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "9.9.9.9", "dns_port": 5353, "home_lan_access": false, "ipv6_mode": "off", "kill_switch_policy": "off", "mtu_policy": "manual", "manual_mtu": 1392}
+	if edit != nil {
+		edit(profile)
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	policy, err := mobiletor.NewDesktopBridgePolicy(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f := &desktopTorBoxFixture{policy: policy, socks: server, child: &desktopTorBoxChild{meta: policy.Metadata()}}
+	inbounds := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](inbounds, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		f.tun = &desktopTorBoxTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag), name: options.InterfaceName, index: 710, mtu: int(options.MTU)}
+		if f.tun.name == "" {
+			f.tun.name = "utun801"
+		}
+		return f.tun, nil
+	})
+	outbounds := outbound.NewRegistry()
+	socks.RegisterOutbound(outbounds)
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterTCP(dnsRegistry)
+	DNST.RegisterUDP(dnsRegistry)
+	DNST.RegisterTLS(dnsRegistry)
+	DNST.RegisterHTTPS(dnsRegistry)
+	services := boxService.NewRegistry()
+	routervpndesktoppt.RegisterNetworkOwner(services)
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = Context(ctx, inbounds, outbounds, endpoint.NewRegistry(), dnsRegistry, services, certificate.NewRegistry())
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(policy.Config()))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.ctx, f.options = ctx, options
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := f.box.Close(); err != nil {
+			t.Error("fixture Box failed to close", err)
+		}
+	})
+	return f
+}
+func (f *desktopTorBoxFixture) capture(t *testing.T) *RouterVPNDesktopTor {
+	t.Helper()
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := f.box.RouterVPNDesktopTorCreate(f.policy)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopTorBox(t, owner) })
+	return owner
+}
+func closeDesktopTorBox(t *testing.T, owner *RouterVPNDesktopTor) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := owner.Close(ctx); err != nil {
+		t.Error("native desktop Tor owner did not drain", err)
+	}
+}
+
+func TestRouterVPNDesktopTorBoxRequiresStartedExactNativeGraph(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, nil)
+	if owner, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil || owner != nil {
+		t.Fatal("unstarted Box granted desktop Tor ownership")
+	}
+	owner := f.capture(t)
+	if owner.Healthy() {
+		t.Fatal("capturing TUN/PT objects fabricated a connected path")
+	}
+	if service, err := owner.DNSMeasurement(); err == nil || service != nil {
+		t.Fatal("unproved path exposed DNS measurements")
+	}
+	if second, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil || second != nil {
+		t.Fatal("one physical generation granted two desktop Tor owners")
+	}
+	changed := strings.Replace(f.policy.Profile(), `"dns_port":5353`, `"dns_port":5354`, 1)
+	wrong, err := mobiletor.NewDesktopBridgePolicy(changed, desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := f.box.RouterVPNDesktopTorCreate(wrong); err == nil || second != nil {
+		t.Fatal("different DNS policy claimed the existing native Box")
+	}
+	if err := owner.Start(nil); err == nil {
+		t.Fatal("public native API accepted an unauthenticated Tor child")
+	}
+	wrongChild := &desktopTorBoxChild{meta: wrong.Metadata()}
+	if err := owner.start(wrongChild); err == nil || wrongChild.configured.Load() != 0 {
+		t.Fatal("wrong captured child reached control configuration")
+	}
+	if err := owner.start(f.child); err != nil {
+		t.Fatal(err)
+	}
+	if owner.Healthy() {
+		t.Fatal("successful control enable fabricated selected DNS/public exit proof")
+	}
+}
+
+func TestRouterVPNDesktopTorBoxRetiresOnSameFingerprintResetAndReaderChange(t *testing.T) {
+	for _, reason := range []string{"network", "reader-mtu", "reader-index", "parent"} {
+		t.Run(reason, func(t *testing.T) {
+			f := newDesktopTorBoxFixture(t, nil)
+			owner := f.capture(t)
+			if err := owner.start(f.child); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := owner.run(f.prover(t)); err != nil {
+				t.Fatal(err)
+			}
+			switch reason {
+			case "network":
+				manager := owner.engine.box.network
+				manager.ResetNetwork(f.ctx)
+			case "reader-mtu":
+				f.tun.mu.Lock()
+				f.tun.mtu++
+				f.tun.mu.Unlock()
+			case "reader-index":
+				f.tun.mu.Lock()
+				f.tun.index++
+				f.tun.mu.Unlock()
+			case "parent":
+				owner.cancel()
+			}
+			if err := owner.VerifyCurrentPath(context.Background()); err == nil {
+				t.Fatal("changed real native owner retained current proof")
+			}
+			if owner.Healthy() {
+				t.Fatal("retired proof survived its failed current-path verification")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorBoxCloseWaitsForCapturedStart(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, nil)
+	owner := f.capture(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	f.child.configure = func(context.Context, map[string]string) error { close(entered); <-release; return nil }
+	result := make(chan error, 1)
+	go func() { result <- owner.start(f.child) }()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("captured configuration did not start")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := owner.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("inflight control configuration was falsely drained", err)
+	}
+	once.Do(func() { close(release) })
+	if err := <-result; err == nil {
+		t.Fatal("late control configuration enabled a retired connection")
+	}
+	if f.child.Current() {
+		t.Fatal("canceled control configuration enabled Tor networking")
+	}
+	closeDesktopTorBox(t, owner)
+}

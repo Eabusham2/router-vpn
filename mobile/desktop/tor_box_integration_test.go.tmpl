@@ -1,0 +1,374 @@
+package box
+
+import (
+	"context"
+	"encoding/binary"
+	"encoding/json"
+	"errors"
+	"io"
+	"net"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Only the Tor daemon is a local protocol fixture. The Box, isolated native
+// SOCKS outbound, selected TCP DNS transport/router, PT package and reset
+// service are the actual prepared shipping implementations. No public address
+// or Tor exit is contacted by this fixture.
+type desktopTorBoxSOCKS struct {
+	listener     net.Listener
+	mu           sync.Mutex
+	closing      bool
+	connections  map[net.Conn]bool
+	workers      sync.WaitGroup
+	dnsCalls     atomic.Int32
+	proofCalls   atomic.Int32
+	badDNS       atomic.Bool
+	proofEntered chan struct{}
+	proofRelease chan struct{}
+	proofOnce    sync.Once
+}
+
+func newDesktopTorBoxSOCKS(t *testing.T) *desktopTorBoxSOCKS {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &desktopTorBoxSOCKS{listener: listener, connections: map[net.Conn]bool{}}
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			s.mu.Lock()
+			if s.closing {
+				s.mu.Unlock()
+				connection.Close()
+				return
+			}
+			s.connections[connection] = true
+			s.workers.Add(1)
+			s.mu.Unlock()
+			go func() {
+				defer s.workers.Done()
+				defer func() { connection.Close(); s.mu.Lock(); delete(s.connections, connection); s.mu.Unlock() }()
+				_ = s.serve(connection)
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		for connection := range s.connections {
+			_ = connection.Close()
+		}
+		s.mu.Unlock()
+		_ = listener.Close()
+		s.workers.Wait()
+	})
+	return s
+}
+func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
+	connection.SetDeadline(time.Now().Add(20 * time.Second))
+	var head [2]byte
+	if _, err := io.ReadFull(connection, head[:]); err != nil {
+		return err
+	}
+	if head[0] != 5 || head[1] == 0 {
+		return errors.New("native outbound omitted SOCKS5 methods")
+	}
+	methods := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(connection, methods); err != nil {
+		return err
+	}
+	auth := false
+	for _, method := range methods {
+		auth = auth || method == 2
+	}
+	if !auth {
+		return errors.New("native outbound omitted captured SOCKS isolation")
+	}
+	if _, err := connection.Write([]byte{5, 2}); err != nil {
+		return err
+	}
+	if _, err := io.ReadFull(connection, head[:]); err != nil {
+		return err
+	}
+	if head[0] != 1 {
+		return errors.New("native isolation auth version changed")
+	}
+	username := make([]byte, int(head[1]))
+	if _, err := io.ReadFull(connection, username); err != nil {
+		return err
+	}
+	var size [1]byte
+	if _, err := io.ReadFull(connection, size[:]); err != nil {
+		return err
+	}
+	password := make([]byte, int(size[0]))
+	if _, err := io.ReadFull(connection, password); err != nil {
+		return err
+	}
+	if string(username) != desktopTorBoxSession || string(password) != desktopTorBoxIsolation {
+		return errors.New("native outbound used another session isolation")
+	}
+	if _, err := connection.Write([]byte{1, 0}); err != nil {
+		return err
+	}
+	var command [4]byte
+	if _, err := io.ReadFull(connection, command[:]); err != nil {
+		return err
+	}
+	if command[0] != 5 || command[1] != 1 || command[2] != 0 {
+		return errors.New("native Tor requested an unsupported SOCKS operation")
+	}
+	var address string
+	switch command[3] {
+	case 1, 4:
+		count := 4
+		if command[3] == 4 {
+			count = 16
+		}
+		ip := make([]byte, count)
+		if _, err := io.ReadFull(connection, ip); err != nil {
+			return err
+		}
+		address = net.IP(ip).String()
+	case 3:
+		if _, err := io.ReadFull(connection, size[:]); err != nil {
+			return err
+		}
+		host := make([]byte, int(size[0]))
+		if _, err := io.ReadFull(connection, host); err != nil {
+			return err
+		}
+		address = string(host)
+	default:
+		return errors.New("native SOCKS target encoding changed")
+	}
+	var port [2]byte
+	if _, err := io.ReadFull(connection, port[:]); err != nil {
+		return err
+	}
+	target := net.JoinHostPort(address, strconv.Itoa(int(binary.BigEndian.Uint16(port[:]))))
+	if target != "check.torproject.org:443" && target != "9.9.9.9:5353" && !dnsmeasure.AllowedPublicAddress(target) {
+		return errors.New("native request escaped the fixture's frozen destinations")
+	}
+	if _, err := connection.Write([]byte{5, 0, 0, 1, 127, 0, 0, 1, 0, 1}); err != nil {
+		return err
+	}
+	if target == "check.torproject.org:443" {
+		s.proofCalls.Add(1)
+		if s.proofEntered != nil {
+			s.proofOnce.Do(func() { close(s.proofEntered) })
+			<-s.proofRelease
+		}
+		var request [1]byte
+		if _, err := io.ReadFull(connection, request[:]); err != nil {
+			return err
+		}
+		if request[0] != 42 {
+			// A real Run uses TLS. This intentionally untrusted plaintext peer
+			// cannot produce a successful public Tor proof accidentally.
+			_, err := connection.Write([]byte("not a TLS Tor proof\n"))
+			return err
+		}
+		_, err := connection.Write([]byte("captured native SOCKS path"))
+		return err
+	}
+	peer := &mDNS.Conn{Conn: connection}
+	for {
+		query, err := peer.ReadMsg()
+		if err != nil {
+			return err
+		}
+		s.dnsCalls.Add(1)
+		answer := new(mDNS.Msg)
+		answer.SetReply(query)
+		if s.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA {
+			answer.Rcode = mDNS.RcodeServerFailure
+		} else {
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+		}
+		if err := peer.WriteMsg(answer); err != nil {
+			return err
+		}
+	}
+}
+
+func (f *desktopTorBoxFixture) prover(t *testing.T) func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error) {
+	t.Helper()
+	return func(ctx context.Context, session string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
+		if session != desktopTorBoxSession {
+			return mobiletor.Proof{}, errors.New("public proof changed its captured session")
+		}
+		if f.socks.dnsCalls.Load() == 0 {
+			// Observe the ordering without implementing the production guard in
+			// this fixture. A skipped DNS proof must still reach the synthetic
+			// origin so the negative case can detect false Connected evidence.
+			t.Error("public proof preceded captured selected DNS")
+		}
+		connection, err := dial(ctx, "tcp", "check.torproject.org:443")
+		if err != nil {
+			return mobiletor.Proof{}, err
+		}
+		defer connection.Close()
+		if _, err := connection.Write([]byte{42}); err != nil {
+			return mobiletor.Proof{}, err
+		}
+		reply := make([]byte, len("captured native SOCKS path"))
+		if _, err := io.ReadFull(connection, reply); err != nil || string(reply) != "captured native SOCKS path" {
+			return mobiletor.Proof{}, errors.New("fixture did not traverse the actual native SOCKS outbound")
+		}
+		// This value doubles only the external HTTPS origin. It is reachable
+		// solely through the private test method; public Run keeps real TLS.
+		return mobiletor.Proof{SessionID: session, IP: "198.51.100.18", IsTor: true, CheckedAt: time.Now().UTC()}, nil
+	}
+}
+
+func TestRouterVPNDesktopTorNativeSOCKSDNSAndReceiptRemainCaptured(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, nil)
+	owner := f.capture(t)
+	if err := owner.start(f.child); err != nil {
+		t.Fatal(err)
+	}
+	receipt, err := owner.run(f.prover(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if receipt.Schema != 1 || receipt.SessionID != desktopTorBoxSession || receipt.SourceSHA256 != f.policy.SourceSHA256() || receipt.Policy != f.policy.Metadata() || receipt.ConfigSHA256 != receipt.Policy.ConfigSHA256 || receipt.InterfaceName != f.tun.name || receipt.InterfaceIndex != 710 || receipt.EffectiveMTU != 1392 || !receipt.Healthy || !receipt.Proof.DNSProven || !receipt.Proof.IsTor || f.socks.proofCalls.Load() != 1 || !owner.Healthy() {
+		t.Fatal("native receipt lost exact policy/path/readback", receipt)
+	}
+	if _, err := owner.run(f.prover(t)); err == nil {
+		t.Fatal("proof request reran and could adopt another path")
+	}
+	if err := owner.VerifyCurrentPath(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	measurement, err := owner.DNSMeasurement()
+	if err != nil {
+		t.Fatal(err)
+	}
+	before := f.socks.dnsCalls.Load()
+	request := strings.Repeat("c", 32)
+	if err := measurement.Start(request, "tcp"); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	var status dnsmeasure.Status
+	for time.Now().Before(deadline) {
+		if err := json.Unmarshal([]byte(measurement.StatusJSON()), &status); err != nil {
+			t.Fatal(err)
+		}
+		if status.Complete && status.Drained {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 13 {
+		t.Fatal("real native DNS retest did not finish", measurement.StatusJSON())
+	}
+	selected := status.Results[0]
+	if selected.Endpoint.ID != "selected" || selected.Endpoint.Port != 5353 || selected.Endpoint.Address != "9.9.9.9" || selected.Endpoint.Transport != "tcp" || !selected.Ready || selected.Samples != 3 || selected.Failed != 0 || selected.Median == nil || *selected.Median <= 0 {
+		t.Fatal("selected DNS retest changed its actual transport", selected)
+	}
+	if f.socks.dnsCalls.Load() < before+3 {
+		t.Fatal("selected DNS timing was served from cache")
+	}
+	if err := measurement.Close(); err != nil {
+		t.Fatal(err)
+	}
+	closeDesktopTorBox(t, owner)
+	if owner.Healthy() {
+		t.Fatal("closed owner retained a usable proof")
+	}
+}
+
+func TestRouterVPNDesktopTorNativeRejectsFailedDNSAndUntrustedPublicProof(t *testing.T) {
+	for _, kind := range []string{"dns", "public-tls", "late-proof"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newDesktopTorBoxFixture(t, nil)
+			owner := f.capture(t)
+			if err := owner.start(f.child); err != nil {
+				t.Fatal(err)
+			}
+			var result mobiletor.DesktopBridgeProof
+			var err error
+			switch kind {
+			case "dns":
+				f.socks.badDNS.Store(true)
+				result, err = owner.run(f.prover(t))
+			case "public-tls":
+				result, err = owner.Run()
+			case "late-proof":
+				result, err = owner.run(func(ctx context.Context, session string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
+					proof, err := f.prover(t)(ctx, session, dial)
+					owner.network.InterfaceUpdated(ctx)
+					return proof, err
+				})
+			}
+			if err == nil || result.Healthy || owner.Healthy() {
+				t.Fatal("failed or stale native path became Connected", result, err)
+			}
+			if kind == "dns" && f.socks.proofCalls.Load() != 0 {
+				t.Fatal("selected DNS failure silently used another resolver/public proof")
+			}
+			if service, err := owner.DNSMeasurement(); err == nil || service != nil {
+				t.Fatal("failed public proof gained DNS retest authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorNativeCloseRetainsInflightPublicProof(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, nil)
+	owner := f.capture(t)
+	if err := owner.start(f.child); err != nil {
+		t.Fatal(err)
+	}
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	done := make(chan error, 1)
+	go func() {
+		_, err := owner.run(func(ctx context.Context, session string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
+			connection, err := dial(ctx, "tcp", "check.torproject.org:443")
+			if err != nil {
+				return mobiletor.Proof{}, err
+			}
+			defer connection.Close()
+			close(entered)
+			<-release
+			return mobiletor.Proof{SessionID: session, IP: "198.51.100.18", IsTor: true, CheckedAt: time.Now()}, nil
+		})
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("public proof did not enter actual native outbound")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := owner.Close(ctx)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("inflight public proof was falsely acknowledged drained", err)
+	}
+	once.Do(func() { close(release) })
+	if err := <-done; err == nil {
+		t.Fatal("retired proof callback produced a successful receipt")
+	}
+	closeDesktopTorBox(t, owner)
+}

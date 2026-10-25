@@ -50,11 +50,19 @@ func TestDesktopBridgePolicyPreservesResolverDeviceAndStandaloneOwner(t *testing
 				if err != nil {
 					t.Fatal(err)
 				}
+				services, ok := graph["services"].([]any)
+				if !ok || len(services) != 1 {
+					t.Fatal("desktop Tor did not capture its native network-reset service")
+				}
+				observer, ok := services[0].(map[string]any)
+				if !ok || len(observer) != 4 || observer["type"] != "routervpn-desktop-tor-network" || observer["tag"] != "routervpn-tor-physical" || observer["session_id"] != meta.SessionID || observer["source_sha256"] != meta.SourceSHA256 {
+					t.Fatal("desktop Tor physical generation belongs to another session or source")
+				}
 				tun := graph["inbounds"].([]any)[0].(map[string]any)
 				if len(graph["inbounds"].([]any)) != 1 || tun["mtu"] != json.Number("1488") || tun["auto_route"] != true || tun["strict_route"] != true {
 					t.Fatal("desktop device policy lost its one real TUN")
 				}
-				if target == "darwin" && tun["interface_name"] != nil || target != "darwin" && tun["interface_name"] != "router-vpn-tor" {
+				if target == "darwin" && tun["interface_name"] != nil || target == "linux" && tun["interface_name"] != "router-vpn" || target == "windows" && tun["interface_name"] != "router-vpn-tor" {
 					t.Fatal("native interface selection changed")
 				}
 				out := torHostTagged(t, graph["outbounds"], ProfileOutboundTag)
