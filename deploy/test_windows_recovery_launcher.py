@@ -43,14 +43,59 @@ def run(command, **options):
     return result
 
 
-def generate(package):
+def package_bash(*, windows=None, which=shutil.which):
+    if windows is None:
+        windows = os.name == 'nt'
+    if not windows:
+        bash = which('bash')
+        require(bash is not None, 'Bash is required for the actual package writer')
+        return bash
+    # A bare bash.exe can be the Windows WSL launcher, even when Git for
+    # Windows is installed. Resolve only a shell in the selected Git install.
+    git = which('git')
+    require(git is not None, 'Git for Windows is required for the actual package writer')
+    root = Path(git).resolve().parent.parent
+    if root.name.lower() in ('mingw32', 'mingw64', 'clangarm64'):
+        root = root.parent
+    for bash in (root/'bin/bash.exe', root/'usr/bin/bash.exe'):
+        if bash.is_file():
+            return str(bash)
+    raise AssertionError('Git for Windows Bash is missing beside the selected Git executable: ' + git)
+
+
+def bash_resolution_contracts():
+    with tempfile.TemporaryDirectory(prefix='routervpn-recovery-bash-') as temporary:
+        root = Path(temporary)/'Git with spaces'
+        git = root/'cmd/git.exe'; git.parent.mkdir(parents=True); git.write_bytes(b'fixture')
+        shadow = Path(temporary)/'Windows/bash.exe'; shadow.parent.mkdir(); shadow.write_bytes(b'fixture')
+        looked_up = []
+        def lookup(name):
+            looked_up.append(name)
+            return str(git if name == 'git' else shadow)
+        for directory in ('bin', 'usr/bin'):
+            bash = root/directory/'bash.exe'; bash.parent.mkdir(parents=True); bash.write_bytes(b'fixture')
+            require(package_bash(windows=True, which=lookup) == str(bash), 'Did not select the explicit Git Bash')
+            bash.unlink()
+        # Existing WSL-style PATH entry cannot replace missing Git Bash.
+        for missing_git in (False, True):
+            try:
+                package_bash(windows=True, which=(lambda name: None if name == 'git' else str(shadow)) if missing_git else lookup)
+            except AssertionError:
+                pass
+            else:
+                raise AssertionError('Missing Git Bash incorrectly fell back to a Windows PATH shell')
+        require(looked_up == ['git'] * 3, 'Windows resolver consulted the ambiguous bare Bash')
+        print('Git Bash resolution: explicit install paths + missing Git/shell rejection PASS')
+
+
+def generate(package, bash):
     source = (ROOT/'deploy/package-builds.sh').read_text(encoding='utf-8')
     found = re.search(r"^write_windows_app_launcher\(\)\{.*?\nPS1\n\}", source, re.M | re.S)
     require(found is not None, 'Actual package recovery writer is missing')
     script = package/'Start-RouterVPN.ps1'
     # Execute only the real writer function. The package-building shell is not
     # sourced: it also removes/rebuilds dist, which is unrelated to this fixture.
-    run(['bash', '-c', found.group(0)+'\nwrite_windows_app_launcher "$1"\n', '--', script.as_posix()])
+    run([bash, '-c', found.group(0)+'\nwrite_windows_app_launcher "$1"\n', '--', script.as_posix()])
     require(script.is_file(), 'Actual package writer did not emit its recovery entry point')
     emitted = script.read_text(encoding='utf-8')
     for forbidden in ('/api/emergency-stop', 'Stop-Process', 'router-vpn-client.exe', 'HOMEVPN_CONTROLLER_OWNER'):
@@ -94,15 +139,17 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--shell', default='pwsh')
     args = parser.parse_args()
+    bash_resolution_contracts()
     audit_contracts()
     shell = shutil.which(args.shell)
     require(shell is not None, 'Required PowerShell executable is unavailable: '+args.shell)
-    require(shutil.which('go') is not None and shutil.which('bash') is not None, 'Go/Bash fixture compiler and package writer are required')
+    bash = package_bash()
+    require(shutil.which('go') is not None, 'Go fixture compiler is required')
     with tempfile.TemporaryDirectory(prefix='routervpn-recovery-dispatch-') as temporary:
         root = Path(temporary)
         package = root/'Package with spaces'/'RouterVPN-Windows-fixture'
         package.mkdir(parents=True)
-        script = generate(package)
+        script = generate(package, bash)
         source = root/'fixture.go'; source.write_text(FIXTURE, encoding='utf-8')
         executable = package/'RouterVPN.exe'
         command = ['go', 'build', '-trimpath']
