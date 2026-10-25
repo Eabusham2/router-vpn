@@ -20,27 +20,30 @@ private enum IOSUnifiedModeSelection {
 extension RouterVPNModel {
     var unifiedSelectedProfile: RouterProfile? {
         guard let bundle else { return nil }
-        return bundle.routerProfiles.first(where: { $0.id == bundle.selectedRouterID }) ?? bundle.routerProfiles.first
+        return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
     }
 
     var unifiedQuickKillSwitch: Bool {
         guard let p = unifiedSelectedProfile else { return false }
         if p.killSwitch == true { return true }
-        return (p.killSwitchPolicy ?? "off").lowercased() != "off"
+        let policy = (p.killSwitchPolicy ?? "off").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        return ["strict", "always", "enabled", "on", "lockdown"].contains(policy)
     }
 
     func setUnifiedQuickKillSwitch(_ enabled: Bool) {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing persistent kill-switch policy."; return }
         guard var current = bundle,
-              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
-              current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
-            message = "Select a Router VPN node before changing kill-switch policy."; return
+              !current.selectedRouterID.isEmpty,
+              let selected = IOSDNSRuntimePolicy.selectedProfile(in: current),
+              let index = current.routerProfiles.firstIndex(where: { $0.id == selected.id }),
+              selected.normalizedNodeKind == "router-vpn" || selectedExternalSupportedOnIOS else {
+            message = "Select one linked node with a native kill-switch runtime before changing its policy."; return
         }
         current.routerProfiles[index].killSwitch = enabled
         current.routerProfiles[index].killSwitchPolicy = enabled ? "on-connect" : "off"
         do {
             try importBundle(JSONEncoder().encode(current))
-            message = enabled ? "Kill switch enabled for the selected Router VPN node." : "Kill switch disabled for the selected Router VPN node."
+            message = enabled ? "Kill switch enabled for the selected node." : "Kill switch disabled for the selected node."
         } catch { message = "Kill-switch update failed: \(error.localizedDescription)" }
     }
 
