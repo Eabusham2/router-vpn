@@ -6,8 +6,11 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
+	"sync"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -312,7 +315,14 @@ func TestRouterVPNDesktopExternalPathMissingOrReplacedInputCannotPublishProof(t 
 
 func TestRouterVPNDesktopExternalPathRetiredDirectoryCannotReceiveOldReply(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
-	directory, f, _ := desktopPathMailbox(t, func() error { close(entered); <-release; return nil })
+	directory, f, owner := desktopPathMailbox(t, func() error { close(entered); <-release; return nil })
+	var releaseOnce sync.Once
+	releaseWorker := func() { releaseOnce.Do(func() { close(release) }) }
+	t.Cleanup(releaseWorker)
+	original, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	request := f.record.routerVPNDesktopPathRequest
 	request.Generation, request.Request = 1, strings.Repeat("b", 32)
 	desktopPathInput(t, directory, "path-request.json", request)
@@ -322,7 +332,40 @@ func TestRouterVPNDesktopExternalPathRetiredDirectoryCannotReceiveOldReply(t *te
 	<-entered
 	retired := directory + "-retired"
 	if err := os.Rename(directory, retired); err != nil {
-		t.Fatal(err)
+		// Windows may prevent replacement while os.Root owns this directory.
+		// Exercise that protection instead of releasing the captured handle to
+		// manufacture a replacement the running command could never encounter.
+		if runtime.GOOS != "windows" || !errors.Is(err, syscall.Errno(5)) && !errors.Is(err, syscall.Errno(32)) {
+			t.Fatal(err)
+		}
+		current, currentErr := os.Stat(directory)
+		held, heldErr := f.files.root.Stat(".")
+		if currentErr != nil || heldErr != nil || !os.SameFile(original, current) || !os.SameFile(original, held) {
+			t.Fatal("denied rename changed captured directory ownership", currentErr, heldErr)
+		}
+		if _, err := os.Lstat(retired); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("denied rename created a retired directory", err)
+		}
+		if err := os.Mkdir(directory, 0700); !errors.Is(err, os.ErrExist) {
+			t.Fatal("denied rename permitted a replacement directory", err)
+		}
+		releaseWorker()
+		if err := desktopPathFinish(t, f); err != nil {
+			t.Fatal(err)
+		}
+		record := desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Complete })
+		if record.routerVPNDesktopPathRequest != request || !record.Verified || record.Cancelled || record.CheckedAt == 0 || f.done != nil || len(f.inputs) != 0 || owner.calls.Load() != 1 {
+			t.Fatal("original worker did not drain to its exact captured reply", record)
+		}
+		if _, err := os.Stat(filepath.Join(directory, "path-request.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("original request was not retired", err)
+		}
+		current, currentErr = os.Stat(directory)
+		held, heldErr = f.files.root.Stat(".")
+		if currentErr != nil || heldErr != nil || !os.SameFile(original, current) || !os.SameFile(original, held) {
+			t.Fatal("completion lost captured directory ownership", currentErr, heldErr)
+		}
+		return
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(retired) })
 	if err := os.Mkdir(directory, 0700); err != nil {
@@ -332,7 +375,7 @@ func TestRouterVPNDesktopExternalPathRetiredDirectoryCannotReceiveOldReply(t *te
 	if err := os.WriteFile(filepath.Join(directory, "path-status.json"), foreign, 0600); err != nil {
 		t.Fatal(err)
 	}
-	close(release)
+	releaseWorker()
 	if err := desktopPathFinish(t, f); err != nil {
 		t.Fatal(err)
 	}

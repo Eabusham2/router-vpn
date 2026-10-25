@@ -749,7 +749,8 @@ struct ClientBundle: Codable {
     var modes: [VPNMode]
     var profiles: [String: [String: String]]
 
-    static let empty = ClientBundle(
+    // A new value for each caller avoids a shared non-Sendable model instance.
+    static var empty: ClientBundle { ClientBundle(
         bundleVersion: 4,
         profileSchemaVersion: 4,
         nodeProofID: "",
@@ -767,7 +768,7 @@ struct ClientBundle: Codable {
         logicalModes: [],
         modes: [],
         profiles: [:]
-    )
+    ) }
 
     enum CodingKeys: String, CodingKey {
         case bundleVersion, profileSchemaVersion, endpoint, apiToken, routerAPI, adGuardIPv4, adGuardIPv6

@@ -54,19 +54,8 @@ func (p *relayProcess) Stop(ctx context.Context) error {
 			if err != nil || pathErr != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(actual, current) {
 				return errors.New("owned relay directory identity changed")
 			}
-			directory, err := p.root.Open(".")
-			if err != nil {
+			if err := removeRelayRootContents(p.root); err != nil {
 				return errors.New("owned relay directory cleanup failed")
-			}
-			entries, readErr := directory.ReadDir(-1)
-			closeErr := directory.Close()
-			if readErr != nil || closeErr != nil {
-				return errors.New("owned relay directory cleanup failed")
-			}
-			for _, entry := range entries {
-				if err := p.root.RemoveAll(entry.Name()); err != nil {
-					return errors.New("owned relay directory cleanup failed")
-				}
 			}
 			current, pathErr = os.Lstat(p.dir)
 			if pathErr != nil || !os.SameFile(actual, current) || os.Remove(p.dir) != nil {
@@ -116,7 +105,7 @@ func (p *relayProcess) OpenVPNRemote(ctx context.Context) (nativeopenvpn.RemoteR
 	defer p.root.Remove(temporary)
 	written, writeErr := file.Write(raw)
 	closeErr := file.Close()
-	if writeErr != nil || written != len(raw) || closeErr != nil || p.root.Rename(temporary, "openvpn-query.json") != nil {
+	if writeErr != nil || written != len(raw) || closeErr != nil || renameRelayRootFile(p.root, temporary, "openvpn-query.json") != nil {
 		return nativeopenvpn.RemoteReceipt{}, bad
 	}
 	defer p.root.Remove("openvpn-query.json")

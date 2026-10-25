@@ -10,8 +10,10 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
+	"syscall"
 	"testing"
 	"time"
 
@@ -143,27 +145,54 @@ func TestDesktopExternalFreshPathDrainUsesOnlyCapturedDirectoryAndCloseAck(t *te
 	if desktopPathNativeClosed(launch) {
 		t.Fatal("missing native close acknowledgement was accepted")
 	}
+	original, err := os.Stat(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
 	retired := directory + "-retired"
-	if err := os.Rename(directory, retired); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(retired) })
-	if err := os.Mkdir(directory, 0700); err != nil {
-		t.Fatal(err)
-	}
+	ackDirectory := retired
+	renamed := true
 	foreign := []byte(`{"replacement":"untouched"}`)
-	if err := os.WriteFile(filepath.Join(directory, "path-status.json"), foreign, 0600); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := readDesktopPathRecord(launch); err == nil {
-		t.Fatal("renamed old result attested the replacement workspace")
+	if err := os.Rename(directory, retired); err != nil {
+		if runtime.GOOS != "windows" || !errors.Is(err, syscall.Errno(5)) && !errors.Is(err, syscall.Errno(32)) {
+			t.Fatal(err)
+		}
+		// An owned Windows directory can be non-renamable. Keep the live
+		// handle and verify both its identity and the original drain/close
+		// acknowledgements; do not skip or manufacture an unowned handle.
+		renamed, ackDirectory = false, directory
+		current, currentErr := os.Stat(directory)
+		held, heldErr := launch.directoryRoot.Stat(".")
+		if currentErr != nil || heldErr != nil || !os.SameFile(original, current) || !os.SameFile(original, held) {
+			t.Fatal("denied rename changed captured directory ownership", currentErr, heldErr)
+		}
+		if _, err := os.Lstat(retired); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("denied rename created a retired directory", err)
+		}
+		if err := os.Mkdir(directory, 0700); !errors.Is(err, os.ErrExist) {
+			t.Fatal("denied rename permitted a replacement directory", err)
+		}
+		if actual, err := readDesktopPathRecord(launch); err != nil || actual != record {
+			t.Fatal("original captured reply was lost", err)
+		}
+	} else {
+		t.Cleanup(func() { _ = os.RemoveAll(retired) })
+		if err := os.Mkdir(directory, 0700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(directory, "path-status.json"), foreign, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := readDesktopPathRecord(launch); err == nil {
+			t.Fatal("renamed old result attested the replacement workspace")
+		}
 	}
 	if drained, err := readDesktopPathDrainRecord(launch); err != nil || drained != record {
 		t.Fatal("exact old worker drain was lost", err)
 	}
 	closed := desktopExternalStop{Schema: 1, SessionID: strings.Repeat("f", 32), SourceSHA256: owner.expected.SourceSHA256, Closed: true}
 	raw, _ = json.Marshal(closed)
-	if err := os.WriteFile(filepath.Join(retired, "stopped.json"), raw, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(ackDirectory, "stopped.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if desktopPathNativeClosed(launch) {
@@ -171,14 +200,25 @@ func TestDesktopExternalFreshPathDrainUsesOnlyCapturedDirectoryAndCloseAck(t *te
 	}
 	closed.SessionID = owner.session
 	raw, _ = json.Marshal(closed)
-	if err := os.WriteFile(filepath.Join(retired, "stopped.json"), raw, 0600); err != nil {
+	if err := os.WriteFile(filepath.Join(ackDirectory, "stopped.json"), raw, 0600); err != nil {
 		t.Fatal(err)
 	}
 	if !desktopPathNativeClosed(launch) {
 		t.Fatal("captured native close did not establish worker drain")
 	}
-	if actual, _ := os.ReadFile(filepath.Join(directory, "path-status.json")); string(actual) != string(foreign) {
-		t.Fatal("cleanup acknowledgement changed replacement workspace")
+	if renamed {
+		if actual, _ := os.ReadFile(filepath.Join(directory, "path-status.json")); string(actual) != string(foreign) {
+			t.Fatal("cleanup acknowledgement changed replacement workspace")
+		}
+	} else {
+		current, currentErr := os.Stat(directory)
+		held, heldErr := launch.directoryRoot.Stat(".")
+		if currentErr != nil || heldErr != nil || !os.SameFile(original, current) || !os.SameFile(original, held) {
+			t.Fatal("drain acknowledgement lost captured directory ownership", currentErr, heldErr)
+		}
+		if actual, err := readDesktopPathDrainRecord(launch); err != nil || actual != record {
+			t.Fatal("close acknowledgement changed original captured reply", err)
+		}
 	}
 }
 

@@ -58,7 +58,7 @@ func testOpenVPNRemoteQuery(t *testing.T, p *relayProcess, base multihoprelay.Na
 						_, err = file.Write(raw)
 						_ = file.Close()
 						if err == nil {
-							err = p.root.Rename("response.tmp", "openvpn-remote.json")
+							err = renameRelayRootFile(p.root, "response.tmp", "openvpn-remote.json")
 						}
 					}
 					if err != nil {
