@@ -388,6 +388,16 @@ func prepareDesktopTorStop(a *app, command *exec.Cmd) error {
 	return requestDesktopTorStop(ctx, a, launch, command)
 }
 
+func observeDesktopTorDrain(readExited func() bool, readStopped func() (bool, error)) (closed, exited bool, err error) {
+	// The child publishes its terminal receipt before it exits. Sample the
+	// process first: otherwise a missing receipt followed by a newly completed
+	// process could combine observations from opposite sides of that publish.
+	// A receipt observed while this sample is still running remains pending.
+	exited = readExited()
+	closed, err = readStopped()
+	return
+}
+
 func requestDesktopTorStop(ctx context.Context, a *app, launch *desktopNodeLaunch, command *exec.Cmd) error {
 	if ctx == nil {
 		return errors.New("Tor teardown requires a bounded context")
@@ -420,11 +430,13 @@ func requestDesktopTorStop(ctx context.Context, a *app, launch *desktopNodeLaunc
 		if err := desktopTorStopOwner(a, launch, command); err != nil {
 			return err
 		}
-		closed, err := desktopTorStopped(launch)
+		closed, exited, err := observeDesktopTorDrain(
+			func() bool { return desktopNodeProcessExited(launch) },
+			func() (bool, error) { return desktopTorStopped(launch) },
+		)
 		if err != nil {
 			return err
 		}
-		exited := desktopNodeProcessExited(launch)
 		if closed && exited {
 			return desktopTorStopOwner(a, launch, command)
 		}
