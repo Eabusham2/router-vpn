@@ -37,9 +37,12 @@ retains them. Cancellation, failed proof, profile replacement and stale results
 roll back only their captured owner. Speed Lab captures the effective live MTU
 and the already-proved Local/Server execution; restoration reapplies that value
 and proves the original path without running another comparison. A mandatory
-Linux namespace job exercises actual kernel TUN replacement and rollback; the
-local container has no TUN device, so local controller/native tests alone do not
-establish that kernel gate or Windows/macOS device behavior.
+Linux namespace job exercises actual kernel TUN replacement and rollback. It
+passed with a real TUN on `3151083fc89b5670e98ad5a54c838425bb7a26ef` in
+[release job 121032185604](https://github.com/Eabusham2/router-vpn/actions/runs/40147557862/job/121032185604),
+including the same-name replacement and stale-owner cases. This verifies that
+kernel transaction on that source; it does not establish Windows/macOS physical
+networking or private-server performance.
 
 Windows, macOS and Linux Speed Lab now send explicit entry-mode and execution
 choices through their native forms to the real controller. Saved choices are
@@ -47,6 +50,12 @@ retained, and invalid choices cannot silently become a different path. macOS
 owns and cancels its loopback URLSession and rejects stale UI completions.
 Temporary tests restore the captured connection after traffic drains, while a
 newer user connection or Disconnect takes priority. See [SPEED-LAB.md](SPEED-LAB.md).
+
+Android temporary external tests also retain the selected Local/Server/Compare
+execution and exact saved entry mode. The actual dialog, unified controller,
+permission and restoration fixtures exercise the same captured request. The
+previous overload forced Local; `3151083f` fixes that path and requires the
+proved execution to remain unchanged through the test.
 
 The real pinned native OpenVPN fixture transfers encrypted TCP and UDP with
 Off, AES-256-GCM and AES-256-GCM plus XOR Start Layers. Wrong certificate,
@@ -63,6 +72,10 @@ Windows built-in `kill` alias collision, OpenVPN named dispatch and canonical
 cross-platform native source fingerprints. Commit `16070d14` gives the actual
 Linux action harness a valid selected-node fixture. These changes preserve
 negative controls; they do not replace physical-device or off-LAN acceptance.
+Commit `9b8fce03` publishes the paired OpenVPN, native desktop MTU and desktop
+Speed Lab changes. Commit `3151083f` also preserves PowerShell 5.1 JSON array
+semantics for native firewall exceptions and updates the OpenVPN workflow's
+helper-name guard without restoring the built-in alias collision.
 The successful `745b3e41` release predates this continuation and does not certify
 its packages. Exact-commit native packaging, release publication, private
 deployment and device acceptance require their own evidence.

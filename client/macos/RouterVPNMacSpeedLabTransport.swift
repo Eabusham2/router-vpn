@@ -55,26 +55,32 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         lock.lock()
+        guard !finished else { lock.unlock(); completionHandler(.cancel); return }
         status = (response as? HTTPURLResponse)?.statusCode ?? 0
         let oversized = response.expectedContentLength > Int64(Self.limit)
         if oversized { failure = NSError(domain: "RouterVPNSpeedLab", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speed Lab response exceeded its size limit."]) }
         lock.unlock()
         completionHandler(oversized ? .cancel : .allow)
-        // Explicit cancellation also drives the owned task's completion on
-        // Foundation implementations that leave a rejected response suspended.
-        if oversized { dataTask.cancel() }
+        // A rejected response already has a terminal result. Complete the
+        // captured owner once even if Foundation defers its cancellation event.
+        if oversized { finish(nil, cancelOwnedTask: true) }
     }
 
     func urlSession(_ session: URLSession, dataTask: URLSessionDataTask, didReceive bytes: Data) {
         lock.lock()
+        guard !finished else { lock.unlock(); return }
         let oversized = data.count > Self.limit - bytes.count
         if oversized { failure = NSError(domain: "RouterVPNSpeedLab", code: 2, userInfo: [NSLocalizedDescriptionKey: "Speed Lab response exceeded its size limit."]) }
         else { data.append(bytes) }
         lock.unlock()
-        if oversized { dataTask.cancel() }
+        if oversized { finish(nil, cancelOwnedTask: true) }
     }
 
     func urlSession(_ session: URLSession, task: URLSessionTask, didCompleteWithError error: Error?) {
+        finish(error, cancelOwnedTask: false)
+    }
+
+    private func finish(_ error: Error?, cancelOwnedTask: Bool) {
         lock.lock()
         guard !finished else { lock.unlock(); return }
         finished = true
@@ -82,9 +88,11 @@ final class RouterVPNMacSpeedLabTransport: NSObject, URLSessionDataDelegate, @un
         let response = data; data.removeAll(keepingCapacity: false)
         let explicitError = failure ?? error
         let code = status
+        let ownedTask = task; let ownedSession = session
         self.task = nil; self.session = nil
         lock.unlock()
-        session.finishTasksAndInvalidate()
+        if cancelOwnedTask { ownedTask?.cancel(); ownedSession?.invalidateAndCancel() }
+        else { ownedSession?.finishTasksAndInvalidate() }
         let result: Result<Data, Error>
         if let explicitError { result = .failure(explicitError) }
         else if !(200..<300).contains(code) {

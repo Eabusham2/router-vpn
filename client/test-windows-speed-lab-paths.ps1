@@ -1,7 +1,8 @@
 param([string]$Root = (Split-Path $PSScriptRoot -Parent), [Parameter(Mandatory=$true)][string]$Output)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-. (Join-Path $Root 'client/RouterVPN-Windows-SpeedLab.ps1')
+$ShellSource=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-SpeedLab.ps1')
+. ([ScriptBlock]::Create($ShellSource))
 $Source=Add-RouterVPNSpeedLabWindowsShell 'function ShowUnifiedPerformance{}'
 $Ast=[ScriptBlock]::Create($Source).Ast
 $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ne'ShowUnifiedSpeedLab'-and$N.Name-ne'ShowUnifiedPerformance'-and$N.Name-ne'ShowUnifiedAdvancedPerformance'},$true))
@@ -43,7 +44,7 @@ $Run=[pscustomobject]@{IsEnabled=$true};$Advanced=[pscustomobject]@{IsEnabled=$t
 $Fields=@{};foreach($Name in @('DAITA','Jumbo','Encrypted','Obfuscated')){$Fields[$Name]=[pscustomobject]@{IsChecked=$false;IsEnabled=$true}}
 $D=[pscustomobject]@{Tag='initial';Fields=$Fields};$D|Add-Member ScriptMethod FindName {param($Name)return $this.Fields[$Name]}
 $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
-$Opt=Get-Content -Raw -LiteralPath (Join-Path $Output 'speed-lab-options.json')|ConvertFrom-Json
+$Opt=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'speed-lab-options.json')|ConvertFrom-Json
 function Check([bool]$Condition,[string]$Message){if(-not$Condition){throw $Message}}
 function UnifiedAsyncBusy{return $false}
 function RefreshProduct{}
