@@ -73,6 +73,7 @@ class State:
         self.failures = []
         self.bodies = []
         self.last_stage = "idle"
+        self.response_history = []
 
     def view(self, stage="idle", complete=True, drained=True):
         self.last_stage = stage
@@ -109,6 +110,11 @@ def controller(scenario):
 
         def reply(self, code, value):
             raw = json.dumps(value).encode("utf-8")
+            status = value.get("status", {})
+            if code == 409:
+                state.response_history.append("error")
+            elif status.get("complete") is True and status.get("drained") is True and status.get("stage") == "cancelled":
+                state.response_history.append("drained")
             try:
                 self.send_response(code)
                 self.send_header("Content-Type", "application/json")
@@ -116,7 +122,7 @@ def controller(scenario):
                 self.send_header("Connection", "close")
                 self.end_headers()
                 self.wfile.write(raw)
-            except (BrokenPipeError, ConnectionResetError):
+            except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                 pass
 
         def do_GET(self):
@@ -263,6 +269,29 @@ Write-Host 'PASS: actual shipping Windows App/helper/Product/Unified DNS Retest 
     run([shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script, "-Root", ROOT])
 
 
+def run_live_case(command, scenario):
+    with controller(scenario) as (url, state):
+        run(command + ["-Live", "-Scenario", scenario, "-BaseUrl", url])
+        if scenario == "early-close":
+            time.sleep(0.5)
+        if state.failures:
+            raise AssertionError(f"{scenario}: {state.failures}")
+        if scenario in ("success", "tcp", "tls"):
+            if not state.saved or not state.selected or state.admitted != 1 or state.status_count != 2:
+                raise AssertionError(f"{scenario}: real measured Save contract was not exercised")
+        elif not state.cancelled or not state.cancel_count or state.last_stage != "cancelled":
+            raise AssertionError(f"{scenario}: exact native cancellation/drain was not exercised")
+        if scenario == "early-close" and state.admitted != 0:
+            raise AssertionError("Cancel tombstone did not reject delayed Start admission")
+        # Cancel and status are both valid receipt channels. Their scheduling
+        # order is not a native cleanup guarantee, especially under WPF. Require
+        # the deliberately unavailable reply followed by actual drain proof.
+        if scenario == "unavailable":
+            history = state.response_history
+            if "error" not in history or "drained" not in history or history.index("error") >= len(history) - 1 - history[::-1].index("drained"):
+                raise AssertionError("HTTP errors skipped the native drain receipt")
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--shell", default="pwsh")
@@ -298,21 +327,7 @@ def main():
             print("PASS: rejected broken " + name, flush=True)
         if not args.unit_only:
             for scenario in ("success", "tcp", "tls", "early-close", "owner-close", "draining", "unavailable", "replacement"):
-                with controller(scenario) as (url, state):
-                    run(command + ["-Live", "-Scenario", scenario, "-BaseUrl", url])
-                    if scenario == "early-close":
-                        time.sleep(0.5)
-                    if state.failures:
-                        raise AssertionError(f"{scenario}: {state.failures}")
-                    if scenario in ("success", "tcp", "tls"):
-                        if not state.saved or not state.selected or state.admitted != 1 or state.status_count != 2:
-                            raise AssertionError(f"{scenario}: real measured Save contract was not exercised")
-                    elif not state.cancelled or not state.cancel_count or state.last_stage != "cancelled":
-                        raise AssertionError(f"{scenario}: exact native cancellation/drain was not exercised")
-                    if scenario == "early-close" and state.admitted != 0:
-                        raise AssertionError("Cancel tombstone did not reject delayed Start admission")
-                    if scenario == "unavailable" and (state.cancel_count < 2 or state.poll_count < 3):
-                        raise AssertionError("HTTP errors skipped the native drain wait")
+                run_live_case(command, scenario)
     print("Windows shipping DNS measurements, resolver staging, explicit Save and drain ownership: PASS", flush=True)
 
 
