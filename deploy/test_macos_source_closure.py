@@ -46,6 +46,7 @@ def verify(text):
         ROOT / "client/macos/RouterVPNMacSpeedLabTransport.swift",
         ROOT / "client/macos/RouterVPNMacViaEntryCandidates.swift",
         ROOT / "client/macos/RouterVPNMacViaEntryPolicy.swift",
+        ROOT / "client/macos/RouterVPNMacDeviceSettings.swift",
     }
     if not required <= paths or any(not path.is_file() for path in paths):
         raise ValueError("A native external/path/measurement extension is absent from the actual compiler inputs")
@@ -65,11 +66,15 @@ class NativeSourceClosure(unittest.TestCase):
     def test_a_declared_but_uncompiled_extension_is_rejected(self):
         source = BUILDER.read_text()
         invocation = compiler_invocation(source)
-        self.assertIn('"$EXTERNAL_NODE_SRC"', invocation)
-        changed = source.replace(invocation, invocation.replace('"$EXTERNAL_NODE_SRC"', ''), 1)
-        self.assertIn('EXTERNAL_NODE_SRC="$ROOT/client/macos/RouterVPNMacExternalNode.swift"', changed)
-        with self.assertRaisesRegex(ValueError, "absent"):
-            verify(changed)
+        for variable, filename in (("EXTERNAL_NODE_SRC", "RouterVPNMacExternalNode.swift"),
+                                   ("DEVICE_SETTINGS_SRC", "RouterVPNMacDeviceSettings.swift")):
+            with self.subTest(extension=filename):
+                token = '"$'+variable+'"'
+                self.assertIn(token, invocation)
+                changed = source.replace(invocation, invocation.replace(token, ''), 1)
+                self.assertIn(variable+'="$ROOT/client/macos/'+filename+'"', changed)
+                with self.assertRaisesRegex(ValueError, "absent"):
+                    verify(changed)
 
     def test_duplicated_extension_is_rejected(self):
         source = BUILDER.read_text()

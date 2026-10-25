@@ -68,9 +68,11 @@ private struct MacProfileStartupSettings: Decodable, Sendable {
         guard !profileID.isEmpty, !profileToken.isEmpty else {
             throw NSError(domain: "RouterVPN.Settings", code: 3, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings to capture the selected node."])
         }
+        let displayedStartup = self.startupMode == "smart-auto" ? "auto" : self.startupMode
+        let savedStartup = startupMode == displayedStartup ? self.startupMode : startupMode
         return try JSONSerialization.data(withJSONObject: [
             "profile_id": profileID, "profile_token": profileToken,
-            "startup_mode": startupMode, "auto_connect": autoConnect
+            "startup_mode": savedStartup, "auto_connect": autoConnect
         ])
     }
 }
@@ -130,12 +132,36 @@ private func macApplyLoadedConnectionMode(_ root: [String: Any]) {
 
 private func macMutationBusy(_ api: ProductAPI) -> Bool {
     do {
-        let state = try api.json("/api/status", timeout: 4) as? [String: Any] ?? [:]
-        if state["connected"] as? Bool == true { return true }
-        let phase = (state["phase"] as? String ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return ["connecting", "starting", "checking", "trying", "proving", "disconnecting", "stopping", "switching", "reconnecting"].contains { phase.contains($0) }
+        try MacProfileDeviceSettings.requireIdle(api.request("/api/status", timeout: 4))
+        return false
     } catch {
         return true
+    }
+}
+
+private final class MacDevicePolicyControls: NSObject {
+    let mtu: NSPopUpButton
+    let manual: NSTextField
+    let startup: NSPopUpButton
+    let automatic: NSButton
+    let commonEditable: Bool
+    let startupEditable: Bool
+
+    init(mtu: NSPopUpButton, manual: NSTextField, startup: NSPopUpButton, automatic: NSButton,
+         commonEditable: Bool, startupEditable: Bool) {
+        self.mtu = mtu; self.manual = manual; self.startup = startup; self.automatic = automatic
+        self.commonEditable = commonEditable; self.startupEditable = startupEditable
+        super.init()
+        mtu.target = self; mtu.action = #selector(update)
+        startup.target = self; startup.action = #selector(update)
+        update()
+    }
+
+    @objc func update() {
+        manual.isEnabled = commonEditable && mtu.selectedItem?.representedObject as? String == "manual"
+        let stayDisconnected = startup.selectedItem?.representedObject as? String == "manual"
+        if stayDisconnected { automatic.state = .off }
+        automatic.isEnabled = startupEditable && !stayDisconnected
     }
 }
 
@@ -322,16 +348,43 @@ private final class MacConnectionProfileControls: NSObject {
 
 extension ProductWindowController {
     @objc func editProfileSettings() {
+        let displayedProfileID = routerPopup.selectedItem?.representedObject as? String ?? ""
+        let displayedNodeKind = (profiles.first(where: { ($0["id"] as? String) == displayedProfileID })?["node_kind"] as? String ?? "")
+            .trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         asyncAction {
-            let data = try? self.api.request("/api/profile/settings", timeout: 5)
+            // Route by the node the user opened. A changed controller selection
+            // cannot turn an external edit into the Router-only settings path.
+            let data: Data? = displayedNodeKind == "router-vpn" ? (try? self.api.request("/api/profile/settings", timeout: 5)) : nil
             let decoded = data.flatMap { try? JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: $0) }
             let supportsNodeSettings = decoded != nil
-            let startupData: Data? = supportsNodeSettings ? nil : (try? self.api.request("/api/profile/startup", timeout: 5))
+            let deviceData: Data? = displayedNodeKind == "external" ? (try? self.api.request("/api/profile/device", timeout: 5)) : nil
+            let capturedDevice = deviceData.flatMap { try? MacProfileDeviceSettings.capture($0, displayedProfileID: displayedProfileID) }
+            let supportsDeviceSettings = capturedDevice?.devicePolicySupported == true
+            let supportsCommonSettings = supportsNodeSettings || supportsDeviceSettings
+            // Unsupported protocols retain their separate startup transaction.
+            // Its source token is different from the device-plus-entry token.
+            let startupData: Data? = displayedNodeKind == "external" && !supportsDeviceSettings ? (try? self.api.request("/api/profile/startup", timeout: 5)) : nil
             let capturedStartup = startupData.flatMap { try? JSONDecoder().decode(MacProfileStartupSettings.self, from: $0) }
-            let externalStartup = capturedStartup?.nodeKind == "external" ? capturedStartup : nil
-            let supportsStartupSettings = supportsNodeSettings || externalStartup != nil
+            let externalStartup = capturedStartup?.nodeKind == "external" && capturedStartup?.profileID == displayedProfileID &&
+                MacProfileDeviceSettings.validToken(capturedStartup?.profileToken ?? "") &&
+                ["auto", "smart-auto", "last", "manual"].contains(capturedStartup?.startupMode ?? "") ? capturedStartup : nil
+            let supportsStartupSettings = supportsCommonSettings || externalStartup != nil
+            let importedSettings = supportsDeviceSettings || externalStartup != nil
             let settingsMutationBusy = macMutationBusy(self.api)
             var settings = decoded ?? .unavailableDefaults
+            if let capturedDevice {
+                settings.homeLANAccess = capturedDevice.homeLANAccess
+                settings.killSwitchPolicy = capturedDevice.killSwitchPolicy
+                settings.ipv6Mode = capturedDevice.ipv6Mode
+                settings.mtuPolicy = capturedDevice.mtuPolicy
+                settings.manualMTU = capturedDevice.manualMTU
+                settings.effectiveMTU = capturedDevice.effectiveMTU
+                settings.effectiveMTUSource = capturedDevice.mtuSource
+                if supportsDeviceSettings {
+                    settings.startupMode = capturedDevice.displayedStartup
+                    settings.autoConnect = capturedDevice.autoConnect
+                }
+            }
             if let externalStartup {
                 settings.startupMode = externalStartup.startupMode == "smart-auto" ? "auto" : externalStartup.startupMode
                 settings.autoConnect = externalStartup.autoConnect
@@ -339,8 +392,13 @@ extension ProductWindowController {
             let semaphore = DispatchSemaphore(value: 0)
             var save = false
             var validationError = ""
+            var deviceEdits: MacProfileDeviceSettings.Edits?
 
             DispatchQueue.main.async {
+                defer { semaphore.signal() }
+                guard (self.routerPopup.selectedItem?.representedObject as? String ?? "") == displayedProfileID else {
+                    validationError = "The selected node changed while Settings loaded. Reopen Settings."; return
+                }
                 let alert = NSAlert()
                 alert.messageText = "Settings"
                 if supportsStartupSettings && settingsMutationBusy {
@@ -348,9 +406,11 @@ extension ProductWindowController {
                 } else {
                     alert.informativeText = supportsNodeSettings
                         ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
-                        : externalStartup != nil
-                            ? "Startup for the selected imported node. Saved connection uses its protocol and hop settings. Last keeps a still-valid proved Local/Server choice."
-                            : "Node settings are unavailable. Connection-profile Add / Load / Update / Delete remains available."
+                        : supportsDeviceSettings
+                            ? "Common device and startup settings for the captured imported node. DNS, independent entry policy, credentials and saved graph are retained. Fixed MTU is a requested interface value; Retest measures the active path."
+                            : externalStartup != nil
+                                ? "Startup for the selected imported node. Saved connection uses its protocol and hop settings. Last keeps a still-valid proved Local/Server choice. \(capturedDevice?.devicePolicyReason ?? "Common device settings are unavailable for this runtime.")"
+                                : "Node settings are unavailable. Connection-profile Add / Load / Update / Delete remains available."
                 }
                 alert.addButton(withTitle: supportsStartupSettings ? "Save" : "Close")
                 alert.addButton(withTitle: "Cancel")
@@ -385,14 +445,14 @@ extension ProductWindowController {
                 let startLayerNote = NSTextField(wrappingLabelWithString: "AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR only whitens already-authenticated ciphertext and is never counted as encryption. Unsupported graphs fail closed.")
                 startLayerNote.textColor = .secondaryLabelColor; startLayerNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(startLayerNote)
                 let mtu = popup("MTU", values: [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
-                let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: "Fixed MTU 576–9000"))
+                let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: capturedDevice != nil ? "Fixed MTU 1280–9000" : "Fixed MTU 576–9000"))
                 let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
-                let effective = NSTextField(wrappingLabelWithString: "Effective MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not measured yet") • \(settings.effectiveMTUSource ?? "Auto will test/use a valid path-specific value")")
+                let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not measured yet") • \(settings.effectiveMTUSource ?? "Retest the active path for a fresh measurement")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
                 let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
                 let jumbo = check("Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
-                let startupValues = externalStartup != nil
+                let startupValues = importedSettings
                     ? [("Saved connection","auto"),("Last proven connection","last"),("Manual / stay disconnected","manual")]
                     : [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
                 let startup = popup("Default mode on startup", values: startupValues, selected: settings.startupMode)
@@ -402,16 +462,23 @@ extension ProductWindowController {
 
                 let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
                 form.addArrangedSubview(connectionProfiles.root)
-                let nodePreferenceViews: [NSControl] = [lan, kill, ipv6, base, fallback, autoEncrypted, autoObfuscated, startLayer, mtu, manual, daita, jumbo, socks, startup, auto, forwarding, retest]
-                if !supportsNodeSettings || settingsMutationBusy {
-                    nodePreferenceViews.forEach { $0.isEnabled = false }
-                }
+                let routerPreferenceViews: [NSControl] = [base, fallback, autoEncrypted, autoObfuscated, startLayer, daita, jumbo, socks, forwarding]
+                routerPreferenceViews.forEach { $0.isEnabled = supportsNodeSettings && !settingsMutationBusy }
+                let commonPreferenceViews: [NSControl] = [lan, kill, ipv6, mtu]
+                commonPreferenceViews.forEach { $0.isEnabled = supportsCommonSettings && !settingsMutationBusy }
                 startup.isEnabled = supportsStartupSettings && !settingsMutationBusy
-                auto.isEnabled = supportsStartupSettings && !settingsMutationBusy
+                retest.isEnabled = supportsNodeSettings && !settingsMutationBusy
+                let policyControls = MacDevicePolicyControls(mtu: mtu, manual: manual, startup: startup, automatic: auto,
+                    commonEditable: supportsCommonSettings && !settingsMutationBusy,
+                    startupEditable: supportsStartupSettings && !settingsMutationBusy)
                 if supportsStartupSettings && settingsMutationBusy { alert.buttons.first?.isEnabled = false }
 
                 alert.accessoryView = form
-                if alert.runModal() == .alertFirstButtonReturn && supportsStartupSettings && !settingsMutationBusy {
+                let response = withExtendedLifetime((connectionProfiles, policyControls)) { alert.runModal() }
+                if response == .alertFirstButtonReturn && supportsStartupSettings && !settingsMutationBusy {
+                    guard (self.routerPopup.selectedItem?.representedObject as? String ?? "") == displayedProfileID else {
+                        validationError = "The selected node changed before Save. Reopen Settings."; return
+                    }
                     settings.homeLANAccess = lan.state == .on
                     settings.killSwitchPolicy = (kill.selectedItem?.representedObject as? String) ?? "off"
                     settings.ipv6Mode = (ipv6.selectedItem?.representedObject as? String) ?? "on"
@@ -429,18 +496,37 @@ extension ProductWindowController {
                     settings.socksEnabled = socks.state == .on
                     settings.startupMode = (startup.selectedItem?.representedObject as? String) ?? "smart-auto"
                     settings.autoConnect = auto.state == .on
+                    if let capturedDevice, supportsDeviceSettings {
+                        let edits = MacProfileDeviceSettings.Edits(homeLANAccess: settings.homeLANAccess,
+                            killSwitchPolicy: settings.killSwitchPolicy, ipv6Mode: settings.ipv6Mode,
+                            mtuPolicy: settings.mtuPolicy, manualMTUText: manual.stringValue,
+                            startupMode: settings.startupMode, autoConnect: settings.autoConnect)
+                        do { _ = try capturedDevice.saveData(displayedProfileID: displayedProfileID, edits: edits); deviceEdits = edits }
+                        catch { validationError = error.localizedDescription }
+                    }
                     save = validationError.isEmpty
                 }
-                _ = connectionProfiles
-                semaphore.signal()
             }
 
             semaphore.wait()
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
             if !supportsStartupSettings { return "Connection profile manager closed; node settings are unchanged." }
             if !save { return settingsMutationBusy ? "Settings locked until Router VPN is fully disconnected." : "Settings unchanged." }
+            if let capturedDevice, supportsDeviceSettings, let deviceEdits {
+                try capturedDevice.save(edits: deviceEdits, displayedProfileID: {
+                    var current = ""
+                    DispatchQueue.main.sync { current = self.routerPopup.selectedItem?.representedObject as? String ?? "" }
+                    return current
+                }, readStatus: { try self.api.request("/api/status", timeout: 4) }, persist: {
+                    try self.api.requestRaw("/api/profile/device", body: $0, timeout: 8)
+                })
+                return "Device and startup settings saved for the captured imported node. The next connection will prove the selected policy."
+            }
             if macMutationBusy(self.api) { throw NSError(domain: "RouterVPN.Settings", code: 2, userInfo: [NSLocalizedDescriptionKey: "VPN became active or began transitioning before settings save; disconnect and try again."]) }
             if let externalStartup {
+                var current = ""
+                DispatchQueue.main.sync { current = self.routerPopup.selectedItem?.representedObject as? String ?? "" }
+                guard current == displayedProfileID else { throw MacProfileDeviceSettings.issue("The selected node changed before startup Save.") }
                 let payload = try externalStartup.saveData(startupMode: settings.startupMode, autoConnect: settings.autoConnect)
                 _ = try self.api.requestRaw("/api/profile/startup", body: payload, timeout: 8)
                 return "Startup settings saved for this imported node."
@@ -457,4 +543,7 @@ extension ProductWindowController {
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses
 // /api/connection-profiles + setup save/update/load/delete and never duplicates node secrets.
+// Imported common policy uses the captured /api/profile/device transaction; its
+// optional startup pair is sent only when edited. Unsupported device runtimes
+// retain the separately captured startup-only token and route.
 // Connection-profile mutation and persistent Settings Save both fail closed while controller status is connected/transitioning or unavailable.
