@@ -27,6 +27,7 @@ jobs:
             'client/native-windows-mode.ps1',
             'client/Optimize-RouterVPN-MTU.ps1',
             'client/RouterVPN-Windows-MTU.ps1',
+            'client/RouterVPN-Windows-DNSMeasurement.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
             'client/test-private-router-vpn-state.ps1',
@@ -93,6 +94,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 compact DNS regressions failed' }
           python deploy/test_desktop_quick_dns.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 compact DNS regressions failed' }
+      - name: Native DNS measurements, measured drafts and exact worker drain
+        shell: pwsh
+        run: |
+          python deploy/test_windows_dns_measurement.py --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 native DNS ownership regressions failed' }
+          python deploy/test_windows_dns_measurement.py --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 native DNS ownership regressions failed' }
       - name: Tor helper test cleanup regressions
         shell: pwsh
         run: |
