@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Shipping-chain guard; behavioral parsing lives in mobile/*_test.go."""
 from pathlib import Path
+import re
 import subprocess
 import sys
 
@@ -10,6 +11,85 @@ def need(path, *markers):
     for marker in markers:
         assert marker in text, f"{path}: missing shipping OpenVPN connection {marker!r}"
     return text
+
+
+def swift_member(source, signature):
+    start = source.index(signature)
+    end = source.index('{', start) + 1
+    depth = 1
+    while depth:
+        if source[end] == '{': depth += 1
+        if source[end] == '}': depth -= 1
+        end += 1
+    return source[start:end]
+
+
+def external_preparation_contract(source):
+    body = swift_member(source, 'func connectSelectedExternal(startupAdmission:')
+    launch = body.index('try manager.connection.startVPNTunnel(options: options)')
+    preparation = body[:launch]
+    revalidate = 'try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)'
+    awaits = list(re.finditer(r'try await (NETunnelProviderManager|manager)\.(loadAllFromPreferences|saveToPreferences|loadFromPreferences)\(\)', preparation))
+    assert awaits and awaits[0].group(2) == 'loadAllFromPreferences', 'external startup must first capture its owned manager'
+    initial = preparation[awaits[0].end():preparation.index('let proto = NETunnelProviderProtocol()')]
+    ordered = ['guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled',
+               'guard managers.count <= 1', 'let manager = managers.first ?? NETunnelProviderManager()', revalidate]
+    positions = [initial.index(item) for item in ordered]
+    assert positions == sorted(positions), 'manager selection must retain generation and source ownership before configuration'
+    assert {'saveToPreferences', 'loadFromPreferences'}.issubset({item.group(2) for item in awaits}), 'external preferences must be saved and read back'
+    for awaited in awaits[1:]:
+        assert preparation[awaited.end():].lstrip().startswith(revalidate), f'{awaited.group(2)} must immediately revalidate the captured source after its await'
+    startup = swift_member(preparation, 'if startupAdmission != nil')
+    assert startup.index('let available = try await NETunnelProviderManager.loadAllFromPreferences()') < startup.index(revalidate) < startup.index('guard available.allSatisfy'), 'startup manager refresh must revalidate ownership before checking other VPNs'
+    assert '$0.connection.status == .disconnected || $0.connection.status == .invalid' in startup
+    saved = preparation[preparation.index('guard let saved ='):]
+    for marker in ['saved.providerConfiguration?["bundle"] as? Data == encodedBundle',
+                   'saved.providerConfiguration?[entryBundleKey] as? Data == capturedEntry',
+                   'saved.includeAllNetworks == strict, saved.enforceRoutes == strict',
+                   'manager.isEnabled, manager.isOnDemandEnabled == strict']:
+        assert marker in saved, 'the native launch must retain exact preference and protection readback'
+    owner = swift_member(source, 'private func requireExternalPreparation(')
+    for marker in ['try Task.checkCancellation()', 'iosConnectGeneration == generation, !iosUserDisconnectInProgress',
+                   'current.selectedRouterID == source.selectedRouterID',
+                   'current.routerProfiles == source.routerProfiles, current.profiles == source.profiles',
+                   'guard try externalTorEntryData(source: source) == entry',
+                   'manager.connection.status == .disconnected || manager.connection.status == .invalid']:
+        assert marker in owner, 'external preparation lost captured ownership: ' + marker
+
+
+def check_preparation_controls(source):
+    external_preparation_contract(source)
+    guard = 'try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)'
+    mutants = []
+    for call in ['try await manager.saveToPreferences()', 'try await manager.loadFromPreferences()',
+                 'let available = try await NETunnelProviderManager.loadAllFromPreferences()']:
+        expression = re.compile(re.escape(call) + r'(\s*)' + re.escape(guard))
+        assert len(expression.findall(source)) == 1, 'preference mutation anchor drifted: ' + call
+        mutants.append(expression.sub(lambda match: call + match.group(1), source, count=1))
+        mutants.append(expression.sub(lambda match: guard + match.group(1) + call, source, count=1))
+    for original, replacement in [('try Task.checkCancellation()', '/* cancellation check removed */'),
+                     ('iosConnectGeneration == generation, !iosUserDisconnectInProgress', 'true'),
+                     ('current.selectedRouterID == source.selectedRouterID', 'true'),
+                     ('current.routerProfiles == source.routerProfiles, current.profiles == source.profiles', 'true'),
+                     ('guard try externalTorEntryData(source: source) == entry', 'guard true')]:
+        owner = swift_member(source, 'private func requireExternalPreparation(')
+        assert owner.count(original) == 1, original
+        mutants.append(source.replace(owner, owner.replace(original, replacement, 1), 1))
+    for original, replacement in [
+        ('let manager = managers.first ?? NETunnelProviderManager()\n            ' + guard, 'let manager = managers.first ?? NETunnelProviderManager()'),
+        ('guard managers.count <= 1', 'guard true'),
+        ('saved.providerConfiguration?["bundle"] as? Data == encodedBundle', 'true'),
+        ('guard available.allSatisfy', 'guard available.contains'),
+    ]:
+        assert source.count(original) == 1, original
+        mutants.append(source.replace(original, replacement, 1))
+    for mutant in mutants:
+        try:
+            external_preparation_contract(mutant)
+        except (AssertionError, ValueError):
+            continue
+        raise AssertionError('external preparation gate accepted a missing or reordered ownership guard')
+    print(f'Apple external preference ownership/order gate: PASS ({len(mutants)} defect mutations rejected)')
 
 need('mobile/routervpn_openvpn.go', 'func RouterOpenVPNEndpoint(', 'return nativeopenvpn.CompileEndpoint(config, username, password, tag, detour)')
 need('internal/nativeopenvpn/profile.go', 'func CompileEndpoint(', '"openvpn-client"', '"system": false', '"remote_certificate_tls": "server"', 'netip.ParseAddr', 'file references are never read')
@@ -24,7 +104,7 @@ for path in ('ios/RouterVPN/App/IOSExternalNodeBuilderView.swift', 'ios/RouterVP
     need(path, 'LibboxRouterOpenVPNEndpoint', 'openvpn-client', '"system"] as? Bool == false')
 need('ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift', 'startExternalLibbox', 'proveExternalExit', 'expectedPublicIP: runtime.expectedPublicIP')
 model=need('ios/RouterVPN/App/RouterVPNModelExternal.swift', '.loadAllFromPreferences().filter', 'managers.count <= 1', 'private func requireExternalPreparation(', 'current.selectedRouterID == source.selectedRouterID', 'current.routerProfiles == source.routerProfiles, current.profiles == source.profiles', 'guard try externalTorEntryData(source: source) == entry', 'saved.providerConfiguration?["bundle"] as? Data == encodedBundle', 'exact public-exit proof')
-assert model.count('try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)') == 3, 'external preparation must revalidate the captured source after each preferences await'
+check_preparation_controls(model)
 need('android/app/src/main/java/com/eabusham/routervpn/AndroidOpenVPN.java', 'Libbox.routerOpenVPNEndpoint', 'Libbox.version()', '!detour.equals', 'result.optBoolean("system", true)')
 store=need('android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java', 'AndroidOpenVPN.endpoint(e, "")', '.put("openvpn_config",e.openVPNConfig)', 'AndroidPrivateFileStore.write')
 summary=store.split('JSONObject summary()',1)[1].split('private final Context',1)[0]
