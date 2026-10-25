@@ -5,6 +5,7 @@ ROOT=$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)
 SRC="$ROOT/client/macos/RouterVPNMacProduct.swift"
 UNIFIED_SRC="$ROOT/client/macos/RouterVPNMacUnifiedShell.swift"
 SESSION_MUTATION_TRANSFORM="$ROOT/client/macos/macos-session-mutation-transform.py"
+TOR_BRIDGE_TRANSFORM="$ROOT/client/macos/macos-tor-bridge-ui-transform.py"
 TELEMETRY_SRC="$ROOT/client/macos/RouterVPNMacTelemetry.swift"
 SPEED_LAB_SRC="$ROOT/client/macos/RouterVPNMacSpeedLab.swift"
 SPEED_LAB_TRANSPORT_SRC="$ROOT/client/macos/RouterVPNMacSpeedLabTransport.swift"
@@ -31,6 +32,7 @@ esac
 python3 "$ROOT/deploy/test_macos_via_entry_candidates.py"
 python3 "$ROOT/deploy/test_apple_vector_map.py"
 python3 "$ROOT/deploy/test_macos_source_closure.py" --shipping-only
+python3 "$ROOT/deploy/test_macos_tor_bridge_ui.py" --shipping-only
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
 APP="$OUT/RouterVPN.app"
@@ -48,6 +50,7 @@ ADAPTIVE_SRC="$BUILD_WORK/main.swift"
 
 python3 "$SESSION_MUTATION_TRANSFORM" "$SRC" "$HARDENED_SRC" product
 python3 "$SESSION_MUTATION_TRANSFORM" "$UNIFIED_SRC" "$HARDENED_UNIFIED_SRC" unified
+python3 "$TOR_BRIDGE_TRANSFORM" "$HARDENED_UNIFIED_SRC" "$HARDENED_UNIFIED_SRC"
 
 python3 - "$HARDENED_SRC" "$ADAPTIVE_SRC" <<'PY'
 from pathlib import Path

@@ -10,8 +10,10 @@ if len(sys.argv) != 3:
 src, out = map(Path, sys.argv[1:3])
 text = src.read_text(encoding="utf-8")
 
-button_anchor = 'row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Select", #selector(selectNode)));'
-button_new = 'row.addArrangedSubview(button("Pair Router node", #selector(pairNode))); row.addArrangedSubview(button("Import / add custom", #selector(importNode))); row.addArrangedSubview(button("Tor bridges…", #selector(openTorBridgeBuilder))); row.addArrangedSubview(button("Select", #selector(selectNode)));'
+button_anchor = 'row.addArrangedSubview(button("Add external node…", #selector(addExternalNode))); content.addArrangedSubview(row)'
+button_new = '''content.addArrangedSubview(row)
+        let provisionRow = NSStackView(); provisionRow.orientation = .horizontal; provisionRow.spacing = 8
+        provisionRow.addArrangedSubview(button("Add external node…", #selector(addExternalNode))); provisionRow.addArrangedSubview(button("Tor bridges…", #selector(openTorBridgeBuilder))); content.addArrangedSubview(provisionRow)'''
 if button_anchor in text:
     text = text.replace(button_anchor, button_new, 1)
 elif button_new not in text:
