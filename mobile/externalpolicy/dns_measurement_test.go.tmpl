@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	box "github.com/sagernet/sing-box"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
@@ -32,6 +33,9 @@ func TestRouterTorDNSMeasurementKeepsSelectedTransportAndUncachedActualRouter(t 
 				t.Fatal(err)
 			}
 			engine, _ := torMTUNativeConfigFixture(t, config)
+			if err := box.RouterVPNStartDNSRouterForTest(engine); err != nil {
+				t.Fatal(err)
+			}
 			proof := torMTUProved(t, engine)
 			outbound, _ := engine.Outbound().Outbound(mobiletor.ProfileOutboundTag)
 			tor := outbound.(*torMTUFixtureOutbound)
@@ -58,7 +62,10 @@ func TestRouterTorDNSMeasurementKeepsSelectedTransportAndUncachedActualRouter(t 
 			if selected.ID != "selected" || selected.Transport != "tcp" || selected.Address != "9.9.9.9" || selected.Port != 53 || selected.Route != mobiletor.ProfileOutboundTag || !selected.Ready || selected.Samples != 3 || selected.Failed != 0 || selected.Median == nil || result.PublicTransport != "https" {
 				t.Fatal("selected DNS relabeled or substituted", selected)
 			}
-			if tor.dnsCalls.Load()-before != 3 {
+			// The actual TCP multiplexer may also send its asynchronous A/AAAA
+			// connection-reuse probe. Require one fresh routed answer for each
+			// measured sample without mislabeling that extra wire traffic.
+			if tor.dnsCalls.Load()-before < int32(selected.Samples) {
 				t.Fatal("selected DNS was served from a cache", tor.dnsCalls.Load()-before)
 			}
 			want := int32(36)
@@ -92,6 +99,9 @@ func TestRouterTorDNSMeasurementHomeKeepsExactPrivateEntry(t *testing.T) {
 				t.Fatal(err)
 			}
 			engine, _ := torMTUNativeConfigFixture(t, config)
+			if err := box.RouterVPNStartDNSRouterForTest(engine); err != nil {
+				t.Fatal(err)
+			}
 			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", entry)
 			if err != nil {
 				t.Fatal(err)
@@ -121,7 +131,7 @@ func TestRouterTorDNSMeasurementHomeKeepsExactPrivateEntry(t *testing.T) {
 				t.Fatal(measurement.StatusJSON())
 			}
 			row := result.Results[0]
-			if row.Transport != protocol || row.Route != "proxy" || row.Address != "10.77.0.53" || !row.Ready || private.dnsCalls.Load()-before != 3 {
+			if row.Transport != protocol || row.Route != "proxy" || row.Address != "10.77.0.53" || !row.Ready || row.Samples != dnsmeasure.Samples || row.Failed != 0 || row.Median == nil || private.dnsCalls.Load()-before < int32(row.Samples) {
 				t.Fatal("Home DNS escaped captured private entry", row, private.dnsCalls.Load()-before)
 			}
 		})

@@ -141,7 +141,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		RuntimeImplemented: true, RuntimeSupported: true, Editable: kind == "router-vpn",
 	}
 	if kind == "external" && p.External != nil {
-		out.External = &publicExternalNode{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
+		out.External = &publicExternalNode{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HasResponseProbe: p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0, HasServerPeer: p.External.ServerPeer != nil, HasOpenVPNPairing: p.External.OpenVPNPairing != nil}
 		out.RouterAPI = ""
 		out.AdGuardIPv4 = ""
 		out.AdGuardIPv6 = ""

@@ -87,6 +87,12 @@ func (f *desktopExternalFixture) Cancel() {
 	f.once.Do(func() { f.healthy.Store(false); close(f.cancel) })
 }
 func (f *desktopExternalFixture) Healthy() bool { return f.healthy.Load() }
+func (f *desktopExternalFixture) VerifyCurrentPath() error {
+	if !f.Healthy() {
+		return errors.New("private-proxy-secret")
+	}
+	return nil
+}
 func (f *desktopExternalFixture) ProgressJSON() string {
 	return `{"stage":"probing","failure":"private-proxy-secret","measurements":[]}`
 }

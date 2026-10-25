@@ -63,7 +63,7 @@ final class Form {
     let username = Field(""); let password = Field(""); let method = Field(""); let secret = Field(""); let tlsName = Field("")
     let responseURL = Field(""); let responseName = Field(""); let startLayer = Popup()
     let layerAPI = Field(""); let layerPort = Field(""); let layerKey = Field("")
-    let openVPNConfig = TextArea(); let openVPNPairing = TextArea()
+    let openVPNConfig = TextArea(); let openVPNPairing = TextArea(); let openVPNResponseProbes = TextArea()
     let serverPeerPublic = Field(""); let serverPeerAddresses = Field(""); let serverPeerMTU = Field(""); let serverPeerKeepalive = Field("")
     let wgPrivate = Field(Data(repeating: 112, count: 32).base64EncodedString())
     let wgPeer = Field(Data(repeating: 113, count: 32).base64EncodedString())
@@ -190,6 +190,19 @@ for (index, layer) in layers.enumerated() {
 form.openVPNPairing.string = ""; form.openVPNConfig.string += "remote 203.0.113.21 443 tcp\n"; form.responseURL.stringValue = ""; form.responseName.stringValue = ""; form.startLayer.indexOfSelectedItem = 0; form.layerAPI.stringValue = ""; form.layerPort.stringValue = ""; form.layerKey.stringValue = ""
 form.save(); check(form.result != nil && form.result!["openvpn_pairing_json"] == nil, "Plain Local multiremote incorrectly requires pairing")
 try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-local-multiremote.json")); count += 1
+let multi = (try JSONSerialization.jsonObject(with: Data(contentsOf: output.appendingPathComponent("external-openvpn-multihost-client.json"))) as! [String: Any])["external"] as! [String: Any]
+let multiInline = multi["openvpn"] as! [String: String], probes = multi["openvpn_response_probes"] as! [String: Any]
+form.openVPNConfig.string = multiInline["config"]!; form.username.stringValue = multiInline["username"]!; form.password.stringValue = multiInline["password"]!; form.expected.stringValue = multi["expected_public_ip"] as! String
+form.openVPNPairing.string = "\n" + String(decoding: try JSONSerialization.data(withJSONObject: multi["openvpn_pairing"]!, options: [.sortedKeys]), as: UTF8.self) + "\n"
+let mapText = String(decoding: try JSONSerialization.data(withJSONObject: probes, options: [.sortedKeys]), as: UTF8.self)
+form.openVPNResponseProbes.string = "\n" + mapText + "\n"; form.save()
+check(form.result != nil && form.result!["openvpn_response_probes_json"] as? String == form.openVPNResponseProbes.string && form.result!["openvpn_pairing_json"] as? String == form.openVPNPairing.string && form.result!["openvpn"] as? [String: String] == multiInline && form.result!["response_probe"] == nil, "Actual OpenVPN callback changed private map, source, or credentials")
+try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-multihost.json")); count += 1
+let firstHost = probes.keys.sorted()[0], firstProbe = String(decoding: try JSONSerialization.data(withJSONObject: probes[firstHost]!, options: [.sortedKeys]), as: UTF8.self)
+form.openVPNResponseProbes.string = "{\"" + firstHost + "\":" + firstProbe + "," + String(mapText.dropFirst()); form.save()
+check(form.result != nil && form.result!["openvpn_response_probes_json"] as? String == form.openVPNResponseProbes.string, "Native OpenVPN callback parsed or changed raw duplicate map before strict controller validation")
+try JSONSerialization.data(withJSONObject: form.result!, options: [.sortedKeys]).write(to: output.appendingPathComponent("openvpn-multihost-duplicate.json")); count += 1
+form.openVPNResponseProbes.string = String(repeating: "x", count: 40961); form.save(); check(form.result == nil, "Oversized OpenVPN map reached controller"); count += 1; form.openVPNResponseProbes.string = ""
 form.selected = "shadowsocks"; form.save(); check(form.result == nil, "Changing protocol discarded private OpenVPN source"); count += 1
 form.openVPNConfig.string = ""; form.selected = "openvpn"; form.save(); check(form.result == nil, "Empty OpenVPN source reached controller"); count += 1
 form.openVPNPairing.string = ""; form.selected = "shadowsocks"
@@ -366,6 +379,7 @@ def main():
         with tempfile.TemporaryDirectory(prefix='router-vpn-amnezia-form-') as temporary:
             directory = Path(temporary)
             shutil.copyfile(ROOT/'deploy/fixtures/external-openvpn-client.json', directory/'external-openvpn-client.json')
+            shutil.copyfile(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json', directory/'external-openvpn-multihost-client.json')
             env = dict(os.environ, ROUTERVPN_AWG_FORM_PAYLOADS=str(directory), ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
             subprocess.run(['go', 'test', '-count=1', './cmd/client', '-run', '^TestDesktopExternalEntryModeFormCatalog$'], cwd=ROOT, env=env, check=True, timeout=180)
             if args.platform == 'linux':

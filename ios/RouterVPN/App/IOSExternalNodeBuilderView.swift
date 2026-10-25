@@ -64,7 +64,8 @@ extension RouterVPNModel {
         exitLayerPort: Int = 0,
         exitLayerKey: String = "",
         serverPeerJSON: String = "",
-        openVPNPairingJSON: String = ""
+        openVPNPairingJSON: String = "",
+        openVPNResponseProbesJSON: String = ""
     ) throws {
         guard !profileMutationBlocked else {
             throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Disconnect or let the active VPN transition finish before adding an external node."])
@@ -199,6 +200,14 @@ extension RouterVPNModel {
             let original = ExternalOpenVPNConfig(config: openVPNConfig, username: username, password: password)
             if let pairing = try IOSExternalExecution.openVPNPairing(openVPNPairingJSON, profile: original) {
                 external["openvpn_pairing"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(pairing))
+            }
+        }
+        if !openVPNResponseProbesJSON.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            guard protocolName == "openvpn", responseProbeURL.isEmpty, responseProbeServerName.isEmpty,
+                  exitStartLayer == "off" else { throw IOSExternalExecution.issue() }
+            let original = ExternalOpenVPNConfig(config: openVPNConfig, username: username, password: password)
+            if let probes = try IOSExternalExecution.openVPNResponseProbes(openVPNResponseProbesJSON, profile: original) {
+                external["openvpn_response_probes"] = try JSONSerialization.jsonObject(with: JSONEncoder().encode(probes))
             }
         }
         if ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
@@ -348,6 +357,7 @@ struct IOSExternalNodeBuilderView: View {
     @State private var exitLayerKey = ""
     @State private var serverPeerJSON = ""
     @State private var openVPNPairingJSON = ""
+    @State private var openVPNResponseProbesJSON = ""
     @State private var wgPrivate = ""
     @State private var wgPeer = ""
     @State private var wgPSK = ""
@@ -449,6 +459,13 @@ struct IOSExternalNodeBuilderView: View {
                         TextField("Certificate server name (optional)", text: $responseProbeServerName).textInputAutocapitalization(.never).autocorrectionDisabled()
                         Text("Use an HTTPS response endpoint hosted on the exact server IP above. Its certificate must verify against this name or the IP. Server and Compare also require this exit to be paired in the Router VPN entry's private relay settings. Local remains available without this endpoint.")
                             .font(.caption).foregroundStyle(.secondary)
+                        if selected == .openvpn {
+                            TextEditor(text: $openVPNResponseProbesJSON).font(.system(.caption, design: .monospaced)).frame(minHeight: 120)
+                                .textInputAutocapitalization(.never).autocorrectionDisabled()
+                                .accessibilityLabel("Private OpenVPN remote response endpoints JSON")
+                            Text("For a profile with multiple remote IPs, paste one HTTPS response endpoint for each of its 2–16 IPs. Use an object keyed by remote IP, with url and optional server_name for each endpoint. Leave the single URL and certificate fields blank and keep Exit Start Layer Off. This map stays in the private node.")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }
                 if selected == .hysteria2 {
@@ -535,7 +552,8 @@ struct IOSExternalNodeBuilderView: View {
                 exitLayerPort: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? (Int(exitLayerPort) ?? 0) : 0,
                 exitLayerKey: ExternalNodeConfig.serverExecutionProtocols.contains(selected.rawValue) && exitStartLayer != "off" ? exitLayerKey : "",
                 serverPeerJSON: selected.isWireGuardFamily ? serverPeerJSON : "",
-                openVPNPairingJSON: selected == .openvpn ? openVPNPairingJSON : ""
+                openVPNPairingJSON: selected == .openvpn ? openVPNPairingJSON : "",
+                openVPNResponseProbesJSON: selected == .openvpn ? openVPNResponseProbesJSON : ""
             )
             dismiss()
         } catch { errorText = error.localizedDescription }

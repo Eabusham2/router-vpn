@@ -298,9 +298,11 @@ func TestDesktopExternalProcessFixture(t *testing.T) {
 	}
 	checked := time.Now().UnixMilli()
 	mtuTick := desktopMTUChildFixture(kind, dir, expected, write)
+	pathTick := desktopPathChildFixture(kind, dir, expected, write)
 	write("progress.json", desktopExternalProgressRecord{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving", Progress: mobilemultihop.Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}}})
 	for {
 		mtuTick()
+		pathTick()
 		data, err := os.ReadFile(filepath.Join(dir, "stop.json"))
 		if err == nil {
 			var stop desktopExternalStop

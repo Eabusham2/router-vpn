@@ -126,17 +126,18 @@ func externalServerPeerFields(protocolID: String, publicKey: String, addresses: 
     return ["server_peer": peer]
 }
 
-func externalOpenVPNFields(protocolID: String, config: String, pairing: String, username: String, password: String) throws -> [String: Any] {
+func externalOpenVPNFields(protocolID: String, config: String, pairing: String, username: String, password: String, responseProbes: String = "") throws -> [String: Any] {
     func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     guard protocolID == "openvpn" else {
-        guard config.isEmpty && pairing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw fail("OpenVPN profile and pairing fields belong only to OpenVPN.") }
+        guard config.isEmpty && pairing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty && responseProbes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { throw fail("OpenVPN profile, pairing, and response-map fields belong only to OpenVPN.") }
         return [:]
     }
-    guard !config.isEmpty, config.utf8.count <= 256 * 1024, !config.contains("\0"), pairing.utf8.count <= 512 * 1024 else {
-        throw fail("Paste a bounded inline OpenVPN profile and its optional private pairing package.")
+    guard !config.isEmpty, config.utf8.count <= 256 * 1024, !config.contains("\0"), pairing.utf8.count <= 512 * 1024, responseProbes.utf8.count <= 40 * 1024 else {
+        throw fail("Paste a bounded inline OpenVPN profile, optional private pairing package, and optional per-remote response map.")
     }
     var result: [String: Any] = ["openvpn": ["config": config, "username": username, "password": password]]
     if !pairing.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result["openvpn_pairing_json"] = pairing }
+    if !responseProbes.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty { result["openvpn_response_probes_json"] = responseProbes }
     return result
 }
 
@@ -338,8 +339,8 @@ extension ProductWindowController {
         let serverPeerMTU = externalField("Server peer MTU 1280–9000 (required with descriptor)")
         let serverPeerKeepalive = externalField("Server peer keepalive 0–65535 (optional)")
 
-        let openVPNConfig = NSTextView(); let openVPNPairing = NSTextView()
-        let openVPNViews = [openVPNConfig, openVPNPairing].map { view -> NSScrollView in
+        let openVPNConfig = NSTextView(); let openVPNPairing = NSTextView(); let openVPNResponseProbes = NSTextView()
+        let openVPNViews = [openVPNConfig, openVPNPairing, openVPNResponseProbes].map { view -> NSScrollView in
             view.isRichText = false; view.isAutomaticQuoteSubstitutionEnabled = false; view.isAutomaticDashSubstitutionEnabled = false
             view.font = .monospacedSystemFont(ofSize: 11, weight: .regular)
             view.frame = NSRect(x: 0, y: 0, width: 420, height: 130); view.isVerticallyResizable = true; view.isHorizontallyResizable = false
@@ -385,15 +386,18 @@ extension ProductWindowController {
             [NSTextField(labelWithString: "Server peer keepalive"), serverPeerKeepalive],
             [NSTextField(labelWithString: "Private inline OpenVPN profile"), openVPNViews[0]],
             [NSTextField(labelWithString: "Private OpenVPN pairing JSON"), openVPNViews[1]],
+            [NSTextField(labelWithString: "Private OpenVPN per-remote response map JSON"), openVPNViews[2]],
         ])
         grid.rowSpacing = 5
         grid.columnSpacing = 10
 
-        let content = NSStackView(views: [note, grid])
+        let mapNote = NSTextField(wrappingLabelWithString: "For multiple OpenVPN remote hosts, paste the complete private map of every remote IP to its verified HTTPS response endpoint. Use the map instead of the single response URL above. A multi-host map cannot use a single-server exit Start Layer.")
+        mapNote.textColor = .secondaryLabelColor
+        let content = NSStackView(views: [note, mapNote, grid])
         content.orientation = .vertical
         content.alignment = .leading
         content.spacing = 8
-        content.setFrameSize(NSSize(width: 660, height: 1380))
+        content.setFrameSize(NSSize(width: 660, height: 1570))
         grid.widthAnchor.constraint(equalTo: content.widthAnchor).isActive = true
         let scroll = NSScrollView(frame: NSRect(x: 0, y: 0, width: 680, height: 580))
         scroll.hasVerticalScroller = true
@@ -447,7 +451,7 @@ extension ProductWindowController {
         if !sni.isEmpty { body["tls_server_name"] = sni }
         do {
             body.merge(try externalOpenVPNFields(protocolID: selected, config: openVPNConfig.string, pairing: openVPNPairing.string,
-                username: username.stringValue, password: password.stringValue)) { _, supplied in supplied }
+                username: username.stringValue, password: password.stringValue, responseProbes: openVPNResponseProbes.string)) { _, supplied in supplied }
             if selected == "openvpn" { body.removeValue(forKey: "username"); body.removeValue(forKey: "password") }
         } catch { appendHelp(error.localizedDescription); return }
         if selected == "wireguard" || selected == "amneziawg" {

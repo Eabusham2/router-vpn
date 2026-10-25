@@ -397,7 +397,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if !a.operationMu.TryLock() {
 					return result, errors.New("connection transition started before MTU adoption")
 				}
-				if err := snapshot.current(a); err != nil {
+				if err := snapshot.verifyCurrentPath(ctx, a); err != nil {
 					a.operationMu.Unlock()
 					return result, err
 				}
@@ -406,7 +406,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 					written = &updated
 				}
 				if err == nil {
-					err = snapshot.current(a)
+					err = snapshot.verifyCurrentPath(ctx, a)
 				}
 				if err == nil && ctx.Err() == nil {
 					commit := desktopMTUControlFor(request)
@@ -422,7 +422,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if !record.Status.Measured || written == nil || record.Status.EffectiveMTU != written.EffectiveMTU || record.Status.PathKey != written.EffectiveMTUPathKey {
 					return result, errors.New("native MTU did not adopt a freshly verified result")
 				}
-				if err := snapshot.current(a); err != nil {
+				if err := snapshot.verifyCurrentPath(ctx, a); err != nil {
 					return result, err
 				}
 				if err := ctx.Err(); err != nil {

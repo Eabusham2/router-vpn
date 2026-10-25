@@ -28,12 +28,12 @@ final class AndroidNodeStore {
 }
 final class AndroidStandardExitStore {
  static final Map<String,Entry> saved=new HashMap<>();
- static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";String startupMode="smart-auto";boolean autoConnect;}
+ static final class Entry {String id="saved-exit",protocol="openvpn",secret="private-endpoint-key",policy="captured-home",expectedPublicIp="8.8.4.4";String startupMode="smart-auto",responseMap="";boolean autoConnect;}
  AndroidStandardExitStore(Context c){}List<Entry> list()throws Exception{List<Entry> list=new ArrayList<>();for(Entry e:saved.values())list.add(copy(e));return list;}Entry get(String id)throws Exception{Entry e=saved.get(id);if(e==null)throw new IllegalArgumentException("missing exit");return copy(e);}
- static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||!e.protocol.equals("shadowsocks")))throw new IllegalArgumentException("unowned execution");}
+ static void validateExecution(Entry e,boolean entry,String execution){if(!List.of("local","server","auto").contains(execution)||!execution.equals("local")&&(!entry||!(e.protocol.equals("shadowsocks")||e.protocol.equals("openvpn")&&!e.responseMap.isEmpty())))throw new IllegalArgumentException("unowned execution");}
  static void validate(Entry e){if(e==null||e.id.isEmpty())throw new IllegalArgumentException("missing saved exit");}
- static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;x.startupMode=e.startupMode;x.autoConnect=e.autoConnect;return x;}
- static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).toString();}
+ static Entry copy(Entry e){Entry x=new Entry();x.id=e.id;x.protocol=e.protocol;x.secret=e.secret;x.policy=e.policy;x.expectedPublicIp=e.expectedPublicIp;x.startupMode=e.startupMode;x.autoConnect=e.autoConnect;x.responseMap=e.responseMap;return x;}
+ static String snapshot(Entry e)throws Exception{return new JSONObject().put("startup_mode",e.startupMode).put("auto_connect",e.autoConnect).put("id",e.id).put("protocol",e.protocol).put("secret",e.secret).put("policy",e.policy).put("expected",e.expectedPublicIp).put("openvpn_response_probes",e.responseMap).toString();}
 }
 final class NativeWireGuardController {}final class NativeAmneziaWGController {}final class NativeXrayController {}
 final class NativeSingBoxController {
@@ -112,9 +112,9 @@ public class ExternalPermissionTest {
   Fixture modes=new Fixture(root);List<NativeSingBoxController.ModeInfo> values=modes.controller.supportedNativeEntryModes(modes.entry);check(values.size()==19,"native entry picker omitted or duplicated modes");for(int i=0;i<ALL.length;i++)check(values.get(i).id.equals(ALL[i])&&values.get(i).name.endsWith("["+ALL[i]+"]"),"native entry identity and displayed label diverged");
  }
  static void execution(Path root)throws Exception{
-  for(String choice:List.of("local","server","auto"))for(boolean restore:new boolean[]{false,true}){
-   Fixture f=new Fixture(root);f.exit.protocol="shadowsocks";f.save();f.controller.connectExternal(f.entry,f.exit,false,"max-quic-awg",choice,f.callback);Bundle state=new Bundle();f.controller.savePending(state);
-   check(f.runtime().starts==0,"execution launched before permission");if(restore)f.restore(state);f.allow();check(f.callback.ok&&f.runtime().execution.equals(choice),"permission lost external execution choice");
+  for(String protocol:List.of("shadowsocks","openvpn"))for(String choice:List.of("local","server","auto"))for(boolean restore:new boolean[]{false,true}){
+   Fixture f=new Fixture(root);f.exit.protocol=protocol;f.exit.responseMap=protocol.equals("openvpn")?"captured-private-two-host-map":"";f.save();f.controller.connectExternal(f.entry,f.exit,false,"max-quic-awg",choice,f.callback);Bundle state=new Bundle();f.controller.savePending(state);
+   check(f.runtime().starts==0,"execution launched before permission");if(restore)f.restore(state);f.allow();check(f.callback.ok&&f.runtime().execution.equals(choice)&&f.runtime().exit.responseMap.equals(f.exit.responseMap),"permission lost external execution choice or captured remote map");
   }
   Fixture tampered=new Fixture(root);tampered.exit.protocol="shadowsocks";tampered.save();tampered.controller.connectExternal(tampered.entry,tampered.exit,false,"wg","auto",tampered.callback);Bundle state=new Bundle();tampered.controller.savePending(state);state.putString("multihop_execution_pending","server");tampered.restore(state);tampered.allow();check(!tampered.callback.ok&&tampered.runtime().starts==0,"restored permission substituted Server for Compare");
   Fixture direct=new Fixture(root);direct.exit.protocol="shadowsocks";direct.save();direct.controller.connectExternal(null,direct.exit,true,"wg","server",direct.callback);check(!direct.callback.ok&&direct.runtime().starts==0,"direct path acquired a server execution owner");

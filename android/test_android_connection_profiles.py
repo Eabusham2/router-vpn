@@ -17,7 +17,7 @@ JAVA = ROOT / "android/app/src/main/java/com/eabusham/routervpn"
 
 GO = r'''package main
 import("encoding/json";"fmt";"io";"os";"router-vpn/internal/mobilemultihop";"router-vpn/mobile")
-func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil&&len(args)==2{result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1])}else if err==nil&&len(args)==1{err=libbox.RouterValidatePrivateNodeJSON(args[0])}else if err==nil{panic("invalid fixture request")};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
+func main(){raw,err:=io.ReadAll(os.Stdin);var args []string;if err==nil{err=json.Unmarshal(raw,&args)};var result string;if err==nil{switch {case len(args)==2:result,err=mobilemultihop.CompileAmneziaProfile(args[0],args[1]);case len(args)==1:err=libbox.RouterValidatePrivateNodeJSON(args[0]);case len(args)==6&&args[0]=="openvpn-endpoint":result,err=libbox.RouterOpenVPNEndpoint(args[1],args[2],args[3],args[4],args[5]);case len(args)==3&&args[0]=="openvpn-pairing":err=libbox.RouterValidateExternalOpenVPNPairing(args[1],args[2]);case len(args)==3&&args[0]=="openvpn-probes":err=libbox.RouterValidateExternalOpenVPNResponseProbes(args[1],args[2]);default:panic("invalid fixture request")}};if err!=nil{fmt.Fprintln(os.Stderr,err);os.Exit(1)};fmt.Print(result)}'''
 
 
 def method(name, signature):
@@ -63,6 +63,10 @@ public final class MemoryPreferences implements SharedPreferences {
     "io/nekohasekai/libbox/Libbox.java": r'''package io.nekohasekai.libbox;import org.json.JSONArray;import java.nio.charset.StandardCharsets;
 public final class Libbox {public static String routerCompileAmneziaProfile(String profile,String identity)throws Exception{return call(profile,identity);}
 public static void routerValidatePrivateNodeJSON(String source)throws Exception{call(source);}
+public static String version(){return "1.14.1";}
+public static String routerOpenVPNEndpoint(String config,String user,String password,String tag,String detour)throws Exception{return call("openvpn-endpoint",config,user,password,tag,detour);}
+public static void routerValidateExternalOpenVPNPairing(String profile,String pairing)throws Exception{call("openvpn-pairing",profile,pairing);}
+public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("openvpn-probes",profile,probes);}
 private static String call(String...args)throws Exception{
  Process process=new ProcessBuilder(System.getenv("ROUTERVPN_PROFILE_COMPILER")).start();process.getOutputStream().write(new JSONArray(java.util.Arrays.asList(args)).toString().getBytes(StandardCharsets.UTF_8));process.getOutputStream().close();String out=new String(process.getInputStream().readAllBytes(),StandardCharsets.UTF_8),error=new String(process.getErrorStream().readAllBytes(),StandardCharsets.UTF_8);if(process.waitFor()!=0)throw new IllegalStateException(error);return out;
 }}''',
@@ -84,7 +88,7 @@ final class AndroidRuntimeRegistry {
  static final class Engine{boolean isRunning(){return false;}boolean isActiveOrTransitioning(){return false;}String getState(){return "DOWN";}}
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
 }
-final class AndroidOpenVPN {static void validatePairing(AndroidStandardExitStore.Entry entry){if(entry.openVPNPairing!=null)throw new AssertionError("OpenVPN pairing is outside this non-OpenVPN fixture");}static JSONObject endpoint(AndroidStandardExitStore.Entry entry,String detour){throw new AssertionError("OpenVPN compiler is outside the persistence fixture");}}
+
 final class AndroidTorProfile {
  static boolean isTor(String protocol){return "tor".equals(protocol)||"tor-bridge".equals(protocol);}
  static String digest(byte[] bytes)throws Exception{return HexFormat.of().formatHex(java.security.MessageDigest.getInstance("SHA-256").digest(bytes));}
@@ -202,6 +206,18 @@ public final class ConnectionProfilesHarness {
    }
   }
  }
+ static void mappedOpenVPNProfiles(Path root)throws Exception{
+  JSONObject source=new JSONObject(Files.readString(Path.of(System.getenv("ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE")))).getJSONObject("external"),inline=source.getJSONObject("openvpn");
+  for(String execution:List.of("local","server","auto")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=external("mapped-openvpn",false);exit.protocol="openvpn";exit.openVPNConfig=inline.getString("config");exit.username=inline.getString("username");exit.password=inline.getString("password");exit.expectedPublicIp=source.getString("expected_public_ip");exit.openVPNPairing=new JSONObject(source.getJSONObject("openvpn_pairing").toString());exit.openVPNResponseProbes=new JSONObject(source.getJSONObject("openvpn_response_probes").toString());f.exits.save(exit);f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("Mapped OpenVPN");
+   String rows=text(f.rows);check(!rows.contains("openvpn_response_probes")&&!rows.contains("openvpn_pairing")&&!rows.contains(exit.openVPNConfig)&&!rows.contains(exit.openVPNPairing.getString("private_key")),"complete connection profile duplicated private OpenVPN transport or map");
+   String frozen=AndroidStandardExitStore.snapshot(exit);f.changeExternal(exit.id);f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);check(selected.execution.equals(execution)&&selected.entry.id.equals(f.first.id)&&selected.entryMode.equals("hysteria2")&&AndroidStandardExitStore.snapshot(selected.exit).equals(frozen),"complete profile lost mapped OpenVPN policy, exact entry, execution or private references");
+   ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution)&&surface.connection.exit.openVPNResponseProbes.toString().equals(exit.openVPNResponseProbes.toString())&&surface.connection.exit.openVPNPairing.toString().equals(exit.openVPNPairing.toString()),"main Connect substituted mapped OpenVPN private owner after profile Load");
+   AndroidStandardExitStore.Entry copy=AndroidStandardExitStore.copy(selected.exit);String host=copy.openVPNResponseProbes.names().getString(0);copy.openVPNResponseProbes.getJSONObject(host).put("url","https://"+host+"/rotated-private-probe");f.exits.save(copy);f.otherSelection();f.store.load(saved.id);check(f.store.currentExternalPath(exit.id).exit.openVPNResponseProbes.toString().equals(copy.openVPNResponseProbes.toString()),"saved profile overwrote its linked node's newer private response map");
+   if(!execution.equals("local")){State before=new State(f);rejected(()->f.store.selectExternalPath(copy,null,"wg",execution),"mapped direct cannot own Server execution");before.same(f,"mapped direct rejection");}
+   f.store.delete(saved.id);check(f.store.list().isEmpty()&&f.exits.get(exit.id).openVPNResponseProbes.toString().equals(copy.openVPNResponseProbes.toString()),"Delete removed another private node or retained the complete profile");
+  }
+ }
  static void externalDefaultHome(Path root)throws Exception{
   for(boolean tor:new boolean[]{false,true})for(String mode:List.of("missing","","home")){
    Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get(tor?"external-b":"external-a");JSONObject policy=new JSONObject();if(!mode.equals("missing"))policy.put("dns_mode",mode);if(tor)exit.torPolicy=policy;else exit.policy=policy;f.exits.save(exit);
@@ -289,7 +305,7 @@ public final class ConnectionProfilesHarness {
   java.io.ByteArrayOutputStream invalid=new java.io.ByteArrayOutputStream();invalid.write((prefix+",\"unrelated\":\"").getBytes(StandardCharsets.UTF_8));invalid.write(255);invalid.write("\"}".getBytes(StandardCharsets.UTF_8));
   rejected(()->f.nodes.importBundle(invalid.toByteArray()),"malformed UTF-8 private bundle");before.same(f,"malformed byte import rejection");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 
@@ -313,7 +329,7 @@ def main():
             target.write_text(content)
         app = src / "com/eabusham/routervpn"
         app.mkdir(parents=True)
-        for name in ("AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia"):
+        for name in ("AndroidConnectionProfileStore", "AndroidConnectionProfilePolicy", "AndroidNodeStore", "AndroidStandardExitStore", "AndroidProfileSelection", "AndroidNumericAddress", "AndroidExternalAmnezia", "AndroidOpenVPN"):
             shutil.copyfile(JAVA / (name + ".java"), app / (name + ".java"))
         methods = "\n".join(method("AndroidExternalPolicy.java", signature) for signature in ("static boolean supports(", "static void checkPolicy("))
         (app / "Boundaries.java").write_text(BOUNDARIES.replace("EXTERNAL_METHODS", methods))
@@ -323,7 +339,7 @@ def main():
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(classes), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
-        env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler)
+        env = os.environ.copy(); env["ROUTERVPN_PROFILE_COMPILER"] = str(compiler);env["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"] = str(ROOT/"deploy/fixtures/external-openvpn-multihost-client.json")
         subprocess.run(["java", "-cp", str(classes) + os.pathsep + str(jar), "com.eabusham.routervpn.ConnectionProfilesHarness", str(data)], env=env, check=True, timeout=180)
         # A per-instance transaction can still lose an update between separate
         # Activities. Reproduce that defect only in isolated compiled classes.

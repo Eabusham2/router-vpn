@@ -370,4 +370,20 @@ func TestExportExternalOpenVPNPairingFixtures(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	external, server := externalOpenVPNMappedSource(t)
+	paired, err := PairExternalOpenVPN("exit", external, server, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, err := ExternalOpenVPNServerDescriptor(server)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"external": external, "server_peer_profile": server, "paired": paired, "descriptor": public, "selected_layer": ""})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, "mapped.json"), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
 }

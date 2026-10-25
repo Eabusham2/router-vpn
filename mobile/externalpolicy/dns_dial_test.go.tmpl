@@ -23,6 +23,16 @@ import (
 	M "github.com/sagernet/sing/common/metadata"
 )
 
+// Native Box construction deliberately does not start an OS TUN in these
+// tests. Start the real DNS client separately so its cache exists and a
+// measurement that accidentally enables caching can actually be detected.
+func RouterVPNStartDNSRouterForTest(s *Box) error {
+	if s == nil || s.dnsRouter == nil {
+		return errors.New("missing native DNS test owner")
+	}
+	return s.dnsRouter.Start(adapter.StartStateStart)
+}
+
 type routerVPNDNSDialOptions struct {
 	dial func(context.Context, string, M.Socksaddr) (net.Conn, error)
 }

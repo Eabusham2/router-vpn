@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/http"
@@ -37,6 +38,151 @@ func desktopOpenVPNCreateFixture(t *testing.T, layer string) externalProfileCrea
 	return externalProfileCreateRequest{Name: "Captured OpenVPN", Protocol: "openvpn", ExpectedPublicIP: f.External.ExpectedPublicIP,
 		OpenVPN: f.External.OpenVPN, OpenVPNPairing: f.External.OpenVPNPairing, ResponseProbe: f.External.ResponseProbe,
 		StartLayer: f.Layer, StartLayerProvision: f.External.StartLayer}
+}
+
+func desktopOpenVPNMultiHostCreateFixture(t *testing.T) externalProfileCreateRequest {
+	t.Helper()
+	raw, err := os.ReadFile(filepath.Join("..", "..", "deploy", "fixtures", "external-openvpn-multihost-client.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var fixture struct {
+		External common.ExternalNodeConfig `json:"external"`
+		Layer    string                    `json:"selected_layer"`
+	}
+	if err := json.Unmarshal(raw, &fixture); err != nil {
+		t.Fatal(err)
+	}
+	if fixture.External.OpenVPN == nil || fixture.External.OpenVPNPairing == nil || len(fixture.External.OpenVPNResponseProbes) < 2 {
+		t.Fatal("multi-host private fixture missing")
+	}
+	return externalProfileCreateRequest{Name: "Captured provider fallback", Protocol: "openvpn", ExpectedPublicIP: fixture.External.ExpectedPublicIP,
+		OpenVPN: fixture.External.OpenVPN, OpenVPNPairing: fixture.External.OpenVPNPairing, OpenVPNResponseProbes: fixture.External.OpenVPNResponseProbes, StartLayer: fixture.Layer}
+}
+
+func TestTypedExternalOpenVPNMultiHostMapPersistsPrivately(t *testing.T) {
+	for _, rawEditor := range []bool{false, true} {
+		request := desktopOpenVPNMultiHostCreateFixture(t)
+		expected, err := json.Marshal(request.OpenVPNResponseProbes)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if rawEditor {
+			request.OpenVPNResponseProbes = nil
+			request.OpenVPNResponseProbesJSON = "\n" + string(expected) + "\n"
+		}
+		profile, _, launch := desktopOpenVPNCompileFixture(t, request)
+		if len(launch.external.physicalEndpoints) < 2 {
+			t.Fatal("provider fallback lost its physical remotes")
+		}
+		captured, err := json.Marshal(profile.External.OpenVPNResponseProbes)
+		if err != nil || !bytes.Equal(captured, expected) {
+			t.Fatal("private response map changed", err)
+		}
+		clone := common.CloneRouterProfile(profile)
+		for host, probe := range profile.External.OpenVPNResponseProbes {
+			probe.ServerName = "mutated.example.test"
+			profile.External.OpenVPNResponseProbes[host] = probe
+			break
+		}
+		cloned, _ := json.Marshal(clone.External.OpenVPNResponseProbes)
+		if !bytes.Equal(cloned, expected) {
+			t.Fatal("captured response map aliases mutable node data")
+		}
+		root := t.TempDir()
+		a := &app{cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "routers.json")}, profiles: common.RouterProfileStore{SchemaVersion: common.RouterProfileStoreVersion}, state: state{Mode: "off", Phase: "off"}}
+		recorder := httptest.NewRecorder()
+		a.externalProfileCreate(recorder, typedCreateRequest(t, request))
+		if recorder.Code != http.StatusOK {
+			t.Fatal("mapped private creation failed", recorder.Code, recorder.Body.String())
+		}
+		encoded, err := os.ReadFile(a.cfg.ProfilesFile)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var saved common.RouterProfileStore
+		if json.Unmarshal(encoded, &saved) != nil || len(saved.Profiles) != 1 {
+			t.Fatal("private provider map was not persisted")
+		}
+		persisted, _ := json.Marshal(saved.Profiles[0].External.OpenVPNResponseProbes)
+		if !bytes.Equal(persisted, expected) {
+			t.Fatal("persisted provider map changed")
+		}
+		options := httptest.NewRecorder()
+		a.speedLabOptions(options, httptest.NewRequest(http.MethodGet, "/api/speed-lab/options", nil))
+		for _, public := range []string{recorder.Body.String(), options.Body.String()} {
+			if !strings.Contains(public, `"has_response_probe":true`) {
+				t.Fatal("valid mapped probe readiness missing")
+			}
+			if strings.Contains(public, `"openvpn_response_probes"`) {
+				t.Fatal("private map escaped public metadata")
+			}
+			for _, probe := range saved.Profiles[0].External.OpenVPNResponseProbes {
+				if strings.Contains(public, probe.URL) || probe.ServerName != "" && strings.Contains(public, probe.ServerName) {
+					t.Fatal("private provider proof endpoint escaped public metadata")
+				}
+			}
+		}
+	}
+}
+
+func TestTypedExternalOpenVPNMapRejectsAmbiguousInputs(t *testing.T) {
+	for name, change := range map[string]func(*externalProfileCreateRequest){
+		"dual-map": func(q *externalProfileCreateRequest) {
+			raw, _ := json.Marshal(q.OpenVPNResponseProbes)
+			q.OpenVPNResponseProbesJSON = string(raw)
+		},
+		"single-and-map": func(q *externalProfileCreateRequest) {
+			q.ResponseProbe = &common.ExternalResponseProbe{URL: "https://203.0.113.20/proof"}
+		},
+		"partial-map": func(q *externalProfileCreateRequest) {
+			for host := range q.OpenVPNResponseProbes {
+				delete(q.OpenVPNResponseProbes, host)
+				break
+			}
+		},
+		"wrong-host": func(q *externalProfileCreateRequest) {
+			for host, probe := range q.OpenVPNResponseProbes {
+				probe.URL = "https://203.0.113.99/proof"
+				q.OpenVPNResponseProbes[host] = probe
+				break
+			}
+		},
+		"raw-duplicate": func(q *externalProfileCreateRequest) {
+			raw, _ := json.Marshal(q.OpenVPNResponseProbes)
+			q.OpenVPNResponseProbes = nil
+			q.OpenVPNResponseProbesJSON = `{"203.0.113.20":{"url":"https://203.0.113.20/proof"},` + string(raw[1:])
+		},
+		"foreign-protocol": func(q *externalProfileCreateRequest) {
+			q.Protocol = "socks5"
+			q.OpenVPN = nil
+			q.OpenVPNPairing = nil
+			q.Server = "203.0.113.20"
+			q.Port = 1080
+		},
+		"raw-null": func(q *externalProfileCreateRequest) {
+			q.OpenVPNResponseProbes = nil
+			q.OpenVPNResponseProbesJSON = "null"
+		},
+		"raw-trailing": func(q *externalProfileCreateRequest) {
+			raw, _ := json.Marshal(q.OpenVPNResponseProbes)
+			q.OpenVPNResponseProbes = nil
+			q.OpenVPNResponseProbesJSON = string(raw) + "{}"
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			q := desktopOpenVPNMultiHostCreateFixture(t)
+			change(&q)
+			if _, err := externalProfileFromCreateRequest(q); err == nil {
+				t.Fatal("ambiguous or foreign proof map accepted")
+			}
+		})
+	}
+	for _, field := range []string{"openvpn_response_probes", "openvpn_response_probes_json"} {
+		if _, err := decodeExternalProfileCreate([]byte(`{"protocol":"openvpn","` + field + `":null}`)); err == nil {
+			t.Fatal("null private map accepted")
+		}
+	}
 }
 
 func desktopOpenVPNCompileFixture(t *testing.T, request externalProfileCreateRequest) (common.RouterProfile, standardExit, *desktopNodeLaunch) {
@@ -190,6 +336,40 @@ func TestDesktopExternalOpenVPNFormPayload(t *testing.T) {
 	if directory == "" {
 		t.Skip("run deploy/test_desktop_amnezia_forms.py with the platform form")
 	}
+	t.Run("paired-multihost", func(t *testing.T) {
+		raw, err := os.ReadFile(filepath.Join(directory, "openvpn-multihost.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		request, err := decodeExternalProfileCreate(raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		expected := desktopOpenVPNMultiHostCreateFixture(t)
+		if request.Protocol != "openvpn" || request.OpenVPNPairingJSON == "" || request.OpenVPNResponseProbesJSON == "" || request.ResponseProbe != nil || request.StartLayerProvision != nil || request.StartLayer != common.StartLayerOff || !reflect.DeepEqual(request.OpenVPN, expected.OpenVPN) {
+			t.Fatal("native form changed multi-host provider authority")
+		}
+		profile, _, launch := desktopOpenVPNCompileFixture(t, request)
+		if !reflect.DeepEqual(profile.External.OpenVPNResponseProbes, expected.OpenVPNResponseProbes) || !reflect.DeepEqual(profile.External.OpenVPNPairing, expected.OpenVPNPairing) || len(launch.external.physicalEndpoints) < 2 {
+			t.Fatal("native form lost captured provider remotes, response map or pairing")
+		}
+		bad, err := os.ReadFile(filepath.Join(directory, "openvpn-multihost-duplicate.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		rejected, err := decodeExternalProfileCreate(bad)
+		if err != nil {
+			t.Fatal("raw editor request should reach strict private map decoder", err)
+		}
+		if _, err = externalProfileFromCreateRequest(rejected); err == nil {
+			t.Fatal("duplicate remote map was silently normalized by the native form")
+		}
+		if export := os.Getenv("ROUTERVPN_DESKTOP_OPENVPN_GRAPHS"); export != "" {
+			if err := os.WriteFile(filepath.Join(export, "form-multihost.json"), launch.config, 0600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	})
 	for _, layer := range []string{common.StartLayerOff, common.StartLayerAES256GCM, common.StartLayerAES256GCMXOR} {
 		t.Run(layer, func(t *testing.T) {
 			raw, err := os.ReadFile(filepath.Join(directory, "openvpn-"+layer+".json"))

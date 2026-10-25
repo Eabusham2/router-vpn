@@ -710,6 +710,9 @@ func externalCapturedTransport(out, profile map[string]any) error {
 	if err := multihoprelay.ValidateExternalOpenVPNPairing(protocol, ext); err != nil {
 		return err
 	}
+	if err := multihoprelay.ValidateExternalOpenVPNResponseProbes(protocol, ext); err != nil {
+		return err
+	}
 	key := strings.ReplaceAll(protocol, "-", "_")
 	source, ok := ext[key].(map[string]any)
 	if !ok {

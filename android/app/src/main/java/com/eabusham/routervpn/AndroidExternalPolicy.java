@@ -80,6 +80,7 @@ final class AndroidExternalPolicy {
         AndroidStandardExitStore.validateStartLayer(exit);
         AndroidStandardExitStore.validateServerPeer(exit);
         AndroidOpenVPN.validatePairing(exit);
+        AndroidOpenVPN.validateResponseProbes(exit);
         // The entry supplies Home's private resolver identity during native
         // composition. Its independent DNS selection cannot replace this exit's.
         if (!policy.has("ipv6_mode")) policy.put("ipv6_mode", "on");
@@ -94,6 +95,7 @@ final class AndroidExternalPolicy {
         if(exit.startLayer!=null)ext.put("start_layer",copy(exit.startLayer));
         if(exit.serverPeer!=null)ext.put("server_peer",copy(exit.serverPeer));
         if(exit.openVPNPairing!=null)ext.put("openvpn_pairing",copy(exit.openVPNPairing));
+        if(exit.openVPNResponseProbes!=null)ext.put("openvpn_response_probes",copy(exit.openVPNResponseProbes));
         JSONObject transport;
         switch (exit.protocol) {
             case "wireguard": case "amneziawg":

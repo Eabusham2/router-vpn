@@ -262,6 +262,16 @@ enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFi
    try reject("unsupported external execution cannot be saved as complete "+kind){_ = try IOSConnectionProfileStore.add(model:model,name:"Unowned execution")}
    try check("rejected execution creates no saved record",IOSPrivateJSONStore.writes==0 && model.imports==0)
   }
+  let mapFixture=try json(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"]!)))
+  var mapped=profile("openvpn");mapped.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:data(mapFixture["external"]!))
+  let mapModel=try reset(mapped),mappedRecord=try IOSConnectionProfileStore.add(model:mapModel,name:"Private remote map")
+  let publicRecord=String(decoding:IOSPrivateJSONStore.bytes!,as:UTF8.self)
+  try check("complete connection record stores only node reference, not response map",!publicRecord.contains("openvpn_response_probes") && !publicRecord.contains("response_probe") && !publicRecord.contains("server_name"))
+  for probe in mapped.external!.openVPNResponseProbes!.values {try check("connection record omits each private probe",!publicRecord.contains(probe.url) && !publicRecord.contains(probe.serverName ?? "NONEXISTENT_NAME"))}
+  var linked=bundle(mapped);linked.routerProfiles[0].external?.openVPNResponseProbes?["203.0.113.21"]?.url="https://203.0.113.21/new-response"
+  IOSNodeBundleStore.shared.bundles[mapped.id]=try JSONEncoder().encode(linked);mapModel.bundle=bundle(profile("socks5","unrelated"))
+  _=try IOSConnectionProfileStore.load(model:mapModel,id:mappedRecord.id)
+  try check("loading complete profile uses current private node map",mapModel.selectedNodeProfile?.external==linked.routerProfiles[0].external)
  }
  static func main()throws {
   defer {UserDefaults.standard.removeObject(forKey:iosConnectionProfilesKey);UserDefaults.standard.removeObject(forKey:iosConnectionModeKey);UserDefaults.standard.removeObject(forKey:iosConnectionCustomPresetsKey)}
@@ -292,7 +302,7 @@ def main():
         code = work / 'Tests.swift';code.write_text(source + '\n' + policy + BOUNDARIES)
         binary = work / 'tests'
         subprocess.run(options + [str(APP / 'Models.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
-        subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json')), check=True, timeout=30)
+        subprocess.run([str(binary)], env=dict(os.environ, ROUTERVPN_OPENVPN_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-client.json'), ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE=str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json')), check=True, timeout=30)
 
 
 if __name__ == '__main__':

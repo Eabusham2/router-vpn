@@ -12,6 +12,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 // ExternalExit identifies a third-party transport by its exact public endpoint
@@ -20,10 +21,11 @@ import (
 // session authentication contract. Packet peers need independent server keys
 // before they can participate in Local/Server comparison.
 type ExternalExit struct {
-	ExpectedPublicIP string               `json:"expected_public_ip"`
-	ResponseProbe    ResponseProbe        `json:"response_probe"`
-	Packet           *ExternalPacketPair  `json:"packet,omitempty"`
-	OpenVPN          *ExternalOpenVPNPair `json:"openvpn,omitempty"`
+	ExpectedPublicIP      string                       `json:"expected_public_ip"`
+	ResponseProbe         ResponseProbe                `json:"response_probe"`
+	Packet                *ExternalPacketPair          `json:"packet,omitempty"`
+	OpenVPN               *ExternalOpenVPNPair         `json:"openvpn,omitempty"`
+	OpenVPNResponseProbes nativeopenvpn.ResponseProbes `json:"openvpn_response_probes,omitempty"`
 }
 
 type ResponseProbe struct {
@@ -67,6 +69,9 @@ func ExternalFingerprint(exit Exit) (string, error) {
 	var value any
 	if exit.Mode == "openvpn" {
 		value = []any{"routervpn-external-openvpn-v4", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
+		if exit.External.OpenVPNResponseProbes != nil {
+			value = []any{"routervpn-external-openvpn-v5", exit.Mode, exit.External.OpenVPN.Local, exit.External.OpenVPN.Server, exit.External.ExpectedPublicIP, exit.External.OpenVPNResponseProbes}
+		}
 	} else if ExternalPacketMode(exit.Mode) {
 		value = []any{"routervpn-external-packet-v3", exit.Mode, exit.External.Packet.Local, exit.External.Packet.Server, externalPublicLayer(exit.StartLayer), exit.External.ExpectedPublicIP, exit.External.ResponseProbe}
 	} else if exit.Mode == "shadowsocks" && exit.StartLayer == nil {
@@ -124,7 +129,7 @@ func AuthenticateExternalRequest(exit Exit, request Request) (Request, error) {
 			return Request{}, err
 		}
 		defer clear(key)
-		domain = "routervpn-external-openvpn-auth-v4\x00"
+		domain = "routervpn-external-openvpn-auth-" + externalOpenVPNVersion(exit) + "\x00"
 	} else if ExternalPacketMode(exit.Mode) {
 		key, err = externalPacketAuthKey(exit, fingerprint)
 		if err != nil {

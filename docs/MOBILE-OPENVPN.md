@@ -80,6 +80,16 @@ provider identities. The copied mobile binding tests exercise
 `RouterValidateExternalOpenVPNPairing` before Java or Swift private-store
 decoding can drop invalid fields.
 
+`deploy/test_external_openvpn_remote_native.py --core PINNED_CORE_CHECKOUT`
+executes the actual pinned OpenVPN endpoint and the private relay command with
+ephemeral certificates and owned local sockets. It verifies TCP/UDP fallback
+to a different captured remote, encrypted relay traffic, reconnect generation,
+deliberately delayed old configuration callbacks, failed TLS ownership and
+strict request/source/receipt file ownership. Its dependency patch is applied
+only to a private module copy whose entire unmodified source is checked against
+the pinned Go checksum; module-cache source is unchanged. Repeated preparation
+in either order preserves the existing close policy and generation policy.
+
 `deploy/test_external_openvpn_native.py --core PINNED_CORE_CHECKOUT` runs the
 real OpenVPN provider and both independently authenticated owners under the race
 detector. TCP and UDP each carry actual payloads with Off, AES and AES plus XOR
@@ -117,9 +127,20 @@ the required average of the last-node and same external response timings and
 repeats both probes for the chosen candidate. Restoring an already-proved
 Local/Server choice does not rerun Compare.
 
-Paired Server/Compare currently requires one public literal host across the
-original remote list so its last-node response proof identifies the actual
-provider. Multiple ports and transport fallbacks on that host remain supported;
-ordinary Local profiles retain different-host lists. Different-host paired
-comparison and external-entry Server execution remain open extensions with
-additional remote-observation and runtime ownership requirements.
+Legacy single-host pairings preserve their `response_probe` and v4 identity.
+Different-host paired profiles provide a private
+`external.openvpn_response_probes` map covering every original host. Native
+forms and imports strictly validate and preserve this map. Each native
+candidate proves its actual connected remote and immutable transport
+generation before using that host's response endpoint. The v5 relay contract
+requires a fresh process-owned response to each request and retires a retained
+proof when the provider reconnects, even to the same address. The same fresh
+boundary protects MTU, DNS Retest and Speed Lab result adoption.
+
+Different-host mapped OpenVPN currently requires the exit Start Layer to be
+Off; Router entry Start Layers remain supported. Mapped exit layers require
+additional physical-to-inner-host proof semantics and remain unfinished.
+External-entry Server execution requires an authenticated administrative
+runtime owner on that entry. An ordinary unmanaged provider import alone
+cannot install or authorize that execution owner. These qualifications do not
+change the bounded inline-profile compatibility rules above.

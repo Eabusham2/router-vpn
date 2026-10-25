@@ -18,6 +18,12 @@ func RouterValidateExternalOpenVPNPairing(profileJSON, pairingJSON string) error
 	return nativeopenvpn.ValidatePairingJSON(profileJSON, pairingJSON)
 }
 
+// RouterValidateExternalOpenVPNResponseProbes validates the raw private map
+// before native JSON conversion can discard duplicate, unknown or null fields.
+func RouterValidateExternalOpenVPNResponseProbes(profileJSON, probesJSON string) error {
+	return nativeopenvpn.ValidateResponseProbesJSON(profileJSON, probesJSON)
+}
+
 // RouterValidatePrivateNodeJSON validates raw object structure before native
 // bundle decoding. Typed schema and captured policy validation follow it.
 func RouterValidatePrivateNodeJSON(raw string) error {

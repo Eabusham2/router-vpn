@@ -31,6 +31,7 @@ type Capability struct {
 	Layer               string `json:"exit_start_layer,omitempty"`
 	ExternalFingerprint string `json:"external_fingerprint,omitempty"`
 	ExpectedPublicIP    string `json:"expected_public_ip,omitempty"`
+	OpenVPNRemote       string `json:"openvpn_remote,omitempty"`
 }
 
 type Capabilities struct {
@@ -58,6 +59,9 @@ func (c Capabilities) Validate(expectedNode string) error {
 			return bad
 		}
 		if external && (e.NodeID != "" || !ExternalMode(e.Mode) || (ExternalPacketMode(e.Mode) && !canonicalPacketPublic(e.PublicKey)) || (!ExternalPacketMode(e.Mode) && e.PublicKey != "") || e.PQIdentity != "" || !proofID.MatchString(e.ExternalFingerprint) || !externalPublicIP(e.ExpectedPublicIP)) {
+			return bad
+		}
+		if e.OpenVPNRemote != "" && (!external || e.Mode != "openvpn" || e.Layer != "" || e.OpenVPNRemote != "fresh-connected-transport-v1") {
 			return bad
 		}
 		identity := e.ID + "/" + e.Mode + "/" + e.Layer

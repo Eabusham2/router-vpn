@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
 )
 
@@ -210,11 +211,15 @@ func newExternalExecution(policy *ExternalPolicy) (*Controller, error) {
 	c := &Controller{meta: Metadata{EntryID: entryID, ExitID: s.ExitID, EntryNodeID: entryNode, EntryAPI: entryAPI, EntryToken: entryToken, EntryTag: s.EntryTag, ExitMode: s.Protocol, ExitStartLayer: proposal.ExitStartLayer, Execution: s.Execution.Selection}, config: policy.Config(), proposal: proposal, external: policy,
 		progress: Progress{Stage: "prepared", Measurements: []routechoice.Measurement{}, LastNodeMeasurement: "https-response-time", ExternalMeasurement: "https-response-time"}}
 	c.expected = multihoprelay.Lease{Request: proposal, NodeID: entryNode, Host: api.Hostname(), Port: proposal.Port, Username: proposal.Username, Password: proposal.Password}
+	exit, err := externalRelaySelection(s)
+	if err != nil {
+		return nil, err
+	}
+	if multihoprelay.OpenVPNRemoteRequired(exit) {
+		c.openvpnTransport, c.openvpnResponses = exit.Transport, exit.External.OpenVPNResponseProbes
+		c.expected.OpenVPNRemote = true
+	}
 	if multihoprelay.ExternalPacketMode(s.Protocol) {
-		exit, err := externalRelaySelection(s)
-		if err != nil {
-			return nil, err
-		}
 		local, _, err := multihoprelay.ExternalPacketIdentities(exit)
 		if err != nil {
 			return nil, err
@@ -251,6 +256,10 @@ func (c *Controller) verifyExternalTrial(ctx context.Context, tag string) error 
 }
 
 func (c *Controller) externalNodeResponse(ctx context.Context, tag string) (time.Duration, error) {
+	return c.externalNodeResponseAt(ctx, tag, nil)
+}
+
+func (c *Controller) externalNodeResponseAt(ctx context.Context, tag string, receipt *nativeopenvpn.RemoteReceipt) (time.Duration, error) {
 	if c.external == nil || c.requireValid() != nil || c.engine.Selected() != tag {
 		return 0, errors.New("external response probe is stale")
 	}
@@ -259,6 +268,16 @@ func (c *Controller) externalNodeResponse(ctx context.Context, tag string) (time
 		return 0, err
 	}
 	probe := exit.External.ResponseProbe
+	if c.openvpnResponses != nil {
+		if receipt == nil || !receipt.Matches(c.openvpnTransport) {
+			return 0, errors.New("OpenVPN last-node response has no connected remote owner")
+		}
+		selected, exists := c.openvpnResponses[receipt.Host]
+		if !exists {
+			return 0, errors.New("OpenVPN connected remote has no captured HTTPS response endpoint")
+		}
+		probe = multihoprelay.ResponseProbe{URL: selected.URL, ServerName: selected.ServerName}
+	}
 	start := time.Now()
 	_, err = externalProofHTTPName(ctx, c.engine.Dial, tag, probe.URL, "", probe.ServerName, c.externalResponseTLS)
 	elapsed := time.Since(start)

@@ -25,6 +25,9 @@ import (
 // host-default HTTP requests or treats the start of a helper as Connected.
 type desktopExternalRuntime struct {
 	mu                                     sync.Mutex
+	pathMu                                 sync.Mutex
+	pathGeneration                         uint64
+	pathFailed                             bool
 	source, capture                        []byte
 	predecessor                            string
 	session, network, selection, execution string

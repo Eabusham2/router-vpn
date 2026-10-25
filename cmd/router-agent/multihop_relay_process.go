@@ -2,6 +2,10 @@ package main
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"io"
 	"net"
@@ -9,16 +13,21 @@ import (
 	"os/exec"
 	"path/filepath"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 	"runtime"
 	"strconv"
+	"sync"
 	"time"
 )
 
 type relayExecRunner struct{}
 type relayProcess struct {
-	cmd  *exec.Cmd
-	done chan struct{}
-	dir  string
+	cmd     *exec.Cmd
+	done    chan struct{}
+	dir     string
+	rootMu  sync.Mutex
+	root    *os.Root
+	capture multihoprelay.NativeOpenVPNCapture
 }
 
 func (p *relayProcess) Alive() bool {
@@ -35,10 +44,124 @@ func (p *relayProcess) Stop(ctx context.Context) error {
 	}
 	select {
 	case <-p.done:
+		p.rootMu.Lock()
+		defer p.rootMu.Unlock()
+		if p.root != nil {
+			// Delete only the directory whose descriptor was captured before
+			// launch. A replacement at the old path is never our workspace.
+			actual, err := p.root.Stat(".")
+			current, pathErr := os.Lstat(p.dir)
+			if err != nil || pathErr != nil || current.Mode()&os.ModeSymlink != 0 || !os.SameFile(actual, current) {
+				return errors.New("owned relay directory identity changed")
+			}
+			directory, err := p.root.Open(".")
+			if err != nil {
+				return errors.New("owned relay directory cleanup failed")
+			}
+			entries, readErr := directory.ReadDir(-1)
+			closeErr := directory.Close()
+			if readErr != nil || closeErr != nil {
+				return errors.New("owned relay directory cleanup failed")
+			}
+			for _, entry := range entries {
+				if err := p.root.RemoveAll(entry.Name()); err != nil {
+					return errors.New("owned relay directory cleanup failed")
+				}
+			}
+			current, pathErr = os.Lstat(p.dir)
+			if pathErr != nil || !os.SameFile(actual, current) || os.Remove(p.dir) != nil {
+				return errors.New("owned relay directory cleanup failed")
+			}
+			if err := p.root.Close(); err != nil {
+				return errors.New("owned relay directory close failed")
+			}
+			p.root = nil
+			return nil
+		}
+		if p.capture.Validate() == nil {
+			return nil
+		}
 		return os.RemoveAll(p.dir)
 	case <-ctx.Done():
 		return errors.New("owned relay process has not exited")
 	}
+}
+
+// OpenVPNRemote reads only the exact child-owned receipt. Listener readiness,
+// a persisted file from an earlier session, and a live PID are insufficient.
+func (p *relayProcess) OpenVPNRemote(ctx context.Context) (nativeopenvpn.RemoteReceipt, error) {
+	bad := errors.New("owned native OpenVPN remote is unavailable")
+	if ctx.Err() != nil || !p.Alive() {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	p.rootMu.Lock()
+	defer p.rootMu.Unlock()
+	if p.root == nil || p.capture.Validate() != nil {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	nonce := make([]byte, 16)
+	if _, err := rand.Read(nonce); err != nil {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	query := multihoprelay.NativeOpenVPNQuery{Capture: p.capture, RequestID: hex.EncodeToString(nonce)}
+	raw, err := json.Marshal(query)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	temporary := ".openvpn-query-" + query.RequestID
+	file, err := p.root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	defer p.root.Remove(temporary)
+	written, writeErr := file.Write(raw)
+	closeErr := file.Close()
+	if writeErr != nil || written != len(raw) || closeErr != nil || p.root.Rename(temporary, "openvpn-query.json") != nil {
+		return nativeopenvpn.RemoteReceipt{}, bad
+	}
+	defer p.root.Remove("openvpn-query.json")
+	deadline := time.NewTimer(time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		receipt, err := p.readOpenVPNReceiptLocked()
+		if err == nil && receipt.RequestID == query.RequestID && receipt.Validate(p.capture, time.Now()) == nil && ctx.Err() == nil && p.Alive() {
+			return receipt.Remote, nil
+		}
+		select {
+		case <-ctx.Done():
+			return nativeopenvpn.RemoteReceipt{}, bad
+		case <-p.done:
+			return nativeopenvpn.RemoteReceipt{}, bad
+		case <-deadline.C:
+			return nativeopenvpn.RemoteReceipt{}, bad
+		case <-ticker.C:
+		}
+	}
+}
+
+func (p *relayProcess) readOpenVPNReceiptLocked() (multihoprelay.NativeOpenVPNReceipt, error) {
+	bad := errors.New("owned native OpenVPN receipt is unavailable")
+	info, err := p.root.Lstat("openvpn-remote.json")
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() <= 0 || info.Size() > 8192 {
+		return multihoprelay.NativeOpenVPNReceipt{}, bad
+	}
+	file, err := p.root.Open("openvpn-remote.json")
+	if err != nil {
+		return multihoprelay.NativeOpenVPNReceipt{}, bad
+	}
+	defer file.Close()
+	actual, err := file.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		return multihoprelay.NativeOpenVPNReceipt{}, bad
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, 8193))
+	var receipt multihoprelay.NativeOpenVPNReceipt
+	if err != nil || int64(len(raw)) != info.Size() || json.Unmarshal(raw, &receipt) != nil {
+		return multihoprelay.NativeOpenVPNReceipt{}, bad
+	}
+	return receipt, nil
 }
 func (relayExecRunner) Start(ctx context.Context, config []byte, lease multihoprelay.Lease) (multihoprelay.Process, error) {
 	root := "/run/router-vpn-relays"
@@ -63,6 +186,28 @@ func (relayExecRunner) Start(ctx context.Context, config []byte, lease multihopr
 	if err := atomicWritePrivilegedState(path, config); err != nil {
 		return nil, err
 	}
+	var capture multihoprelay.NativeOpenVPNCapture
+	var ownedRoot *os.Root
+	if lease.OpenVPNRemote {
+		sum := sha256.Sum256(config)
+		capture = multihoprelay.NativeOpenVPNCapture{Schema: 1, SessionID: lease.SessionID, ConfigSHA256: hex.EncodeToString(sum[:]), ExternalFingerprint: lease.ExternalFingerprint, ExternalAttempt: lease.ExternalAttempt}
+		if capture.Validate() != nil {
+			return nil, errors.New("invalid captured OpenVPN relay owner")
+		}
+		raw, err := json.Marshal(capture)
+		if err != nil || atomicWritePrivilegedState(filepath.Join(dir, "native-capture.json"), raw) != nil {
+			return nil, errors.New("native OpenVPN relay capture could not be written")
+		}
+		ownedRoot, err = os.OpenRoot(dir)
+		if err != nil {
+			return nil, errors.New("native OpenVPN relay directory could not be captured")
+		}
+		defer func() {
+			if !adopted {
+				_ = ownedRoot.Close()
+			}
+		}()
+	}
 	check := exec.CommandContext(ctx, "/usr/local/bin/sing-box", "check", "-c", path)
 	check.Dir = dir
 	check.Stdout = io.Discard
@@ -71,6 +216,9 @@ func (relayExecRunner) Start(ctx context.Context, config []byte, lease multihopr
 		return nil, errors.New("pinned server core rejected the relay configuration")
 	}
 	cmd := exec.Command("/usr/local/bin/sing-box", "run", "-c", path)
+	if lease.OpenVPNRemote {
+		cmd = exec.Command("/usr/local/bin/sing-box", "routervpn-relay", "--runtime-dir", dir, "--session", lease.SessionID)
+	}
 	cmd.Dir = dir
 	cmd.Stdout = io.Discard
 	cmd.Stderr = io.Discard
@@ -81,6 +229,7 @@ func (relayExecRunner) Start(ctx context.Context, config []byte, lease multihopr
 	if err != nil {
 		return nil, err
 	}
+	p.root, p.capture = ownedRoot, capture
 	adopted = true
 	// Authenticate the exact fresh credentials. A listener already occupying the
 	// port must not be mistaken for the engine just launched.

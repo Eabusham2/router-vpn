@@ -162,7 +162,7 @@ func TestOpenVPNUserPairingKeepsCredentialsOutOfDescriptorsAndRejectsAliases(t *
 	}
 }
 
-func TestOpenVPNPairingPreservesSameHostRemoteListAndLocalKeepsDifferentHosts(t *testing.T) {
+func TestOpenVPNPairingPreservesCompleteRemoteListAndLegacyProofStaysSingleHost(t *testing.T) {
 	p := openVPNProfile("", "")
 	p.Username, p.Password = "user", "password"
 	p.Config += "remote 192.0.2.60 443 tcp\nremote-random\n"
@@ -185,8 +185,11 @@ func TestOpenVPNPairingPreservesSameHostRemoteListAndLocalKeepsDifferentHosts(t 
 	if _, err := ValidateEndpoint(endpoint); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := DescribePeer(p, openVPNAuthKey(t)); err == nil {
-		t.Fatal("pairing accepted remotes that one last-node probe cannot prove")
+	if _, err := DescribePeer(p, openVPNAuthKey(t)); err != nil {
+		t.Fatal("independent pairing lost a complete different-host transport", err)
+	}
+	if _, err := SameRemoteHost(endpoint); err == nil {
+		t.Fatal("legacy single response accepted different-host remotes")
 	}
 }
 

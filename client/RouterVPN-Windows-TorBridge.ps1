@@ -116,15 +116,17 @@ function AddUnifiedExternalServerPeer($Body,[string]$Protocol,[string]$PublicKey
     if($KeepaliveText){if(-not [int]::TryParse($KeepaliveText,[ref]$Keepalive) -or $Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Server peer keepalive must be 0–65535 seconds.'};$Peer.persistent_keepalive_interval=$Keepalive}
     $Body.server_peer=$Peer
 }
-function AddUnifiedExternalOpenVPN($Body,[string]$Protocol,[string]$Config,[string]$Pairing,[string]$Username,[string]$Password){
+function AddUnifiedExternalOpenVPN($Body,[string]$Protocol,[string]$Config,[string]$Pairing,[string]$Username,[string]$Password,[string]$ResponseProbes=''){
     if($Protocol -cne 'openvpn'){
-        if($Config -or $Pairing.Trim()){throw 'OpenVPN profile and pairing fields belong only to OpenVPN.'}
+        if($Config -or $Pairing.Trim() -or $ResponseProbes.Trim()){throw 'OpenVPN profile, pairing, and response-map fields belong only to OpenVPN.'}
         return
     }
     if(-not $Config -or [Text.Encoding]::UTF8.GetByteCount($Config) -gt 262144 -or $Config.Contains([string][char]0)){throw 'Paste a bounded inline OpenVPN profile (up to 256 KiB).'}
     if([Text.Encoding]::UTF8.GetByteCount($Pairing) -gt 524288){throw 'OpenVPN pairing JSON is too large.'}
+    if([Text.Encoding]::UTF8.GetByteCount($ResponseProbes) -gt 40960){throw 'OpenVPN response-map JSON is too large.'}
     $Body.openvpn=@{config=$Config;username=$Username;password=$Password}
     if($Pairing.Trim()){$Body.openvpn_pairing_json=$Pairing}
+    if($ResponseProbes.Trim()){$Body.openvpn_response_probes_json=$ResponseProbes}
 }
 function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$false){
     if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect or let the active VPN transition finish before choosing an external path.';return}
@@ -250,6 +252,8 @@ function ShowUnifiedExternalNodeBuilder{
     <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Margin="0,6,0,8" Text="Plain HTTP CONNECT never accepts TLS metadata. HTTPS CONNECT and Hysteria2 require TLS/SNI. The typed maker never accepts executable paths, arbitrary sing-box JSON, Tor directives, or OpenVPN scripts and file paths."/>
     <TextBlock Text="Private inline OpenVPN profile" FontWeight="Bold" Margin="0,14,0,4"/><TextBox Name="ExtOpenVPNConfig" AcceptsReturn="True" MinHeight="130" MaxHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" TextWrapping="NoWrap"/>
     <TextBlock Text="Private OpenVPN pairing JSON — optional for Local" Margin="0,10,0,4"/><TextBox Name="ExtOpenVPNPairing" AcceptsReturn="True" MinHeight="110" MaxHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" TextWrapping="NoWrap"/>
+    <TextBlock Text="Private OpenVPN response map — optional for multiple remote hosts" Margin="0,10,0,4"/><TextBox Name="ExtOpenVPNResponseProbes" AcceptsReturn="True" MinHeight="110" MaxHeight="220" VerticalScrollBarVisibility="Auto" FontFamily="Consolas" TextWrapping="NoWrap"/>
+    <TextBlock Text="Use one HTTPS response endpoint for every original remote IP, keyed by that IP. Use the complete map instead of the single response URL above. This private map cannot use a single-server exit Start Layer." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,6,0,8"/>
     <TextBlock Text="Use the original inline profile and username/password above. Server / Compare requires this device's private pairing package and a separate provider identity on the Router entry. Server secrets stay on the entry. The controller validates the original profile and JSON before saving; scripts and file paths are rejected." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,6,0,8"/>
     <TextBlock Name="ExtStatus" Foreground="#FFCC8A" TextWrapping="Wrap" Margin="0,0,0,10"/>
     <StackPanel Orientation="Horizontal" HorizontalAlignment="Right"><Button Name="ExtSave" Content="Save node" Padding="14,8"/><Button Name="ExtClose" Content="Close" Margin="8,0,0,0" Padding="14,8"/></StackPanel>
@@ -280,7 +284,7 @@ function ShowUnifiedExternalNodeBuilder{
                 $KeepaliveText=[string]$D.FindName('ExtWGKeepalive').Text;if($KeepaliveText.Trim()){$Keepalive=[int]$KeepaliveText;if($Keepalive -lt 0 -or $Keepalive -gt 65535){throw 'Keepalive must be 0–65535 seconds.'};$Body.wg_keepalive=$Keepalive}
                 if($ID -eq 'amneziawg'){$Body.awg_parameters=ParseUnifiedExternalAmneziaParameters ([string]$D.FindName('ExtAWGParameters').Text)}
             }
-            AddUnifiedExternalOpenVPN $Body $ID ([string]$D.FindName('ExtOpenVPNConfig').Text) ([string]$D.FindName('ExtOpenVPNPairing').Text) ([string]$D.FindName('ExtUser').Text) ([string]$D.FindName('ExtPassword').Password)
+            AddUnifiedExternalOpenVPN $Body $ID ([string]$D.FindName('ExtOpenVPNConfig').Text) ([string]$D.FindName('ExtOpenVPNPairing').Text) ([string]$D.FindName('ExtUser').Text) ([string]$D.FindName('ExtPassword').Password) ([string]$D.FindName('ExtOpenVPNResponseProbes').Text)
             AddUnifiedExternalServerPeer $Body $ID ([string]$D.FindName('ExtServerPeerPublic').Text) ([string]$D.FindName('ExtServerPeerAddresses').Text) ([string]$D.FindName('ExtServerPeerMTU').Text) ([string]$D.FindName('ExtServerPeerKeepalive').Text)
             AddUnifiedExternalTransportFields $Body $ID ([string]$D.FindName('ExtServer').Text) ([string]$D.FindName('ExtResponseURL').Text) ([string]$D.FindName('ExtResponseName').Text) ([string]$D.FindName('ExtStartLayer').SelectedItem.Tag) ([string]$D.FindName('ExtLayerAPI').Text) ([string]$D.FindName('ExtLayerPort').Text) ([string]$D.FindName('ExtLayerKey').Password)
             $R=Api '/api/external-profile/create' 'POST' $Body 25;$Status.Text='External node saved and selected. Use a Router entry for Home AdGuard, or choose a resolver in DNS for Direct.';Log ('External node saved: '+[string]$R.profile.name);RefreshProduct

@@ -1,0 +1,13 @@
+//go:build routervpn_openvpn_remote_test
+
+package openvpn
+
+// This fixture is installed only before Start in a test build. The real event
+// queue and real handler remain in the path; tests can hold an old callback
+// while a new TLS transport establishes, then choose when each callback runs.
+func (c *Client) RouterVPNTestConfigurationDispatch(dispatch func(uint64, func() error) error) {
+	original := c.options.OnTunnelConfiguration
+	c.options.OnTunnelConfiguration = func(event TunnelConfigurationEvent) error {
+		return dispatch(event.RouterVPNTransportGeneration, func() error { return original(event) })
+	}
+}

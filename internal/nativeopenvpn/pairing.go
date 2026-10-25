@@ -12,7 +12,6 @@ import (
 	"encoding/pem"
 	"errors"
 	"io"
-	"net/netip"
 	"reflect"
 	"strings"
 	"unicode"
@@ -380,7 +379,7 @@ func DescribePeer(profile Profile, authPrivate string) (PublicDescriptor, error)
 	if err != nil {
 		return PublicDescriptor{}, err
 	}
-	if _, err := SameRemoteHost(endpoint); err != nil {
+	if _, err := Remotes(endpoint); err != nil {
 		return PublicDescriptor{}, err
 	}
 	tlsPolicy, ok := endpoint["tls"].(map[string]any)
@@ -459,44 +458,20 @@ func DescribePeer(profile Profile, authPrivate string) (PublicDescriptor, error)
 	return PublicDescriptor{PairingPublicKey: base64.StdEncoding.EncodeToString(private.PublicKey().Bytes()), Transport: endpoint, ProviderIdentity: identity}, nil
 }
 
-// SameRemoteHost preserves every captured remote/port/protocol. Current relay
-// comparison has one last-node response endpoint, so its remotes must identify
-// the same literal server. General Local parsing continues to allow 16 hosts.
+// SameRemoteHost preserves the legacy single-response-endpoint contract and
+// the current Start Layer mapping. Multi-host relay captures instead require
+// ResponseProbes and an owned connected-remote receipt.
 func SameRemoteHost(endpoint map[string]any) (string, error) {
-	var hosts []string
-	if raw, exists := endpoint["servers"]; exists {
-		servers, ok := raw.([]any)
-		if !ok || len(servers) < 2 || len(servers) > 16 {
-			return "", errPairing
-		}
-		for _, raw := range servers {
-			server, ok := raw.(map[string]any)
-			if !ok {
-				return "", errPairing
-			}
-			host, ok := server["server"].(string)
-			if !ok {
-				return "", errPairing
-			}
-			hosts = append(hosts, host)
-		}
-	} else {
-		host, ok := endpoint["server"].(string)
-		if !ok {
-			return "", errPairing
-		}
-		hosts = append(hosts, host)
-	}
-	if len(hosts) == 0 {
+	remotes, err := Remotes(endpoint)
+	if err != nil || len(remotes) == 0 {
 		return "", errPairing
 	}
-	for _, host := range hosts {
-		address, err := netip.ParseAddr(host)
-		if err != nil || address.Zone() != "" || address.Is4In6() || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || netip.MustParsePrefix("100.64.0.0/10").Contains(address) || host != hosts[0] {
+	for _, remote := range remotes {
+		if remote.Host != remotes[0].Host {
 			return "", errPairing
 		}
 	}
-	return hosts[0], nil
+	return remotes[0].Host, nil
 }
 
 func ValidatePublicPair(local, server PublicDescriptor) error {

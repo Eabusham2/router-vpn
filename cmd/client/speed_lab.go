@@ -53,7 +53,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			"multihop_execution": p.MultihopExecution,
 		}
 		if p.External != nil {
-			node["has_response_probe"] = p.External.ResponseProbe != nil
+			node["has_response_probe"] = p.External.ResponseProbe != nil || len(p.External.OpenVPNResponseProbes) != 0
 			node["has_server_peer"] = p.External.ServerPeer != nil
 			node["has_openvpn_pairing"] = p.External.OpenVPNPairing != nil
 		}
@@ -165,7 +165,7 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 	}
 	defer stopPath()
 	r = r.WithContext(pathCtx)
-	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return validateSpeedLabIdentity(a, identity) })
+	measurement, err := measureSpeedLab(r.Context(), duration, minDuration, maxDuration, func() error { return verifySpeedLabPath(r.Context(), a, identity) })
 	if err != nil {
 		return path, measurement, nil, speedLabPathResultError(pathCtx, err)
 	}
@@ -176,7 +176,7 @@ func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDur
 			return path, measurement, nil, speedLabPathResultError(pathCtx, err)
 		}
 	}
-	if err := speedLabPathResultError(pathCtx, validateSpeedLabIdentity(a, identity)); err != nil {
+	if err := speedLabPathResultError(pathCtx, verifySpeedLabPath(pathCtx, a, identity)); err != nil {
 		return path, measurement, nil, err
 	}
 	return path, measurement, hops, nil
@@ -302,12 +302,23 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 		return speedLabPath{}, speedLabMeasurement{}, nil, speedLabRestoreAfterFailure(a, snapshot, err)
 	}
 	defer stopPath()
-	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, validate)
+	verify := func() error {
+		if err := validate(); err != nil {
+			return err
+		}
+		if identity.External != nil {
+			if err := verifySpeedLabPath(pathCtx, a, identity); err != nil {
+				return err
+			}
+		}
+		return validate()
+	}
+	measurement, measureErr := measureSpeedLab(pathCtx, duration, minDuration, maxDuration, verify)
 	var hops []speedLabHopMeasurement
 	if measureErr == nil && path.Topology == "multihop" {
 		hops, measureErr = measureSpeedLabMultihopHopsContext(pathCtx, a, identity)
 	}
-	measureErr = speedLabPathResultError(pathCtx, errors.Join(measureErr, validate()))
+	measureErr = speedLabPathResultError(pathCtx, errors.Join(measureErr, verify()))
 	// Join all requests/observers before intentional teardown. Their cancellation
 	// cannot retire a replacement runtime or turn restoration into a stale test.
 	stopPath()

@@ -43,6 +43,13 @@ type Engine interface {
 type MeasurementScope interface {
 	BeginMeasurement() (release func(), err error)
 }
+
+// MeasurementBoundary observes any independently changing native transport
+// before work and before publishing results. A cached health flag is not an
+// adequate adoption boundary for a leased remote runtime.
+type MeasurementBoundary interface {
+	VerifyMeasurement(context.Context) error
+}
 type Hop struct {
 	ID    string `json:"id"`
 	Role  string `json:"role"`
@@ -309,7 +316,19 @@ func (s *Service) phase(ctx context.Context, id, phase string) error {
 	return nil
 }
 func (s *Service) run(ctx context.Context, id string, size int) {
+	var boundaryError error
+	verify := func() error {
+		if boundary, ok := s.engine.(MeasurementBoundary); ok {
+			if err := boundary.VerifyMeasurement(ctx); err != nil {
+				return err
+			}
+		}
+		return s.valid(ctx)
+	}
 	for _, h := range s.hops {
+		if boundaryError = verify(); boundaryError != nil {
+			break
+		}
 		if s.phase(ctx, id, h.Role+":idle") != nil {
 			break
 		}
@@ -338,7 +357,7 @@ func (s *Service) run(ctx context.Context, id string, size int) {
 		} else {
 			r.Ready = true
 		}
-		if s.valid(ctx) != nil {
+		if boundaryError = verify(); boundaryError != nil {
 			break
 		}
 		s.mu.Lock()
@@ -348,6 +367,11 @@ func (s *Service) run(ctx context.Context, id string, size int) {
 		s.mu.Unlock()
 	}
 	err := s.valid(ctx)
+	if boundaryError != nil {
+		err = boundaryError
+	} else if err == nil {
+		err = verify()
+	}
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state.Request != id || s.state.Complete {

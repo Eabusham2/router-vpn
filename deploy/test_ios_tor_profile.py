@@ -59,6 +59,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "external-response-probe":err=mobilemultihop.ValidateExternalResponseProbe(r.Node,r.Config);value="checked"
  case "private-node-json":err=nativeopenvpn.ValidatePrivateNodeJSON(r.Config);value="checked"
  case "openvpn-pairing":var p nativeopenvpn.Profile;var pair nativeopenvpn.Pairing;err=json.Unmarshal([]byte(r.Config),&p);if err==nil{err=json.Unmarshal([]byte(r.Policy),&pair)};if err==nil{_,err=nativeopenvpn.ValidatePairing(p,pair)};value="checked"
+ case "openvpn-response-probes":err=RouterValidateExternalOpenVPNResponseProbes(r.Config,r.Policy);value="checked"
  case "openvpn":value,err=nativeopenvpn.CompileEndpoint(r.Config,r.Files,r.Node,r.Mode,r.Source)
  case "predecessor":_,err=mobiletor.NewPredecessorProof(r.Config);value="checked"
  case "predecessor-fingerprint":var proof *mobiletor.PredecessorProof;proof,err=mobiletor.NewPredecessorProof(r.Config);if err==nil{value=proof.Fingerprint()}
@@ -74,6 +75,13 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "sip":var data []byte;data,err=nativesip003.Compile([]byte(r.Config),[]byte(r.Files));value=string(data)
  case "sip-start":var data []byte;data,err=nativesip003.ComposeStartLayer([]byte(r.Config),[]byte(r.Files),[]byte(r.Source),[]byte(r.Policy));value=string(data)
 ''' + xray_fixture + ' case "compile":value,err=mobilemultihop.CompilePQProfile(r.Mode,r.Files,r.Node)')
+
+# Execute the shipping gomobile boundary unchanged, rather than only a second
+# call to its underlying parser. Native framework marshalling remains doubled.
+_openvpn_binding = (ROOT / 'mobile/routervpn_openvpn.go').read_text()
+_response_binding_start = _openvpn_binding.index('func RouterValidateExternalOpenVPNResponseProbes(')
+RESPONSE_BINDING = _openvpn_binding[_response_binding_start:_openvpn_binding.index('\n}', _response_binding_start) + 2]
+GO += '\n' + RESPONSE_BINDING + '\n'
 
 # A real Swift module makes canImport(Libbox) select every shipping native
 # compiler branch. The serialized subprocess implements only the FFI boundary.
@@ -154,6 +162,9 @@ public func LibboxRouterApplyPerformancePolicy(_ config:String,_ policy:String,_
 }
 public func LibboxRouterValidateExternalOpenVPNPairing(_ profile:String,_ pairing:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"openvpn-pairing","Config":profile,"Policy":pairing]) == "checked"
+}
+public func LibboxRouterValidateExternalOpenVPNResponseProbes(_ profile:String,_ probes:String,_ error:inout NSError?)->Bool {
+ result(&error,["Op":"openvpn-response-probes","Config":profile,"Policy":probes]) == "checked"
 }
 public func LibboxRouterValidatePrivateNodeJSON(_ source:String,_ error:inout NSError?)->Bool {
  result(&error,["Op":"private-node-json","Config":source]) == "checked"
@@ -253,7 +264,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  func linkNodeBundle(_ data:Data)throws {_ = try JSONDecoder().decode(ClientBundle.self,from:data);saved=data;writes+=1}
 }
 @main struct Tests {
- @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,executionGraphs=0,externalLayerGraphs=0,sessions=Set<String>()
+ @MainActor static var checks=0,graphs=0,homeGraphs=0,policyCases=0,externalGraphs=0,executionGraphs=0,externalLayerGraphs=0,mappedOpenVPNGraphs=0,sessions=Set<String>()
  static let modes=["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg","ss-v2ray","split","max","naive-h2","naive-h3"]
  static let kinds=["tor","obfs4","meek_lite","snowflake","webtunnel","custom"]
  static let layers=["off","aes-256-gcm","aes-256-gcm+xor-whitening"]
@@ -546,6 +557,11 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
  }
  @MainActor static func run()throws {
   defer{RouterVPNTorTestClose()}
+  if ProcessInfo.processInfo.environment["ROUTERVPN_IOS_OPENVPN_PROBES_ONLY"]=="1" {
+   try openVPNResponseProbesCreation()
+   print("Apple OpenVPN remote response map: PASS (\(checks) shipping Swift/real Go checks; storage and FFI boundaries doubled)")
+   return
+  }
   let maximum=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[2]))),composite=try object(Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[3])))
   if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_ENTRY_GRAPHS"] {
    for mode in modes {for layer in layers {
@@ -574,8 +590,9 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try responseProbeCreation()
   try packetServerPeerCreation()
   try openVPNPairingCreation(maximum,composite)
+  try openVPNResponseProbesCreation()
   try ordinaryExternalPredecessors(maximum,composite)
-  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
+  print("Apple Tor profile creation and complete provider assembly: PASS (\(graphs) Tor, \(homeGraphs) Home DNS, \(externalGraphs) ordinary external, \(executionGraphs) external Server/Compare, \(externalLayerGraphs) separate exit-layer graphs, \(mappedOpenVPNGraphs) mapped OpenVPN graphs, \(policyCases) independent profile-policy combinations, \(checks) checks; shipping Swift/real Go; OS and FFI handles doubled)")
  }
  @MainActor static func main() {
   do{try run()}catch{FileHandle.standardError.write(Data(("FAIL Apple Tor: "+error.localizedDescription+"\n").utf8));exit(1)}
@@ -736,8 +753,68 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let local=try JSONDecoder().decode(ClientBundle.self,from:model.saved!).routerProfiles[0]
   try check("plain Local OpenVPN keeps multi-host remotes without pairing",local.external?.openVPN?.config==source+"remote 203.0.113.21 443 tcp\n" && local.external?.openVPNPairing==nil && !IOSExternalExecution.eligible(entry:entry,exit:local))
  }
+ @MainActor static func openVPNResponseProbesCreation()throws {
+  let fixtures=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!)))["layers"] as! [String:[String:Any]]
+  let original=(fixtures["off"]!["external"] as! [String:Any])["openvpn"] as! [String:Any]
+  let source=(original["config"] as! String)+"remote 203.0.113.21 443 tcp\n",username=original["username"] as! String,password=original["password"] as! String
+  let probes:[String:Any]=["203.0.113.20":["url":"https://203.0.113.20:9443/response","server_name":"first.example.test"],"203.0.113.21":["url":"https://203.0.113.21:9443/response","server_name":"second.example.test"]]
+  let text=String(decoding:try json(probes),as:UTF8.self),model=RouterVPNModel()
+  func save(_ value:String,_ legacy:String="",_ layer:String="off")throws {
+   try model.createIOSExternalNode(protocolName:"openvpn",name:"Private remote map",server:"203.0.113.20",port:1194,expectedPublicIP:"203.0.113.88",username:username,password:password,method:"",secret:"",tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:1280,openVPNConfig:source,responseProbeURL:legacy,exitStartLayer:layer,openVPNResponseProbesJSON:value)
+  }
+  try save(text)
+  let imported=try JSONDecoder().decode(ClientBundle.self,from:model.saved!),external=imported.routerProfiles[0].external!
+  try IOSExternalExecution.validateImported(imported)
+  try check("OpenVPN maker retains exact multi-host source and private response map",external.openVPN?.config==source && external.openVPN?.username==username && external.openVPN?.password==password && external.responseProbe==nil && external.openVPNResponseProbes?.count==2 && external.openVPNResponseProbes?["203.0.113.21"]?.serverName=="second.example.test")
+  let roundtrip=try JSONDecoder().decode(ClientBundle.self,from:JSONEncoder().encode(imported))
+  try check("OpenVPN private Codable roundtrip preserves every response endpoint",roundtrip.routerProfiles[0].external==external)
+  var profile=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]
+  profile["dns_mode"]="custom";profile["dns_protocol"]="tcp";profile["dns_host"]="9.9.9.9";profile["dns_port"]=5353;profile["mtu_policy"]="fixed";profile["manual_mtu"]=1280;profile["ipv6_mode"]="on";profile["home_lan_access"]=false
+  let runtime=try RouterVPNExternalExitBuilder.build(profile:profile),capture=try object(Data(runtime.policy!.capture.utf8)),metadata=try object(Data(runtime.policy!.metadata.utf8))
+  let captured=(capture["profile"] as! [String:Any])["external"] as! [String:Any]
+  let expectedOriginal=(profile["external"] as! [String:Any])["openvpn"]!
+  try check("PacketTunnel capture preserves private per-remote response identity",json(captured["openvpn_response_probes"]!)==json(probes) && json(captured["openvpn"]!)==json(expectedOriginal))
+  try check("public external policy metadata omits map and certificate names",metadata["openvpn_response_probes"]==nil && !runtime.policy!.metadata.contains("first.example.test") && !runtime.policy!.metadata.contains("second.example.test"))
+  let saved=model.saved,writes=model.writes
+  let duplicate="{\"203.0.113.20\":{\"url\":\"https://203.0.113.20/first\"},\"203.0.113.20\":{\"url\":\"https://203.0.113.20/second\"},\"203.0.113.21\":{\"url\":\"https://203.0.113.21/response\"}}"
+  let escapedAlias=duplicate.replacingOccurrences(of:"\"203.0.113.20\":{\"url\":\"https://203.0.113.20/second",with:"\"203.0.113.\\u0032\\u0030\":{\"url\":\"https://203.0.113.20/second")
+  for raw in ["null","[]","{}",text+" {}",duplicate,escapedAlias,String(text.dropLast())+",\"203.0.113.22\":{\"url\":\"https://203.0.113.22/extra\"}}",String(repeating:" ",count:40*1024)+text] {
+   reject("raw OpenVPN response map rejects ambiguity, wrong shape or bound"){try save(raw)}
+  }
+  for fault in ["missing-host","extra-field","null-name","wrong-host","http","private-host","uncovered-host"] {
+   var changed=probes
+   switch fault {
+   case "missing-host":changed.removeValue(forKey:"203.0.113.21")
+   case "extra-field":changed["203.0.113.20"]=["url":"https://203.0.113.20/response","password":"hidden"]
+   case "null-name":changed["203.0.113.20"]=["url":"https://203.0.113.20/response","server_name":NSNull()]
+   case "wrong-host":changed["203.0.113.20"]=["url":"https://203.0.113.21/response"]
+   case "http":changed["203.0.113.20"]=["url":"http://203.0.113.20/response"]
+   case "private-host":changed.removeValue(forKey:"203.0.113.21");changed["192.168.50.1"]=["url":"https://192.168.50.1/response"]
+   default:changed.removeValue(forKey:"203.0.113.21");changed["203.0.113.22"]=["url":"https://203.0.113.22/response"]
+   }
+   reject("OpenVPN response map rejects "+fault){try save(String(decoding:json(changed),as:UTF8.self))}
+  }
+  reject("single and per-remote response contracts are mutually exclusive"){try save(text,"https://203.0.113.20/response")}
+  reject("multi-host map cannot silently borrow the first host's Start Layer"){try save(text,"","aes-256-gcm")}
+  var malformed=profile,block=profile["external"] as! [String:Any]
+  block["openvpn_response_probes"]=["203.0.113.20":["url":"https://203.0.113.20/response","unknown":true],"203.0.113.21":["url":"https://203.0.113.21/response"]];malformed["external"]=block
+  reject("typed import does not erase unknown probe fields before native validation"){_ = try JSONDecoder().decode(RouterProfile.self,from:json(malformed))}
+  block["openvpn_response_probes"]=NSNull();malformed["external"]=block
+  reject("typed import rejects explicit null map"){_ = try JSONDecoder().decode(RouterProfile.self,from:json(malformed))}
+  block["openvpn_response_probes"]=probes;block["response_probe"]=NSNull();malformed["external"]=block
+  reject("typed import cannot collapse an explicit null legacy probe beside a remote map"){_ = try JSONDecoder().decode(RouterProfile.self,from:json(malformed))}
+  let rawBundle="{\"routerProfiles\":[{\"external\":{\"openvpn_response_probes\":"+duplicate+"}}]}"
+  reject("whole private import rejects duplicate response hosts before Codable"){try IOSExternalExecution.validatePrivateNodeJSON(Data(rawBundle.utf8))}
+  try check("invalid response maps never overwrite the saved private node",model.saved==saved && model.writes==writes)
+  let paired=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"]!)))["external"] as! [String:Any]
+  let pairedOriginal=paired["openvpn"] as! [String:Any],pairedMap=paired["openvpn_response_probes"] as! [String:Any],pairedOwner=paired["openvpn_pairing"] as! [String:Any]
+  try model.createIOSExternalNode(protocolName:"openvpn",name:"Paired multi-host private map",server:"203.0.113.20",port:1194,expectedPublicIP:paired["expected_public_ip"] as! String,username:pairedOriginal["username"] as! String,password:pairedOriginal["password"] as! String,method:"",secret:"",tlsServerName:"",wgPrivateKey:"",wgPeerPublicKey:"",wgPresharedKey:"",wgAddresses:[],wgAllowedIPs:[],wgDNS:[],wgMTU:1280,openVPNConfig:pairedOriginal["config"] as! String,openVPNPairingJSON:String(decoding:json(pairedOwner),as:UTF8.self),openVPNResponseProbesJSON:String(decoding:json(pairedMap),as:UTF8.self))
+  let pairedSaved=(try object(model.saved!)["routerProfiles"] as! [[String:Any]])[0]["external"] as! [String:Any]
+  try check("private paired fixture survives maker with exact independent descriptors",json(pairedSaved)==json(paired))
+ }
  @MainActor static func ordinaryExternalPredecessors(_ maximum:[String:Any],_ composite:[String:Any])throws {
   let pairingFixtures=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_CLIENT_FIXTURE"]!)))["layers"] as! [String:[String:Any]]
+  let mappedOpenVPN=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE"]!)))["external"] as! [String:Any]
   let protocols=["wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"]
   var failures:[String]=[]
   for mode in modes {for layer in layers {
@@ -819,6 +896,31 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
        executionGraphs+=1
       }
      }
+     if kind=="openvpn" {
+      for execution in ["local","server","auto"] {
+       var selected=exit
+       selected["external"]=mappedOpenVPN;selected["endpoint"]="203.0.113.20:1194";selected["multihop_execution"]=execution;selected["start_layer"]="off"
+       let frozen=try json(selected),entryProfile=try JSONDecoder().decode(RouterProfile.self,from:json(profile)),exitProfile=try JSONDecoder().decode(RouterProfile.self,from:frozen)
+       try IOSExternalExecution.require(selection:execution,entry:entryProfile,exit:exitProfile)
+       var launch=provider;launch["engine"]="external-libbox";launch["mode"]="external-openvpn"
+       launch["bundle"]=try json(["selectedRouterID":selected["id"]!,"routerProfiles":[selected]])
+       owner.multihopExecutionSource = execution=="local" ? nil : try IOSMultihopExecution.Source(configuration:launch) { SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined() }
+       defer {owner.multihopExecutionSource=nil}
+       let built=try owner.prepare(provider:launch,selectedProfile:selected,strict:true).runtime.policy!
+       let graph=try object(Data(built.config.utf8)),captured=try object(Data(built.capture.utf8)),local=try tagged(graph,execution=="local" ? "custom-exit" : "routervpn-execution-local")
+       let capturedExternal=(captured["profile"] as! [String:Any])["external"] as! [String:Any],original=mappedOpenVPN["openvpn"] as! [String:Any]
+       try check("mapped OpenVPN retains complete entry mode and independent Start Layer",captured["predecessor_config"] as? String==String(decoding:originalFiles["sing-box.json"]!,as:UTF8.self) && json(captured["entry"]!)==json(profile))
+       try check("mapped OpenVPN retains both physical remotes and local credentials",local["type"] as? String=="openvpn-client" && (local["servers"] as? [[String:Any]])?.count==2 && local["detour"] as? String=="external-entry" && local["username"] as? String==original["username"] as? String && local["password"] as? String==original["password"] as? String)
+       try check("mapped OpenVPN capture keeps exact private response and pairing contracts",json(capturedExternal)==json(mappedOpenVPN) && json(selected)==frozen)
+       try check("mapped OpenVPN does not expose private probes or pairing",!built.metadata.contains("openvpn_response_probes") && !built.metadata.contains("provider.example") && !built.metadata.contains(original["password"] as! String) && !built.metadata.contains((mappedOpenVPN["openvpn_pairing"] as! [String:Any])["private_key"] as! String))
+       try check("mapped OpenVPN selection reaches native execution owner",execution=="local" ? built.executionRequested==nil : built.executionRequested==execution && tagged(graph,"custom-exit")["type"] as? String=="selector")
+       if let output=ProcessInfo.processInfo.environment["ROUTERVPN_IOS_EXTERNAL_GRAPHS"] {
+        let file=URL(fileURLWithPath:output).appendingPathComponent(mode+"-"+layer+"-openvpn-mapped-"+execution+".json")
+        try Data(built.config.utf8).write(to:file,options:.withoutOverwriting)
+       }
+       mappedOpenVPNGraphs+=1
+      }
+     }
      if mode=="wg" && ExternalNodeConfig.serverExecutionProtocols.contains(kind) {
       for exitLayer in ["aes-256-gcm","aes-256-gcm+xor-whitening"] { for execution in ["local","server","auto"] {
        var selected=exit,external=selected["external"] as! [String:Any]
@@ -856,6 +958,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   if !failures.isEmpty{throw NSError(domain:"OrdinaryExternalMatrix",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
   try check("every full Router entry mode and layer composes with every ordinary exit",externalGraphs==456)
   try check("every native Router entry and Start Layer has an external execution owner",executionGraphs==912 && externalLayerGraphs==144)
+  try check("every Router entry and layer retains mapped OpenVPN Local, Server and Compare",mappedOpenVPNGraphs==171)
  }
 }
 '''
@@ -866,7 +969,10 @@ def main():
     parser.add_argument('--output', type=Path)
     parser.add_argument('--entry-output', type=Path)
     parser.add_argument('--entry-only', action='store_true')
+    parser.add_argument('--openvpn-probes-only', action='store_true')
     args = parser.parse_args()
+    if args.openvpn_probes_only and (args.output or args.entry_output or args.entry_only or os.environ.get('ROUTERVPN_IOS_EXTERNAL_GRAPHS')):
+        raise ValueError('--openvpn-probes-only cannot produce complete graph evidence')
     if args.entry_only and args.output:
         raise ValueError('--entry-only cannot produce complete Tor graph evidence')
     external_output = os.environ.get('ROUTERVPN_IOS_EXTERNAL_GRAPHS')
@@ -916,7 +1022,11 @@ def main():
         command += ['-Xlinker', '-rpath', '-Xlinker', str(work), *map(str, sources), str(source), '-o', str(work / 'tests')]
         subprocess.run(command, check=True, timeout=180)
         environment = dict(os.environ)
+        environment.pop('ROUTERVPN_IOS_OPENVPN_PROBES_ONLY', None)
         environment['ROUTERVPN_OPENVPN_CLIENT_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-client.json')
+        environment['ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE'] = str(ROOT / 'deploy/fixtures/external-openvpn-multihost-client.json')
+        if args.openvpn_probes_only:
+            environment['ROUTERVPN_IOS_OPENVPN_PROBES_ONLY'] = '1'
         if args.output:
             environment['ROUTERVPN_IOS_TOR_GRAPHS'] = str(args.output.resolve())
         if args.entry_output:
@@ -924,9 +1034,21 @@ def main():
         if args.entry_only:
             environment['ROUTERVPN_IOS_ENTRY_ONLY'] = '1'
         subprocess.run([str(work / 'tests'), str(compiler), str(maximum), str(composite)], env=environment, check=True, timeout=180)
+        if args.openvpn_probes_only:
+            original = 'return nativeopenvpn.ValidateResponseProbesJSON(profileJSON, probesJSON)'
+            if RESPONSE_BINDING.count(original) != 1:
+                raise AssertionError('OpenVPN response binding boundary changed')
+            broken = RESPONSE_BINDING.replace(original, 'return nil')
+            (go_dir / 'main.go').write_text(GO.replace(RESPONSE_BINDING, broken))
+            negative = work / 'compiler-without-raw-response-validation'
+            subprocess.run(['go', 'build', '-o', str(negative), str(go_dir / 'main.go')], cwd=ROOT, check=True, timeout=120)
+            rejected = subprocess.run([str(work / 'tests'), str(negative), str(maximum), str(composite)], env=environment, capture_output=True, text=True, timeout=30)
+            if rejected.returncode == 0 or 'raw OpenVPN response map rejects ambiguity' not in rejected.stderr:
+                raise AssertionError('Missing raw response-map validation negative control escaped: ' + rejected.stderr[-1500:])
+            print('Apple OpenVPN copied-binding negative control: missing raw map validation rejected')
         if args.output:
-            inputs = [Path(__file__), APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
+            inputs = [Path(__file__), ROOT / 'mobile/routervpn_openvpn.go', APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
+            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144, 'mapped_openvpn_graphs': 171, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
                 'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 

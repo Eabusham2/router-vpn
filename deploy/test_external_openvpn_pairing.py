@@ -48,7 +48,7 @@ class OpenVPNPairing(unittest.TestCase):
             return PAIR.pair(bundle, 'exit', server_peer_profile=server)
 
     def test_actual_pairer_preserves_each_layer_and_only_server_owned_provider_credentials(self):
-        self.assertEqual(len(self.fixtures), 3)
+        self.assertEqual(set(self.fixtures), {'off', 'aes-256-gcm', 'aes-256-gcm+xor-whitening', 'mapped'})
         for name, fixture in self.fixtures.items():
             with self.subTest(layer=name):
                 external, server = copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile'])
@@ -66,6 +66,25 @@ class OpenVPNPairing(unittest.TestCase):
                 self.assertEqual(len(paired['transport']['servers']), 2)
                 self.assertNotIn('server', paired['transport'])
                 self.assertFalse(paired['transport']['system'])
+
+    def test_actual_mapped_pairer_preserves_all_hosts_and_rejects_partial_or_unbound_proof(self):
+        fixture = self.fixtures['mapped']
+        paired, = self.pair(copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile']), '')
+        self.assertEqual(paired['external']['openvpn_response_probes'], fixture['external']['openvpn_response_probes'])
+        self.assertEqual({remote['server'] for remote in paired['transport']['servers']}, {'203.0.113.20', '203.0.113.21'})
+        for fault in ('missing-host', 'foreign-host', 'wrong-proof-host', 'legacy-probe', 'exit-layer', 'changed-original', 'private-descriptor'):
+            with self.subTest(fault=fault):
+                external, server = copy.deepcopy(fixture['external']), copy.deepcopy(fixture['server_peer_profile'])
+                if fault == 'missing-host': del external['openvpn_response_probes']['203.0.113.21']
+                if fault == 'foreign-host': external['openvpn_response_probes']['203.0.113.22'] = dict(url='https://203.0.113.22/response')
+                if fault == 'wrong-proof-host': external['openvpn_response_probes']['203.0.113.21']['url'] = 'https://203.0.113.20/response'
+                if fault == 'legacy-probe': external['response_probe'] = dict(url='https://203.0.113.20/response')
+                if fault == 'exit-layer': external['start_layer'] = copy.deepcopy(self.fixtures['aes-256-gcm']['external']['start_layer'])
+                if fault == 'changed-original': server['openvpn']['config'] = server['openvpn']['config'].replace('203.0.113.21 443', '203.0.113.21 8443')
+                if fault == 'private-descriptor': external['openvpn_pairing']['server']['password'] = 'private-sentinel'
+                with self.assertRaises(ValueError) as raised:
+                    self.pair(external, server, '')
+                self.assertNotIn('private-sentinel', str(raised.exception))
 
     def test_actual_descriptor_export_contains_no_provider_or_pairing_secrets(self):
         for fixture in self.fixtures.values():

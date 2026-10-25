@@ -92,7 +92,7 @@ func externalOpenVPNTransport(external map[string]any) (map[string]any, error) {
 	if external["protocol"] != "openvpn" {
 		return nil, errExternalOpenVPN
 	}
-	allowed := map[string]bool{"protocol": true, "openvpn": true, "openvpn_pairing": true, "expected_public_ip": true, "response_probe": true, "start_layer": true}
+	allowed := map[string]bool{"protocol": true, "openvpn": true, "openvpn_pairing": true, "openvpn_response_probes": true, "expected_public_ip": true, "response_probe": true, "start_layer": true}
 	for key := range external {
 		if !allowed[key] {
 			return nil, errExternalOpenVPN
@@ -102,7 +102,23 @@ func externalOpenVPNTransport(external map[string]any) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return nativeopenvpn.CompileProfile(profile, "exit", "")
+	transport, err := nativeopenvpn.CompileProfile(profile, "exit", "")
+	if err != nil {
+		return nil, err
+	}
+	if raw, present := external["openvpn_response_probes"]; present {
+		_, legacy := external["response_probe"]
+		_, layered := external["start_layer"]
+		if legacy || layered {
+			return nil, errExternalOpenVPN
+		}
+		encoded, err := json.Marshal(raw)
+		var probes nativeopenvpn.ResponseProbes
+		if err != nil || json.Unmarshal(encoded, &probes) != nil || probes.Validate(transport) != nil {
+			return nil, errExternalOpenVPN
+		}
+	}
+	return transport, nil
 }
 
 func externalOpenVPNSelection(external map[string]any) (*ExternalOpenVPNPair, error) {
@@ -136,6 +152,17 @@ func ValidateExternalOpenVPNPairing(protocol string, external map[string]any) er
 	return err
 }
 
+func ValidateExternalOpenVPNResponseProbes(protocol string, external map[string]any) error {
+	if _, exists := external["openvpn_response_probes"]; !exists {
+		return nil
+	}
+	if protocol != "openvpn" {
+		return errExternalOpenVPN
+	}
+	_, err := externalOpenVPNTransport(external)
+	return err
+}
+
 func validateExternalOpenVPN(exit Exit) (map[string]any, error) {
 	if exit.Mode != "openvpn" || exit.External == nil || exit.External.Packet != nil || exit.External.OpenVPN == nil || exit.NodeID != "" || !externalPublicIP(exit.External.ExpectedPublicIP) {
 		return nil, errExternalOpenVPN
@@ -161,9 +188,15 @@ func validateExternalOpenVPN(exit Exit) (map[string]any, error) {
 		return nil, errExternalOpenVPN
 	}
 	clear(shared)
-	host, err := nativeopenvpn.SameRemoteHost(transport)
-	if err != nil || exit.External.ResponseProbe.Validate(host) != nil {
-		return nil, errExternalOpenVPN
+	if exit.External.OpenVPNResponseProbes != nil {
+		if exit.External.ResponseProbe != (ResponseProbe{}) || exit.StartLayer != nil || exit.External.OpenVPNResponseProbes.Validate(transport) != nil {
+			return nil, errExternalOpenVPN
+		}
+	} else {
+		host, err := nativeopenvpn.SameRemoteHost(transport)
+		if err != nil || exit.External.ResponseProbe.Validate(host) != nil {
+			return nil, errExternalOpenVPN
+		}
 	}
 	if exit.StartLayer != nil {
 		if _, _, err := WrapStartLayer(transport, exit.Mode, exit.StartLayer, ExitStartLayerTag, ""); err != nil {
@@ -188,10 +221,22 @@ func externalOpenVPNAuthKey(exit Exit, fingerprint string) ([]byte, error) {
 	if exit.StartLayer != nil {
 		layerSecret = exit.StartLayer.Transport["password"]
 	}
-	raw, _ := json.Marshal([]any{"routervpn-external-openvpn-salt-v4", fingerprint, layerSecret})
+	version := externalOpenVPNVersion(exit)
+	raw, _ := json.Marshal([]any{"routervpn-external-openvpn-salt-" + version, fingerprint, layerSecret})
 	salt := sha256.Sum256(raw)
 	clear(raw)
-	return packetHKDF(shared, salt[:], "routervpn-external-openvpn-lease-v4"), nil
+	return packetHKDF(shared, salt[:], "routervpn-external-openvpn-lease-"+version), nil
+}
+
+func externalOpenVPNVersion(exit Exit) string {
+	if OpenVPNRemoteRequired(exit) {
+		return "v5"
+	}
+	return "v4"
+}
+
+func OpenVPNRemoteRequired(exit Exit) bool {
+	return exit.Mode == "openvpn" && exit.External != nil && exit.External.OpenVPNResponseProbes != nil
 }
 
 func externalOpenVPNServerProfile(source map[string]any) (nativeopenvpn.Profile, string, error) {

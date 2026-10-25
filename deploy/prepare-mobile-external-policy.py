@@ -58,10 +58,17 @@ def prepare(vendor, *, mobile=True):
         ('dns_dial_test.go', 'routervpn_dns_dial_test.go'),
         ('mtu.go', 'routervpn_external_mtu.go'),
         ('mtu_test.go', 'routervpn_external_mtu_test.go'),
+        ('openvpn_remote_test.go', 'routervpn_external_openvpn_remote_test.go'),
+        ('openvpn_bridge_test.go', 'routervpn_external_openvpn_bridge_test.go'),
         ('tor_mtu.go', 'routervpn_tor_mtu.go'),
         ('tor_mtu_test.go', 'routervpn_tor_mtu_test.go'),
     ):
         (vendor/target).write_bytes((ROOT/'mobile/externalpolicy'/(source+'.tmpl')).read_bytes())
+    fixture = vendor/'testdata/routervpn-external-openvpn-mapped.json'
+    if fixture.is_symlink() or fixture.parent.is_symlink():
+        raise ValueError('linked native OpenVPN test capture')
+    fixture.parent.mkdir(exist_ok=True)
+    fixture.write_bytes((ROOT/'deploy/fixtures/external-openvpn-multihost-client.json').read_bytes())
 
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)

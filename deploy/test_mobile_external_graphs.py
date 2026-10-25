@@ -43,6 +43,7 @@ def inputs() -> list[Path]:
             ROOT/'android/test_android_external_entries.py', ROOT/'android/test_android_tor_profile.py',
             ROOT/'deploy/test_ios_tor_profile.py',
             ROOT/'deploy/fixtures/external-openvpn-client.json',
+            ROOT/'deploy/fixtures/external-openvpn-multihost-client.json',
             *sorted((ROOT/'android/app/src/main/java/com/eabusham/routervpn').glob('*.java')),
             *sorted((ROOT/'ios/RouterVPN/App').glob('*.swift')),
             *sorted((ROOT/'ios/RouterVPN/PacketTunnel').glob('*.swift'))] + HOST.inputs()
@@ -65,7 +66,11 @@ def expected_names(target: str) -> set[str]:
               for case in itertools.product(MODES, LAYERS, supported, EXECUTIONS)}
     layered = {'wg-'+entry+'-'+protocol+'-exit-'+layer+'-'+execution+'.json'
                for entry, protocol, layer, execution in itertools.product(LAYERS, supported, LAYERS[1:], ('local', *EXECUTIONS))}
-    return local | paired | layered
+    # A distinct multi-remote OpenVPN capture must retain its full response map
+    # through every Router predecessor and entry layer for all execution choices.
+    mapped = {mode+'-'+layer+'-openvpn-mapped-'+execution+'.json'
+              for mode, layer, execution in itertools.product(MODES, LAYERS, ('local', *EXECUTIONS))}
+    return local | paired | layered | mapped
 
 
 def require_matrix(directory: Path, target: str) -> int:

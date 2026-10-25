@@ -547,7 +547,11 @@ func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
 		err = errors.Join(err, a.speedLabCheckLaunchedRuntime())
 	}
 	if err == nil {
-		_, err = waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond)
+		var identity speedLabPathIdentity
+		identity, err = waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond)
+		if err == nil {
+			err = verifySpeedLabPath(a.connectionOperationContextOrBackground(), a, identity)
+		}
 	}
 	return err
 }

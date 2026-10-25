@@ -34,6 +34,9 @@ _wg_spec.loader.exec_module(WIREGUARD_BIND)
 _openvpn_spec = importlib.util.spec_from_file_location('routervpn_openvpn_close', ROOT/'deploy/mobile_openvpn_close_policy.py')
 OPENVPN_CLOSE = importlib.util.module_from_spec(_openvpn_spec)
 _openvpn_spec.loader.exec_module(OPENVPN_CLOSE)
+_openvpn_remote_spec = importlib.util.spec_from_file_location('routervpn_openvpn_remote', ROOT/'deploy/mobile_openvpn_remote_policy.py')
+OPENVPN_REMOTE = importlib.util.module_from_spec(_openvpn_remote_spec)
+_openvpn_remote_spec.loader.exec_module(OPENVPN_REMOTE)
 _pq_spec = importlib.util.spec_from_file_location('routervpn_pq', ROOT/'deploy/prepare-mobile-pq.py')
 PQ = importlib.util.module_from_spec(_pq_spec)
 _pq_spec.loader.exec_module(PQ)
@@ -43,7 +46,7 @@ def inputs():
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -93,6 +96,7 @@ def prepare(vendor):
     COMPOSITE.prepare(vendor)
     WIREGUARD_BIND.prepare(vendor)
     OPENVPN_CLOSE.prepare(vendor)
+    OPENVPN_REMOTE.prepare(vendor)
     print('Shared multihop source digest:',digest())
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__);parser.add_argument('vendor',type=Path,nargs='?');parser.add_argument('--digest',action='store_true');args=parser.parse_args()

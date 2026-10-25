@@ -75,13 +75,14 @@ type Request struct {
 }
 type Lease struct {
 	Request
-	NodeID     string    `json:"node_id"`
-	ExitNodeID string    `json:"exit_node_id"`
-	Host       string    `json:"host"`
-	Port       int       `json:"port"`
-	Username   string    `json:"username"`
-	Password   string    `json:"password"`
-	ExpiresAt  time.Time `json:"expires_at"`
+	NodeID        string    `json:"node_id"`
+	ExitNodeID    string    `json:"exit_node_id"`
+	Host          string    `json:"host"`
+	Port          int       `json:"port"`
+	Username      string    `json:"username"`
+	Password      string    `json:"password"`
+	ExpiresAt     time.Time `json:"expires_at"`
+	OpenVPNRemote bool      `json:"openvpn_remote,omitempty"`
 }
 type Process interface {
 	Alive() bool
@@ -186,6 +187,9 @@ func (m *Manager) Available() []map[string]string {
 		if e.External != nil {
 			item["external_fingerprint"], _ = ExternalFingerprint(e)
 			item["expected_public_ip"] = e.External.ExpectedPublicIP
+		}
+		if OpenVPNRemoteRequired(e) {
+			item["openvpn_remote"] = "fresh-connected-transport-v1"
 		}
 		if e.StartLayer != nil {
 			item["exit_start_layer"] = e.StartLayer.Mode
@@ -373,6 +377,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		username, password = q.Username, q.Password
 	}
 	lease := Lease{Request: q, NodeID: m.node, ExitNodeID: exit.NodeID, Host: m.cfg.ListenIP, Port: port, Username: username, Password: password, ExpiresAt: m.now().Add(time.Duration(m.cfg.TTLSeconds) * time.Second)}
+	lease.OpenVPNRemote = OpenVPNRemoteRequired(*exit)
 	config, err := Build(*exit, peer, lease)
 	if err != nil {
 		return Lease{}, err
@@ -384,6 +389,11 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		return Lease{}, err
 	}
 	process, err := m.runner.Start(ctx, config, lease)
+	if err == nil && lease.OpenVPNRemote {
+		if _, ok := process.(OpenVPNRemoteProcess); !ok {
+			err = errors.New("server core cannot attest its owned connected OpenVPN remote")
+		}
+	}
 	if err != nil || process == nil || ctx.Err() != nil || !process.Alive() {
 		if process != nil {
 			// Retain ownership on cleanup failure. Its port must not be reused.
@@ -696,6 +706,9 @@ func validPort(v any) bool {
 	return ok && n >= 1 && n <= 65535 && n == float64(int(n))
 }
 func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
+	if lease.OpenVPNRemote != OpenVPNRemoteRequired(exit) {
+		return nil, errors.New("OpenVPN relay remote proof ownership differs from its captured transport")
+	}
 	if exit.External != nil {
 		if ExternalIndependentMode(exit.Mode) && externalIndependentOwner(exit) != "server" {
 			return nil, errors.New("external packet relay cannot run the client's local credentials")

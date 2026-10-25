@@ -2,11 +2,15 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
 SOURCE_SHA = '03f8e07a0fb478220ad0a1860acb499dd3b797bb'
 OLD = 'err := E.Errors(c.client.Close(), c.device.Close())'
 NEW = 'err := E.Errors(routerVPNOpenVPNCloseError(c.client.Close()), c.device.Close())'
+_remote_spec = importlib.util.spec_from_file_location('openvpn_remote_close_composition', ROOT/'deploy/mobile_openvpn_remote_policy.py')
+REMOTE = importlib.util.module_from_spec(_remote_spec)
+_remote_spec.loader.exec_module(REMOTE)
 
 
 def blobsha(data):
@@ -16,19 +20,21 @@ def blobsha(data):
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_close_policy.py',
             ROOT/'deploy/test_mobile_openvpn_pinned.sh',
+            *REMOTE.inputs(),
             *sorted((ROOT / 'mobile/openvpn').glob('*.tmpl'))]
 
 
 def patch(text):
-    original = text
-    if text.count(NEW) == 1:
-        original = text.replace(NEW, OLD, 1)
+    stripped, has_remote = REMOTE.unpatch(text)
+    original = stripped
+    if stripped.count(NEW) == 1:
+        original = stripped.replace(NEW, OLD, 1)
     if original.count(OLD) != 1 or blobsha(original.encode()) != SOURCE_SHA:
         raise ValueError('Pinned OpenVPN endpoint differs; close policy patch refused')
     output = original.replace(OLD, NEW, 1)
-    if text not in (original, output):
+    if stripped not in (original, output):
         raise ValueError('Partial OpenVPN close policy patch')
-    return output
+    return REMOTE.patch(output) if has_remote else output
 
 
 def prepare(vendor):

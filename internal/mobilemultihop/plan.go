@@ -29,6 +29,7 @@ import (
 	"router-vpn/internal/mobilepq"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/nativecomposite"
+	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
 )
 
@@ -99,6 +100,11 @@ type Controller struct {
 	renewDone           chan struct{}
 	external            *ExternalPolicy
 	externalResponseTLS *tls.Config // Unexported loopback-test trust; nil in every host bridge.
+	openvpnTransport    map[string]any
+	openvpnResponses    nativeopenvpn.ResponseProbes
+	openvpnActive       atomic.Pointer[openVPNRemoteState]
+	openvpnRemoteCancel context.CancelFunc
+	openvpnRemoteDone   chan struct{}
 }
 
 func exactJSON(data []byte, output any, limit int) error {

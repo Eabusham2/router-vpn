@@ -42,7 +42,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 	external := repoFile(t, "ios/RouterVPN/App/IOSExternalExecution.swift")
 	for _, required := range []string{
 		"external.matchesStartLayer(profile.startLayer)",
-		`if external.startLayer != nil || external.serverPeer != nil || external.openVPNPairing != nil || (external.protocolName == "openvpn" && external.responseProbe != nil) { try validateLayerDraft(profile) }`,
+		`if external.startLayer != nil || external.serverPeer != nil || external.openVPNPairing != nil || external.openVPNResponseProbes != nil || (external.protocolName == "openvpn" && external.responseProbe != nil) { try validateLayerDraft(profile) }`,
 		"LibboxRouterValidateExternalTransport(source, capture, &failure)",
 	} {
 		if !strings.Contains(external, required) {

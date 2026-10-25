@@ -92,6 +92,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 				return errors.New("restored native path already has another MTU operation")
 			}
 			if record.Status.EffectiveMTU == target {
+				if err := a.verifyDesktopExternalCurrentPath(ctx, launch); err != nil {
+					return err
+				}
 				owner.mu.Lock()
 				owner.generation--
 				owner.restoreMTU = 0
@@ -110,7 +113,7 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 			if !record.Status.Restored || record.Status.Source != "restored-captured-system-tun" || record.RestoredMTU != target || record.Status.EffectiveMTU != target {
 				return errors.New("captured live MTU failed its fresh restored-path verification")
 			}
-			if _, err := a.readDesktopExternalProof(launch); err != nil {
+			if err := a.verifyDesktopExternalCurrentPath(ctx, launch); err != nil {
 				return err
 			}
 			if ctx.Err() != nil {

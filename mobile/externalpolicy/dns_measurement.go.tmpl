@@ -161,6 +161,20 @@ func (e *routerVPNDNSMeasurementEngine) Identity() string {
 	}
 	return identity + ":dns:" + e.session
 }
+func (e *routerVPNDNSMeasurementEngine) VerifyMeasurement(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("DNS native path retired")
+	}
+	if e.external != nil {
+		if err := e.external.VerifyCurrentPath(); err != nil {
+			return errors.New("DNS native transport generation changed")
+		}
+	}
+	if ctx.Err() != nil || e.Identity() == "" {
+		return errors.New("DNS native path retired during verification")
+	}
+	return nil
+}
 func (e *routerVPNDNSMeasurementEngine) BeginMeasurement(parent context.Context) (context.Context, func(), error) {
 	if parent == nil || parent.Err() != nil || e.Identity() == "" {
 		return nil, nil, errors.New("DNS native owner retired")

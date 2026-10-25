@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 // ExternalMode identifies native external execution families. Packet families
@@ -57,29 +58,48 @@ func ExternalSelection(id, protocol string, external map[string]any, layer *Star
 	if err != nil {
 		return Exit{}, err
 	}
-	rawProbe, ok := external["response_probe"].(map[string]any)
+	expected, ok := external["expected_public_ip"].(string)
 	if !ok {
 		return Exit{}, bad
 	}
-	for key := range rawProbe {
-		if key != "url" && key != "server_name" {
+	exit := Exit{ID: id, Mode: protocol, Transport: transport, StartLayer: layer, External: &ExternalExit{ExpectedPublicIP: expected}}
+	if raw, mapped := external["openvpn_response_probes"]; mapped {
+		if protocol != "openvpn" {
 			return Exit{}, bad
 		}
-	}
-	probeURL, urlOK := rawProbe["url"].(string)
-	probeName := ""
-	if value, exists := rawProbe["server_name"]; exists {
-		var nameOK bool
-		probeName, nameOK = value.(string)
-		if !nameOK {
+		if _, legacy := external["response_probe"]; legacy {
 			return Exit{}, bad
 		}
+		encoded, err := json.Marshal(raw)
+		var probes nativeopenvpn.ResponseProbes
+		if err != nil || json.Unmarshal(encoded, &probes) != nil || probes.Validate(transport) != nil {
+			return Exit{}, bad
+		}
+		exit.External.OpenVPNResponseProbes = probes
+	} else {
+		rawProbe, ok := external["response_probe"].(map[string]any)
+		if !ok {
+			return Exit{}, bad
+		}
+		for key := range rawProbe {
+			if key != "url" && key != "server_name" {
+				return Exit{}, bad
+			}
+		}
+		probeURL, urlOK := rawProbe["url"].(string)
+		probeName := ""
+		if value, exists := rawProbe["server_name"]; exists {
+			var nameOK bool
+			probeName, nameOK = value.(string)
+			if !nameOK {
+				return Exit{}, bad
+			}
+		}
+		if !urlOK {
+			return Exit{}, bad
+		}
+		exit.External.ResponseProbe = ResponseProbe{URL: probeURL, ServerName: probeName}
 	}
-	expected, ok := external["expected_public_ip"].(string)
-	if !ok || !urlOK {
-		return Exit{}, bad
-	}
-	exit := Exit{ID: id, Mode: protocol, Transport: transport, StartLayer: layer, External: &ExternalExit{ExpectedPublicIP: expected, ResponseProbe: ResponseProbe{URL: probeURL, ServerName: probeName}}}
 	if ExternalPacketMode(protocol) {
 		pair, err := externalPacketSelection(protocol, external, transport)
 		if err != nil {

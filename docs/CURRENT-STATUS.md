@@ -17,8 +17,19 @@ validate the complete raw JSON object before platform decoders can collapse
 ambiguous duplicate fields. Existing proxy and WG/AWG leases also retain the
 captured authenticated peer, manager epoch, fresh attempt and bounded deadline.
 See [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md) and
-[MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md) for supported profiles and the
-remaining different-host OpenVPN comparison boundary.
+[MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md) for supported profiles.
+
+Different-host OpenVPN fallback now supports Local, Server and Compare through
+an exact private response map covering every original remote. The native engine
+reports the established remote and physical-session generation; Server reads
+require a fresh nonce from the captured private runtime. Reconnects and queued
+callbacks cannot retain proof for the previous transport. DNS Retest, both
+comparison probes, winner repetition, MTU and Speed Lab verify that generation
+at their measurement and adoption boundaries. The original remote list, inline
+credentials and independently provisioned Server identity remain captured.
+Mapped exit Start Layers still require per-host layer support; the supported
+mapped path currently uses exit Start Layer Off and retains every Router entry
+Start Layer. Single-host exit AES and AES plus XOR remain supported.
 
 Desktop external paths now use their owned native runtime for Direct, Local,
 Server and Compare both. Router VPN entries retain all 19 supported saved entry
@@ -44,6 +55,14 @@ including the same-name replacement and stale-owner cases. This verifies that
 kernel transaction on that source; it does not establish Windows/macOS physical
 networking or private-server performance.
 
+Desktop measurements also use a separate fresh-path mailbox bound to the exact
+session, source/configuration hashes, request nonce and generation. Its worker
+does not block the native owner heartbeat. Delayed receipts, replaced workspaces
+and cancelled requests cannot authorize a result. Failure to drain retains
+cleanup ownership and protection while retiring only the captured native owner.
+Fresh checks surround durable MTU persistence and commit, Speed Lab phases and
+final adoption, including restoration of the already-proved execution choice.
+
 Windows, macOS and Linux Speed Lab now send explicit entry-mode and execution
 choices through their native forms to the real controller. Saved choices are
 retained, and invalid choices cannot silently become a different path. macOS
@@ -62,10 +81,14 @@ Off, AES-256-GCM and AES-256-GCM plus XOR Start Layers. Wrong certificate,
 control-channel key, remote identity and listener key cases must fail. Focused
 race tests exercise replay rejection, cleanup, profile transactions, restoration
 and native MTU mailbox ownership. Both shipping Java and Swift producers supplied
-1,512 captured graphs to the actual pinned native runtime. Each accepted all
-1,512 graphs and rejected all 1,512 missing-engine controls with stable source,
+1,683 captured graphs to the actual pinned native runtime. Each accepted all
+1,683 graphs and rejected all 1,683 missing-engine controls with stable source,
 module and native-library provenance. These constructor results remain separate
-from APK/Xcode builds and physical traffic.
+from APK/Xcode builds and physical traffic. The 171 additional mapped OpenVPN
+graphs preserve all 1,512 earlier combinations. Real encrypted fallback tests
+also exercise TCP/UDP, same-host reconnects, stale TLS callbacks and incorrect
+certificates, names and keys. An initialized native DNS cache negative control
+confirms that selected-DNS measurements require fresh routed answers.
 
 Published desktop lifecycle work is in `f3beb47b`. Commit `d16b862a` fixes the
 Windows built-in `kill` alias collision, OpenVPN named dispatch and canonical
@@ -76,6 +99,10 @@ Commit `9b8fce03` publishes the paired OpenVPN, native desktop MTU and desktop
 Speed Lab changes. Commit `3151083f` also preserves PowerShell 5.1 JSON array
 semantics for native firewall exceptions and updates the OpenVPN workflow's
 helper-name guard without restoring the built-in alias collision.
+Commit `90254368` aligns the macOS oversized-response fixture with the shipping
+JSON endpoint while preserving an untyped partial-body case, and makes the
+Windows test completion output compatible with its CP1252 console. Actual
+Darwin/Windows CI remains distinct from local fixture verification.
 The successful `745b3e41` release predates this continuation and does not certify
 its packages. Exact-commit native packaging, release publication, private
 deployment and device acceptance require their own evidence.

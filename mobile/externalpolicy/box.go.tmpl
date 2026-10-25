@@ -15,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/protocol/group"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -111,6 +112,12 @@ func (r *RouterVPNExternalProofRequest) Cancel() {
 func (r *RouterVPNExternalProofRequest) Healthy() bool {
 	return r != nil && r.request != nil && r.request.Healthy()
 }
+func (r *RouterVPNExternalProofRequest) VerifyCurrentPath() error {
+	if r == nil || r.request == nil {
+		return errors.New("external proof is unavailable")
+	}
+	return r.request.VerifyCurrentPath()
+}
 func (r *RouterVPNExternalProofRequest) Close() error {
 	if r == nil || r.request == nil {
 		return nil
@@ -139,6 +146,28 @@ type routerVPNExternalNativeEngine struct {
 	routes   map[string]adapter.Outbound
 	dns      map[string]adapter.DNSTransport
 	services map[string]adapter.Service
+}
+
+func (e *routerVPNExternalNativeEngine) OpenVPNRemote(tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if e == nil || e.Identity() == "" || (tag != mobilemultihop.LocalTag && tag != mobilemultihop.ExternalFinalTag) || tag == mobilemultihop.LocalTag && e.Selected() != tag {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("OpenVPN receipt belongs to a retired or unselected native route")
+	}
+	owner := e.routes[tag]
+	endpoint, ok := owner.(interface {
+		RouterVPNConnectedRemote() (nativeopenvpn.RemoteReceipt, error)
+	})
+	if !ok {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("native OpenVPN endpoint cannot attest its connected remote")
+	}
+	receipt, err := endpoint.RouterVPNConnectedRemote()
+	current, exists := e.box.outbound.Outbound(tag)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, err
+	}
+	if !exists || current != owner || e.Identity() == "" || tag == mobilemultihop.LocalTag && e.Selected() != tag {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("native OpenVPN remote owner changed during observation")
+	}
+	return receipt, nil
 }
 
 func (s *Box) routerVPNExternalEngine(entryTag, tunTag string, compiled option.Options) (*routerVPNExternalNativeEngine, error) {

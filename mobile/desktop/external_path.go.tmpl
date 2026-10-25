@@ -1,0 +1,199 @@
+package main
+
+import (
+	"bytes"
+	"crypto/sha256"
+	"encoding/json"
+	"errors"
+	"os"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
+)
+
+// A retained connection heartbeat cannot authorize a new measurement. Each
+// request below invokes the exact proof owner's synchronous path check. It
+// neither selects an execution candidate nor claims or changes the native TUN.
+type routerVPNDesktopPathRequest struct {
+	Schema       int    `json:"schema"`
+	Session      string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+	ConfigSHA256 string `json:"config_sha256"`
+	Generation   uint64 `json:"generation"`
+	Request      string `json:"request_id"`
+}
+
+type routerVPNDesktopPathRecord struct {
+	routerVPNDesktopPathRequest
+	Complete  bool  `json:"complete"`
+	Verified  bool  `json:"verified"`
+	Cancelled bool  `json:"cancelled"`
+	CheckedAt int64 `json:"checked_at,omitempty"`
+}
+
+type routerVPNDesktopPathInput struct {
+	info   os.FileInfo
+	digest [32]byte
+}
+
+type routerVPNDesktopPathOutcome struct {
+	err       error
+	checkedAt int64
+}
+
+// Only the command loop mutates this mailbox or its files. The worker owns a
+// bounded proof call and sends one outcome; it never writes an asynchronous
+// completion to a pathname that could now belong to another request.
+type routerVPNDesktopPathFiles struct {
+	files  *routerVPNExternalFiles
+	owner  routerVPNExternalOwner
+	record routerVPNDesktopPathRecord
+	done   chan routerVPNDesktopPathOutcome
+	inputs map[string]routerVPNDesktopPathInput
+}
+
+func routerVPNOpenDesktopPath(files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopPathFiles, error) {
+	f := &routerVPNDesktopPathFiles{files: files, owner: owner, inputs: map[string]routerVPNDesktopPathInput{}, record: routerVPNDesktopPathRecord{
+		routerVPNDesktopPathRequest: routerVPNDesktopPathRequest{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config}, Complete: true,
+	}}
+	return f, f.publish()
+}
+
+func (f *routerVPNDesktopPathFiles) identity(request routerVPNDesktopPathRequest) bool {
+	base := f.record.routerVPNDesktopPathRequest
+	return request.Schema == 1 && request.Session == base.Session && request.SourceSHA256 == base.SourceSHA256 && request.ConfigSHA256 == base.ConfigSHA256 && request.Generation > 0 && routerVPNExternalSession.MatchString(request.Request)
+}
+
+func (f *routerVPNDesktopPathFiles) read(name string, matches func(routerVPNDesktopPathRequest) bool) (routerVPNDesktopPathRequest, bool) {
+	raw, err := f.files.read(name, 2048)
+	if err != nil {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	if _, err := applexray.Object(raw); err != nil {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	var request routerVPNDesktopPathRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) != nil || !f.identity(request) || !matches(request) {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	info, err := f.files.root.Lstat(name)
+	if err != nil {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	again, err := f.files.read(name, 2048)
+	if err != nil || !bytes.Equal(raw, again) {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	input := routerVPNDesktopPathInput{info: info, digest: sha256.Sum256(raw)}
+	if previous, exists := f.inputs[name]; exists && (!os.SameFile(previous.info, info) || previous.digest != input.digest) {
+		return routerVPNDesktopPathRequest{}, false
+	}
+	f.inputs[name] = input
+	return request, true
+}
+
+func (f *routerVPNDesktopPathFiles) retire() error {
+	for name, owned := range f.inputs {
+		info, err := f.files.root.Lstat(name)
+		raw, readErr := f.files.read(name, 2048)
+		// A missing consumed request is not a successful acknowledgement: its
+		// owner must remain unchanged through completion and retirement.
+		if err != nil || readErr != nil || !os.SameFile(info, owned.info) || sha256.Sum256(raw) != owned.digest {
+			return routerVPNExternalFailure
+		}
+		if err := f.files.root.Remove(name); err != nil {
+			return routerVPNExternalFailure
+		}
+		delete(f.inputs, name)
+	}
+	return nil
+}
+
+func (f *routerVPNDesktopPathFiles) publish() error {
+	return f.files.publish("path-status.json", f.record)
+}
+
+func (f *routerVPNDesktopPathFiles) tick() error {
+	if f.done == nil && f.record.Complete {
+		request, ok := f.read("path-request.json", func(request routerVPNDesktopPathRequest) bool {
+			return f.record.Generation != ^uint64(0) && request.Generation == f.record.Generation+1
+		})
+		if ok {
+			f.record = routerVPNDesktopPathRecord{routerVPNDesktopPathRequest: request}
+		}
+	}
+	if f.record.Generation == 0 {
+		return nil
+	}
+	if _, cancel := f.read("path-cancel.json", func(request routerVPNDesktopPathRequest) bool {
+		return request == f.record.routerVPNDesktopPathRequest
+	}); cancel {
+		f.record.Cancelled, f.record.Verified, f.record.CheckedAt = true, false, 0
+	}
+	if !f.record.Complete && f.done == nil {
+		if f.record.Cancelled {
+			f.record.Complete = true
+		} else {
+			done := make(chan routerVPNDesktopPathOutcome, 1)
+			f.done = done
+			go func() {
+				err := f.owner.VerifyCurrentPath()
+				done <- routerVPNDesktopPathOutcome{err: err, checkedAt: time.Now().UnixMilli()}
+			}()
+		}
+	}
+	if f.done != nil {
+		select {
+		case outcome := <-f.done:
+			f.done = nil
+			f.record.Complete = true
+			if outcome.err == nil && !f.record.Cancelled && f.owner.Healthy() {
+				f.record.Verified, f.record.CheckedAt = true, outcome.checkedAt
+			}
+		default:
+		}
+	}
+	if f.record.Complete {
+		if err := f.retire(); err != nil {
+			return err
+		}
+	}
+	return f.publish()
+}
+
+// Canceling a measurement suppresses its result, but does not call Cancel on a
+// healthy VPN. Teardown calls this after owner.Cancel, so an active remote query
+// also sees its proof lifetime end. Both paths join before acknowledging close.
+func (f *routerVPNDesktopPathFiles) close() error {
+	if f == nil {
+		return nil
+	}
+	if f.done != nil {
+		<-f.done
+		f.done = nil
+	}
+	f.record.Complete, f.record.Cancelled, f.record.Verified, f.record.CheckedAt = true, true, false, 0
+	return errors.Join(f.retire(), f.publish())
+}
+
+func (n *routerVPNExternalNative) VerifyCurrentPath() error {
+	n.mu.Lock()
+	proof, closed := n.proof, n.boxClosed
+	n.mu.Unlock()
+	if proof == nil || closed {
+		return routerVPNExternalFailure
+	}
+	// No owner or engine mutex is held across the authenticated native query.
+	if err := proof.VerifyCurrentPath(); err != nil {
+		return routerVPNExternalFailure
+	}
+	n.mu.Lock()
+	current := n.proof == proof && !n.boxClosed
+	n.mu.Unlock()
+	if !current || !proof.Healthy() {
+		return routerVPNExternalFailure
+	}
+	return nil
+}

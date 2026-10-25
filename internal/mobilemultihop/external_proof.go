@@ -13,6 +13,8 @@ import (
 	"net/http"
 	"net/netip"
 	"net/url"
+	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -59,9 +61,11 @@ type ExternalProofRequest struct {
 	runMu     sync.Mutex
 	runDone   chan struct{}
 	// Unexported test seams exercise the lifecycle without public networking.
-	public    func(context.Context, string, string) error
-	private   func(context.Context) error
-	execution *Controller
+	public           func(context.Context, string, string) error
+	private          func(context.Context) error
+	execution        *Controller
+	openvpnTransport map[string]any
+	openvpnRemote    atomic.Pointer[nativeopenvpn.RemoteReceipt]
 }
 
 func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, session string, engine ExternalProofEngine) (*ExternalProofRequest, error) {
@@ -90,6 +94,21 @@ func NewExternalProofRequest(parent context.Context, policy *ExternalPolicy, ses
 			return nil, err
 		}
 	}
+	if policy.capture.Execution == nil && policy.capture.Protocol == "openvpn" {
+		external, _ := policy.capture.Profile["external"].(map[string]any)
+		if _, mapped := external["openvpn_response_probes"]; mapped {
+			if _, ok := engine.(OpenVPNRemoteEngine); !ok {
+				cancel()
+				return nil, errors.New("native OpenVPN remote observation is required")
+			}
+			var err error
+			r.openvpnTransport, err = multihoprelay.ExternalTransport("openvpn", external)
+			if err != nil {
+				cancel()
+				return nil, err
+			}
+		}
+	}
 	r.public = r.provePublic
 	r.private = r.provePrivateEntry
 	return r, nil
@@ -108,7 +127,73 @@ func (r *ExternalProofRequest) Cancel() {
 	}
 }
 func (r *ExternalProofRequest) Healthy() bool {
-	return r != nil && r.succeeded.Load() && r.current() && (r.execution == nil || r.execution.Healthy())
+	return r != nil && r.succeeded.Load() && r.current() && r.localOpenVPNHealthy() && (r.execution == nil || r.execution.Healthy())
+}
+
+// VerifyCurrentPath exposes a fresh synchronous retained-path check to native
+// MTU, measurements and hosts. No private provider information is returned.
+func (r *ExternalProofRequest) VerifyCurrentPath() error {
+	if !r.Healthy() {
+		return errors.New("external path is no longer proved")
+	}
+	ctx, cancel := context.WithTimeout(r.ctx, 1500*time.Millisecond)
+	defer cancel()
+	if err := r.verifyCurrentPath(ctx); err != nil {
+		r.Cancel()
+		return err
+	}
+	return nil
+}
+
+func (r *ExternalProofRequest) verifyCurrentPath(ctx context.Context) error {
+	if !r.current() || ctx.Err() != nil || !r.localOpenVPNHealthy() {
+		return errors.New("external path generation changed")
+	}
+	if r.execution != nil {
+		return r.execution.VerifyCurrentPath(ctx)
+	}
+	return nil
+}
+
+func (r *ExternalProofRequest) localOpenVPNHealthy() bool {
+	if r.openvpnTransport == nil {
+		return true
+	}
+	expected := r.openvpnRemote.Load()
+	if expected == nil {
+		return false
+	}
+	actual, err := r.engine.(OpenVPNRemoteEngine).OpenVPNRemote(ExternalFinalTag)
+	return err == nil && actual == *expected && r.current()
+}
+
+func (r *ExternalProofRequest) captureLocalOpenVPNRemote(ctx context.Context) error {
+	if r.openvpnTransport == nil {
+		return nil
+	}
+	for {
+		if !r.current() || ctx.Err() != nil {
+			return errors.New("OpenVPN path observation cancelled")
+		}
+		receipt, err := r.engine.(OpenVPNRemoteEngine).OpenVPNRemote(ExternalFinalTag)
+		if err == nil {
+			if !receipt.Matches(r.openvpnTransport) {
+				return errors.New("OpenVPN remote does not match its captured transport")
+			}
+			r.openvpnRemote.Store(&receipt)
+			return nil
+		}
+		if !errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			return errors.New("OpenVPN native remote is unavailable")
+		}
+		timer := time.NewTimer(40 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+	}
 }
 func (r *ExternalProofRequest) Close() error {
 	if r == nil {
@@ -175,6 +260,12 @@ func (r *ExternalProofRequest) Run() (result string, failure error) {
 	}
 	ctx, cancel := context.WithTimeout(r.ctx, 45*time.Second)
 	defer cancel()
+	if err := r.captureLocalOpenVPNRemote(ctx); err != nil {
+		return "", err
+	}
+	if err := r.verifyCurrentPath(ctx); err != nil {
+		return "", err
+	}
 	if r.meta.EntryID != "" {
 		var err error
 		if r.meta.EntryNodeID != "" {
@@ -184,14 +275,14 @@ func (r *ExternalProofRequest) Run() (result string, failure error) {
 			ip, _ := external["expected_public_ip"].(string)
 			err = r.public(ctx, r.meta.EntryTag, ip)
 		}
-		if err != nil || !r.current() || ctx.Err() != nil {
+		if err != nil || r.verifyCurrentPath(ctx) != nil || !r.current() || ctx.Err() != nil {
 			return "", errors.New("captured external entry proof failed or became stale")
 		}
 	}
-	if err := r.engine.DNSProof(ctx, r.meta.TUNTag); err != nil || !r.current() || ctx.Err() != nil {
+	if err := r.engine.DNSProof(ctx, r.meta.TUNTag); err != nil || r.verifyCurrentPath(ctx) != nil || !r.current() || ctx.Err() != nil {
 		return "", errors.New("captured external DNS proof failed or became stale")
 	}
-	if err := r.public(ctx, ExternalFinalTag, r.meta.ExpectedPublicIP); err != nil || !r.current() || ctx.Err() != nil {
+	if err := r.public(ctx, ExternalFinalTag, r.meta.ExpectedPublicIP); err != nil || r.verifyCurrentPath(ctx) != nil || !r.current() || ctx.Err() != nil {
 		return "", errors.New("captured public exit proof failed or became stale")
 	}
 	proof := ExternalProofResult{Schema: 1, SessionID: r.session, SourceSHA256: r.meta.SourceSHA256, ConfigSHA256: r.meta.ConfigSHA256, ExitID: r.meta.ExitID, EntryID: r.meta.EntryID, EntryNodeID: r.meta.EntryNodeID, IP: r.meta.ExpectedPublicIP, DNSProven: true, EntryProven: r.meta.EntryID != "", CheckedAt: time.Now().UnixMilli()}

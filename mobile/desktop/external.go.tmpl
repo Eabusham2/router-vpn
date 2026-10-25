@@ -190,6 +190,7 @@ type routerVPNExternalOwner interface {
 	Run() (string, error)
 	Cancel()
 	Healthy() bool
+	VerifyCurrentPath() error
 	ProgressJSON() string
 	Close() error
 }
@@ -394,7 +395,7 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 		return routerVPNExternalFailure
 	}
 	defer files.root.Close()
-	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json"} {
+	for _, name := range []string{"proof.json", "progress.json", "stopped.json", "mtu-status.json", "path-status.json"} {
 		if !files.current(name) {
 			return routerVPNExternalFailure
 		}
@@ -478,6 +479,7 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 	var receipt routerVPNExternalProofRecord
 	var heartbeat time.Time
 	var mtuFiles *routerVPNDesktopMTUFiles
+	var pathFiles *routerVPNDesktopPathFiles
 	for !stopping {
 		select {
 		case outcome := <-done:
@@ -500,6 +502,11 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 				break
 			}
 			connected, progress.Stage = true, "connected"
+			pathFiles, err = routerVPNOpenDesktopPath(files, owner, session, policy.SourceSHA256(), configSHA)
+			if err != nil {
+				failure, stopping = routerVPNExternalFailure, true
+				break
+			}
 			mtuFiles, err = routerVPNOpenDesktopMTU(files, owner, session, policy.SourceSHA256(), configSHA)
 			if err != nil {
 				failure, stopping = routerVPNExternalFailure, true
@@ -515,6 +522,12 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 			if connected && !owner.Healthy() {
 				failure, stopping = routerVPNExternalFailure, true
 				break
+			}
+			if connected && pathFiles != nil {
+				if err := pathFiles.tick(); err != nil {
+					failure, stopping = routerVPNExternalFailure, true
+					break
+				}
 			}
 			if connected && mtuFiles != nil {
 				if err := mtuFiles.tick(); err != nil {
@@ -539,6 +552,9 @@ func routerVPNRunExternal(parent context.Context, directory, session string, fac
 		}
 	}
 	owner.Cancel()
+	if pathFiles.close() != nil {
+		failure = routerVPNExternalFailure
+	}
 	if files.remove("proof.json") != nil {
 		failure = routerVPNExternalFailure
 	}

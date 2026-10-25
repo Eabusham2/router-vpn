@@ -364,8 +364,9 @@ HARNESS = prefix + r'''
 }
 '''
 
-GO = P.GO.replace('"router-vpn/internal/mobileperf"', '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor"', 1)
-GO = GO.replace('case "xray-policy":', '''case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="validated"
+GO = P.GO.replace('"router-vpn/internal/mobileperf"', '"router-vpn/internal/mobileperf";"router-vpn/internal/mobiletor";privateparse "router-vpn/internal/nativeopenvpn"', 1)
+GO = GO.replace('case "xray-policy":', '''case "private-node-json":err=privateparse.ValidatePrivateNodeJSON(r.Config);value="checked"
+ case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="validated"
  case "tor-profile-captured":
   var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfileWithPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
@@ -382,7 +383,7 @@ final class AndroidRuntimeRegistry {
  final Engine orchestrator=new Engine(),multihop=new Engine(),singBox=new Engine(),xray=new Engine();
  static AndroidRuntimeRegistry get(android.content.Context c){return new AndroidRuntimeRegistry();}
 }
-final class AndroidOpenVPN {static void validatePairing(AndroidStandardExitStore.Entry entry){if(entry.openVPNPairing!=null)throw new AssertionError("OpenVPN pairing is outside this non-OpenVPN fixture");}
+final class AndroidOpenVPN {static void validateResponseProbes(AndroidStandardExitStore.Entry entry){if(entry.openVPNResponseProbes!=null)throw new AssertionError("OpenVPN response map is outside this non-OpenVPN fixture");}static void validatePairing(AndroidStandardExitStore.Entry entry){if(entry.openVPNPairing!=null)throw new AssertionError("OpenVPN pairing is outside this non-OpenVPN fixture");}
  static JSONObject endpoint(AndroidStandardExitStore.Entry e,String value){throw new AssertionError("Tor must not invoke OpenVPN");}
 }
 '''
@@ -417,6 +418,7 @@ def run():
                 text = text.replace(" public static boolean rejectConfig;", " public static Runnable afterCheck;\n public static boolean rejectConfig;")
                 text = text.replace("new JSONObject(c);}", "new JSONObject(c);if(afterCheck!=null)afterCheck.run();}")
                 text = text.replace(" public static String routerCompilePQProfile(", r'''
+ public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
  public static int torCalls;
  public static String lastTorPredecessor="";
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{

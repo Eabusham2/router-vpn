@@ -144,6 +144,12 @@ func (l *RouterVPNExternalMTULease) ChangeMTU(parent context.Context, expected a
 		return expected, err
 	}
 	defer end()
+	// The retained lease owns the TUN, but a remote provider may reconnect
+	// without replacing that TUN. Read its fresh native generation before
+	// taking the engine lock or changing any interface state.
+	if err := l.proof.VerifyCurrentPath(); err != nil {
+		return expected, err
+	}
 	e := l.proof.engine
 	e.mu.Lock()
 	if ctx.Err() != nil || l.closed.Load() || l.proof.mtu.Load() != l || e.identityLocked() == "" || e.tun != expected {
@@ -168,6 +174,9 @@ func (l *RouterVPNExternalMTULease) ChangeMTU(parent context.Context, expected a
 	}
 	if ctx.Err() != nil || !l.Healthy() {
 		return current, errors.New("external MTU transaction was canceled")
+	}
+	if err := l.proof.VerifyCurrentPath(); err != nil {
+		return current, err
 	}
 	return current, changeErr
 }

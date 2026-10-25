@@ -1,0 +1,570 @@
+//go:build with_openvpn && routervpn_openvpn_remote_test
+
+package main
+
+import (
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	E "github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	O "github.com/sagernet/sing-box/protocol/openvpn"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+type remoteNativeOpenVPNNativeCertificates struct{ ca, provider, providerKey, local, localKey, relay, relayKey string }
+
+func remoteNativeOpenVPNNativePKI(t *testing.T) remoteNativeOpenVPNNativeCertificates {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "Private native OpenVPN test CA"}, NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	result := remoteNativeOpenVPNNativeCertificates{ca: string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))}
+	issue := func(serial int64, name string, usage x509.ExtKeyUsage) (string, string) {
+		private, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+		if err != nil {
+			t.Fatal(err)
+		}
+		cert := &x509.Certificate{SerialNumber: big.NewInt(serial), Subject: pkix.Name{CommonName: name}, NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{usage}, DNSNames: []string{name}}
+		der, err := x509.CreateCertificate(rand.Reader, cert, ca, &private.PublicKey, key)
+		if err != nil {
+			t.Fatal(err)
+		}
+		secret, err := x509.MarshalPKCS8PrivateKey(private)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der})), string(pem.EncodeToMemory(&pem.Block{Type: "PRIVATE KEY", Bytes: secret}))
+	}
+	result.provider, result.providerKey = issue(2, "provider.routervpn.test", x509.ExtKeyUsageServerAuth)
+	result.local, result.localKey = issue(3, "local-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	result.relay, result.relayKey = issue(4, "relay-client.routervpn.test", x509.ExtKeyUsageClientAuth)
+	return result
+}
+
+func remoteNativeOpenVPNNativeProfile(pki remoteNativeOpenVPNNativeCertificates, cert, key, network, control string) nativeopenvpn.Profile {
+	config := "client\nremote 192.0.2.1 1194 " + network + "\nverify-x509-name provider.routervpn.test name\nremote-cert-tls server\ndata-ciphers AES-256-GCM:AES-128-GCM\ntun-mtu 1400\nhand-window 3\ntls-timeout 1\n<ca>\n" + pki.ca + "</ca>\n<cert>\n" + cert + "</cert>\n<key>\n" + key + "</key>\n"
+	if control != "" {
+		config += "<" + control + ">\n" + remoteNativeOpenVPNControlKey + "</" + control + ">\n"
+		if control == "tls-auth" {
+			config += "key-direction 1\n"
+		}
+	}
+	return nativeopenvpn.Profile{Config: config}
+}
+
+var remoteNativeOpenVPNControlKey = "-----BEGIN OpenVPN Static key V1-----\n" + strings.Repeat(strings.Repeat("a", 32)+"\n", 16) + "-----END OpenVPN Static key V1-----\n"
+
+type remoteNativePhysical struct {
+	first, second int
+	network       string
+	calls         atomic.Int64
+}
+
+func (p *remoteNativePhysical) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	var port int
+	switch destination.String() {
+	case "192.0.2.1:1194":
+		if network != "tcp" {
+			return nil, errors.New("unowned first protocol")
+		}
+		port = p.first
+	case "192.0.2.2:1443":
+		if network != p.network {
+			return nil, errors.New("unowned second protocol")
+		}
+		port = p.second
+	default:
+		return nil, errors.New("unowned physical destination")
+	}
+	p.calls.Add(1)
+	return (&net.Dialer{}).DialContext(ctx, network, fmt.Sprintf("127.0.0.1:%d", port))
+}
+func (*remoteNativePhysical) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("unowned packet listener")
+}
+
+func remoteNativeFactory(parent context.Context, raw []byte, physical N.Dialer, dispatch func(uint64, func() error) error) (*routerVPNRelayBox, error) {
+	ctx, cancel := context.WithCancel(include.Context(context.Background()))
+	stop := context.AfterFunc(parent, cancel)
+	if physical != nil {
+		registry := service.FromContext[adapter.EndpointRegistry](ctx).(*E.Registry)
+		E.Register[option.OpenVPNClientEndpointOptions](registry, "openvpn-client", func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.OpenVPNClientEndpointOptions) (adapter.Endpoint, error) {
+			owner, err := O.RouterVPNTestPhysicalClientEndpoint(ctx, router, logger, tag, options, physical)
+			if err == nil && dispatch != nil {
+				owner.(*O.ClientEndpoint).RouterVPNTestConfigurationDispatch(dispatch)
+			}
+			return owner, err
+		})
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		stop()
+		cancel()
+		return nil, err
+	}
+	owner, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		stop()
+		cancel()
+		return nil, err
+	}
+	return &routerVPNRelayBox{Box: owner, cancel: cancel, stop: stop}, nil
+}
+
+func remoteNativePort(t *testing.T) int {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	_ = listener.Close()
+	return port
+}
+func remoteNativeStart(t *testing.T, root map[string]any) *routerVPNRelayBox {
+	t.Helper()
+	raw, _ := json.Marshal(root)
+	owner, err := remoteNativeFactory(context.Background(), raw, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = owner.Start(); err != nil {
+		_ = owner.Close()
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := owner.Close(); !remoteNativeOnlyClosed(err) {
+			t.Error(err)
+		}
+	})
+	return owner
+}
+
+func remoteNativeProvider(t *testing.T, pki remoteNativeOpenVPNNativeCertificates, network string, echoPort int) int {
+	t.Helper()
+	port := remoteNativePort(t)
+	tls := map[string]any{"certificate": []string{pki.provider}, "key": []string{pki.providerKey}, "client_certificate": []string{pki.ca}, "verify_client_certificate": "require", "remote_certificate_tls": "client"}
+	remoteNativeStart(t, map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{map[string]any{"type": "openvpn-server", "tag": "provider", "system": false, "listen": "127.0.0.1", "listen_port": port, "network": network, "address": []string{"10.211.18.1/24"}, "data_ciphers": []string{"AES-256-GCM", "AES-128-GCM"}, "tls": tls}}, "outbounds": []any{map[string]any{"type": "direct", "tag": "egress"}}, "route": map[string]any{"rules": []any{map[string]any{"ip_cidr": []string{"192.0.2.123/32"}, "port": []int{80}, "action": "route", "outbound": "egress", "override_address": "127.0.0.1", "override_port": echoPort}, map[string]any{"action": "reject"}}}})
+	return port
+}
+
+func remoteNativeGraph(t *testing.T, pki remoteNativeOpenVPNNativeCertificates, network string, port int) map[string]any {
+	t.Helper()
+	profile := remoteNativeOpenVPNNativeProfile(pki, pki.local, pki.localKey, "tcp", "")
+	profile.Config = strings.Replace(profile.Config, "remote 192.0.2.1 1194 tcp\n", "remote 192.0.2.1 1194 tcp\nremote 192.0.2.2 1443 "+network+"\n", 1)
+	endpoint, err := nativeopenvpn.CompileProfile(profile, "exit", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	return map[string]any{"log": map[string]any{"disabled": true}, "endpoints": []any{endpoint}, "inbounds": []any{map[string]any{"type": "socks", "tag": "relay", "listen": "127.0.0.1", "listen_port": port, "users": []any{map[string]any{"username": "owned-user", "password": "owned-password"}}}}, "route": map[string]any{"final": "exit"}}
+}
+
+func remoteNativeCapture(t *testing.T, graph map[string]any) (string, multihoprelay.NativeOpenVPNCapture) {
+	t.Helper()
+	directory := t.TempDir()
+	if os.Chmod(directory, 0700) != nil {
+		t.Fatal("private directory")
+	}
+	raw, _ := json.Marshal(graph)
+	sum := sha256.Sum256(raw)
+	capture := multihoprelay.NativeOpenVPNCapture{Schema: 1, SessionID: strings.Repeat("a", 32), ConfigSHA256: hex.EncodeToString(sum[:]), ExternalFingerprint: strings.Repeat("b", 64), ExternalAttempt: strings.Repeat("c", 32)}
+	data, _ := json.Marshal(capture)
+	if os.WriteFile(filepath.Join(directory, "sing-box.json"), raw, 0600) != nil || os.WriteFile(filepath.Join(directory, "native-capture.json"), data, 0600) != nil {
+		t.Fatal("private fixture write")
+	}
+	return directory, capture
+}
+
+func remoteNativeQuery(t *testing.T, directory string, capture multihoprelay.NativeOpenVPNCapture, timeout time.Duration) (multihoprelay.NativeOpenVPNReceipt, error) {
+	t.Helper()
+	var nonce [16]byte
+	if _, err := rand.Read(nonce[:]); err != nil {
+		t.Fatal(err)
+	}
+	query := multihoprelay.NativeOpenVPNQuery{Capture: capture, RequestID: hex.EncodeToString(nonce[:])}
+	raw, _ := json.Marshal(query)
+	path := filepath.Join(directory, "openvpn-query.json")
+	temporary := path + ".tmp"
+	if os.WriteFile(temporary, raw, 0600) != nil || os.Rename(temporary, path) != nil {
+		t.Fatal("query fixture write")
+	}
+	defer os.Remove(path)
+	ticker := time.NewTicker(5 * time.Millisecond)
+	defer ticker.Stop()
+	deadline := time.NewTimer(timeout)
+	defer deadline.Stop()
+	for {
+		raw, err := os.ReadFile(filepath.Join(directory, routerVPNRelayRemoteName))
+		var receipt multihoprelay.NativeOpenVPNReceipt
+		if err == nil && json.Unmarshal(raw, &receipt) == nil && receipt.RequestID == query.RequestID && receipt.Validate(capture, time.Now()) == nil {
+			return receipt, nil
+		}
+		select {
+		case <-deadline.C:
+			return receipt, errors.New("fresh native receipt was not produced")
+		case <-ticker.C:
+		}
+	}
+}
+
+func remoteNativeWait(t *testing.T, test func() bool, message string) {
+	t.Helper()
+	deadline := time.NewTimer(10 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(5 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		if test() {
+			return
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal(message)
+		case <-tick.C:
+		}
+	}
+}
+
+func remoteNativeFetch(t *testing.T, port int) {
+	t.Helper()
+	proxy, _ := url.Parse(fmt.Sprintf("socks5://owned-user:owned-password@127.0.0.1:%d", port))
+	transport := &http.Transport{Proxy: http.ProxyURL(proxy), DisableKeepAlives: true}
+	defer transport.CloseIdleConnections()
+	client := &http.Client{Transport: transport, Timeout: 3 * time.Second}
+	response, err := client.Get("http://192.0.2.123/remote-proof")
+	if err != nil {
+		t.Fatal("actual encrypted provider traffic failed", err)
+	}
+	defer response.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(response.Body, 1024))
+	if err != nil || string(data) != "owned-provider-response" {
+		t.Fatal("provider bytes changed")
+	}
+}
+
+func TestRouterVPNRelayNativeFallbackAndFreshRemoteGeneration(t *testing.T) {
+	for _, network := range []string{"tcp", "udp"} {
+		t.Run(network, func(t *testing.T) {
+			pki := remoteNativeOpenVPNNativePKI(t)
+			echo, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			httpServer := &http.Server{ReadHeaderTimeout: time.Second, Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte("owned-provider-response")) })}
+			go httpServer.Serve(echo)
+			t.Cleanup(func() { _ = httpServer.Close() })
+			physical := &remoteNativePhysical{first: remoteNativePort(t), second: remoteNativeProvider(t, pki, network, echo.Addr().(*net.TCPAddr).Port), network: network}
+			proxyPort := remoteNativePort(t)
+			graph := remoteNativeGraph(t, pki, network, proxyPort)
+			directory, capture := remoteNativeCapture(t, graph)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			created := make(chan *O.ClientEndpoint, 1)
+			factory := func(ctx context.Context, raw []byte) (routerVPNRelayOwner, error) {
+				owner, err := remoteNativeFactory(ctx, raw, physical, nil)
+				if err == nil {
+					endpoint, _ := owner.Endpoint().Get("exit")
+					created <- endpoint.(*O.ClientEndpoint)
+				}
+				return owner, err
+			}
+			go func() { done <- routerVPNRunRelay(ctx, directory, capture.SessionID, factory) }()
+			t.Cleanup(func() {
+				cancel()
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("owned native relay failed to drain")
+				}
+			})
+			var endpoint *O.ClientEndpoint
+			select {
+			case endpoint = <-created:
+			case err := <-done:
+				t.Fatal(err)
+			case <-time.After(5 * time.Second):
+				t.Fatal("native endpoint not constructed")
+			}
+			receipt, err := remoteNativeQuery(t, directory, capture, 10*time.Second)
+			if err != nil || receipt.Remote.Host != "192.0.2.2" || receipt.Remote.Port != 1443 || receipt.Remote.Network != network || receipt.Remote.Generation != 1 || physical.calls.Load() < 2 {
+				t.Fatal("fallback reported selected config instead of actual second remote", err, receipt.Remote)
+			}
+			remoteNativeFetch(t, proxyPort)
+			endpoint.RouterVPNTestRestart()
+			remoteNativeWait(t, func() bool { return endpoint.RouterVPNTestTransportGeneration() > receipt.Remote.Generation }, "same-host reconnect did not change native generation")
+			next, err := remoteNativeQuery(t, directory, capture, 10*time.Second)
+			if err != nil || next.Remote.Remote != receipt.Remote.Remote || next.Remote.Generation <= receipt.Remote.Generation || next.RequestID == receipt.RequestID {
+				t.Fatal("reconnected path reused old remote proof", err, next.Remote)
+			}
+			remoteNativeFetch(t, proxyPort)
+			cancel()
+			select {
+			case err := <-done:
+				if err != nil {
+					t.Fatal(err)
+				}
+				done <- nil
+			case <-time.After(5 * time.Second):
+				t.Fatal("native close timed out")
+			}
+			if _, err = os.Stat(filepath.Join(directory, routerVPNRelayRemoteName)); !os.IsNotExist(err) {
+				t.Fatal("native receipt survived teardown")
+			}
+			if _, err = endpoint.RouterVPNConnectedRemote(); err == nil {
+				t.Fatal("closed endpoint attested a remote")
+			}
+			conn, err := net.DialTimeout("tcp", fmt.Sprintf("127.0.0.1:%d", proxyPort), 100*time.Millisecond)
+			if err == nil {
+				_ = conn.Close()
+				t.Fatal("owned relay listener survived close")
+			}
+		})
+	}
+}
+
+func TestRouterVPNRelayNativeQueuedOldTLSCallbackCannotProveNewTransport(t *testing.T) {
+	pki := remoteNativeOpenVPNNativePKI(t)
+	physical := &remoteNativePhysical{first: remoteNativePort(t), second: remoteNativeProvider(t, pki, "tcp", remoteNativePort(t)), network: "tcp"}
+	graph := remoteNativeGraph(t, pki, "tcp", remoteNativePort(t))
+	directory, capture := remoteNativeCapture(t, graph)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	created := make(chan *O.ClientEndpoint, 1)
+	oldQueued := make(chan uint64, 1)
+	oldApplied := make(chan error, 1)
+	newQueued := make(chan uint64, 1)
+	releaseOld := make(chan struct{})
+	releaseNew := make(chan struct{})
+	var calls atomic.Int32
+	dispatch := func(generation uint64, apply func() error) error {
+		switch calls.Add(1) {
+		case 1:
+			oldQueued <- generation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-releaseOld:
+			}
+			err := apply()
+			oldApplied <- err
+			return err
+		case 2:
+			newQueued <- generation
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-releaseNew:
+			}
+			return apply()
+		default:
+			return apply()
+		}
+	}
+	factory := func(ctx context.Context, raw []byte) (routerVPNRelayOwner, error) {
+		owner, err := remoteNativeFactory(ctx, raw, physical, dispatch)
+		if err == nil {
+			endpoint, _ := owner.Endpoint().Get("exit")
+			created <- endpoint.(*O.ClientEndpoint)
+		}
+		return owner, err
+	}
+	go func() { done <- routerVPNRunRelay(ctx, directory, capture.SessionID, factory) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("delayed native callback did not drain")
+		}
+	})
+	var endpoint *O.ClientEndpoint
+	select {
+	case endpoint = <-created:
+	case err := <-done:
+		t.Fatal(err)
+	case <-time.After(5 * time.Second):
+		t.Fatal("native endpoint not constructed")
+	}
+	var first uint64
+	select {
+	case first = <-oldQueued:
+	case <-time.After(10 * time.Second):
+		t.Fatal("first real TLS callback not queued")
+	}
+	if first != 1 {
+		t.Fatal("old native callback missing original generation")
+	}
+	endpoint.RouterVPNTestRestart()
+	remoteNativeWait(t, func() bool { return endpoint.RouterVPNTestTransportGeneration() > first }, "replacement native transport did not start")
+	close(releaseOld)
+	select {
+	case err := <-oldApplied:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("old callback did not return")
+	}
+	var second uint64
+	select {
+	case second = <-newQueued:
+	case <-time.After(10 * time.Second):
+		t.Fatal("new TLS callback not queued")
+	}
+	if second <= first {
+		t.Fatal("new callback reused old native generation")
+	}
+	if _, err := endpoint.RouterVPNConnectedRemote(); err == nil {
+		t.Fatal("queued old TLS callback marked replacement transport configured")
+	}
+	if _, err := remoteNativeQuery(t, directory, capture, 80*time.Millisecond); err == nil {
+		t.Fatal("native relay published stale queued callback receipt")
+	}
+	close(releaseNew)
+	receipt, err := remoteNativeQuery(t, directory, capture, 5*time.Second)
+	if err != nil || receipt.Remote.Generation != second {
+		t.Fatal("actual new TLS callback did not prove its own generation", err, receipt.Remote)
+	}
+}
+
+// The auxiliary test provider uses the upstream server endpoint, whose closed
+// listener is returned through its normal close error. Accept only an all-closed
+// error tree here; the shipping client/relay cleanup remains asserted strictly.
+func remoteNativeOnlyClosed(err error) bool {
+	if err == nil {
+		return true
+	}
+	if many, ok := err.(interface{ Unwrap() []error }); ok {
+		children := many.Unwrap()
+		if len(children) == 0 {
+			return false
+		}
+		for _, child := range children {
+			if !remoteNativeOnlyClosed(child) {
+				return false
+			}
+		}
+		return true
+	}
+	if one, ok := err.(interface{ Unwrap() error }); ok {
+		return remoteNativeOnlyClosed(one.Unwrap())
+	}
+	return errors.Is(err, net.ErrClosed)
+}
+
+func TestRouterVPNRelayNativeUnverifiedTLSNeverProducesRemoteReceipt(t *testing.T) {
+	pki := remoteNativeOpenVPNNativePKI(t)
+	physical := &remoteNativePhysical{first: remoteNativePort(t), second: remoteNativeProvider(t, pki, "tcp", remoteNativePort(t)), network: "tcp"}
+	for _, kind := range []string{"wrong CA", "wrong TLS name", "wrong client key"} {
+		t.Run(kind, func(t *testing.T) {
+			graph := remoteNativeGraph(t, pki, "tcp", remoteNativePort(t))
+			endpoint := graph["endpoints"].([]any)[0].(map[string]any)
+			tls := endpoint["tls"].(map[string]any)
+			switch kind {
+			case "wrong CA":
+				tls["certificate"] = []string{remoteNativeOpenVPNNativePKI(t).ca}
+			case "wrong TLS name":
+				tls["server_name"] = "foreign.invalid"
+			case "wrong client key":
+				tls["client_key"] = []string{remoteNativeOpenVPNNativePKI(t).localKey}
+			}
+			directory, capture := remoteNativeCapture(t, graph)
+			ctx, cancel := context.WithCancel(context.Background())
+			done := make(chan error, 1)
+			factory := func(ctx context.Context, raw []byte) (routerVPNRelayOwner, error) {
+				return remoteNativeFactory(ctx, raw, physical, nil)
+			}
+			go func() { done <- routerVPNRunRelay(ctx, directory, capture.SessionID, factory) }()
+			if _, err := remoteNativeQuery(t, directory, capture, 1800*time.Millisecond); err == nil {
+				t.Error("unverified TLS produced a connected receipt")
+			}
+			cancel()
+			select {
+			case <-done:
+			case <-time.After(5 * time.Second):
+				t.Fatal("rejected TLS owner did not close")
+			}
+			if _, err := os.Stat(filepath.Join(directory, routerVPNRelayRemoteName)); !os.IsNotExist(err) {
+				t.Fatal("failed TLS left a native receipt")
+			}
+		})
+	}
+}
+
+func TestRouterVPNRelayNativePrivateSourceBoundaryPrecedesConstruction(t *testing.T) {
+	for _, kind := range []string{"source hash", "wrong session", "linked config", "unknown capture", "public source", "preexisting receipt"} {
+		t.Run(kind, func(t *testing.T) {
+			directory, capture := remoteNativeCapture(t, map[string]any{"log": map[string]any{"disabled": true}})
+			session := capture.SessionID
+			switch kind {
+			case "source hash":
+				_ = os.WriteFile(filepath.Join(directory, "sing-box.json"), []byte(`{"changed":true}`), 0600)
+			case "wrong session":
+				session = strings.Repeat("f", 32)
+			case "linked config":
+				target := filepath.Join(t.TempDir(), "foreign")
+				raw, _ := os.ReadFile(filepath.Join(directory, "sing-box.json"))
+				_ = os.WriteFile(target, raw, 0600)
+				_ = os.Remove(filepath.Join(directory, "sing-box.json"))
+				_ = os.Symlink(target, filepath.Join(directory, "sing-box.json"))
+			case "unknown capture":
+				raw, _ := json.Marshal(capture)
+				raw = append(raw[:len(raw)-1], []byte(`,"command":"hidden"}`)...)
+				_ = os.WriteFile(filepath.Join(directory, "native-capture.json"), raw, 0600)
+			case "public source":
+				_ = os.Chmod(filepath.Join(directory, "sing-box.json"), 0644)
+			case "preexisting receipt":
+				_ = os.WriteFile(filepath.Join(directory, routerVPNRelayRemoteName), []byte(`{}`), 0600)
+			}
+			called := false
+			factory := func(context.Context, []byte) (routerVPNRelayOwner, error) {
+				called = true
+				return nil, errors.New("must not construct")
+			}
+			if routerVPNRunRelay(context.Background(), directory, session, factory) == nil || called {
+				t.Fatal("private source boundary failed before native construction")
+			}
+		})
+	}
+	if remoteNativeOnlyClosed(errors.Join(net.ErrClosed, errors.New("real failure"))) {
+		t.Fatal("auxiliary provider cleanup masked an unrelated error")
+	}
+}

@@ -13,5 +13,8 @@ func (r *ExternalProofRequest) DNSMeasurementAuthority(source, capture, session 
 	if err != nil || policy.Config() != r.policy.Config() || policy.Metadata() != r.policy.Metadata() || policy.SourceSHA256() != r.policy.SourceSHA256() {
 		return "", "", errors.New("DNS measurement selection differs from its proved graph")
 	}
+	if r.VerifyCurrentPath() != nil {
+		return "", "", errors.New("DNS measurement transport changed during capture")
+	}
 	return policy.Config(), policy.Metadata(), nil
 }

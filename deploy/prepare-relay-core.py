@@ -36,10 +36,13 @@ openvpn_spec.loader.exec_module(OPENVPN_CLOSE)
 strategy_spec = importlib.util.spec_from_file_location('relay_native_strategy', ROOT/'deploy/prepare-mobile-strategy.py')
 STRATEGY = importlib.util.module_from_spec(strategy_spec)
 strategy_spec.loader.exec_module(STRATEGY)
+remote_spec = importlib.util.spec_from_file_location('relay_openvpn_remote', ROOT/'deploy/mobile_openvpn_remote_policy.py')
+OPENVPN_REMOTE = importlib.util.module_from_spec(remote_spec)
+remote_spec.loader.exec_module(OPENVPN_REMOTE)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 def inputs():
-    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl'] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + STRATEGY.inputs()
+    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
 
@@ -74,6 +77,11 @@ def prepare(vendor):
             if target.is_symlink(): raise ValueError('Refusing a linked relay source destination')
             target.write_text(text)
     AMNEZIA.prepare(vendor)
+    OPENVPN_REMOTE.prepare(vendor)
+    for source in (ROOT/'mobile/relay').glob('*.tmpl'):
+        target = vendor/'cmd/sing-box'/('routervpn_relay_'+source.name.removesuffix('.tmpl'))
+        if target.is_symlink(): raise ValueError('Linked native relay command destination')
+        target.write_bytes(source.read_bytes())
     print('Private relay source digest:', digest())
 
 def prepare_native(vendor, xray):

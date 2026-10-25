@@ -3,16 +3,20 @@
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 
 ROOT = Path(__file__).resolve().parents[1]
 IMPORT = '"router-vpn/internal/nativeopenvpn"'
 NATIVE_IMPORT = '"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"'
+_remote_spec = importlib.util.spec_from_file_location('routervpn_openvpn_remote', ROOT/'deploy/mobile_openvpn_remote_policy.py')
+REMOTE = importlib.util.module_from_spec(_remote_spec)
+_remote_spec.loader.exec_module(REMOTE)
 
 
 def inputs():
     return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_openvpn_source.py', ROOT/'mobile/routervpn_openvpn.go',
             ROOT/'mobile/routervpn_openvpn_test.go', ROOT/'mobile/routervpn_openvpn_parser_test.go',
-            *sorted((ROOT/'internal/nativeopenvpn').glob('*.go'))]
+            *sorted((ROOT/'internal/nativeopenvpn').glob('*.go'))] + REMOTE.inputs()
 
 
 def digest():
@@ -40,6 +44,7 @@ def prepare(vendor):
             raise ValueError('Unsafe OpenVPN source destination')
     for target, data in files.items():
         target.write_bytes(data)
+    REMOTE.prepare(vendor)
 
 
 if __name__ == '__main__':

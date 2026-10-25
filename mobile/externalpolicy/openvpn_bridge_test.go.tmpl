@@ -1,0 +1,69 @@
+//go:build with_openvpn
+
+package box_test
+
+import (
+	"encoding/json"
+	"errors"
+	"testing"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/protocol/group"
+)
+
+func TestRouterVPNExternalOpenVPNRemoteBridgeUsesActualCapturedEndpoint(t *testing.T) {
+	for _, execution := range []bool{false, true} {
+		source, capture := externalNativeExecutionProtocolSource(t, "openvpn", "")
+		tag := mobilemultihop.LocalTag
+		if !execution {
+			var captured map[string]any
+			if json.Unmarshal([]byte(capture), &captured) != nil {
+				t.Fatal("capture")
+			}
+			delete(captured, "execution")
+			captured["profile"].(map[string]any)["multihop_execution"] = "local"
+			raw, _ := json.Marshal(captured)
+			capture = string(raw)
+			tag = mobilemultihop.ExternalFinalTag
+		}
+		engine := externalNativeCapturedFixture(t, source, capture, nil)
+		proof, err := engine.RouterVPNExternalCreateProof(source, capture, "native-openvpn-owner")
+		if err != nil {
+			t.Fatal("actual OpenVPN endpoint did not compose with native proof", err)
+		}
+		defer proof.Close()
+		var selector *group.Selector
+		if execution {
+			outbound, ok := engine.Outbound().Outbound(mobilemultihop.ExternalFinalTag)
+			selector, _ = outbound.(*group.Selector)
+			if !ok || selector == nil || selector.Start() != nil {
+				t.Fatal("actual candidate selector did not start")
+			}
+		}
+		if receipt, err := box.RouterVPNExternalReadOpenVPNRemoteForTest(proof, tag); !errors.Is(err, nativeopenvpn.ErrRemotePending) || receipt.Generation != 0 {
+			t.Fatal("native bridge lost the actual endpoint or configuration fabricated a connected receipt", err)
+		}
+		if _, err := box.RouterVPNExternalReadOpenVPNRemoteForTest(proof, "direct"); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			t.Fatal("native receipt escaped its captured route")
+		}
+		if execution {
+			if !selector.SelectOutbound(mobilemultihop.ServerTag) {
+				t.Fatal("could not select the real alternate candidate")
+			}
+			if _, err := box.RouterVPNExternalReadOpenVPNRemoteForTest(proof, tag); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+				t.Fatal("unselected native candidate retained receipt authority")
+			}
+			selector.SelectOutbound(mobilemultihop.LocalTag)
+		}
+		_ = engine.Endpoint().Remove(tag)
+		if _, err := box.RouterVPNExternalReadOpenVPNRemoteForTest(proof, tag); err == nil || errors.Is(err, nativeopenvpn.ErrRemotePending) {
+			t.Fatal("removed native endpoint retained receipt authority")
+		}
+	}
+	// Exercise full source/config binding and credential substitution controls
+	// for the same real OpenVPN selector graph, in addition to receipt routing.
+	source, capture := externalNativeExecutionProtocolSource(t, "openvpn", "")
+	exerciseExternalNativeExecution(t, source, capture)
+}

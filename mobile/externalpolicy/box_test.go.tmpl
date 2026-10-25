@@ -5,6 +5,7 @@ import (
 	"crypto/ecdh"
 	"encoding/base64"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 
@@ -79,6 +80,15 @@ func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode str
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("k", 32)))
 	external := map[string]any{"protocol": protocol, "expected_public_ip": "203.0.113.88", "response_probe": map[string]any{"url": "https://203.0.113.20/response", "server_name": "node.example"}}
 	switch protocol {
+	case "openvpn":
+		raw, err := os.ReadFile("testdata/routervpn-external-openvpn-mapped.json")
+		var fixture struct {
+			External map[string]any `json:"external"`
+		}
+		if err != nil || json.Unmarshal(raw, &fixture) != nil || fixture.External == nil {
+			t.Fatal("missing exact client-only OpenVPN fixture", err)
+		}
+		external = fixture.External
 	case "wireguard", "amneziawg":
 		serverPrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("v", 32)))
 		remotePrivate, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("r", 32)))
@@ -122,7 +132,7 @@ func externalNativeExecutionProtocolSource(t *testing.T, protocol, layerMode str
 		t.Fatal(err)
 	}
 	graph["outbounds"], graph["endpoints"] = []any{transport}, []any{wg}
-	if multihoprelay.ExternalPacketMode(protocol) {
+	if multihoprelay.ExternalPacketMode(protocol) || protocol == "openvpn" {
 		wg["mtu"] = 1500
 		graph["outbounds"], graph["endpoints"] = []any{}, []any{wg, transport}
 	}

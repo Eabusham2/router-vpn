@@ -101,6 +101,10 @@ func (e *ExternalNodeConfig) UnmarshalJSON(data []byte) error {
 	if raw, exists := fields["openvpn_pairing"]; exists && bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return fmt.Errorf("external OpenVPN pairing must be an explicit private capture or absent")
 	}
+	if _, mapped := fields["openvpn_response_probes"]; mapped {
+		if _, legacy := fields["response_probe"]; legacy { return fmt.Errorf("OpenVPN remote response map cannot include a legacy response field") }
+		if _, layered := fields["start_layer"]; layered { return fmt.Errorf("OpenVPN remote response map requires an unambiguous physical remote mapping") }
+	}
 	var decoded externalNodeConfigJSON
 	if err := json.Unmarshal(data, &decoded); err != nil {
 		return err

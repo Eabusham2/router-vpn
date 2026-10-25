@@ -51,7 +51,15 @@ enum IOSMultihopExecution {
                       configuration["external_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
                       ["server", "auto"].contains(exitProfile["multihop_execution"] as? String ?? ""),
                       ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"].contains(exitMode), let selected = exitProfile["external"] as? [String: Any],
-                      selected["protocol"] as? String == exitMode, selected["response_probe"] is [String: Any] else { throw issue() }
+                      selected["protocol"] as? String == exitMode else { throw issue() }
+                if let probes = selected["openvpn_response_probes"] {
+                    guard exitMode == "openvpn", selected["response_probe"] == nil,
+                          selected["start_layer"] == nil, ["", "off"].contains(exitProfile["start_layer"] as? String ?? "off"),
+                          let map = probes as? [String: Any], (2...16).contains(map.count),
+                          map.values.allSatisfy({ $0 is [String: Any] }) else { throw issue() }
+                } else {
+                    guard selected["response_probe"] is [String: Any] else { throw issue() }
+                }
                 if exitMode == "openvpn" {
                     guard let pairing = selected["openvpn_pairing"] as? [String: Any],
                           Set(pairing.keys) == ["private_key", "server"], pairing["private_key"] is String,

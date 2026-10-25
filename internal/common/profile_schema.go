@@ -104,7 +104,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	if ext.TorBridge != nil { blocks++ }
 	if ext.Protocol == "tor" {
 		if blocks != 0 { return fmt.Errorf("plain Tor cannot contain another protocol or bridge block") }
-		if ext.ResponseProbe != nil || ext.StartLayer != nil || ext.ServerPeer != nil || ext.OpenVPNPairing != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint, server pairing or proxy Start Layer") }
+		if ext.ResponseProbe != nil || ext.StartLayer != nil || ext.ServerPeer != nil || ext.OpenVPNPairing != nil || ext.OpenVPNResponseProbes != nil { return fmt.Errorf("plain Tor cannot contain a fixed external response endpoint, server pairing or proxy Start Layer") }
 		return nil
 	}
 	if blocks != 1 { return fmt.Errorf("external node requires exactly one protocol block") }
@@ -161,6 +161,7 @@ func normalizeExternalNode(ext *ExternalNodeConfig) error {
 	}
 	if err := validateExternalServerPeer(ext); err != nil { return err }
 	if err := validateExternalOpenVPNPairing(ext); err != nil { return err }
+	if err := validateExternalOpenVPNResponseProbes(ext); err != nil { return err }
 	if ext.ResponseProbe != nil {
 		if !externalExecutionProtocol(ext.Protocol) { return fmt.Errorf("node response probe requires a supported external execution protocol") }
 		host := externalNodeEndpoint(ext)

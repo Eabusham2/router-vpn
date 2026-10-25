@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"time"
 
 	"router-vpn/internal/hopmeasure"
 )
@@ -39,6 +40,19 @@ type externalMeasurementEngine struct {
 	proof    *ExternalProofRequest
 	engine   hopmeasure.Engine
 	identity string
+}
+
+func (e *externalMeasurementEngine) VerifyMeasurement(parent context.Context) error {
+	if e.Identity() == "" || parent == nil || parent.Err() != nil {
+		return errors.New("external measurement owner retired")
+	}
+	ctx, cancel := context.WithTimeout(parent, 1500*time.Millisecond)
+	defer cancel()
+	if err := e.proof.verifyCurrentPath(ctx); err != nil {
+		e.proof.Cancel()
+		return err
+	}
+	return nil
 }
 
 func (e *externalMeasurementEngine) BeginMeasurement() (func(), error) {

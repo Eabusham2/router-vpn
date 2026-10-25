@@ -198,6 +198,22 @@ struct ExternalResponseProbe: Codable, Hashable {
     var url: String
     var serverName: String?
 
+    init(url: String, serverName: String? = nil) {
+        self.url = url
+        self.serverName = serverName
+    }
+
+    init(from decoder: Decoder) throws {
+        let raw = try decoder.container(keyedBy: ExternalLayerKey.self)
+        let keys = Set(raw.allKeys.map(\.stringValue))
+        guard keys.contains("url"), keys.isSubset(of: ["url", "server_name"]) else {
+            throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "A response endpoint accepts only its HTTPS URL and optional certificate name."))
+        }
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        url = try c.decode(String.self, forKey: .url)
+        serverName = c.contains(.serverName) ? try c.decode(String.self, forKey: .serverName) : nil
+    }
+
     enum CodingKeys: String, CodingKey {
         case url
         case serverName = "server_name"
@@ -409,6 +425,10 @@ struct ExternalOpenVPNPairingUpdate {
     let pairing: ExternalOpenVPNPairing?
 }
 
+struct ExternalOpenVPNResponseProbesUpdate {
+    let probes: [String: ExternalResponseProbe]?
+}
+
 struct ExternalNodeConfig: Codable, Hashable {
     var protocolName: String
     var expectedPublicIP: String
@@ -425,6 +445,7 @@ struct ExternalNodeConfig: Codable, Hashable {
     var startLayer: ExternalStartLayer?
     var serverPeer: ExternalServerPeer?
     var openVPNPairing: ExternalOpenVPNPairing?
+    var openVPNResponseProbes: [String: ExternalResponseProbe]?
 
     static let packetProtocols: Set<String> = ["wireguard", "amneziawg"]
     static let serverExecutionProtocols: Set<String> = ["wireguard", "amneziawg", "shadowsocks", "hysteria2", "socks5", "http-connect", "https-connect", "openvpn"]
@@ -505,11 +526,17 @@ struct ExternalNodeConfig: Codable, Hashable {
         httpsConnect = try c.decodeIfPresent(ExternalHTTPConnectConfig.self, forKey: .httpsConnect)
         hysteria2 = try c.decodeIfPresent(ExternalHysteria2Config.self, forKey: .hysteria2)
         torBridge = try c.decodeIfPresent(ExternalTorBridgeConfig.self, forKey: .torBridge)
-        responseProbe = try c.decodeIfPresent(ExternalResponseProbe.self, forKey: .responseProbe)
+        responseProbe = c.contains(.responseProbe) ? try c.decode(ExternalResponseProbe.self, forKey: .responseProbe) : nil
         // Explicit null must not turn a rejected imported layer into absence.
         startLayer = c.contains(.startLayer) ? try c.decode(ExternalStartLayer.self, forKey: .startLayer) : nil
         serverPeer = c.contains(.serverPeer) ? try c.decode(ExternalServerPeer.self, forKey: .serverPeer) : nil
         openVPNPairing = c.contains(.openVPNPairing) ? try c.decode(ExternalOpenVPNPairing.self, forKey: .openVPNPairing) : nil
+        openVPNResponseProbes = c.contains(.openVPNResponseProbes) ? try c.decode([String: ExternalResponseProbe].self, forKey: .openVPNResponseProbes) : nil
+        if let probes = openVPNResponseProbes {
+            guard protocolName == "openvpn", (2...16).contains(probes.count), responseProbe == nil, startLayer == nil else {
+                throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN remote response endpoints require 2–16 hosts, no single response endpoint, and Start Layer Off."))
+            }
+        }
         guard openVPNPairing == nil || protocolName == "openvpn" else {
             throw DecodingError.dataCorrupted(.init(codingPath: decoder.codingPath, debugDescription: "OpenVPN pairing belongs only to its private OpenVPN node."))
         }
@@ -530,6 +557,7 @@ struct ExternalNodeConfig: Codable, Hashable {
         case startLayer = "start_layer"
         case serverPeer = "server_peer"
         case openVPNPairing = "openvpn_pairing"
+        case openVPNResponseProbes = "openvpn_response_probes"
         case protocolName = "protocol"
         case expectedPublicIP = "expected_public_ip"
     }

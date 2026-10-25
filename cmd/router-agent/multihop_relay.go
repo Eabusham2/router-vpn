@@ -168,8 +168,8 @@ func registerMultihopRelayRoute(h *http.ServeMux, s *server) {
 func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
-	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete {
-		w.Header().Set("Allow", "GET, PUT, DELETE")
+	if r.Method != http.MethodGet && r.Method != http.MethodPut && r.Method != http.MethodDelete && r.Method != http.MethodPost {
+		w.Header().Set("Allow", "GET, PUT, DELETE, POST")
 		http.Error(w, "method not allowed", 405)
 		return
 	}
@@ -218,7 +218,18 @@ func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 	}
 	ctx, cancel := context.WithTimeout(r.Context(), 8*time.Second)
 	defer cancel()
-	if r.Method == http.MethodDelete {
+	if r.Method == http.MethodPost {
+		if r.URL.RawQuery != "" {
+			http.Error(w, "invalid remote status request", 400)
+			return
+		}
+		remote, e := s.relay.OpenVPNRemote(ctx, peer, q)
+		err = e
+		if err == nil {
+			_ = json.NewEncoder(w).Encode(remote)
+			return
+		}
+	} else if r.Method == http.MethodDelete {
 		err = s.relay.Delete(ctx, peer, q)
 		if err == nil {
 			_ = json.NewEncoder(w).Encode(map[string]any{"node_id": s.cfg.NodeID, "session_id": q.SessionID, "stopped": true})

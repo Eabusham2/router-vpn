@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 func externalExecutionFixture(t *testing.T, selection string) (string, string) {
@@ -124,6 +125,14 @@ type externalExecutionProcess struct {
 	mu       sync.Mutex
 	alive    bool
 	failStop bool
+	remote   func(context.Context) (nativeopenvpn.RemoteReceipt, error)
+}
+
+func (p *externalExecutionProcess) OpenVPNRemote(ctx context.Context) (nativeopenvpn.RemoteReceipt, error) {
+	if !p.Alive() || p.remote == nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	return p.remote(ctx)
 }
 
 func (p *externalExecutionProcess) Alive() bool { p.mu.Lock(); defer p.mu.Unlock(); return p.alive }
@@ -140,12 +149,13 @@ func (p *externalExecutionProcess) Stop(context.Context) error {
 type externalExecutionRunner struct {
 	mu        sync.Mutex
 	processes []*externalExecutionProcess
+	remote    func(context.Context) (nativeopenvpn.RemoteReceipt, error)
 }
 
 func (r *externalExecutionRunner) Start(_ context.Context, _ []byte, _ multihoprelay.Lease) (multihoprelay.Process, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	p := &externalExecutionProcess{alive: true}
+	p := &externalExecutionProcess{alive: true, remote: r.remote}
 	r.processes = append(r.processes, p)
 	return p, nil
 }
@@ -166,6 +176,35 @@ type externalExecutionEngine struct {
 	trust                      *tls.Config
 	leaseRequests              []multihoprelay.Request
 	badPacketChallenge         string
+	badOpenVPNCapability       string
+	remotes                    map[string]nativeopenvpn.RemoteReceipt
+	remoteQueries              int
+	nodeDials                  map[string][]string
+	onNode, onPublic, onDNS    func(string)
+	onRemote                   func(context.Context, string)
+	onRemoteResponse           func(context.Context)
+}
+
+func (e *externalExecutionEngine) OpenVPNRemote(tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if e.Selected() != tag {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("wrong native selector")
+	}
+	return e.remote(context.Background(), tag)
+}
+func (e *externalExecutionEngine) remote(ctx context.Context, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	e.mu.Lock()
+	hook := e.onRemote
+	e.mu.Unlock()
+	if hook != nil {
+		hook(ctx, tag)
+	}
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	receipt, ok := e.remotes[tag]
+	if ctx.Err() != nil || !ok || e.identity == "" {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	return receipt, nil
 }
 
 func (e *externalExecutionEngine) Identity() string {
@@ -188,6 +227,12 @@ func (e *externalExecutionEngine) Select(tag string) error {
 	return nil
 }
 func (e *externalExecutionEngine) DNSProof(ctx context.Context, tag string) error {
+	e.mu.Lock()
+	hook, selected := e.onDNS, e.selected
+	e.mu.Unlock()
+	if hook != nil {
+		hook(selected)
+	}
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if tag != "tun-in" || ctx.Err() != nil || e.identity == "" {
@@ -215,8 +260,14 @@ func (e *externalExecutionEngine) Dial(ctx context.Context, tag, address string)
 			return nil, errors.New("wrong control destination")
 		}
 		server = e.entry
-	} else if address == "203.0.113.20:443" {
+	} else if address == "203.0.113.20:443" || address == "203.0.113.21:9443" && e.policy.capture.Profile["external"].(map[string]any)["openvpn_response_probes"] != nil {
 		server = e.node[tag]
+		e.mu.Lock()
+		if e.nodeDials == nil {
+			e.nodeDials = map[string][]string{}
+		}
+		e.nodeDials[tag] = append(e.nodeDials[tag], address)
+		e.mu.Unlock()
 	} else if address == "1.1.1.1:80" || address == "1.0.0.1:80" {
 		server = e.public[tag]
 	}
@@ -253,6 +304,13 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		t.Fatal(err)
 	}
 	e := &externalExecutionEngine{identity: "one-external-box", selected: LocalTag, policy: policy, manager: m, runner: runner, public: map[string]*httptest.Server{}, node: map[string]*httptest.Server{}, nodeCalls: map[string]int{}, dnsCalls: map[string]int{}, probeTargets: map[string][]string{}, badDNS: map[string]bool{}, badPublic: map[string]bool{}, badNode: map[string]bool{}}
+	if multihoprelay.OpenVPNRemoteRequired(exit) {
+		e.remotes = map[string]nativeopenvpn.RemoteReceipt{
+			LocalTag:  {Remote: nativeopenvpn.Remote{Host: "203.0.113.20", Port: 1194, Network: "udp"}, Generation: 1, ConnectedAt: time.Now().UnixMilli()},
+			ServerTag: {Remote: nativeopenvpn.Remote{Host: "203.0.113.21", Port: 443, Network: "tcp"}, Generation: 2, ConnectedAt: time.Now().UnixMilli()},
+		}
+		runner.remote = func(ctx context.Context) (nativeopenvpn.RemoteReceipt, error) { return e.remote(ctx, ServerTag) }
+	}
 	e.entry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") != "Bearer captured-entry-token" {
 			w.WriteHeader(403)
@@ -269,6 +327,18 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 		}
 		if r.Method == "GET" {
 			result := map[string]any{"node_id": node, "execution": "server", "exits": m.Available()}
+			e.mu.Lock()
+			remoteCapability := e.badOpenVPNCapability
+			e.mu.Unlock()
+			if remoteCapability != "" {
+				for _, capability := range result["exits"].([]map[string]string) {
+					if remoteCapability == "missing" {
+						delete(capability, "openvpn_remote")
+					} else {
+						capability["openvpn_remote"] = remoteCapability
+					}
+				}
+			}
 			if r.URL.RawQuery == "external_packet=1" {
 				challenge, err := m.PacketChallenge(netip.MustParseAddr("10.77.0.2"))
 				if err != nil {
@@ -311,6 +381,24 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			return
 		}
 		peer := netip.MustParseAddr("10.77.0.2")
+		if r.Method == "POST" {
+			e.mu.Lock()
+			e.remoteQueries++
+			e.mu.Unlock()
+			remote, err := m.OpenVPNRemote(r.Context(), peer, q)
+			if err != nil {
+				w.WriteHeader(503)
+				return
+			}
+			e.mu.Lock()
+			responseHook := e.onRemoteResponse
+			e.mu.Unlock()
+			if responseHook != nil {
+				responseHook(r.Context())
+			}
+			_ = json.NewEncoder(w).Encode(remote)
+			return
+		}
 		if r.Method == "PUT" {
 			e.mu.Lock()
 			e.leaseRequests = append(e.leaseRequests, q)
@@ -350,7 +438,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			if r.Header.Get("Authorization") != "" {
 				e.errors = append(e.errors, "private token leaked")
 			}
+			hook := e.onNode
 			e.mu.Unlock()
+			if hook != nil {
+				hook(tag)
+			}
 			if tag == LocalTag {
 				time.Sleep(20 * time.Millisecond)
 			}
@@ -369,7 +461,11 @@ func newExternalExecutionEngine(t *testing.T, policy *ExternalPolicy) *externalE
 			if r.Header.Get("Authorization") != "" {
 				e.errors = append(e.errors, "private token leaked")
 			}
+			hook := e.onPublic
 			e.mu.Unlock()
+			if hook != nil {
+				hook(tag)
+			}
 			if tag == LocalTag {
 				time.Sleep(10 * time.Millisecond)
 			}

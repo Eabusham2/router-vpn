@@ -110,6 +110,7 @@ jobs:
           git -C "$VENDOR" checkout --detach FETCH_HEAD
           bash deploy/test_mobile_openvpn_pinned.sh "$VENDOR" 2>&1 | tee "$RUNNER_TEMP/native-core.log"
           python3 deploy/test_external_openvpn_native.py --core "$VENDOR" 2>&1 | tee -a "$RUNNER_TEMP/native-core.log"
+          python3 deploy/test_external_openvpn_remote_native.py --core "$VENDOR" 2>&1 | tee -a "$RUNNER_TEMP/native-core.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

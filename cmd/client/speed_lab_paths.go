@@ -766,6 +766,9 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 			err = a.restoreDesktopCapturedMTU(a.connectionOperationContextOrBackground(), native)
 		}
 		if err == nil {
+			err = a.verifyDesktopExternalCurrentPath(a.connectionOperationContextOrBackground(), native)
+		}
+		if err == nil {
 			err = registerActiveDNSRuntimeConfig(a, external.ID, "external-"+exit.Protocol, filepath.Join(native.directory, "sing-box.json"))
 		}
 	} else if exit.Protocol == "openvpn" {

@@ -28,7 +28,7 @@ $Expected=@{jc='3';jmin='40';jmax='900';s1='56';s2='48';s3='24';s4='32';h1='1000
 $Private=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('p'*32)))
 $Peer=[Convert]::ToBase64String([Text.Encoding]::ASCII.GetBytes(('q'*32)))
 $Fields=@{}
-foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing')){
+foreach($Name in @('ExtPort','ExtName','ExtServer','ExtExpected','ExtUser','ExtPassword','ExtTLS','ExtMethod','ExtSecret','ExtWGPrivate','ExtWGPeer','ExtWGAddresses','ExtWGAllowed','ExtWGDNS','ExtWGPSK','ExtWGMTU','ExtWGKeepalive','ExtAWGParameters','ExtResponseURL','ExtResponseName','ExtLayerAPI','ExtLayerPort','ExtLayerKey','ExtServerPeerPublic','ExtServerPeerAddresses','ExtServerPeerMTU','ExtServerPeerKeepalive','ExtOpenVPNConfig','ExtOpenVPNPairing','ExtOpenVPNResponseProbes')){
     $Fields[$Name]=[pscustomobject]@{Text='';Password=''}
 }
 $Fields.ExtStartLayer=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='off'}}
@@ -139,6 +139,17 @@ foreach($Layer in @('off','aes-256-gcm','aes-256-gcm+xor-whitening')){
 $Fields.ExtOpenVPNPairing.Text='';$Fields.ExtOpenVPNConfig.Text+="remote 203.0.113.21 443 tcp`n";$Fields.ExtResponseURL.Text='';$Fields.ExtResponseName.Text='';$Fields.ExtStartLayer.SelectedItem.Tag='off';$Fields.ExtLayerAPI.Text='';$Fields.ExtLayerPort.Text='';$Fields.ExtLayerKey.Password=''
 $script:Saved=$null;& $Save;Check ($null -ne $Saved -and -not $Saved.ContainsKey('openvpn_pairing_json')) 'Plain Local multiremote incorrectly requires pairing.'
 if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-local-multiremote.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$Multi=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'deploy/fixtures/external-openvpn-multihost-client.json')|ConvertFrom-Json
+$Fields.ExtOpenVPNConfig.Text=$Multi.external.openvpn.config;$Fields.ExtUser.Text=$Multi.external.openvpn.username;$Fields.ExtPassword.Password=$Multi.external.openvpn.password;$Fields.ExtExpected.Text=$Multi.external.expected_public_ip
+$Fields.ExtOpenVPNPairing.Text="`n"+($Multi.external.openvpn_pairing|ConvertTo-Json -Depth 32)+"`n"
+$MapText=$Multi.external.openvpn_response_probes|ConvertTo-Json -Depth 8 -Compress;$Fields.ExtOpenVPNResponseProbes.Text="`n"+$MapText+"`n"
+$script:Saved=$null;& $Save;Check ($null -ne $Saved -and $Saved.openvpn_response_probes_json -ceq $Fields.ExtOpenVPNResponseProbes.Text -and $Saved.openvpn_pairing_json -ceq $Fields.ExtOpenVPNPairing.Text -and $Saved.openvpn.config -ceq $Fields.ExtOpenVPNConfig.Text -and $Saved.openvpn.username -ceq $Fields.ExtUser.Text -and $Saved.openvpn.password -ceq $Fields.ExtPassword.Password -and -not $Saved.ContainsKey('response_probe')) 'Actual OpenVPN callback changed private map, source, or credentials.'
+if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-multihost.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$FirstHost=@($Multi.external.openvpn_response_probes.PSObject.Properties.Name|Sort-Object)[0];$FirstProbe=$Multi.external.openvpn_response_probes.PSObject.Properties[$FirstHost].Value|ConvertTo-Json -Depth 8 -Compress
+$Fields.ExtOpenVPNResponseProbes.Text='{"'+$FirstHost+'":'+$FirstProbe+','+$MapText.Substring(1)
+$script:Saved=$null;& $Save;Check ($null -ne $Saved -and $Saved.openvpn_response_probes_json -ceq $Fields.ExtOpenVPNResponseProbes.Text) 'Native OpenVPN callback parsed or changed raw duplicate map before strict controller validation.'
+if($Output){[IO.File]::WriteAllText((Join-Path $Output 'openvpn-multihost-duplicate.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))};$Count++
+$Fields.ExtOpenVPNResponseProbes.Text='x'*40961;$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Oversized OpenVPN map reached controller.';$Count++;$Fields.ExtOpenVPNResponseProbes.Text=''
 $Protocol.SelectedItem.Tag='shadowsocks';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Changing protocol discarded private OpenVPN source.';$Count++
 $Fields.ExtOpenVPNConfig.Text='';$Protocol.SelectedItem.Tag='openvpn';$script:Saved=$null;& $Save;Check ($null -eq $Saved) 'Empty OpenVPN source reached controller.';$Count++
 $Protocol.SelectedItem.Tag='shadowsocks'

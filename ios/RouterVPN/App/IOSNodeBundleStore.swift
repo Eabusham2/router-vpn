@@ -67,7 +67,7 @@ final class IOSNodeBundleStore {
         var seen = Set<String>()
         for key in available.keys.sorted() {
             guard let data = available[key],
-                  let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
+                  let bundle = try? decodeStoredBundle(data) else { continue }
             for profile in bundle.routerProfiles where seen.insert(profile.id).inserted {
                 result.append(profile)
             }
@@ -84,7 +84,7 @@ final class IOSNodeBundleStore {
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
-                  let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  let bundle = try? decodeStoredBundle(data),
                   bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             return data
         }
@@ -99,7 +99,7 @@ final class IOSNodeBundleStore {
         let available = readableRecords(current: current)
         for key in available.keys.sorted() {
             guard let data = available[key], data == expectedRecord,
-                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  var bundle = try? decodeStoredBundle(data),
                   bundle.routerProfiles.filter({ $0.id == result.id }).count == 1,
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == result.id }) else { continue }
             bundle.routerProfiles[index] = try result.applying(to: bundle.routerProfiles[index])
@@ -117,7 +117,7 @@ final class IOSNodeBundleStore {
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
-                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  var bundle = try? decodeStoredBundle(data),
                   bundle.routerProfiles.contains(where: { $0.id == wanted }) else { continue }
             bundle.routerProfiles.removeAll(where: { $0.id == wanted })
             var next = records
@@ -146,15 +146,16 @@ final class IOSNodeBundleStore {
         responseProbe: ExternalResponseProbe? = nil,
         startLayerUpdate: ExternalStartLayerUpdate? = nil,
         serverPeerUpdate: ExternalServerPeerUpdate? = nil,
-        openVPNPairingUpdate: ExternalOpenVPNPairingUpdate? = nil
+        openVPNPairingUpdate: ExternalOpenVPNPairingUpdate? = nil,
+        openVPNResponseProbesUpdate: ExternalOpenVPNResponseProbesUpdate? = nil
     ) throws -> Data {
         try ensureStorageReady()
         let available = readableRecords(current: current)
-        guard (startLayerUpdate == nil && serverPeerUpdate == nil && openVPNPairingUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
+        guard (startLayerUpdate == nil && serverPeerUpdate == nil && openVPNPairingUpdate == nil && openVPNResponseProbesUpdate == nil) || expectedExternal != nil else { throw IOSExternalExecution.issue() }
         let wanted = canonicalProfileID(profileID, current: current)
         for key in available.keys.sorted() {
             guard let data = available[key],
-                  var bundle = try? JSONDecoder().decode(ClientBundle.self, from: data),
+                  var bundle = try? decodeStoredBundle(data),
                   let index = bundle.routerProfiles.firstIndex(where: { $0.id == wanted }) else { continue }
             if let expectedExternal {
                 guard bundle.routerProfiles[index].normalizedNodeKind == "external",
@@ -162,9 +163,15 @@ final class IOSNodeBundleStore {
                       bundle.routerProfiles[index].external == expectedExternal else {
                     throw NSError(domain: "RouterVPN.NodeStore", code: 6, userInfo: [NSLocalizedDescriptionKey: "The external node changed while its editor was open. Reopen Edit Node before saving."])
                 }
-                if responseProbe == nil, bundle.routerProfiles[index].multihopEnabled == true,
+                if let openVPNResponseProbesUpdate {
+                    guard expectedExternal.protocolName == "openvpn" else { throw IOSExternalExecution.issue() }
+                    bundle.routerProfiles[index].external?.openVPNResponseProbes = openVPNResponseProbesUpdate.probes
+                }
+                guard responseProbe == nil || bundle.routerProfiles[index].external?.openVPNResponseProbes == nil else { throw IOSExternalExecution.issue() }
+                if responseProbe == nil, bundle.routerProfiles[index].external?.openVPNResponseProbes == nil,
+                   bundle.routerProfiles[index].multihopEnabled == true,
                    ["server", "auto"].contains(bundle.routerProfiles[index].multihopExecution ?? "local") {
-                    throw NSError(domain: "RouterVPN.NodeStore", code: 7, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the response endpoint used by Server or Compare."])
+                    throw NSError(domain: "RouterVPN.NodeStore", code: 7, userInfo: [NSLocalizedDescriptionKey: "Choose Local in Multihop before removing the response endpoints used by Server or Compare."])
                 }
                 bundle.routerProfiles[index].external?.responseProbe = responseProbe
                 if let serverPeerUpdate {
@@ -203,6 +210,13 @@ final class IOSNodeBundleStore {
             return replacement
         }
         throw NSError(domain: "RouterVPN.NodeStore", code: 404, userInfo: [NSLocalizedDescriptionKey: "Linked node was not found in the iOS node store"])
+    }
+
+    /// Validate the original bytes before Codable can collapse duplicate host
+    /// entries or other private credentials in an older linked record.
+    private func decodeStoredBundle(_ data: Data) throws -> ClientBundle {
+        try IOSExternalExecution.validatePrivateNodeJSON(data)
+        return try JSONDecoder().decode(ClientBundle.self, from: data)
     }
 
     private func store(_ source: ClientBundle, replaceExistingRecord: Bool, preserving current: ClientBundle? = nil,
@@ -309,7 +323,7 @@ final class IOSNodeBundleStore {
     private func owningRecordKey(_ bundle: ClientBundle, in available: [String: Data]) throws -> String {
         let incomingIDs = Set(bundle.routerProfiles.map(\.id))
         let owners = available.compactMap { key, data -> String? in
-            guard let saved = try? JSONDecoder().decode(ClientBundle.self, from: data),
+            guard let saved = try? decodeStoredBundle(data),
                   !incomingIDs.isDisjoint(with: saved.routerProfiles.map(\.id)) else { return nil }
             return key
         }
@@ -345,7 +359,7 @@ final class IOSNodeBundleStore {
     private func globalProfileIDs(in available: [String: Data], excludingRecord: String?) -> Set<String> {
         var ids = Set<String>()
         for (key, data) in available where key != excludingRecord {
-            guard let bundle = try? JSONDecoder().decode(ClientBundle.self, from: data) else { continue }
+            guard let bundle = try? decodeStoredBundle(data) else { continue }
             for profile in bundle.routerProfiles { ids.insert(profile.id) }
         }
         return ids

@@ -1,0 +1,76 @@
+{
+  "description": "Synthetic client-only private multi-host OpenVPN import fixture; its independent server descriptor is public, and no server private profile or key is included. This is parser/provenance test material, not a usable provider account.",
+  "external": {
+    "expected_public_ip": "203.0.113.88",
+    "openvpn": {
+      "config": "client\nremote 203.0.113.20 1194 udp\nremote 203.0.113.21 443 tcp\nremote-random\nauth-user-pass\npeer-fingerprint aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\nverify-x509-name provider.example name\ntls-version-min 1.2\ntls-version-max 1.3\ndata-ciphers AES-256-GCM:CHACHA20-POLY1305\nauth SHA256\ntun-mtu 1500\nmssfix 1400 mtu\npull-filter ignore \"dhcp-option DNS\"\nroute-nopull\n",
+      "password": "local-private-password",
+      "username": "local-provider"
+    },
+    "openvpn_pairing": {
+      "private_key": "YWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWFhYWE=",
+      "server": {
+        "pairing_public_key": "Sk+MzeGY1m6ZtMAUQYoyI84lbJiQCuSmgR/RD364TCw=",
+        "provider_identity": {
+          "username": "server-provider"
+        },
+        "transport": {
+          "auth": "SHA256",
+          "data_ciphers": [
+            "AES-256-GCM",
+            "CHACHA20-POLY1305"
+          ],
+          "mode": "tls",
+          "mss_fix": 1400,
+          "mss_fix_mode": "mtu",
+          "mtu": 1500,
+          "network": "udp",
+          "pull_filters": [
+            {
+              "action": "ignore",
+              "text": "dhcp-option DNS"
+            }
+          ],
+          "remote_random": true,
+          "route_no_pull": true,
+          "servers": [
+            {
+              "network": "udp",
+              "server": "203.0.113.20",
+              "server_port": 1194
+            },
+            {
+              "network": "tcp",
+              "server": "203.0.113.21",
+              "server_port": 443
+            }
+          ],
+          "system": false,
+          "tls": {
+            "peer_fingerprint": [
+              "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+            ],
+            "remote_certificate_tls": "server",
+            "server_name": "provider.example",
+            "server_name_type": "name",
+            "version_max": "1.3",
+            "version_min": "1.2"
+          },
+          "type": "openvpn-client"
+        }
+      }
+    },
+    "openvpn_response_probes": {
+      "203.0.113.20": {
+        "server_name": "provider.example",
+        "url": "https://203.0.113.20/response"
+      },
+      "203.0.113.21": {
+        "server_name": "provider.example",
+        "url": "https://203.0.113.21/response"
+      }
+    },
+    "protocol": "openvpn"
+  },
+  "selected_layer": ""
+}

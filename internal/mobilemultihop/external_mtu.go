@@ -14,7 +14,7 @@ import (
 // It never accepts an independent host boolean, saved effective MTU, private
 // node credential or profile belonging to a different external selection.
 func (r *ExternalProofRequest) MTUAuthority(source, capture string) (string, string, error) {
-	if !r.Healthy() {
+	if r.VerifyCurrentPath() != nil {
 		return "", "", errors.New("external MTU requires the retained successful exit proof")
 	}
 	policy, err := NewExternalPolicy(source, capture)
@@ -30,7 +30,7 @@ func (r *ExternalProofRequest) MTUAuthority(source, capture string) (string, str
 		"expected_public_ip": r.meta.ExpectedPublicIP, "mtu_policy": r.meta.MTUPolicy,
 		"jumbo_tun": jumbo,
 	})
-	if err != nil || !r.Healthy() {
+	if err != nil || r.VerifyCurrentPath() != nil {
 		return "", "", errors.New("external MTU authority retired before delivery")
 	}
 	return policy.Config(), string(authority), nil
@@ -68,7 +68,7 @@ func (r *ExternalProofRequest) verifyMTU(parent context.Context, dial func(conte
 		return err
 	}
 	defer release()
-	if r.engine.DNSProof(ctx, r.meta.TUNTag) != nil || !r.Healthy() || ctx.Err() != nil {
+	if r.verifyCurrentPath(ctx) != nil || r.engine.DNSProof(ctx, r.meta.TUNTag) != nil || r.verifyCurrentPath(ctx) != nil || !r.Healthy() || ctx.Err() != nil {
 		return errors.New("external MTU DNS owner failed proof")
 	}
 	var nonce [16]byte
@@ -76,7 +76,7 @@ func (r *ExternalProofRequest) verifyMTU(parent context.Context, dial func(conte
 		return errors.New("external MTU proof nonce unavailable")
 	}
 	data, err := externalProofHTTP(ctx, dial, ExternalFinalTag, "https://1.1.1.1/cdn-cgi/trace?routervpn_mtu="+hex.EncodeToString(nonce[:]), "", testTLS)
-	if err != nil || externalTraceAddress(data, r.meta.ExpectedPublicIP) != nil || !r.Healthy() || ctx.Err() != nil {
+	if err != nil || externalTraceAddress(data, r.meta.ExpectedPublicIP) != nil || r.verifyCurrentPath(ctx) != nil || !r.Healthy() || ctx.Err() != nil {
 		return errors.New("external MTU public exit changed or proof failed")
 	}
 	return nil

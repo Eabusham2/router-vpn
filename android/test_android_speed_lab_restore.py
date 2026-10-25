@@ -56,10 +56,10 @@ final class AndroidMultihopRuntime {
  List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
- String execution="local",selected="local";
+ String execution="local",selected="local",restoredResponseMap="";
  String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
  void connect(File f,AndroidStandardExitStore.Entry e,String mode,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,mode,cb);}
- void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;this.execution=execution;selected=winner;connect(f,e,mode,cb);}
+ void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;this.execution=execution;selected=winner;restoredResponseMap=e.responseMap;connect(f,e,mode,cb);}
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  boolean isActiveOrTransitioning(){return AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.logicalMode.equals("external");}
  String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}
@@ -103,7 +103,7 @@ public final class SpeedLabRestoreTest {
   final AndroidNodeStore.Node original,first,last;final AndroidStandardExitStore.Entry external=new AndroidStandardExitStore.Entry();final String type,raw;String originalSession,originalWinner="server";
   Fixture(Path directory,String type,String topology)throws Exception{check(!AndroidMTUMeasurementGate.held(),"previous case leaked hold");this.type=type;this.raw=type.equals("multihop")?"max-quic-awg":type.startsWith("external")?type.substring(9):"reality-pq-vision";
    RuntimeBoundary.reset();android.content.Context.speedPreferences.clear();AndroidConnectionProfileStore.saved=null;AndroidHomeStateStore.current=new AndroidHomeStateStore.Snapshot();AndroidRuntimeRegistry.instance=new AndroidRuntimeRegistry();AndroidVpnMutationGuard.busy=false;AndroidNodeStore.nodes.clear();AndroidStandardExitStore.saved.clear();android.net.VpnService.needsPermission=false;AndroidSpeedLab.starts=AndroidSpeedLab.cancels=0;AndroidSpeedLab.pending=null;AndroidNativeHopMeasurement.starts=AndroidNativeHopMeasurement.cancels=0;AndroidNativeHopMeasurement.hold=false;AndroidNativeHopMeasurement.pending=null;LayeredVpnService.quiesce=null;LayeredVpnService.automatic=0;
-   original=node(directory,"original");first=node(directory,"entry");last=node(directory,"exit");external.protocol=type.startsWith("external")?raw:"tor-bridge";AndroidStandardExitStore.saved.put(external.id,AndroidStandardExitStore.copy(external));
+   original=node(directory,"original");first=node(directory,"entry");last=node(directory,"exit");external.protocol=type.startsWith("external")?raw:"tor-bridge";if(type.equals("external-openvpn"))external.responseMap="captured-private-two-host-map";AndroidStandardExitStore.saved.put(external.id,AndroidStandardExitStore.copy(external));
    connection=new AndroidUnifiedConnectionController(activity,nodes);controller=new AndroidSpeedLabController(activity,connection);
    if(type.equals("router")){AndroidHomeStateStore.begin("SMART AUTO",raw,"",original.id,"","");AndroidRuntimeRegistry.instance.orchestrator.source=Files.readString(original.file.toPath());AndroidHomeStateStore.proved();}
    if(type.equals("multihop")){AndroidHomeStateStore.begin("multihop",raw,original.id,last.id,"reality-xhttp","");AndroidRuntimeRegistry.instance.multihop.execution="auto";AndroidRuntimeRegistry.instance.multihop.selected="server";AndroidHomeStateStore.proved();}
@@ -128,10 +128,10 @@ public final class SpeedLabRestoreTest {
   }
  }
  static void exactExternalWinner(Path root)throws Exception{
-  for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
-   Fixture f=new Fixture(root,"external-shadowsocks",topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;
+  for(String kind:new String[]{"external-shadowsocks","external-openvpn"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
+   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="auto";owner.selected=selected;
    f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"external winner restoration failed");f.originalRestored();
-   check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected),"external Compare was rerun instead of restoring its proved winner");
+   check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected)&&owner.restoredResponseMap.equals(f.external.responseMap),"external Compare was rerun instead of restoring its proved winner");
   }
  }
  static void cancellation(Path root)throws Exception{
@@ -160,10 +160,11 @@ public final class SpeedLabRestoreTest {
   }
  }
  static void stale(Path root)throws Exception{
-  for(String mutation:new String[]{"node","external-profile","newer-connected","manual-off","during-stop","restored-proof"}){
-   Fixture f=new Fixture(root,mutation.equals("external-profile")?"external-openvpn":mutation.equals("node")?"multihop":"router","external");f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"stale fixture not measured");
+  for(String mutation:new String[]{"node","external-profile","external-map","newer-connected","manual-off","during-stop","restored-proof"}){
+   Fixture f=new Fixture(root,(mutation.equals("external-profile")||mutation.equals("external-map"))?"external-openvpn":mutation.equals("node")?"multihop":"router","external");f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"stale fixture not measured");
    if(mutation.equals("node"))Files.writeString(f.original.file.toPath(),"changed original DNS");
    if(mutation.equals("external-profile")){AndroidStandardExitStore.Entry e=AndroidStandardExitStore.copy(f.external);e.secret="replacement key";AndroidStandardExitStore.saved.put(e.id,e);}
+   if(mutation.equals("external-map")){AndroidStandardExitStore.Entry e=AndroidStandardExitStore.copy(f.external);e.responseMap="replacement-owner-map";AndroidStandardExitStore.saved.put(e.id,e);}
    if(mutation.equals("newer-connected")){AndroidHomeStateStore.begin("new-user","wg","","new-node","","");AndroidHomeStateStore.proved();}
    if(mutation.equals("manual-off"))AndroidHomeStateStore.off();
    if(mutation.equals("during-stop")){RuntimeBoundary.holdStop=true;RuntimeBoundary.stopEntered=false;}
@@ -215,7 +216,7 @@ public final class SpeedLabRestoreTest {
   }
   Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Unsupported Tor comparison stopped the original path");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,8 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,24 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
 }
 '''
 

@@ -165,6 +165,7 @@ jobs:
           git -C "$VENDOR" fetch --depth=1 origin 1ac1a339cb1223e9c70eae14c44411c75033c02d
           git -C "$VENDOR" checkout --detach FETCH_HEAD
           python3 deploy/test_external_openvpn_native.py --core "$VENDOR" 2>&1 | tee "$RUNNER_TEMP/paired-openvpn.log"
+          python3 deploy/test_external_openvpn_remote_native.py --core "$VENDOR" 2>&1 | tee -a "$RUNNER_TEMP/paired-openvpn.log"
       - uses: actions/upload-artifact@v4
         if: always()
         with:

@@ -33,7 +33,8 @@ extension RouterVPNModel {
         exitLayerPort: Int = 0,
         exitLayerKey: String = "",
         serverPeerJSON: String? = nil,
-        openVPNPairingJSON: String? = nil
+        openVPNPairingJSON: String? = nil,
+        openVPNResponseProbesJSON: String? = nil
     ) -> Bool {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before editing node metadata."; return false }
         let trimmedName = name.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -64,6 +65,11 @@ extension RouterVPNModel {
                 guard let expectedExternal, expectedExternal.protocolName == "openvpn", let original = expectedExternal.openVPN else { throw IOSExternalExecution.issue() }
                 pairingUpdate = ExternalOpenVPNPairingUpdate(pairing: try IOSExternalExecution.openVPNPairing(openVPNPairingJSON, profile: original))
             } else { pairingUpdate = nil }
+            let probesUpdate: ExternalOpenVPNResponseProbesUpdate?
+            if let openVPNResponseProbesJSON {
+                guard let expectedExternal, expectedExternal.protocolName == "openvpn", let original = expectedExternal.openVPN else { throw IOSExternalExecution.issue() }
+                probesUpdate = ExternalOpenVPNResponseProbesUpdate(probes: try IOSExternalExecution.openVPNResponseProbes(openVPNResponseProbesJSON, profile: original))
+            } else { probesUpdate = nil }
             let peerUpdate: ExternalServerPeerUpdate?
             if let serverPeerJSON {
                 guard let expectedExternal, ExternalNodeConfig.packetProtocols.contains(expectedExternal.protocolName) else { throw IOSExternalExecution.issue() }
@@ -105,7 +111,8 @@ extension RouterVPNModel {
                 responseProbe: probe,
                 startLayerUpdate: layerUpdate,
                 serverPeerUpdate: peerUpdate,
-                openVPNPairingUpdate: pairingUpdate
+                openVPNPairingUpdate: pairingUpdate,
+                openVPNResponseProbesUpdate: probesUpdate
             )
             if bundle?.routerProfiles.contains(where: { $0.id == id }) == true {
                 try importBundle(replacement)

@@ -29,6 +29,14 @@ SWIFT = r'''
   let predecessor=try source()["entryBundle"] as! Data
   return ["engine":"external-libbox","mode":"external-"+kind,"bundle":try JSONSerialization.data(withJSONObject:root),"external_entry_bundle":predecessor,"external_entry_mode":"max-tls-awg"]
  }
+ static func mapped(_ requested:String="auto")throws->[String:Any]{
+  var value=try external(requested,"openvpn"),root=try JSONSerialization.jsonObject(with:value["bundle"] as! Data) as! [String:Any]
+  let fixture=try JSONSerialization.jsonObject(with:Data(contentsOf:URL(fileURLWithPath:CommandLine.arguments[1]))) as! [String:Any]
+  var profiles=root["routerProfiles"] as! [[String:Any]]
+  profiles[0]["external"]=fixture["external"];profiles[0]["start_layer"]="off";root["routerProfiles"]=profiles
+  value["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+  return value
+ }
  static func main()throws{
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)
   for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {for requested in ["local","server","auto"]{
@@ -123,6 +131,44 @@ SWIFT = r'''
    }
   }}}
   for kind in ["wireguard","amneziawg","openvpn","unknown"] {reject("unsupported external protocol cannot acquire restoration owner"){_ = try IOSMultihopExecution.Source(configuration:external("server",kind),digest:digest)}}
+  for requested in ["server","auto"] {
+   let original=try mapped(requested),source=try IOSMultihopExecution.Source(configuration:original,digest:digest)
+   let needsReceipt=try IOSMultihopExecution.requiresCapture(configuration:original)
+   check("paired mapped OpenVPN captures the proved runtime owner",needsReceipt && source.requested==requested)
+   for winner in ["local","server"] where requested=="auto" || requested==winner {
+    let receipt=try IOSMultihopExecution.Capture(source:source,execution:winner,session:session,request:request),bytes=try receipt.encoded()
+    let restored=try IOSMultihopExecution.restoredExecution(option:String(decoding:bytes,as:UTF8.self) as NSString,source:source,mtuHold:hold)
+    check("mapped OpenVPN restores the proved winner without rerunning Compare",restored==winner && source.requested==requested)
+    check("mapped receipt omits private map, provider identities and pairing",!String(decoding:bytes,as:UTF8.self).contains("provider.example") && !String(decoding:bytes,as:UTF8.self).contains("openvpn_response_probes") && !String(decoding:bytes,as:UTF8.self).contains("private_key"))
+    for field in ["probe","provider","pairing","remote","entry"] {
+     var changed=original,root=try JSONSerialization.jsonObject(with:original["bundle"] as! Data) as! [String:Any],profiles=root["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any]
+     if field=="probe" {var map=ext["openvpn_response_probes"] as! [String:Any],probe=map["203.0.113.21"] as! [String:Any];probe["server_name"]="replacement.example";map["203.0.113.21"]=probe;ext["openvpn_response_probes"]=map}
+     if field=="provider" {var value=ext["openvpn"] as! [String:Any];value["password"]="replacement credential";ext["openvpn"]=value}
+     if field=="pairing" {var pair=ext["openvpn_pairing"] as! [String:Any];pair["private_key"]=Data(repeating:4,count:32).base64EncodedString();ext["openvpn_pairing"]=pair}
+     if field=="remote" {var value=ext["openvpn"] as! [String:Any];value["config"]=(value["config"] as! String).replacingOccurrences(of:"443 tcp",with:"8443 tcp");ext["openvpn"]=value}
+     profiles[0]["external"]=ext;root["routerProfiles"]=profiles;changed["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+     if field=="entry" {var entry=try JSONSerialization.jsonObject(with:original["external_entry_bundle"] as! Data) as! [String:Any];entry["profiles"]=["private":"replacement entry credential"];changed["external_entry_bundle"]=try JSONSerialization.data(withJSONObject:entry,options:.sortedKeys)}
+     let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
+     reject("mapped OpenVPN receipt cannot adopt changed captured "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement)}
+    }
+   }
+   for fault in ["missing-pair","null-pair","legacy-probe","null-map","one-host","bad-value","exit-layer","selected-layer","foreign-protocol"] {
+    var changed=original,root=try JSONSerialization.jsonObject(with:original["bundle"] as! Data) as! [String:Any],profiles=root["routerProfiles"] as! [[String:Any]],ext=profiles[0]["external"] as! [String:Any]
+    switch fault {
+    case "missing-pair":ext.removeValue(forKey:"openvpn_pairing")
+    case "null-pair":ext["openvpn_pairing"]=NSNull()
+    case "legacy-probe":ext["response_probe"]=["url":"https://203.0.113.20/response"]
+    case "null-map":ext["openvpn_response_probes"]=NSNull()
+    case "one-host":ext["openvpn_response_probes"]=["203.0.113.20":["url":"https://203.0.113.20/response"]]
+    case "bad-value":ext["openvpn_response_probes"]=["203.0.113.20":NSNull(),"203.0.113.21":NSNull()]
+    case "exit-layer":ext["start_layer"]=["mode":"aes-256-gcm"]
+    case "selected-layer":profiles[0]["start_layer"]="aes-256-gcm"
+    default:ext["protocol"]="shadowsocks"
+    }
+    profiles[0]["external"]=ext;root["routerProfiles"]=profiles;changed["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
+    reject("mapped restore rejects incompatible captured contract "+fault){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
+   }
+  }
   let local=try external("local"),needsLocal=try IOSMultihopExecution.requiresCapture(configuration:local)
   check("plain external Local does not invent lease ownership",!needsLocal)
   reject("plain external Local cannot adopt an unrelated execution receipt"){_ = try IOSMultihopExecution.Source(configuration:local,digest:digest)}
@@ -139,7 +185,7 @@ def main():
         path, binary = Path(folder)/'test.swift', Path(folder)/'test'
         path.write_text((APP/'IOSMultihopExecution.swift').read_text()+'\n'+SWIFT)
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(path), '-o', str(binary)], check=True, timeout=90)
-        subprocess.run([str(binary)], check=True, timeout=20)
+        subprocess.run([str(binary), str(ROOT/'deploy/fixtures/external-openvpn-multihost-client.json')], check=True, timeout=20)
     provider = (ROOT/'ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift').read_text()
     assert 'currentPathProofGuard() === guardState' in provider
     assert 'engine.bindMultihopExecutionSource(source, metadata: hopMetadata)' in provider

@@ -1,0 +1,47 @@
+//go:build with_openvpn
+
+package openvpn
+
+import (
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"net"
+)
+
+// Capture is called by sing-openvpn immediately after this exact physical
+// connection is returned, before the session can enqueue TLS configuration.
+func (c *ClientEndpoint) routerVPNTransportGenerationFor(connection net.Conn) uint64 {
+	state := c.state.Load()
+	if connection == nil || state == nil || state.routerVPNTransport != connection || c.loopContext.Err() != nil {
+		return 0
+	}
+	return state.routerVPNTransportGeneration
+}
+
+// RouterVPNConnectedRemote exposes only a coherent snapshot from this owned
+// native TLS/data-channel endpoint. Configuration selection and process health
+// do not establish a connection. The physical transport generation changes
+// before every reconnect handshake, even when its address remains unchanged.
+func (c *ClientEndpoint) RouterVPNConnectedRemote() (nativeopenvpn.RemoteReceipt, error) {
+	if c == nil || c.loopContext.Err() != nil || c.client == nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	state := c.state.Load()
+	if state == nil || !state.started || !state.tunnelConfigured || state.routerVPNTransportGeneration == 0 || state.tunnelInfo.ConnectedSince.IsZero() || !c.client.Ready() {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	c.statusAccess.Lock()
+	terminal := c.terminalError != ""
+	c.statusAccess.Unlock()
+	if terminal || c.client.PendingChallenge() != nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	remote, err := nativeopenvpn.ParseRemote(state.tunnelInfo.Server, state.tunnelInfo.Network)
+	if err != nil {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	receipt := nativeopenvpn.RemoteReceipt{Remote: remote, Generation: state.routerVPNTransportGeneration, ConnectedAt: state.tunnelInfo.ConnectedSince.UnixMilli()}
+	if receipt.Validate() != nil || !c.client.Ready() || c.loopContext.Err() != nil || c.state.Load() != state {
+		return nativeopenvpn.RemoteReceipt{}, nativeopenvpn.ErrRemotePending
+	}
+	return receipt, nil
+}

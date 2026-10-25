@@ -33,7 +33,7 @@ PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 
 
 def inputs():
-    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(),
+    files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
              ROOT/'deploy/prepare-desktop-mtu.py', *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
     for package in (*PURE, 'dnsmeasure'):
@@ -87,7 +87,8 @@ def prepare(vendor):
     DESKTOP_MTU.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
     EXTERNAL.prepare(vendor, mobile=False)
-    templates = [ROOT/'mobile/desktop/external.go.tmpl', ROOT/'mobile/desktop/external_test.go.tmpl', *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
+    RELAY.OPENVPN_REMOTE.prepare(vendor)
+    templates = [*sorted((ROOT/'mobile/desktop').glob('external*.go.tmpl')), *sorted((ROOT/'mobile/desktop').glob('mtu*.go.tmpl'))]
     for template in templates:
         write(vendor, 'cmd/sing-box/routervpn_'+template.name.removesuffix('.tmpl'), template.read_bytes())
     print('Desktop native external proof source:', digest())

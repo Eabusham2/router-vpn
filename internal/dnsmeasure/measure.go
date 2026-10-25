@@ -34,6 +34,13 @@ type Engine interface {
 	SelectedDNS(context.Context) error
 }
 
+// A native transport can reconnect while its enclosing VPN and TUN remain
+// alive. Retained external paths verify that generation at measurement and
+// result-adoption boundaries without relying on their background health cache.
+type MeasurementBoundary interface {
+	VerifyMeasurement(context.Context) error
+}
+
 type Description struct {
 	NodeID, SessionID, RouteLabel string
 	Selected                      Endpoint
@@ -256,6 +263,10 @@ func (s *Service) StatusJSON() string {
 	return string(data)
 }
 func (s *Service) run(ctx context.Context, id, transport string) {
+	if err := s.verifyMeasurement(ctx); err != nil {
+		s.finish(id, nil, err)
+		return
+	}
 	endpoints := append([]Endpoint{s.description.Selected}, candidates(transport, s.description.RouteLabel)...)
 	results := make([]Result, len(endpoints))
 	jobs := make(chan int, len(endpoints))
@@ -299,7 +310,22 @@ func (s *Service) run(ctx context.Context, id, transport string) {
 		}()
 	}
 	workers.Wait()
-	err := s.valid(ctx)
+	s.finish(id, results, s.verifyMeasurement(ctx))
+}
+
+func (s *Service) verifyMeasurement(ctx context.Context) error {
+	if err := s.valid(ctx); err != nil {
+		return err
+	}
+	if boundary, ok := s.engine.(MeasurementBoundary); ok {
+		if err := boundary.VerifyMeasurement(ctx); err != nil {
+			return err
+		}
+	}
+	return s.valid(ctx)
+}
+
+func (s *Service) finish(id string, results []Result, err error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	if s.state.Request != id || s.state.Complete {

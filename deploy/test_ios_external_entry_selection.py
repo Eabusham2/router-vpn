@@ -255,6 +255,34 @@ func bundle(_ p:RouterProfile)->ClientBundle{var value=ClientBundle.empty;value.
     try check("rejected packet Server keeps the valid Local configuration",encoded(editor.bundle!)==local)
    }
   }}
+  var mapped=try profile("mapped-openvpn","external","openvpn")
+  mapped.external?.socks5=nil
+  mapped.external?.openVPN=ExternalOpenVPNConfig(config:"client\ndev tun\nproto udp\nremote 203.0.113.20 1194\nremote 203.0.113.21 443 tcp\nauth-user-pass\nremote-cert-tls server\npeer-fingerprint "+String(repeating:"ab",count:32)+"\n",username:" exact user ",password:" exact secret ")
+  let map:[String:Any]=["203.0.113.20":["url":"https://203.0.113.20/response","server_name":"first.example.test"],"203.0.113.21":["url":"https://203.0.113.21/response","server_name":"second.example.test"]]
+  let mapText=String(decoding:try encoded(map),as:UTF8.self),mapEditor=RouterVPNModel(),mapOriginal=mapped.external!
+  mapEditor.bundle=bundle(mapped);IOSNodeBundleStore.shared.nodes=[mapped.id:try encoded(mapEditor.bundle!)]
+  try check("native editor saves each private OpenVPN response endpoint",mapEditor.updateNodeMetadata(id:mapped.id,name:"Mapped",location:"",latitudeText:"",longitudeText:"",expectedExternal:mapOriginal,openVPNResponseProbesJSON:mapText))
+  let mappedExternal=mapEditor.bundle!.routerProfiles[0].external!
+  try check("native map edit preserves exact inline source and credentials",mappedExternal.openVPN==mapOriginal.openVPN && mappedExternal.openVPNResponseProbes?.count==2 && mappedExternal.responseProbe==nil)
+  let mappedBytes=try encoded(mapEditor.bundle!),mappedRecords=IOSNodeBundleStore.shared.nodes
+  for bad in ["null",mapText+" {}",String(mapText.dropLast())+",\"203.0.113.20\":{\"url\":\"https://203.0.113.20/replaced\"}}"] {
+   try check("raw ambiguous map cannot overwrite linked node",!mapEditor.updateNodeMetadata(id:mapped.id,name:"Bad",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,openVPNResponseProbesJSON:bad))
+  }
+  try check("single response cannot replace an unremoved remote map",!mapEditor.updateNodeMetadata(id:mapped.id,name:"Conflicting",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,responseProbeURL:"https://203.0.113.20/response"))
+  try check("stale map editor cannot overwrite newer private state",!mapEditor.updateNodeMetadata(id:mapped.id,name:"Stale",location:"",latitudeText:"",longitudeText:"",expectedExternal:mapOriginal,openVPNResponseProbesJSON:mapText))
+  try check("failed edits preserve exact stored and active bundle",encoded(mapEditor.bundle!)==mappedBytes && IOSNodeBundleStore.shared.nodes==mappedRecords)
+  let ambiguousRecord=String(decoding:mappedRecords[mapped.id]!,as:UTF8.self).replacingOccurrences(of:"\"openvpn_response_probes\":{",with:"\"openvpn_response_probes\":{\"203.0.113.20\":{\"url\":\"https://203.0.113.20/response\",\"server_name\":\"first.example.test\"},")
+  IOSNodeBundleStore.shared.nodes[mapped.id]=Data(ambiguousRecord.utf8)
+  try check("stored private bytes reject duplicate remote identities before edit",!mapEditor.updateNodeMetadata(id:mapped.id,name:"Ambiguous record",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,openVPNResponseProbesJSON:mapText))
+  try check("ambiguous stored record is preserved without normalizing its credentials",IOSNodeBundleStore.shared.nodes[mapped.id]==Data(ambiguousRecord.utf8) && encoded(mapEditor.bundle!)==mappedBytes)
+  IOSNodeBundleStore.shared.nodes=mappedRecords
+  try check("metadata-only edit retains current private response map",mapEditor.updateNodeMetadata(id:mapped.id,name:"Metadata",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal))
+  try check("metadata-only edit does not drop an optional map",mapEditor.bundle!.routerProfiles[0].external==mappedExternal)
+  var serverSelection=mapEditor.bundle!;serverSelection.routerProfiles[0].multihopEnabled=true;serverSelection.routerProfiles[0].multihopExecution="auto";mapEditor.bundle=serverSelection;IOSNodeBundleStore.shared.nodes[mapped.id]=try encoded(serverSelection)
+  try check("saved comparison cannot lose every response endpoint",!mapEditor.updateNodeMetadata(id:mapped.id,name:"Clear",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,openVPNResponseProbesJSON:""))
+  serverSelection.routerProfiles[0].multihopExecution="local";mapEditor.bundle=serverSelection;IOSNodeBundleStore.shared.nodes[mapped.id]=try encoded(serverSelection)
+  try check("Local can explicitly remove private response map",mapEditor.updateNodeMetadata(id:mapped.id,name:"Local",location:"",latitudeText:"",longitudeText:"",expectedExternal:mappedExternal,openVPNResponseProbesJSON:""))
+  try check("removing map retains original multi-host OpenVPN credentials",mapEditor.bundle!.routerProfiles[0].external?.openVPNResponseProbes==nil && mapEditor.bundle!.routerProfiles[0].external?.openVPN==mapOriginal.openVPN)
   print("Apple external entry selection: PASS (\(checks) shipping Swift checks; storage/native-readiness boundaries doubled)")
  }
 }

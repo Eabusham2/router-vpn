@@ -1,0 +1,346 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+)
+
+type desktopPathProofFixture struct {
+	*desktopExternalFixture
+	verify func() error
+	calls  atomic.Int32
+}
+
+func (f *desktopPathProofFixture) VerifyCurrentPath() error {
+	f.calls.Add(1)
+	return f.verify()
+}
+
+func desktopPathInput(t *testing.T, directory, name string, request routerVPNDesktopPathRequest) {
+	t.Helper()
+	raw, err := json.Marshal(request)
+	if err != nil || os.WriteFile(filepath.Join(directory, name), raw, 0600) != nil {
+		t.Fatal("could not publish captured path fixture input", err)
+	}
+}
+
+func desktopPathRecord(t *testing.T, directory string, matches func(routerVPNDesktopPathRecord) bool) routerVPNDesktopPathRecord {
+	t.Helper()
+	deadline := time.NewTimer(4 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		raw, err := os.ReadFile(filepath.Join(directory, "path-status.json"))
+		var record routerVPNDesktopPathRecord
+		if err == nil && json.Unmarshal(raw, &record) == nil && matches(record) {
+			return record
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("captured native path fixture did not complete", err, record)
+		case <-tick.C:
+		}
+	}
+}
+
+func desktopPathRun(t *testing.T, directory string, owner *desktopPathProofFixture) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunExternal(context.Background(), directory, desktopExternalSession, func(context.Context, *mobilemultihop.ExternalPolicy, string, string, string) (routerVPNExternalOwner, error) {
+			return owner, nil
+		})
+	}()
+	return done
+}
+
+func TestRouterVPNDesktopExternalPathCancelJoinsWorkerAndKeepsHeartbeat(t *testing.T) {
+	directory, policy := desktopExternalWorkspace(t)
+	base := desktopExternalOwner(t, policy, false)
+	entered, release := make(chan struct{}), make(chan struct{})
+	owner := &desktopPathProofFixture{desktopExternalFixture: base, verify: func() error { close(entered); <-release; return nil }}
+	done := desktopPathRun(t, directory, owner)
+	initial := desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Generation == 0 })
+	var first routerVPNExternalProofRecord
+	if json.Unmarshal(desktopExternalWaitFile(t, directory, "proof.json"), &first) != nil {
+		t.Fatal("missing native proof")
+	}
+	request := initial.routerVPNDesktopPathRequest
+	request.Generation, request.Request = 1, strings.Repeat("b", 32)
+	desktopPathInput(t, directory, "path-request.json", request)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native fresh verification never started")
+	}
+	desktopPathInput(t, directory, "path-cancel.json", request)
+	desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Cancelled && !r.Complete })
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		var heartbeat routerVPNExternalProofRecord
+		if raw, err := os.ReadFile(filepath.Join(directory, "proof.json")); err == nil && json.Unmarshal(raw, &heartbeat) == nil && heartbeat.HeartbeatAt > first.HeartbeatAt {
+			if heartbeat.CheckedAt != first.CheckedAt {
+				t.Fatal("fresh check rewrote original proof identity")
+			}
+			break
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("fresh network check blocked the native heartbeat")
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if !owner.Healthy() || owner.closes.Load() != 0 {
+		t.Fatal("measurement cancellation stopped a healthy VPN")
+	}
+	close(release)
+	record := desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Generation == 1 && r.Complete })
+	if !record.Cancelled || record.Verified || record.CheckedAt != 0 || owner.calls.Load() != 1 {
+		t.Fatal("cancelled fresh result remained eligible", record)
+	}
+	for _, name := range []string{"path-request.json", "path-cancel.json"} {
+		if _, err := os.Stat(filepath.Join(directory, name)); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("consumed input was not retired", name, err)
+		}
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopExternalPathTeardownCannotOutliveItsWorker(t *testing.T) {
+	directory, policy := desktopExternalWorkspace(t)
+	base := desktopExternalOwner(t, policy, false)
+	entered, cancelled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	owner := &desktopPathProofFixture{desktopExternalFixture: base, verify: func() error {
+		close(entered)
+		<-base.cancel
+		close(cancelled)
+		<-release
+		return errors.New("private provider details")
+	}}
+	done := desktopPathRun(t, directory, owner)
+	initial := desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Generation == 0 })
+	request := initial.routerVPNDesktopPathRequest
+	request.Generation, request.Request = 1, strings.Repeat("b", 32)
+	desktopPathInput(t, directory, "path-request.json", request)
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("worker never started")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, policy.SourceSHA256())
+	select {
+	case <-cancelled:
+	case <-time.After(3 * time.Second):
+		t.Fatal("teardown did not cancel the proof lifetime")
+	}
+	select {
+	case <-done:
+		t.Fatal("native process acknowledged close before worker drain")
+	default:
+	}
+	if _, err := os.Stat(filepath.Join(directory, "stopped.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("premature close acknowledgement")
+	}
+	close(release)
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	record := desktopPathRecord(t, directory, func(r routerVPNDesktopPathRecord) bool { return r.Complete })
+	if record.Verified || !record.Cancelled {
+		t.Fatal("teardown published a late usable result")
+	}
+}
+
+func desktopPathMailbox(t *testing.T, verify func() error) (string, *routerVPNDesktopPathFiles, *desktopPathProofFixture) {
+	t.Helper()
+	directory, policy := desktopExternalWorkspace(t)
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = files.root.Close() })
+	base := desktopExternalOwner(t, policy, false)
+	base.healthy.Store(true)
+	owner := &desktopPathProofFixture{desktopExternalFixture: base, verify: verify}
+	var proof mobilemultihop.ExternalProofResult
+	if json.Unmarshal([]byte(base.result), &proof) != nil {
+		t.Fatal("bad proof fixture")
+	}
+	mailbox, err := routerVPNOpenDesktopPath(files, owner, desktopExternalSession, proof.SourceSHA256, proof.ConfigSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return directory, mailbox, owner
+}
+
+func desktopPathFinish(t *testing.T, f *routerVPNDesktopPathFiles) error {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	for {
+		if err := f.tick(); err != nil {
+			return err
+		}
+		if f.record.Complete {
+			return nil
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("native path worker failed to drain")
+		case <-time.After(time.Millisecond):
+		}
+	}
+}
+
+func TestRouterVPNDesktopExternalPathRequiresFreshCheckAndExactRequest(t *testing.T) {
+	for _, failure := range []bool{false, true} {
+		t.Run(map[bool]string{false: "valid", true: "fresh-failure"}[failure], func(t *testing.T) {
+			directory, f, owner := desktopPathMailbox(t, func() error {
+				if failure {
+					return errors.New("private provider details")
+				}
+				return nil
+			})
+			request := f.record.routerVPNDesktopPathRequest
+			request.Generation, request.Request = 1, strings.Repeat("b", 32)
+			for _, bad := range []string{"session", "source", "config", "generation", "nonce", "unknown", "duplicate"} {
+				changed := request
+				switch bad {
+				case "session":
+					changed.Session = strings.Repeat("c", 32)
+				case "source":
+					changed.SourceSHA256 = strings.Repeat("c", 64)
+				case "config":
+					changed.ConfigSHA256 = strings.Repeat("c", 64)
+				case "generation":
+					changed.Generation = 2
+				case "nonce":
+					changed.Request = "invalid"
+				}
+				raw, _ := json.Marshal(changed)
+				if bad == "unknown" {
+					raw = append([]byte(`{"foreign":true,`), raw[1:]...)
+				}
+				if bad == "duplicate" {
+					raw = append([]byte(`{"schema":1,`), raw[1:]...)
+				}
+				if os.WriteFile(filepath.Join(directory, "path-request.json"), raw, 0600) != nil {
+					t.Fatal("input write")
+				}
+				if err := f.tick(); err != nil || owner.calls.Load() != 0 || f.record.Generation != 0 {
+					t.Fatal("invalid request reached native verification", bad, err)
+				}
+				_ = os.Remove(filepath.Join(directory, "path-request.json"))
+			}
+			desktopPathInput(t, directory, "path-request.json", request)
+			if err := desktopPathFinish(t, f); err != nil {
+				t.Fatal(err)
+			}
+			if owner.calls.Load() != 1 || f.record.Verified == failure || f.record.routerVPNDesktopPathRequest != request || !owner.Healthy() {
+				t.Fatal("fresh owner result was replaced by cached health")
+			}
+			raw, _ := os.ReadFile(filepath.Join(directory, "path-status.json"))
+			if strings.Contains(string(raw), "private provider") {
+				t.Fatal("private native failure escaped")
+			}
+			// A replay cannot invoke another fresh check or advance the receipt.
+			desktopPathInput(t, directory, "path-request.json", request)
+			if err := f.tick(); err != nil || owner.calls.Load() != 1 || f.record.Generation != 1 {
+				t.Fatal("replay changed native proof ownership", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPathMissingOrReplacedInputCannotPublishProof(t *testing.T) {
+	for _, change := range []string{"missing", "replaced", "modified"} {
+		t.Run(change, func(t *testing.T) {
+			entered, release := make(chan struct{}), make(chan struct{})
+			directory, f, _ := desktopPathMailbox(t, func() error { close(entered); <-release; return nil })
+			request := f.record.routerVPNDesktopPathRequest
+			request.Generation, request.Request = 1, strings.Repeat("b", 32)
+			desktopPathInput(t, directory, "path-request.json", request)
+			if err := f.tick(); err != nil {
+				t.Fatal(err)
+			}
+			<-entered
+			path := filepath.Join(directory, "path-request.json")
+			if change == "modified" {
+				if err := os.WriteFile(path, []byte(`{"foreign":true}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.Rename(path, path+".old"); err != nil {
+					t.Fatal(err)
+				}
+				if change == "replaced" {
+					desktopPathInput(t, directory, "path-request.json", request)
+				}
+			}
+			close(release)
+			if err := desktopPathFinish(t, f); err == nil {
+				t.Fatal("lost/changed input still published a fresh result")
+			}
+			var record routerVPNDesktopPathRecord
+			raw, _ := os.ReadFile(filepath.Join(directory, "path-status.json"))
+			if json.Unmarshal(raw, &record) != nil || record.Verified || record.Complete {
+				t.Fatal("unowned completion became publishable", record)
+			}
+			if change == "modified" {
+				raw, _ = os.ReadFile(path)
+				if string(raw) != `{"foreign":true}` {
+					t.Fatal("foreign input was erased")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopExternalPathRetiredDirectoryCannotReceiveOldReply(t *testing.T) {
+	entered, release := make(chan struct{}), make(chan struct{})
+	directory, f, _ := desktopPathMailbox(t, func() error { close(entered); <-release; return nil })
+	request := f.record.routerVPNDesktopPathRequest
+	request.Generation, request.Request = 1, strings.Repeat("b", 32)
+	desktopPathInput(t, directory, "path-request.json", request)
+	if err := f.tick(); err != nil {
+		t.Fatal(err)
+	}
+	<-entered
+	retired := directory + "-retired"
+	if err := os.Rename(directory, retired); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(retired) })
+	if err := os.Mkdir(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	foreign := []byte(`{"replacement":"retained"}`)
+	if err := os.WriteFile(filepath.Join(directory, "path-status.json"), foreign, 0600); err != nil {
+		t.Fatal(err)
+	}
+	close(release)
+	if err := desktopPathFinish(t, f); err != nil {
+		t.Fatal(err)
+	}
+	actual, _ := os.ReadFile(filepath.Join(directory, "path-status.json"))
+	if string(actual) != string(foreign) {
+		t.Fatal("old native worker overwrote replacement directory")
+	}
+	if _, err := os.Stat(filepath.Join(retired, "path-request.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("old request not retired through its exact directory")
+	}
+}

@@ -332,17 +332,55 @@ apply. Concurrent relay leases cannot alias a canonical provider public key,
 common name or username, and a process whose cleanup failed keeps that identity
 reserved.
 
-The current paired comparison requires all captured remotes to use the same
-public literal host, because one captured last-node response endpoint must
-prove that node. Multiple ports, TCP/UDP fallback order and supported original
-TLS, cipher, control wrapping, keepalive, fragment and MTU settings remain
-intact. Ordinary Local profiles continue to support different-host remote
-lists. Comparing different provider hosts still needs trustworthy observation
-of the selected remote and its matching response proof; that extension remains
-open.
+Existing single-host pairings retain their v4 identity and `response_probe`.
+For different-host lists, the private import instead supplies
+`external.openvpn_response_probes`, with one verified HTTPS response endpoint
+for every distinct original public literal host:
 
-Off, AES-256-GCM and AES-256-GCM plus XOR exit Start Layers use the same owned
-native graph. The private relay runs a userspace `openvpn-client` endpoint with
+```json
+"openvpn_response_probes": {
+  "203.0.113.20": {
+    "url": "https://203.0.113.20/response",
+    "server_name": "provider.example"
+  },
+  "203.0.113.21": {
+    "url": "https://203.0.113.21:9443/response",
+    "server_name": "provider.example"
+  }
+}
+```
+
+The map contains two to sixteen exact hosts. Missing, extra, duplicate,
+noncanonical or unrelated hosts are rejected before private JSON decoding can
+discard them. It cannot coexist with `response_probe` or an exit Start Layer,
+including explicit null fields. The map remains private through native import,
+saved profiles, pairing and capture; public profile views expose eligibility
+only. Both owners retain their original remote order, ports, transport fallback,
+TLS, cipher, control wrapping, keepalive, fragment and MTU options.
+
+This v5 pairing requires the entry's `fresh-connected-transport-v1` capability.
+The actual native OpenVPN endpoint supplies the connected physical remote and
+an immutable generation for that transport. A queued configuration callback
+from an older dial cannot mark a new connection ready. The private relay
+answers each status request using a new request nonce and the exact owned
+process, source digest, lease epoch and attempt; an existing recent receipt
+file is insufficient. A changed remote, reconnect to the same remote, stopped
+process, expired owner or delayed replacement response invalidates that proof.
+
+Each candidate measures its last-node response through its own connected remote's
+map entry. Both candidates use the same randomly selected external endpoint,
+and their scores remain `(last_node_ms + external_ms) / 2`. The controller
+checks the exact native generation around DNS, both timed probes and the
+winner's repeated proof. Failures receive no score. Restoration keeps the
+already-proved Local/Server choice. Retained MTU, DNS Retest and Speed Lab
+operations perform fresh checks at capture and result-adoption boundaries;
+the background health watch alone cannot certify a new measurement.
+
+Single-host Off, AES-256-GCM and AES-256-GCM plus XOR exit Start Layers use the
+same owned native graph. Different-host mapped pairing currently permits Off
+at the exit; the captured Router entry may still have either Start Layer.
+Mapped exit layers require an explicit physical-to-inner-host proof contract
+and remain an unfinished graph capability. The private relay runs a userspace `openvpn-client` endpoint with
 `system: false`; it does not create another system VPN or change the entry's
 global default route. The client proves its selected DNS and exit through the
 chosen path. Configured interface/fragment bounds account for the enclosing

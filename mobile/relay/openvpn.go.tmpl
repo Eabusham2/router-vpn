@@ -1,0 +1,231 @@
+package main
+
+import (
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	stdjson "encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+	"github.com/spf13/cobra"
+)
+
+const routerVPNRelayRemoteName = "openvpn-remote.json"
+
+type routerVPNRelayEndpoint interface {
+	adapter.Endpoint
+	StatusUpdated() <-chan struct{}
+	RouterVPNConnectedRemote() (nativeopenvpn.RemoteReceipt, error)
+}
+
+type routerVPNRelayOwner interface {
+	Start() error
+	Close() error
+	Endpoint() adapter.EndpointManager
+}
+
+type routerVPNRelayFactory func(context.Context, []byte) (routerVPNRelayOwner, error)
+
+func init() {
+	var directory, session string
+	command := &cobra.Command{Use: "routervpn-relay", Short: "Run one private owned OpenVPN relay", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return routerVPNRunRelay(ctx, directory, session, routerVPNNewRelayOwner)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "Owned private lease directory")
+	command.Flags().StringVar(&session, "session", "", "Captured private lease session")
+	mainCommand.AddCommand(command)
+}
+
+func routerVPNNewRelayOwner(parent context.Context, raw []byte) (routerVPNRelayOwner, error) {
+	ctx := service.ExtendContext(globalCtx)
+	ctx, cancel := context.WithCancel(ctx)
+	// The caller owns Close and cancellation even when startup fails.
+	stop := context.AfterFunc(parent, cancel)
+	options, err := json.UnmarshalExtendedContext[option.Options](ctx, raw)
+	if err != nil {
+		stop()
+		cancel()
+		return nil, errors.New("owned relay configuration is invalid")
+	}
+	owner, err := box.New(box.Options{Context: ctx, Options: options})
+	if err != nil {
+		stop()
+		cancel()
+		return nil, errors.New("owned relay native construction failed")
+	}
+	return &routerVPNRelayBox{Box: owner, cancel: cancel, stop: stop}, nil
+}
+
+type routerVPNRelayBox struct {
+	*box.Box
+	cancel context.CancelFunc
+	stop   func() bool
+}
+
+func (owner *routerVPNRelayBox) Close() error { owner.stop(); owner.cancel(); return owner.Box.Close() }
+
+func routerVPNRelayRead(root *os.Root, name string, limit int64) ([]byte, error) {
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm()&0077 != 0 || info.Size() <= 0 || info.Size() > limit {
+		return nil, errors.New("private relay source is unavailable")
+	}
+	file, err := root.Open(name)
+	if err != nil {
+		return nil, errors.New("private relay source is unavailable")
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return nil, errors.New("private relay source identity changed")
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, limit+1))
+	if err != nil || int64(len(raw)) > limit || int64(len(raw)) != info.Size() {
+		return nil, errors.New("private relay source is invalid")
+	}
+	return raw, nil
+}
+
+func routerVPNRelayWrite(root *os.Root, capture multihoprelay.NativeOpenVPNCapture, requestID string, remote nativeopenvpn.RemoteReceipt) error {
+	value := multihoprelay.NativeOpenVPNReceipt{Capture: capture, RequestID: requestID, Remote: remote, HeartbeatAt: time.Now().UnixMilli()}
+	if value.Validate(capture, time.Now()) != nil {
+		return errors.New("native relay remote is not connected")
+	}
+	raw, err := stdjson.Marshal(value)
+	if err != nil {
+		return errors.New("native relay receipt encoding failed")
+	}
+	temporary := ".openvpn-remote-" + capture.SessionID + ".tmp"
+	file, err := root.OpenFile(temporary, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
+	if err != nil {
+		return errors.New("native relay receipt ownership failed")
+	}
+	defer root.Remove(temporary)
+	written, writeErr := file.Write(raw)
+	closeErr := file.Close()
+	if writeErr != nil || written != len(raw) || closeErr != nil {
+		return errors.New("native relay receipt write failed")
+	}
+	if root.Rename(temporary, routerVPNRelayRemoteName) != nil {
+		return errors.New("native relay receipt publication failed")
+	}
+	return nil
+}
+
+func routerVPNRunRelay(ctx context.Context, directory, session string, factory routerVPNRelayFactory) (result error) {
+	bad := errors.New("owned OpenVPN relay lifecycle failed")
+	if ctx == nil || ctx.Err() != nil || factory == nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return bad
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || info.Mode().Perm() != 0700 {
+		return bad
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return bad
+	}
+	defer root.Close()
+	current, err := root.Stat(".")
+	if err != nil || !os.SameFile(info, current) {
+		return bad
+	}
+	if _, err := root.Lstat(routerVPNRelayRemoteName); !os.IsNotExist(err) {
+		return bad
+	}
+	raw, err := routerVPNRelayRead(root, "sing-box.json", 2<<20)
+	if err != nil {
+		return bad
+	}
+	encoded, err := routerVPNRelayRead(root, "native-capture.json", 4096)
+	if err != nil {
+		return bad
+	}
+	var capture multihoprelay.NativeOpenVPNCapture
+	if stdjson.Unmarshal(encoded, &capture) != nil || capture.Validate() != nil || capture.SessionID != session {
+		return bad
+	}
+	sum := sha256.Sum256(raw)
+	if hex.EncodeToString(sum[:]) != capture.ConfigSHA256 {
+		return bad
+	}
+	owner, err := factory(ctx, raw)
+	if err != nil || owner == nil {
+		return bad
+	}
+	defer func() {
+		// Stop advertising proof before draining the exact native owner.
+		if err := root.Remove(routerVPNRelayRemoteName); err != nil && !os.IsNotExist(err) {
+			result = bad
+		}
+		if owner.Close() != nil {
+			result = bad
+		}
+	}()
+	if ctx.Err() != nil || owner.Start() != nil {
+		return bad
+	}
+	endpoint, exists := owner.Endpoint().Get("exit")
+	if !exists {
+		return bad
+	}
+	observed, ok := endpoint.(routerVPNRelayEndpoint)
+	if !ok {
+		return bad
+	}
+	ticker := time.NewTicker(20 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		changed := observed.StatusUpdated()
+		current, exists := owner.Endpoint().Get("exit")
+		if !exists || current != endpoint {
+			return bad
+		}
+		var query multihoprelay.NativeOpenVPNQuery
+		queried := false
+		if _, err := root.Lstat("openvpn-query.json"); err == nil {
+			raw, err := routerVPNRelayRead(root, "openvpn-query.json", 4096)
+			if err != nil {
+				if _, missing := root.Lstat("openvpn-query.json"); !os.IsNotExist(missing) {
+					return bad
+				}
+			} else {
+				if stdjson.Unmarshal(raw, &query) != nil || query.Validate(capture) != nil {
+					return bad
+				}
+				queried = true
+			}
+		} else if !os.IsNotExist(err) {
+			return bad
+		}
+		receipt, err := observed.RouterVPNConnectedRemote()
+		if queried && err == nil {
+			if routerVPNRelayWrite(root, capture, query.RequestID, receipt) != nil {
+				return bad
+			}
+		} else if err := root.Remove(routerVPNRelayRemoteName); err != nil && !os.IsNotExist(err) {
+			return bad
+		}
+		select {
+		case <-ctx.Done():
+			return nil
+		case <-changed:
+		case <-ticker.C:
+		}
+	}
+}

@@ -1,0 +1,17 @@
+package box
+
+import (
+	"errors"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativeopenvpn"
+)
+
+// This adapter exists only in the native test package. External Box tests use
+// it to exercise the shipping private bridge against the real pinned endpoint
+// and managers without starting an OS TUN or contacting a provider.
+func RouterVPNExternalReadOpenVPNRemoteForTest(proof *RouterVPNExternalProofRequest, tag string) (nativeopenvpn.RemoteReceipt, error) {
+	if proof == nil || proof.engine == nil {
+		return nativeopenvpn.RemoteReceipt{}, errors.New("missing test proof")
+	}
+	return proof.engine.OpenVPNRemote(tag)
+}

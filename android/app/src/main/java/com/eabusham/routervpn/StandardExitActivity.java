@@ -445,12 +445,18 @@ public final class StandardExitActivity extends Activity {
             form.addView(text("Paste the public descriptor supplied when pairing this exit: public_key, addresses, mtu and optional persistent_keepalive_interval. This is the server-side client's identity, with different keys and assigned addresses from this device. Its private key and PSK stay on the Router entry. A matching HTTPS response probe is also required for Server / Compare.",13,false));
         }
         EditText openVPNPairing=field("Private OpenVPN pairing JSON (optional for Local)",false);
+        EditText openVPNProbes=field("OpenVPN per-remote HTTPS response map JSON (optional)",false);
         if("openvpn".equals(captured.protocol)){
             openVPNPairing.setSingleLine(false);openVPNPairing.setMinLines(5);
             openVPNPairing.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
             if(captured.openVPNPairing!=null)openVPNPairing.setText(captured.openVPNPairing.toString());
             form.addView(text("Independent OpenVPN Server identity",14,true));form.addView(openVPNPairing);
             form.addView(text("Paste this device's private pairing package supplied by your Router entry. It includes a dedicated local authentication key and a server descriptor. The server's OpenVPN password, certificate key and authentication key stay on the entry. Both OpenVPN profiles must use separate provider identities and the same verified remote policy. Leave blank for Local only.",13,false));
+            openVPNProbes.setSingleLine(false);openVPNProbes.setMinLines(5);
+            openVPNProbes.setInputType(InputType.TYPE_CLASS_TEXT|InputType.TYPE_TEXT_FLAG_MULTI_LINE);
+            if(captured.openVPNResponseProbes!=null)openVPNProbes.setText(captured.openVPNResponseProbes.toString());
+            form.addView(text("Response endpoints for multiple remote hosts",14,true));form.addView(openVPNProbes);
+            form.addView(text("For an OpenVPN profile with different remote hosts, paste every remote IP and its verified HTTPS response endpoint. Use this map instead of the single response URL above. Every original host must appear once; the map stays private with this node. A multi-host map cannot use a single-server exit Start Layer.",13,false));
         }
         TextView error=text("",13,false);form.addView(error);ScrollView scroll=new ScrollView(this);scroll.addView(form);
         AlertDialog dialog=new AlertDialog.Builder(this).setTitle("Connection settings — "+captured.name).setView(scroll).setPositiveButton("Save",null).setNegativeButton("Cancel",null).create();
@@ -490,7 +496,7 @@ public final class StandardExitActivity extends Activity {
                     next.serverPeer=AndroidStandardExitStore.parseServerPeer(serverPeer.getText().toString());
                     AndroidStandardExitStore.validateServerPeer(next);
                 }
-                if("openvpn".equals(next.protocol))next.openVPNPairing=AndroidOpenVPN.pairing(next,openVPNPairing.getText().toString());
+                if("openvpn".equals(next.protocol)){next.openVPNPairing=AndroidOpenVPN.pairing(next,openVPNPairing.getText().toString());next.openVPNResponseProbes=AndroidOpenVPN.responseProbes(next,openVPNProbes.getText().toString());AndroidOpenVPN.validateResponseProbes(next);}
                 // Shared idle validation defers only the unresolved Home entry;
                 // native transport, DNS shape and saved device policy stay required.
                 startup.apply(next);

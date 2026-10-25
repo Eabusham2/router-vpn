@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativeopenvpn"
 	"router-vpn/internal/routechoice"
 )
 
@@ -111,6 +112,9 @@ func (c *Controller) acquire(ctx context.Context) error {
 	found := false
 	for _, exit := range caps.Exits {
 		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer && exit.ExternalFingerprint == c.proposal.ExternalFingerprint {
+			if c.openvpnResponses != nil && exit.OpenVPNRemote != "fresh-connected-transport-v1" {
+				return errors.New("multi-host OpenVPN requires fresh connected-remote support on the entry server")
+			}
 			if c.external != nil && exit.ExpectedPublicIP != c.external.capture.ExpectedPublicIP {
 				return errors.New("paired external public proof changed")
 			}
@@ -188,7 +192,7 @@ func (c *Controller) renewLocked(ctx context.Context) error {
 		return err
 	}
 	var lease multihoprelay.Lease
-	if exactJSON(data, &lease, 8192) != nil || lease.Request != c.proposal || lease.NodeID != c.meta.EntryNodeID || lease.ExitNodeID != c.meta.ExitNodeID || lease.Host != c.expected.Host || lease.Port != c.expected.Port || lease.Username != c.expected.Username || lease.Password != c.expected.Password {
+	if exactJSON(data, &lease, 8192) != nil || lease.Request != c.proposal || lease.NodeID != c.meta.EntryNodeID || lease.ExitNodeID != c.meta.ExitNodeID || lease.Host != c.expected.Host || lease.Port != c.expected.Port || lease.Username != c.expected.Username || lease.Password != c.expected.Password || lease.OpenVPNRemote != c.expected.OpenVPNRemote {
 		return errors.New("server relay response changed the frozen lease")
 	}
 	acknowledgedAt := time.Now()
@@ -272,9 +276,10 @@ func (c *Controller) renew() {
 }
 
 type trial struct {
-	owner     *Controller
-	candidate routechoice.Candidate
-	tag       string
+	owner         *Controller
+	candidate     routechoice.Candidate
+	tag           string
+	openvpnRemote *nativeopenvpn.RemoteReceipt
 }
 
 func (s *trial) Identity() string {
@@ -286,7 +291,13 @@ func (s *trial) Identity() string {
 func (s *trial) Verify(ctx context.Context) error {
 	c := s.owner
 	if c.external != nil {
-		return c.verifyExternalTrial(ctx, s.tag)
+		if err := s.checkOpenVPNRemote(ctx); err != nil {
+			return err
+		}
+		if err := c.verifyExternalTrial(ctx, s.tag); err != nil {
+			return err
+		}
+		return s.checkOpenVPNRemote(ctx)
 	}
 	if _, e := c.prove(ctx, c.meta.EntryTag, c.meta.EntryAPI, c.meta.EntryToken, c.meta.EntryNodeID); e != nil {
 		return e
@@ -297,7 +308,14 @@ func (s *trial) Verify(ctx context.Context) error {
 func (s *trial) ProbeLast(ctx context.Context) (time.Duration, error) {
 	c := s.owner
 	if c.external != nil {
-		return c.externalNodeResponse(ctx, s.tag)
+		if err := s.checkOpenVPNRemote(ctx); err != nil {
+			return 0, err
+		}
+		elapsed, err := c.externalNodeResponseAt(ctx, s.tag, s.openvpnRemote)
+		if err != nil {
+			return 0, err
+		}
+		return elapsed, s.checkOpenVPNRemote(ctx)
 	}
 	return c.prove(ctx, s.tag, c.meta.ExitAPI, c.meta.ExitToken, c.meta.ExitNodeID)
 }
@@ -311,9 +329,15 @@ func (s *trial) ProbeExternal(ctx context.Context, target string) (time.Duration
 	if !allowed || s.Identity() == "" {
 		return 0, errors.New("unapproved or stale external probe")
 	}
+	if err := s.checkOpenVPNRemote(ctx); err != nil {
+		return 0, err
+	}
 	_, elapsed, e := s.owner.exchange(ctx, s.tag, "GET", target, "", nil)
 	if e != nil {
 		return 0, e
+	}
+	if err := s.checkOpenVPNRemote(ctx); err != nil {
+		return 0, err
 	}
 	return elapsed, s.owner.requireValid()
 }
@@ -348,6 +372,13 @@ func (d driver) Open(ctx context.Context, candidate routechoice.Candidate) (rout
 		if c.engine.Selected() != s.tag || c.requireValid() != nil || ctx.Err() != nil {
 			return s, errors.New("external candidate selection retired")
 		}
+	}
+	if c.openvpnResponses != nil {
+		receipt, err := c.awaitOpenVPNRemote(ctx, s.tag)
+		if err != nil {
+			return s, err
+		}
+		s.openvpnRemote = &receipt
 	}
 	return s, nil
 }
@@ -428,6 +459,17 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 		if err == nil && result.Winner.Execution == routechoice.Server && !c.leaseFresh() {
 			err = errors.New("proved server lease expired before activation")
 		}
+		if err == nil && c.openvpnResponses != nil {
+			selected, ok := active.(*trial)
+			if !ok || selected.openvpnRemote == nil {
+				err = errors.New("selected OpenVPN candidate lost its connected remote proof")
+			} else {
+				err = selected.checkOpenVPNRemote(ctx)
+				if err == nil {
+					c.openvpnActive.Store(&openVPNRemoteState{tag: tag, receipt: *selected.openvpnRemote, deadline: time.Now().Add(openVPNRemoteFreshness)})
+				}
+			}
+		}
 	}
 	if err != nil || result.Winner == nil {
 		c.invalidate()
@@ -450,6 +492,9 @@ func (c *Controller) Run(parent context.Context, engine Engine) error {
 	if result.Winner.Execution == routechoice.Server {
 		c.renew()
 	}
+	if c.openvpnResponses != nil {
+		c.watchOpenVPNRemote()
+	}
 	return nil
 }
 func (c *Controller) leaseFresh() bool {
@@ -471,7 +516,7 @@ func (c *Controller) Healthy() bool {
 	}
 	// Do not call the native engine while holding the state mutex: callbacks
 	// may invalidate this same controller. Recheck the outcome after readback.
-	if engine.Identity() != identity || engine.Selected() != tag {
+	if engine.Identity() != identity || engine.Selected() != tag || !c.openVPNRemoteHealthy(tag) {
 		return false
 	}
 	c.mu.Lock()
@@ -484,15 +529,38 @@ func (c *Controller) Close() error {
 	if c.renewCancel != nil {
 		c.renewCancel()
 	}
-	renewDone, runDone := c.renewDone, c.runDone
+	if c.openvpnRemoteCancel != nil {
+		c.openvpnRemoteCancel()
+	}
+	runDone := c.runDone
 	c.mu.Unlock()
-	for _, done := range []chan struct{}{renewDone, runDone} {
+	wait := func(done chan struct{}) error {
 		if done != nil {
 			select {
 			case <-done:
 			case <-time.After(12 * time.Second):
 				return errors.New("mobile comparison teardown is still pending")
 			}
+		}
+		return nil
+	}
+	if err := wait(runDone); err != nil {
+		return err
+	}
+	// Run may have reached its final publication boundary while cancellation
+	// began. Capture and cancel every worker after Run has finished creating them.
+	c.mu.Lock()
+	if c.renewCancel != nil {
+		c.renewCancel()
+	}
+	if c.openvpnRemoteCancel != nil {
+		c.openvpnRemoteCancel()
+	}
+	renewDone, remoteDone := c.renewDone, c.openvpnRemoteDone
+	c.mu.Unlock()
+	for _, done := range []chan struct{}{renewDone, remoteDone} {
+		if err := wait(done); err != nil {
+			return err
 		}
 	}
 	return c.release()
