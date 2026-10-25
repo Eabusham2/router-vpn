@@ -82,6 +82,8 @@ jobs:
         run: python3 deploy/test_desktop_dns_settings.py --platform macos
       - name: Compact DNS preserves captured ownership and encrypted Home
         run: python3 deploy/test_desktop_quick_dns.py --platform macos
+      - name: Native DNS Retest retains captured ownership through drain and save
+        run: python3 deploy/test_macos_dns_measurement.py
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-darwin-*-${{ github.sha }}

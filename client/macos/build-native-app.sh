@@ -13,6 +13,9 @@ EXTERNAL_NODE_SRC="$ROOT/client/macos/RouterVPNMacExternalNode.swift"
 MTU_TRANSPORT_SRC="$ROOT/client/macos/RouterVPNMacMTUTransport.swift"
 MTU_CONTROLLER_SRC="$ROOT/client/macos/RouterVPNMacMTUController.swift"
 MTU_PANEL_SRC="$ROOT/client/macos/RouterVPNMacMTUPanel.swift"
+DNS_TRANSPORT_SRC="$ROOT/client/macos/RouterVPNMacDNSTransport.swift"
+DNS_CONTROLLER_SRC="$ROOT/client/macos/RouterVPNMacDNSController.swift"
+DNS_PANEL_SRC="$ROOT/client/macos/RouterVPNMacDNSPanel.swift"
 SHUTDOWN_SRC="$ROOT/client/macos/RouterVPNMacShutdown.swift"
 VIA_ENTRY_POLICY_SRC="$ROOT/client/macos/RouterVPNMacViaEntryPolicy.swift"
 VIA_ENTRY_UI_SRC="$ROOT/client/macos/RouterVPNMacViaEntryCandidates.swift"
@@ -38,6 +41,7 @@ python3 "$ROOT/deploy/test_apple_vector_map.py"
 python3 "$ROOT/deploy/test_macos_source_closure.py" --shipping-only
 python3 "$ROOT/deploy/test_macos_tor_bridge_ui.py" --shipping-only
 python3 "$ROOT/deploy/test_macos_mtu.py" --shipping-only
+python3 "$ROOT/deploy/test_macos_dns_measurement.py" --shipping-only
 python3 "$ROOT/deploy/test_macos_shutdown.py" --shipping-only
 
 SDK=$(xcrun --sdk macosx --show-sdk-path)
@@ -168,7 +172,7 @@ PY
 xcrun clang -fobjc-arc -fblocks -fmodules -isysroot "$SDK" -mmacosx-version-min=13.0 -arch "$CLANG_ARCH" -c "$MENU_SRC" -o "$MENU_OBJ"
 
 xcrun swiftc -O -sdk "$SDK" -target "$TARGET" -framework AppKit -framework CoreLocation -framework Foundation -framework MapKit \
-  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$MTU_TRANSPORT_SRC" "$MTU_CONTROLLER_SRC" "$MTU_PANEL_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$EXTERNAL_NODE_SRC" "$SHUTDOWN_SRC" "$MAP_GEOMETRY_SRC" "$MAP_RENDERER_SRC" "$MENU_OBJ" -o "$BIN"
+  "$ADAPTIVE_SRC" "$HARDENED_UNIFIED_SRC" "$TELEMETRY_SRC" "$SPEED_LAB_SRC" "$SPEED_LAB_TRANSPORT_SRC" "$MTU_TRANSPORT_SRC" "$MTU_CONTROLLER_SRC" "$MTU_PANEL_SRC" "$DNS_TRANSPORT_SRC" "$DNS_CONTROLLER_SRC" "$DNS_PANEL_SRC" "$GLOBE_SRC" "$PROFILE_SRC" "$PROFILE_CHROME_SRC" "$ONBOARDING_SRC" "$HOME_SRC" "$SETTINGS_SRC" "$VIA_ENTRY_POLICY_SRC" "$VIA_ENTRY_UI_SRC" "$EXTERNAL_NODE_SRC" "$SHUTDOWN_SRC" "$MAP_GEOMETRY_SRC" "$MAP_RENDERER_SRC" "$MENU_OBJ" -o "$BIN"
 chmod 755 "$BIN"
 cp "$ROOT/client/shared/map/routervpn-land-110m.json" "$ROOT/client/shared/map/NATURAL-EARTH.txt" "$APP/Contents/Resources/"
 test -s "$APP/Contents/Resources/routervpn-land-110m.json"

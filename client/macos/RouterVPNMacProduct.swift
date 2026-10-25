@@ -79,6 +79,7 @@ private final class MultihopProgressTransportDelegate: NSObject, URLSessionTaskD
 final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let api: ProductAPI
     var mtuPanel: RouterVPNMacMTUPanel?
+    var dnsPanel: RouterVPNMacDNSPanel?
     let statusLabel = NSTextField(labelWithString: "Checking…")
     let detailLabel = NSTextField(wrappingLabelWithString: "")
     let errorLabel = NSTextField(wrappingLabelWithString: "")
@@ -175,7 +176,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         dnsHostField.placeholderString = "resolver host / IPv4 / IPv6"; dnsPortField.placeholderString = "port"; dnsServerNameField.placeholderString = "TLS server name"; dnsPathField.placeholderString = "/dns-query"
         let grid = NSGridView(views: [[label("DNS mode"), dnsModePopup], [label("Home / Custom transport"), dnsProtocolPopup], [label("Common resolver"), dnsPresetPopup], [label("Host"), dnsHostField], [label("Port"), dnsPortField], [label("TLS server name"), dnsServerNameField], [label("HTTPS path"), dnsPathField]])
         grid.rowSpacing = 6; grid.columnSpacing = 10; s.addArrangedSubview(grid)
-        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8; row.addArrangedSubview(button("Save DNS policy", #selector(saveDNS))); row.addArrangedSubview(button("Retest home-node DNS RTT", #selector(retestDNS))); row.addArrangedSubview(button("Refresh DNS", #selector(refreshAction))); s.addArrangedSubview(row)
+        let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8; row.addArrangedSubview(button("Save DNS policy", #selector(saveDNS))); row.addArrangedSubview(button("Retest DNS", #selector(retestDNS))); row.addArrangedSubview(button("Refresh DNS", #selector(refreshAction))); s.addArrangedSubview(row)
         s.addArrangedSubview(scroll(dnsText)); return s
     }
     func advancedView() -> NSView {
@@ -307,7 +308,16 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     @objc func disconnect() { asyncAction { _ = try self.api.request("/api/disconnect", method: "POST", body: [:], timeout: 20); return "Disconnected." } }
     @objc func publicExit() { asyncAction { String(data: try self.api.request("/api/public-ip", timeout: 20), encoding: .utf8) ?? "" } }
-    @objc func retestDNS() { asyncAction { String(data: try self.api.request("/api/dns/retest", method: "POST", body: [:], timeout: 90), encoding: .utf8) ?? "DNS Retest completed" } }
+    @objc func retestDNS() {
+        guard let selected = routerPopup.selectedItem?.representedObject as? String,
+              let profile = profiles.first(where: { $0["id"] as? String == selected }) else {
+            appendHelp("Select the connected node before DNS Retest."); return
+        }
+        if (profile["node_kind"] as? String ?? "router-vpn") == "external" {
+            showDNSMeasurement(profileID: selected); return
+        }
+        asyncAction { String(data: try self.api.request("/api/dns/retest", method: "POST", body: [:], timeout: 90), encoding: .utf8) ?? "Home-node DNS query Retest completed" }
+    }
     @objc func saveDNS() {
         let displayedID = routerPopup.selectedItem?.representedObject as? String ?? ""
         let captured = dnsPolicyCapture
