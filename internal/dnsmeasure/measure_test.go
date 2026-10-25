@@ -71,6 +71,9 @@ func (e *fakeEngine) Dial(ctx context.Context, address string) (net.Conn, error)
 	e.mu.Lock()
 	e.dials = append(e.dials, address)
 	e.mu.Unlock()
+	if err := fixtureDNSWork(ctx); err != nil {
+		return nil, err
+	}
 	return e.dial(ctx, address)
 }
 func (e *fakeEngine) SelectedDNS(ctx context.Context) error {
@@ -78,7 +81,20 @@ func (e *fakeEngine) SelectedDNS(ctx context.Context) error {
 	if e.selectFn != nil {
 		return e.selectFn(ctx)
 	}
-	return nil
+	return fixtureDNSWork(ctx)
+}
+
+// Real cancellable fixture work keeps a valid in-memory exchange measurable on
+// clocks whose resolution can otherwise exceed an entire immediate callback.
+func fixtureDNSWork(ctx context.Context) error {
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
 }
 func fixture(t *testing.T) (*Service, *fakeEngine) {
 	t.Helper()

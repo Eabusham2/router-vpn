@@ -31,7 +31,7 @@ func (s *Service) sample(parent context.Context, endpoint Endpoint) (millisecond
 		if err := s.valid(ctx); err != nil {
 			return 0, err
 		}
-		return float64(time.Since(start).Nanoseconds()) / 1e6, nil
+		return elapsedProbeMilliseconds(start, time.Now())
 	}
 	query, err := newQuery()
 	if err != nil {
@@ -91,8 +91,19 @@ func (s *Service) sample(parent context.Context, endpoint Endpoint) (millisecond
 	if err := s.valid(ctx); err != nil {
 		return 0, err
 	}
-	return float64(time.Since(start).Nanoseconds()) / 1e6, nil
+	return elapsedProbeMilliseconds(start, time.Now())
 }
+
+// A successful response is not a timing measurement unless the clock advanced.
+// In particular, never replace a zero interval with an invented minimum RTT.
+func elapsedProbeMilliseconds(start, end time.Time) (float64, error) {
+	elapsed := end.Sub(start)
+	if elapsed <= 0 {
+		return 0, errors.New("DNS probe clock did not advance")
+	}
+	return float64(elapsed.Nanoseconds()) / 1e6, nil
+}
+
 func framedExchange(connection net.Conn, query []byte) ([]byte, error) {
 	frame := make([]byte, len(query)+2)
 	binary.BigEndian.PutUint16(frame, uint16(len(query)))

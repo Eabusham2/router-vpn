@@ -51,7 +51,18 @@ func (e *desktopDNSFixtureEngine) SelectedDNS(ctx context.Context) error {
 		<-e.release
 		return ctx.Err()
 	}
-	return nil
+	return desktopDNSFixtureWork(ctx)
+}
+
+func desktopDNSFixtureWork(ctx context.Context) error {
+	timer := time.NewTimer(time.Millisecond)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return ctx.Err()
+	}
 }
 func (e *desktopDNSFixtureEngine) Dial(ctx context.Context, address string) (net.Conn, error) {
 	if !dnsmeasure.AllowedPublicAddress(address) {
@@ -77,6 +88,9 @@ func (e *desktopDNSFixtureEngine) Dial(ctx context.Context, address string) (net
 		answer := append([]byte{}, query...)
 		answer[2], answer[3], answer[6], answer[7] = 0x81, 0x80, 0, 1
 		answer = append(answer, 0xc0, 0x0c, 0, 1, 0, 1, 0, 0, 0, 1, 0, 4, 93, 184, 216, 34)
+		if desktopDNSFixtureWork(ctx) != nil {
+			return
+		}
 		binary.BigEndian.PutUint16(size[:], uint16(len(answer)))
 		_, _ = peer.Write(append(size[:], answer...))
 	}()
