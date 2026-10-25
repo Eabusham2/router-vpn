@@ -36,7 +36,9 @@ static gboolean linux_extended_probe_v17(gpointer data) {
     if(p->ticks>320){p->failure=1;goto finish;}
     if(p->stage==0){
         gint64 start=g_get_monotonic_time();
-        g_signal_emit_by_name(p->telemetry->fastest,"changed");
+        // The test begins with a real selected Router node. Exercise the
+        // user's Fastest choice instead of re-emitting that node's selection.
+        if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(p->telemetry->fastest),"fastest")){p->failure=2;goto finish;}
         if(g_get_monotonic_time()-start>500000||s->primary==NULL||s->primary->connecting||gtk_widget_get_sensitive(p->base->connect)){p->failure=2;goto finish;}
         start=g_get_monotonic_time();
         (void)refresh_timer(p->app);(void)linux_unified_refresh_v8(p->base);(void)linux_telemetry_refresh_v9(p->telemetry);

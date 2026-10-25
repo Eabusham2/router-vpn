@@ -70,7 +70,11 @@ def main() -> int:
         def do_GET(self):
             fixtures = {
                 "/api/status": {"connected": False, "phase": "disconnected"},
-                "/api/profiles": {"profiles": [], "selected_id": ""},
+                # Connect requires one exact selected node. Keep the fixture
+                # valid so this test reaches the asynchronous request owner;
+                # the native form suite rejects empty, stale and duplicate
+                # selections before any Connect can be submitted.
+                "/api/profiles": {"profiles": [{"id": "fixture-initial", "name": "Test selected router", "node_kind": "router-vpn"}], "selected_id": "fixture-initial"},
                 "/api/logical-modes": [{"id": "smart-auto", "name": "SMART AUTO", "available": True}],
                 "/api/profile/settings": {}, "/api/home-summary": {},
                 "/api/session/events": {"events": [], "last_event_seq": 0},
