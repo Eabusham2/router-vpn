@@ -2,6 +2,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"os/exec"
 	"strings"
@@ -62,6 +63,16 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 // torBridgeConnectOwned assumes the caller already owns beginConnectionOperation.
 // This lets the unified external-profile route dispatch Tor without nested locks.
 func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.RouterProfile) {
+	a.torBridgeConnectCapturedOwned(w, profile, nil)
+}
+
+func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile common.RouterProfile, startup *startupPolicyCapture) {
+	if startup != nil {
+		if err := startup.current(a); err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
 	_, torCfg, _, _, profileErr := torBridgeProfile(profile)
 	if profileErr != nil {
 		http.Error(w, profileErr.Error(), http.StatusBadRequest)
@@ -89,22 +100,30 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	cmd, err := torBridgeCommand(a, policy, profile)
+	cmd, prelaunch, err := prepareTorBridgeCommand(a, policy, profile)
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err = a.checkConnectionOperation(); err != nil {
+	defer prelaunch.close()
+	err = a.checkConnectionOperation()
+	if err == nil && startup != nil {
+		err = startup.current(a)
+	}
+	if err != nil {
+		err = errors.Join(err, prelaunch.cleanup())
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	if err = cmd.Start(); err != nil {
+		err = errors.Join(err, prelaunch.cleanup())
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
+	prelaunch.close() // The started native launcher now owns this workspace.
 	a.mu.Lock()
 	a.cmd = cmd
 	a.state.Mode = "external-node"
@@ -166,9 +185,9 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
-	if a.cmd != cmd {
+	if a.cmd != cmd || startup != nil && startup.currentLocked(a) != nil {
 		a.mu.Unlock()
-		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime changed before dynamic exit proof could be adopted")
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime or captured startup selection changed before dynamic exit proof could be adopted")
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
 		if cleanupFailed {

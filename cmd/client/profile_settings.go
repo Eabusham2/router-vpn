@@ -70,6 +70,7 @@ func registerProfileSettingsRoute(h *http.ServeMux, a *app) {
 	}
 	a.mu.Unlock()
 	h.HandleFunc("/api/profile/settings", a.profileSettings)
+	h.HandleFunc("/api/profile/startup", a.profileStartupSettings)
 }
 
 func (a *app) syncProfileOptionStateLocked(p common.RouterProfile) {

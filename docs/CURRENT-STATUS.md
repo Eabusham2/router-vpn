@@ -7,6 +7,17 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
+Desktop imported-node startup now uses the saved protocol and graph through
+the interactive connection path's owned runtime and proofs. The delayed attempt
+captures selection, credentials, policy and private entry assets; manual
+Connect and Disconnect retire it. Last retains a matching proved Local/Server
+choice without rerunning Compare, with fresh session proof still required.
+Native Windows, macOS and Linux Settings now provide startup-only editing for
+imported nodes using a captured node revision, preserving their private settings.
+See [STARTUP-POLICY.md](STARTUP-POLICY.md) for the source contract and executable
+checks. This closes a source gap found during requirement 116 reconciliation;
+current native release and physical startup acceptance remain separate evidence.
+
 The current source also includes Apple candidate-measurement repair `7484eec1`
 and macOS Tor editor integration `b94f5df9`. The Apple probe receives an immutable
 Sendable target while private profiles remain on MainActor; its executable

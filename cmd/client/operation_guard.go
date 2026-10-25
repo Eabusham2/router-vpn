@@ -85,6 +85,14 @@ func preflightPrivateConnectionRuntime() error {
 }
 
 func (a *app) beginConnectionOperation() (context.Context, func(), error) {
+	// An explicit Connect supersedes delayed startup even when its own
+	// preflight fails. Startup enters the shared transaction directly so it
+	// does not cancel the intent that it is about to execute.
+	cancelPendingStartupPolicy(a)
+	return a.beginConnectionTransaction()
+}
+
+func (a *app) beginConnectionTransaction() (context.Context, func(), error) {
 	if !a.operationMu.TryLock() {
 		return nil, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}

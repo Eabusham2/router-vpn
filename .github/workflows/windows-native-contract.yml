@@ -65,6 +65,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 MTU ownership regressions failed' }
           python deploy/test_desktop_mtu.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 MTU ownership regressions failed' }
+      - name: Imported-node startup settings preserve captured identity
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_startup_settings.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 startup settings regressions failed' }
+          python deploy/test_desktop_startup_settings.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 startup settings regressions failed' }
       - name: Tor helper test cleanup regressions
         shell: pwsh
         run: |

@@ -36,12 +36,13 @@ type strategyResult struct {
 }
 
 type startupSelection struct {
-	RouterID     string    `json:"router_id"`
-	RuntimeMode  string    `json:"runtime_mode"`
-	LogicalMode  string    `json:"logical_mode,omitempty"`
-	Base         string    `json:"base,omitempty"`
-	ProfileToken string    `json:"profile_token"`
-	UpdatedAt    time.Time `json:"updated_at"`
+	RouterID     string                    `json:"router_id"`
+	RuntimeMode  string                    `json:"runtime_mode"`
+	LogicalMode  string                    `json:"logical_mode,omitempty"`
+	Base         string                    `json:"base,omitempty"`
+	ProfileToken string                    `json:"profile_token"`
+	UpdatedAt    time.Time                 `json:"updated_at"`
+	External     *startupExternalSelection `json:"external,omitempty"`
 }
 
 var strategyLocks sync.Map
@@ -57,6 +58,14 @@ func scheduleStartupPolicy(a *app) {
 	if previous, loaded := startupPolicyCancels.Swap(a, context.CancelFunc(cancel)); loaded {
 		previous.(context.CancelFunc)()
 	}
+	capture, err := a.captureStartupPolicy()
+	if err != nil || capture == nil {
+		cancel()
+		if err != nil {
+			log.Printf("Router VPN startup capture failed closed: %v", err)
+		}
+		return
+	}
 	go func() {
 		// A CancelFunc is intentionally retained in the per-app map until an
 		// explicit disconnect or replacement. Function values are not comparable,
@@ -68,7 +77,7 @@ func scheduleStartupPolicy(a *app) {
 			return
 		case <-timer.C:
 		}
-		a.applyStartupPolicyWithContext(ctx)
+		a.applyCapturedStartupPolicy(ctx, capture, externalConnectRuntime{})
 	}()
 }
 
@@ -660,31 +669,51 @@ func (a *app) applyStartupPolicy() {
 }
 
 func (a *app) applyStartupPolicyWithContext(scheduleCtx context.Context) {
+	capture, err := a.captureStartupPolicy()
+	if err != nil {
+		log.Printf("Router VPN startup capture failed closed: %v", err)
+		return
+	}
+	a.applyCapturedStartupPolicy(scheduleCtx, capture, externalConnectRuntime{})
+}
+
+func (a *app) applyCapturedStartupPolicy(scheduleCtx context.Context, capture *startupPolicyCapture, native externalConnectRuntime) {
 	if scheduleCtx == nil {
 		scheduleCtx = context.Background()
 	}
-	if scheduleCtx.Err() != nil {
+	if scheduleCtx.Err() != nil || capture == nil {
 		return
 	}
-	_, finish, guardErr := a.beginConnectionOperation()
+	if err := capture.current(a); err != nil {
+		return
+	}
+	_, finish, guardErr := a.beginConnectionTransaction()
 	if guardErr != nil {
 		log.Printf("Router VPN startup auto-connect skipped while another transaction is active: %v", guardErr)
 		return
 	}
 	defer finish()
+	a.mu.Lock()
+	operationCancel := a.connectionCancel
+	a.mu.Unlock()
+	stopCancellation := context.AfterFunc(scheduleCtx, operationCancel)
+	defer stopCancellation()
 	if scheduleCtx.Err() != nil {
 		return
 	}
-	a.mu.Lock()
-	selectedID := a.profiles.SelectedID
-	profile, ok := a.profileByIDLocked(selectedID)
-	a.mu.Unlock()
-	if !ok || !profile.AutoConnect || strings.EqualFold(strings.TrimSpace(profile.NodeKind), "external") || profile.External != nil {
+	if err := capture.current(a); err != nil {
 		return
 	}
+	profile := cloneRouterProfile(capture.profile)
 	mode := strings.ToLower(strings.TrimSpace(profile.StartupMode))
 	if mode == "" || mode == "manual" {
 		log.Printf("Router VPN auto-connect is enabled but startup mode is Manual; leaving the app disconnected")
+		return
+	}
+	if profile.NodeKind == "external" || profile.External != nil {
+		if err := a.startExternalStartupOwned(capture, native); err != nil {
+			log.Printf("Router VPN external startup auto-connect failed closed: %v", err)
+		}
 		return
 	}
 	var err error

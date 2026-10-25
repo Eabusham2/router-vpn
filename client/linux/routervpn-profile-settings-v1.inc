@@ -343,12 +343,84 @@ static void profile_settings_grid_row_v7(GtkWidget *grid, int row, const char *l
     gtk_grid_attach(GTK_GRID(grid), widget, 1, row, 1, 1);
 }
 
+// Startup-only payload: retain the captured node revision, never serialize an
+// imported protocol or its private credentials through the Router settings UI.
+static char *profile_startup_payload_v7(JsonObject *captured, const char *mode, gboolean automatic) {
+    const char *id = obj_string(captured, "profile_id");
+    const char *token = obj_string(captured, "profile_token");
+    if (id[0] == '\0' || token[0] == '\0') return NULL;
+    JsonBuilder *builder = json_builder_new();
+    json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "profile_id"); json_builder_add_string_value(builder, id);
+    json_builder_set_member_name(builder, "profile_token"); json_builder_add_string_value(builder, token);
+    json_builder_set_member_name(builder, "startup_mode"); json_builder_add_string_value(builder, mode != NULL ? mode : "manual");
+    json_builder_set_member_name(builder, "auto_connect"); json_builder_add_boolean_value(builder, automatic);
+    json_builder_end_object(builder);
+    JsonNode *root = json_builder_get_root(builder);
+    JsonGenerator *generator = json_generator_new();
+    json_generator_set_root(generator, root);
+    char *payload = json_generator_to_data(generator, NULL);
+    g_object_unref(generator); json_node_free(root); g_object_unref(builder);
+    return payload;
+}
+
+static gboolean profile_external_startup_dialog_v7(App *app) {
+    Buffer out = {0}; char *err = NULL;
+    if (!api_request("/api/profile/startup", "GET", NULL, 5000, &out, &err)) {
+        g_free(err); free(out.data); return FALSE;
+    }
+    JsonNode *root = parse_json(out.data);
+    if (root == NULL || !JSON_NODE_HOLDS_OBJECT(root) ||
+        g_strcmp0(obj_string(json_node_get_object(root), "node_kind"), "external") != 0) {
+        if (root != NULL) json_node_free(root);
+        g_free(err); free(out.data); return FALSE;
+    }
+    JsonObject *captured = json_node_get_object(root);
+    gboolean busy = routervpn_mutation_busy(app);
+    GtkWidget *dialog = gtk_dialog_new_with_buttons("Imported node startup", GTK_WINDOW(app->window),
+        GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Cancel", GTK_RESPONSE_CANCEL,
+        "Save startup", GTK_RESPONSE_OK, NULL);
+    gtk_window_set_default_size(GTK_WINDOW(dialog), 520, 220);
+    GtkWidget *box = gtk_dialog_get_content_area(GTK_DIALOG(dialog));
+    gtk_container_set_border_width(GTK_CONTAINER(box), 16);
+    GtkWidget *note = gtk_label_new(busy ? "Disconnect before changing startup settings."
+        : "Saved connection uses this node's protocol and hop settings. Last keeps a still-valid proved Local/Server choice.");
+    gtk_label_set_line_wrap(GTK_LABEL(note), TRUE);
+    gtk_box_pack_start(GTK_BOX(box), note, FALSE, FALSE, 8);
+    static const char *const labels[] = {"Saved connection", "Last proven connection", "Manual / stay disconnected"};
+    static const char *const ids[] = {"auto", "last", "manual"};
+    const char *saved_mode = obj_string(captured, "startup_mode");
+    GtkWidget *mode = profile_settings_combo_v7(labels, ids, G_N_ELEMENTS(ids),
+        g_strcmp0(saved_mode, "smart-auto") == 0 ? "auto" : saved_mode);
+    gtk_box_pack_start(GTK_BOX(box), mode, FALSE, FALSE, 8);
+    GtkWidget *automatic = gtk_check_button_new_with_label("Auto-connect when Router VPN starts");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(automatic), json_object_has_member(captured, "auto_connect") && json_object_get_boolean_member(captured, "auto_connect"));
+    gtk_box_pack_start(GTK_BOX(box), automatic, FALSE, FALSE, 8);
+    gtk_widget_set_sensitive(mode, !busy); gtk_widget_set_sensitive(automatic, !busy);
+    gtk_dialog_set_response_sensitive(GTK_DIALOG(dialog), GTK_RESPONSE_OK, !busy);
+    gtk_widget_show_all(dialog);
+    if (gtk_dialog_run(GTK_DIALOG(dialog)) == GTK_RESPONSE_OK && !busy &&
+        routervpn_require_mutation_idle(app, "saving imported-node startup")) {
+        char *payload = profile_startup_payload_v7(captured, gtk_combo_box_get_active_id(GTK_COMBO_BOX(mode)),
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(automatic)));
+        Buffer saved = {0}; char *save_err = NULL;
+        if (payload != NULL && api_request("/api/profile/startup", "POST", payload, 8000, &saved, &save_err)) {
+            append_diag(app, "Startup settings saved for this imported node.");
+        } else append_diag(app, save_err != NULL ? save_err : "Reopen Settings to capture the selected node.");
+        g_free(payload); free(saved.data); g_free(save_err);
+    }
+    gtk_widget_destroy(dialog); json_node_free(root); g_free(err); free(out.data);
+    refresh_home_summary_v6(app);
+    return TRUE;
+}
+
 static void on_profile_settings_v7(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
     Buffer out = {0};
     char *err = NULL;
     if (!api_request("/api/profile/settings", "GET", NULL, 5000, &out, &err)) {
+        if (profile_external_startup_dialog_v7(app)) { g_free(err); free(out.data); return; }
         append_diag(app, err != NULL ? err : "Profile settings unavailable");
         g_free(err);
         free(out.data);

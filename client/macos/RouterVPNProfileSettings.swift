@@ -52,6 +52,29 @@ private struct RouterVPNProfileSettingsPayloadV2: Codable {
     }
 }
 
+private struct MacProfileStartupSettings: Decodable, Sendable {
+    let profileID: String
+    let profileToken: String
+    let nodeKind: String
+    let startupMode: String
+    let autoConnect: Bool
+
+    enum CodingKeys: String, CodingKey {
+        case profileID = "profile_id", profileToken = "profile_token", nodeKind = "node_kind"
+        case startupMode = "startup_mode", autoConnect = "auto_connect"
+    }
+
+    func saveData(startupMode: String, autoConnect: Bool) throws -> Data {
+        guard !profileID.isEmpty, !profileToken.isEmpty else {
+            throw NSError(domain: "RouterVPN.Settings", code: 3, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings to capture the selected node."])
+        }
+        return try JSONSerialization.data(withJSONObject: [
+            "profile_id": profileID, "profile_token": profileToken,
+            "startup_mode": startupMode, "auto_connect": autoConnect
+        ])
+    }
+}
+
 private struct MacConnectionPresetMirror: Codable {
     var name: String
     var layers: [String]
@@ -282,8 +305,16 @@ extension ProductWindowController {
             let data = try? self.api.request("/api/profile/settings", timeout: 5)
             let decoded = data.flatMap { try? JSONDecoder().decode(RouterVPNProfileSettingsPayloadV2.self, from: $0) }
             let supportsNodeSettings = decoded != nil
+            let startupData: Data? = supportsNodeSettings ? nil : (try? self.api.request("/api/profile/startup", timeout: 5))
+            let capturedStartup = startupData.flatMap { try? JSONDecoder().decode(MacProfileStartupSettings.self, from: $0) }
+            let externalStartup = capturedStartup?.nodeKind == "external" ? capturedStartup : nil
+            let supportsStartupSettings = supportsNodeSettings || externalStartup != nil
             let settingsMutationBusy = macMutationBusy(self.api)
             var settings = decoded ?? .unavailableDefaults
+            if let externalStartup {
+                settings.startupMode = externalStartup.startupMode == "smart-auto" ? "auto" : externalStartup.startupMode
+                settings.autoConnect = externalStartup.autoConnect
+            }
             let semaphore = DispatchSemaphore(value: 0)
             var save = false
             var validationError = ""
@@ -291,14 +322,16 @@ extension ProductWindowController {
             DispatchQueue.main.async {
                 let alert = NSAlert()
                 alert.messageText = "Settings"
-                if supportsNodeSettings && settingsMutationBusy {
+                if supportsStartupSettings && settingsMutationBusy {
                     alert.informativeText = "Disconnect Router VPN or let the active transition finish before editing persistent node settings. Saved values are preferences, not runtime proof."
                 } else {
                     alert.informativeText = supportsNodeSettings
                         ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
-                        : "Selected Custom/external node does not expose Router VPN node settings here. Connection-profile Add / Load / Update / Delete remains available."
+                        : externalStartup != nil
+                            ? "Startup for the selected imported node. Saved connection uses its protocol and hop settings. Last keeps a still-valid proved Local/Server choice."
+                            : "Node settings are unavailable. Connection-profile Add / Load / Update / Delete remains available."
                 }
-                alert.addButton(withTitle: supportsNodeSettings ? "Save" : "Close")
+                alert.addButton(withTitle: supportsStartupSettings ? "Save" : "Close")
                 alert.addButton(withTitle: "Cancel")
 
                 let form = NSStackView()
@@ -338,7 +371,10 @@ extension ProductWindowController {
                 let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
                 let jumbo = check("Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
-                let startup = popup("Default mode on startup", values: [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")], selected: settings.startupMode)
+                let startupValues = externalStartup != nil
+                    ? [("Saved connection","auto"),("Last proven connection","last"),("Manual / stay disconnected","manual")]
+                    : [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
+                let startup = popup("Default mode on startup", values: startupValues, selected: settings.startupMode)
                 let auto = check("Auto-connect when Router VPN starts", value: settings.autoConnect)
                 let forwarding = NSButton(title: "Port forwarding / Protected DMZ…", target: self, action: #selector(self.openUnifiedForwarding)); forwarding.bezelStyle = .rounded; form.addArrangedSubview(forwarding)
                 let retest = NSButton(title: "Retest MTU for current config/path", target: self, action: #selector(self.retestMTU)); retest.bezelStyle = .rounded; form.addArrangedSubview(retest)
@@ -349,10 +385,12 @@ extension ProductWindowController {
                 if !supportsNodeSettings || settingsMutationBusy {
                     nodePreferenceViews.forEach { $0.isEnabled = false }
                 }
-                if supportsNodeSettings && settingsMutationBusy { alert.buttons.first?.isEnabled = false }
+                startup.isEnabled = supportsStartupSettings && !settingsMutationBusy
+                auto.isEnabled = supportsStartupSettings && !settingsMutationBusy
+                if supportsStartupSettings && settingsMutationBusy { alert.buttons.first?.isEnabled = false }
 
                 alert.accessoryView = form
-                if alert.runModal() == .alertFirstButtonReturn && supportsNodeSettings && !settingsMutationBusy {
+                if alert.runModal() == .alertFirstButtonReturn && supportsStartupSettings && !settingsMutationBusy {
                     settings.homeLANAccess = lan.state == .on
                     settings.killSwitchPolicy = (kill.selectedItem?.representedObject as? String) ?? "off"
                     settings.ipv6Mode = (ipv6.selectedItem?.representedObject as? String) ?? "on"
@@ -363,7 +401,7 @@ extension ProductWindowController {
                     settings.startLayer = (startLayer.selectedItem?.representedObject as? String) ?? "off"
                     settings.mtuPolicy = (mtu.selectedItem?.representedObject as? String) ?? "auto"
                     let manualValue = Int(manual.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
-                    if settings.mtuPolicy == "manual" && !(576...9000).contains(manualValue) { validationError = "Fixed MTU must be 576–9000." }
+                    if supportsNodeSettings && settings.mtuPolicy == "manual" && !(576...9000).contains(manualValue) { validationError = "Fixed MTU must be 576–9000." }
                     settings.manualMTU = settings.mtuPolicy == "manual" ? manualValue : nil
                     settings.daitaEnabled = daita.state == .on
                     settings.jumboTUN = jumbo.state == .on
@@ -378,9 +416,14 @@ extension ProductWindowController {
 
             semaphore.wait()
             if !validationError.isEmpty { throw NSError(domain: "RouterVPN.Settings", code: 1, userInfo: [NSLocalizedDescriptionKey: validationError]) }
-            if !supportsNodeSettings { return "Connection profile manager closed; external node settings remain owned by that node's protocol configuration." }
+            if !supportsStartupSettings { return "Connection profile manager closed; node settings are unchanged." }
             if !save { return settingsMutationBusy ? "Settings locked until Router VPN is fully disconnected." : "Settings unchanged." }
             if macMutationBusy(self.api) { throw NSError(domain: "RouterVPN.Settings", code: 2, userInfo: [NSLocalizedDescriptionKey: "VPN became active or began transitioning before settings save; disconnect and try again."]) }
+            if let externalStartup {
+                let payload = try externalStartup.saveData(startupMode: settings.startupMode, autoConnect: settings.autoConnect)
+                _ = try self.api.requestRaw("/api/profile/startup", body: payload, timeout: 8)
+                return "Startup settings saved for this imported node."
+            }
             let payload = try JSONEncoder().encode(settings)
             _ = try self.api.requestRaw("/api/profile/settings", body: payload, timeout: 8)
             return "Settings saved for the next supported connection. Saved preferences are not runtime proof."

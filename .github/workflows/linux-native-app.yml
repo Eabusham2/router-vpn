@@ -9,6 +9,7 @@ on:
       - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
+      - 'deploy/test_desktop_startup_settings.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -26,6 +27,7 @@ on:
       - 'deploy/test-linux-rendered-layout.sh'
       - 'deploy/test-linux-via-entry-candidates-ui.py'
       - 'deploy/test_desktop_mtu.py'
+      - 'deploy/test_desktop_startup_settings.py'
       - 'deploy/materialize-desktop-icons.py'
       - 'cmd/client/**'
       - 'cmd/dnsproxy/**'
@@ -84,6 +86,8 @@ jobs:
         run: go test ./cmd/client ./internal/common
       - name: GTK MTU progress, exact cancellation and final rollback receipts
         run: python3 deploy/test_desktop_mtu.py --platform linux
+      - name: Imported-node startup settings preserve captured identity
+        run: python3 deploy/test_desktop_startup_settings.py --platform linux
       - uses: actions/download-artifact@v4
         with:
           pattern: RouterVPN-native-runtime-linux-${{ matrix.arch }}-${{ github.sha }}

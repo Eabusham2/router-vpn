@@ -281,14 +281,31 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 }
 
 func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, error) {
+	command, owner, err := prepareTorBridgeCommand(a, policy, profile)
+	if owner != nil {
+		owner.close()
+	}
+	return command, err
+}
+
+func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	prepared, err := prepareTorBridgeRuntime(root, policy, profile)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
+	owner, err := captureTorBridgePrelaunch(a, profile.ID, prepared.RuntimeDir)
+	if err != nil {
+		return nil, nil, err
+	}
+	defer func() {
+		if failure != nil {
+			failure = errors.Join(failure, owner.cleanup())
+			owner.close()
+		}
+	}()
 	if err := registerActiveDNSRuntimeConfig(a, profile.ID, "external-tor-bridge", filepath.Join(prepared.RuntimeDir, "sing-box.json")); err != nil {
-		_ = os.RemoveAll(prepared.RuntimeDir)
-		return nil, fmt.Errorf("register Tor DNS runtime identity: %w", err)
+		return nil, nil, fmt.Errorf("register Tor DNS runtime identity: %w", err)
 	}
 
 	var cmd *exec.Cmd
@@ -298,13 +315,11 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 			helper = filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-tor-bridge-windows.ps1")
 		}
 		if st, statErr := os.Lstat(helper); statErr != nil || st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
-			_ = os.RemoveAll(prepared.RuntimeDir)
-			return nil, errors.New("native Windows Tor bridge helper is missing or unsafe")
+			return nil, nil, errors.New("native Windows Tor bridge helper is missing or unsafe")
 		}
 		powershell, lookupErr := safeExecutable("powershell.exe")
 		if lookupErr != nil {
-			_ = os.RemoveAll(prepared.RuntimeDir)
-			return nil, lookupErr
+			return nil, nil, lookupErr
 		}
 		cmd = exec.Command(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper,
 			"-Action", "up",
@@ -321,8 +336,7 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 			helper = filepath.Join(a.cfg.ScriptsDir, "native-tor-bridge.sh")
 		}
 		if st, statErr := os.Lstat(helper); statErr != nil || st.Mode()&os.ModeSymlink != 0 || !st.Mode().IsRegular() {
-			_ = os.RemoveAll(prepared.RuntimeDir)
-			return nil, errors.New("native Tor bridge helper is missing or unsafe")
+			return nil, nil, errors.New("native Tor bridge helper is missing or unsafe")
 		}
 		cmd = exec.Command("bash", helper, "up", prepared.RuntimeDir, prepared.BridgeEndpoint, strconv.Itoa(prepared.SocksPort), prepared.TorBinary, prepared.SingBoxBinary)
 	}
@@ -338,5 +352,6 @@ func torBridgeCommand(a *app, policy, profile common.RouterProfile) (*exec.Cmd, 
 	)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	return cmd, nil
+	owner.command = cmd
+	return cmd, owner, nil
 }

@@ -50,8 +50,8 @@ func TestEveryShippingConnectionStartIsGuardedBeforeAndAfterLaunch(t *testing.T)
 	assertGuardedProcessStart(t, "standard_exit_platform_routes.go", "func (a *app) platformStandardExitConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop_native_routes.go", "func (a *app) nativeMultihopConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
 	assertGuardedProcessStart(t, "multihop.go", "func (a *app) multihopConnect", "if err := cmd.Start(); err != nil", "a.cmd = cmd")
-	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnect", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
-	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnect", "if err = realCmd.Start(); err != nil", "a.cmd = realCmd")
+	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = cmd.Start(); err != nil", "a.cmd = cmd")
+	assertGuardedProcessStart(t, "external_profile_connect.go", "func (a *app) externalProfileConnectOwned", "if err = realCmd.Start(); err != nil", "a.cmd = realCmd")
 }
 
 func TestFallbackLoopsRecognizeStableCancellationSentinel(t *testing.T) {
