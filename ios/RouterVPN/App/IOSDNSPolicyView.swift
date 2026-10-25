@@ -12,6 +12,7 @@ private struct IOSDNSPreset: Identifiable, Hashable, Sendable {
 }
 
 struct IOSDNSPolicyView: View {
+    var initialMode: String? = nil
     @EnvironmentObject var model: RouterVPNModel
     @State private var mode = "home"
     @State private var protocolName = "udp"
@@ -237,7 +238,7 @@ struct IOSDNSPolicyView: View {
                 if !status.isEmpty { Section("Status") { Text(status).font(.caption) } }
             }
             .navigationTitle("DNS")
-            .onAppear { load() }
+            .onAppear { openSelection() }
             .onChange(of: model.connected) { _ in cancelMeasurements() }
             .onChange(of: model.tunnelTransitioning) { _ in cancelMeasurements() }
             .onChange(of: model.activeEngine) { _ in cancelMeasurements() }
@@ -259,6 +260,22 @@ struct IOSDNSPolicyView: View {
     private func selectedProfile() -> RouterProfile? {
         guard let bundle = model.bundle else { return nil }
         return IOSDNSRuntimePolicy.selectedProfile(in: bundle)
+    }
+
+    private func openSelection() {
+        load()
+        guard let initialMode else { return }
+        if initialMode == "fastest" {
+            status = "Retest over the active VPN path, then use its fastest successful row in this editor. Disconnect and Save applies that measured choice to the next connection."
+            return
+        }
+        guard ["custom", "dot", "doh", "doh3"].contains(initialMode) else { return }
+        guard !torExternal || initialMode != "doh3" else {
+            status = "Choose TCP, DoT or DoH through Tor. Home AdGuard can use HTTP/3 through its paired Router entry."
+            return
+        }
+        mode = initialMode
+        applyModeDefaults(initialMode)
     }
 
     private func load() {

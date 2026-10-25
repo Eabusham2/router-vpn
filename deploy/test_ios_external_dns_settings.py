@@ -44,11 +44,16 @@ enum IOSDNSRuntimePolicy {
 // test_ios_dns_measurement.py; this gate isolates editor/native DNS validation.
 @MainActor struct IOSDNSMeasurementCapture {func requireSources(model:RouterVPNModel)throws{}}
 @MainActor final class RouterVPNModel {
- var bundle:ClientBundle?, entry:ClientBundle?, profileMutationBlocked=false, imports=0, message=""
- func importBundle(_ data:Data)throws {bundle=try JSONDecoder().decode(ClientBundle.self,from:data);imports+=1}
+ var bundle:ClientBundle?, entry:ClientBundle?, profileMutationBlocked=false, imports=0, message="",failImport=false
+ func importBundle(_ data:Data)throws {if failImport{throw TestError.failed};bundle=try JSONDecoder().decode(ClientBundle.self,from:data);imports+=1}
  func iosMultihopEntryBundle(for bundle:ClientBundle)throws->ClientBundle {
-  guard let entry, entry.selectedRouterID==bundle.routerProfiles[0].multihopEntryID else{throw TestError.failed};return entry
+  guard let selected=IOSDNSRuntimePolicy.selectedProfile(in:bundle),let entry, entry.selectedRouterID==selected.multihopEntryID else{throw TestError.failed};return entry
  }
+ // QUICK_DNS_HANDLER
+}
+@MainActor final class HomeView {
+ var dnsEditorMode:String?,showingDNS=false
+ // DNS_OPEN_HANDLER
 }
 @MainActor final class Settings {
  let model:RouterVPNModel
@@ -56,6 +61,7 @@ enum IOSDNSRuntimePolicy {
  var useHostnameBootstrap=false,results:[DNSBenchmarkResult]=[]
  var loadedExternalDNS:[String]?
  var loadedExternalProfile:RouterProfile?
+ var initialMode:String?
  var measuredSource:IOSDNSMeasurementCapture?,measuredDraft=false
  var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"",serverPort:53))
  init(_ model:RouterVPNModel){self.model=model}
@@ -199,10 +205,68 @@ enum TestError {static var failed:NSError {NSError(domain:"DNSSettings",code:1)}
   model.bundle!.routerProfiles[0].name="Updated elsewhere";editor.host="149.112.112.112";editor.savePolicy()
   try check("an open Tor sheet cannot overwrite a newer node capture",model.imports==1 && model.bundle!.routerProfiles[0].name=="Updated elsewhere" && model.bundle!.routerProfiles[0].dnsHost=="9.9.9.9")
  }
+ static func quick()throws {
+  for kind in IOSExternalDNSPolicy.protocols.sorted()+["tor","tor-bridge"] {
+   var p=profile(kind)
+   if kind.hasPrefix("tor") {
+    p.apiToken="";p.socksPassword="";p.endpoint="tor"
+    var ext:[String:Any]=["protocol":kind,"expected_public_ip":""]
+    if kind=="tor-bridge"{ext["tor_bridge"]=["transport":"obfs4","bridges":["obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"]]}
+    p.external=try JSONDecoder().decode(ExternalNodeConfig.self,from:json(ext))
+   }
+   var entry=profile("wireguard");entry.id="entry";entry.nodeKind="router-vpn";entry.external=nil
+   entry.nodeProofID=String(repeating:"a",count:64);entry.apiToken="captured-entry-token";entry.routerAPI="http://10.8.0.1:8787"
+   entry.adGuardIPv4="192.168.50.133";entry.adGuardIPv6="fd12:3456::53"
+   p.multihopEnabled=true;p.multihopEntryID=entry.id;p.multihopEntryMode="wg";p.multihopExitID=p.id;p.multihopExitMode=kind;p.multihopExecution="local"
+   let model=RouterVPNModel();model.bundle=bundle(p);model.entry=bundle(entry)
+   var sibling=profile("shadowsocks");sibling.id="other-node";model.bundle!.routerProfiles.insert(sibling,at:0)
+   let privateAssets=model.bundle!.profiles,entryBefore=try JSONEncoder().encode(model.entry!)
+   model.unifiedSetDNSMode("home")
+   let home=model.bundle!.routerProfiles[1]
+   try check("quick Home selects exact captured AdGuard "+kind+": "+model.message,model.imports==1 && home.dnsMode=="home" && home.dnsHost==entry.adGuardIPv4 && home.dnsProtocol=="udp" && home.dnsPort==53)
+   try check("quick DNS preserves transport credentials graph and other nodes",home.external==p.external && home.multihopEntryID==p.multihopEntryID && home.manualMTU==p.manualMTU && home.ipv6Mode==p.ipv6Mode && model.bundle!.routerProfiles[0]==sibling && model.bundle!.profiles==privateAssets)
+   try check("quick DNS cannot overwrite entry private data",try JSONDecoder().decode(ClientBundle.self,from:entryBefore).routerProfiles==model.entry!.routerProfiles)
+   model.bundle!.routerProfiles[1].dnsProtocol="tls";model.bundle!.routerProfiles[1].dnsHost=entry.adGuardIPv6
+   model.bundle!.routerProfiles[1].dnsPort=8853;model.bundle!.routerProfiles[1].dnsServerName="adguard.home.example";model.bundle!.routerProfiles[1].dnsPath="/selected-query"
+   let encrypted=model.bundle!.routerProfiles[1];model.unifiedSetDNSMode("home")
+   try check("reselecting Home preserves complete encrypted policy",model.imports==2 && model.bundle!.routerProfiles[1]==encrypted)
+   model.unifiedSetDNSMode("rescue")
+   let rescue=model.bundle!.routerProfiles[1]
+   try check("explicit Rescue matches the real native preset",model.imports==3 && rescue.dnsMode=="rescue" && rescue.dnsProtocol=="https" && rescue.dnsHost=="1.1.1.1" && rescue.dnsPort==443 && rescue.dnsServerName=="cloudflare-dns.com" && rescue.external==p.external)
+   for fault in ["missing-entry","borrowed-home-fields","wrong-entry","no-adguard","foreign-dns","busy","write","fastest","unknown"] {
+    model.bundle=bundle(p);model.entry=bundle(entry);model.profileMutationBlocked=false;model.failImport=false
+    switch fault {
+    case "missing-entry":model.bundle!.routerProfiles[0].multihopEnabled=false;model.entry=nil
+    case "borrowed-home-fields":model.bundle!.routerProfiles[0].multihopEnabled=false;model.bundle!.routerProfiles[0].adGuardIPv4=entry.adGuardIPv4;model.entry=nil
+    case "wrong-entry":model.entry!.selectedRouterID="other"
+    case "no-adguard":model.entry!.routerProfiles[0].adGuardIPv4="";model.entry!.routerProfiles[0].adGuardIPv6=""
+    case "foreign-dns":model.bundle!.routerProfiles[0].dnsMode="home";model.bundle!.routerProfiles[0].dnsHost="192.168.2.133"
+    case "busy":model.profileMutationBlocked=true
+    case "write":model.failImport=true
+    default:break
+    }
+    let before=model.bundle!.routerProfiles,writes=model.imports
+    model.unifiedSetDNSMode(["fastest","unknown"].contains(fault) ? fault:"home")
+    try check("quick DNS rejects unowned or unmeasured selection "+fault,model.imports==writes && model.bundle!.routerProfiles==before)
+   }
+   model.profileMutationBlocked=true;model.failImport=false;model.bundle=bundle(p);model.entry=bundle(entry)
+   for requested in ["fastest","custom","dot","doh","doh3"] {
+    let homeView=HomeView();homeView.openDNS(requested)
+    let editor=Settings(model);editor.initialMode=homeView.dnsEditorMode;let writes=model.imports;editor.openSelection()
+    try check("DNS editor remains reachable while connected",homeView.showingDNS && model.imports==writes)
+    if requested=="fastest" {
+     try check("Fastest opens real Retest without adopting historical selection",editor.mode==p.dnsMode && editor.status.contains("Retest over the active VPN path"))
+    } else if kind.hasPrefix("tor") && requested=="doh3" {
+     try check("Tor HTTP3 menu cannot invent UDP transport",editor.mode==p.dnsMode && editor.status.contains("through Tor"))
+    } else {try check("DNS transport menu prepares its exact editor choice",editor.mode==requested)}
+    editor.savePolicy();try check("opening DNS never bypasses active mutation guard",model.imports==writes)
+   }
+  }
+ }
  static func main() {
   defer { RouterVPNTorTestClose() }
   do {
-   try settings();try home();try hostileCodable();try ordinaryDrafts();try tor()
+   try settings();try home();try hostileCodable();try ordinaryDrafts();try tor();try quick()
    print("Apple external DNS settings: PASS (\(checks) shipping sheet/model checks; ordinary and Tor DNS use real Go validation; storage and Network boundary substituted)")
   } catch { FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1) }
  }
@@ -216,13 +280,21 @@ def main():
     view = (APP / 'IOSDNSPolicyView.swift').read_text()
     methods = '\n'.join(method(view, signature) for signature in [
         'private var ordinaryExternal:', 'private var torExternal:', 'private var nativeExternal:', 'private var externalDNSFields:',
-        'private func selectedProfile()', 'private func load()', 'private func savePolicy()',
-        'private func usePreset(', 'private func defaultPort(', 'private func sorted('
+        'private func selectedProfile()', 'private func load()', 'private func openSelection()', 'private func savePolicy()',
+        'private func usePreset(', 'private func applyModeDefaults(', 'private func defaultPort(', 'private func sorted('
     ])
     dns = (APP / 'IOSDNSRuntimePolicy.swift').read_text()
     selected = dns[dns.index('    static func selectedProfile('):dns.index('    static func resolve(')]
     preset = view[view.index('private struct IOSDNSPreset:'):view.index('struct IOSDNSPolicyView:')].replace('private struct ', 'struct ', 1)
+    unified = (APP / 'IOSUnifiedProductView.swift').read_text()
+    menu = method(unified, 'Menu(dnsTitle)')
+    after_menu = unified[unified.index('Menu(dnsTitle)') + len(menu):].lstrip()
+    assert not after_menu.startswith('.disabled(model.profileMutationBlocked)'), 'connected DNS Retest entry must remain reachable'
+    assert 'Button("Fastest measured") { openDNS("fastest") }' in menu
+    assert 'IOSDNSPolicyView(initialMode: dnsEditorMode)' in unified
     source = SWIFT.replace(' // SELECTED_PROFILE', selected).replace(' // SHIPPING_SETTINGS', methods).replace('// SHIPPING_PRESET', preset)
+    source = source.replace(' // QUICK_DNS_HANDLER', method(unified, 'func unifiedSetDNSMode(')).replace(' // DNS_OPEN_HANDLER', method(unified, 'private func openDNS('))
+    source += '\n' + (APP / 'IOSDNSQuickSelection.swift').read_text()
     with tempfile.TemporaryDirectory(prefix='ios-external-dns-settings-') as temporary, tempfile.TemporaryDirectory(prefix='.ios-tor-dns-go-', dir=ROOT) as go_dir:
         work = Path(temporary)
         compiler_source = Path(go_dir) / 'main.go'; compiler_source.write_text(T.GO)
@@ -239,8 +311,20 @@ def main():
             options += ['-I', str(work), '-L', str(work), '-lNetwork', '-Xlinker', '-rpath', '-Xlinker', str(work)]
         code = work / 'Tests.swift'; code.write_text(source)
         binary = work / 'tests'
-        subprocess.run(options + [str(APP / 'Models.swift'), str(APP / 'IOSExternalDNSPolicy.swift'), str(code), '-o', str(binary)], check=True, timeout=120)
+        compile_command = options + ['-Onone', '-whole-module-optimization', str(APP / 'Models.swift'), str(APP / 'IOSExternalDNSPolicy.swift'), str(code), '-o', str(binary)]
+        subprocess.run(compile_command, check=True, timeout=120)
         subprocess.run([str(binary), str(compiler)], check=True, timeout=60)
+        for name, before, after, expected in (
+            ('unresolved-home', 'if external {\n                guard let entry', 'if external && entry != nil {\n                guard let entry', 'quick DNS rejects unowned or unmeasured selection borrowed-home-fields'),
+            ('active-write', 'guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing the selected DNS policy."; return }', 'guard true else { return }', 'quick DNS rejects unowned or unmeasured selection busy'),
+            ('unmeasured-fastest', 'if initialMode == "fastest" {', 'if initialMode == "fastest" { mode = "fastest"', 'Fastest opens real Retest without adopting historical selection'),
+        ):
+            assert source.count(before) == 1, name
+            code.write_text(source.replace(before, after, 1))
+            subprocess.run(compile_command, check=True, timeout=120)
+            result = subprocess.run([str(binary), str(compiler)], capture_output=True, text=True, timeout=60)
+            assert result.returncode == 1 and expected in result.stderr, name + ': ' + result.stderr[-2000:]
+            print('Rejected quick-DNS defect mutation: ' + name, flush=True)
 
 
 if __name__ == '__main__':

@@ -72,14 +72,18 @@ extension RouterVPNModel {
     func unifiedSetDNSMode(_ mode: String) {
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before changing the selected DNS policy."; return }
         guard var current = bundle,
-              let index = current.routerProfiles.firstIndex(where: { $0.id == current.selectedRouterID }) ?? current.routerProfiles.indices.first,
-              current.routerProfiles[index].normalizedNodeKind == "router-vpn" else {
-            message = "Select a Router VPN node before changing DNS."; return
+              !current.selectedRouterID.isEmpty,
+              let selected = IOSDNSRuntimePolicy.selectedProfile(in: current),
+              let index = current.routerProfiles.firstIndex(where: { $0.id == selected.id }) else {
+            message = "Select one linked node before changing DNS."; return
         }
-        current.routerProfiles[index].dnsMode = mode
         do {
+            let capturedEntry = selected.normalizedNodeKind == "external" && selected.multihopEnabled == true
+                ? try iosMultihopEntryBundle(for: current) : nil
+            current.routerProfiles[index] = try IOSDNSQuickSelection.applying(mode, to: selected,
+                entry: capturedEntry.flatMap { IOSDNSRuntimePolicy.selectedProfile(in: $0) })
             try importBundle(JSONEncoder().encode(current))
-            message = "DNS set to \(mode). The next connection must still pass real tunnel DNS/path proof."
+            message = "DNS set to \(current.routerProfiles[index].dnsMode ?? mode). The next connection must still prove the selected DNS and path."
         } catch { message = "DNS update failed: \(error.localizedDescription)" }
     }
 
@@ -258,6 +262,7 @@ struct IOSUnifiedProductView: View {
     @State private var showingMultihop = false
     @State private var showingModes = false
     @State private var showingDNS = false
+    @State private var dnsEditorMode: String?
     @State private var showingSettings = false
     @State private var showingOnboarding = false
     @State private var startupApplied = false
@@ -302,7 +307,7 @@ struct IOSUnifiedProductView: View {
         .sheet(isPresented: $showingNodes) { RouterVPNNodeManagerSheet().environmentObject(model) }
         .sheet(isPresented: $showingMultihop) { IOSMultihopView().environmentObject(model) }
         .sheet(isPresented: $showingModes) { IOSUnifiedModePicker(selectedMode: $selectedMode).environmentObject(model) }
-        .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
+        .sheet(isPresented: $showingDNS) { IOSDNSPolicyView(initialMode: dnsEditorMode).environmentObject(model) }
         .sheet(isPresented: $showingSettings) { IOSUnifiedSettingsView(telemetry: telemetry).environmentObject(model) }
         .sheet(isPresented: $showingOnboarding) { RouterVPNProductOnboardingView().presentationDetents([.medium, .large]).presentationDragIndicator(.visible).interactiveDismissDisabled(false) }
         .onAppear { if !UserDefaults.standard.bool(forKey: "RouterVPNProductOnboardingDoneV2") { model.message = "Setup is ready. Open Setup guide from the expanded control sheet when needed." } }
@@ -401,18 +406,18 @@ struct IOSUnifiedProductView: View {
                         Label("DNS", systemImage: "network").font(.subheadline.bold())
                         Spacer()
                         Menu(dnsTitle) {
-                            Button("Home AdGuard") { model.unifiedSetDNSMode("home") }
-                            Button("Fastest measured") { model.unifiedSetDNSMode("fastest") }
-                            Button("Rescue") { model.unifiedSetDNSMode("rescue") }
+                            Button("Home AdGuard") { model.unifiedSetDNSMode("home") }.disabled(model.profileMutationBlocked)
+                            Button("Fastest measured") { openDNS("fastest") }
+                            Button("Rescue") { model.unifiedSetDNSMode("rescue") }.disabled(model.profileMutationBlocked)
                             Divider()
-                            Button("Custom…") { showingDNS = true }
-                            Button("DoT…") { showingDNS = true }
-                            Button("DoH…") { showingDNS = true }
-                            Button("DoH3…") { showingDNS = true }
+                            Button("Custom…") { openDNS("custom") }
+                            Button("DoT…") { openDNS("dot") }
+                            Button("DoH…") { openDNS("doh") }
+                            Button("DoH3…") { openDNS("doh3") }
+                                .disabled(["tor", "tor-bridge"].contains(model.selectedExternalProtocol))
                             Divider()
-                            Button("DNS details / Retest…") { showingDNS = true }
+                            Button("DNS details / Retest…") { openDNS() }
                         }
-                        .disabled(model.profileMutationBlocked)
                     }
                     .padding(11).background(.thinMaterial, in: RoundedRectangle(cornerRadius: 12))
 
@@ -433,6 +438,11 @@ struct IOSUnifiedProductView: View {
             if value.translation.height < -40 { withAnimation(.spring()) { expanded = true } }
             else if value.translation.height > 40 { withAnimation(.spring()) { expanded = false } }
         })
+    }
+
+    private func openDNS(_ mode: String? = nil) {
+        dnsEditorMode = mode
+        showingDNS = true
     }
 
     private var iosMultihopSummary: String {
@@ -617,6 +627,7 @@ private struct IOSUnifiedSettingsView: View {
     @State private var showingAdvanced = false
     @State private var showingPerformance = false
     @State private var showingProfiles = false
+    @State private var showingDNS = false
     @State private var requireEncrypted = false
     @State private var requireObfuscation = false
 
@@ -659,7 +670,7 @@ private struct IOSUnifiedSettingsView: View {
                 }
                 Section("Platform truth") {
                     Text("Padding and Jumbo settings apply to compatible native paths. Multihop preserves each selected node and layer; external and Tor exits use their own DNS and exit proofs. Incoming forwarding requires a routable Router VPN path and the authenticated node's forwarding API.").font(.caption).foregroundStyle(.secondary)
-                    Button("DNS details / Retest…") { dismiss(); DispatchQueue.main.async { model.message = "Open DNS from the main control sheet for resolver policy and real DNS-query RTT." } }
+                    Button("DNS details / Retest…") { showingDNS = true }
                 }
                 Section { Button("Done") { saveRequirements(); dismiss() } }
             }
@@ -670,6 +681,7 @@ private struct IOSUnifiedSettingsView: View {
             .sheet(isPresented: $showingAdvanced) { IOSProfileSettingsView().environmentObject(model) }
             .sheet(isPresented: $showingPerformance) { IOSUnifiedPerformanceView(telemetry: telemetry).environmentObject(model) }
             .sheet(isPresented: $showingProfiles) { IOSConnectionProfilesView().environmentObject(model) }
+            .sheet(isPresented: $showingDNS) { IOSDNSPolicyView().environmentObject(model) }
         }
     }
     private func saveRequirements() { guard !model.profileMutationBlocked else { return }; model.setUnifiedRequirement("encrypted", enabled: requireEncrypted); model.setUnifiedRequirement("obfuscation", enabled: requireObfuscation) }
