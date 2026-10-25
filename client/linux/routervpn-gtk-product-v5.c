@@ -276,6 +276,31 @@ static void dns_set_text_v5(GtkWidget *entry, const char *value) {
     if (entry != NULL) gtk_entry_set_text(GTK_ENTRY(entry), value != NULL ? value : "");
 }
 
+static char *dns_policy_payload_v5(JsonObject *captured, const char *displayed_id,
+                                   const char *mode, const char *protocol, const char *host,
+                                   const char *port_text, const char *server, const char *path) {
+    const char *profile_id = captured != NULL ? obj_string(captured, "profile_id") : "";
+    const char *token = captured != NULL ? obj_string(captured, "profile_token") : "";
+    if (displayed_id == NULL || displayed_id[0] == '\0' || strcmp(profile_id, displayed_id) != 0 || token[0] == '\0') return NULL;
+    char *end = NULL;
+    gint64 port = port_text != NULL && port_text[0] != '\0' ? g_ascii_strtoll(port_text, &end, 10) : 0;
+    if ((end != NULL && *end != '\0') || port < 0 || port > 65535) return NULL;
+    JsonBuilder *builder = json_builder_new(); json_builder_begin_object(builder);
+    json_builder_set_member_name(builder, "profile_id"); json_builder_add_string_value(builder, profile_id);
+    json_builder_set_member_name(builder, "profile_token"); json_builder_add_string_value(builder, token);
+    json_builder_set_member_name(builder, "mode"); json_builder_add_string_value(builder, mode != NULL ? mode : "");
+    json_builder_set_member_name(builder, "protocol"); json_builder_add_string_value(builder, protocol != NULL ? protocol : "");
+    json_builder_set_member_name(builder, "host"); json_builder_add_string_value(builder, host != NULL ? host : "");
+    json_builder_set_member_name(builder, "port"); json_builder_add_int_value(builder, port);
+    json_builder_set_member_name(builder, "server_name"); json_builder_add_string_value(builder, server != NULL ? server : "");
+    json_builder_set_member_name(builder, "path"); json_builder_add_string_value(builder, path != NULL ? path : "");
+    json_builder_end_object(builder);
+    JsonGenerator *generator = json_generator_new(); JsonNode *body = json_builder_get_root(builder); json_generator_set_root(generator, body);
+    char *payload = json_generator_to_data(generator, NULL);
+    json_node_free(body); g_object_unref(generator); g_object_unref(builder);
+    return payload;
+}
+
 static void refresh_dns_page_v5(App *app) {
     GtkWidget *summary = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-summary-v5");
     GtkWidget *mode = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-mode-v5");
@@ -285,14 +310,27 @@ static void refresh_dns_page_v5(App *app) {
     GtkWidget *server = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-server-v5");
     GtkWidget *path = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-path-v5");
     if (summary == NULL || mode == NULL) return;
+    g_object_set_data(G_OBJECT(app->window), "router-vpn-dns-capture-v5", NULL);
+    dns_set_text_v5(host, ""); dns_set_text_v5(port, ""); dns_set_text_v5(server, ""); dns_set_text_v5(path, "");
+    const char *displayed = active_router_id(app);
+    if (displayed == NULL || displayed[0] == '\0') {
+        gtk_label_set_text(GTK_LABEL(summary), "Select a node to load DNS settings."); return;
+    }
+    char *expected = g_strdup(displayed);
     Buffer out = {0}; char *err = NULL;
     if (!api_request("/api/dns/policy", "GET", NULL, 3000, &out, &err)) {
         gtk_label_set_text(GTK_LABEL(summary), err != NULL ? err : "DNS policy unavailable");
-        g_free(err); free(out.data); return;
+        g_free(expected); g_free(err); free(out.data); return;
     }
     JsonNode *root = parse_json(out.data);
     if (root != NULL && JSON_NODE_HOLDS_OBJECT(root)) {
         JsonObject *obj = json_node_get_object(root);
+        if (g_strcmp0(obj_string(obj, "profile_id"), expected) != 0 ||
+            g_strcmp0(active_router_id(app), expected) != 0 || obj_string(obj, "profile_token")[0] == '\0') {
+            gtk_label_set_text(GTK_LABEL(summary), "The selected node changed while DNS settings loaded. Refresh DNS.");
+            json_node_free(root); g_free(expected); free(out.data); g_free(err); return;
+        }
+        g_object_set_data_full(G_OBJECT(app->window), "router-vpn-dns-capture-v5", json_node_copy(root), (GDestroyNotify)json_node_free);
         const char *mode_id = obj_string(obj, "mode");
         if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(mode), mode_id[0] ? mode_id : "home")) gtk_combo_box_set_active(GTK_COMBO_BOX(mode), 0);
         const char *proto = obj_string(obj, "protocol");
@@ -318,7 +356,7 @@ static void refresh_dns_page_v5(App *app) {
                 }
             }
         }
-        g_string_append(detail, "\nBenchmark RTT = real A/AAAA DNS query time measured from the selected home node, not ICMP. Saving policy is not active-runtime proof; reconnect and session proof still decide that.");
+        g_string_append_printf(detail, "\n%s", obj_string(obj, "note"));
         gtk_label_set_text(GTK_LABEL(summary), detail->str);
         g_string_free(detail, TRUE);
     }
@@ -327,6 +365,7 @@ static void refresh_dns_page_v5(App *app) {
     }
     free(out.data);
     g_free(err);
+    g_free(expected);
 }
 
 static void on_dns_preset_v5(GtkComboBox *combo, gpointer data) {
@@ -353,18 +392,17 @@ static void on_save_dns_v5(GtkButton *button, gpointer data) {
     GtkWidget *port = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-port-v5");
     GtkWidget *server = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-server-v5");
     GtkWidget *path = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-path-v5");
-    JsonBuilder *builder = json_builder_new(); json_builder_begin_object(builder);
-    json_builder_set_member_name(builder, "mode"); json_builder_add_string_value(builder, dns_mode_id_v5(mode));
-    json_builder_set_member_name(builder, "protocol"); json_builder_add_string_value(builder, dns_mode_id_v5(protocol));
-    json_builder_set_member_name(builder, "host"); json_builder_add_string_value(builder, gtk_entry_get_text(GTK_ENTRY(host)));
-    json_builder_set_member_name(builder, "port"); json_builder_add_int_value(builder, (gint64)g_ascii_strtoll(gtk_entry_get_text(GTK_ENTRY(port)), NULL, 10));
-    json_builder_set_member_name(builder, "server_name"); json_builder_add_string_value(builder, gtk_entry_get_text(GTK_ENTRY(server)));
-    json_builder_set_member_name(builder, "path"); json_builder_add_string_value(builder, gtk_entry_get_text(GTK_ENTRY(path)));
-    json_builder_end_object(builder); JsonGenerator *gen = json_generator_new(); JsonNode *root = json_builder_get_root(builder); json_generator_set_root(gen, root); char *payload = json_generator_to_data(gen, NULL);
+    JsonNode *capture = g_object_get_data(G_OBJECT(app->window), "router-vpn-dns-capture-v5");
+    JsonObject *captured = capture != NULL && JSON_NODE_HOLDS_OBJECT(capture) ? json_node_get_object(capture) : NULL;
+    char *payload = dns_policy_payload_v5(captured, active_router_id(app), dns_mode_id_v5(mode), dns_mode_id_v5(protocol),
+        gtk_entry_get_text(GTK_ENTRY(host)), gtk_entry_get_text(GTK_ENTRY(port)), gtk_entry_get_text(GTK_ENTRY(server)), gtk_entry_get_text(GTK_ENTRY(path)));
+    if (payload == NULL) {
+        append_diag(app, "Refresh DNS for the displayed node and enter a valid port before saving."); return;
+    }
     Buffer out = {0}; char *err = NULL;
     if (api_request("/api/dns/policy", "POST", payload, 5000, &out, &err)) append_diag(app, "DNS policy saved for the next connection. Reconnect and use session DNS proof to verify active enforcement.");
     else append_diag(app, err != NULL ? err : "DNS policy save failed");
-    free(out.data); g_free(err); g_free(payload); json_node_free(root); g_object_unref(gen); g_object_unref(builder);
+    free(out.data); g_free(err); g_free(payload);
     refresh_dns_page_v5(app);
 }
 
@@ -383,10 +421,10 @@ static GtkWidget *build_dns_page_v5(App *app) {
     GtkWidget *grid = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(grid),6); gtk_grid_set_column_spacing(GTK_GRID(grid),10);
     GtkWidget *mode = gtk_combo_box_text_new();
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"home","Home AdGuard");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"fastest","Fastest measured");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"custom","Custom UDP/TCP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"dot","DNS-over-TLS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"doh","DNS-over-HTTPS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"doh3","DNS-over-HTTP/3");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode),"rescue","DNS Rescue");
-    GtkWidget *protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"udp","UDP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"tcp","TCP");
+    GtkWidget *protocol=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"udp","UDP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"tcp","TCP");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"tls","TLS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"https","HTTPS");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(protocol),"h3","HTTP/3");
     GtkWidget *preset=gtk_combo_box_text_new();gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"manual","Manual/current");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"cf4","Cloudflare IPv4 — 1.1.1.1");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"cf6","Cloudflare IPv6 — 2606:4700:4700::1111");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"g4","Google IPv4 — 8.8.8.8");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"g6","Google IPv6 — 2001:4860:4860::8888");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"q4","Quad9 IPv4 — 9.9.9.9");gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(preset),"q6","Quad9 IPv6 — 2620:fe::fe");gtk_combo_box_set_active(GTK_COMBO_BOX(preset),0);
     GtkWidget *host=gtk_entry_new(),*port=gtk_entry_new(),*server=gtk_entry_new(),*path=gtk_entry_new();gtk_entry_set_placeholder_text(GTK_ENTRY(host),"resolver host / IPv4 / IPv6");gtk_entry_set_placeholder_text(GTK_ENTRY(port),"port");gtk_entry_set_placeholder_text(GTK_ENTRY(server),"TLS server name");gtk_entry_set_placeholder_text(GTK_ENTRY(path),"/dns-query");
-    const char *labels[]={"Mode","Custom protocol","Common resolver","Host","Port","TLS server name","HTTPS path"};GtkWidget *widgets[]={mode,protocol,preset,host,port,server,path};for(guint i=0;i<G_N_ELEMENTS(widgets);i++){GtkWidget*l=gtk_label_new(labels[i]);gtk_label_set_xalign(GTK_LABEL(l),1.0f);gtk_grid_attach(GTK_GRID(grid),l,0,(gint)i,1,1);gtk_grid_attach(GTK_GRID(grid),widgets[i],1,(gint)i,1,1);}
+    const char *labels[]={"Mode","Home / Custom transport","Common resolver","Host","Port","TLS server name","HTTPS path"};GtkWidget *widgets[]={mode,protocol,preset,host,port,server,path};for(guint i=0;i<G_N_ELEMENTS(widgets);i++){GtkWidget*l=gtk_label_new(labels[i]);gtk_label_set_xalign(GTK_LABEL(l),1.0f);gtk_grid_attach(GTK_GRID(grid),l,0,(gint)i,1,1);gtk_grid_attach(GTK_GRID(grid),widgets[i],1,(gint)i,1,1);}
     gtk_box_pack_start(GTK_BOX(box),grid,FALSE,FALSE,0);GtkWidget *row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);gtk_box_pack_start(GTK_BOX(row),make_button("Save DNS policy",G_CALLBACK(on_save_dns_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(row),make_button("Retest DNS RTT",G_CALLBACK(on_dns_retest_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(row),make_button("Refresh DNS",G_CALLBACK(on_refresh_dns_v5),app),FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(box),row,FALSE,FALSE,0);
     GtkWidget *summary=gtk_label_new("DNS policy not loaded yet.");gtk_label_set_xalign(GTK_LABEL(summary),0.0f);gtk_label_set_yalign(GTK_LABEL(summary),0.0f);gtk_label_set_line_wrap(GTK_LABEL(summary),TRUE);GtkWidget *scroll=gtk_scrolled_window_new(NULL,NULL);gtk_container_add(GTK_CONTAINER(scroll),summary);gtk_box_pack_start(GTK_BOX(box),scroll,TRUE,TRUE,0);
     g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-summary-v5",summary);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-mode-v5",mode);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-protocol-v5",protocol);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-host-v5",host);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-port-v5",port);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-server-v5",server);g_object_set_data(G_OBJECT(app->window),"router-vpn-dns-path-v5",path);g_signal_connect(preset,"changed",G_CALLBACK(on_dns_preset_v5),app);

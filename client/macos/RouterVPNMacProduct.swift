@@ -5,6 +5,22 @@ import MapKit
 let routerVPNProductBaseURL = URL(string: "http://127.0.0.1:8788")!
 let routerVPNProductContractVersion = 3
 
+func productDNSPolicyBody(captured: [String: Any]?, displayedProfileID: String, fields: [String: Any]) throws -> [String: Any] {
+    guard let captured, !displayedProfileID.isEmpty,
+          let profileID = captured["profile_id"] as? String, profileID == displayedProfileID,
+          let token = captured["profile_token"] as? String, !token.isEmpty else {
+        throw NSError(domain: "RouterVPN.DNS", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected node changed or DNS settings are not loaded. Refresh DNS before saving."])
+    }
+    guard let port = fields["port"] as? Int, (0...65535).contains(port) else {
+        throw NSError(domain: "RouterVPN.DNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a DNS port from 1 through 65535, or leave it empty for the selected transport default."])
+    }
+    var body: [String: Any] = ["profile_id": profileID, "profile_token": token]
+    for key in ["mode", "protocol", "host", "port", "server_name", "path"] {
+        if let value = fields[key] { body[key] = value }
+    }
+    return body
+}
+
 final class ProductAPI {
     private let session: URLSession
     init() {
@@ -91,13 +107,15 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let dnsPortField = NSTextField(string: "53")
     let dnsServerNameField = NSTextField(string: "")
     let dnsPathField = NSTextField(string: "/dns-query")
+    var dnsPolicyCapture: [String: Any]?
+    var dnsPolicyGeneration = UUID()
     let map = MKMapView()
     let nodesText = NSTextView(); let modesText = NSTextView(); let dnsText = NSTextView(); let advancedText = NSTextView(); let settingsText = NSTextView(); let helpText = NSTextView()
     let forwardInput = NSTextView(); let forwardOutput = NSTextView()
     var routerIDs: [String] = []; var modeIDs: [String] = []; var profiles: [[String: Any]] = []; var eventSeq: UInt64 = 0; var timer: Timer?
     var multihopNodeIDs: [String] = []
     let dnsModeIDs = ["home", "fastest", "custom", "dot", "doh", "doh3", "rescue"]
-    let dnsProtocolIDs = ["udp", "tcp"]
+    let dnsProtocolIDs = ["udp", "tcp", "tls", "https", "h3"]
 
     init(api: ProductAPI) {
         self.api = api
@@ -150,12 +168,12 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
 
     func dnsView() -> NSView {
         let s = NSStackView(); s.orientation = .vertical; s.spacing = 9; s.edgeInsets = NSEdgeInsets(top: 18, left: 18, bottom: 18, right: 18)
-        let note = NSTextField(wrappingLabelWithString: "Choose Home, Fastest, Custom UDP/TCP, DoT, DoH, DoH3 or Rescue. Common IPv4/IPv6 resolver presets only fill fields. Disconnect before changing policy; reconnect and session DNS proof remain authoritative. Home-node Retest measures real DNS A/AAAA query RTT, not ICMP."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
+        let note = NSTextField(wrappingLabelWithString: "Choose Home, Fastest, Custom UDP/TCP, DoT, DoH, DoH3 or Rescue. Common IPv4/IPv6 resolver presets only fill fields. Disconnect before changing policy; reconnect and session DNS proof remain authoritative. DNS samples describe the path that measured them; saved results do not prove this connection."); note.textColor = .secondaryLabelColor; s.addArrangedSubview(note)
         dnsModePopup.addItems(withTitles: ["Home AdGuard", "Fastest measured", "Custom UDP/TCP", "DNS-over-TLS", "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue"])
-        dnsProtocolPopup.addItems(withTitles: ["UDP", "TCP"])
+        dnsProtocolPopup.addItems(withTitles: ["UDP", "TCP", "TLS", "HTTPS", "HTTP/3"])
         dnsPresetPopup.addItems(withTitles: ["Manual/current", "Cloudflare IPv4 — 1.1.1.1", "Cloudflare IPv6 — 2606:4700:4700::1111", "Google IPv4 — 8.8.8.8", "Google IPv6 — 2001:4860:4860::8888", "Quad9 IPv4 — 9.9.9.9", "Quad9 IPv6 — 2620:fe::fe"]); dnsPresetPopup.target = self; dnsPresetPopup.action = #selector(dnsPresetChanged)
         dnsHostField.placeholderString = "resolver host / IPv4 / IPv6"; dnsPortField.placeholderString = "port"; dnsServerNameField.placeholderString = "TLS server name"; dnsPathField.placeholderString = "/dns-query"
-        let grid = NSGridView(views: [[label("DNS mode"), dnsModePopup], [label("Custom protocol"), dnsProtocolPopup], [label("Common resolver"), dnsPresetPopup], [label("Host"), dnsHostField], [label("Port"), dnsPortField], [label("TLS server name"), dnsServerNameField], [label("HTTPS path"), dnsPathField]])
+        let grid = NSGridView(views: [[label("DNS mode"), dnsModePopup], [label("Home / Custom transport"), dnsProtocolPopup], [label("Common resolver"), dnsPresetPopup], [label("Host"), dnsHostField], [label("Port"), dnsPortField], [label("TLS server name"), dnsServerNameField], [label("HTTPS path"), dnsPathField]])
         grid.rowSpacing = 6; grid.columnSpacing = 10; s.addArrangedSubview(grid)
         let row = NSStackView(); row.orientation = .horizontal; row.spacing = 8; row.addArrangedSubview(button("Save DNS policy", #selector(saveDNS))); row.addArrangedSubview(button("Retest home-node DNS RTT", #selector(retestDNS))); row.addArrangedSubview(button("Refresh DNS", #selector(refreshAction))); s.addArrangedSubview(row)
         s.addArrangedSubview(scroll(dnsText)); return s
@@ -291,9 +309,19 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func publicExit() { asyncAction { String(data: try self.api.request("/api/public-ip", timeout: 20), encoding: .utf8) ?? "" } }
     @objc func retestDNS() { asyncAction { String(data: try self.api.request("/api/dns/retest", method: "POST", body: [:], timeout: 90), encoding: .utf8) ?? "DNS Retest completed" } }
     @objc func saveDNS() {
-        let modeIndex = max(0, min(dnsModePopup.indexOfSelectedItem, dnsModeIDs.count - 1)); let protocolIndex = max(0, min(dnsProtocolPopup.indexOfSelectedItem, dnsProtocolIDs.count - 1))
-        let body: [String: Any] = ["mode": dnsModeIDs[modeIndex], "protocol": dnsProtocolIDs[protocolIndex], "host": dnsHostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "port": Int(dnsPortField.stringValue) ?? 0, "server_name": dnsServerNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "path": dnsPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)]
-        asyncAction { String(data: try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10), encoding: .utf8) ?? "DNS policy saved for the next connection" }
+        let displayedID = routerPopup.selectedItem?.representedObject as? String ?? ""
+        let captured = dnsPolicyCapture
+        let modeIndex = max(0, min(dnsModePopup.indexOfSelectedItem, dnsModeIDs.count - 1))
+        let protocolIndex = max(0, min(dnsProtocolPopup.indexOfSelectedItem, dnsProtocolIDs.count - 1))
+        let portText = dnsPortField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        do {
+            guard let port = portText.isEmpty ? 0 : Int(portText) else {
+                throw NSError(domain: "RouterVPN.DNS", code: 2, userInfo: [NSLocalizedDescriptionKey: "Enter a valid numeric DNS port."])
+            }
+            let fields: [String: Any] = ["mode": dnsModeIDs[modeIndex], "protocol": dnsProtocolIDs[protocolIndex], "host": dnsHostField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "port": port, "server_name": dnsServerNameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "path": dnsPathField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)]
+            let body = try productDNSPolicyBody(captured: captured, displayedProfileID: displayedID, fields: fields)
+            asyncAction { String(data: try self.api.request("/api/dns/policy", method: "POST", body: body, timeout: 10), encoding: .utf8) ?? "DNS policy saved for the next connection" }
+        } catch { errorLabel.stringValue = error.localizedDescription; appendHelp("DNS policy failed: \(error.localizedDescription)") }
     }
     @objc func dnsPresetChanged() {
         let presets: [(String,String)] = [("",""),("1.1.1.1","cloudflare-dns.com"),("2606:4700:4700::1111","cloudflare-dns.com"),("8.8.8.8","dns.google"),("2001:4860:4860::8888","dns.google"),("9.9.9.9","dns.quad9.net"),("2620:fe::fe","dns.quad9.net")]
@@ -362,15 +390,53 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     func renderProfiles(selected: String) {
         nodesText.string = profiles.map { p in let name = p["name"] as? String ?? p["id"] as? String ?? "Router"; let loc = p["location"] as? String ?? ""; let endpoint = p["endpoint"] as? String ?? "—"; let kind = p["node_kind"] as? String ?? "router-vpn"; let median = (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0; let lastUsed = p["last_used_at"] as? String ?? ""; return "\((p["id"] as? String) == selected ? "●" : "○") [\(kind)] \(name) \(loc)\n  endpoint: \(endpoint)\n  median: \(median > 0 ? String(format: "%.1f ms", median) : "not measured")\n  last used: \(lastUsed.isEmpty ? "never" : lastUsed)" }.joined(separator: "\n\n")
         settingsText.string = profiles.map { p in let name = p["name"] as? String ?? "Router"; let mtu = (p["effective_mtu"] as? NSNumber)?.intValue ?? 0; let source = p["effective_mtu_source"] as? String ?? "default"; let mbps = (p["effective_mtu_mbps"] as? NSNumber)?.doubleValue ?? 0; let rtt = (p["effective_mtu_median_rtt_ms"] as? NSNumber)?.doubleValue ?? 0; let success = (p["effective_mtu_success_ratio"] as? NSNumber)?.doubleValue ?? 0; let perf = mbps > 0 ? String(format: "  Retest performance=%.1f Mbps median RTT=%.2f ms success=%.1f%%\n", mbps, rtt, success * 100.0) : ""; return "\(name)\n  base=\(p["base_tunnel"] as? String ?? "auto") DNS=\(p["dns_mode"] as? String ?? "home")/\(p["dns_protocol"] as? String ?? "udp")\n  kill-switch=\(p["kill_switch_policy"] as? String ?? "off") LAN=\((p["home_lan_access"] as? Bool ?? false) ? "on" : "off") MTU=\(mtu > 0 ? String(mtu) : "default") source=\(source)\n\(perf)  tested=\(p["effective_mtu_tested_at"] as? String ?? "not retested")" }.joined(separator: "\n\n")
-        if let p = profiles.first(where: { ($0["id"] as? String) == selected }) ?? profiles.first {
-            let mode = p["dns_mode"] as? String ?? "home"; let proto = p["dns_protocol"] as? String ?? "udp"; if let i = dnsModeIDs.firstIndex(of: mode) { dnsModePopup.selectItem(at: i) }; if let i = dnsProtocolIDs.firstIndex(of: proto) { dnsProtocolPopup.selectItem(at: i) }; dnsPresetPopup.selectItem(at: 0); dnsHostField.stringValue = p["dns_host"] as? String ?? ""; dnsPortField.stringValue = String((p["dns_port"] as? NSNumber)?.intValue ?? 53); dnsServerNameField.stringValue = p["dns_server_name"] as? String ?? ""; dnsPathField.stringValue = p["dns_path"] as? String ?? "/dns-query"
-            var lines = ["Selected DNS: \(mode) \(proto) \(dnsHostField.stringValue):\(dnsPortField.stringValue)"]
-            let fastestHost = p["fastest_dns_host"] as? String ?? ""; if !fastestHost.isEmpty { lines.append("Fastest measured: \(p["fastest_dns_name"] as? String ?? fastestHost) • \((p["fastest_dns_latency_ms"] as? NSNumber)?.doubleValue ?? 0) ms • \(fastestHost)") }
-            let results = (p["dns_results"] as? [[String: Any]] ?? []).sorted { a,b in let aw = a["working"] as? Bool ?? false, bw = b["working"] as? Bool ?? false; if aw != bw { return aw }; return ((a["latency_ms"] as? NSNumber)?.doubleValue ?? Double.greatestFiniteMagnitude) < ((b["latency_ms"] as? NSNumber)?.doubleValue ?? Double.greatestFiniteMagnitude) }
-            for r in results { let working = r["working"] as? Bool ?? false; lines.append("\(r["name"] as? String ?? r["address"] as? String ?? "Resolver") • \(r["address"] as? String ?? "") • \(working ? String(format: "%.2f ms", (r["latency_ms"] as? NSNumber)?.doubleValue ?? 0) : "failed")") }
-            lines.append("RTT values are home-node DNS A/AAAA query measurements, not ICMP. Saved policy is staged for the next connection; session proof still determines active DNS."); dnsText.string = lines.joined(separator: "\n")
-        } else { dnsText.string = "No selected Router VPN node." }
+        refreshDNSPolicy(selected: selected)
         renderMap()
+    }
+    func refreshDNSPolicy(selected: String) {
+        let generation = UUID(); dnsPolicyGeneration = generation; dnsPolicyCapture = nil
+        dnsHostField.stringValue = ""; dnsPortField.stringValue = ""; dnsServerNameField.stringValue = ""; dnsPathField.stringValue = ""
+        guard !selected.isEmpty else { dnsText.string = "Select a node to load DNS settings."; return }
+        dnsText.string = "Loading DNS settings for \(selected)…"
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            do {
+                guard let policy = try self.api.json("/api/dns/policy") as? [String: Any],
+                      policy["profile_id"] as? String == selected,
+                      let token = policy["profile_token"] as? String, !token.isEmpty else {
+                    throw NSError(domain: "RouterVPN.DNS", code: 1, userInfo: [NSLocalizedDescriptionKey: "The selected node changed while DNS settings loaded. Refresh DNS."])
+                }
+                DispatchQueue.main.async {
+                    guard self.dnsPolicyGeneration == generation,
+                          self.routerPopup.selectedItem?.representedObject as? String == selected else { return }
+                    let mode = policy["mode"] as? String ?? "home", proto = policy["protocol"] as? String ?? "udp"
+                    if let i = self.dnsModeIDs.firstIndex(of: mode) { self.dnsModePopup.selectItem(at: i) }
+                    if let i = self.dnsProtocolIDs.firstIndex(of: proto) { self.dnsProtocolPopup.selectItem(at: i) }
+                    self.dnsPresetPopup.selectItem(at: 0)
+                    self.dnsHostField.stringValue = policy["host"] as? String ?? ""
+                    self.dnsPortField.stringValue = String((policy["port"] as? NSNumber)?.intValue ?? 0)
+                    self.dnsServerNameField.stringValue = policy["server_name"] as? String ?? ""
+                    self.dnsPathField.stringValue = policy["path"] as? String ?? ""
+                    var lines = ["Node: \(selected)", "Selected DNS: \(mode) \(proto) \(self.dnsHostField.stringValue):\(self.dnsPortField.stringValue)"]
+                    if let fastest = policy["fastest_dns_host"] as? String, !fastest.isEmpty {
+                        lines.append("Fastest measured: \(policy["fastest_dns_name"] as? String ?? fastest) • \((policy["fastest_dns_latency_ms"] as? NSNumber)?.doubleValue ?? 0) ms • \(fastest)")
+                    }
+                    for result in policy["results"] as? [[String: Any]] ?? [] {
+                        let working = result["working"] as? Bool ?? false
+                        let timing = working ? String(format: "%.2f ms", (result["latency_ms"] as? NSNumber)?.doubleValue ?? 0) : "failed"
+                        lines.append("\(result["name"] as? String ?? "Resolver") • \(result["address"] as? String ?? "") • \(timing)")
+                    }
+                    lines.append(policy["note"] as? String ?? "The next connection must prove the selected DNS policy.")
+                    self.dnsText.string = lines.joined(separator: "\n"); self.dnsPolicyCapture = policy
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    guard self.dnsPolicyGeneration == generation,
+                          self.routerPopup.selectedItem?.representedObject as? String == selected else { return }
+                    self.dnsText.string = "DNS policy unavailable: \(error.localizedDescription)"; self.dnsPolicyCapture = nil
+                }
+            }
+        }
     }
     func renderMap() { map.removeAnnotations(map.annotations); var annotations: [RouterAnnotation] = []; for p in profiles { let lat = (p["latitude"] as? NSNumber)?.doubleValue ?? 0; let lon = (p["longitude"] as? NSNumber)?.doubleValue ?? 0; guard CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)), !(lat == 0 && lon == 0) else { continue }; annotations.append(RouterAnnotation(id: p["id"] as? String ?? "", name: p["name"] as? String ?? "Router", location: p["location"] as? String ?? "", latency: (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0, lat: lat, lon: lon)) }; map.addAnnotations(annotations); if !annotations.isEmpty { map.showAnnotations(annotations, animated: false) } }
     func refreshModes() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let modes = try api.json("/api/logical-modes", timeout: 12) as? [[String: Any]] else { return }; let ready = modes.filter { $0["available"] as? Bool == true }; DispatchQueue.main.async { self.modeIDs = ready.compactMap { $0["id"] as? String }; self.modePopup.removeAllItems(); self.modePopup.addItems(withTitles: ready.map { $0["name"] as? String ?? $0["id"] as? String ?? "Mode" }); self.modesText.string = modes.map { mode in var layerSet = Set<String>(); if let variants = mode["variants"] as? [String: Any] { for value in variants.values { if let variant = value as? [String: Any], let raw = variant["mode"] as? [String: Any], let layers = raw["layers"] as? [String] { for layer in layers { if !layer.isEmpty { layerSet.insert(layer) } } } } }; let layers = layerSet.sorted().isEmpty ? "—" : layerSet.sorted().joined(separator: " • "); let pingMin=(mode["ping_min_ms"] as? NSNumber)?.doubleValue ?? 0, pingMax=(mode["ping_max_ms"] as? NSNumber)?.doubleValue ?? 0, trafficMin=(mode["traffic_min_pct"] as? NSNumber)?.doubleValue ?? 0, trafficMax=(mode["traffic_max_pct"] as? NSNumber)?.doubleValue ?? 0, speedMin=(mode["speed_loss_min_pct"] as? NSNumber)?.doubleValue ?? 0, speedMax=(mode["speed_loss_max_pct"] as? NSNumber)?.doubleValue ?? 0; let available=mode["available"] as? Bool ?? false; let bases=(mode["ready_bases"] as? [String] ?? []).joined(separator: ", "); let reason=(mode["reason"] as? String ?? "").isEmpty ? (available ? "selected variant is runnable; final Connected still requires selected-path proof" : "no runnable variant") : (mode["reason"] as? String ?? ""); return "\(available ? "✓" : "—") \(mode["name"] as? String ?? "Mode")\n  \(mode["description"] as? String ?? "")\n  layers: \(layers)\n  added latency \(String(format: "%.1f–%.1f ms", pingMin,pingMax)) • traffic \(String(format: "+%.1f–%.1f%%",trafficMin,trafficMax)) • speed loss \(String(format: "%.1f–%.1f%%",speedMin,speedMax))\n  readiness: \(available ? "Ready" : "Unavailable")\(bases.isEmpty ? "" : " • bases: \(bases)")\n  reason: \(reason)" }.joined(separator: "\n\n") } } catch { } } }

@@ -79,6 +79,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 protection settings regressions failed' }
           python deploy/test_desktop_protection_settings.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 protection settings regressions failed' }
+      - name: DNS editors preserve the captured node and selected transport
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_dns_settings.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 DNS settings regressions failed' }
+          python deploy/test_desktop_dns_settings.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 DNS settings regressions failed' }
       - name: Tor helper test cleanup regressions
         shell: pwsh
         run: |

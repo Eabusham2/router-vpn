@@ -116,7 +116,9 @@ for rel, markers in {
         "connection profile delete failed and was rolled back",
     ),
     "cmd/client/dns_policy_api.go": (
-        "beginMutationOperation(r)", "oldProfile := profile", "a.profiles.Profiles[i] = oldProfile",
+        "beginMutationOperation(r)", "dnsPolicySelectionToken(current, currentEntry) != token",
+        "current.ID != profile.ID", "copyDNSPolicy(&currentUpdate, updated)",
+        "a.profiles.Profiles[i] = current", "cancelPendingStartupPolicy(a)",
     ),
     "cmd/client/home_summary.go": (
         "stateToken := mtuStateSnapshotToken(a.state)", "after.ActualMode != before.ActualMode",

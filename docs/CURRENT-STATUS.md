@@ -39,6 +39,19 @@ product and shutdown ownership suites passed. Real Windows PowerShell 5.1 and
 AppKit package verification run in their native workflows; physical tunnel
 enforcement remains an independent acceptance requirement.
 
+Desktop DNS editors now load and save ordinary external and Tor policies
+against the exact selected profile and saved entry. The saved transport,
+address, port, TLS identity and path pass the same native policy validators used
+by the running graph. Native controls preserve encrypted Home parameters rather
+than resetting them through a UDP/TCP-only selector. Source/selection changes,
+failed persistence and cancelled edits cannot rewrite private node state.
+Explicit Rescue uses its actual named preset; missing Home entry/bootstrap or
+unsupported transport is reported before connection rather than replaced.
+Legacy external Fastest samples cannot authorize a different transport: desktop
+native DNS Retest and selection of a complete measured resolver draft remain
+implementation work. Router Home's UDP preset is still distinct from explicit
+DoT/DoH policy, and broader encrypted Home support remains to be completed.
+
 The current source also includes Apple candidate-measurement repair `7484eec1`
 and macOS Tor editor integration `b94f5df9`. The Apple probe receives an immutable
 Sendable target while private profiles remain on MainActor; its executable

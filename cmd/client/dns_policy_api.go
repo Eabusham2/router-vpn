@@ -3,6 +3,7 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"sort"
@@ -12,12 +13,14 @@ import (
 )
 
 type dnsPolicyRequest struct {
-	Mode       string `json:"mode"`
-	Protocol   string `json:"protocol,omitempty"`
-	Host       string `json:"host,omitempty"`
-	Port       int    `json:"port,omitempty"`
-	ServerName string `json:"server_name,omitempty"`
-	Path       string `json:"path,omitempty"`
+	ProfileID    string `json:"profile_id,omitempty"`
+	ProfileToken string `json:"profile_token,omitempty"`
+	Mode         string `json:"mode"`
+	Protocol     string `json:"protocol,omitempty"`
+	Host         string `json:"host,omitempty"`
+	Port         int    `json:"port,omitempty"`
+	ServerName   string `json:"server_name,omitempty"`
+	Path         string `json:"path,omitempty"`
 }
 
 type dnsPolicyPreset struct {
@@ -28,6 +31,9 @@ type dnsPolicyPreset struct {
 }
 
 type dnsPolicyResponse struct {
+	ProfileID           string                      `json:"profile_id"`
+	ProfileToken        string                      `json:"profile_token"`
+	NodeKind            string                      `json:"node_kind"`
 	Mode                string                      `json:"mode"`
 	Protocol            string                      `json:"protocol"`
 	Host                string                      `json:"host"`
@@ -61,77 +67,76 @@ func (a *app) dnsPolicy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	a.mu.Lock()
-	selected := a.profiles.SelectedID
-	profile, ok := a.profileByIDLocked(selected)
-	busy := profileSettingsBusy(a.state.Connected, a.state.Phase)
+	profile, entry, ok := a.dnsPolicySelectionLocked()
 	a.mu.Unlock()
 	if !ok {
-		http.Error(w, "add and select your home router first", http.StatusBadRequest)
+		http.Error(w, "add and select a node first", http.StatusBadRequest)
 		return
 	}
-	if strings.EqualFold(strings.TrimSpace(profile.NodeKind), "external") || profile.External != nil {
-		http.Error(w, "Router VPN DNS policy applies only to Router VPN home nodes; external exits own their own DNS runtime", http.StatusConflict)
-		return
-	}
-
+	token := dnsPolicySelectionToken(profile, entry)
 	if r.Method == http.MethodGet {
-		writeDNSPolicy(w, profile)
-		return
-	}
-	if busy {
-		http.Error(w, "disconnect before changing DNS policy so the next tunnel starts with one coherent resolver configuration", http.StatusConflict)
+		writeDNSPolicy(w, profile, entry)
 		return
 	}
 	var request dnsPolicyRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&request); err != nil {
-		http.Error(w, "bad json", http.StatusBadRequest)
+	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10))
+	decoder.DisallowUnknownFields()
+	if err := decoder.Decode(&request); err != nil {
+		http.Error(w, "invalid DNS policy", http.StatusBadRequest)
 		return
 	}
-	updated, err := applyDNSPolicyToProfile(profile, request)
+	if err := decoder.Decode(new(any)); err != io.EOF {
+		http.Error(w, "one DNS policy object is required", http.StatusBadRequest)
+		return
+	}
+	// External editors must identify the selected private source and its saved
+	// entry. Older Router-only clients remain compatible; every supplied
+	// revision is checked, and both paths recheck the capture before saving.
+	if externalDNSProfile(profile) || request.ProfileID != "" || request.ProfileToken != "" {
+		if request.ProfileID != profile.ID || request.ProfileToken == "" || request.ProfileToken != token {
+			http.Error(w, "selected node, entry or DNS policy changed; refresh DNS settings", http.StatusConflict)
+			return
+		}
+	}
+	updated, err := applyCapturedDNSPolicy(profile, entry, request)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
 	a.mu.Lock()
-	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
+	current, currentEntry, exists := a.dnsPolicySelectionLocked()
+	if !exists || current.ID != profile.ID || dnsPolicySelectionToken(current, currentEntry) != token ||
+		a.closing || r.Context().Err() != nil || profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		a.mu.Unlock()
-		http.Error(w, "disconnect before changing DNS policy", http.StatusConflict)
+		http.Error(w, "node, entry or connection changed; refresh DNS settings when disconnected", http.StatusConflict)
 		return
 	}
-	found := false
-	oldProfile := profile
+	// Measurement and display changes outside the revision belong to the
+	// current profile. A DNS edit must never replace their object or secrets.
+	currentUpdate := cloneRouterProfile(current)
+	copyDNSPolicy(&currentUpdate, updated)
 	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == selected {
-			oldProfile = a.profiles.Profiles[i]
-			a.profiles.Profiles[i] = updated
-			found = true
-			break
+		if a.profiles.Profiles[i].ID != current.ID {
+			continue
 		}
-	}
-	if !found {
-		a.mu.Unlock()
-		http.Error(w, "selected router disappeared", http.StatusConflict)
-		return
-	}
-	err = a.persistProfilesLocked()
-	if err != nil {
-		for i := range a.profiles.Profiles {
-			if a.profiles.Profiles[i].ID == selected {
-				a.profiles.Profiles[i] = oldProfile
-				break
-			}
+		a.profiles.Profiles[i] = currentUpdate
+		err = a.persistProfilesLocked()
+		if err != nil {
+			a.profiles.Profiles[i] = current
 		}
+		break
 	}
 	a.mu.Unlock()
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "could not save DNS policy", http.StatusInternalServerError)
 		return
 	}
-	writeDNSPolicy(w, updated)
+	cancelPendingStartupPolicy(a)
+	writeDNSPolicy(w, currentUpdate, currentEntry)
 }
 
-func writeDNSPolicy(w http.ResponseWriter, profile common.RouterProfile) {
+func writeDNSPolicy(w http.ResponseWriter, profile, entry common.RouterProfile) {
 	results := append([]common.DNSBenchmarkResult(nil), profile.DNSResults...)
 	sort.SliceStable(results, func(i, j int) bool {
 		if results[i].Working != results[j].Working {
@@ -146,6 +151,7 @@ func writeDNSPolicy(w http.ResponseWriter, profile common.RouterProfile) {
 		return results[i].LatencyMs < results[j].LatencyMs
 	})
 	response := dnsPolicyResponse{
+		ProfileID: profile.ID, ProfileToken: dnsPolicySelectionToken(profile, entry), NodeKind: "router-vpn",
 		Mode:                strings.ToLower(strings.TrimSpace(profile.DNSMode)),
 		Protocol:            strings.ToLower(strings.TrimSpace(profile.DNSProtocol)),
 		Host:                profile.DNSHost,
@@ -159,6 +165,21 @@ func writeDNSPolicy(w http.ResponseWriter, profile common.RouterProfile) {
 		Presets:             dnsPolicyPresets(),
 		Note:                "DNS benchmark values are real A/AAAA DNS query RTTs measured from the selected home node; saved policy is applied on the next connection and runtime proof is still required.",
 	}
+	if externalDNSProfile(profile) {
+		response.NodeKind = "external"
+		response.Note = "The saved DNS policy belongs to this external node and its captured entry. It is applied on the next native connection, which still requires fresh DNS proof. Stored samples do not establish current-path performance."
+		if response.Mode == "rescue" && profile.External != nil && profile.External.Protocol != "tor-bridge" {
+			// Rescue is an explicit named preset in the shared runtime. Historical
+			// leftover custom fields must not mislabel the resolver it will use.
+			response.Protocol, response.Host, response.Port = "https", "1.1.1.1", 443
+			response.ServerName, response.Path = "cloudflare-dns.com", "/dns-query"
+		}
+		if (response.Mode == "home" || response.Mode == "") && profile.External != nil && profile.External.Protocol == "tor-bridge" {
+			response.Note += " Tor bridge DNS needs Custom TCP, DoT, DoH or explicit Rescue through its circuit."
+		} else if (response.Mode == "home" || response.Mode == "") && entry.ID == "" {
+			response.Note += " Home AdGuard needs a paired Router VPN entry before this path can connect; choose an explicit resolver for a direct external connection."
+		}
+	}
 	if response.Mode == "" {
 		response.Mode = "home"
 	}
@@ -166,6 +187,7 @@ func writeDNSPolicy(w http.ResponseWriter, profile common.RouterProfile) {
 		response.Protocol = "udp"
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(response)
 }
 
@@ -182,6 +204,9 @@ func applyDNSPolicyToProfile(profile common.RouterProfile, request dnsPolicyRequ
 
 	switch mode {
 	case "home":
+		if protocol != "" && protocol != "udp" {
+			return profile, errors.New("this Router Home preset uses UDP port 53; select Custom TCP, DoT, DoH or DoH3 explicitly to use another transport")
+		}
 		host = strings.TrimSpace(profile.AdGuardIPv4)
 		if host == "" {
 			host = strings.TrimSpace(profile.AdGuardIPv6)

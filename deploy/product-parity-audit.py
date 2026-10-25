@@ -85,13 +85,18 @@ windows_profile_controls()
 dns_api = require(
     "cmd/client/dns_policy_api.go",
     "/api/dns/policy", 'case "home"', 'case "fastest"', 'case "custom"', 'case "dot"',
-    'case "doh"', 'case "doh3"', 'case "rescue"', "disconnect before changing DNS policy",
+    'case "doh"', 'case "doh3"', 'case "rescue"', "beginMutationOperation(r)",
+    "dnsPolicySelectionToken(current, currentEntry) != token", "current.ID != profile.ID",
+    "profileSettingsBusy(a.state.Connected, a.state.Phase)", "copyDNSPolicy(&currentUpdate, updated)",
+    "a.profiles.Profiles[i] = current",
     "DNS benchmark values are real A/AAAA DNS query RTTs", "profile.DNSMode = mode",
 )
 for forbidden in ("APIToken =", "NodeProofID =", "PrivateKey ="):
     if forbidden in dns_api:
         errors.append(f"cmd/client/dns_policy_api.go: DNS mutation unexpectedly writes secret/identity field: {forbidden}")
 require("cmd/client/dns_policy_api_test.go", "TestDNSPolicyOnlyMutatesDNSFields", "TestApplyDNSPolicyEncryptedInference", "TestApplyDNSPolicyRejectsUnsafeOrUnsupported")
+require("cmd/client/dns_policy_external.go", "mobilemultihop.ValidateExternalDNS", "selectedTorBridgeDNS", "dnsPolicySelectionToken", "copyDNSPolicy")
+require("cmd/client/dns_policy_external_test.go", "TestExternalDNSPolicySavePreservesAllNinePrivateProtocolsAndOtherSettings", "TestExternalDNSPolicyRejectsStaleNodeEntryAndBenchmarkInputs", "TestExternalDNSPolicyRejectsMalformedUnownedAndFailedSaves", "TestExternalDNSPolicyRescueIsExplicitCanonicalPresetAndFastestRejectsLegacyEvidence")
 require("cmd/client/logical_modes.go", "ping_min_ms", "ping_max_ms", "traffic_min_pct", "traffic_max_pct", "speed_loss_min_pct", "speed_loss_max_pct", "ready_bases", "reason")
 
 home = require(
