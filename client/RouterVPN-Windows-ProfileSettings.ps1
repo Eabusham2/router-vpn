@@ -20,6 +20,66 @@ function global:Save-RouterVPNProfileStartup {
     Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/startup') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
 }
 
+function global:Assert-RouterVPNProfileDeviceCapture {
+    param($Captured,[string]$DisplayedProfileID)
+    if($null -eq $Captured -or [string]::IsNullOrWhiteSpace($DisplayedProfileID) -or
+       $Captured.profile_id -isnot [string] -or $Captured.profile_id -cne $DisplayedProfileID -or
+       $Captured.profile_token -isnot [string] -or $Captured.profile_token -cnotmatch '\A[0-9a-f]{64}\z' -or
+       [string]$Captured.node_kind -cne 'external' -or $Captured.device_policy_supported -isnot [bool]){
+        throw 'The selected node changed or its device settings could not be captured. Reopen Settings.'
+    }
+}
+
+function global:Get-RouterVPNProfileDevice {
+    param([string]$BaseUrl,[string]$DisplayedProfileID)
+    $captured=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/device') -Method Get -TimeoutSec 5
+    Assert-RouterVPNProfileDeviceCapture -Captured $captured -DisplayedProfileID $DisplayedProfileID
+    return $captured
+}
+
+function global:New-RouterVPNProfileDevicePayload {
+    param($Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect)
+    Assert-RouterVPNProfileDeviceCapture -Captured $Captured -DisplayedProfileID $DisplayedProfileID
+    if(-not $Captured.device_policy_supported){throw 'This node cannot apply common device settings through its native runtime.'}
+    if($HomeLANAccess -isnot [bool]){throw 'LAN access must be an explicit Boolean.'}
+    if($KillSwitchPolicy -cnotin @('off','on-connect','always')){throw 'Choose Off, On connect, or Always protection.'}
+    if($IPv6Mode -cnotin @('on','auto','off')){throw 'Choose On, Auto, or Off for IPv6.'}
+    if($MTUPolicy -cnotin @('auto','default','manual')){throw 'Choose Auto, Runtime default, or Fixed MTU.'}
+    if(($ManualMTU -isnot [string] -and $ManualMTU -isnot [int] -and $ManualMTU -isnot [long]) -or [string]$ManualMTU -cnotmatch '\A[0-9]{1,4}\z'){
+        throw 'Fixed MTU must be a whole number from 1280 to 9000.'
+    }
+    $manualValue=[int]$ManualMTU
+    if(($MTUPolicy -ceq 'manual' -and ($manualValue -lt 1280 -or $manualValue -gt 9000)) -or ($MTUPolicy -cne 'manual' -and $manualValue -ne 0)){
+        throw 'Fixed MTU must be 1280 to 9000; Auto and Runtime default require zero.'
+    }
+    $body=@{profile_id=$DisplayedProfileID;profile_token=[string]$Captured.profile_token;home_lan_access=$HomeLANAccess;kill_switch_policy=$KillSwitchPolicy;ipv6_mode=$IPv6Mode;mtu_policy=$MTUPolicy;manual_mtu=$manualValue}
+    $hasMode=$PSBoundParameters.ContainsKey('StartupMode');$hasAutomatic=$PSBoundParameters.ContainsKey('AutoConnect')
+    if($hasMode -ne $hasAutomatic){throw 'Startup mode and auto-connect must be edited together.'}
+    if($hasMode){
+        if($StartupMode -isnot [string] -or $StartupMode -cnotin @('manual','auto','smart-auto','last') -or $AutoConnect -isnot [bool] -or ($StartupMode -ceq 'manual' -and $AutoConnect)){
+            throw 'Choose a valid startup mode; Manual must stay disconnected.'
+        }
+        if($Captured.startup_mode -isnot [string] -or $Captured.startup_mode -cnotin @('manual','auto','smart-auto','last') -or $Captured.auto_connect -isnot [bool]){
+            throw 'The captured startup policy is invalid. Reopen Settings.'
+        }
+        $displayedStartup=if($Captured.startup_mode -ceq 'smart-auto'){'auto'}else{$Captured.startup_mode}
+        $modeChanged=$StartupMode -cne $displayedStartup
+        if($modeChanged -or $AutoConnect -ne $Captured.auto_connect){
+            $body.startup_mode=if($modeChanged){$StartupMode}else{$Captured.startup_mode}
+            $body.auto_connect=$AutoConnect
+        }
+    }
+    return $body
+}
+
+function global:Save-RouterVPNProfileDevice {
+    param([string]$BaseUrl,$Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect)
+    $arguments=@{};foreach($key in $PSBoundParameters.Keys){if($key -cne 'BaseUrl'){$arguments[$key]=$PSBoundParameters[$key]}}
+    $body=New-RouterVPNProfileDevicePayload @arguments
+    if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'Disconnect Router VPN before saving device settings.'}
+    Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/device') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
+}
+
 function global:Set-RouterVPNProfileProtection {
     param([string]$BaseUrl,[string]$DisplayedProfileID,[bool]$Enabled)
     if([string]::IsNullOrWhiteSpace($DisplayedProfileID)){throw 'Select a node before changing protection.'}
@@ -115,12 +175,20 @@ function global:Apply-RouterVPNLoadedConnectionSnapshot {
 }
 
 function global:Show-RouterVPNProfileSettingsDialog {
-    param([string]$BaseUrl,[System.Windows.Window]$Owner,[hashtable]$ConnectionSnapshot,[scriptblock]$OnConnectionProfileLoaded)
-    $current=$null;$settingsError='';$startCaps=$null;$startCapsError=''
-    try{$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl}catch{$settingsError=$_.Exception.Message}
-    $externalStartup=$null
-    if($null -eq $current){try{$captured=Get-RouterVPNProfileStartup -BaseUrl $BaseUrl;if([string]$captured.node_kind -eq 'external'){$externalStartup=$captured}}catch{$settingsError=$_.Exception.Message}}
-    try{$startCaps=Get-RouterVPNStartLayerCapabilities -BaseUrl $BaseUrl}catch{$startCapsError=$_.Exception.Message}
+    param([string]$BaseUrl,[System.Windows.Window]$Owner,[hashtable]$ConnectionSnapshot,[scriptblock]$OnConnectionProfileLoaded,[string]$DisplayedProfileID,[string]$DisplayedNodeKind)
+    if([string]::IsNullOrWhiteSpace($DisplayedProfileID) -or $DisplayedNodeKind -cnotin @('router','external')){throw 'Select a node before opening Settings.'}
+    $current=$null;$settingsError='';$startCaps=$null;$startCapsError='';$externalDevice=$null;$externalStartup=$null
+    if($DisplayedNodeKind -ceq 'external'){
+        $externalDevice=Get-RouterVPNProfileDevice -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID
+        if(-not $externalDevice.device_policy_supported){
+            $captured=Get-RouterVPNProfileStartup -BaseUrl $BaseUrl
+            if([string]$captured.node_kind -eq 'external' -and [string]$captured.profile_id -ceq $DisplayedProfileID -and [string]$captured.profile_token -cmatch '\A[0-9a-f]{64}\z'){$externalStartup=$captured}
+            else{throw 'The selected node changed while capturing its startup settings.'}
+        }
+    }else{
+        try{$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl}catch{$settingsError=$_.Exception.Message}
+        try{$startCaps=Get-RouterVPNStartLayerCapabilities -BaseUrl $BaseUrl}catch{$startCapsError=$_.Exception.Message}
+    }
     [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Settings" Width="720" Height="850" MinWidth="560" MinHeight="620" WindowStartupLocation="CenterOwner" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF">
 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
@@ -129,13 +197,17 @@ function global:Show-RouterVPNProfileSettingsDialog {
 <CheckBox Name="LAN" Content="Allow home LAN access" Margin="0,5"/>
 <TextBlock Text="Kill switch policy"/><ComboBox Name="Kill" Margin="0,3,0,10"><ComboBoxItem Content="Off" Tag="off"/><ComboBoxItem Content="On connect" Tag="on-connect"/><ComboBoxItem Content="Always / strict" Tag="always"/></ComboBox>
 <TextBlock Text="IPv6 policy"/><ComboBox Name="IPv6" Margin="0,3,0,10"><ComboBoxItem Content="On — default" Tag="on"/><ComboBoxItem Content="Auto" Tag="auto"/><ComboBoxItem Content="Off" Tag="off"/></ComboBox>
+<StackPanel Name="RouterTransportSettings">
 <TextBlock Text="WG / AWG base preference"/><ComboBox Name="Base" Margin="0,3,0,5"><ComboBoxItem Content="Auto" Tag="auto"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AmneziaWG" Tag="awg"/></ComboBox><CheckBox Name="Fallback" Content="Allow compatible WG/AWG base fallback" Margin="0,0,0,10"/>
 <TextBlock Text="AUTO / SMART AUTO filters" FontWeight="SemiBold" Margin="0,8,0,2"/><CheckBox Name="RequireEncrypted" Content="Require encrypted AUTO candidates" Margin="0,3"/><CheckBox Name="RequireObfuscation" Content="Require obfuscation for AUTO candidates" Margin="0,3"/><TextBlock Text="Both are Off by default. Enabled filters remove non-matching candidates before AUTO tries them; SMART cannot simplify below the selected requirements." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 <TextBlock Text="Start encryption / obfuscation layer" FontWeight="SemiBold"/><ComboBox Name="StartLayer" Margin="0,3,0,4"><ComboBoxItem Content="Off — default" Tag="off"/><ComboBoxItem Content="AES-256-GCM — authenticated" Tag="aes-256-gcm"/><ComboBoxItem Content="AES-256-GCM + XOR whitening" Tag="aes-256-gcm+xor-whitening"/></ComboBox><TextBlock Name="StartLayerTruth" Text="AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR is reversible whitening of already-authenticated ciphertext only; it is never counted as encryption. Unsupported runtime graphs fail closed." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
+</StackPanel>
 <TextBlock Text="MTU policy"/><ComboBox Name="MTUPolicy" Margin="0,3,0,5"><ComboBoxItem Content="Auto measured — default" Tag="auto"/><ComboBoxItem Content="Fixed / manual" Tag="manual"/><ComboBoxItem Content="Runtime default" Tag="default"/></ComboBox><TextBox Name="ManualMTU" Margin="0,0,0,5" ToolTip="Fixed MTU 576–9000; ignored for Auto/Runtime default"/><TextBlock Name="Effective" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
+<StackPanel Name="RouterFeatureSettings">
 <CheckBox Name="DAITA" Content="DAITA-like traffic padding (bounded; supported modes only)" Margin="0,5"/><CheckBox Name="Jumbo" Content="Jumbo TUN / jumbo packet mode (compatible paths only)" Margin="0,5"/><CheckBox Name="Socks" Content="Enable private in-tunnel SOCKS5 utility" Margin="0,5"/>
 <StackPanel Orientation="Horizontal" Margin="0,4,0,10"><Button Name="Forwarding" Content="Port forwarding / Protected DMZ…" Padding="10,6"/></StackPanel>
 <TextBlock Text="Retest is path/config specific. A fixed MTU stays fixed until changed. Incoming forwarding is owned by the authenticated private home node and is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,12"/>
+</StackPanel>
 </StackPanel>
 <StackPanel Name="StartupSettings">
 <TextBlock Text="Startup / default mode" Margin="0,10,0,0"/><ComboBox Name="Startup" Margin="0,3,0,5"><ComboBoxItem Content="SMART AUTO — recommended" Tag="smart-auto"/><ComboBoxItem Content="AUTO" Tag="auto"/><ComboBoxItem Content="Last proven mode" Tag="last"/><ComboBoxItem Content="Manual / stay disconnected" Tag="manual"/></ComboBox><CheckBox Name="AutoConnect" Content="Auto-connect when the native app starts" Margin="0,0,0,10"/>
@@ -163,16 +235,29 @@ function global:Show-RouterVPNProfileSettingsDialog {
     }else{
         $nodeSettings.IsEnabled=$false;$settingsSave.IsEnabled=$false;$settingsNote.Text='Selected node does not expose Router VPN node settings here (for example, a Custom/external node). Connection-profile Add / Load / Update / Delete remains available.';$effective.Text=$settingsError
     }
-    if($null -ne $externalStartup){
+    if($null -ne $externalDevice){
+        $dialog.FindName('RouterTransportSettings').Visibility='Collapsed';$dialog.FindName('RouterFeatureSettings').Visibility='Collapsed'
+        $lan.IsChecked=[bool]$externalDevice.home_lan_access;SetTag $kill ([string]$externalDevice.kill_switch_policy);SetTag $ipv6 ([string]$externalDevice.ipv6_mode);SetTag $mtuPolicy ([string]$externalDevice.mtu_policy)
+        $manual.Text=if([int]$externalDevice.manual_mtu-gt0){[string]$externalDevice.manual_mtu}else{''}
+        $manual.ToolTip='Fixed interface MTU 1280 to 9000; the native transport validates its actual limit.'
+        $effective.Text="Historical effective MTU: $(if([int]$externalDevice.effective_mtu-gt0){$externalDevice.effective_mtu}else{'not measured'}) - $($externalDevice.mtu_source). Retest the connected path for a fresh value."
+        $nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported
+        $settingsSave.IsEnabled=[bool]$externalDevice.device_policy_supported -or $null -ne $externalStartup
+        $settingsNote.Text=if($externalDevice.device_policy_supported){[string]$externalDevice.note}else{[string]$externalDevice.device_policy_reason}
+    }
+    $startupCapture=if($null -ne $externalStartup){$externalStartup}else{$externalDevice}
+    if($null -ne $startupCapture){
         $startup.Items.Clear()
         foreach($choice in @(@('Saved connection','auto'),@('Last proven connection','last'),@('Manual / stay disconnected','manual'))){$item=New-Object System.Windows.Controls.ComboBoxItem;$item.Content=$choice[0];$item.Tag=$choice[1];[void]$startup.Items.Add($item)}
-        $startupMode=[string]$externalStartup.startup_mode;if($startupMode -eq 'smart-auto'){$startupMode='auto'};SetTag $startup $startupMode
-        $autoConnect.IsChecked=[bool]$externalStartup.auto_connect
-        $settingsNote.Text='Startup settings for the selected imported node. Its saved protocol, credentials and connection policy are kept.'
+        $startupMode=[string]$startupCapture.startup_mode;if($startupMode -eq 'smart-auto'){$startupMode='auto'};SetTag $startup $startupMode
+        $autoConnect.IsChecked=[bool]$startupCapture.auto_connect
         $startupNote.Text='Saved connection uses the selected protocol and hop settings. Last keeps its previously proved Local/Server choice when it is still valid.'
-        $settingsSave.IsEnabled=$true
     }
-    if(($null -eq $current -and $null -eq $externalStartup) -or (Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl)){$startupSettings.IsEnabled=$false;$settingsSave.IsEnabled=$false}
+    if(($null -eq $current -and $null -eq $externalDevice -and $null -eq $externalStartup) -or (Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl)){$nodeSettings.IsEnabled=$false;$startupSettings.IsEnabled=$false;$settingsSave.IsEnabled=$false}
+    $syncStartupControls={if([string]$startup.SelectedItem.Tag -ceq 'manual'){$autoConnect.IsChecked=$false;$autoConnect.IsEnabled=$false}else{$autoConnect.IsEnabled=$startupSettings.IsEnabled}}
+    $startup.Add_SelectionChanged($syncStartupControls);& $syncStartupControls
+    $syncManualControls={$manual.IsEnabled=$nodeSettings.IsEnabled -and [string]$mtuPolicy.SelectedItem.Tag -ceq 'manual'}
+    $mtuPolicy.Add_SelectionChanged($syncManualControls);& $syncManualControls
     $syncProfileMutationState={
         $busy=Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl
         $profileName.IsEnabled=-not$busy;$profileCombo.IsEnabled=-not$busy;$profileAdd.IsEnabled=-not$busy;$profileLoad.IsEnabled=-not$busy;$profileUpdate.IsEnabled=-not$busy;$profileDelete.IsEnabled=-not$busy
@@ -199,9 +284,19 @@ function global:Show-RouterVPNProfileSettingsDialog {
     & $refreshProfiles
     $dialog.FindName('MtuRetest').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $dialog})
     $dialog.FindName('Forwarding').Add_Click({[System.Windows.MessageBox]::Show('Port forwarding / Protected DMZ is configured through the authenticated private home-node forwarding surface and must be validated off-LAN. Router VPN will not advertise arbitrary DNAT for proxy-only paths.','Router VPN forwarding')|Out-Null})
-    $script:RVPNSettingsSave=$false;$dialog.FindName('Cancel').Add_Click({$dialog.Close()});$settingsSave.Add_Click({if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){$settingsSave.IsEnabled=$false;$nodeSettings.IsEnabled=$false;$startupSettings.IsEnabled=$false;$settingsNote.Text='VPN is active or transitioning; persistent node settings remain locked until it is fully disconnected.';return};$script:RVPNSettingsSave=$true;$dialog.Close()});[void]$dialog.ShowDialog();if(-not$script:RVPNSettingsSave -or ($null -eq $current -and $null -eq $externalStartup)){return $null}
+    $script:RVPNSettingsSave=$false;$dialog.FindName('Cancel').Add_Click({$dialog.Close()});$settingsSave.Add_Click({if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){$settingsSave.IsEnabled=$false;$nodeSettings.IsEnabled=$false;$startupSettings.IsEnabled=$false;$settingsNote.Text='VPN is active or transitioning; persistent node settings remain locked until it is fully disconnected.';return};$script:RVPNSettingsSave=$true;$dialog.Close()});[void]$dialog.ShowDialog();if(-not$script:RVPNSettingsSave -or ($null -eq $current -and $null -eq $externalStartup -and $null -eq $externalDevice)){return $null}
     if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'VPN became active or began transitioning before settings save; disconnect and try again.'}
-    if($null -ne $externalStartup){return Save-RouterVPNProfileStartup -BaseUrl $BaseUrl -Captured $externalStartup -StartupMode ([string]$startup.SelectedItem.Tag) -AutoConnect ([bool]$autoConnect.IsChecked)}
+    if($null -ne $externalDevice -and $externalDevice.device_policy_supported){
+        $externalManual=if([string]$mtuPolicy.SelectedItem.Tag -ceq 'manual'){$manual.Text.Trim()}else{0}
+        return Save-RouterVPNProfileDevice -BaseUrl $BaseUrl -Captured $externalDevice -DisplayedProfileID $DisplayedProfileID -HomeLANAccess ([bool]$lan.IsChecked) -KillSwitchPolicy ([string]$kill.SelectedItem.Tag) -IPv6Mode ([string]$ipv6.SelectedItem.Tag) -MTUPolicy ([string]$mtuPolicy.SelectedItem.Tag) -ManualMTU $externalManual -StartupMode ([string]$startup.SelectedItem.Tag) -AutoConnect ([bool]$autoConnect.IsChecked)
+    }
+    if($null -ne $externalStartup){
+        $displayedStartup=if([string]$externalStartup.startup_mode -ceq 'smart-auto'){'auto'}else{[string]$externalStartup.startup_mode}
+        $selectedStartup=[string]$startup.SelectedItem.Tag
+        if($selectedStartup -ceq $displayedStartup){$selectedStartup=[string]$externalStartup.startup_mode}
+        if($selectedStartup -ceq [string]$externalStartup.startup_mode -and [bool]$autoConnect.IsChecked -eq [bool]$externalStartup.auto_connect){return $null}
+        return Save-RouterVPNProfileStartup -BaseUrl $BaseUrl -Captured $externalStartup -StartupMode $selectedStartup -AutoConnect ([bool]$autoConnect.IsChecked)
+    }
     $manualValue=0;if($manual.Text.Trim()){if(-not[int]::TryParse($manual.Text.Trim(),[ref]$manualValue)){throw 'Fixed MTU must be a number.'}}
     if([string]$mtuPolicy.SelectedItem.Tag-eq'manual'-and($manualValue-lt576-or$manualValue-gt9000)){throw 'Fixed MTU must be 576–9000.'};if([string]$mtuPolicy.SelectedItem.Tag-ne'manual'){$manualValue=0}
     $freshStartCaps=Get-RouterVPNStartLayerCapabilities -BaseUrl $BaseUrl

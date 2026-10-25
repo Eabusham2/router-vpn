@@ -28,6 +28,8 @@ jobs:
             'client/Optimize-RouterVPN-MTU.ps1',
             'client/RouterVPN-Windows-MTU.ps1',
             'client/RouterVPN-Windows-DNSMeasurement.ps1',
+            'client/RouterVPN-Windows-ProfileSettings.ps1',
+            'client/test-windows-device-settings.ps1',
             'client/windows-kill-switch.ps1',
             'client/test-windows-kill-switch.ps1',
             'client/test-private-router-vpn-state.ps1',
@@ -73,6 +75,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 startup settings regressions failed' }
           python deploy/test_desktop_startup_settings.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 startup settings regressions failed' }
+      - name: Imported-node common device settings and real WPF form
+        shell: pwsh
+        run: |
+          python deploy/test_windows_device_settings.py --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 device settings regressions failed' }
+          python deploy/test_windows_device_settings.py --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 device settings regressions failed' }
       - name: Native protection controls preserve the captured node
         shell: pwsh
         run: |

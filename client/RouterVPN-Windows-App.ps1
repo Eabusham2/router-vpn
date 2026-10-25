@@ -57,6 +57,7 @@ $UnifiedControllerContract=@(
     '/api/connect-logical','/api/disconnect','/api/profile/select','/api/profile/latency','/api/profile/fastest',
     '/api/connection/live-latency','/api/connection/speed-test','/api/multihop/live-latency','/api/multihop/speed-test','/api/public-ip','/api/dns/retest','/api/emergency-stop',
     '/api/dns/measurement','/api/dns/measurement/cancel','/api/dns/measurement/select','/api/dns/policy',
+    '/api/profile/device','/api/profile/startup','/api/profile/settings',
     '/api/mtu/status','/api/mtu/retest','/api/mtu/cancel','/api/speed-lab/options','/api/speed-lab/run','/api/tor-bridge/capabilities','/api/tor-bridge/import','/api/tor-bridge/connect'
 )
 $LegacyAutoAuditMarker='/api/auto'
@@ -153,7 +154,7 @@ try{
     if($SelfTest){
         $self=Get-Content -LiteralPath $MyInvocation.MyCommand.Path -Raw -Encoding UTF8
         foreach($marker in @('RouterVPN-Windows-SessionMutation.ps1','Convert-RouterVPNWindowsProductSessionMutation','Convert-RouterVPNWindowsUnifiedSessionMutation','RouterVPN-Windows-Telemetry.ps1','RouterVPN-Windows-SpeedLab.ps1','RouterVPN-Windows-TorBridge.ps1','Add-RouterVPNUnifiedWindowsShell','Add-RouterVPNTelemetryWindowsShell','Add-RouterVPNSpeedLabWindowsShell','Add-RouterVPNTorBridgeWindowsShell','windows-onboarding-v3.json','Show-RouterVPNProductOnboarding -Force','SMART AUTO is the default mode','IPv6 On default','Auto measured/fixed MTU','DAITA-like traffic padding','AUTO encryption/obfuscation filters','Tor censorship bridges')){if(-not$self.Contains($marker)){throw "Windows unified launcher self-test missing $marker"}}
-        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$SpeedLabSource.Contains($marker)-and-not$TorBridgeSource.Contains($marker)-and-not$ProductSource.Contains($marker)-and-not$MTUSource.Contains($marker)-and-not$DNSMeasurementSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
+        foreach($marker in $UnifiedControllerContract){if(-not$UnifiedShellSource.Contains($marker)-and-not$TelemetrySource.Contains($marker)-and-not$SpeedLabSource.Contains($marker)-and-not$TorBridgeSource.Contains($marker)-and-not$ProductSource.Contains($marker)-and-not$MTUSource.Contains($marker)-and-not$DNSMeasurementSource.Contains($marker)-and-not$ProfileSettingsSource.Contains($marker)){throw "Windows composed controller contract missing $marker"}}
         # Controller routes and helper-internal telemetry/Speed-Lab fields are
         # enforced by the composed-source contract above and the helpers' own
         # self-tests. This list intentionally guards Product-v2 UI seams only.

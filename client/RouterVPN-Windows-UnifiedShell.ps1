@@ -771,7 +771,7 @@ $Window.Add_Closing({param($Sender,$Event)if($null-ne$script:UnifiedCandidates){
 (Control 'UnifiedNodesButton').Add_Click({OpenUnifiedDetail 1})
 (Control 'UnifiedPresetsButton').Add_Click({OpenUnifiedDetail 2})
 (Control 'UnifiedDnsDetailsButton').Add_Click({OpenUnifiedDetail 3})
-(Control 'UnifiedSettingsButton').Add_Click({try{$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
+(Control 'UnifiedSettingsButton').Add_Click({try{$DisplayedProfileID=[string]$RouterCombo.SelectedValue;$DisplayedSettingsNode=@($Profiles|Where-Object{[string]$_.id -ceq $DisplayedProfileID});if([string]::IsNullOrWhiteSpace($DisplayedProfileID)-or$DisplayedSettingsNode.Count-ne1){throw 'Select a node before opening Settings.'};$DisplayedNodeKind=if([string]$DisplayedSettingsNode[0].node_kind -ceq 'external'){'external'}else{'router'};$Saved=Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window -DisplayedProfileID $DisplayedProfileID -DisplayedNodeKind $DisplayedNodeKind;if($null -ne $Saved){Log 'Profile settings saved'}}catch{Log ('Settings failed: '+$_.Exception.Message)};RefreshProduct})
 (Control 'UnifiedMtuButton').Add_Click({Show-RouterVPNMTUDialog -BaseUrl $BaseUrl -Owner $Window})
 (Control 'UnifiedBackButton').Add_Click({BackUnifiedMap})
 $Window.Add_Closed({
