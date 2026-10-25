@@ -94,8 +94,20 @@ def workflow_job(source: str, name: str) -> str:
     return match.group(1)
 
 
+def check_workspace_gate(job: str) -> None:
+    marker = "      - name: Native workspace deletion and captured Tor child cleanup\n"
+    if job.count(marker) != 1:
+        raise AssertionError("Windows captured cleanup gate is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    if "shell: pwsh" not in gate or "& go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor)'" not in gate:
+        raise AssertionError("Windows cleanup gate omitted live-handle or captured child tests")
+    if "if ($LASTEXITCODE -ne 0) { throw" not in gate or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
+        raise AssertionError("Windows cleanup gate no longer blocks a failed native test")
+
+
 def check_workflow(candidate: str, build_all: str) -> None:
     windows = workflow_job(candidate, "windows-native-smoke")
+    check_workspace_gate(windows)
     if "    needs: generic-builds\n" not in windows:
         raise AssertionError("Windows gates lost their exact run's package dependency")
     if "uses: actions/setup-python@v5" not in windows or "python-version: '3.12'" not in windows:
@@ -135,10 +147,19 @@ class WindowsReleaseGateTests(unittest.TestCase):
     def test_current_workflow_requires_both_architectures_shells_and_publication_edge(self):
         check_workflow((REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8"), (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8"))
 
+    def test_standalone_windows_runs_the_real_workspace_and_child_tests(self):
+        workflow = (REPOSITORY / ".github/workflows/windows-native-contract.yml").read_text(encoding="utf-8")
+        job = workflow_job(workflow, "native-windows")
+        check_workspace_gate(job)
+        for old, new in (("DesktopRuntimeWorkspace|DesktopTor", "DesktopTor"), ("DesktopRuntimeWorkspace|DesktopTor", "DesktopRuntimeWorkspace"), ("& go test -v -count=1 -timeout=180s", "& go test -v -count=1 -timeout=180s -run '^$'")):
+            with self.subTest(new=new), self.assertRaises(AssertionError):
+                check_workspace_gate(job.replace(old, new, 1))
+
     def test_broken_release_edges_and_weakened_commands_are_rejected(self):
         candidate = (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
         build_all = (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8")
         variants = (
+            ("cleanup", "DesktopRuntimeWorkspace|DesktopTor", "DesktopTor"),
             ("matrix", "{arch: arm64, runner: windows-11-arm}", "{arch: other, runner: windows-latest}"),
             ("shell", "@('pwsh','powershell.exe')", "@('pwsh')"),
             ("source", "--package-root $roots[0].FullName", "--package-root $env:GITHUB_WORKSPACE"),

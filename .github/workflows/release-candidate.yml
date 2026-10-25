@@ -222,6 +222,12 @@ jobs:
         with: {go-version: '1.26.3', cache: false}
       - uses: actions/setup-python@v5
         with: {python-version: '3.12'}
+      - name: Native workspace deletion and captured Tor child cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor)'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows captured workspace or Tor child cleanup failed' }
       - name: Verify native Windows Tor host compatibility API
         shell: pwsh
         env: {ROUTER_VPN_REQUIRE_TOR_HELPERS: '1'}

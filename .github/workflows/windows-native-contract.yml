@@ -175,6 +175,12 @@ jobs:
             Write-Output "::error title=Windows Go contract failure::$message"
             exit $exit
           }
+      - name: Native workspace deletion and captured Tor child cleanup
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor)'
+          if ($LASTEXITCODE -ne 0) { throw 'Windows captured workspace or Tor child cleanup failed' }
       - name: Standalone runtime verifier startup isolation
         shell: pwsh
         run: |
