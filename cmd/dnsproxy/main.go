@@ -33,37 +33,25 @@ func getenv(k, d string) string {
 	return d
 }
 
-func envInt(k string, d int) int {
-	v, err := strconv.Atoi(getenv(k, strconv.Itoa(d)))
-	if err != nil || v < 1 || v > 65535 {
-		return d
-	}
-	return v
-}
-
 func main() {
 	listen := flag.String("listen", getenv("HOMEVPN_DNS_LISTEN", "127.0.0.1:53"), "local DNS listen address")
 	protocol := flag.String("protocol", getenv("HOMEVPN_DNS_PROTOCOL", "udp"), "udp, tcp, tls, https, or rescue")
 	server := flag.String("server", getenv("HOMEVPN_DNS_HOST", "1.1.1.1"), "upstream DNS address")
-	port := flag.Int("port", envInt("HOMEVPN_DNS_PORT", 53), "upstream DNS port")
+	port := flag.String("port", getenv("HOMEVPN_DNS_PORT", "0"), "upstream DNS port; zero uses the selected transport default")
 	serverName := flag.String("server-name", getenv("HOMEVPN_DNS_SERVER_NAME", ""), "TLS server name")
 	path := flag.String("path", getenv("HOMEVPN_DNS_PATH", "/dns-query"), "DoH path")
 	flag.Parse()
 
-	primary := upstream{Protocol: strings.ToLower(*protocol), Server: *server, Port: *port, ServerName: *serverName, Path: *path}
-	if primary.Protocol == "h3" || primary.Protocol == "doh3" {
-		// Raw kernel modes intentionally avoid a QUIC dependency. Rescue/DoH on 443
-		// still works; sing-box modes handle native DoH3 themselves.
-		primary.Protocol = "https"
-		if primary.Port == 0 {
-			primary.Port = 443
-		}
+	selectedPort, err := strconv.Atoi(*port)
+	if err != nil {
+		log.Fatal("DNS upstream port must be an integer; refusing to replace the selected port")
 	}
-	if primary.Protocol == "doh" {
-		primary.Protocol = "https"
-	}
-	if primary.Protocol == "dot" {
-		primary.Protocol = "tls"
+	// Validate the actual CLI selection before opening either listener. A
+	// caller cannot bypass transport validation through an earlier alias rewrite,
+	// and an unsupported DoH3 selection cannot silently become HTTPS.
+	primary, err := normalizeDNSUpstream(upstream{Protocol: *protocol, Server: *server, Port: selectedPort, ServerName: *serverName, Path: *path})
+	if err != nil {
+		log.Fatal(err)
 	}
 
 	udpAddr, err := net.ResolveUDPAddr("udp", *listen)
