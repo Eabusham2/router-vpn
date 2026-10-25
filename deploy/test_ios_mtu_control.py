@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Run production MTU IPC/measurement ownership; NetworkExtension is doubled."""
 from pathlib import Path
-import os,platform,shutil,subprocess,tempfile
+import os,platform,resource,shutil,subprocess,tempfile
 ROOT=Path(__file__).resolve().parents[1]
 STUB=r"""
 import Foundation
@@ -20,11 +20,13 @@ public enum Fixture {
  nonisolated(unsafe) public static var failCommand=false
  nonisolated(unsafe) public static var lease=""
  nonisolated(unsafe) public static var releases=0
+ nonisolated(unsafe) public static var messages=0
  nonisolated(unsafe) public static var session=UUID().uuidString
  nonisolated(unsafe) public static var managers:[NETunnelProviderManager]=[NETunnelProviderManager()]
 }
 public final class NETunnelProviderSession:NEVPNConnection {
  public func sendProviderMessage(_ data:Data,responseHandler:((Data?)->Void)?)throws {
+  Fixture.messages += 1
   let query=try JSONSerialization.jsonObject(with:data) as! [String:String]
   let request=query["request_id"]!,operation=query["operation"]!
   if operation=="mtu-hold" {
@@ -57,7 +59,9 @@ import NetworkExtension
  var connected=true
  var activeEngine="libbox"
  var activeSessionIdentity:IOSSessionIdentity?=try! IOSSessionIdentity(connectedAt:Date(timeIntervalSince1970:123),engine:"libbox",rawProfile:"shadowsocks",bundleData:Data("owned".utf8),entryBundleData:nil)
- func refreshTunnelStatus()async{}
+ var startupAllowed=true
+ var refreshHook:(()->Void)?
+ func refreshTunnelStatus()async{refreshHook?()}
 }
 @main struct Tests {
  @MainActor static func main()async throws{
@@ -98,6 +102,15 @@ import NetworkExtension
   let saved=model.activeSessionIdentity;model.activeSessionIdentity=nil
   await reject("unverified identity accepted"){_ = try await IOSMTUControl.capture(model)}
   model.activeSessionIdentity=saved
+  let beforeStartupMessages=Fixture.messages
+  model.refreshHook={model.startupAllowed=false}
+  await reject("retired startup admitted MTU hold after status refresh"){
+   try await IOSSpeedLabContext.$startupAdmission.withValue({model.startupAllowed}){
+    try await IOSMTUControl.holdCurrent(model,request:id)
+   }
+  }
+  check(Fixture.messages==beforeStartupMessages && Fixture.lease.isEmpty,"retired startup touched the current native owner")
+  model.refreshHook=nil;model.startupAllowed=true
   let releases=Fixture.releases
   let result:Int=try await IOSMTUControl.withHold(model:model){
    check(IOSMTUMeasurementGate.held && !Fixture.lease.isEmpty,"measurement entered without native hold")
@@ -160,8 +173,24 @@ with tempfile.TemporaryDirectory(prefix='routervpn-mtu-control-') as directory:
  swift=shutil.which('swiftc')
  if not swift:raise SystemExit('swiftc required; no skipped ownership tests')
  ext='dylib' if platform.system()=='Darwin' else 'so'
- def run(args):subprocess.run(args,cwd=tmp,check=True,timeout=90)
- run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','NetworkExtension',str(tmp/'NetworkExtension.swift'),'-o',str(tmp/('libNetworkExtension.'+ext))])
+ resource.setrlimit(resource.RLIMIT_CORE,(0,0))
+ def run(args,broken=False):
+  result=subprocess.run(args,cwd=tmp,check=False,timeout=90,text=True,capture_output=True)
+  if broken:
+   assert result.returncode!=0 and 'retired startup admitted MTU hold after status refresh' in result.stdout+result.stderr, 'Startup-admission negative did not reach its executable assertion: '+result.stdout+result.stderr
+  elif result.returncode:
+   raise RuntimeError(result.stdout+result.stderr)
+  elif result.stdout:print(result.stdout,end='')
+ compiler=[swift,'-swift-version','6','-module-cache-path',str(tmp/'module-cache')]
+ run(compiler+['-emit-module','-emit-library','-module-name','NetworkExtension',str(tmp/'NetworkExtension.swift'),'-o',str(tmp/('libNetworkExtension.'+ext))])
  app=ROOT/'ios/RouterVPN/App'
- run([swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lNetworkExtension','-Xlinker','-rpath','-Xlinker',str(tmp),str(app/'IOSMTUControl.swift'),str(app/'IOSMTUMeasurementGate.swift'),str(app/'IOSSessionIdentity.swift'),str(tmp/'Harness.swift'),'-o',str(tmp/'test')])
+ inputs=compiler+['-I',str(tmp),'-L',str(tmp),'-lNetworkExtension','-Xlinker','-rpath','-Xlinker',str(tmp),str(app/'IOSMTUControl.swift'),str(app/'IOSMTUMeasurementGate.swift'),str(app/'IOSSessionIdentity.swift'),str(app/'IOSSpeedLabOwnership.swift'),str(tmp/'Harness.swift'),'-o',str(tmp/'test')]
+ run(inputs)
  run([str(tmp/'test')])
+ original=(app/'IOSMTUControl.swift').read_text()
+ marker='guard startup() else { throw CancellationError() }'
+ assert original.count(marker)==1
+ mutated=tmp/'IOSMTUControl.swift';mutated.write_text(original.replace(marker,'guard true else { throw CancellationError() }',1))
+ run([str(mutated) if value==str(app/'IOSMTUControl.swift') else value for value in inputs])
+ run([str(tmp/'test')],broken=True)
+ print('Retired startup MTU-admission executable negative rejected.')
