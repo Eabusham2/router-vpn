@@ -1,0 +1,774 @@
+package routervpndesktoppt
+
+import (
+	"bytes"
+	"context"
+	"encoding/binary"
+	"errors"
+	"io"
+	"net"
+	"net/netip"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/json/badoption"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4"
+)
+
+type desktopPTDNS struct {
+	adapter.DNSRouter
+	calls  atomic.Int32
+	lookup func(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error)
+}
+
+func (r *desktopPTDNS) Lookup(ctx context.Context, name string, options adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	r.calls.Add(1)
+	if ctx.Value(torBootstrapDNSKey{}) != true {
+		return nil, errors.New("native bootstrap marker missing")
+	}
+	if r.lookup != nil {
+		return r.lookup(ctx, name, options)
+	}
+	return []netip.Addr{netip.MustParseAddr("192.0.2.77"), netip.MustParseAddr("2001:db8::77")}, nil
+}
+
+type desktopPTDNSManager struct {
+	adapter.DNSTransportManager
+	mu    sync.Mutex
+	items map[string]adapter.DNSTransport
+}
+
+func (m *desktopPTDNSManager) Transport(tag string) (adapter.DNSTransport, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	value, ok := m.items[tag]
+	return value, ok
+}
+func (*desktopPTDNSManager) Default() adapter.DNSTransport { panic("PT used implicit default DNS") }
+func (*desktopPTDNSManager) Transports() []adapter.DNSTransport {
+	panic("PT enumerated DNS alternatives")
+}
+func (m *desktopPTDNSManager) replace(tag string, value adapter.DNSTransport) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.items[tag] = value
+}
+
+type desktopPTOutboundManager struct{ adapter.OutboundManager }
+
+func (*desktopPTOutboundManager) Outbound(string) (adapter.Outbound, bool) { return nil, false }
+
+type desktopPTTransport struct {
+	dns.TransportAdapter
+	adapter.Lifecycle
+}
+
+func (*desktopPTTransport) Reset() {}
+func (*desktopPTTransport) Exchange(context.Context, *mDNS.Msg) (*mDNS.Msg, error) {
+	return nil, errors.New("fixture permits only explicit DNS callback")
+}
+func (*desktopPTTransport) ExchangeAsync(_ context.Context, _ *mDNS.Msg, callback func(*mDNS.Msg, error)) {
+	callback(nil, errors.New("fixture permits only explicit DNS callback"))
+}
+func desktopPTRemote(tag, detour, server string) adapter.DNSTransport {
+	options := option.RemoteDNSServerOptions{DNSServerAddressOptions: option.DNSServerAddressOptions{Server: server, ServerPort: 853}}
+	options.Detour = detour
+	return &desktopPTTransport{TransportAdapter: dns.NewTransportAdapterWithRemoteOptions(C.DNSTypeTLS, tag, options)}
+}
+
+type desktopPTFinder struct {
+	control.InterfaceFinder
+	items []control.Interface
+}
+
+func (f *desktopPTFinder) Interfaces() []control.Interface { return f.items }
+
+type desktopPTMonitor struct {
+	tun.DefaultInterfaceMonitor
+	own []string
+}
+
+func (m *desktopPTMonitor) MyInterfaces() []string { return m.own }
+
+type desktopPTNetwork struct {
+	adapter.NetworkManager
+	finder    *desktopPTFinder
+	monitor   *desktopPTMonitor
+	automatic bool
+}
+
+func (*desktopPTNetwork) DefaultOptions() adapter.NetworkOptions          { return adapter.NetworkOptions{} }
+func (n *desktopPTNetwork) InterfaceFinder() control.InterfaceFinder      { return n.finder }
+func (n *desktopPTNetwork) InterfaceMonitor() tun.DefaultInterfaceMonitor { return n.monitor }
+func (n *desktopPTNetwork) AutoDetectInterface() bool                     { return n.automatic }
+
+type desktopPTLower struct {
+	calls  atomic.Int32
+	dial   func(context.Context, string, M.Socksaddr) (net.Conn, error)
+	packet func(context.Context, M.Socksaddr) (net.PacketConn, error)
+}
+
+func (n *desktopPTLower) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	n.calls.Add(1)
+	if ctx.Value(torBootstrapDNSKey{}) != true {
+		return nil, errors.New("TCP native capture marker missing")
+	}
+	if n.dial == nil {
+		return nil, errors.New("fixture denied external dial")
+	}
+	return n.dial(ctx, network, destination)
+}
+func (n *desktopPTLower) ListenPacket(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+	n.calls.Add(1)
+	if ctx.Value(torBootstrapDNSKey{}) != true {
+		return nil, errors.New("UDP native capture marker missing")
+	}
+	if n.packet == nil {
+		return nil, errors.New("fixture denied external packets")
+	}
+	return n.packet(ctx, destination)
+}
+
+type desktopPTFixture struct {
+	ctx     context.Context
+	router  *desktopPTDNS
+	dns     *desktopPTDNSManager
+	network *desktopPTNetwork
+	options option.DialerOptions
+	query   adapter.DNSQueryOptions
+	lower   *desktopPTLower
+	active  atomic.Bool
+}
+
+func newDesktopPTFixture(t *testing.T) *desktopPTFixture {
+	t.Helper()
+	parent, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx := service.ContextWithDefaultRegistry(parent)
+	f := &desktopPTFixture{ctx: ctx, router: &desktopPTDNS{}, dns: &desktopPTDNSManager{items: map[string]adapter.DNSTransport{}}, lower: &desktopPTLower{}}
+	f.network = &desktopPTNetwork{automatic: true, monitor: &desktopPTMonitor{own: []string{"router-vpn-tor"}}, finder: &desktopPTFinder{items: []control.Interface{
+		{Index: 7, MTU: 1500, Name: "captured0", Flags: net.FlagUp, Addresses: []netip.Prefix{netip.MustParsePrefix("192.0.2.31/24"), netip.MustParsePrefix("2001:db8:1::31/64")}},
+		{Index: 8, MTU: 1280, Name: "router-vpn-tor", Flags: net.FlagUp, Addresses: []netip.Prefix{netip.MustParsePrefix("172.29.0.1/30")}},
+	}}}
+	service.MustRegister[adapter.DNSRouter](ctx, f.router)
+	service.MustRegister[adapter.DNSTransportManager](ctx, f.dns)
+	service.MustRegister[adapter.OutboundManager](ctx, &desktopPTOutboundManager{})
+	service.MustRegister[adapter.NetworkManager](ctx, f.network)
+	f.dns.items["bootstrap"] = desktopPTRemote("bootstrap", "", "192.0.2.53")
+	ttl := uint32(41)
+	subnet := badoption.Prefixable(netip.MustParsePrefix("198.51.100.0/24"))
+	f.options.DomainResolver = &option.DomainResolveOptions{Server: "bootstrap", Strategy: option.DomainStrategy(C.DomainStrategyPreferIPv6), DisableCache: true, DisableOptimisticCache: true, RewriteTTL: &ttl, Timeout: badoption.Duration(2 * time.Second), ClientSubnet: &subnet}
+	query, err := adapter.DNSQueryOptionsFrom(ctx, f.options.DomainResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.query = query
+	f.active.Store(true)
+	return f
+}
+func (f *desktopPTFixture) make(t *testing.T, plan mobiletor.Plan) *Owner {
+	t.Helper()
+	lower := dialer.NewResolveDialer(f.ctx, f.lower, false, "bootstrap", f.query, 0)
+	owner, err := newOwner(f.ctx, plan, f.options, f.active.Load, lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopPT(t, owner) })
+	return owner
+}
+func closeDesktopPT(t *testing.T, owner *Owner) {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := owner.Close(ctx); err != nil {
+		t.Error("native PT owner did not drain", err)
+	}
+}
+func desktopPTPlan(t *testing.T, lines ...string) mobiletor.Plan {
+	t.Helper()
+	plan, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: lines})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return plan
+}
+
+type desktopPTServer interface {
+	WrapConn(net.Conn) (net.Conn, error)
+}
+
+func desktopPTObfs4(t *testing.T) (mobiletor.Plan, desktopPTServer) {
+	t.Helper()
+	transport := &obfs4.Transport{}
+	args := pt.Args{}
+	factory, err := transport.ServerFactory(t.TempDir(), &args)
+	if err != nil {
+		t.Fatal(err)
+	}
+	cert, _ := factory.Args().Get("cert")
+	return desktopPTPlan(t, "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert="+cert+" iat-mode=0"), factory
+}
+func desktopPTStart(t *testing.T, owner *Owner) map[string]string {
+	t.Helper()
+	if err := owner.Start(); err != nil {
+		t.Fatal(err)
+	}
+	listeners, err := owner.Listeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return listeners
+}
+func desktopPTSend(t *testing.T, client net.Conn, bridge mobiletor.Bridge) {
+	t.Helper()
+	client.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := client.Write([]byte{5, 1, 2}); err != nil {
+		t.Fatal(err)
+	}
+	var response [2]byte
+	if _, err := io.ReadFull(client, response[:]); err != nil || response != [2]byte{5, 2} {
+		t.Fatal("PT argument negotiation failed", err, response)
+	}
+	keys := make([]string, 0, len(bridge.Arguments))
+	for key := range bridge.Arguments {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	escape := strings.NewReplacer("\\", "\\\\", ";", "\\;", "=", "\\=")
+	fields := make([]string, 0, len(keys))
+	for _, key := range keys {
+		fields = append(fields, escape.Replace(key)+"="+escape.Replace(bridge.Arguments[key]))
+	}
+	encoded := strings.Join(fields, ";")
+	if len(encoded) == 0 || len(encoded) > 255 {
+		t.Fatal("invalid fixture SOCKS argument length")
+	}
+	auth := append([]byte{1, byte(len(encoded))}, []byte(encoded)...)
+	auth = append(auth, 1, 0)
+	if _, err := client.Write(auth); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.ReadFull(client, response[:]); err != nil || response != [2]byte{1, 0} {
+		t.Fatal("PT rejected argument negotiation", err, response)
+	}
+	target := netip.MustParseAddrPort(bridge.Target)
+	kind := byte(1)
+	if target.Addr().Is6() {
+		kind = 4
+	}
+	request := append([]byte{5, 1, 0, kind}, target.Addr().AsSlice()...)
+	request = binary.BigEndian.AppendUint16(request, target.Port())
+	if _, err := client.Write(request); err != nil {
+		t.Fatal(err)
+	}
+}
+func desktopPTConnect(t *testing.T, address string, bridge mobiletor.Bridge) (net.Conn, byte) {
+	t.Helper()
+	client, err := net.DialTimeout("tcp4", address, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	desktopPTSend(t, client, bridge)
+	var response [10]byte
+	if _, err := io.ReadFull(client, response[:]); err != nil || response[0] != 5 || response[2] != 0 || response[3] != 1 {
+		client.Close()
+		t.Fatal("PT connect response invalid", err, response)
+	}
+	return client, response[1]
+}
+
+func TestRouterVPNDesktopTorPTRealObfs4UsesCapturedNativeDialer(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan, factory := desktopPTObfs4(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	serverDone := make(chan error, 1)
+	go func() {
+		for range 2 {
+			raw, err := listener.Accept()
+			if err != nil {
+				serverDone <- err
+				return
+			}
+			raw.SetDeadline(time.Now().Add(5 * time.Second))
+			remote, err := factory.WrapConn(raw)
+			if err != nil {
+				raw.Close()
+				serverDone <- err
+				return
+			}
+			_, err = io.Copy(remote, remote)
+			remote.Close()
+			if err != nil && !errors.Is(err, net.ErrClosed) {
+				serverDone <- err
+				return
+			}
+		}
+		serverDone <- nil
+	}()
+	f.lower.dial = func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+		if network != "tcp" || destination.String() != plan.Bridges[0].Target {
+			return nil, errors.New("PT changed captured bridge target")
+		}
+		// Only this fixture maps the unroutable TEST-NET target to an actual
+		// local obfs4 server. Production owns the native bound socket dialer.
+		return (&net.Dialer{}).DialContext(ctx, "tcp4", listener.Addr().String())
+	}
+	owner := f.make(t, plan)
+	listeners := desktopPTStart(t, owner)
+	for range 2 {
+		client, reply := desktopPTConnect(t, listeners["obfs4"], plan.Bridges[0])
+		if reply != 0 {
+			client.Close()
+			t.Fatalf("real obfs4 was rejected: %d", reply)
+		}
+		payload := bytes.Repeat([]byte("native-owned Tor PT data;"), 128)
+		if _, err := client.Write(payload); err != nil {
+			client.Close()
+			t.Fatal(err)
+		}
+		actual := make([]byte, len(payload))
+		_, err := io.ReadFull(client, actual)
+		client.Close()
+		if err != nil || !bytes.Equal(payload, actual) {
+			t.Fatal("actual obfs4 data path failed", err)
+		}
+	}
+	if err := <-serverDone; err != nil {
+		t.Fatal("local obfs4 server failed", err)
+	}
+	if f.lower.calls.Load() != 2 || f.router.calls.Load() != 0 {
+		t.Fatal("numeric bridges escaped captured native path")
+	}
+	closeDesktopPT(t, owner)
+	if owner.Current() {
+		t.Fatal("closed owner remained current")
+	}
+	if conn, err := net.DialTimeout("tcp4", listeners["obfs4"], time.Second); err == nil {
+		conn.Close()
+		t.Fatal("drained PT listener remained open")
+	}
+}
+
+func TestRouterVPNDesktopTorPTAllFamiliesOwnExactPrivateListeners(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	obfs, _ := desktopPTObfs4(t)
+	plan := desktopPTPlan(t, obfs.Bridges[0].Line,
+		"meek_lite 192.0.2.20:80 url=https://meek.azureedge.net/ front=ajax.aspnetcdn.com utls=HelloRandomizedALPN",
+		"snowflake 192.0.2.3:80 2B280B23E1107BB62ABFC40DDCC8824814F80A72 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.example.net/ front=cdn.example.net ice=stun:stun.example.net:3478 utls-imitate=hellorandomizedalpn",
+		"webtunnel 10.0.0.2:443 89ABCDEF0123456789ABCDEF0123456789ABCDEF url=https://bridge.example.net/secret ver=0.0.1")
+	owner := f.make(t, plan)
+	listeners := desktopPTStart(t, owner)
+	if len(listeners) != 4 || f.lower.calls.Load() != 0 || f.router.calls.Load() != 0 {
+		t.Fatal("transport admission opened an external network operation")
+	}
+	for _, bridge := range plan.Bridges {
+		address, err := netip.ParseAddrPort(listeners[bridge.Transport])
+		if err != nil || !address.Addr().IsLoopback() || !address.Addr().Is4() || address.Port() == 0 {
+			t.Fatal("PT listener was not private", err)
+		}
+	}
+	listeners["obfs4"] = "127.0.0.1:1"
+	again, err := owner.Listeners()
+	if err != nil || again["obfs4"] == listeners["obfs4"] {
+		t.Fatal("listener copy changed the owner")
+	}
+	for _, change := range []string{"target", "arguments"} {
+		request := plan.Bridges[0]
+		request.Arguments = map[string]string{}
+		for key, value := range plan.Bridges[0].Arguments {
+			request.Arguments[key] = value
+		}
+		if change == "target" {
+			request.Target = "203.0.113.45:443"
+		} else {
+			request.Arguments["iat-mode"] = "1"
+		}
+		client, reply := desktopPTConnect(t, again["obfs4"], request)
+		client.Close()
+		if reply == 0 || f.lower.calls.Load() != 0 {
+			t.Fatalf("%s mutation used the physical dialer", change)
+		}
+	}
+	if err := owner.Start(); err == nil {
+		t.Fatal("owner admitted a second PT generation")
+	}
+	closeDesktopPT(t, owner)
+	for _, address := range again {
+		if conn, err := net.DialTimeout("tcp4", address, time.Second); err == nil {
+			conn.Close()
+			t.Fatal("closed transport retained its listener")
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorPTPreservesSelectedBootstrapDNS(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan, _ := desktopPTObfs4(t)
+	owner := f.make(t, plan)
+	if len(owner.options.Interfaces) != 1 || owner.options.Interfaces[0].Name != "captured0" {
+		t.Fatal("Snowflake interface snapshot included its own TUN")
+	}
+	desktopPTStart(t, owner)
+	*f.options.DomainResolver.RewriteTTL = 999
+	f.options.DomainResolver.Server = "other-resolver"
+	f.router.lookup = func(_ context.Context, name string, query adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		if name != "bridge.example" || query.Transport != f.query.Transport || query.Strategy != C.DomainStrategyPreferIPv6 || query.LookupStrategy != C.DomainStrategyIPv4Only || !query.DisableCache || !query.DisableOptimisticCache || query.RewriteTTL == nil || *query.RewriteTTL != 41 || query.Timeout != 2*time.Second || query.ClientSubnet != netip.MustParsePrefix("198.51.100.0/24") {
+			t.Errorf("selected native DNS changed: %#v", query)
+		}
+		*query.RewriteTTL = 1234
+		return []netip.Addr{netip.MustParseAddr("192.0.2.77"), netip.MustParseAddr("2001:db8::77"), netip.IPv4Unspecified()}, nil
+	}
+	for range 2 {
+		values, err := owner.options.Resolve(context.Background(), "ip4", "bridge.example")
+		if err != nil || !reflect.DeepEqual(values, []netip.Addr{netip.MustParseAddr("192.0.2.77")}) {
+			t.Fatal("captured DNS lookup failed", values, err)
+		}
+	}
+	f.dns.replace("bootstrap", desktopPTRemote("bootstrap", "", "192.0.2.54"))
+	if values, err := owner.options.Resolve(context.Background(), "ip4", "bridge.example"); err == nil || values != nil || owner.Current() {
+		t.Fatal("replaced DNS owner was accepted")
+	}
+	f.dns.replace("bootstrap", f.query.Transport)
+	if owner.Current() {
+		t.Fatal("restoring a resolver pointer revived a retired owner")
+	}
+}
+
+func TestRouterVPNDesktopTorPTRejectsUnownedBootstrapAdmission(t *testing.T) {
+	for _, name := range []string{"no-resolver", "detour", "recursive", "hostname", "implicit", "wrong-query", "no-physical"} {
+		t.Run(name, func(t *testing.T) {
+			f := newDesktopPTFixture(t)
+			plan, _ := desktopPTObfs4(t)
+			switch name {
+			case "no-resolver":
+				f.options.DomainResolver = nil
+			case "detour":
+				f.options.Detour = "entry"
+			case "recursive":
+				f.dns.replace("bootstrap", desktopPTRemote("bootstrap", mobiletor.ProfileOutboundTag, "192.0.2.53"))
+			case "hostname":
+				f.dns.replace("bootstrap", desktopPTRemote("bootstrap", "", "resolver.example"))
+			case "implicit":
+				f.dns.replace("bootstrap", &desktopPTTransport{TransportAdapter: dns.NewTransportAdapter(C.DNSTypeLocal, "bootstrap", nil)})
+			case "wrong-query":
+				f.query.Transport = desktopPTRemote("elsewhere", "", "192.0.2.55")
+			case "no-physical":
+				f.active.Store(false)
+			}
+			if name == "recursive" || name == "hostname" || name == "implicit" {
+				// Keep the native dialer's selected transport equal to the
+				// manager so each case reaches its intended graph/type guard.
+				f.query.Transport, _ = f.dns.Transport("bootstrap")
+			}
+			lower := dialer.NewResolveDialer(f.ctx, f.lower, false, "bootstrap", f.query, 0)
+			owner, err := newOwner(f.ctx, plan, f.options, f.active.Load, lower)
+			if err == nil || owner != nil {
+				if owner != nil {
+					closeDesktopPT(t, owner)
+				}
+				t.Fatal("unowned native PT bootstrap was admitted")
+			}
+			if f.lower.calls.Load() != 0 || f.router.calls.Load() != 0 {
+				t.Fatal("invalid admission caused network activity")
+			}
+		})
+	}
+	f := newDesktopPTFixture(t)
+	plan, _ := desktopPTObfs4(t)
+	f.network.automatic = false
+	if owner, err := New(f.ctx, plan, *f.options.DomainResolver, f.active.Load); err == nil || owner != nil {
+		t.Fatal("public native factory accepted an unbound network manager")
+	}
+}
+
+func TestRouterVPNDesktopTorPTResetRejectsLateDNSAndCannotRevive(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan, _ := desktopPTObfs4(t)
+	observer, captured := testNetworkActivated(t, f.ctx)
+	lower := dialer.NewResolveDialer(captured, f.lower, false, "bootstrap", f.query, 0)
+	owner, err := newOwner(captured, plan, f.options, observer.Current, lower)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopPT(t, owner) })
+	desktopPTStart(t, owner)
+	entered, release := make(chan struct{}), make(chan struct{})
+	defer func() {
+		select {
+		case <-release:
+		default:
+			close(release)
+		}
+	}()
+	f.router.lookup = func(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		close(entered)
+		<-release
+		return []netip.Addr{netip.MustParseAddr("192.0.2.77")}, nil
+	}
+	result := make(chan error, 1)
+	go func() {
+		values, err := owner.options.Resolve(context.Background(), "ip4", "late.example")
+		if err == nil || values != nil {
+			result <- errors.New("late DNS returned a usable result")
+		} else {
+			result <- nil
+		}
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("DNS fixture did not begin")
+	}
+	observer.InterfaceUpdated(f.ctx) // The interface snapshot and address are unchanged.
+	if owner.Current() {
+		t.Fatal("same-address network reset retained a current PT owner")
+	}
+	close(release)
+	if err := <-result; err != nil {
+		t.Fatal(err)
+	}
+	if owner.Current() || owner.Context().Err() == nil {
+		t.Fatal("late DNS completion revived the old generation")
+	}
+	if _, err := owner.Listeners(); err == nil {
+		t.Fatal("retired PT listeners remained eligible for Tor")
+	}
+}
+
+func TestRouterVPNDesktopTorPTLateSocketsRemainOwnedUntilActualClose(t *testing.T) {
+	for _, kind := range []string{"tcp", "udp"} {
+		t.Run(kind, func(t *testing.T) {
+			f := newDesktopPTFixture(t)
+			plan, _ := desktopPTObfs4(t)
+			owner := f.make(t, plan)
+			desktopPTStart(t, owner)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var once sync.Once
+			defer once.Do(func() { close(release) })
+			var peer net.Conn
+			var packet net.PacketConn
+			if kind == "tcp" {
+				late, other := net.Pipe()
+				peer = other
+				defer peer.Close()
+				f.lower.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+					close(entered)
+					<-release
+					return late, nil
+				}
+			} else {
+				var err error
+				packet, err = net.ListenPacket("udp4", "127.0.0.1:0")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer packet.Close()
+				f.lower.packet = func(context.Context, M.Socksaddr) (net.PacketConn, error) {
+					close(entered)
+					<-release
+					return packet, nil
+				}
+			}
+			// Exercise the same shared Network that PT Bridges uses. It, not an
+			// error return or the test callback, must own and drain late sockets.
+			network, err := mobiletor.NewNetwork(owner.Context(), owner.dial, owner.packets)
+			if err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				if kind == "tcp" {
+					conn, err := network.DialContext(context.Background(), "tcp", "203.0.113.44:443")
+					if conn != nil {
+						conn.Close()
+						done <- errors.New("retired TCP returned a socket")
+					} else {
+						done <- err
+					}
+				} else {
+					conn, err := network.ListenPacket(context.Background(), "udp4", "0.0.0.0:0")
+					if conn != nil {
+						conn.Close()
+						done <- errors.New("retired UDP returned a socket")
+					} else {
+						done <- err
+					}
+				}
+			}()
+			select {
+			case <-entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("socket fixture did not begin")
+			}
+			f.active.Store(false)
+			if owner.Current() {
+				t.Fatal("observed retirement remained current")
+			}
+			f.active.Store(true)
+			if owner.Current() {
+				t.Fatal("physical witness revived the old owner")
+			}
+			wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+			err = network.Close(wait)
+			cancel()
+			if !errors.Is(err, context.DeadlineExceeded) {
+				t.Fatal("pending lower socket was falsely acknowledged drained", err)
+			}
+			once.Do(func() { close(release) })
+			if err := <-done; err == nil || strings.Contains(err.Error(), "returned a socket") {
+				t.Fatal("stale socket was adopted", err)
+			}
+			wait, cancel = context.WithTimeout(context.Background(), 3*time.Second)
+			err = network.Close(wait)
+			cancel()
+			if err != nil {
+				t.Fatal("late socket did not drain", err)
+			}
+			if kind == "tcp" {
+				peer.SetReadDeadline(time.Now().Add(time.Second))
+				_, err = peer.Read(make([]byte, 1))
+				if !errors.Is(err, io.EOF) {
+					t.Fatal("late TCP socket was not actually closed", err)
+				}
+			} else {
+				_, err = packet.WriteTo([]byte("late"), packet.LocalAddr())
+				if !errors.Is(err, net.ErrClosed) {
+					t.Fatal("late UDP socket was not actually closed", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPTCloseWaitsForActualTransportDial(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan, _ := desktopPTObfs4(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	late, peer := net.Pipe()
+	defer peer.Close()
+	f.lower.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		close(entered)
+		<-release
+		return late, nil
+	}
+	owner := f.make(t, plan)
+	listeners := desktopPTStart(t, owner)
+	client, err := net.DialTimeout("tcp4", listeners["obfs4"], time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer client.Close()
+	desktopPTSend(t, client, plan.Bridges[0])
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real PT worker never entered the captured native dial")
+	}
+	wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err = owner.Close(wait)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("PT worker was falsely acknowledged drained", err)
+	}
+	if owner.Current() {
+		t.Fatal("draining owner allowed new admission")
+	}
+	once.Do(func() { close(release) })
+	closeDesktopPT(t, owner)
+	peer.SetReadDeadline(time.Now().Add(time.Second))
+	if _, err := peer.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatal("real PT worker leaked its late native socket", err)
+	}
+}
+
+func TestRouterVPNDesktopTorPTCloseBeforeStartIsPermanent(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan, _ := desktopPTObfs4(t)
+	owner := f.make(t, plan)
+	closeDesktopPT(t, owner)
+	if err := owner.Start(); err == nil {
+		t.Fatal("close-before-start reopened private listeners")
+	}
+	if owner.Current() || f.lower.calls.Load() != 0 || f.router.calls.Load() != 0 {
+		t.Fatal("unstarted retired capture created network activity")
+	}
+}
+
+func TestRouterVPNDesktopTorPTCloseRetainsActualSnowflakeDNSWorker(t *testing.T) {
+	f := newDesktopPTFixture(t)
+	plan := desktopPTPlan(t, "snowflake 192.0.2.8:443 0123456789ABCDEF0123456789ABCDEF01234567 fingerprint=0123456789ABCDEF0123456789ABCDEF01234567 url=https://broker.example/ front=front.example ice=stun:stun.example:3478")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	var active, physicalTCP atomic.Int32
+	free := func() { releaseOnce.Do(func() { close(release) }) }
+	defer free()
+	f.router.lookup = func(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error) {
+		active.Add(1)
+		defer active.Add(-1)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		return []netip.Addr{netip.MustParseAddr("127.0.0.1")}, nil
+	}
+	f.lower.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		physicalTCP.Add(1)
+		return nil, errors.New("fixture forbids a physical Snowflake TCP dial")
+	}
+	f.lower.packet = func(ctx context.Context, destination M.Socksaddr) (net.PacketConn, error) {
+		if !destination.Addr.IsUnspecified() || destination.Port != 0 {
+			return nil, errors.New("fixture permits only local ephemeral Snowflake packets")
+		}
+		return (&net.ListenConfig{}).ListenPacket(ctx, "udp4", "127.0.0.1:0")
+	}
+	owner := f.make(t, plan)
+	listeners := desktopPTStart(t, owner)
+	client, reply := desktopPTConnect(t, listeners["snowflake"], plan.Bridges[0])
+	defer client.Close()
+	if reply != 0 {
+		t.Fatal("actual Snowflake PT did not accept its exact plan", reply)
+	}
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("real Snowflake worker did not use the selected native resolver")
+	}
+	wait, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	err := owner.Close(wait)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) || active.Load() == 0 {
+		t.Fatal("actual pending Snowflake DNS was falsely acknowledged drained", err)
+	}
+	free()
+	closeDesktopPT(t, owner)
+	if active.Load() != 0 {
+		t.Fatal("Snowflake DNS worker survived the real drain")
+	}
+	// The only fixture TCP callback rejects every dial. A late DNS answer
+	// must never get far enough to attempt even that captured physical call.
+	if physicalTCP.Load() != 0 {
+		t.Fatal("retired Snowflake lookup reached the physical socket callback")
+	}
+}

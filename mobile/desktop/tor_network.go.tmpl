@@ -1,0 +1,136 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"regexp"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	"github.com/sagernet/sing-box/log"
+)
+
+const (
+	NetworkOwnerType = "routervpn-desktop-tor-network"
+	NetworkOwnerTag  = "routervpn-tor-physical"
+)
+
+type CaptureOptions struct {
+	SessionID    string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+}
+
+var (
+	networkSessionID = regexp.MustCompile(`^[0-9a-f]{32}$`)
+	networkSourceID  = regexp.MustCompile(`^[0-9a-f]{64}$`)
+)
+
+func RegisterNetworkOwner(registry *boxService.Registry) {
+	boxService.Register[CaptureOptions](registry, NetworkOwnerType, NewNetworkOwner)
+}
+
+// NetworkOwner is the network-reset observer belonging to one exact Box and
+// Tor session. It opens no socket and owns no process. Its child context is the
+// parent of that session's physical capture, PT workers and proof operations.
+// A reset retires that context even when interface names/addresses stay equal.
+type NetworkOwner struct {
+	mu        sync.Mutex
+	ctx       context.Context
+	cancel    context.CancelFunc
+	capture   CaptureOptions
+	ready     bool
+	activated bool
+	retired   bool
+}
+
+var (
+	_ adapter.Service                 = (*NetworkOwner)(nil)
+	_ adapter.InterfaceUpdateListener = (*NetworkOwner)(nil)
+)
+
+func NewNetworkOwner(ctx context.Context, _ log.ContextLogger, tag string, options CaptureOptions) (adapter.Service, error) {
+	if ctx == nil || ctx.Err() != nil || tag != NetworkOwnerTag ||
+		!networkSessionID.MatchString(options.SessionID) || !networkSourceID.MatchString(options.SourceSHA256) {
+		return nil, errors.New("desktop Tor network observer requires its exact tag, live Box context and captured session/source")
+	}
+	owned, cancel := context.WithCancel(ctx)
+	return &NetworkOwner{ctx: owned, cancel: cancel, capture: options}, nil
+}
+
+func (*NetworkOwner) Type() string { return NetworkOwnerType }
+func (*NetworkOwner) Tag() string  { return NetworkOwnerTag }
+
+func (n *NetworkOwner) Start(stage adapter.StartStage) error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.retired || n.ctx == nil || n.ctx.Err() != nil {
+		return errors.New("desktop Tor network observer is retired")
+	}
+	if stage > adapter.StartStateStarted {
+		return errors.New("desktop Tor network observer received an unknown start stage")
+	}
+	if stage == adapter.StartStateStarted {
+		n.ready = true
+	}
+	return nil
+}
+
+// Matches permits the native Box to verify this service before activation.
+// Identity equality alone never establishes that its network capture is live.
+func (n *NetworkOwner) Matches(sessionID, sourceSHA256 string) bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return !n.retired && n.ctx != nil && n.ctx.Err() == nil &&
+		n.capture.SessionID == sessionID && n.capture.SourceSHA256 == sourceSHA256
+}
+
+// Activate is a single admission after the real Box reaches Started. Invalid
+// identities and duplicate calls cannot replace or cancel an existing owner.
+// Physical capture must begin only after receiving this exact child context.
+func (n *NetworkOwner) Activate(sessionID, sourceSHA256 string) (context.Context, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.retired || !n.ready || n.activated || n.ctx == nil || n.ctx.Err() != nil ||
+		n.capture.SessionID != sessionID || n.capture.SourceSHA256 != sourceSHA256 {
+		return nil, errors.New("desktop Tor network capture is not ready, does not match, or was already activated")
+	}
+	n.activated = true
+	return n.ctx, nil
+}
+
+func (n *NetworkOwner) Current() bool {
+	if n == nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	return n.activated && n.ready && !n.retired && n.ctx != nil && n.ctx.Err() == nil
+}
+
+func (n *NetworkOwner) InterfaceUpdated(_ context.Context) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	// Box initialization may discover interfaces before admission. No PT
+	// socket/capture is owned yet; a later activation captures the new state.
+	if !n.activated {
+		return
+	}
+	n.retired = true
+	n.ready = false
+	n.cancel()
+}
+
+func (n *NetworkOwner) Close() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	n.retired = true
+	n.ready = false
+	if n.cancel != nil {
+		n.cancel()
+	}
+	return nil
+}

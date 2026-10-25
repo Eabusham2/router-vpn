@@ -60,6 +60,61 @@ class NativeBuildDiagnostics(unittest.TestCase):
             self.assertEqual(result['value'], 'captured')
             self.assertEqual(diagnostic.getvalue(), 'warning remains stderr\n')
 
+    def test_completed_builder_stages_and_seals_actual_pt_notices_for_every_target(self):
+        # Only expensive compiler/native dependency operations are doubled.
+        # The actual builder stages notices, seals receipt hashes, verifies its
+        # payload and atomically publishes the resulting bundle directory.
+        for target in N.TARGETS:
+            with self.subTest(target=target), tempfile.TemporaryDirectory(prefix='native-notice-build-') as temporary:
+                root = Path(temporary)
+                source = root/'core'; (source/'cmd/sing-box').mkdir(parents=True)
+                for name in ('LICENSE', 'routervpn-amnezia-LICENSE.txt', 'routervpn-xray-LICENSE.txt'):
+                    (source/name).write_text('bounded upstream fixture license\n')
+                system, arch = target.split('/')
+                env = {'GOOS': system, 'GOARCH': arch, 'CGO_ENABLED': '1', 'CGO_LDFLAGS': ''}
+                compiled = []
+
+                def run(command, **kwargs):
+                    args = [str(value) for value in command]
+                    if args == ['go', 'env', 'GOVERSION']:
+                        return N.TOOLCHAIN
+                    if args[:2] == ['go', 'build']:
+                        output = Path(args[args.index('-o')+1])
+                        prefix = image(target) if target.startswith('windows/') else b'fixture native engine\n'
+                        output.write_bytes(prefix+N.marker(N.digest()).encode())
+                        compiled.append(output)
+                        return ''
+                    if args[:3] == ['go', 'version', '-m']:
+                        return metadata(target)
+                    self.assertIn(args, [['go', 'mod', 'tidy'], ['go', 'mod', 'verify']])
+                    return ''
+
+                def cronet(_source, stage, _target, _env):
+                    (stage/'CRONET-LICENSE').write_text('bounded Cronet license\n')
+                    name = N.library_name(target)
+                    if name:
+                        (stage/name).write_bytes(image(target) if system == 'windows' else b'fixture native library')
+
+                def pq_licenses(stage, _env):
+                    for name in ('ROSENPASS-LICENSE-MIT', 'ROSENPASS-LICENSE-APACHE'):
+                        (stage/name).write_text('bounded Rosenpass fixture license\n')
+
+                with patch.object(N, 'environment', return_value=env), patch.object(N, 'run', side_effect=run), \
+                     patch.object(N, 'pristine'), patch.object(N.PQ, 'verify', return_value={'native_static_libs': []}), \
+                     patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
+                     patch.object(N.OPENVPN, 'prepare'), patch.object(N.EXTERNAL, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
+                     patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet', side_effect=cronet), \
+                     patch.object(N, 'stage_pq_licenses', side_effect=pq_licenses), \
+                     patch.object(N.platform, 'system', return_value='FixtureOS'), \
+                     patch.object(N.platform, 'machine', return_value='fixture'), contextlib.redirect_stdout(io.StringIO()):
+                    result = N.build(target, root/'bundle', source=source, xray=root/'xray', pq=root/'pq')
+                    receipt = N.reuse(result, target)
+                raw = (result/'TOR-PT-NOTICES.json').read_bytes()
+                self.assertEqual(raw, N.EXTERNAL.desktop_pt_notices())
+                self.assertGreater(len(raw), 256*1024)
+                self.assertEqual(receipt['files']['TOR-PT-NOTICES.json'], N.payload(raw))
+                self.assertEqual(len(compiled), 1)
+
 PE, OPTIONAL, HEADER = 0x80, 0x98, 0x200
 SECTIONS = OPTIONAL+240
 
@@ -207,7 +262,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                 policy = 'a'*64
                 write_bundle(root, target)
                 for name in N.LICENSES:
-                    (root/name).write_text('owned fixture license\n')
+                    (root/name).write_bytes(N.EXTERNAL.desktop_pt_notices() if name == N.PT_NOTICES else b'owned fixture license\n')
 
                 def seal(engine):
                     (root/N.binary_name(target)).write_bytes(engine+N.marker(policy).encode())

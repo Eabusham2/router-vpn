@@ -41,10 +41,11 @@ PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
         'with_naive_outbound', 'routervpn_native_pq')
-MAX_BINARY, MAX_LIBRARY, MAX_LICENSE = 384*1024*1024, 128*1024*1024, 2*1024*1024
+MAX_BINARY, MAX_LIBRARY, MAX_LICENSE = 384*1024*1024, 128*1024*1024, 256*1024
+PT_NOTICES, MAX_PT_NOTICES = 'TOR-PT-NOTICES.json', 2*1024*1024
 CRONET_VERSION = 'v0.0.0-20260912104006-c10c03c318db'
 LICENSES = ('SING-BOX-LICENSE', 'AMNEZIA-LICENSE', 'XRAY-LICENSE',
-            'ROSENPASS-LICENSE-MIT', 'ROSENPASS-LICENSE-APACHE', 'CRONET-LICENSE')
+            'ROSENPASS-LICENSE-MIT', 'ROSENPASS-LICENSE-APACHE', 'CRONET-LICENSE', PT_NOTICES)
 # Windows supplies these libraries and its versioned API-set contracts. Every
 # other DLL must be an explicitly owned payload, never a compiler PATH entry.
 WINDOWS_SYSTEM_DLLS = frozenset((
@@ -184,6 +185,18 @@ def payload(raw):
 def expected_names(target):
     library = library_name(target)
     return set(LICENSES)|{binary_name(target)}|({library} if library else set())
+
+
+def payload_bound(name, target):
+    if name == binary_name(target):
+        return MAX_BINARY
+    if name == library_name(target):
+        return MAX_LIBRARY
+    if name == PT_NOTICES:
+        return MAX_PT_NOTICES
+    if name in LICENSES:
+        return MAX_LICENSE
+    raise ValueError('Unowned native runtime payload name')
 
 
 def library_name(target):
@@ -339,8 +352,9 @@ def reuse(directory, target, policy=None, env=None):
     files = {}
     binary = binary_name(target)
     for name in names:
-        maximum = MAX_BINARY if name == binary else MAX_LIBRARY if name == library_name(target) else MAX_LICENSE
-        files[name] = payload(regular(directory/name, maximum))
+        files[name] = payload(regular(directory/name, payload_bound(name, target)))
+    if regular(directory/PT_NOTICES, MAX_PT_NOTICES) != EXTERNAL.desktop_pt_notices():
+        raise ValueError('Native PT notices differ from the captured dependency sources')
     receipt = json.loads(regular(directory/'NATIVE-RUNTIME.json', 32768), object_pairs_hook=unique_object)
     expected = {**receipt_fields(target, policy), **files[binary], 'files': files}
     if receipt != expected:
@@ -394,6 +408,16 @@ def stage_pq_licenses(stage, env):
     source = Path(packages[0]['manifest_path']).parent.parent
     for name in ('LICENSE-MIT', 'LICENSE-APACHE'):
         (stage/('ROSENPASS-'+name)).write_bytes(regular(source/name, MAX_LICENSE))
+
+
+def stage_pt_notices(stage):
+    raw = EXTERNAL.desktop_pt_notices()
+    if not isinstance(raw, bytes) or not 0 < len(raw) <= MAX_PT_NOTICES:
+        raise ValueError('Native PT notices exceed their exact payload bound')
+    path = stage/PT_NOTICES
+    if path.exists() or path.is_symlink():
+        raise ValueError('Unowned native PT notices in the build stage')
+    path.write_bytes(raw)
 
 
 def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
@@ -472,8 +496,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
                                   ('routervpn-xray-LICENSE.txt', 'XRAY-LICENSE')):
             (stage/name).write_bytes(regular(source/source_name, MAX_LICENSE))
         stage_pq_licenses(stage, env)
-        files = {name: payload(regular(stage/name, MAX_BINARY if name == binary.name else
-                                      MAX_LIBRARY if name == library_name(target) else MAX_LICENSE))
+        stage_pt_notices(stage)
+        files = {name: payload(regular(stage/name, payload_bound(name, target)))
                  for name in expected_names(target)}
         receipt = {**receipt_fields(target, policy), **files[binary.name], 'files': files}
         (stage/'NATIVE-RUNTIME.json').write_text(json.dumps(receipt, sort_keys=True, indent=2)+'\n')

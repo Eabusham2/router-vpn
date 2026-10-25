@@ -18,7 +18,7 @@ function Assert-RouterVPNRuntimeInstallPath([string]$Path,[bool]$Directory) {
 
 function Get-RouterVPNRuntimeInstallNames([string]$Kind) {
     switch($Kind) {
-        'native' { return @('NATIVE-RUNTIME.json','sing-box-routervpn.exe','libcronet.dll','SING-BOX-LICENSE','AMNEZIA-LICENSE','XRAY-LICENSE','ROSENPASS-LICENSE-MIT','ROSENPASS-LICENSE-APACHE','CRONET-LICENSE') }
+        'native' { return @('NATIVE-RUNTIME.json','sing-box-routervpn.exe','libcronet.dll','SING-BOX-LICENSE','AMNEZIA-LICENSE','XRAY-LICENSE','ROSENPASS-LICENSE-MIT','ROSENPASS-LICENSE-APACHE','CRONET-LICENSE','TOR-PT-NOTICES.json') }
         'amnezia' { return @('AMNEZIA-RUNTIME.json','sing-box-amnezia.exe','SING-BOX-LICENSE','AMNEZIA-LICENSE') }
         'xray' { return @('XRAY-RUNTIME.json','xray.exe','XRAY-LICENSE') }
         default { throw 'Unknown owned runtime directory.' }
@@ -36,8 +36,9 @@ function Get-RouterVPNRuntimeInstallManifest([string]$Directory,[string]$Kind,[b
     foreach($item in @($items | Sort-Object Name)) {
         if($item.Name -cnotin $allowed) { throw 'Runtime payload contains an unowned file.' }
         Assert-RouterVPNRuntimeInstallPath $item.FullName $false
-        $limit=2097152
-        if($item.Name -like '*.json') { $limit=32768 }
+        $limit=262144
+        if($Kind -eq 'native' -and $item.Name -ceq 'TOR-PT-NOTICES.json') { $limit=2097152 }
+        elseif($item.Name -like '*.json') { $limit=32768 }
         elseif($item.Name -eq 'libcronet.dll') { $limit=134217728 }
         elseif($item.Name -like '*.exe') { $limit=402653184 }
         if($item.Length -le 0 -or $item.Length -gt $limit) { throw 'Runtime payload exceeds its file bound.' }

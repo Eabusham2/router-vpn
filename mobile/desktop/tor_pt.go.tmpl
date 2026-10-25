@@ -1,0 +1,285 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"sync/atomic"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/common"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/torpt"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/service"
+)
+
+// Type is only the shared dependency-cycle exclusion. This package registers no
+// embedded Tor outbound and never launches an external PT executable.
+const Type = "routervpn-tor"
+
+// Owner keeps native PT listeners, physical sockets, selected bootstrap DNS and
+// their real drain in the same Go engine as the desktop TUN. The caller supplies
+// the exact Box/network-generation witness and must retain this owner after any
+// Start attempt until Close succeeds.
+type Owner struct {
+	ctx       context.Context
+	cancel    context.CancelFunc
+	plan      mobiletor.Plan
+	lower     N.Dialer
+	network   *torNetworkCapture
+	options   torpt.NetworkOptions
+	physical  func() bool
+	retired   atomic.Bool
+	ready     atomic.Bool
+	mu        sync.Mutex
+	started   bool
+	bridges   *torpt.Bridges
+	startDone chan struct{}
+	watchDone chan struct{}
+}
+
+// New opens no socket. Its direct dialer is the pinned native core's actual
+// per-socket interface-bound dialer, not net.Dialer or an external process that
+// would route back into the TUN. The explicit resolver is captured with all
+// native query options and checked for Tor cycles before PT admission.
+func New(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, current func() bool) (*Owner, error) {
+	if ctx == nil || ctx.Err() != nil || current == nil || !current() || resolver.Server == "" {
+		return nil, errors.New("desktop Tor PT requires the exact live native physical owner and explicit bootstrap DNS")
+	}
+	manager := service.FromContext[adapter.NetworkManager](ctx)
+	if manager == nil || !manager.AutoDetectInterface() || service.FromContext[adapter.DNSTransportManager](ctx) == nil {
+		return nil, errors.New("desktop Tor PT requires native interface binding and the captured DNS manager")
+	}
+	if resolver.RewriteTTL != nil {
+		ttl := *resolver.RewriteTTL
+		resolver.RewriteTTL = &ttl
+	}
+	if resolver.ClientSubnet != nil {
+		subnet := *resolver.ClientSubnet
+		resolver.ClientSubnet = &subnet
+	}
+	options := option.DialerOptions{}
+	options.DomainResolver = &resolver
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options, RemoteIsDomain: true, NewDialer: true})
+	if err != nil {
+		return nil, errors.New("desktop Tor physical native dialer could not be captured")
+	}
+	return newOwner(ctx, plan, options, current, lower)
+}
+
+// This internal constructor shares the shipping capture/ownership path with
+// tests whose final native socket operation is a local fixture.
+func newOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer) (*Owner, error) {
+	if ctx == nil || ctx.Err() != nil || current == nil || !current() || lower == nil || options.Detour != "" || options.DomainResolver == nil || options.DomainResolver.Server == "" {
+		return nil, errors.New("desktop Tor PT physical capture is missing or retired")
+	}
+	lines := make([]string, len(plan.Bridges))
+	for i, bridge := range plan.Bridges {
+		lines[i] = bridge.Line
+	}
+	verified, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: lines})
+	if err != nil {
+		return nil, err
+	}
+	owned, cancel := context.WithCancel(ctx)
+	capture, err := captureTorNetwork(owned, mobiletor.ProfileOutboundTag, options, lower)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	network, err := capture.prepare()
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, lower: lower, network: capture, options: network, physical: current,
+		startDone: make(chan struct{}), watchDone: make(chan struct{})}
+	owner.options.Resolve = owner.resolve
+	if err := owner.current(); err != nil {
+		cancel()
+		return nil, err
+	}
+	return owner, nil
+}
+
+func (o *Owner) Context() context.Context { return o.ctx }
+
+func (o *Owner) Start() error {
+	o.mu.Lock()
+	if o.started || o.retired.Load() || o.ctx.Err() != nil {
+		o.mu.Unlock()
+		return errors.New("desktop Tor PT owner was already started or retired")
+	}
+	o.started = true
+	o.mu.Unlock()
+	defer close(o.startDone)
+	if err := o.current(); err != nil {
+		close(o.watchDone)
+		return err
+	}
+	bridges, err := torpt.StartWithNetwork(o.ctx, o.plan, o.dial, o.packets, o.options)
+	if err != nil {
+		o.retire()
+		close(o.watchDone)
+		return err
+	}
+	o.mu.Lock()
+	o.bridges = bridges
+	o.mu.Unlock()
+	go func() {
+		defer close(o.watchDone)
+		select {
+		case <-bridges.Stopping():
+			o.retire()
+		case <-o.ctx.Done():
+		}
+	}()
+	if err := o.current(); err != nil {
+		return err
+	}
+	o.ready.Store(true)
+	if !o.Current() {
+		return errors.New("desktop Tor PT admission completed after retirement")
+	}
+	return nil
+}
+
+func (o *Owner) Listeners() (map[string]string, error) {
+	if !o.Current() {
+		return nil, errors.New("desktop Tor PT listeners belong to a retired capture")
+	}
+	o.mu.Lock()
+	bridges := o.bridges
+	o.mu.Unlock()
+	if bridges == nil {
+		return nil, errors.New("desktop Tor PT listeners are not started")
+	}
+	listeners := bridges.Listeners()
+	if !o.Current() {
+		return nil, errors.New("desktop Tor PT listener capture changed")
+	}
+	return listeners, nil
+}
+
+func (o *Owner) Current() bool {
+	return o != nil && o.ready.Load() && o.current() == nil
+}
+
+func (o *Owner) current() error {
+	if o == nil {
+		return net.ErrClosed
+	}
+	if o.retired.Load() || o.ctx.Err() != nil || !o.physical() || o.network.current() != nil {
+		o.retire()
+		return errors.New("desktop Tor PT physical network, resolver or native owner retired")
+	}
+	return nil
+}
+
+func (o *Owner) retire() {
+	o.retired.Store(true)
+	o.ready.Store(false)
+	o.cancel()
+}
+
+func (o *Owner) operation(ctx context.Context) error {
+	if ctx == nil {
+		return errors.New("desktop Tor PT operation has no captured context")
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return o.current()
+}
+
+func (o *Owner) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if err := o.operation(ctx); err != nil {
+		return nil, err
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("desktop Tor PT destination is invalid")
+	}
+	connection, err := o.lower.DialContext(context.WithValue(ctx, torBootstrapDNSKey{}, true), network, destination)
+	if currentErr := o.operation(ctx); currentErr != nil {
+		// The PT network retains even a late failed socket, including its real
+		// Close result and worker drain. Never discard it outside that owner.
+		return connection, errors.Join(err, currentErr)
+	}
+	return connection, err
+}
+
+func (o *Owner) packets(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if err := o.operation(ctx); err != nil {
+		return nil, err
+	}
+	if network != "udp" && network != "udp4" && network != "udp6" {
+		return nil, errors.New("desktop Tor PT packet operation requires UDP")
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() {
+		return nil, errors.New("desktop Tor PT packet hint is invalid")
+	}
+	// Pion checks the actual returned local address. This native callback is a
+	// protected destination/family hint, never a promise to bind a requested IP.
+	connection, err := o.lower.ListenPacket(context.WithValue(ctx, torBootstrapDNSKey{}, true), destination)
+	if currentErr := o.operation(ctx); currentErr != nil {
+		return connection, errors.Join(err, currentErr)
+	}
+	return connection, err
+}
+
+func (o *Owner) resolve(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	if err := o.operation(ctx); err != nil {
+		return nil, err
+	}
+	addresses, err := o.network.resolve(ctx, network, host)
+	if currentErr := o.operation(ctx); currentErr != nil {
+		return nil, errors.Join(err, currentErr)
+	}
+	return addresses, err
+}
+
+// Close is retryable. Context cancellation stops admission but cannot certify
+// that a pending native dial, DNS callback, transport worker or socket closed.
+func (o *Owner) Close(ctx context.Context) error {
+	if o == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("desktop Tor PT close requires a bounded caller context")
+	}
+	o.retire()
+	o.mu.Lock()
+	if !o.started {
+		o.started = true
+		close(o.startDone)
+		close(o.watchDone)
+	}
+	o.mu.Unlock()
+	select {
+	case <-o.startDone:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	o.mu.Lock()
+	bridges := o.bridges
+	o.mu.Unlock()
+	if bridges != nil {
+		if err := bridges.Close(ctx); err != nil {
+			return err
+		}
+	}
+	select {
+	case <-o.watchDone:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}

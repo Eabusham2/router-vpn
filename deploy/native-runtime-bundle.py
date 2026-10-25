@@ -42,11 +42,7 @@ def members(target):
 def bound(name, target):
     if name == 'NATIVE-RUNTIME.json':
         return 32768
-    if name == BUILD.binary_name(target):
-        return BUILD.MAX_BINARY
-    if name == BUILD.library_name(target):
-        return BUILD.MAX_LIBRARY
-    return BUILD.MAX_LICENSE
+    return BUILD.payload_bound(name, target)
 
 
 def unpack_payload(records, prefix, target, destination):

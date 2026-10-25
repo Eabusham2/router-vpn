@@ -27,7 +27,9 @@ function Reset-Fixture([string]$Name,[bool]$Existing=$true) {
     Write-Fixture (Join-Path $script:Bundle 'router-vpn-client.exe') 'fixture controller; process execution is doubled'
     foreach($kind in @('native','amnezia','xray')) {
         foreach($name in @(Get-RouterVPNRuntimeInstallNames $kind)) {
-            Write-Fixture (Join-Path $script:Bundle ('runtime/'+$kind+'/'+$name)) ('new-'+$kind+'-'+$name)
+            $payload='new-'+$kind+'-'+$name
+            if($kind -eq 'native' -and $name -ceq 'TOR-PT-NOTICES.json') { $payload='{"notice":"'+('x'*300000)+'"}' }
+            Write-Fixture (Join-Path $script:Bundle ('runtime/'+$kind+'/'+$name)) $payload
             if($Existing) { Write-Fixture (Join-Path $script:Installed ('runtime/'+$kind+'/'+$name)) ('old-'+$kind+'-'+$name) }
         }
         $script:New[$kind]=Get-RouterVPNRuntimeInstallManifest (Join-Path $script:Bundle ('runtime/'+$kind)) $kind
@@ -60,6 +62,10 @@ function Copy-RouterVPNRuntimeInstallXray([string]$Bundle,[string]$Destination,[
     }
     if($script:Fault -eq 'stage-drift') {
         Write-Fixture (Join-Path ([IO.Path]::GetDirectoryName($Destination)) 'native/libcronet.dll') 'changed after initial staged hash'
+    }
+    if($script:Fault -eq 'stage-notices-drift') {
+        $path=Join-Path ([IO.Path]::GetDirectoryName($Destination)) 'native/TOR-PT-NOTICES.json'
+        $raw=[IO.File]::ReadAllBytes($path);$raw[100]=[byte]($raw[100] -bxor 1);[IO.File]::WriteAllBytes($path,$raw)
     }
 }
 
@@ -104,6 +110,7 @@ function Expect-Failure([string]$Pattern) {
 }
 
 try {
+    Check ('TOR-PT-NOTICES.json' -cin @(Get-RouterVPNRuntimeInstallNames 'native')) 'Native installer omitted mandatory PT notices.'
     Reset-Fixture 'upgrade'
     Invoke-Install
     Require-Payload $script:New
@@ -115,7 +122,13 @@ try {
     Require-Payload $script:New
     Check ($script:Moves -eq 3) 'Fresh install tried to replace unrelated runtime state.'
 
-    foreach($faultCase in @('backup-locked','adopt-second','post-verify','stage-drift')) {
+    Reset-Fixture 'upgrade-from-pre-pt-release'
+    Remove-Item -LiteralPath (Join-Path $script:Installed 'runtime/native/TOR-PT-NOTICES.json') -Force
+    Invoke-Install
+    Require-Payload $script:New
+    Check ((Get-Item -LiteralPath (Join-Path $script:Installed 'runtime/native/TOR-PT-NOTICES.json')).Length -gt 262144) 'PT notices did not survive installation with their explicit larger bound.'
+
+    foreach($faultCase in @('backup-locked','adopt-second','post-verify','stage-drift','stage-notices-drift')) {
         Reset-Fixture $faultCase
         $script:Fault=$faultCase
         Expect-Failure 'injected|changed fixture'
@@ -151,6 +164,20 @@ try {
     Expect-Failure 'unowned files'
     Require-Payload $script:Old
     Check ($script:Moves -eq 0) 'Unowned package payload changed the installed runtime.'
+
+    foreach($noticeFault in @('missing','misnamed','oversized','ordinary-license-oversized')) {
+        Reset-Fixture ('pt-notices-'+$noticeFault)
+        $path=Join-Path $script:Bundle 'runtime/native/TOR-PT-NOTICES.json'
+        switch($noticeFault) {
+            'missing' { Remove-Item -LiteralPath $path -Force }
+            'misnamed' { Rename-Item -LiteralPath $path -NewName 'TOR-PT-NOTICE.json' }
+            'oversized' { Write-Fixture $path ('x'*2097153) }
+            'ordinary-license-oversized' { Write-Fixture (Join-Path $script:Bundle 'runtime/native/XRAY-LICENSE') ('x'*262145) }
+        }
+        Expect-Failure 'incomplete|unowned|file bound'
+        Require-Payload $script:Old
+        Check ($script:Moves -eq 0) 'Invalid notices or widened ordinary license bound reached runtime adoption.'
+    }
 
     Reset-Fixture 'linked-source'
     $real=Join-Path $script:Bundle 'real-native'

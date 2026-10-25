@@ -19,6 +19,8 @@ import (
 const bundledNativeXray = "50231eaff98ccc31b5cbd247a721c16e97fe5ec1"
 const bundledNativeRosenpass = "00569eb273016a10d2e75e5142236f06f7c3d4b3"
 const bundledNativeMaxBytes = 384 << 20
+const bundledNativePTNoticesName = "TOR-PT-NOTICES.json"
+const bundledNativePTNoticesMaxBytes = 2 << 20
 
 type bundledNativeFile struct {
 	Size   int64  `json:"size"`
@@ -56,6 +58,17 @@ func nativeBinaryName() string {
 	return "sing-box-routervpn"
 }
 
+func nativeLicenseBound(name string) int64 {
+	switch name {
+	case bundledNativePTNoticesName:
+		return bundledNativePTNoticesMaxBytes
+	case "SING-BOX-LICENSE", "AMNEZIA-LICENSE", "XRAY-LICENSE", "ROSENPASS-LICENSE-MIT", "ROSENPASS-LICENSE-APACHE", "CRONET-LICENSE":
+		return 256 << 10
+	default:
+		return 0
+	}
+}
+
 func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 	var r bundledNativeReceipt
 	bad := errors.New("native runtime receipt differs from the required source, target or payload")
@@ -66,8 +79,10 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 		if name == "." || name == ".." || filepath.Base(name) != name || strings.ContainsAny(name, "/\\\x00\r\n") || strings.HasPrefix(name, ".") || f.Size <= 0 || f.Size > bundledNativeMaxBytes || !nativeDigest(f.SHA256) {
 			return r, bad
 		}
-		if name != nativeBinaryName() && name != "libcronet.dll" && name != "libcronet.so" && ((!strings.HasSuffix(name, "-LICENSE") && name != "ROSENPASS-LICENSE-MIT" && name != "ROSENPASS-LICENSE-APACHE") || f.Size > 256<<10) {
-			return r, bad
+		if name != nativeBinaryName() && name != "libcronet.dll" && name != "libcronet.so" {
+			if limit := nativeLicenseBound(name); limit == 0 || f.Size > limit {
+				return r, bad
+			}
 		}
 		if (name == "libcronet.dll" && runtime.GOOS != "windows") || (name == "libcronet.so" && runtime.GOOS != "linux") || ((name == "libcronet.dll" || name == "libcronet.so") && f.Size > 128<<20) {
 			return r, bad
@@ -76,7 +91,7 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 	if r.Files[nativeBinaryName()].Size != r.Size || r.Files[nativeBinaryName()].SHA256 != r.SHA256 {
 		return r, bad
 	}
-	for _, name := range []string{"SING-BOX-LICENSE", "AMNEZIA-LICENSE", "XRAY-LICENSE", "ROSENPASS-LICENSE-MIT", "ROSENPASS-LICENSE-APACHE", "CRONET-LICENSE"} {
+	for _, name := range []string{"SING-BOX-LICENSE", "AMNEZIA-LICENSE", "XRAY-LICENSE", "ROSENPASS-LICENSE-MIT", "ROSENPASS-LICENSE-APACHE", "CRONET-LICENSE", bundledNativePTNoticesName} {
 		if _, ok := r.Files[name]; !ok {
 			return r, bad
 		}
@@ -112,6 +127,27 @@ func verifyNativeFile(path string, expected bundledNativeFile) error {
 	return nil
 }
 
+func verifyNativePayload(directory string, receipt bundledNativeReceipt) error {
+	entries, err := os.ReadDir(directory)
+	if err != nil {
+		return err
+	}
+	if len(entries) != len(receipt.Files)+1 {
+		return errors.New("native runtime contains missing or unowned payload files")
+	}
+	for _, entry := range entries {
+		if _, expected := receipt.Files[entry.Name()]; !expected && entry.Name() != "NATIVE-RUNTIME.json" {
+			return errors.New("native runtime contains an unowned payload file")
+		}
+	}
+	for name, expected := range receipt.Files {
+		if err := verifyNativeFile(filepath.Join(directory, name), expected); err != nil {
+			return fmt.Errorf("native engine %s: %w", name, err)
+		}
+	}
+	return nil
+}
+
 func verifyBundledNative(root string) (string, error) {
 	root, err := filepath.Abs(root)
 	if err != nil {
@@ -131,10 +167,8 @@ func verifyBundledNative(root string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	for name, expected := range receipt.Files {
-		if err := verifyNativeFile(filepath.Join(directory, name), expected); err != nil {
-			return "", fmt.Errorf("native engine %s: %w", name, err)
-		}
+	if err := verifyNativePayload(directory, receipt); err != nil {
+		return "", err
 	}
 	binary := filepath.Join(directory, nativeBinaryName())
 	metadata, err := buildinfo.ReadFile(binary)

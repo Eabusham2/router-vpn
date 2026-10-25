@@ -74,6 +74,8 @@ def sealed_runtime_fixtures(root: Path, arch: str) -> None:
             for name in module.expected_names(target) - {binary}:
                 if name == module.library_name(target):
                     (directory / name).write_bytes(PE_FIXTURE.image(target))
+                elif name == module.PT_NOTICES:
+                    (directory / name).write_bytes(module.EXTERNAL.desktop_pt_notices())
                 else:
                     write(directory / name, "same-image " + name + "\n")
             files = {name: module.payload((directory / name).read_bytes())

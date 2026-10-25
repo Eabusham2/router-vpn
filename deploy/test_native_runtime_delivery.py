@@ -53,6 +53,8 @@ def fixture(directory, target):
     directory.mkdir(parents=True)
     for name in BUILD.expected_names(target):
         raw = (BUILD.marker(BUILD.digest()) if name == BUILD.binary_name(target) else 'fixture '+name).encode()
+        if name == BUILD.PT_NOTICES:
+            raw = BUILD.EXTERNAL.desktop_pt_notices()
         if target.startswith('windows/') and name in (BUILD.binary_name(target), BUILD.library_name(target)):
             raw = PE_FIXTURE.image(target)+raw
         (directory/name).write_bytes(raw)
@@ -309,6 +311,56 @@ def windows_dependency_boundaries(root):
                 check(not restored.exists(), 'unowned DLL dependency became a published bundle')
 
 
+def pt_notice_boundaries(root):
+    expected = BUILD.EXTERNAL.desktop_pt_notices()
+    check(256*1024 < len(expected) <= 2*1024*1024, 'real PT notices do not exercise their explicit larger bound')
+    stage = root/'pt-notice-stage'
+    stage.mkdir()
+    BUILD.stage_pt_notices(stage)
+    check((stage/'TOR-PT-NOTICES.json').read_bytes() == expected, 'builder did not stage the exact PT dependency notices')
+    rejected(lambda: BUILD.stage_pt_notices(stage), 'overwrite an existing notice payload')
+    empty = root/'pt-notice-overflow-stage'; empty.mkdir()
+    with patch.object(BUILD.EXTERNAL, 'desktop_pt_notices', return_value=b'x'*(2*1024*1024+1)):
+        rejected(lambda: BUILD.stage_pt_notices(empty), 'oversized generated PT notices')
+    check(not list(empty.iterdir()), 'failed PT notice staging published a partial payload')
+    for target in BUILD.TARGETS:
+        check('TOR-PT-NOTICES.json' in DELIVERY.members(target), 'native package omitted mandatory PT notices')
+        check(DELIVERY.bound('TOR-PT-NOTICES.json', target) == 2*1024*1024, 'PT notice archive bound differs')
+        for name in BUILD.LICENSES:
+            if name != 'TOR-PT-NOTICES.json':
+                check(DELIVERY.bound(name, target) == 256*1024, 'ordinary license bound was widened')
+        rejected(lambda: DELIVERY.bound('TOR-PT-NOTICE.json', target), 'misnamed PT notice bound')
+    target = 'linux/amd64'
+    for fault in ('missing', 'misnamed', 'changed', 'changed-resealed', 'oversized', 'ordinary-license-oversized'):
+        directory = root/('pt-notice-'+fault)
+        shutil.copytree(root/'sources/linux-amd64', directory)
+        path = directory/'TOR-PT-NOTICES.json'
+        if fault == 'missing':
+            path.unlink()
+        elif fault == 'misnamed':
+            path.rename(directory/'TOR-PT-NOTICE.json')
+        elif fault in ('changed', 'changed-resealed'):
+            raw = bytearray(path.read_bytes()); raw[len(raw)//2] ^= 1; path.write_bytes(raw)
+        elif fault == 'oversized':
+            path.write_bytes(b'x'*(2*1024*1024+1))
+        else:
+            (directory/'XRAY-LICENSE').write_bytes(b'x'*(256*1024+1))
+        if fault in ('changed-resealed', 'oversized', 'ordinary-license-oversized'):
+            fixture_receipt(directory, target)
+        rejected(lambda: BUILD.reuse(directory, target), 'native PT notice '+fault)
+        artifact = root/('pt-notice-'+fault+'.tar.gz')
+        with tarfile.open(artifact, 'w:gz') as output:
+            output.add(directory, arcname='linux-amd64')
+        restored = root/('pt-notice-rejected-'+fault)
+        rejected(lambda: DELIVERY.extract_bundle(target, artifact, restored), 'artifact PT notice '+fault)
+        check(not restored.exists(), 'invalid PT notice artifact was adopted')
+        package = root/('pt-notice-'+fault+'.zip')
+        with zipfile.ZipFile(package, 'w', compression=zipfile.ZIP_DEFLATED) as output:
+            for child in directory.iterdir():
+                output.write(child, 'RouterVPN/runtime/native/'+child.name)
+        rejected(lambda: DELIVERY.verify_package(target, package), 'package PT notice '+fault)
+
+
 def boundary_tests():
     # Only Go's executable build metadata and the external codesign process are
     # doubled here. The production PE parser, bounds, receipts, hashes, paths,
@@ -402,6 +454,7 @@ def boundary_tests():
         archive_boundaries(root)
         signing_promotion_boundaries(root)
         windows_dependency_boundaries(root)
+        pt_notice_boundaries(root)
     checkout_bytes_test()
     print(f'{checks} native delivery/signing boundary checks passed', flush=True)
 

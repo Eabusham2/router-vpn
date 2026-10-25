@@ -1,0 +1,289 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"encoding/json"
+	"strings"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+)
+
+func testNetworkOptions() CaptureOptions {
+	return CaptureOptions{SessionID: strings.Repeat("a", 32), SourceSHA256: strings.Repeat("b", 64)}
+}
+
+func testNetworkOwner(t *testing.T, parent context.Context) *NetworkOwner {
+	t.Helper()
+	created, err := NewNetworkOwner(parent, nil, NetworkOwnerTag, testNetworkOptions())
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, ok := created.(*NetworkOwner)
+	if !ok {
+		t.Fatalf("constructor returned %T", created)
+	}
+	t.Cleanup(func() { _ = owner.Close() })
+	return owner
+}
+
+func testNetworkActivated(t *testing.T, parent context.Context) (*NetworkOwner, context.Context) {
+	t.Helper()
+	owner := testNetworkOwner(t, parent)
+	if err := owner.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	options := testNetworkOptions()
+	capture, err := owner.Activate(options.SessionID, options.SourceSHA256)
+	if err != nil || capture == nil || !owner.Current() {
+		t.Fatalf("live activation failed: %v", err)
+	}
+	return owner, capture
+}
+
+func assertNetworkCancelled(t *testing.T, capture context.Context) {
+	t.Helper()
+	select {
+	case <-capture.Done():
+	default:
+		t.Fatal("retired network capture context remained live")
+	}
+}
+
+func TestDesktopTorNetworkOwnerRegistryAndValidation(t *testing.T) {
+	registry := boxService.NewRegistry()
+	RegisterNetworkOwner(registry)
+	raw, ok := registry.CreateOptions(NetworkOwnerType)
+	if !ok {
+		t.Fatal("observer was not registered with the native service registry")
+	}
+	options, ok := raw.(*CaptureOptions)
+	if !ok {
+		t.Fatalf("native registry returned %T options", raw)
+	}
+	encoded, err := json.Marshal(testNetworkOptions())
+	if err != nil || !strings.Contains(string(encoded), `"session_id"`) || !strings.Contains(string(encoded), `"source_sha256"`) {
+		t.Fatal("observer lost its exact JSON capture contract")
+	}
+	if err := json.Unmarshal(encoded, options); err != nil {
+		t.Fatal(err)
+	}
+	created, err := registry.Create(context.Background(), nil, NetworkOwnerTag, NetworkOwnerType, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer created.Close()
+	owner, ok := created.(*NetworkOwner)
+	if !ok || created.Type() != NetworkOwnerType || created.Tag() != NetworkOwnerTag || !owner.Matches(options.SessionID, options.SourceSHA256) {
+		t.Fatal("registry changed the exact service or captured identity")
+	}
+	for _, test := range []struct {
+		name string
+		tag  string
+		edit func(*CaptureOptions)
+	}{
+		{"tag", "other-service", func(*CaptureOptions) {}},
+		{"session-empty", NetworkOwnerTag, func(o *CaptureOptions) { o.SessionID = "" }},
+		{"session-path", NetworkOwnerTag, func(o *CaptureOptions) { o.SessionID = "../" + o.SessionID }},
+		{"session-upper", NetworkOwnerTag, func(o *CaptureOptions) { o.SessionID = strings.ToUpper(o.SessionID) }},
+		{"session-short", NetworkOwnerTag, func(o *CaptureOptions) { o.SessionID = o.SessionID[1:] }},
+		{"source-empty", NetworkOwnerTag, func(o *CaptureOptions) { o.SourceSHA256 = "" }},
+		{"source-upper", NetworkOwnerTag, func(o *CaptureOptions) { o.SourceSHA256 = strings.ToUpper(o.SourceSHA256) }},
+		{"source-short", NetworkOwnerTag, func(o *CaptureOptions) { o.SourceSHA256 = o.SourceSHA256[1:] }},
+		{"source-newline", NetworkOwnerTag, func(o *CaptureOptions) { o.SourceSHA256 += "\n" }},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			invalid := testNetworkOptions()
+			test.edit(&invalid)
+			if service, err := NewNetworkOwner(context.Background(), nil, test.tag, invalid); err == nil || service != nil {
+				if service != nil {
+					_ = service.Close()
+				}
+				t.Fatal("observer accepted an invalid capture")
+			}
+		})
+	}
+	if service, err := NewNetworkOwner(nil, nil, NetworkOwnerTag, testNetworkOptions()); err == nil || service != nil {
+		t.Fatal("observer accepted a missing Box context")
+	}
+	parent, cancel := context.WithCancel(context.Background())
+	cancel()
+	if service, err := NewNetworkOwner(parent, nil, NetworkOwnerTag, testNetworkOptions()); err == nil || service != nil {
+		t.Fatal("observer accepted an already-cancelled Box context")
+	}
+}
+
+func TestDesktopTorNetworkOwnerActivatesOnlyOnceAfterStarted(t *testing.T) {
+	owner := testNetworkOwner(t, context.Background())
+	options := testNetworkOptions()
+	if owner.Current() || !owner.Matches(options.SessionID, options.SourceSHA256) {
+		t.Fatal("unstarted observer claimed a live capture or lost its precheck identity")
+	}
+	for _, stage := range []adapter.StartStage{adapter.StartStateInitialize, adapter.StartStateStart, adapter.StartStatePostStart} {
+		if err := owner.Start(stage); err != nil {
+			t.Fatal(err)
+		}
+		owner.InterfaceUpdated(context.Background())
+		if capture, err := owner.Activate(options.SessionID, options.SourceSHA256); err == nil || capture != nil || owner.Current() {
+			t.Fatal("observer activated before native Started")
+		}
+	}
+	if err := owner.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	// A reset before any physical/PT capture does not consume admission.
+	owner.InterfaceUpdated(context.Background())
+	for _, pair := range [][2]string{{strings.Repeat("c", 32), options.SourceSHA256}, {options.SessionID, strings.Repeat("d", 64)}} {
+		if owner.Matches(pair[0], pair[1]) {
+			t.Fatal("observer matched the wrong session/source")
+		}
+		if capture, err := owner.Activate(pair[0], pair[1]); err == nil || capture != nil || owner.Current() {
+			t.Fatal("wrong identity acquired the observer")
+		}
+	}
+	capture, err := owner.Activate(options.SessionID, options.SourceSHA256)
+	if err != nil || capture == nil || capture.Err() != nil || !owner.Current() {
+		t.Fatalf("valid identity did not acquire the ready observer: %v", err)
+	}
+	if duplicate, err := owner.Activate(options.SessionID, options.SourceSHA256); err == nil || duplicate != nil {
+		t.Fatal("duplicate activation acquired a second physical capture")
+	}
+	if _, err := owner.Activate(strings.Repeat("e", 32), options.SourceSHA256); err == nil || capture.Err() != nil || !owner.Current() {
+		t.Fatal("invalid/duplicate activation replaced or cancelled the valid owner")
+	}
+}
+
+func TestDesktopTorNetworkOwnerRetiresOnUnchangedInterfaceReset(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	owner, capture := testNetworkActivated(t, parent)
+	options := testNetworkOptions()
+	// InterfaceUpdated carries no changed fingerprint. Even a repeated reset
+	// with the same context invalidates all already-captured physical sockets.
+	owner.InterfaceUpdated(parent)
+	assertNetworkCancelled(t, capture)
+	if owner.Current() || owner.Matches(options.SessionID, options.SourceSHA256) || parent.Err() != nil {
+		t.Fatal("reset resurrected the owner or cancelled the enclosing Box")
+	}
+	owner.InterfaceUpdated(parent)
+	if err := owner.Start(adapter.StartStateStarted); err == nil {
+		t.Fatal("native Started resurrected a retired capture")
+	}
+	if revived, err := owner.Activate(options.SessionID, options.SourceSHA256); err == nil || revived != nil {
+		t.Fatal("reset allowed the old session to capture a replacement network")
+	}
+	if err := owner.Close(); err != nil {
+		t.Fatal(err)
+	}
+	assertNetworkCancelled(t, capture)
+}
+
+func TestDesktopTorNetworkOwnerCloseAndParentCancellation(t *testing.T) {
+	for _, active := range []bool{false, true} {
+		for _, parentCancellation := range []bool{false, true} {
+			parent, cancel := context.WithCancel(context.Background())
+			owner := testNetworkOwner(t, parent)
+			options := testNetworkOptions()
+			capture := owner.ctx
+			if active {
+				if err := owner.Start(adapter.StartStateStarted); err != nil {
+					t.Fatal(err)
+				}
+				var err error
+				capture, err = owner.Activate(options.SessionID, options.SourceSHA256)
+				if err != nil {
+					t.Fatal(err)
+				}
+			}
+			if parentCancellation {
+				cancel()
+			} else if err := owner.Close(); err != nil {
+				t.Fatal(err)
+			}
+			assertNetworkCancelled(t, capture)
+			if owner.Current() || owner.Matches(options.SessionID, options.SourceSHA256) {
+				t.Fatal("closed/cancelled observer remained eligible")
+			}
+			if err := owner.Start(adapter.StartStateStarted); err == nil {
+				t.Fatal("closed/cancelled observer restarted")
+			}
+			if capture, err := owner.Activate(options.SessionID, options.SourceSHA256); err == nil || capture != nil {
+				t.Fatal("closed/cancelled observer was activated")
+			}
+			if err := owner.Close(); err != nil {
+				t.Fatal("idempotent close failed:", err)
+			}
+			cancel()
+		}
+	}
+}
+
+func TestDesktopTorNetworkOwnersRemainIndependent(t *testing.T) {
+	parent, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	first, firstCapture := testNetworkActivated(t, parent)
+	second, secondCapture := testNetworkActivated(t, parent)
+	first.InterfaceUpdated(parent)
+	assertNetworkCancelled(t, firstCapture)
+	if !second.Current() || secondCapture.Err() != nil || parent.Err() != nil {
+		t.Fatal("retiring one Box observer cancelled a separate owner")
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if !second.Current() || secondCapture.Err() != nil {
+		t.Fatal("old observer teardown closed its replacement")
+	}
+}
+
+func TestDesktopTorNetworkOwnerConcurrentAdmissionAndRetirement(t *testing.T) {
+	owner := testNetworkOwner(t, context.Background())
+	options := testNetworkOptions()
+	if err := owner.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	start := make(chan struct{})
+	admitted := make(chan context.Context, 16)
+	var workers sync.WaitGroup
+	for range 16 {
+		workers.Add(1)
+		go func() {
+			defer workers.Done()
+			<-start
+			if capture, err := owner.Activate(options.SessionID, options.SourceSHA256); err == nil {
+				admitted <- capture
+			}
+		}()
+	}
+	close(start)
+	workers.Wait()
+	close(admitted)
+	var captures []context.Context
+	for capture := range admitted {
+		captures = append(captures, capture)
+	}
+	if len(captures) != 1 || !owner.Current() {
+		t.Fatalf("concurrent activation admitted %d captures", len(captures))
+	}
+	for index := range 16 {
+		workers.Add(1)
+		go func(index int) {
+			defer workers.Done()
+			if index%2 == 0 {
+				owner.InterfaceUpdated(context.Background())
+			} else {
+				_ = owner.Close()
+			}
+			_ = owner.Current()
+			_ = owner.Matches(options.SessionID, options.SourceSHA256)
+			_, _ = owner.Activate(options.SessionID, options.SourceSHA256)
+		}(index)
+	}
+	workers.Wait()
+	assertNetworkCancelled(t, captures[0])
+	if owner.Current() {
+		t.Fatal("concurrent reset/close left the capture current")
+	}
+}

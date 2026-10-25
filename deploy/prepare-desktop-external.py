@@ -2,14 +2,18 @@
 """Install the shared native external proof owner and its private desktop CLI.
 
 This extends the already prepared complete desktop engine. It installs the same
-Box proof, DNS and retained-TUN code as mobile, without registering another Tor
-runtime or importing the mobile platform service into the command-line process.
+Box proof, DNS and retained-TUN code as mobile. Desktop PTs share that native
+engine; Tor remains a separately owned executable, with no embedded Tor/C
+outbound or mobile platform service in the command-line process.
 """
 from pathlib import Path
 import argparse
 import hashlib
 import importlib.util
+import json
+import re
 import subprocess
+import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
@@ -28,17 +32,55 @@ MTU = load('prepare-mobile-mtu')
 STRATEGY = load('prepare-mobile-strategy')
 RELAY = load('prepare-relay-core')
 DESKTOP_MTU = load('prepare-desktop-mtu')
+TOR = load('prepare-mobile-tor')
 SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtuprobe')))
 PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
+PT_OWNER = 'routervpn-desktop-tor-source.json'
+PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
+PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl')
+NETWORK_DISPATCH = '''\t// Invalidate native performance proofs before endpoints rebind.
+\tif manager := service.FromContext[adapter.ServiceManager](r.ctx); manager != nil {
+\t\tfor _, owned := range manager.Services() {
+\t\t\tif listener, ok := owned.(adapter.InterfaceUpdateListener); ok { listener.InterfaceUpdated(ctx) }
+\t\t}
+\t}
+
+'''
+
+
+def pt_inputs():
+    directory = ROOT/'mobile/torpt'
+    if directory.is_symlink():
+        raise ValueError('Linked desktop PT source directory')
+    files = []
+    for path in sorted(directory.rglob('*'), key=lambda path: path.relative_to(ROOT).as_posix()):
+        if path.is_symlink():
+            raise ValueError('Linked desktop PT source input')
+        if path.is_file():
+            files.append(path)
+    return files
+
+
+def desktop_pt_notices():
+    notices = {path.relative_to(ROOT).as_posix(): path.read_text()
+               for path in pt_inputs() if path.name.startswith('LICENSE') or
+               path.name in ('UPSTREAM.json', 'SOURCE_LOCK.json', 'go.mod', 'go.sum', 'README.md')}
+    if not {'mobile/torpt/SOURCE_LOCK.json', 'mobile/torpt/LICENSE-DEPENDENCIES.json'}.issubset(notices):
+        raise ValueError('Desktop PT source and dependency notices are incomplete')
+    return (json.dumps(notices, indent=2, sort_keys=True)+'\n').encode()
 
 
 def inputs():
     files = [Path(__file__).resolve(), *EXTERNAL.inputs(), *MTU.inputs(), *STRATEGY.inputs(), *RELAY.OPENVPN_REMOTE.inputs(),
              ROOT/'mobile/toroutbound/box.go.tmpl', ROOT/'mobile/toroutbound/box_test.go.tmpl',
-             ROOT/'deploy/prepare-desktop-mtu.py', *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
+             ROOT/'deploy/prepare-desktop-mtu.py', ROOT/'deploy/prepare-mobile-tor.py',
+             ROOT/'deploy/test_desktop_tor_preparation.py',
+             ROOT/'mobile/toroutbound/network.go.tmpl', ROOT/'mobile/toroutbound/upstream.go.tmpl',
+             ROOT/'mobile/toroutbound/dns_adapter.go.tmpl', *pt_inputs(),
+             *sorted((ROOT/'mobile/desktop').glob('*.tmpl'))]
     for package in (*PURE, 'dnsmeasure'):
         files += sorted((ROOT/'internal'/package).glob('*.go'))
-    return list(dict.fromkeys(files))
+    return sorted(dict.fromkeys(files), key=lambda path: path.relative_to(ROOT).as_posix())
 
 
 def digest():
@@ -61,13 +103,148 @@ def write(vendor, relative, content):
     target.write_bytes(content)
 
 
-def prepare(vendor):
+def checked_vendor(vendor):
+    if vendor.is_symlink():
+        raise ValueError('Desktop PT preparation requires an unlinked native checkout')
     vendor = vendor.resolve()
     if subprocess.check_output(['git', '-C', str(vendor), 'rev-parse', 'HEAD'], text=True).strip() != PIN:
         raise ValueError('Desktop external proof requires the exact pinned native core')
+    return vendor
+
+
+def pt_copies():
+    content = {}
+    for path in pt_inputs():
+        if path.name in ('go.mod', 'go.sum'):
+            continue
+        relative = 'routervpn/torpt/'+path.relative_to(ROOT/'mobile/torpt').as_posix()
+        raw = path.read_bytes()
+        content[relative] = TOR.rewrite(raw) if path.suffix == '.go' else raw
+    for name in ('network.go.tmpl', 'upstream.go.tmpl'):
+        path = ROOT/'mobile/toroutbound'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or raw.count(b'package routervpntor\n') != 1 or not raw.startswith(b'package routervpntor\n'):
+            raise ValueError('Desktop PT shared package boundary changed')
+        content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw.replace(b'package routervpntor\n', b'package routervpndesktoppt\n', 1)
+    for name in PT_TEMPLATES:
+        path = ROOT/'mobile/desktop'/name
+        raw = path.read_bytes()
+        if path.is_symlink() or not raw.startswith(b'package routervpndesktoppt\n'):
+            raise ValueError('Desktop PT adapter package boundary changed')
+        content['routervpn/desktoppt/'+name.removesuffix('.tmpl')] = raw
+    return content
+
+
+def pt_registry_source(source):
+    if MODULE+'/protocol/routervpntor' in source or 'routervpntor.RegisterOutbound' in source:
+        raise ValueError('Desktop PT preparation cannot share an embedded Tor registry')
+    imported = '\t"'+MODULE+'/routervpn/desktoppt"'
+    registered = '\troutervpndesktoppt.RegisterNetworkOwner(registry)'
+    for marker, exact in ((MODULE+'/routervpn/desktoppt', imported), ('routervpndesktoppt.RegisterNetworkOwner', registered)):
+        if marker in source and (source.count(marker) != 1 or source.count(exact) != 1):
+            raise ValueError('Desktop Tor network observer registration differs')
+    source = TOR.insert_once(source, '\t"'+MODULE+'/service/resolved"', imported)
+    source = TOR.insert_once(source, '\tresolved.RegisterService(registry)', registered)
+    start = source.index('func ServiceRegistry() *service.Registry {')
+    end = source.index('\n}\n', start)
+    if registered not in source[start:end]:
+        raise ValueError('Desktop Tor network observer must belong to the service registry')
+    return source.encode()
+
+
+def pt_network_source(vendor, source):
+    original = subprocess.check_output(['git', '-C', str(vendor), 'show', PIN+':route/network.go']).decode()
+    marker, anchor = 'func (r *NetworkManager) ResetNetwork(ctx context.Context) {', '\tfor _, endpoint := range r.endpoint.Endpoints() {'
+    if original.count(marker) != 1 or source.count(marker) != 1:
+        raise ValueError('Desktop Tor network reset boundary changed')
+    start, original_start = source.index(marker), original.index(marker)
+    end, original_end = source.index('\n}\n', start)+2, original.index('\n}\n', original_start)+2
+    baseline = original[original_start:original_end]
+    if baseline.count(anchor) != 1:
+        raise ValueError('Pinned desktop Tor network dispatch boundary changed')
+    generated = baseline.replace(anchor, NETWORK_DISPATCH+anchor, 1)
+    actual = source[start:end]
+    if actual not in (baseline, generated) or source.count(NETWORK_DISPATCH) != (1 if actual == generated else 0):
+        raise ValueError('Desktop Tor network service dispatch differs from its exact preparation')
+    # Preserve the separately prepared atomic Start/Close lifecycle outside this
+    # method. The exact shared fragment is also understood by performance prep.
+    return (source[:start]+generated+source[end:]).encode()
+
+
+def preflight_pt_files(vendor, content):
+    owner = TOR.destination(vendor, PT_OWNER)
+    previous = {}
+    if owner.exists():
+        if not owner.is_file() or owner.stat().st_size > 4*1024*1024:
+            raise ValueError('Desktop PT ownership record is unsafe')
+        record = json.loads(owner.read_bytes())
+        if not isinstance(record, dict) or record.get('schema') != 1 or record.get('core') != PIN or not isinstance(record.get('files'), dict):
+            raise ValueError('Desktop PT ownership record is invalid')
+        previous = record['files']
+        for relative, checksum in previous.items():
+            if not relative.startswith(PT_NAMESPACES) or not isinstance(checksum, str) or not re.fullmatch('[0-9a-f]{64}', checksum):
+                raise ValueError('Desktop PT cannot own unrelated native source')
+            path = TOR.destination(vendor, relative)
+            if not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != checksum:
+                raise ValueError('Refusing to overwrite changed desktop PT generated source')
+    for relative, data in content.items():
+        path = TOR.destination(vendor, relative)
+        if path.exists() and (not path.is_file() or relative not in previous and path.read_bytes() != data):
+            raise ValueError('Refusing to overwrite unowned desktop PT source')
+    for namespace in PT_NAMESPACES:
+        directory = TOR.destination(vendor, namespace)
+        if directory.exists():
+            if not directory.is_dir():
+                raise ValueError('Desktop PT generated namespace is not a directory')
+            for path in directory.rglob('*'):
+                relative = path.relative_to(vendor).as_posix()
+                if path.is_symlink() or path.is_file() and relative not in content and relative not in previous:
+                    raise ValueError('Unowned file in desktop PT generated namespace')
+    return previous
+
+
+def prepare_desktop_pt(vendor, go='go'):
+    vendor = checked_vendor(vendor)
+    content = pt_copies()
+    previous = preflight_pt_files(vendor, content)
+    paths = {name: TOR.destination(vendor, name) for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum')}
+    originals = {name: path.read_bytes() for name, path in paths.items()}
+    if not originals['go.mod'].startswith(('module '+MODULE+'\n').encode()):
+        raise ValueError('Desktop PT preparation requires the existing single native Go module')
+    registry = pt_registry_source(originals['include/registry.go'].decode())
+    network = pt_network_source(vendor, originals['route/network.go'].decode())
+    dns = TOR.bootstrap_dns_source(vendor, (ROOT/'mobile/toroutbound/dns_adapter.go.tmpl').read_bytes())
+    # Reuse only the pinned module editor, never mobile prepare/copies/TORPACK.
+    # Stage its edits first: checksum conflicts or a changed source lock cannot
+    # partially update the real native module before the source is accepted.
+    with tempfile.TemporaryDirectory(prefix='routervpn-desktop-pt-module-') as directory:
+        staged = Path(directory)
+        for name in ('go.mod', 'go.sum'):
+            (staged/name).write_bytes(originals[name])
+        TOR.prepare_modules(staged, go)
+        modules = {name: (staged/name).read_bytes() for name in ('go.mod', 'go.sum')}
+    if any(TOR.destination(vendor, name).read_bytes() != data for name, data in originals.items()):
+        raise ValueError('Desktop PT preparation target changed before adoption')
+    if preflight_pt_files(vendor, content) != previous:
+        raise ValueError('Desktop PT source ownership changed before adoption')
+    for relative, raw in content.items():
+        write(vendor, relative, raw)
+    for relative in set(previous)-set(content):
+        TOR.destination(vendor, relative).unlink()
+    for relative, raw in {**modules, 'include/registry.go': registry, 'route/network.go': network, 'dns/transport_adapter.go': dns}.items():
+        write(vendor, relative, raw)
+    write(vendor, PT_OWNER, (json.dumps(dict(schema=1, core=PIN, source_sha256=digest(),
+        dns_adapter_sha256=hashlib.sha256(dns).hexdigest(), registry_sha256=hashlib.sha256(registry).hexdigest(),
+        network_sha256=hashlib.sha256(network).hexdigest(), module_sha256={name: hashlib.sha256(raw).hexdigest() for name, raw in modules.items()},
+        files={name: hashlib.sha256(raw).hexdigest() for name, raw in sorted(content.items())}), indent=2, sort_keys=True)+'\n').encode())
+
+
+def prepare(vendor, go='go'):
+    vendor = checked_vendor(vendor)
+    prepare_desktop_pt(vendor, go)
     # These pure policy types are shared by the Box's external and Tor proof
-    # ownership code. No Tor/PT implementation, C invocation or registry changes
-    # are installed in the desktop engine by this preparation.
+    # ownership code. The selective PT owner above shares this one Go runtime;
+    # no embedded Tor implementation or C package is installed here.
     for package in PURE:
         for path in sorted((ROOT/'internal'/package).glob('*.go')):
             if path.name.endswith('_test.go'):
@@ -98,10 +275,11 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('vendor', type=Path, nargs='?')
     parser.add_argument('--digest', action='store_true')
+    parser.add_argument('--go', default='go')
     arguments = parser.parse_args()
     if arguments.digest:
         print(digest())
     elif arguments.vendor:
-        prepare(arguments.vendor)
+        prepare(arguments.vendor, arguments.go)
     else:
         parser.error('vendor or --digest required')
