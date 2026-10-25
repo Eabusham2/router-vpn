@@ -119,7 +119,7 @@ if platform.system() == 'Darwin':
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_quick_protection.py')], check=True, timeout=180)
     subprocess.run([sys.executable, str(root / 'deploy/test_apple_vector_map.py')], check=True, timeout=300)
     for external_test in ('test_ios_external_policy.py', 'test_ios_external_entry_selection.py', 'test_ios_external_execution_owner.py',
-                          'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py',
+                          'test_ios_external_connection_profiles.py', 'test_ios_external_dns_settings.py', 'test_ios_external_device_settings.py',
                           'test_ios_node_store_transactions.py'):
         subprocess.run([sys.executable, str(root / 'deploy' / external_test)], check=True, timeout=300)
     subprocess.run([sys.executable, str(root / 'deploy/test_ios_performance_bridge.py')], check=True, timeout=150)

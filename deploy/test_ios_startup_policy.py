@@ -432,6 +432,7 @@ def run_fixture(directory, swift, expected=None):
     executable = directory / 'fixture'
     command = ['swiftc', '-swift-version', '6', '-Onone', '-whole-module-optimization', '-parse-as-library', '-module-cache-path', str(directory.parent / 'modules'),
                str(APP / 'Models.swift'), str(APP / 'IOSStartupPolicy.swift'),
+               str(APP / 'IOSDevicePolicySettings.swift'),
                str(APP / 'IOSMultihopExecution.swift'), str(APP / 'IOSStartupLastChoice.swift'),
                str(APP / 'IOSSpeedLabOwnership.swift'), str(fixture), '-o', str(executable)]
     result = subprocess.run(command, capture_output=True, text=True, timeout=90)

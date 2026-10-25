@@ -135,6 +135,22 @@ enum IOSExternalExecution {
         guard valid else { throw issue() }
     }
 
+    /// Common device preferences use native idle validation. The connection
+    /// still owns entry capture and fresh DNS, exit and network-policy proof.
+    static func validateDeviceDraft(_ profile: RouterProfile) throws {
+        guard profile.normalizedNodeKind == "external", let external = profile.external else { throw issue() }
+        if ["tor", "tor-bridge"].contains(external.protocolName) {
+            var failure: NSError?
+            let valid = LibboxRouterValidateTorProfile(String(decoding: try JSONEncoder().encode(profile), as: UTF8.self), &failure)
+            if let failure { throw failure }
+            guard valid else { throw issue() }
+        } else {
+            // This is the same exact transport/device/MTU parser used by the
+            // native external compiler. It opens no sockets and proves no path.
+            try validateLayerDraft(profile)
+        }
+    }
+
     /// Saving an imported wrapper validates the real compiler contract while
     /// leaving Home DNS unresolved until its selected Router entry is captured.
     static func validateLayerDraft(_ profile: RouterProfile) throws {

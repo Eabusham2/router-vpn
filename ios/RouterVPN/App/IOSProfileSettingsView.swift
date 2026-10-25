@@ -40,6 +40,19 @@ struct IOSProfileSettingsView: View {
                         Text("Edit the node and its DNS or Multihop settings to change the saved path.")
                             .font(.caption).foregroundStyle(.secondary)
                     }
+                    Section("Device policy") {
+                        Toggle("Allow home LAN access", isOn: $homeLANAccess)
+                        Picker("Kill switch policy", selection: $killSwitchPolicy) { ForEach(killValues, id: \.1) { Text($0.0).tag($0.1) } }
+                        Picker("IPv6 policy", selection: $ipv6Mode) { ForEach(ipv6Values, id: \.1) { Text($0.0).tag($0.1) } }
+                        Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
+                        if mtuPolicy == "manual" {
+                            TextField("Fixed MTU 1280–9000", text: $manualMTU).keyboardType(.numberPad)
+                        }
+                        Button("Save device policy for next connection") { saveExternalDevicePolicy() }
+                            .disabled(model.profileMutationBlocked)
+                        Text("These settings belong to this node. Its entry keeps its own policy, and the connection enforces both. Fixed MTU remains subject to the captured transport and entry limits; a saved value is not a path measurement. Use Live MTU below for Retest or Cancel.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 } else {
                 Section("Selected Router VPN node") {
                     Text("Disconnect before saving. These values persist in the private node profile and apply only where the iOS PacketTunnel/runtime actually supports them. A saved preference is not runtime proof.")
@@ -110,7 +123,7 @@ struct IOSProfileSettingsView: View {
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before changing saved connection-profile choices.").font(.caption).foregroundStyle(.orange) }
                 }
                 Section {
-                    Button("Save for next supported connection") { save() }
+                    Button(externalNode ? "Save startup settings" : "Save for next supported connection") { save() }
                         .disabled(model.profileMutationBlocked)
                     if model.profileMutationBlocked { Text("Disconnect or let the active VPN transition finish before editing persistent tunnel policy.").font(.caption).foregroundStyle(.orange) }
                     if !status.isEmpty { Text(status).font(.caption) }
@@ -139,7 +152,12 @@ struct IOSProfileSettingsView: View {
         }
         autoConnect = p.autoConnect ?? false
         loadedProfile = p
-        if p.normalizedNodeKind == "external" { return }
+        if p.normalizedNodeKind == "external" {
+            let policy = IOSDevicePolicySettings(profile: p)
+            homeLANAccess = policy.homeLANAccess; killSwitchPolicy = policy.killSwitchPolicy
+            ipv6Mode = policy.ipv6Mode; mtuPolicy = policy.mtuPolicy; manualMTU = policy.manualMTU
+            return
+        }
         homeLANAccess = p.homeLANAccess ?? true
         killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch == true ? "always" : "off")).lowercased()
         ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
@@ -152,6 +170,28 @@ struct IOSProfileSettingsView: View {
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
         daitaEnabled = p.daitaEnabled ?? false
         jumboTUN = p.jumboTUN ?? false
+    }
+
+    private func saveExternalDevicePolicy() {
+        guard !model.profileMutationBlocked else { status = "Disconnect or let the active VPN transition finish before changing device policy."; return }
+        guard var bundle = model.bundle,
+              let selected = IOSDNSRuntimePolicy.selectedProfile(in: bundle), selected.normalizedNodeKind == "external",
+              selected == loadedProfile,
+              let index = bundle.routerProfiles.firstIndex(where: { $0.id == selected.id }),
+              bundle.routerProfiles.filter({ $0.id == selected.id }).count == 1 else {
+            status = "The selected node changed. Reopen Settings before saving device policy."; return
+        }
+        var draft = IOSDevicePolicySettings(profile: selected)
+        draft.homeLANAccess = homeLANAccess; draft.killSwitchPolicy = killSwitchPolicy
+        draft.ipv6Mode = ipv6Mode; draft.mtuPolicy = mtuPolicy; draft.manualMTU = manualMTU
+        do {
+            let prepared = try draft.applying(to: selected)
+            try IOSExternalExecution.validateDeviceDraft(prepared)
+            bundle.routerProfiles[index] = prepared
+            try model.importBundle(JSONEncoder().encode(bundle))
+            loadedProfile = selectedProfile()
+            status = "Device policy saved for the next connection. The native path must still prove its DNS, entry and exit."
+        } catch { status = "Device policy rejected: \(error.localizedDescription)" }
     }
 
     private func save() {
