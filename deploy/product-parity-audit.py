@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -30,6 +31,55 @@ def require_combined(label: str, paths: tuple[str, ...], *markers: str) -> str:
         if marker not in body:
             errors.append(f"{label}: missing composed product-parity marker: {marker}")
     return body
+
+
+def windows_profile_controls() -> None:
+    """Trace the captured quick control and the separate complete Settings form."""
+    require("client/RouterVPN-Windows-App.ps1",
+            "$ProfileSettingsHelpers=Join-Path $PSScriptRoot 'RouterVPN-Windows-ProfileSettings.ps1'",
+            "$ProfileSettingsSource=Get-Content -LiteralPath $ProfileSettingsHelpers -Raw -Encoding UTF8",
+            ". ([ScriptBlock]::Create($ProfileSettingsSource))",
+            "$ProductSource=Add-RouterVPNUnifiedWindowsShell -ProductSource $ProductSource")
+    shell_path = "client/RouterVPN-Windows-UnifiedShell.ps1"
+    shell = require(shell_path, "(Control 'UnifiedSettingsButton').Add_Click(",
+                    "Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -Owner $Window")
+    binding = re.search(r"(?m)^\(Control 'UnifiedKillSwitch'\)\.Add_Click\(.*$", shell)
+    for marker in ("$DisplayedProfileID=[string]$RouterCombo.SelectedValue",
+                   "Set-RouterVPNProfileProtection -BaseUrl $BaseUrl -DisplayedProfileID $DisplayedProfileID -Enabled $On"):
+        if binding is None or marker not in binding.group():
+            errors.append(f"{shell_path}: quick protection binding lost captured dispatch: {marker}")
+    helper_path = "client/RouterVPN-Windows-ProfileSettings.ps1"
+    helper = require(helper_path, "function global:Get-RouterVPNProfileSettings",
+                     "'/api/profile/settings') -Method Get", "function global:Save-RouterVPNProfileSettings",
+                     "'/api/profile/settings') -Method Post", "function global:Show-RouterVPNProfileSettingsDialog",
+                     "$current=Get-RouterVPNProfileSettings -BaseUrl $BaseUrl",
+                     "Save-RouterVPNProfileSettings -BaseUrl $BaseUrl -Body $body")
+    function = re.search(r"(?ms)^function global:Set-RouterVPNProfileProtection \{.*?^\}", helper)
+    for marker in ("[string]::IsNullOrWhiteSpace($DisplayedProfileID)",
+                   "'/api/profile/protection') -Method Get",
+                   "[string]$captured.profile_id -cne $DisplayedProfileID",
+                   "[string]::IsNullOrWhiteSpace([string]$captured.profile_token)",
+                   "profile_id=$DisplayedProfileID;profile_token=[string]$captured.profile_token;kill_switch_policy=",
+                   "'/api/profile/protection') -Method Post",
+                   "-Body ($body | ConvertTo-Json -Compress)"):
+        if function is None or marker not in function.group():
+            errors.append(f"{helper_path}: captured quick protection helper is incomplete: {marker}")
+    require("cmd/client/profile_settings.go", 'h.HandleFunc("/api/profile/protection", a.profileProtectionSettings)')
+    require("cmd/client/profile_protection.go", "a.beginMutationOperation(r)", "decoder.DisallowUnknownFields()",
+            "q.ProfileID != profile.ID || q.ProfileToken != profileStartupSettingsToken(profile)",
+            "a.profiles.SelectedID != profile.ID || profileStartupSettingsToken(current) != q.ProfileToken",
+            "a.closing || profileSettingsBusy(a.state.Connected, a.state.Phase)",
+            'updated.KillSwitchPolicy, updated.KillSwitch = q.KillSwitchPolicy, q.KillSwitchPolicy != "off"',
+            "persistErr = a.persistProfilesLocked()", "a.profiles.Profiles[i] = current")
+    require("cmd/client/profile_protection_test.go", "TestProfileProtectionPreservesExternalPrivateGraphAndPolicies",
+            "TestProfileProtectionRejectsStaleSourceAndBusyOrMissingOwner",
+            "TestProfileProtectionRejectsMalformedInputAndRollsBackPersistenceFailure")
+    require(".github/workflows/windows-native-contract.yml",
+            "test_desktop_protection_settings.py --platform windows --shell pwsh",
+            "test_desktop_protection_settings.py --platform windows --shell powershell.exe")
+
+
+windows_profile_controls()
 
 
 dns_api = require(
@@ -108,7 +158,7 @@ require(
     "UnifiedProofButton", "UnifiedEmergencyButton", "Prove actual exit", "Emergency disconnect",
     "/api/home-summary/prove-exit", "actual_exit_status", "actual_exit_ip",
     "/api/strategy/auto", "/api/strategy/smart-auto", "/api/strategy/custom",
-    "/api/multihop/connect", "/api/profile/settings", "/api/mtu/retest", "/api/dns/policy",
+    "/api/multihop/connect", "/api/mtu/retest", "/api/dns/policy",
     "SMART AUTO", "New CUSTOM preset", "real coordinates", "color-coded hop roles",
 )
 require(

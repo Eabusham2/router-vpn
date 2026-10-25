@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+import re
 import types
 import unittest
 
@@ -128,6 +129,49 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.replace("modes/native-multihop-darwin.sh", "kill-switch-platform.py", "unprotected-helper.py")
         self.assertFalse(self.recovered["controller_multihop_platform"]("darwin"))
         self.assertFalse(self.legacy["macOS native AppKit packages"]())
+
+
+class WindowsProfileControlsAuditTests(unittest.TestCase):
+    def test_actual_product_audit_traces_captured_quick_control_and_full_settings(self):
+        path = ROOT / "deploy/product-parity-audit.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "windows_profile_controls"]
+        self.assertEqual(len(functions), 1)
+        self.assertTrue(any(isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Name) and node.value.func.id == "windows_profile_controls"
+                            for node in tree.body), "Actual product audit stopped invoking the shipping control gate")
+        changes, errors = {}, []
+        def require(path, *markers):
+            body = changes[path] if path in changes else (ROOT / path).read_text(encoding="utf-8")
+            errors.extend(path + ": missing " + marker for marker in markers if marker not in body)
+            return body
+        scope = {"require": require, "errors": errors, "re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), scope)
+        scope["windows_profile_controls"]()
+        self.assertEqual(errors, [])
+        mutations = (
+            ("client/RouterVPN-Windows-App.ps1", ". ([ScriptBlock]::Create($ProfileSettingsSource))", "$null"),
+            ("client/RouterVPN-Windows-UnifiedShell.ps1", "$DisplayedProfileID=[string]$RouterCombo.SelectedValue", "$DisplayedProfileID='replacement'"),
+            ("client/RouterVPN-Windows-UnifiedShell.ps1", "Set-RouterVPNProfileProtection -BaseUrl", "Set-UnrelatedProtection -BaseUrl"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "[string]$captured.profile_id -cne $DisplayedProfileID", "$false"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "profile_token=[string]$captured.profile_token", "profile_token='unrelated-source'"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "'/api/profile/protection') -Method Get", "'/api/profile/settings') -Method Get"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "'/api/profile/protection') -Method Post", "'/api/profile/settings') -Method Post"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "-Body ($body | ConvertTo-Json -Compress)", "-Body ($captured | ConvertTo-Json -Compress)"),
+            ("cmd/client/profile_settings.go", 'h.HandleFunc("/api/profile/protection", a.profileProtectionSettings)', "// route removed"),
+            ("cmd/client/profile_protection.go", "profileStartupSettingsToken(current) != q.ProfileToken", "false"),
+            ("client/RouterVPN-Windows-UnifiedShell.ps1", "Show-RouterVPNProfileSettingsDialog -BaseUrl", "Show-UnrelatedSettings -BaseUrl"),
+            ("client/RouterVPN-Windows-ProfileSettings.ps1", "'/api/profile/settings') -Method Post", "'/api/unrelated/settings') -Method Post"),
+        )
+        for changed_path, before, after in mutations:
+            with self.subTest(path=changed_path, removed=before):
+                original = (ROOT / changed_path).read_text(encoding="utf-8")
+                self.assertIn(before, original)
+                changes.clear(); errors.clear()
+                changes[changed_path] = original.replace(before, after)
+                scope["windows_profile_controls"]()
+                self.assertTrue(errors, "Broken shipping control passed its actual product audit")
 
 
 if __name__ == "__main__":
