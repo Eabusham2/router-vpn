@@ -234,7 +234,10 @@ def prepare_desktop_pt(vendor, go='go'):
     # Stage its edits first: checksum conflicts or a changed source lock cannot
     # partially update the real native module before the source is accepted.
     with tempfile.TemporaryDirectory(prefix='routervpn-desktop-pt-module-') as directory:
-        staged = Path(directory)
+        # This directory was just created by this build. Capture its canonical
+        # identity before child containment checks (Windows temp paths can use
+        # 8.3 aliases, and macOS can expose /var through a symbolic link).
+        staged = Path(directory).resolve(strict=True)
         for name in ('go.mod', 'go.sum'):
             (staged/name).write_bytes(originals[name])
         TOR.prepare_modules(staged, go)

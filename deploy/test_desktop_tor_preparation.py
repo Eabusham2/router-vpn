@@ -160,6 +160,37 @@ class DesktopPTPreparation(unittest.TestCase):
         expected.pop('include/registry.go')
         self.assertEqual(changed, expected)
 
+    def test_owned_module_staging_resolves_temp_alias_before_containment(self):
+        actual_temp = tempfile.TemporaryDirectory
+        actual_modules = PREP.TOR.prepare_modules
+        staging = Path(self.temp.name)/'staging-real'
+        alias = Path(self.temp.name)/'staging-alias'
+        staging.mkdir()
+        try:
+            alias.symlink_to(staging, target_is_directory=True)
+        except (OSError, NotImplementedError):
+            self.skipTest('Temporary-directory alias creation unavailable on this host')
+        observed = []
+        @contextlib.contextmanager
+        def owned_alias(**kwargs):
+            with actual_temp(dir=alias, **kwargs) as directory:
+                self.assertNotEqual(Path(directory), Path(directory).resolve())
+                yield directory
+        def prepare_actual_modules(directory, go):
+            observed.append(directory)
+            actual_modules(directory, go)
+            self.assertEqual(directory, directory.resolve(strict=True))
+        with patch.object(PREP.tempfile, 'TemporaryDirectory', side_effect=owned_alias), \
+             patch.object(PREP.TOR, 'prepare_modules', side_effect=prepare_actual_modules):
+            self.prepare()
+        self.assertEqual(len(observed), 1)
+        self.assertTrue((self.vendor/PREP.PT_OWNER).is_file())
+        self.assertEqual(list(staging.iterdir()), [])
+        # Canonicalizing our own temporary root does not admit an escaped
+        # destination or relax validation of the caller's native checkout.
+        with self.assertRaisesRegex(ValueError, 'Unsafe native Tor source destination'):
+            PREP.TOR.destination(self.vendor, '../outside.go')
+
     def test_checksum_conflict_and_foreign_module_fail_before_adoption(self):
         lock = json.loads((ROOT/'mobile/torpt/SOURCE_LOCK.json').read_text())
         item = lock['modules'][0]
