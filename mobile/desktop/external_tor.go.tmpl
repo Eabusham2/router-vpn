@@ -1,0 +1,266 @@
+package main
+
+import (
+	"context"
+	"net/netip"
+	"os"
+	"os/signal"
+	"strings"
+	"syscall"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/spf13/cobra"
+)
+
+func init() {
+	var directory, session, binary string
+	command := &cobra.Command{Use: "routervpn-tor", Short: "Run one captured Router VPN standalone Tor session", Args: cobra.NoArgs, SilenceUsage: true,
+		RunE: func(_ *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return routerVPNRunTor(ctx, directory, session, binary, os.Getenv, routerVPNNewTorNative)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "absolute private session directory")
+	command.Flags().StringVar(&session, "session", "", "captured session identity")
+	command.Flags().StringVar(&binary, "tor-binary", "", "exact captured standalone Tor executable")
+	mainCommand.AddCommand(command)
+}
+
+type routerVPNTorProgress struct {
+	Schema       int    `json:"schema"`
+	Session      string `json:"session_id"`
+	SourceSHA256 string `json:"source_sha256"`
+	ConfigSHA256 string `json:"config_sha256"`
+	Stage        string `json:"stage"`
+}
+
+func routerVPNTorStage(stage string) bool {
+	switch stage {
+	case "starting", "authenticating", "starting-tun", "starting-transports", "bootstrapping", "proving", "connected", "stopping", "cleanup-pending", "closed":
+		return true
+	}
+	return false
+}
+
+func routerVPNTorValidProof(proof mobiletor.DesktopBridgeProof, metadata mobiletor.DesktopBridgeMetadata, started, timeNow time.Time) bool {
+	address, err := netip.ParseAddr(proof.Proof.IP)
+	if err != nil || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.String() != proof.Proof.IP {
+		return false
+	}
+	return proof.Schema == 1 && proof.SessionID == metadata.SessionID && proof.SourceSHA256 == metadata.SourceSHA256 && proof.ConfigSHA256 == metadata.ConfigSHA256 && proof.Policy == metadata && proof.Healthy && proof.Proof.SessionID == metadata.SessionID && proof.Proof.IsTor && proof.Proof.DNSProven &&
+		!proof.Proof.CheckedAt.IsZero() && !proof.Proof.CheckedAt.Before(started.Add(-time.Second)) && !proof.Proof.CheckedAt.After(timeNow.Add(time.Second)) && proof.HeartbeatAt >= proof.Proof.CheckedAt.UnixMilli() && proof.HeartbeatAt >= timeNow.Add(-3*time.Second).UnixMilli() && proof.HeartbeatAt <= timeNow.Add(time.Second).UnixMilli() &&
+		proof.InterfaceName != "" && len(proof.InterfaceName) <= 64 && strings.IndexFunc(proof.InterfaceName, func(r rune) bool { return r <= 0x20 || r == 0x7f }) < 0 && proof.InterfaceIndex > 0 && proof.EffectiveMTU == metadata.ConfiguredMTU && proof.EffectiveMTU >= 1280 && proof.EffectiveMTU <= 9000 && (metadata.InterfaceName == "" || proof.InterfaceName == metadata.InterfaceName)
+}
+
+// The create-only first progress publication is admission for this runtime.
+// Even a second process with identical source cannot mint a no-work receipt for
+// an already-running owner. Only this loop writes proof/DNS/progress receipts.
+func routerVPNRunTor(parent context.Context, directory, session, binaryPath string, getenv func(string) string, factory routerVPNTorFactory) (failure error) {
+	if parent == nil || getenv == nil || factory == nil {
+		return routerVPNTorFailure
+	}
+	files, err := routerVPNOpenTorFiles(directory, session, binaryPath, getenv)
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	defer files.closeHandles()
+	metadata := files.inputs.Policy().Metadata()
+	progress := routerVPNTorProgress{Schema: 1, Session: session, SourceSHA256: metadata.SourceSHA256, ConfigSHA256: metadata.ConfigSHA256, Stage: "starting"}
+	if files.publish("progress.json", progress) != nil {
+		return routerVPNTorFailure
+	}
+	closed := struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}{routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: metadata.SourceSHA256}, true}
+	finish := func() error {
+		if files.current() != nil {
+			return routerVPNTorFailure
+		}
+		if entries, err := routerVPNTorReadDirectory(files.data, 0); err != nil || len(entries) != 0 {
+			return routerVPNTorFailure
+		}
+		progress.Stage = "closed"
+		if files.publish("progress.json", progress) != nil || files.publish("stopped.json", closed) != nil {
+			return routerVPNTorFailure
+		}
+		return nil
+	}
+	if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+		return finish()
+	}
+	binary, err := routerVPNCaptureTorBinary(binaryPath, getenv("HOMEVPN_TOR_BINARY_SHA256"))
+	if err != nil {
+		// Admission and all source bytes are valid; no native constructor or
+		// child launch has occurred. This is a bounded no-work acknowledgement.
+		_ = finish()
+		return routerVPNTorFailure
+	}
+	ctx := globalCtx
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	ctx = context.WithoutCancel(ctx)
+	started := time.Now()
+	owner, factoryErr := factory(ctx, files, binary)
+	if owner == nil {
+		_ = finish()
+		return routerVPNTorFailure
+	}
+	type outcome struct {
+		proof mobiletor.DesktopBridgeProof
+		err   error
+	}
+	done := make(chan outcome, 1)
+	go func() {
+		if factoryErr != nil {
+			done <- outcome{err: factoryErr}
+			return
+		}
+		if err := owner.Start(); err != nil {
+			done <- outcome{err: err}
+			return
+		}
+		proof, err := owner.Run()
+		done <- outcome{proof: proof, err: err}
+	}()
+	tick := time.NewTicker(100 * time.Millisecond)
+	defer tick.Stop()
+	finished, connected, stopping := false, false, false
+	var receipt mobiletor.DesktopBridgeProof
+	var heartbeat time.Time
+	var dnsFiles *routerVPNDesktopDNSFiles
+	for !stopping {
+		select {
+		case result := <-done:
+			finished = true
+			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+				stopping = true
+				break
+			}
+			if result.err != nil || files.current() != nil || !owner.Healthy() || !routerVPNTorValidProof(result.proof, metadata, started, time.Now()) {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			receipt = result.proof
+			service, err := owner.DesktopDNS()
+			if err != nil || service == nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			dnsFiles, err = routerVPNOpenDesktopDNSService(files.routerVPNExternalFiles, service, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+			if err != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			heartbeat = time.Now()
+			receipt.HeartbeatAt = heartbeat.UnixMilli()
+			if files.publish("proof.json", receipt) != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			connected, progress.Stage = true, "connected"
+		case <-parent.Done():
+			stopping = true
+		case <-tick.C:
+			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+				stopping = true
+				break
+			}
+			if files.current() != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			if connected {
+				if !owner.Healthy() {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+				if dnsFiles.tick() != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+				if time.Since(heartbeat) >= 500*time.Millisecond {
+					verify, stop := context.WithTimeout(parent, 2*time.Second)
+					err := owner.VerifyCurrentPath(verify)
+					stop()
+					if parent.Err() != nil {
+						stopping = true
+						break
+					}
+					if err != nil || !owner.Healthy() || files.current() != nil {
+						failure, stopping = routerVPNTorFailure, true
+						break
+					}
+					heartbeat = time.Now()
+					receipt.HeartbeatAt = heartbeat.UnixMilli()
+					if files.publish("proof.json", receipt) != nil {
+						failure, stopping = routerVPNTorFailure, true
+						break
+					}
+				}
+			} else {
+				progress.Stage = owner.Stage()
+				if !routerVPNTorStage(progress.Stage) {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+				// Run may finish between select and this read. Its receipt still
+				// has to pass this loop's captured adoption before publication.
+				if progress.Stage == "connected" {
+					progress.Stage = "proving"
+				}
+			}
+			if files.publish("progress.json", progress) != nil {
+				failure, stopping = routerVPNTorFailure, true
+			}
+		}
+	}
+	owner.Cancel()
+	if dnsFiles != nil {
+		dnsFiles.service.Invalidate()
+	}
+	proofRemoved := files.remove("proof.json") == nil
+	if !proofRemoved {
+		failure = routerVPNTorFailure
+	}
+	progress.Stage = "stopping"
+	_ = files.publish("progress.json", progress)
+	if !finished {
+		<-done
+	}
+	// The standalone Tor child, PT/network observer, DNS/proof workers and Box
+	// remain attached to this process until their actual captured owners drain.
+	for {
+		cleanup, stop := context.WithTimeout(context.Background(), 5*time.Second)
+		err := owner.Close(cleanup)
+		stop()
+		if err == nil {
+			break
+		}
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for dnsFiles != nil && dnsFiles.service.Close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for dnsFiles.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for !proofRemoved {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+		proofRemoved = files.remove("proof.json") == nil
+	}
+	if err := finish(); err != nil {
+		return err
+	}
+	return failure
+}

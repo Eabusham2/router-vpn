@@ -72,10 +72,20 @@ func routerVPNOpenDesktopDNS(files *routerVPNExternalFiles, owner routerVPNExter
 	if err != nil || service == nil {
 		return nil, routerVPNExternalFailure
 	}
+	return routerVPNOpenDesktopDNSService(files, service, session, source, config)
+}
+
+// Both ordinary external graphs and the standalone Tor owner pass their actual
+// proved native service here. The file protocol and drain contract remain one
+// implementation; no protocol is converted into the other proof interface.
+func routerVPNOpenDesktopDNSService(files *routerVPNExternalFiles, service *dnsmeasure.Service, session, source, config string) (*routerVPNDesktopDNSFiles, error) {
+	if files == nil || service == nil {
+		return nil, routerVPNExternalFailure
+	}
 	f := &routerVPNDesktopDNSFiles{files: files, service: service, inputs: map[string]routerVPNDesktopPathInput{}, used: map[string]bool{}, record: routerVPNDesktopDNSRecord{
 		routerVPNDesktopDNSRequest: routerVPNDesktopDNSRequest{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config},
 	}}
-	if json.Unmarshal([]byte(service.StatusJSON()), &f.record.Status) != nil {
+	if json.Unmarshal([]byte(service.StatusJSON()), &f.record.Status) != nil || f.record.Status.Schema != 1 || f.record.Status.SessionID != session || f.record.Status.Request != "" || f.record.Status.Stage != "idle" || !f.record.Status.Drained {
 		return nil, routerVPNExternalFailure
 	}
 	f.record.Status.Complete, f.record.Status.Drained = true, true

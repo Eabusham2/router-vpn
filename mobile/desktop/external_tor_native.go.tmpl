@@ -1,0 +1,226 @@
+package main
+
+import (
+	"context"
+	"io"
+	"sync"
+	"sync/atomic"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	SJ "github.com/sagernet/sing/common/json"
+	"github.com/sagernet/sing/service"
+)
+
+type routerVPNTorOwner interface {
+	Start() error
+	Run() (mobiletor.DesktopBridgeProof, error)
+	Cancel()
+	Healthy() bool
+	VerifyCurrentPath(context.Context) error
+	Stage() string
+	DesktopDNS() (*dnsmeasure.Service, error)
+	Close(context.Context) error
+}
+type routerVPNTorFactory func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error)
+
+type routerVPNTorNative struct {
+	mu              sync.Mutex
+	ctx             context.Context
+	cancel          context.CancelFunc
+	files           *routerVPNTorFiles
+	process         *routerVPNTorProcess
+	box             *box.Box
+	tor             *box.RouterVPNDesktopTor
+	partial         []io.Closer
+	boxClosed       bool
+	boxCloseFailure error
+	stage           atomic.Value
+}
+
+func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary *routerVPNTorBinary) (routerVPNTorOwner, error) {
+	if ctx == nil || files == nil || binary == nil || files.current() != nil {
+		return nil, routerVPNTorFailure
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(files.inputs.Policy().Config()))
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(ctx)))
+	for _, previous := range routerVPNExternalConstructed(owned) {
+		if previous != nil {
+			cancel()
+			return nil, routerVPNTorFailure
+		}
+	}
+	process, err := routerVPNNewTorProcess(files, binary)
+	if err != nil {
+		cancel()
+		return nil, routerVPNTorFailure
+	}
+	n := &routerVPNTorNative{ctx: owned, cancel: cancel, files: files, process: process}
+	n.stage.Store("starting")
+	n.box, err = box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		for _, partial := range routerVPNExternalConstructed(owned) {
+			if closer, ok := partial.(io.Closer); ok {
+				n.partial = append(n.partial, closer)
+			}
+		}
+		return n, routerVPNTorFailure
+	}
+	return n, nil
+}
+
+func (n *routerVPNTorNative) Start() error {
+	if n == nil || n.box == nil || n.ctx.Err() != nil {
+		return routerVPNTorFailure
+	}
+	n.stage.Store("authenticating")
+	if err := n.process.launch(n.ctx); err != nil {
+		return routerVPNTorFailure
+	}
+	if err := n.process.authenticate(n.ctx); err != nil {
+		return routerVPNTorFailure
+	}
+	if n.ctx.Err() != nil || n.process.exited() || n.files.current() != nil {
+		return routerVPNTorFailure
+	}
+	n.stage.Store("starting-tun")
+	if err := n.box.RouterVPNStrategyStart(); err != nil {
+		return routerVPNTorFailure
+	}
+	tor, err := n.box.RouterVPNDesktopTorCreate(n.files.inputs.Policy())
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	n.mu.Lock()
+	n.tor = tor
+	n.mu.Unlock()
+	if n.ctx.Err() != nil || n.process.exited() {
+		tor.Cancel()
+		return routerVPNTorFailure
+	}
+	n.stage.Store("starting-transports")
+	if err := tor.Start(n.process.session); err != nil {
+		return routerVPNTorFailure
+	}
+	n.stage.Store("bootstrapping")
+	return nil
+}
+
+func (n *routerVPNTorNative) Run() (mobiletor.DesktopBridgeProof, error) {
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	if tor == nil || n.ctx.Err() != nil || n.process.exited() {
+		return mobiletor.DesktopBridgeProof{}, routerVPNTorFailure
+	}
+	n.stage.Store("proving")
+	proof, err := tor.Run()
+	if err != nil || !n.Healthy() {
+		return mobiletor.DesktopBridgeProof{}, routerVPNTorFailure
+	}
+	n.stage.Store("connected")
+	return proof, nil
+}
+
+func (n *routerVPNTorNative) Cancel() {
+	if n == nil {
+		return
+	}
+	n.cancel()
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	if tor != nil {
+		tor.Cancel()
+	}
+	n.stage.Store("stopping")
+}
+
+func (n *routerVPNTorNative) Healthy() bool {
+	if n == nil || n.ctx.Err() != nil || n.process.exited() {
+		return false
+	}
+	n.mu.Lock()
+	tor, closed := n.tor, n.boxClosed
+	n.mu.Unlock()
+	return !closed && tor != nil && tor.Healthy()
+}
+func (n *routerVPNTorNative) VerifyCurrentPath(ctx context.Context) error {
+	if ctx == nil || ctx.Err() != nil || !n.Healthy() || n.files.current() != nil {
+		return routerVPNTorFailure
+	}
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	if err := tor.VerifyCurrentPath(ctx); err != nil || !n.Healthy() {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+func (n *routerVPNTorNative) Stage() string {
+	if n == nil {
+		return "starting"
+	}
+	stage, _ := n.stage.Load().(string)
+	return stage
+}
+func (n *routerVPNTorNative) DesktopDNS() (*dnsmeasure.Service, error) {
+	if !n.Healthy() {
+		return nil, routerVPNTorFailure
+	}
+	n.mu.Lock()
+	tor := n.tor
+	n.mu.Unlock()
+	return tor.DNSMeasurement()
+}
+
+// The command joins Start/Run before entering Close. A failed or expired drain
+// is retried on these same objects; no new daemon, Box or policy is constructed.
+func (n *routerVPNTorNative) Close(ctx context.Context) error {
+	if n == nil {
+		return nil
+	}
+	if ctx == nil || ctx.Err() != nil {
+		return routerVPNTorFailure
+	}
+	n.Cancel()
+	if err := n.process.close(ctx); err != nil {
+		return routerVPNTorFailure
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.tor != nil {
+		if err := n.tor.Close(ctx); err != nil {
+			return routerVPNTorFailure
+		}
+	}
+	if n.box == nil {
+		pending := n.partial[:0]
+		for _, partial := range n.partial {
+			if partial.Close() != nil {
+				pending = append(pending, partial)
+			}
+		}
+		n.partial = pending
+		if len(pending) != 0 {
+			return routerVPNTorFailure
+		}
+	} else if !n.boxClosed {
+		n.boxCloseFailure = n.box.Close()
+		n.boxClosed = true
+	}
+	if n.boxCloseFailure != nil {
+		return routerVPNTorFailure
+	}
+	if err := n.process.cleanup(); err != nil {
+		return routerVPNTorFailure
+	}
+	n.stage.Store("closed")
+	return nil
+}

@@ -1,0 +1,451 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNTorCommandFixture struct {
+	base                     *desktopExternalFixture
+	proof                    mobiletor.DesktopBridgeProof
+	measurement              *dnsmeasure.Service
+	engine                   *desktopDNSFixtureEngine
+	startEntered, runEntered chan struct{}
+	startRelease, runRelease chan struct{}
+	closeRelease             chan struct{}
+	verifyFailed             atomic.Bool
+	closeAttempted           chan struct{}
+	closeOnce                sync.Once
+}
+
+func routerVPNNewTorCommandFixture(t *testing.T, files *routerVPNTorFileFixture, blockedDNS bool) *routerVPNTorCommandFixture {
+	t.Helper()
+	meta := files.inputs.Policy().Metadata()
+	base := &desktopExternalFixture{cancel: make(chan struct{}), gate: make(chan struct{})}
+	base.healthy.Store(true)
+	engine := &desktopDNSFixtureEngine{base: base}
+	if blockedDNS {
+		engine.entered, engine.release = make(chan struct{}), make(chan struct{})
+	}
+	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNS.Address, Port: meta.DNS.Port, Transport: meta.DNS.Transport, ServerName: meta.DNS.ServerName, Path: meta.DNS.Path, Route: meta.FinalTag, RouteLabel: "Selected DNS via captured Tor exit"}
+	measurement, err := dnsmeasure.New(engine, dnsmeasure.Description{NodeID: meta.NodeID, SessionID: meta.SessionID, RouteLabel: "Current Tor connection", IPv6Enabled: meta.IPv6Mode != "off", Selected: selected})
+	if err != nil {
+		t.Fatal(err)
+	}
+	name := meta.InterfaceName
+	if name == "" {
+		name = "utun902"
+	}
+	now := time.Now()
+	return &routerVPNTorCommandFixture{base: base, engine: engine, measurement: measurement, closeAttempted: make(chan struct{}),
+		proof: mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta,
+			Proof: mobiletor.Proof{SessionID: meta.SessionID, IP: "198.51.100.18", IsTor: true, DNSProven: true, CheckedAt: now}, InterfaceName: name, InterfaceIndex: 710, EffectiveMTU: meta.ConfiguredMTU, Healthy: true, HeartbeatAt: now.UnixMilli()}}
+}
+func (f *routerVPNTorCommandFixture) Start() error {
+	f.base.starts.Add(1)
+	if f.startEntered != nil {
+		close(f.startEntered)
+		<-f.startRelease
+	}
+	return nil
+}
+func (f *routerVPNTorCommandFixture) Run() (mobiletor.DesktopBridgeProof, error) {
+	if f.runEntered != nil {
+		close(f.runEntered)
+		<-f.runRelease
+	}
+	return f.proof, nil
+}
+func (f *routerVPNTorCommandFixture) Cancel()       { f.base.Cancel() }
+func (f *routerVPNTorCommandFixture) Healthy() bool { return f.base.Healthy() }
+func (f *routerVPNTorCommandFixture) VerifyCurrentPath(ctx context.Context) error {
+	if ctx.Err() != nil || f.verifyFailed.Load() || !f.Healthy() {
+		return errors.New("private fixture path failure")
+	}
+	return nil
+}
+func (f *routerVPNTorCommandFixture) Stage() string { return "proving" }
+func (f *routerVPNTorCommandFixture) DesktopDNS() (*dnsmeasure.Service, error) {
+	return f.measurement, nil
+}
+func (f *routerVPNTorCommandFixture) Close(ctx context.Context) error {
+	f.closeOnce.Do(func() { close(f.closeAttempted) })
+	select {
+	case <-f.base.cancel:
+	default:
+		return errors.New("cancel must precede native close")
+	}
+	f.base.closes.Add(1)
+	if f.closeRelease != nil {
+		select {
+		case <-f.closeRelease:
+		default:
+			return errors.New("actual native cleanup remains pending")
+		}
+	}
+	return f.measurement.Close()
+}
+
+func routerVPNTorRunFixture(t *testing.T, parent context.Context, f *routerVPNTorFileFixture, owner *routerVPNTorCommandFixture) <-chan error {
+	t.Helper()
+	ctx, cancel := context.WithCancel(parent)
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		done <- routerVPNRunTor(ctx, f.directory, routerVPNTorTestSession, f.binary, f.getenv, func(_ context.Context, files *routerVPNTorFiles, binary *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			if files.inputs.Digests() != f.inputs.Digests() || binary.path != f.binary {
+				return nil, errors.New("changed captured input")
+			}
+			if _, err := files.root.Stat("progress.json"); err != nil {
+				return nil, errors.New("native resources preceded durable admission")
+			}
+			return owner, nil
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("captured command fixture did not finish cleanup")
+		}
+	})
+	return done
+}
+
+func routerVPNTorReadProofFixture(t *testing.T, f *routerVPNTorFileFixture) mobiletor.DesktopBridgeProof {
+	t.Helper()
+	var proof mobiletor.DesktopBridgeProof
+	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "proof.json"), &proof) != nil {
+		t.Fatal("invalid native Tor proof")
+	}
+	return proof
+}
+func routerVPNTorCheckStoppedFixture(t *testing.T, f *routerVPNTorFileFixture) {
+	t.Helper()
+	var stopped struct {
+		routerVPNExternalStop
+		Closed bool `json:"closed"`
+	}
+	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "stopped.json"), &stopped) != nil || !stopped.Closed || stopped.Session != routerVPNTorTestSession || stopped.SourceSHA256 != f.inputs.Digests().SourceSHA256 {
+		t.Fatal("unowned Tor drain receipt")
+	}
+}
+
+func TestRouterVPNDesktopTorCommandPublishesExactProofHeartbeatDNSAndStop(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	owner := routerVPNNewTorCommandFixture(t, f, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := routerVPNTorRunFixture(t, ctx, f, owner)
+	proof := routerVPNTorReadProofFixture(t, f)
+	if proof.Policy != f.inputs.Policy().Metadata() || !proof.Healthy || !proof.Proof.DNSProven || !proof.Proof.CheckedAt.Equal(owner.proof.Proof.CheckedAt) {
+		t.Fatal("command changed native proof identity")
+	}
+	desktopExternalStopFile(t, f.directory, strings.Repeat("c", 32), proof.SourceSHA256)
+	deadline := time.Now().Add(3 * time.Second)
+	for {
+		current := routerVPNTorReadProofFixture(t, f)
+		if current.HeartbeatAt > proof.HeartbeatAt {
+			if !current.Proof.CheckedAt.Equal(proof.Proof.CheckedAt) || current.Proof.IP != proof.Proof.IP {
+				t.Fatal("heartbeat selected another Tor proof")
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("captured Tor heartbeat did not advance")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	initial := desktopDNSNativeRecord(t, f.directory, func(record routerVPNDesktopDNSRecord) bool { return record.Generation == 0 })
+	if initial.Session != proof.SessionID || initial.SourceSHA256 != proof.SourceSHA256 || initial.ConfigSHA256 != proof.ConfigSHA256 || initial.Status.NodeID != proof.Policy.NodeID {
+		t.Fatal("DNS mailbox lost exact Tor source ownership")
+	}
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("d", 32), "tcp"
+	desktopDNSNativeInput(t, f.directory, "dns-request.json", request)
+	result := desktopDNSNativeRecord(t, f.directory, func(record routerVPNDesktopDNSRecord) bool {
+		return record.Generation == 1 && record.Status.Complete && record.Status.Drained
+	})
+	if len(result.Status.Results) != 13 || result.Status.Stage != "complete" || owner.engine.active.Load() || owner.engine.selected.Load() != 3 || owner.engine.dials.Load() != 18 {
+		t.Fatal("Tor command lost actual shared DNS worker/query lifecycle", result.Status)
+	}
+	for _, row := range result.Status.Results {
+		if row.Kind == "selected" {
+			if row.Route != proof.Policy.FinalTag || row.RouteLabel != "Selected DNS via captured Tor exit" || row.Transport != "tcp" || row.Port != 5353 || row.Address != "9.9.9.9" {
+				t.Fatal("selected Tor DNS was reinterpreted", row)
+			}
+		} else if row.RouteLabel != "Current Tor connection" {
+			t.Fatal("Tor comparison route label changed", row)
+		}
+	}
+	desktopExternalStopFile(t, f.directory, proof.SessionID, proof.SourceSHA256)
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	routerVPNTorCheckStoppedFixture(t, f)
+	if _, err := os.Stat(filepath.Join(f.directory, "proof.json")); !os.IsNotExist(err) {
+		t.Fatal("closed Tor retained usable proof", err)
+	}
+}
+
+func TestRouterVPNDesktopTorCommandCancelJoinsStartProofAndNativeDrain(t *testing.T) {
+	for _, phase := range []string{"start", "proof", "close"} {
+		t.Run(phase, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			owner := routerVPNNewTorCommandFixture(t, f, false)
+			release := make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			entered := make(chan struct{})
+			switch phase {
+			case "start":
+				owner.startEntered, owner.startRelease = entered, release
+			case "proof":
+				owner.runEntered, owner.runRelease = entered, release
+			case "close":
+				owner.closeRelease = release
+				entered = owner.closeAttempted
+			}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			done := routerVPNTorRunFixture(t, ctx, f, owner)
+			if phase == "close" {
+				routerVPNTorReadProofFixture(t, f)
+				cancel()
+			} else {
+				select {
+				case <-entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("native callback never began")
+				}
+				cancel()
+			}
+			select {
+			case <-owner.base.cancel:
+			case <-time.After(3 * time.Second):
+				t.Fatal("captured cancellation never reached native owner")
+			}
+			if phase == "close" {
+				select {
+				case <-entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("native close was not attempted")
+				}
+			}
+			select {
+			case <-done:
+				t.Fatal("command exited before its actual captured work drained")
+			case <-time.After(20 * time.Millisecond):
+			}
+			if _, err := os.Stat(filepath.Join(f.directory, "stopped.json")); !os.IsNotExist(err) {
+				t.Fatal("pending native work fabricated stopped receipt", err)
+			}
+			releaseOnce.Do(func() { close(release) })
+			if err := desktopExternalWait(t, done); err != nil {
+				t.Fatal(err)
+			}
+			routerVPNTorCheckStoppedFixture(t, f)
+			if _, err := os.Stat(filepath.Join(f.directory, "proof.json")); !os.IsNotExist(err) {
+				t.Fatal("late proof survived cancellation", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorCommandRejectsUnprovedOrForeignNativeResults(t *testing.T) {
+	for _, kind := range []string{"session", "source", "config", "policy", "dns", "tor", "mtu", "interface", "stale", "unhealthy"} {
+		t.Run(kind, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			owner := routerVPNNewTorCommandFixture(t, f, false)
+			switch kind {
+			case "session":
+				owner.proof.SessionID = strings.Repeat("b", 32)
+			case "source":
+				owner.proof.SourceSHA256 = strings.Repeat("b", 64)
+			case "config":
+				owner.proof.ConfigSHA256 = strings.Repeat("b", 64)
+			case "policy":
+				owner.proof.Policy.DNS.Port = 53
+			case "dns":
+				owner.proof.Proof.DNSProven = false
+			case "tor":
+				owner.proof.Proof.IsTor = false
+			case "mtu":
+				owner.proof.EffectiveMTU = 1280
+			case "interface":
+				owner.proof.InterfaceIndex = 0
+			case "stale":
+				owner.proof.Proof.CheckedAt = time.Now().Add(-time.Minute)
+			case "unhealthy":
+				owner.base.healthy.Store(false)
+			}
+			done := routerVPNTorRunFixture(t, context.Background(), f, owner)
+			if err := desktopExternalWait(t, done); err == nil {
+				t.Fatal("foreign or unproved native result reported success")
+			}
+			routerVPNTorCheckStoppedFixture(t, f)
+			if _, err := os.Stat(filepath.Join(f.directory, "proof.json")); !os.IsNotExist(err) {
+				t.Fatal("invalid native result became Connected", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorCommandNoWorkIsBoundToExclusiveAdmission(t *testing.T) {
+	for _, kind := range []string{"cancel", "binary", "factory", "occupied"} {
+		t.Run(kind, func(t *testing.T) {
+			f := routerVPNNewTorFileFixture(t)
+			var called atomic.Int32
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			switch kind {
+			case "cancel":
+				cancel()
+			case "binary":
+				f.environment["HOMEVPN_TOR_BINARY_SHA256"] = strings.Repeat("f", 64)
+			case "occupied":
+				if err := os.WriteFile(filepath.Join(f.directory, "progress.json"), []byte(`{"owner":"other"}`), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			err := routerVPNRunTor(ctx, f.directory, routerVPNTorTestSession, f.binary, f.getenv, func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error) {
+				called.Add(1)
+				return nil, errors.New("construction did not begin")
+			})
+			if kind == "cancel" && err != nil || kind != "cancel" && err == nil {
+				t.Fatal("wrong no-work result", kind, err)
+			}
+			expected := int32(0)
+			if kind == "factory" {
+				expected = 1
+			}
+			if called.Load() != expected {
+				t.Fatal("native resource constructor crossed admission boundary")
+			}
+			if kind == "occupied" {
+				if _, err := os.Stat(filepath.Join(f.directory, "stopped.json")); !os.IsNotExist(err) {
+					t.Fatal("second native launch acknowledged another live owner")
+				}
+				return
+			}
+			routerVPNTorCheckStoppedFixture(t, f)
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorCommandDNSCancelRetainsActualWorkerAndHealthyConnection(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	owner := routerVPNNewTorCommandFixture(t, f, true)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(owner.engine.release) })
+	done := routerVPNTorRunFixture(t, ctx, f, owner)
+	routerVPNTorReadProofFixture(t, f)
+	initial := desktopDNSNativeRecord(t, f.directory, func(record routerVPNDesktopDNSRecord) bool { return record.Generation == 0 })
+	request := initial.routerVPNDesktopDNSRequest
+	request.Generation, request.Request, request.Transport = 1, strings.Repeat("e", 32), "tcp"
+	desktopDNSNativeInput(t, f.directory, "dns-request.json", request)
+	select {
+	case <-owner.engine.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("selected DNS work never began")
+	}
+	desktopDNSNativeInput(t, f.directory, "dns-cancel.json", request)
+	status := desktopDNSNativeRecord(t, f.directory, func(record routerVPNDesktopDNSRecord) bool { return record.Status.Stage == "cancelled" })
+	if status.Status.Drained || !owner.Healthy() || !owner.engine.active.Load() || owner.base.closes.Load() != 0 {
+		t.Fatal("cancelled DNS work retired VPN or released unfinished worker")
+	}
+	cancel()
+	select {
+	case <-owner.closeAttempted:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native shutdown did not begin")
+	}
+	if _, err := os.Stat(filepath.Join(f.directory, "stopped.json")); !os.IsNotExist(err) {
+		t.Fatal("DNS worker had not drained before stopped", err)
+	}
+	releaseOnce.Do(func() { close(owner.engine.release) })
+	if err := desktopExternalWait(t, done); err != nil {
+		t.Fatal(err)
+	}
+	routerVPNTorCheckStoppedFixture(t, f)
+	if owner.engine.active.Load() {
+		t.Fatal("retired Tor retained DNS activity")
+	}
+}
+
+func TestRouterVPNDesktopTorDNSMailboxCannotClaimBusyOrForeignService(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	owner := routerVPNNewTorCommandFixture(t, f, true)
+	files := f.open(t)
+	meta := f.inputs.Policy().Metadata()
+	if _, err := routerVPNOpenDesktopDNSService(files.routerVPNExternalFiles, owner.measurement, strings.Repeat("c", 32), meta.SourceSHA256, meta.ConfigSHA256); err == nil {
+		t.Fatal("foreign service session was admitted")
+	}
+	if err := owner.measurement.Start(strings.Repeat("d", 32), "tcp"); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-owner.engine.entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("busy service did not enter work")
+	}
+	if _, err := routerVPNOpenDesktopDNSService(files.routerVPNExternalFiles, owner.measurement, meta.SessionID, meta.SourceSHA256, meta.ConfigSHA256); err == nil {
+		t.Fatal("busy service was rewritten as drained idle mailbox")
+	}
+	owner.measurement.Invalidate()
+	close(owner.engine.release)
+	if err := owner.measurement.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopTorNativeConstructionRetainsActualBoxAndCancelsBeforeSpawn(t *testing.T) {
+	f := routerVPNNewTorFileFixture(t)
+	files := f.open(t)
+	binary, err := routerVPNCaptureTorBinary(f.binary, f.getenv("HOMEVPN_TOR_BINARY_SHA256"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner, err := routerVPNNewTorNative(include.Context(context.Background()), files, binary)
+	if owner == nil {
+		t.Fatal("actual native constructor discarded partial ownership", err)
+	}
+	t.Cleanup(func() {
+		owner.Cancel()
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		if err := owner.Close(ctx); err != nil {
+			t.Error("actual native constructor cleanup failed", err)
+		}
+	})
+	if err != nil {
+		t.Fatal("valid Tor policy failed actual native Box construction", err)
+	}
+	owner.Cancel()
+	if owner.Start() == nil {
+		t.Fatal("cancelled native constructor spawned Tor/TUN")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := owner.Close(ctx); err != nil {
+		t.Fatal("actual unstarted Box did not drain", err)
+	}
+	if owner.Healthy() {
+		t.Fatal("unstarted native Box fabricated a usable path")
+	}
+}
