@@ -16,7 +16,16 @@ func captureDesktopRuntimeDirectory(launch *desktopNodeLaunch, directory string)
 	if err != nil || !info.IsDir() || info.Mode()&os.ModeSymlink != 0 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
 		return errors.New("native runtime workspace is not a private directory")
 	}
-	root, err := os.OpenRoot(directory)
+	// Root.OpenRoot opens the child with delete sharing on Windows. Keep that
+	// child handle through the identity check and eventual empty-directory
+	// removal; closing it before cleanup would discard its ownership guard.
+	capturePath := filepath.Clean(directory)
+	parent, err := os.OpenRoot(filepath.Dir(capturePath))
+	if err != nil {
+		return err
+	}
+	defer parent.Close()
+	root, err := parent.OpenRoot(filepath.Base(capturePath))
 	if err != nil {
 		return err
 	}
