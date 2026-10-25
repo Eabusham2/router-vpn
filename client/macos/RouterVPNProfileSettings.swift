@@ -407,7 +407,7 @@ extension ProductWindowController {
                     alert.informativeText = supportsNodeSettings
                         ? "Selected Router node • persistent defaults for the next connection. Unsupported runtime features stay unavailable; saved values are not runtime proof."
                         : supportsDeviceSettings
-                            ? "Common device and startup settings for the captured imported node. DNS, independent entry policy, credentials and saved graph are retained. Fixed MTU is a requested interface value; Retest measures the active path."
+                            ? capturedDevice?.note ?? "Common device and startup settings for the captured imported node. DNS, independent entry policy, credentials and saved graph are retained. Fixed MTU is a requested interface value."
                             : externalStartup != nil
                                 ? "Startup for the selected imported node. Saved connection uses its protocol and hop settings. Last keeps a still-valid proved Local/Server choice. \(capturedDevice?.devicePolicyReason ?? "Common device settings are unavailable for this runtime.")"
                                 : "Node settings are unavailable. Connection-profile Add / Load / Update / Delete remains available."
@@ -444,10 +444,10 @@ extension ProductWindowController {
                 let startLayer = popup("Start layer", values: [("Off — default","off"),("AES-256-GCM — authenticated","aes-256-gcm"),("AES-256-GCM + XOR whitening","aes-256-gcm+xor-whitening")], selected: settings.startLayer)
                 let startLayerNote = NSTextField(wrappingLabelWithString: "AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR only whitens already-authenticated ciphertext and is never counted as encryption. Unsupported graphs fail closed.")
                 startLayerNote.textColor = .secondaryLabelColor; startLayerNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(startLayerNote)
-                let mtu = popup("MTU", values: [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
+                let mtu = popup("MTU", values: [("Auto — default","auto"),("Fixed / manual","manual"),("Runtime default","default")], selected: settings.mtuPolicy)
                 let mtuRow = NSStackView(); mtuRow.orientation = .horizontal; mtuRow.spacing = 8; mtuRow.addArrangedSubview(NSTextField(labelWithString: capturedDevice != nil ? "Fixed MTU 1280–9000" : "Fixed MTU 576–9000"))
                 let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
-                let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not measured yet") • \(settings.effectiveMTUSource ?? "Retest the active path for a fresh measurement")")
+                let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not recorded yet") • \(settings.effectiveMTUSource ?? "historical interface readback")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
                 let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
                 let jumbo = check("Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
@@ -538,7 +538,7 @@ extension ProductWindowController {
     }
 }
 
-// Unified settings contract: SMART AUTO default, IPv6 On default, authenticated AES/XOR-whitening Start Layer, Auto measured MTU,
+// Unified settings contract: SMART AUTO default, IPv6 On default, authenticated AES/XOR-whitening Start Layer, Auto MTU,
 // fixed MTU override + Retest, DAITA-like traffic padding, Jumbo TUN, kill switch,
 // AUTO Require encrypted / Require obfuscation, LAN access and forwarding entry point.
 // /api/profile/settings only for Router-node preferences; connection-profile CRUD uses

@@ -154,9 +154,10 @@ if($WPF){
     Add-Type -AssemblyName WindowsBase
     if($null -eq [Windows.Application]::Current){$script:DeviceApplication=New-Object Windows.Application;$script:DeviceApplication.ShutdownMode='OnExplicitShutdown'}
     function Select-Tag($Combo,[string]$Tag){foreach($Item in $Combo.Items){if([string]$Item.Tag -ceq $Tag){$Combo.SelectedItem=$Item;return}};throw ('missing UI choice '+$Tag)}
-    foreach($Scenario in @('save-common','startup-unchanged','manual-startup','invalid-mtu','unsupported-startup','busy')){
+    foreach($Scenario in @('save-common','tor-common','startup-unchanged','manual-startup','invalid-mtu','unsupported-startup','busy')){
         $script:Capture=New-Capture;$script:Busy=$Scenario-ceq'busy';$script:Posts.Clear();$script:WPFError='';$script:Scenario=$Scenario
         if($Scenario -ceq 'unsupported-startup'){$script:Capture.device_policy_supported=$false;$script:Capture.device_policy_reason='Native common device policy unavailable.'}
+        if($Scenario -ceq 'tor-common'){$script:Capture.protocol='tor-bridge';$script:Capture.note='Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented.'}
         $Timer=New-Object Windows.Threading.DispatcherTimer;$Timer.Interval=[TimeSpan]::FromMilliseconds(20)
         $Timer.Add_Tick({
             $Dialog=@([Windows.Application]::Current.Windows|Where-Object{$_.Title -eq 'Settings'})
@@ -164,12 +165,13 @@ if($WPF){
             $Timer.Stop();$Dialog=$Dialog[0]
             try{
                 Check ($Dialog.FindName('RouterTransportSettings').Visibility -eq 'Collapsed' -and $Dialog.FindName('RouterFeatureSettings').Visibility -eq 'Collapsed') 'external form exposed Router-only writes'
-                Check ($Dialog.FindName('Effective').Text -match '^Historical effective MTU:') 'external form called historical MTU current'
+                Check ($Dialog.FindName('Effective').Text -match '^Last recorded interface MTU:' -and $Dialog.FindName('Effective').Text -notmatch 'Retest') 'external form claimed historical interface MTU was a fresh path test'
                 $Save=$Dialog.FindName('Save');$Node=$Dialog.FindName('NodeSettings');$Startup=$Dialog.FindName('Startup');$Automatic=$Dialog.FindName('AutoConnect')
                 switch($script:Scenario){
                     'busy' {Check (-not$Save.IsEnabled-and-not$Node.IsEnabled-and-not$Startup.IsEnabled) 'busy WPF form enabled persistent edits';$Dialog.FindName('Cancel').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent));return}
                     'unsupported-startup' {Check (-not$Node.IsEnabled-and$Startup.IsEnabled-and$Save.IsEnabled) 'unsupported WPF form enabled common device fields or disabled startup';Select-Tag $Startup 'last';$Automatic.IsChecked=$true}
                     'save-common' {Check $Node.IsEnabled 'supported WPF form disabled common device fields';$Dialog.FindName('LAN').IsChecked=$false;Select-Tag ($Dialog.FindName('Kill')) 'always';Select-Tag ($Dialog.FindName('IPv6')) 'off';Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1412'}
+                    'tor-common' {Check $Node.IsEnabled 'supported Tor form disabled common device fields';Check ($Dialog.FindName('SettingsNote').Text -ceq $script:Capture.note) 'captured Tor capability note was replaced';Check ([string]$Dialog.FindName('MTUPolicy').SelectedItem.Content -ceq 'Auto — default') 'Tor Auto claimed a measured path'}
                     'manual-startup' {$Automatic.IsChecked=$true;Select-Tag $Startup 'manual';Check (-not$Automatic.IsChecked-and-not$Automatic.IsEnabled) 'manual WPF startup retained auto-connect'}
                     'invalid-mtu' {Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1.5'}
                 }

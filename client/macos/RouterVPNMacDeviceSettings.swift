@@ -19,6 +19,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
     let mtuSource: String?
     let startupMode: String
     let autoConnect: Bool
+    let note: String?
 
     enum CodingKeys: String, CodingKey {
         case profileID = "profile_id", profileToken = "profile_token", nodeKind = "node_kind"
@@ -27,6 +28,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         case killSwitchPolicy = "kill_switch_policy", ipv6Mode = "ipv6_mode", mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu", effectiveMTU = "effective_mtu", mtuSource = "mtu_source"
         case startupMode = "startup_mode", autoConnect = "auto_connect"
+        case note
     }
 
     static func issue(_ message: String) -> NSError {

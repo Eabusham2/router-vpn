@@ -91,7 +91,7 @@ require(
 
 win_settings = require(
     "client/RouterVPN-Windows-ProfileSettings.ps1", "/api/profile/settings", "Allow home LAN access",
-    "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
+    "Always / strict", "AmneziaWG", 'Content="Auto — default" Tag="auto"', "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "Connection profiles", "Add profile", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",
@@ -112,7 +112,7 @@ require_combined(
 
 mac_settings = require(
     "client/macos/RouterVPNProfileSettings.swift", "/api/profile/settings", "Allow home LAN access",
-    "Always / strict", "AmneziaWG", "Auto measured", "DAITA-like", "Jumbo TUN", "SOCKS5",
+    "Always / strict", "AmneziaWG", '("Auto — default","auto")', "DAITA-like", "Jumbo TUN", "SOCKS5",
     "Require encrypted AUTO candidates", "Require obfuscation for AUTO candidates",
     "Connection profiles", "MacConnectionProfileControls", "Add", "Load", "Update", "Delete",
     "/api/connection-profiles", "/api/connection-profile/setup/save", "/api/connection-profile/setup/update",

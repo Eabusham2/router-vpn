@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 // Imported nodes share device policy without acquiring the Router-only base,
@@ -67,6 +68,21 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 	if desktopExternalNativeProtocol(profile.External.Protocol) {
 		return true, ""
 	}
+	if profile.External.Protocol == "tor-bridge" {
+		// The native Tor owner now applies these device settings. It does not
+		// yet own a Router predecessor, Jumbo selection or padding runtime.
+		// Keep those saved requests intact and expose the specific missing path.
+		switch {
+		case profile.MultihopEnabled:
+			return false, "Tor common device settings for Router-entry graphs require the captured desktop predecessor runtime, which is not yet implemented."
+		case profile.JumboTUN:
+			return false, "Tor common device settings cannot discard saved Jumbo mode; its desktop runtime is not yet implemented."
+		case profile.DAITAEnabled:
+			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
+		default:
+			return true, ""
+		}
+	}
 	return false, "This external protocol does not yet apply the common device settings through an owned native desktop runtime."
 }
 
@@ -101,6 +117,10 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 	if startup == "" {
 		startup = "smart-auto"
 	}
+	note := "Save while disconnected. Fixed MTU is a requested interface value, not a measured path result. Effective MTU is historical; use Retest on the connected path. This edit preserves independent entry policy, DNS, credentials and graph selection."
+	if protocol == "tor-bridge" {
+		note = "Save while disconnected. Tor Auto and Default currently use a 1280-byte virtual interface; Fixed changes the interface value only. Interface readback and historical MTU are not fresh path measurements. Tor MTU optimization and Retest are not yet implemented. DNS, credentials and graph selection are preserved."
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(profileDeviceSettings{
@@ -111,7 +131,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		IPv6Mode: ipv6, MTUPolicy: mtu, ManualMTU: manual,
 		EffectiveMTU: profile.EffectiveMTU, MTUSource: profile.EffectiveMTUSource,
 		StartupMode: startup, AutoConnect: profile.AutoConnect,
-		Note: "Save while disconnected. Fixed MTU is a requested interface value, not a measured path result. Effective MTU is historical; use Retest on the connected path. This edit preserves independent entry policy, DNS, credentials and graph selection.",
+		Note: note,
 	})
 }
 
@@ -177,6 +197,27 @@ func applyProfileDeviceSettings(profile common.RouterProfile, request profileDev
 func validateExternalDeviceSettings(profile common.RouterProfile) error {
 	if supported, reason := externalDevicePolicySupport(profile); !supported {
 		return errors.New(reason)
+	}
+	if profile.External.Protocol == "tor-bridge" {
+		// Pass the exact runtime preferences and private owners to the shipping
+		// Tor parser. Idle Home may remain unresolved; this never grants a
+		// runnable resolver, modifies bridge credentials, or reuses MTU history.
+		// Display/measurement floats are deliberately outside this projection.
+		type wireProfile common.RouterProfile
+		captured := common.RouterProfile{
+			ID: profile.ID, NodeKind: profile.NodeKind, External: profile.External,
+			NodeProofID: profile.NodeProofID, RouterAPI: profile.RouterAPI, APIToken: profile.APIToken,
+			StartLayer: profile.StartLayer, HomeLANAccess: profile.HomeLANAccess, HomeLANCIDRs: profile.HomeLANCIDRs,
+			KillSwitch: profile.KillSwitch, KillSwitchPolicy: profile.KillSwitchPolicy, IPv6Mode: profile.IPv6Mode,
+			MTUPolicy: profile.MTUPolicy, ManualMTU: profile.ManualMTU,
+			DNSMode: profile.DNSMode, DNSProtocol: profile.DNSProtocol, DNSHost: profile.DNSHost,
+			DNSPort: profile.DNSPort, DNSServerName: profile.DNSServerName, DNSPath: profile.DNSPath,
+		}
+		source, err := json.Marshal(wireProfile(captured))
+		if err != nil {
+			return errors.New("could not capture Tor device policy")
+		}
+		return mobiletor.ValidateDesktopBridgeProfile(string(source))
 	}
 	exit, err := standardExitFromExternalProfile(profile)
 	if err != nil {

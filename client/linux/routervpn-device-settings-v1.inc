@@ -170,7 +170,7 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     gtk_grid_attach(GTK_GRID(grid), s->lan, 0, 0, 2, 1);
     const char *kill_labels[] = {"Off", "On connect", "Always / strict"};
     const char *ipv6_labels[] = {"On", "Off", "Auto"};
-    const char *mtu_labels[] = {"Auto measured", "Fixed", "Default"};
+    const char *mtu_labels[] = {"Auto", "Fixed", "Default"};
     const char *startup_labels[] = {"Saved connection", "Last proven connection", "Manual / stay disconnected"};
     s->kill = linux_device_combo_v1(linux_device_kill_ids_v1, kill_labels, G_N_ELEMENTS(kill_labels), kill);
     s->ipv6 = linux_device_combo_v1(linux_device_ipv6_ids_v1, ipv6_labels, G_N_ELEMENTS(ipv6_labels), ipv6);
@@ -187,16 +187,18 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     gint64 effective = 0;
     const char *source = linux_device_string_v1(captured, "mtu_source");
     char *history = linux_device_integer_v1(captured, "effective_mtu", &effective) && effective > 0
-        ? g_strdup_printf("Last recorded interface MTU: %" G_GINT64_FORMAT "%s%s. Retest the active path for a fresh measurement.", effective, source != NULL && source[0] ? " • " : "", source != NULL ? source : "")
-        : g_strdup("No interface MTU has been recorded. Retest is available on the active path.");
+        ? g_strdup_printf("Last recorded interface MTU: %" G_GINT64_FORMAT "%s%s. This is historical interface readback.", effective, source != NULL && source[0] ? " • " : "", source != NULL ? source : "")
+        : g_strdup("No interface MTU has been recorded.");
     GtkWidget *readback = gtk_label_new(history); g_free(history);
     gtk_label_set_xalign(GTK_LABEL(readback), 0.0f); gtk_label_set_line_wrap(GTK_LABEL(readback), TRUE);
     gtk_label_set_max_width_chars(GTK_LABEL(readback), 65); gtk_box_pack_start(GTK_BOX(box), readback, FALSE, FALSE, 0);
     s->message = gtk_label_new(NULL); gtk_label_set_xalign(GTK_LABEL(s->message), 0.0f);
     gtk_label_set_line_wrap(GTK_LABEL(s->message), TRUE); gtk_label_set_max_width_chars(GTK_LABEL(s->message), 65);
     gtk_box_pack_start(GTK_BOX(box), s->message, FALSE, FALSE, 0);
+    const char *note = linux_device_string_v1(captured, "note");
     linux_device_message_v1(s, !supported ? linux_device_string_v1(captured, "device_policy_reason") :
-        !s->idle ? "Disconnect before editing these settings." : "Save applies these device and startup choices together. DNS and hop settings are retained.");
+        !s->idle ? "Disconnect before editing these settings." : note != NULL && note[0] ? note :
+        "Save applies these device and startup choices together. DNS and hop settings are retained.");
     GtkWidget *controls[] = {s->lan, s->kill, s->ipv6, s->mtu, s->startup, s->automatic};
     for (guint i = 0; i < G_N_ELEMENTS(controls); i++) gtk_widget_set_sensitive(controls[i], supported && s->idle);
     gtk_dialog_set_response_sensitive(GTK_DIALOG(s->dialog), GTK_RESPONSE_OK, supported && s->idle);

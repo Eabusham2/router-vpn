@@ -42,6 +42,7 @@ def main():
         "auto-mtu-reset": ('gint64 manual = 0;', 'gint64 manual = 1420;'),
         "captured-token": ('g_strcmp0(kind, "external") != 0 || !linux_device_token_v1(token)', 'g_strcmp0(kind, "external") != 0 || (FALSE && !linux_device_token_v1(token))'),
         "unchanged-startup": ('if (g_strcmp0(startup, s->initial_startup) != 0 || automatic != s->initial_automatic)', 'if (TRUE || g_strcmp0(startup, s->initial_startup) != 0 || automatic != s->initial_automatic)'),
+        "captured-policy-note": ('const char *note = linux_device_string_v1(captured, "note");', 'const char *note = NULL;'),
     }
     flags = shlex.split(subprocess.check_output(["pkg-config", "--cflags", "--libs", "gtk+-3.0", "json-glib-1.0"], text=True))
     with tempfile.TemporaryDirectory(prefix="routervpn-gtk-device-") as tmp:

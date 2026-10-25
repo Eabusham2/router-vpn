@@ -60,6 +60,16 @@ static gboolean modal_save(gpointer data) {
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "exit-\"quoted\""}; active_app = &app;
+    JsonNode *tor_root = fixture(); JsonObject *tor_capture = json_node_get_object(tor_root);
+    const char *tor_note = "Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented.";
+    json_object_set_string_member(tor_capture, "protocol", "tor-bridge");
+    json_object_set_string_member(tor_capture, "note", tor_note);
+    LinuxDeviceSettingsV1 tor_settings = {0};
+    check(linux_device_build_v1(&tor_settings, &app, tor_capture, app.selected), "supported Tor device panel rejected");
+    char *auto_label = gtk_combo_box_text_get_active_text(GTK_COMBO_BOX_TEXT(tor_settings.mtu));
+    check(g_strcmp0(auto_label, "Auto") == 0, "Tor Auto claimed a measured path"); g_free(auto_label);
+    check(g_strcmp0(gtk_label_get_text(GTK_LABEL(tor_settings.message)), tor_note) == 0, "captured Tor capability note was replaced");
+    linux_device_clear_v1(&tor_settings); json_node_free(tor_root);
     JsonNode *root = fixture(); JsonObject *captured = json_node_get_object(root);
     LinuxDeviceSettingsV1 s = {0};
     check(linux_device_build_v1(&s, &app, captured, app.selected), "valid device panel rejected");

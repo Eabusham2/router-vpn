@@ -192,7 +192,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
     [xml]$xaml = @'
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Settings" Width="720" Height="850" MinWidth="560" MinHeight="620" WindowStartupLocation="CenterOwner" ResizeMode="CanResize" Background="#0B1020" Foreground="#F5F7FF">
 <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="20">
-<TextBlock Text="Selected Router VPN node" FontSize="22" FontWeight="Bold"/><TextBlock Name="SettingsNote" Text="Disconnect before saving. SMART AUTO, IPv6 On and Auto measured MTU are the unified defaults. These are persistent node preferences for the next supported connection; a saved value is not runtime proof." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,4,0,14"/>
+<TextBlock Text="Selected Router VPN node" FontSize="22" FontWeight="Bold"/><TextBlock Name="SettingsNote" Text="Disconnect before saving. SMART AUTO, IPv6 On and Auto MTU are the unified defaults. These are persistent node preferences for the next supported connection; a saved value is not runtime proof." TextWrapping="Wrap" Foreground="#A8B6D5" Margin="0,4,0,14"/>
 <StackPanel Name="NodeSettings">
 <CheckBox Name="LAN" Content="Allow home LAN access" Margin="0,5"/>
 <TextBlock Text="Kill switch policy"/><ComboBox Name="Kill" Margin="0,3,0,10"><ComboBoxItem Content="Off" Tag="off"/><ComboBoxItem Content="On connect" Tag="on-connect"/><ComboBoxItem Content="Always / strict" Tag="always"/></ComboBox>
@@ -202,7 +202,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
 <TextBlock Text="AUTO / SMART AUTO filters" FontWeight="SemiBold" Margin="0,8,0,2"/><CheckBox Name="RequireEncrypted" Content="Require encrypted AUTO candidates" Margin="0,3"/><CheckBox Name="RequireObfuscation" Content="Require obfuscation for AUTO candidates" Margin="0,3"/><TextBlock Text="Both are Off by default. Enabled filters remove non-matching candidates before AUTO tries them; SMART cannot simplify below the selected requirements." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 <TextBlock Text="Start encryption / obfuscation layer" FontWeight="SemiBold"/><ComboBox Name="StartLayer" Margin="0,3,0,4"><ComboBoxItem Content="Off — default" Tag="off"/><ComboBoxItem Content="AES-256-GCM — authenticated" Tag="aes-256-gcm"/><ComboBoxItem Content="AES-256-GCM + XOR whitening" Tag="aes-256-gcm+xor-whitening"/></ComboBox><TextBlock Name="StartLayerTruth" Text="AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR is reversible whitening of already-authenticated ciphertext only; it is never counted as encryption. Unsupported runtime graphs fail closed." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 </StackPanel>
-<TextBlock Text="MTU policy"/><ComboBox Name="MTUPolicy" Margin="0,3,0,5"><ComboBoxItem Content="Auto measured — default" Tag="auto"/><ComboBoxItem Content="Fixed / manual" Tag="manual"/><ComboBoxItem Content="Runtime default" Tag="default"/></ComboBox><TextBox Name="ManualMTU" Margin="0,0,0,5" ToolTip="Fixed MTU 576–9000; ignored for Auto/Runtime default"/><TextBlock Name="Effective" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
+<TextBlock Text="MTU policy"/><ComboBox Name="MTUPolicy" Margin="0,3,0,5"><ComboBoxItem Content="Auto — default" Tag="auto"/><ComboBoxItem Content="Fixed / manual" Tag="manual"/><ComboBoxItem Content="Runtime default" Tag="default"/></ComboBox><TextBox Name="ManualMTU" Margin="0,0,0,5" ToolTip="Fixed MTU 576–9000; ignored for Auto/Runtime default"/><TextBlock Name="Effective" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 <StackPanel Name="RouterFeatureSettings">
 <CheckBox Name="DAITA" Content="DAITA-like traffic padding (bounded; supported modes only)" Margin="0,5"/><CheckBox Name="Jumbo" Content="Jumbo TUN / jumbo packet mode (compatible paths only)" Margin="0,5"/><CheckBox Name="Socks" Content="Enable private in-tunnel SOCKS5 utility" Margin="0,5"/>
 <StackPanel Orientation="Horizontal" Margin="0,4,0,10"><Button Name="Forwarding" Content="Port forwarding / Protected DMZ…" Padding="10,6"/></StackPanel>
@@ -240,7 +240,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $lan.IsChecked=[bool]$externalDevice.home_lan_access;SetTag $kill ([string]$externalDevice.kill_switch_policy);SetTag $ipv6 ([string]$externalDevice.ipv6_mode);SetTag $mtuPolicy ([string]$externalDevice.mtu_policy)
         $manual.Text=if([int]$externalDevice.manual_mtu-gt0){[string]$externalDevice.manual_mtu}else{''}
         $manual.ToolTip='Fixed interface MTU 1280 to 9000; the native transport validates its actual limit.'
-        $effective.Text="Historical effective MTU: $(if([int]$externalDevice.effective_mtu-gt0){$externalDevice.effective_mtu}else{'not measured'}) - $($externalDevice.mtu_source). Retest the connected path for a fresh value."
+        $effective.Text="Last recorded interface MTU: $(if([int]$externalDevice.effective_mtu-gt0){$externalDevice.effective_mtu}else{'not recorded'}) - $($externalDevice.mtu_source). This is historical interface readback."
         $nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported
         $settingsSave.IsEnabled=[bool]$externalDevice.device_policy_supported -or $null -ne $externalStartup
         $settingsNote.Text=if($externalDevice.device_policy_supported){[string]$externalDevice.note}else{[string]$externalDevice.device_policy_reason}
@@ -307,7 +307,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
 
 # Safe unified settings contract: /api/profile/settings only for node preferences; connection profiles use
 # /api/connection-profile/setup/* plus /api/connection-profiles and never duplicate node secrets.
-# SMART AUTO default / IPv6 On default / controller-verified authenticated AES/XOR-whitening Start Layer / Auto measured MTU / fixed override + Retest /
+# SMART AUTO default / IPv6 On default / controller-verified authenticated AES/XOR-whitening Start Layer / Auto MTU / fixed override + supported Retest /
 # Require encrypted + Require obfuscation default Off / DAITA-like traffic padding / Jumbo TUN /
 # LAN / kill switch / WG-AWG base+fallback / private SOCKS5 / forwarding ownership / startup /
 # connection profile Add + Load + Update + Delete with current mode/CUSTOM layers and exact visible multihop entry/exit/exit transport;

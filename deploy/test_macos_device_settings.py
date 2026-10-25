@@ -49,6 +49,8 @@ def shipping(model=None, settings=None, build=None):
     product = (ROOT / "client/macos/RouterVPNMacUnifiedShell.swift").read_text()
     assert 'editProfileSettings' in product, "Unified native Settings has no real callback"
     assert 'Last recorded interface MTU:' in settings
+    assert 'capturedDevice?.note ??' in settings, "Device capability note is not shown by the shipping form"
+    assert '("Auto — default","auto")' in settings, "Auto label invents a path measurement"
     workflow = (ROOT / ".github/workflows/macos-native-app.yml").read_text()
     assert workflow.count("- 'deploy/test_macos_device_settings.py'") == 2, "Fixture-only edits do not trigger both native workflow events"
     assert 'run: python3 deploy/test_macos_device_settings.py\n' in workflow, "macOS workflow omitted executable device defects"
@@ -287,6 +289,13 @@ do {
     let quoted = try MacProfileDeviceSettings.capture(data(saved(["profile_id":id])), displayedProfileID:id)
     check(object(try quoted.saveData(displayedProfileID:id, edits:edited(quoted)))["profile_id"] as? String == id, "JSON escaping changed the captured identity")
 }
+do {
+    let note = "Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented."
+    let tor = try MacProfileDeviceSettings.capture(data(saved(["protocol":"tor-bridge", "note":note])), displayedProfileID:fixtureID)
+    let body = object(try tor.saveData(displayedProfileID:fixtureID, edits:edited(tor)))
+    check(tor.note == note && body["note"] == nil,
+          "Captured Tor capability note was lost or copied into policy")
+}
 let invalidCaptures: [[String:Any]] = [
     ["profile_id":"foreign"], ["profile_token":"short"], ["profile_token":String(repeating:"G",count:64)],
     ["node_kind":"router-vpn"], ["device_policy_supported":"true"], ["home_lan_access":"false"],
@@ -419,6 +428,18 @@ do {
     }
     check(owner.error.isEmpty && api.writes.count == 1, "Edited startup caused a partial/multiple transaction")
     check(Set(object(api.writes[0].1).keys) == keys.union(["startup_mode","auto_connect"]), "Real startup edit did not join common Save")
+}
+do {
+    let api = ProductAPI()
+    let note = "Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented."
+    api.device = saved(["protocol":"tor-bridge", "note":note])
+    let owner = runEditor(api) { alert,_ in
+        inspectCommon(alert,editable:true)
+        check(alert.informativeText == note, "Real Tor form replaced its captured capability note")
+        check(popup(alert,"MTU").selectedItem?.title == "Auto — default", "Real Tor Auto claimed a measured path")
+        return .alertFirstButtonReturn
+    }
+    check(owner.error.isEmpty && api.writes.count == 1 && api.writes[0].0 == "/api/profile/device", "Real Tor device Save lost its captured route")
 }
 do {
     let api = ProductAPI()

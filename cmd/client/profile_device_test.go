@@ -18,6 +18,9 @@ import (
 func deviceSettingsTestApp(t *testing.T, protocol string, viaEntry bool) *app {
 	t.Helper()
 	a := externalConnectionTestApp(t, protocol, viaEntry)
+	if protocol == "tor-bridge" {
+		return a
+	}
 	var native common.RouterProfile
 	if protocol == "openvpn" {
 		var err error
@@ -89,14 +92,17 @@ func postDeviceSettingsForTest(a *app, body io.Reader) *httptest.ResponseRecorde
 }
 
 func TestProfileDevicePreservesExternalGraphCredentialsEntryAndMeasurements(t *testing.T) {
-	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"} {
+	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor-bridge"} {
 		for _, viaEntry := range []bool{false, true} {
+			if protocol == "tor-bridge" && viaEntry {
+				continue // The separate Tor rejection test retains this required graph.
+			}
 			for _, policy := range []string{"auto", "default", "manual"} {
 				t.Run(protocol+"/"+policy+map[bool]string{false: "/direct", true: "/entry"}[viaEntry], func(t *testing.T) {
 					a := deviceSettingsTestApp(t, protocol, viaEntry)
 					capture := getDeviceSettingsForTest(t, a)
 					if !capture.DevicePolicySupported || capture.DevicePolicyReason != "" {
-						t.Fatal("native ordinary path does not advertise its actual common settings")
+						t.Fatal("native path does not advertise its actual common settings")
 					}
 					before := cloneRouterProfileStore(a.profiles)
 					request := deviceSettingsRequestForTest(t, capture, policy)
@@ -415,9 +421,10 @@ func TestProfileDeviceReadNormalizesLegacyBlankEnumsWithoutMutatingSource(t *tes
 
 func TestProfileDeviceUnsupportedRuntimeAndRouterStayExplicit(t *testing.T) {
 	a := externalConnectionTestApp(t, "tor-bridge", false)
+	a.profiles.Profiles[3].External.Protocol = "future-protocol"
 	capture := getDeviceSettingsForTest(t, a)
 	if capture.DevicePolicySupported || capture.DevicePolicyReason == "" {
-		t.Fatal("unwired Tor device path claimed support")
+		t.Fatal("unwired protocol claimed common device support")
 	}
 	before := cloneRouterProfileStore(a.profiles)
 	q := deviceSettingsRequestForTest(t, capture, "auto")
