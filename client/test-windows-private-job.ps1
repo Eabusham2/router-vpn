@@ -107,6 +107,28 @@ function New-Variant([string]$Name,[string]$Source) {
     return $type
 }
 
+function Require-PendingExitGuard([object]$Owner) {
+    $failure=$null
+    # PowerShell's adapted property access can turn a throwing getter into
+    # $null. Invoke the actual accessor so the native rejection is observed.
+    try { $null=$Owner.get_ExitCode() } catch { $failure=Unwrap $_ }
+    Check ($failure -is [InvalidOperationException] -and $failure.Message -ceq 'The captured child has not exited.') 'A running child exposed a successful exit status.'
+}
+function Unproved-ClosedOwner([type]$Type) {
+    # This portable witness has no process or Job handles and no exit receipt.
+    # Marking it closed avoids a Win32 call while exercising the real getter.
+    $owner=[Activator]::CreateInstance($Type,$true)
+    $closed=$Type.GetField('closed',[Reflection.BindingFlags]'Instance,NonPublic')
+    Check ($null -ne $closed) 'The portable exit witness lost its exact state boundary.'
+    $closed.SetValue($owner,$true)
+    return $owner
+}
+$exitGuard='if (!WaitLocked(0)) throw new InvalidOperationException("The captured child has not exited.");'
+Check ($script:NativeSource.Contains($exitGuard)) 'The actual exit-witness guard moved without updating the executable fixture.'
+$unguardedExitType=New-Variant 'UnprovedExit' ($script:NativeSource.Replace($exitGuard,'if (!WaitLocked(0)) return 0;'))
+Require-PendingExitGuard (Unproved-ClosedOwner $ownerType)
+Detect-Defect { Require-PendingExitGuard (Unproved-ClosedOwner $unguardedExitType) } 'A running child exposed a successful exit status.' 'The explicit getter fixture accepted an exit code without an exit witness.'
+
 $assignment='if (!Native.AssignProcessToJobObject(owner.job, owner.process))'
 Check ($script:NativeSource.Contains($assignment)) 'The actual Job assignment boundary moved without updating the executable fixture.'
 $failedType=New-Variant 'AssignmentFailure' ($script:NativeSource.Replace($assignment,'if (owner.processId > 0)'))
@@ -321,7 +343,7 @@ try {
     Check $owner.IsInOwnedJob 'The actual native child is not a member of its exact private Job.'
     Check (-not (Wait-RouterVPNPrivateJob $owner -Milliseconds 0)) 'A wait timeout became a process exit acknowledgement.'
     Check (-not $owner.HasExited) 'A running child was reported exited.'
-    Reject { $owner.ExitCode } 'A running child exposed a successful exit status.'
+    Require-PendingExitGuard $owner
     Reject { Close-RouterVPNPrivateJob $owner } 'A live primary owner was closed implicitly.'
     Check (-not $owner.IsClosed -and -not $observed.HasExited) 'Refusing a premature Close still destroyed the live owner.'
     Check (Stop-RouterVPNPrivateJob $owner -Milliseconds 15000 -ExitCode 71) 'Explicit Job termination did not join the captured primary.'
