@@ -24,7 +24,7 @@ def block(source, marker):
 
 def run_case(directory, mutation):
     fixture=directory/mutation;fixture.mkdir()
-    hits=[];errors=[]
+    hits=[];errors=[];events=[]
     class Handler(BaseHTTPRequestHandler):
         protocol_version='HTTP/1.1'
         def log_message(self,*args):pass
@@ -54,20 +54,27 @@ def run_case(directory, mutation):
                     while not(fixture/'release').exists() and time.monotonic()<deadline:time.sleep(.01)
                 if case=='redirect':
                     self.send_response(302);self.send_header('Location','/must-not-follow');self.send_header('Content-Length','0');self.end_headers();return
-                if case=='oversized':
-                    self.send_response(200);self.send_header('Content-Length',str(3*1024*1024));self.end_headers()
-                    # Begin the declared response, then keep it open. The
-                    # client must reject the header bound and close its task;
-                    # an eventual empty-body timeout cannot pass this case.
-                    try:self.wfile.write(b'x');self.wfile.flush()
+                if case in ('oversized','oversized-untyped'):
+                    self.send_response(200);self.send_header('Content-Length',str(3*1024*1024))
+                    # Match the shipping Go JSON endpoint. Foundation may
+                    # buffer an untyped prefix to infer the response MIME type
+                    # before delivering either response or data delegates:
+                    # https://developer.apple.com/documentation/foundation/urlresponse/mimetype
+                    # https://developer.apple.com/forums/thread/64875
+                    if case=='oversized':self.send_header('Content-Type','application/json')
+                    self.end_headers();events.append(case+':headers')
+                    # Keep both declared bodies incomplete. The untyped case
+                    # supplies a bounded sniffable prefix, still far below the
+                    # 2MiB data limit, so only the header bound can reject it.
+                    try:self.wfile.write(b'{' if case=='oversized' else b'x'*4096);self.wfile.flush();events.append(case+':prefix')
                     except(BrokenPipeError,ConnectionResetError):
-                        (fixture/'oversized-cancelled').write_text('closed');return
+                        (fixture/(case+'-cancelled')).write_text('closed');events.append(case+':cancelled');return
                     deadline=time.monotonic()+5
                     while time.monotonic()<deadline:
                         ready,_,_=select.select([self.connection],[],[],.05)
                         if ready and self.connection.recv(1,socket.MSG_PEEK)==b'':
-                            (fixture/'oversized-cancelled').write_text('closed');return
-                    errors.append('oversized native request was not cancelled');self.close_connection=True;return
+                            (fixture/(case+'-cancelled')).write_text('closed');events.append(case+':cancelled');return
+                    errors.append(case+' native request was not cancelled');self.close_connection=True;return
                 if case=='stream':
                     self.send_response(200);self.send_header('Connection','close');self.end_headers()
                     try:
@@ -141,14 +148,14 @@ guard case .success(let owned)?=replacementResult,String(decoding:owned,as:UTF8.
 for _ in 0..<10{_ = RunLoop.current.run(mode:.default,before:Date().addingTimeInterval(0.01))}
 if old.updates != 0 || !old.status.stringValue.isEmpty || replacement.updates != 1{fail("Closed/stale callback mutated dialog state")}
 var count=4
-for scenario in ["success","failure","redirect","oversized","stream"] {
+for scenario in ["success","failure","redirect","oversized","oversized-untyped","stream"] {
  let owner=Owner();var result:Result<Data,Error>?
  try owner.performLocalRequest("/api/speed-lab/run",body:["test_case":scenario],timeout:8){reply in owner.updates+=1;result=reply}
  wait({result != nil},"Native response never completed: "+scenario)
  if scenario=="success" {guard case .success?=result else{fail("Valid native response failed")}}
  else {guard case .failure?=result else{fail("Invalid native response reported success: "+scenario)}}
- if scenario=="oversized" || scenario=="stream" {guard case .failure(let error)?=result,(error as NSError).domain=="RouterVPNSpeedLab",(error as NSError).code==2 else{fail("Oversized native response was accepted or only timed out: "+scenario)}}
- if scenario=="oversized" {wait({exists("oversized-cancelled")},"Rejected native response did not cancel its actual task")}
+ if scenario.hasPrefix("oversized") || scenario=="stream" {guard case .failure(let error)?=result,(error as NSError).domain=="RouterVPNSpeedLab",(error as NSError).code==2 else{fail("Oversized native response was accepted or only timed out: "+scenario)}}
+ if scenario.hasPrefix("oversized") {wait({exists(scenario+"-cancelled")},"Rejected native response did not cancel its actual task")}
  if owner.updates != 1{fail("Native completion was delivered more than once")};count+=1
 }
 for raw in ["https://127.0.0.1/api/speed-lab/run","http://example.invalid/api/speed-lab/run","http://127.0.0.1/api/disconnect","http://u:p@127.0.0.1/api/speed-lab/run","http://127.0.0.1/api/speed-lab/run?other=1"] {
@@ -161,7 +168,7 @@ print("Actual Swift URLSession cancellation, ownership, bounds and failure contr
         subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(fixture/'Transport.swift'),str(fixture/'main.swift'),'-o',str(fixture/'transport-test')],check=True,timeout=120)
         result=subprocess.run([str(fixture/'transport-test'),'http://127.0.0.1:'+str(server.server_address[1]),str(fixture)],text=True,stdout=subprocess.PIPE,stderr=subprocess.STDOUT,timeout=35)
         if mutation=='shipping':
-            print(result.stdout,end='');assert result.returncode==0,result.stdout
+            print(result.stdout,end='');assert result.returncode==0,result.stdout+'\nLoopback events: '+repr(events)+'\nHits: '+repr(hits)+'\nErrors: '+repr(errors)
             assert not errors,errors
             assert '/must-not-follow' not in hits,'Native transport followed a redirect'
         else:

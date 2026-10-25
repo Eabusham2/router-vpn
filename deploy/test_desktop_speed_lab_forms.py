@@ -184,7 +184,7 @@ def main():
             elif args.platform=='darwin': swift_form(directory)
             else: subprocess.run([shell,'-NoLogo','-NoProfile','-File',str(ROOT/'client/test-windows-speed-lab-paths.ps1'),'-Root',str(ROOT),'-Output',str(directory)],check=True,timeout=120)
             subprocess.run(['go','test','-race','-count=1','./cmd/client','-run','^TestDesktopSpeedLabPathFormPayload$'],cwd=ROOT,env=env,check=True,timeout=180)
-    print('Native '+args.platform+' Speed Lab forms → exact captured Go paths: PASS',flush=True)
+    print('Native '+args.platform+' Speed Lab forms -> exact captured Go paths: PASS',flush=True)
 
 
 if __name__=='__main__': main()
