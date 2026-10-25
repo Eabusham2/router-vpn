@@ -81,6 +81,14 @@ extension RouterVPNModel {
 
     func connectSelectedExternal() async {
         guard await iosSpeedLabOwnership.admitConnection() else { return }
+        await connectSelectedExternal(startupAdmission: nil)
+    }
+
+    func connectSelectedExternal(startupAdmission: (() -> Bool)?, restoreLast: Bool = false) async {
+        // Startup has no right to supersede a temporary test. Its captured
+        // admission proves idle ownership synchronously before preparation.
+        // Explicit Connect has already joined the normal owner above.
+        if let startupAdmission { guard startupAdmission() else { return } }
         guard !profileMutationBlocked else { message = "Disconnect or let the active VPN transition finish before starting another external connection."; return }
         guard let bundle, let profile = selectedNodeProfile, profile.normalizedNodeKind == "external" else {
             message = "Choose an external custom node first"; return
@@ -169,6 +177,15 @@ extension RouterVPNModel {
             try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
             try await manager.loadFromPreferences()
             try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
+            if startupAdmission != nil {
+                let available = try await NETunnelProviderManager.loadAllFromPreferences()
+                try requireExternalPreparation(generation, source: bundle, entry: capturedEntry, manager: manager)
+                guard available.allSatisfy({
+                    $0.connection.status == .disconnected || $0.connection.status == .invalid
+                }) else {
+                    throw IOSStartupPolicy.issue("A VPN became active during startup permission. No new connection was started.")
+                }
+            }
             guard let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
                   saved.providerConfiguration?["bundle"] as? Data == encodedBundle,
                   saved.providerConfiguration?["engine"] as? String == "external-libbox",
@@ -184,7 +201,14 @@ extension RouterVPNModel {
             }
             message = tor ? "Connecting to Tor • building the circuit and verifying its current exit…" : "Starting external \(protocolName) PacketTunnel • proving \(ordinary ? "selected DNS and " : "")exit \(expected)…"
             let hold = IOSMTUMeasurementGate.current
-            let options: [String: NSObject]? = hold.isEmpty ? nil : ["routervpn_mtu_hold": hold as NSString]
+            var launchOptions: [String: NSObject] = hold.isEmpty ? [:] : ["routervpn_mtu_hold": hold as NSString]
+            if restoreLast, let configuration = saved.providerConfiguration,
+               (try? IOSMultihopExecution.requiresCapture(configuration: configuration)) == true,
+               let previous = try? IOSStartupLastChoice.restored(configuration: configuration, digest: Self.iosStrategyDigest),
+               let encoded = try? previous.encoded() {
+                launchOptions[IOSMultihopExecution.startupLaunchKey] = String(decoding: encoded, as: UTF8.self) as NSString
+            }
+            let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
             try manager.connection.startVPNTunnel(options: options)
             let selectingExecution = ordinary && profile.multihopEnabled == true && ["server", "auto"].contains(profile.multihopExecution ?? "local")
             let ok = await waitExternalConnection(manager, attempts: tor ? 720 : (selectingExecution ? 480 : 48), generation: generation)
@@ -199,6 +223,13 @@ extension RouterVPNModel {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
             if connected {
                 message = (tor ? "Connected • Tor • current circuit exit verified" : "Connected • external \(protocolName) • \(ordinary ? "selected DNS and " : "")exact exit verified: \(expected)") + (capturedEntry == nil ? "" : " • captured entry verified") + (strict ? " • strict route lockdown" : "")
+                if selectingExecution, IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active {
+                    do { try await rememberIOSExternalExecution(manager: manager, source: bundle, entry: capturedEntry, generation: generation) }
+                    catch {
+                        guard iosConnectGeneration == generation, connected, !iosUserDisconnectInProgress else { return }
+                        message += " • previous execution could not be saved for Last"
+                    }
+                }
             }
         } catch {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
@@ -207,6 +238,37 @@ extension RouterVPNModel {
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress else { return }
             message = "External startup was not completed: \(failure)"
         }
+    }
+
+    private func rememberIOSExternalExecution(manager: NETunnelProviderManager, source: ClientBundle,
+                                              entry: Data?, generation: UUID) async throws {
+        guard let connection = manager.connection as? NETunnelProviderSession,
+              let connectedDate = connection.connectedDate,
+              let proto = manager.protocolConfiguration as? NETunnelProviderProtocol,
+              let configuration = proto.providerConfiguration else { throw CancellationError() }
+        let captured = try IOSStartupCapture(bundle: source, entry: entry, generation: generation)
+        let executionSource = try IOSMultihopExecution.Source(configuration: configuration, digest: Self.iosStrategyDigest)
+        let strict = proto.includeAllNetworks, enforced = proto.enforceRoutes, lan = proto.excludeLocalNetworks
+        func requireCurrent() throws {
+            try Task.checkCancellation()
+            guard connected, iosConnectGeneration == generation, !iosUserDisconnectInProgress,
+                  IOSSpeedLabContext.owner == nil, !iosSpeedLabOwnership.active,
+                  connection.status == .connected, connection.connectedDate == connectedDate,
+                  let current = bundle, let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  saved.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel",
+                  saved.includeAllNetworks == strict, saved.enforceRoutes == enforced, saved.excludeLocalNetworks == lan,
+                  let now = saved.providerConfiguration,
+                  try IOSMultihopExecution.Source(configuration: now, digest: Self.iosStrategyDigest) == executionSource,
+                  try IOSStartupCapture(bundle: current, entry: externalTorEntryData(source: current), generation: iosConnectGeneration) == captured else {
+                throw CancellationError()
+            }
+        }
+        try requireCurrent()
+        let request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+        let data = try await IOSMTUControl.send(connection, operation: "speed-lab-execution", request: request, session: "")
+        try requireCurrent()
+        let receipt = try IOSMultihopExecution.Capture.decode(data, source: executionSource, request: request)
+        try IOSStartupLastChoice.record(configuration: configuration, receipt: receipt, digest: Self.iosStrategyDigest)
     }
 
     private func requireExternalPreparation(_ generation: UUID, source: ClientBundle, entry: Data?, manager: NETunnelProviderManager) throws {

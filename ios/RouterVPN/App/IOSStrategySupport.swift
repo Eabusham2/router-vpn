@@ -209,16 +209,54 @@ extension RouterVPNModel {
     }
 
     func recordIOSLastRuntime() {
-        guard connected, let profile = iosStrategyProfile, !activeRawProfile.isEmpty else { return }
+        guard connected, let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn",
+              !activeRawProfile.isEmpty else { return }
         let value = IOSLastRuntime(routerID: profile.id, rawProfileID: activeRawProfile, logicalModeID: selectedLogicalMode)
         if let data = try? JSONEncoder().encode(value) { UserDefaults.standard.set(data, forKey: "router-vpn.ios.last-runtime-v1") }
     }
 
     func applyIOSStartupPolicyIfNeeded() async {
-        guard let profile = iosStrategyProfile, profile.normalizedNodeKind == "router-vpn", profile.autoConnect == true else { return }
-        let managers = (try? await NETunnelProviderManager.loadAllFromPreferences()) ?? []
-        if managers.contains(where: { $0.connection.status == .connected || $0.connection.status == .connecting || $0.connection.status == .reasserting }) { return }
-        switch (profile.startupMode ?? "manual").lowercased() {
+        guard iosStartupPolicy.claim(), !Task.isCancelled, !profileMutationBlocked,
+              !iosSpeedLabOwnership.active, let profile = iosStrategyProfile,
+              profile.autoConnect == true else { return }
+        let mode: String
+        let captured: IOSStartupCapture
+        let generation = iosConnectGeneration
+        do {
+            mode = try IOSStartupPolicy.mode(profile.startupMode)
+            guard mode != "manual" else { return }
+            captured = try iosStartupCapture()
+            let managers = try await NETunnelProviderManager.loadAllFromPreferences()
+            guard iosStartupMatches(captured), managers.allSatisfy({
+                $0.connection.status == .disconnected || $0.connection.status == .invalid
+            }) else { return }
+        } catch {
+            guard !Task.isCancelled, !profileMutationBlocked,
+                  iosConnectGeneration == generation, iosStrategyProfile == profile else { return }
+            message = "Startup stayed disconnected: \(error.localizedDescription)"
+            return
+        }
+        if profile.normalizedNodeKind == "external" {
+            // An imported node owns its protocol and complete saved graph.
+            // AUTO/SMART/Last never substitute Router modes or a different exit.
+            await connectSelectedExternal(startupAdmission: { self.iosStartupMatches(captured) }, restoreLast: mode == "last")
+            return
+        }
+        guard profile.normalizedNodeKind == "router-vpn" else {
+            message = "The selected node has no supported startup path."
+            return
+        }
+        let intent = IOSStartupIntent(captured)
+        await IOSSpeedLabContext.$startupAdmission.withValue({ self.iosStartupMatches(intent) }) {
+            await IOSSpeedLabContext.$startupClaimed.withValue({ intent.generation = $0 }) {
+                await runIOSRouterStartup(mode: mode, profile: profile, intent: intent)
+            }
+        }
+    }
+
+    private func runIOSRouterStartup(mode: String, profile: RouterProfile, intent: IOSStartupIntent) async {
+        guard iosStartupMatches(intent) else { return }
+        switch mode {
         case "auto":
             auto = true
             await connect()
@@ -230,6 +268,7 @@ extension RouterVPNModel {
                   let last = try? JSONDecoder().decode(IOSLastRuntime.self, from: data),
                   last.routerID == profile.id,
                   await connectIOSRawCandidate(last.rawProfileID) else {
+                guard iosStartupMatches(intent) else { return }
                 message = "Last-mode auto-connect had no restorable proven iOS runtime; falling back to AUTO."
                 auto = true
                 await connect()
@@ -241,5 +280,29 @@ extension RouterVPNModel {
         default:
             message = "Auto-connect is enabled but startup behavior is Manual/unsupported; iOS stayed disconnected."
         }
+    }
+
+    private func iosStartupCapture() throws -> IOSStartupCapture {
+        guard let bundle, let profile = iosStrategyProfile else { throw CancellationError() }
+        let entry: Data?
+        if profile.normalizedNodeKind == "external" {
+            entry = try externalTorEntryData(source: bundle)
+        } else if profile.multihopEnabled == true {
+            let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+            entry = try encoder.encode(iosMultihopEntryBundle(for: bundle))
+        } else { entry = nil }
+        return try IOSStartupCapture(bundle: bundle, entry: entry, generation: iosConnectGeneration)
+    }
+
+    private func iosStartupMatches(_ captured: IOSStartupCapture) -> Bool {
+        guard !Task.isCancelled, !profileMutationBlocked, !iosSpeedLabOwnership.active,
+              !iosUserDisconnectInProgress else { return false }
+        return (try? iosStartupCapture()) == captured
+    }
+
+    private func iosStartupMatches(_ intent: IOSStartupIntent) -> Bool {
+        guard !Task.isCancelled, !profileMutationBlocked, !iosSpeedLabOwnership.active,
+              !iosUserDisconnectInProgress, let current = try? iosStartupCapture() else { return false }
+        return intent.matches(current)
     }
 }

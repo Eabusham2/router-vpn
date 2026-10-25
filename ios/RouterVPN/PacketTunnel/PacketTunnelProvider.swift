@@ -482,8 +482,12 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                 }
                 restoredMultihopExecution = try IOSMultihopExecution.restoredExecution(
                     option: options?[IOSMultihopExecution.launchKey], source: source, mtuHold: initialMTUHold)
+                let startupExecution = try IOSMultihopExecution.restoredStartupExecution(
+                    option: options?[IOSMultihopExecution.startupLaunchKey], source: source)
+                guard restoredMultihopExecution == nil || startupExecution == nil else { throw IOSMultihopExecution.issue() }
+                restoredMultihopExecution = restoredMultihopExecution ?? startupExecution
                 multihopExecutionSource = source
-            } else if options?[IOSMultihopExecution.launchKey] != nil { throw IOSMultihopExecution.issue() }
+            } else if options?[IOSMultihopExecution.launchKey] != nil || options?[IOSMultihopExecution.startupLaunchKey] != nil { throw IOSMultihopExecution.issue() }
             // This complete validation is socket-free. The app's exact source
             // stamps are checked again for every later strategy attempt.
             let maxCapture = try RouterVPNMAXPreparation(provider: provider)

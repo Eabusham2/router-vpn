@@ -78,6 +78,9 @@ private final class IOSMTUReply: @unchecked Sendable {
     }
     static func holdCurrent(_ model: RouterVPNModel, request: String) async throws {
         await model.refreshTunnelStatus()
+        if let startup = IOSSpeedLabContext.startupAdmission {
+            guard startup() else { throw CancellationError() }
+        }
         // WireGuardKit has no adaptive MTU owner in this integration. There is
         // no native mutation to drain; never invent an MTU measurement for it.
         guard model.connected, model.activeEngine.contains("libbox") else { return }

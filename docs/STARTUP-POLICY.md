@@ -78,3 +78,39 @@ PowerShell, Swift, and GTK JSON serializers. The tests verify that only the
 captured identity and chosen startup values are submitted, and reject mutated
 identity/private-field behavior. The Windows workflow runs PowerShell 7 and
 5.1; macOS and Linux run their native serializer checks and actual app builds.
+
+## iOS and iPadOS
+
+Auto-connect runs once per app model when Router VPN opens. It captures the
+exact selected bundle, entry bundle and connection generation before reading
+system VPN preferences. A newer selection, credentials/policy change,
+Disconnect, or temporary Speed Lab owner retires that intent. Available VPNs
+must remain idle through preference save/readback; startup never adopts an
+already-active VPN or replaces a newer operation. Router startup rechecks the
+same intent at nested Connect/SMART admissions and retains its own generation
+across a valid Last fallback. SMART also revalidates startup after refreshing
+VPN status before acquiring any native MTU measurement hold.
+
+Imported nodes keep their own saved protocol and entry/exit graph. AUTO and
+SMART reconnect that graph; Last retains the previous proved Local/Server
+choice only when its source and entry still match. Durable Last state stores
+hashes and the execution choice, without copying credentials or old runtime
+receipts. Startup preferences and historical MTU readback do not invalidate
+that history; requested MTU, credentials, DNS, protection and graph changes
+do. A separate source-bound launch option requests the retained choice, and
+the new native runtime must complete its normal fresh proofs. Speed Lab's
+restore receipt and MTU lease remain separate.
+
+The external Settings form saves only the two startup fields transactionally
+while disconnected. New imported nodes remain Manual with auto-connect Off.
+Live MTU/Retest/Cancel remains accessible for Router, ordinary external and
+Tor paths. App startup does not promise device-boot/background execution or
+add an on-demand rule by itself; existing strict protection retains its own
+system on-demand behavior.
+
+The shipping Swift fixtures exercise 274 startup and Settings checks, 672
+multihop receipt checks, 64 app/provider strategy checks and 21 ownership
+checks. Twelve startup mutations and the strategy suite's five existing
+negative controls are rejected. These checks cover source behavior and
+integration boundaries; exact-SHA Xcode builds and physical acceptance remain
+separate requirements.

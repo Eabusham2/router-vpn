@@ -153,10 +153,17 @@ import Libbox
             message = "Choose a captured single-node native strategy."; return false
         }
         let generation = UUID(); iosConnectGeneration = generation
+        IOSSpeedLabContext.startupClaimed?(generation)
         iosStrategyTaskActive = true; tunnelTransitioning = true
         defer { if iosConnectGeneration == generation { iosStrategyTaskActive = false } }
         do {
-            let managers = try await NETunnelProviderManager.loadAllFromPreferences().filter {
+            let available = try await NETunnelProviderManager.loadAllFromPreferences()
+            if IOSSpeedLabContext.startupAdmission != nil {
+                guard available.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) else {
+                    throw IOSStrategyWire.failure("A VPN became active before startup preparation. No new strategy was started.")
+                }
+            }
+            let managers = available.filter {
                 ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel"
             }
             guard managers.count <= 1 else { throw IOSStrategyWire.failure("Multiple Router VPN managers make strategy ownership ambiguous.") }
@@ -230,6 +237,13 @@ import Libbox
                 try requireIOSStrategyPreparation(generation, source: source, manager: manager, disconnected: true)
                 try await manager.loadFromPreferences()
                 try requireIOSStrategyPreparation(generation, source: source, manager: manager, disconnected: true)
+                if IOSSpeedLabContext.startupAdmission != nil {
+                    let available = try await NETunnelProviderManager.loadAllFromPreferences()
+                    try requireIOSStrategyPreparation(generation, source: source, manager: manager, disconnected: true)
+                    guard !iosSpeedLabOwnership.active, available.allSatisfy({
+                        $0.connection.status == .disconnected || $0.connection.status == .invalid
+                    }) else { throw IOSStrategyWire.failure("A VPN became active during startup permission. No new strategy was started.") }
+                }
                 guard let saved = (manager.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
                       saved["bundle"] as? Data == data,
                       saved["max_source_sha256"] as? [String: String] == (maxSources.isEmpty ? nil : maxSources),

@@ -62,6 +62,17 @@ SWIFT = r'''
   let bytes=try capture.encoded(),text=String(decoding:bytes,as:UTF8.self)
   let ordinary=try IOSMultihopExecution.restoredExecution(option:nil,source:capturedSource,mtuHold:"")
   check("ordinary startup does not invent restoration override",ordinary==nil)
+  let startup=try IOSMultihopExecution.StartupChoice(source:capturedSource,execution:"server")
+  let startupBytes=try startup.encoded(),startupText=String(decoding:startupBytes,as:UTF8.self)
+  let startupSelected=try IOSMultihopExecution.restoredStartupExecution(option:startupText as NSString,source:capturedSource)
+  check("startup Last selects the previous execution without claiming a live receipt",startupSelected=="server" && !startupText.contains("healthy") && !startupText.contains("session_id") && !startupText.contains("credential"))
+  reject("Speed Lab receipt cannot masquerade as a startup choice"){_ = try IOSMultihopExecution.StartupChoice.decode(bytes,source:capturedSource)}
+  reject("startup choice cannot borrow Speed Lab's live restoration lease"){_ = try IOSMultihopExecution.restoredExecution(option:startupText as NSString,source:capturedSource,mtuHold:hold)}
+  for field in ["schema","request","execution","extra"] {
+   var malformed=try JSONSerialization.jsonObject(with:startupBytes) as! [String:Any]
+   if field=="schema"{malformed[field]=2}else{malformed[field]="not-a-valid-choice"}
+   reject("startup choice rejects malformed contract "+field){_ = try IOSMultihopExecution.StartupChoice.decode(JSONSerialization.data(withJSONObject:malformed),source:capturedSource)}
+  }
   for field in ["bundle","entryBundle"]{
    var changed=config
    var object=try JSONSerialization.jsonObject(with:changed[field] as! Data) as! [String:Any]
@@ -69,6 +80,7 @@ SWIFT = r'''
    changed[field]=try JSONSerialization.data(withJSONObject:object)
    let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
    reject("same labels cannot restore changed credentials "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement,request:request)}
+   reject("startup Last cannot reuse changed source "+field){_ = try IOSMultihopExecution.StartupChoice.decode(startupBytes,source:replacement)}
   }
   for field in ["schema","request_id","session_id","healthy","execution","extra"]{
    var object=try JSONSerialization.jsonObject(with:bytes) as! [String:Any]
@@ -208,6 +220,9 @@ def main():
     assert 'currentPathProofGuard() === guardState' in provider
     assert 'engine.bindMultihopExecutionSource(source, metadata: hopMetadata)' in provider
     assert '"execution": restoredMultihopExecution ?? selectedProfile["multihop_execution"]' in provider
+    assert 'IOSMultihopExecution.restoredStartupExecution(' in provider
+    assert 'guard restoredMultihopExecution == nil || startupExecution == nil else' in provider
+    assert 'options?[IOSMultihopExecution.startupLaunchKey] != nil { throw IOSMultihopExecution.issue() }' in provider
     assert '} else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }' not in provider
     assert 'App/IOSMultihopExecution.swift' in (ROOT/'ios/RouterVPN/project.yml').read_text()
 

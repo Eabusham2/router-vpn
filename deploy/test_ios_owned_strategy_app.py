@@ -159,6 +159,13 @@ enum IOSRuntimeSelectionError: LocalizedError {
 @MainActor enum IOSMTUMeasurementGate { static var current = "" }
 @MainActor enum IOSMTUControl {
     static func withHold<T>(model: RouterVPNModel, operation: @MainActor () async throws -> T) async throws -> T { try await operation() }
+    static func send(_ connection: NETunnelProviderSession, operation: String, request: String, session: String) async throws -> Data {
+        throw IOSStrategyWire.failure("External Last IPC is covered by the startup fixture")
+    }
+}
+@MainActor enum IOSPrivateJSONStore {
+    static func read(_ filename: String, maximumBytes: Int) throws -> Data? { nil }
+    static func write(_ data: Data, filename: String, maximumBytes: Int) throws {}
 }
 @MainActor final class FixturePreferences {
     static let standard = FixturePreferences()
@@ -186,6 +193,7 @@ func LibboxRouterCheckMAXProfile(_ mode: String, _ files: String, _ metadata: St
     var activeSessionIdentity: IOSSessionIdentity?
     var iosStrategyStatus: IOSStrategyStatus?
     var iosConnectGeneration = UUID(), multihopProgressGeneration = UUID()
+    let iosStartupPolicy = IOSStartupPolicy()
     let iosSpeedLabOwnership = IOSSpeedLabOwnership()
     var multihopProgressText = ""
     var iosStrategyTaskActive = false, userDisconnectInProgress = false
@@ -327,6 +335,22 @@ func maxAppFixture(_ mode: String, role: String? = nil) throws -> ClientBundle {
         NETunnelProviderManager.saveHook = { changed.bundle?.routerProfiles[0].apiToken = "changed fixture" }
         await model.connect()
         check("changed source before preference readback prevents start", (NETunnelProviderManager.stored[0].connection as! NETunnelProviderSession).starts == 0)
+        for lateVPN in [false, true] {
+            model = try fresh(); model.bundle?.routerProfiles[0].startupMode = "auto"; model.bundle?.routerProfiles[0].autoConnect = true
+            if lateVPN {
+                NETunnelProviderManager.saveHook = {
+                    let foreign = NETunnelProviderManager(), proto = NETunnelProviderProtocol()
+                    proto.providerBundleIdentifier = "different.system.vpn"
+                    foreign.protocolConfiguration = proto; foreign.connection.status = .connected
+                    NETunnelProviderManager.stored.append(foreign)
+                }
+            }
+            await model.applyIOSStartupPolicyIfNeeded()
+            let owned = NETunnelProviderManager.stored.first { ($0.protocolConfiguration as? NETunnelProviderProtocol)?.providerBundleIdentifier == "com.eabusham.routervpn.PacketTunnel" }!
+            check("owned startup proves the saved node only while all VPNs stay idle " + String(lateVPN),
+                  (owned.connection as! NETunnelProviderSession).starts == (lateVPN ? 0 : 1) && model.connected == !lateVPN)
+            model.disconnect(); await model.drainDisconnect()
+        }
         model = try fresh(); model.bundle?.routerProfiles[0].multihopEnabled = true
         NETunnelProviderManager.failLoad = true
         await model.connect()
@@ -463,6 +487,8 @@ def main():
     source += '\n@MainActor extension RouterVPNModel {\n' + external_properties + external_methods
     for text in [selection, (APP / 'Models.swift').read_text(), (APP / 'IOSSessionIdentity.swift').read_text(), wire,
                  (APP / 'IOSSpeedLabOwnership.swift').read_text(),
+                 (APP / 'IOSStartupPolicy.swift').read_text(),
+                 (APP / 'IOSMultihopExecution.swift').read_text(), (APP / 'IOSStartupLastChoice.swift').read_text(),
                  (APP / 'IOSOwnedStrategy.swift').read_text(), (APP / 'IOSStrategySupport.swift').read_text().replace('UserDefaults.standard', 'FixturePreferences.standard'),
                  (APP / 'IOSNativePQProfile.swift').read_text(), (APP / 'IOSMultihopStartLayer.swift').read_text(),
                  (PROVIDER / 'RouterVPNStrategyPolicy.swift').read_text(), (PROVIDER / 'RouterVPNProviderStrategy.swift').read_text()]:

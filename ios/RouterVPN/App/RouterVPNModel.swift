@@ -30,6 +30,7 @@ final class RouterVPNModel: ObservableObject {
     private(set) var activeSessionIdentity: IOSSessionIdentity?
     private var userDisconnectInProgress = false
     var iosConnectGeneration = UUID()
+    let iosStartupPolicy = IOSStartupPolicy()
     let iosSpeedLabOwnership = IOSSpeedLabOwnership()
     var iosStrategyTaskActive = false
     private(set) var iosStrategyStatus: IOSStrategyStatus?
@@ -230,6 +231,9 @@ final class RouterVPNModel: ObservableObject {
     @discardableResult
     func saveRouter() -> Bool {
         guard iosSpeedLabOwnership.admit(.profile) else { return false }
+        // Startup reconnects the captured saved bundle. It must not turn
+        // transient form fields into a new connection policy during launch.
+        if IOSSpeedLabContext.startupAdmission != nil { return true }
         guard !endpoint.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { message = "Enter the home router public IP or hostname"; return false }
         var current = bundle ?? ClientBundle.empty
         current.endpoint = endpoint.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -316,6 +320,7 @@ final class RouterVPNModel: ObservableObject {
             message = "Disconnect the current VPN before replacing its multihop graph."; return
         }
         let generation = UUID(); iosConnectGeneration = generation
+        IOSSpeedLabContext.startupClaimed?(generation)
         guard saveRouter(), let bundle else { return }
         tunnelTransitioning = true
         do {
@@ -483,6 +488,27 @@ final class RouterVPNModel: ObservableObject {
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
         try await manager.loadFromPreferences()
         guard iosConnectGeneration == generation, !userDisconnectInProgress else { throw CancellationError() }
+        if IOSSpeedLabContext.startupAdmission != nil {
+            let available = try await NETunnelProviderManager.loadAllFromPreferences()
+            guard iosConnectGeneration == generation, !userDisconnectInProgress, !Task.isCancelled,
+                  !iosSpeedLabOwnership.active,
+                  self.bundle?.selectedRouterID == bundle.selectedRouterID,
+                  self.bundle?.routerProfiles == bundle.routerProfiles, self.bundle?.profiles == bundle.profiles,
+                  let saved = manager.protocolConfiguration as? NETunnelProviderProtocol,
+                  saved.providerConfiguration?["bundle"] as? Data == configuration["bundle"] as? Data,
+                  saved.providerConfiguration?["entryBundle"] as? Data == configuration["entryBundle"] as? Data,
+                  saved.providerConfiguration?["rawProfileID"] as? String == selection.rawProfileID,
+                  saved.providerConfiguration?["engine"] as? String == selection.engine.rawValue,
+                  saved.includeAllNetworks == strict, saved.enforceRoutes == strict,
+                  saved.excludeLocalNetworks == capturedLANExclusion,
+                  available.allSatisfy({ $0.connection.status == .disconnected || $0.connection.status == .invalid }) else {
+                throw CancellationError()
+            }
+            if let startupEntry = configuration["entryBundle"] as? Data {
+                let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]
+                guard try encoder.encode(iosMultihopEntryBundle(for: bundle)) == startupEntry else { throw CancellationError() }
+            }
+        }
         if !maxSources.isEmpty {
             if let capturedEntry = configuration["entryBundle"] as? Data {
                 let encoder = JSONEncoder(); encoder.outputFormatting = [.sortedKeys]

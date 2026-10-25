@@ -5,6 +5,7 @@ import Foundation
 /// unchanged. Both app and extension validate the exact original sources.
 enum IOSMultihopExecution {
     static let launchKey = "routervpn_speed_lab_execution"
+    static let startupLaunchKey = "routervpn_startup_execution"
 
     /// Plain external Local has no selector/lease owner. Only the saved
     /// Server/Compare family needs a proved runtime receipt for restoration.
@@ -161,6 +162,52 @@ enum IOSMultihopExecution {
         guard let text = option as? String, text.utf8.count <= 4096,
               mtuHold.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { throw issue() }
         return try Capture.decode(Data(text.utf8), source: source).execution
+    }
+
+    /// A cold-launch Last request chooses an already-recorded execution for
+    /// this exact source. It does not claim a live proof or borrow Speed Lab's
+    /// measurement lease. The new native runtime must prove the path normally.
+    struct StartupChoice: Codable, Equatable, Sendable {
+        let schema: Int
+        let request: String
+        let source: Source
+        let execution: String
+
+        init(source: Source, execution: String) throws {
+            schema = 1; request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            self.source = source; self.execution = execution
+            guard valid else { throw issue() }
+        }
+
+        private var valid: Bool {
+            schema == 1 && source.valid &&
+                request.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil &&
+                ["local", "server"].contains(execution) && (source.requested == "auto" || source.requested == execution)
+        }
+
+        func encoded() throws -> Data {
+            guard valid else { throw issue() }
+            let data = try JSONEncoder().encode(self)
+            guard data.count <= 4096 else { throw issue() }
+            return data
+        }
+
+        static func decode(_ data: Data, source: Source) throws -> StartupChoice {
+            guard !data.isEmpty, data.count <= 4096,
+                  let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Set(object.keys) == Set(["schema", "request", "source", "execution"]),
+                  let selected = object["source"] as? [String: Any],
+                  Set(selected.keys) == Set(["bundle_sha256", "entry_sha256", "entry_id", "exit_id", "entry_mode", "exit_mode", "requested"]) else { throw issue() }
+            let value = try JSONDecoder().decode(StartupChoice.self, from: data)
+            guard value.valid, value.source == source else { throw issue() }
+            return value
+        }
+    }
+
+    static func restoredStartupExecution(option: NSObject?, source: Source) throws -> String? {
+        guard let option else { return nil }
+        guard let text = option as? String, text.utf8.count <= 4096 else { throw issue() }
+        return try StartupChoice.decode(Data(text.utf8), source: source).execution
     }
 
     static func issue() -> NSError {

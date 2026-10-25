@@ -18,6 +18,7 @@ struct IOSProfileSettingsView: View {
     @State private var jumboTUN = false
     @State private var startupMode = "smart-auto"
     @State private var autoConnect = false
+    @State private var loadedProfile: RouterProfile?
     @State private var status = ""
     @State private var showingConnectionProfiles = false
 
@@ -27,10 +28,19 @@ struct IOSProfileSettingsView: View {
     private let startLayerValues = [("Off — default","off"),("AES-256-GCM — authenticated Libbox modes","aes-256-gcm"),("AES-256-GCM + XOR whitening — native","aes-256-gcm+xor-whitening")]
     private let mtuValues = [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")]
     private let startupValues = [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
+    private var externalNode: Bool { selectedProfile()?.normalizedNodeKind == "external" }
 
     var body: some View {
         NavigationStack {
             Form {
+                if externalNode {
+                    Section("Selected external node") {
+                        Text("Startup reconnects this node's saved protocol and path, including its entry, exit and execution choice. Every new connection must prove that path again.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Edit the node and its DNS or Multihop settings to change the saved path.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
+                } else {
                 Section("Selected Router VPN node") {
                     Text("Disconnect before saving. These values persist in the private node profile and apply only where the iOS PacketTunnel/runtime actually supports them. A saved preference is not runtime proof.")
                         .font(.caption)
@@ -63,7 +73,6 @@ struct IOSProfileSettingsView: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("MTU") {
-                    IOSMTUCard()
                     Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
                     if mtuPolicy == "manual" {
                         TextField("Fixed MTU 1280–9000", text: $manualMTU).keyboardType(.numberPad)
@@ -77,10 +86,20 @@ struct IOSProfileSettingsView: View {
                     Text("Padding uses the private endpoint inside the selected encrypted path, up to 192 kbps each direction. It is not Mullvad DAITA. Jumbo sets a compatible proxy TUN to 9000 bytes, not the Internet link or raw WG/AWG endpoint.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
+                }
+                Section("Live MTU") {
+                    // The live native owner supports Router, external and Tor
+                    // paths independently of this form's saved Router fields.
+                    IOSMTUCard()
+                }
                 Section("Startup") {
                     Picker("Startup behavior", selection: $startupMode) { ForEach(startupValues, id: \.1) { Text($0.0).tag($0.1) } }
                     Toggle("Auto-connect when Router VPN starts", isOn: $autoConnect)
-                    Text("SMART AUTO is the unified default. Startup/autoconnect is stored as node policy; iOS may still require system VPN/Network Extension permission and background restrictions can limit automatic execution.")
+                    Text(externalNode
+                         ? "AUTO and SMART AUTO reconnect the saved external path. Last reuses its previous proved Local or Server choice when the complete saved path still matches; otherwise it runs the saved selection again. Every launch repeats the path proof. Auto-connect runs once when the app opens, not at device boot or whenever a view reappears."
+                         : "SMART AUTO is the unified default. Auto-connect runs once when the app opens; it does not promise execution after device boot or while the app is closed.")
+                        .font(.caption).foregroundStyle(.secondary)
+                    Text("iOS may ask for VPN permission. An existing VPN or an unfinished operation keeps startup disconnected.")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("Connection profiles") {
@@ -110,8 +129,17 @@ struct IOSProfileSettingsView: View {
     }
 
     private func load() {
+        loadedProfile = nil
         guard let p = selectedProfile() else { status = "Pair/import and select a Router VPN node first. Connection profiles remain available above."; return }
-        guard p.normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings. Connection profiles remain available above."; return }
+        guard ["router-vpn", "external"].contains(p.normalizedNodeKind) else { status = "This node has no supported settings."; return }
+        do { startupMode = try IOSStartupPolicy.mode(p.startupMode) }
+        catch {
+            startupMode = p.startupMode ?? "manual"
+            status = error.localizedDescription
+        }
+        autoConnect = p.autoConnect ?? false
+        loadedProfile = p
+        if p.normalizedNodeKind == "external" { return }
         homeLANAccess = p.homeLANAccess ?? true
         killSwitchPolicy = (p.killSwitchPolicy ?? (p.killSwitch == true ? "always" : "off")).lowercased()
         ipv6Mode = (p.ipv6Mode ?? "on").lowercased()
@@ -124,8 +152,6 @@ struct IOSProfileSettingsView: View {
         manualMTU = (p.manualMTU ?? 0) > 0 ? String(p.manualMTU!) : ""
         daitaEnabled = p.daitaEnabled ?? false
         jumboTUN = p.jumboTUN ?? false
-        startupMode = (p.startupMode ?? "smart-auto").lowercased()
-        autoConnect = p.autoConnect ?? false
     }
 
     private func save() {
@@ -135,11 +161,29 @@ struct IOSProfileSettingsView: View {
               let index = bundle.routerProfiles.firstIndex(where: { $0.id == selected.id }) else {
             status = "Pair/import and select a Router VPN node first."; return
         }
-        guard bundle.routerProfiles[index].normalizedNodeKind == "router-vpn" else { status = "External exits own their protocol settings."; return }
+        guard let loadedProfile, selected == loadedProfile,
+              bundle.routerProfiles.filter({ $0.id == selected.id }).count == 1 else {
+            status = "The selected node changed. Reopen Settings before saving."; return
+        }
+        let startup: RouterProfile
+        do { startup = try IOSStartupPolicy.applying(mode: startupMode, enabled: autoConnect, to: selected) }
+        catch { status = error.localizedDescription; return }
+        if selected.normalizedNodeKind == "external" {
+            // Only these two startup fields change. Hidden Router controls may
+            // never replace an imported node's DNS, keys, protection or graph.
+            bundle.routerProfiles[index] = startup
+            do {
+                try model.importBundle(JSONEncoder().encode(bundle))
+                self.loadedProfile = selectedProfile()
+                status = "Startup saved for this external node. Its saved protocol and path are unchanged."
+            } catch { status = "Settings save failed: \(error.localizedDescription)" }
+            return
+        }
+        guard selected.normalizedNodeKind == "router-vpn" else { status = "This node has no supported settings."; return }
         let manual = Int(manualMTU.trimmingCharacters(in: .whitespacesAndNewlines)) ?? 0
         if mtuPolicy == "manual" && !(1280...9000).contains(manual) { status = "Fixed MTU must be 1280–9000."; return }
 
-        var p = bundle.routerProfiles[index]
+        var p = startup
         p.homeLANAccess = homeLANAccess
         p.killSwitchPolicy = killSwitchPolicy
         p.killSwitch = killSwitchPolicy != "off"
@@ -153,12 +197,11 @@ struct IOSProfileSettingsView: View {
         p.manualMTU = mtuPolicy == "manual" ? manual : 0
         p.daitaEnabled = daitaEnabled
         p.jumboTUN = jumboTUN
-        p.startupMode = startupMode
-        p.autoConnect = autoConnect
         bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
         bundle.routerProfiles[index] = p
         do {
             try model.importBundle(JSONEncoder().encode(bundle))
+            self.loadedProfile = selectedProfile()
             status = "Settings saved for the next supported PacketTunnel connection; saved values are not runtime proof."
         } catch {
             status = "Settings save failed: \(error.localizedDescription)"

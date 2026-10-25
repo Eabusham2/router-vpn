@@ -6,6 +6,10 @@ enum IOSSpeedLabContext {
     static let ownerKey = "routervpn_speed_lab_owner"
     @TaskLocal static var owner: UUID?
     @TaskLocal static var restoringSelection = false
+    // App-launch work may use an idle captured selection, but must never
+    // supersede a user action or a temporary test that began while it waited.
+    @TaskLocal static var startupAdmission: (@MainActor @Sendable () -> Bool)?
+    @TaskLocal static var startupClaimed: (@MainActor @Sendable (UUID) -> Void)?
     static func mark(_ configuration: inout [String: Any]) {
         if let owner { configuration[ownerKey] = owner.uuidString }
     }
@@ -42,6 +46,9 @@ enum IOSSpeedLabContext {
     /// profile. A user Disconnect preserves only the right to restore saved
     /// selection while idle; it never grants permission to reconnect.
     func admit(_ action: Action) -> Bool {
+        if let startup = IOSSpeedLabContext.startupAdmission {
+            return owner == nil && IOSSpeedLabContext.owner == nil && startup()
+        }
         if let captured = IOSSpeedLabContext.owner {
             if current(captured) { return true }
             return action == .profile && IOSSpeedLabContext.restoringSelection && mayRestoreSelection(captured)
@@ -58,6 +65,7 @@ enum IOSSpeedLabContext {
     /// retire. It never races a save/stop of the same system VPN preferences.
     /// A later Disconnect/profile action revokes this waiting connection too.
     func admitConnection() async -> Bool {
+        if IOSSpeedLabContext.startupAdmission != nil { return admit(.connection) }
         if IOSSpeedLabContext.owner != nil { return admit(.connection) }
         guard owner != nil else { return true }
         _ = admit(.connection)
