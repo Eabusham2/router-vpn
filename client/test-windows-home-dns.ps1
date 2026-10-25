@@ -211,7 +211,7 @@ function Invoke-HomeDNSCases([string]$Kind,[string]$SourceFile){
       Assert-DNS ($args[3] -ceq $protocol -and $args[5] -ceq 'fd77::1' -and $args[7] -ceq '5443') 'raw proxy arguments changed Home transport'
       if($protocol -in @('tls','https')){Assert-DNS ($args[8] -ceq '-server-name' -and $args[9] -ceq $node.dns_server_name) 'raw proxy arguments lost Home TLS identity'}
       if($protocol -eq 'https'){Assert-DNS ($args[10] -ceq '-path' -and $args[11] -ceq '/private-dns') 'raw proxy arguments lost Home HTTPS path'}
-      $hint=@{};foreach($line in [IO.File]::ReadAllLines($dnsHint)){if($line.Contains('=')){$parts=$line.Split(@('='),2);$hint[$parts[0]]=$parts[1]}}
+      $hint=@{};foreach($line in [IO.File]::ReadAllLines($dnsHint)){$separator=$line.IndexOf('=');if($separator -ge 0){$hint[$line.Substring(0,$separator)]=$line.Substring($separator+1)}}
       Assert-DNS ($hint.owner -ceq $script:dnsOwnerToken -and $hint.owner -ceq ([IO.File]::ReadAllText($dnsOwnerFile)).Trim()) 'raw DNS hint lost captured owner'
       Assert-DNS ($hint.mode -ceq 'home' -and $hint.protocol -ceq $protocol -and $hint.server -ceq '[fd77::1]:5443') 'raw DNS hint changed Home transport'
       Assert-DNS ($hint.server_name -ceq $dns.server_name -and $hint.path -ceq $dns.path) 'raw DNS hint lost TLS or HTTPS proof fields'
