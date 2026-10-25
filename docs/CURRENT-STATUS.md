@@ -39,6 +39,15 @@ product and shutdown ownership suites passed. Real Windows PowerShell 5.1 and
 AppKit package verification run in their native workflows; physical tunnel
 enforcement remains an independent acceptance requirement.
 
+Apple external Settings now edits LAN access, kill-switch policy, IPv6 and
+Auto/Fixed/Default MTU through the actual ordinary/Tor native validators and a
+captured idle profile transaction. Startup saves remain separate. Android's
+external quick control and complete editor now retain the selected exit's saved
+protection independently from its entry and Android system lockdown. The VPN
+service validates that policy against its captured private marker before launch.
+These controls preserve protocol credentials, graph, DNS, startup and historical
+measurements; invalid fixed MTU and stale editor saves remain rejected.
+
 Desktop DNS editors now load and save ordinary external and Tor policies
 against the exact selected profile and saved entry. The saved transport,
 address, port, TLS identity and path pass the same native policy validators used
@@ -47,10 +56,29 @@ than resetting them through a UDP/TCP-only selector. Source/selection changes,
 failed persistence and cancelled edits cannot rewrite private node state.
 Explicit Rescue uses its actual named preset; missing Home entry/bootstrap or
 unsupported transport is reported before connection rather than replaced.
-Legacy external Fastest samples cannot authorize a different transport: desktop
-native DNS Retest and selection of a complete measured resolver draft remain
-implementation work. Router Home's UDP preset is still distinct from explicit
-DoT/DoH policy, and broader encrypted Home support remains to be completed.
+Legacy external Fastest samples cannot authorize a different transport. The
+ordinary desktop native runtime now measures twelve public resolvers through
+its captured exit and separately queries the selected policy through the actual
+DNS router with cache disabled. TCP, DoT and DoH comparisons use three successful
+samples and their median; failed rows have no score. The native mailbox binds
+source, configuration, session, generation and nonce. Cancellation and shutdown
+retain the exact workers and sockets until confirmed drain, including queued
+Start and renamed-workspace races.
+
+Windows WPF, AppKit and GTK now provide modeless results panels, measured
+sorting, public-only Fastest, explicit row selection and Cancel. Selection makes
+an immutable resolver draft without changing active DNS. Saving requires explicit
+Disconnect, exact source and entry, all six measured resolver fields, and a
+two-minute result lifetime that cannot be refreshed by repeated selection. A
+replacement connection invalidates the result; an explicit Disconnect can retain
+it until expiry. Close waits for native drain and pending local requests.
+Actual native/controller race suites, shipping UI ownership fixtures, loopback
+cancellation and negative controls passed. The complete GTK application built
+and its rendered panel was inspected; WPF/AppKit SDK and release checks remain
+the current exact-SHA native workflow evidence, separate from physical devices.
+Standalone desktop Tor still needs its own retained native DNS adapter. Router
+Home's UDP preset is still distinct from explicit DoT/DoH policy, and broader
+encrypted Home support remains to be completed.
 
 Compact desktop Home and Rescue actions now capture the displayed node before
 reading its DNS revision. Re-selecting Home preserves an already-selected

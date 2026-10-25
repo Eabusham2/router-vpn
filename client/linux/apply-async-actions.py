@@ -18,6 +18,10 @@ def replace_once(text: str, old: str, new: str) -> str:
 def apply(path: Path) -> None:
     text = path.read_text()
     if path.name == "routervpn-gtk-product.c":
+        text = replace_once(text, '    post_and_log((App *)data, "/api/dns/retest", "{}", 90000, "DNS retest");',
+                            '    linux_dns_retest_v1((App *)data);')
+        text = replace_once(text, 'static void on_dns(GtkButton *button, gpointer data) {',
+                            'static void linux_dns_retest_v1(App *app);\n\nstatic void on_dns(GtkButton *button, gpointer data) {')
         anchor = "static size_t write_cb("
         text = replace_once(text, anchor, '#include "routervpn-async-actions-v16.inc"\n\n' + anchor)
         anchor = "static gboolean routervpn_mutation_busy(App *app) {\n"

@@ -33,6 +33,32 @@ def require_combined(label: str, paths: tuple[str, ...], *markers: str) -> str:
     return body
 
 
+def linux_dns_measurement_controls() -> None:
+    """Follow the packaged GTK callback through its captured measurement owner."""
+    build = require("client/linux/build-native-app.sh",
+                    'DNS_INC="$ROOT/client/linux/routervpn-dns-measurement-v1.inc"',
+                    '"$MTU_INC" "$DNS_INC" "$SHUTDOWN_INC"',
+                    '#include "routervpn-dns-measurement-v1.inc"\\n',
+                    'G_CALLBACK(linux_dns_parent_delete_v1)', 'G_CALLBACK(on_delete)')
+    if build.find('G_CALLBACK(linux_dns_parent_delete_v1)') > build.find('G_CALLBACK(on_delete)'):
+        errors.append("Linux main close no longer waits for DNS cancellation before controller teardown")
+    product = require("client/linux/routervpn-gtk-product-v5.c", "Retest DNS queries")
+    callback = re.search(r"(?ms)^static void on_dns_retest_v5\(.*?^\}", product)
+    if callback is None or "linux_dns_retest_v1(app);" not in callback.group():
+        errors.append("Linux DNS page lost the captured measurement dispatch")
+    require("client/linux/apply-async-actions.py", 'linux_dns_retest_v1((App *)data);')
+    require("client/linux/routervpn-dns-measurement-v1.inc",
+            's->profile = g_strdup(displayed)', 'g_strcmp0(active_router_id(s->app), s->profile)',
+            'g_strcmp0(profile, s->profile) != 0', 'g_strcmp0(token, s->token) != 0',
+            'g_strcmp0(session, s->session) != 0', 'g_strcmp0(request, s->request) != 0',
+            's->complete && s->drained', 'g_get_monotonic_time() < s->expires_at',
+            'routervpn_require_mutation_idle(s->app, "saving measured DNS")',
+            '"/api/dns/measurement"', '"/api/dns/measurement/cancel"', '"/api/dns/measurement/select"',
+            '"/api/dns/policy"', 'post_and_log(s->app, "/api/dns/retest"',
+            'linux_dns_parent_delete_v1', 'rv_http_free_v16(s->jobs[i])')
+    require(".github/workflows/linux-native-app.yml", "python3 deploy/test_linux_dns_measurement.py")
+
+
 def windows_profile_controls() -> None:
     """Trace the captured quick control and the separate complete Settings form."""
     require("client/RouterVPN-Windows-App.ps1",
@@ -80,6 +106,7 @@ def windows_profile_controls() -> None:
 
 
 windows_profile_controls()
+linux_dns_measurement_controls()
 
 
 dns_api = require(
@@ -221,7 +248,7 @@ require(
     "client/linux/routervpn-gtk-product-v5.c",
     "build_modes_page_v5", "Added latency", "traffic", "speed loss", "Readiness:", "Reason:",
     "build_dns_page_v5", "Home AdGuard", "Fastest measured", "Custom UDP/TCP", "DNS-over-TLS",
-    "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "/api/dns/retest",
+    "DNS-over-HTTPS", "DNS-over-HTTP/3", "DNS Rescue", "/api/dns/policy", "linux_dns_retest_v1(app)",
     "Cloudflare IPv6", "Google IPv6", "Quad9 IPv6", "gtk_notebook_set_scrollable",
 )
 require("client/linux/routervpn-gtk-product-v4.c", "latitude", "longitude", "Map")

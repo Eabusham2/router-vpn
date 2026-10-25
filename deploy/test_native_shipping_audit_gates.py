@@ -131,6 +131,47 @@ class NativeShippingAuditTests(unittest.TestCase):
         self.assertFalse(self.legacy["macOS native AppKit packages"]())
 
 
+class LinuxDNSMeasurementAuditTests(unittest.TestCase):
+    def test_actual_product_audit_follows_panel_dispatch_and_cleanup(self):
+        path = ROOT / "deploy/product-parity-audit.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "linux_dns_measurement_controls"]
+        self.assertEqual(len(functions), 1)
+        self.assertTrue(any(isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Name) and node.value.func.id == "linux_dns_measurement_controls"
+                            for node in tree.body))
+        changes, errors = {}, []
+
+        def require(path, *markers):
+            body = changes[path] if path in changes else (ROOT / path).read_text(encoding="utf-8")
+            errors.extend(path + ": missing " + marker for marker in markers if marker not in body)
+            return body
+
+        scope = {"require": require, "errors": errors, "re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), scope)
+        scope["linux_dns_measurement_controls"]()
+        self.assertEqual(errors, [])
+        mutations = (
+            ("client/linux/build-native-app.sh", '#include "routervpn-dns-measurement-v1.inc"\\n', ""),
+            ("client/linux/build-native-app.sh", 'G_CALLBACK(linux_dns_parent_delete_v1)', 'G_CALLBACK(unrelated_close)'),
+            ("client/linux/routervpn-gtk-product-v5.c", "linux_dns_retest_v1(app);", "unrelated_retest(app);"),
+            ("client/linux/apply-async-actions.py", "linux_dns_retest_v1((App *)data);", "unrelated_retest((App *)data);"),
+            ("client/linux/routervpn-dns-measurement-v1.inc", 'g_strcmp0(token, s->token) != 0', "FALSE"),
+            ("client/linux/routervpn-dns-measurement-v1.inc", "s->complete && s->drained", "s->complete"),
+            ("client/linux/routervpn-dns-measurement-v1.inc", '"/api/dns/measurement/select"', '"/api/dns/policy"'),
+            ("client/linux/routervpn-dns-measurement-v1.inc", 'post_and_log(s->app, "/api/dns/retest"', 'post_and_log(s->app, "/api/unrelated"'),
+            (".github/workflows/linux-native-app.yml", "python3 deploy/test_linux_dns_measurement.py", "python3 unrelated.py"),
+        )
+        for changed_path, before, after in mutations:
+            with self.subTest(path=changed_path, removed=before):
+                original = (ROOT / changed_path).read_text(encoding="utf-8")
+                self.assertIn(before, original)
+                changes.clear(); errors.clear(); changes[changed_path] = original.replace(before, after)
+                scope["linux_dns_measurement_controls"]()
+                self.assertTrue(errors, "Broken DNS shipping composition passed the real audit")
+
+
 class WindowsProfileControlsAuditTests(unittest.TestCase):
     def test_actual_product_audit_traces_captured_quick_control_and_full_settings(self):
         path = ROOT / "deploy/product-parity-audit.py"
