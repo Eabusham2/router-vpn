@@ -43,10 +43,16 @@ def windows(directory, shell):
     parser = directory / "parse.ps1"
     parser.write_text(r'''param([string]$Source)
 $tokens=$null;$errors=$null
-[void][System.Management.Automation.Language.Parser]::ParseFile($Source,[ref]$tokens,[ref]$errors)
+$text=Get-Content -LiteralPath $Source -Raw -Encoding UTF8
+[void][System.Management.Automation.Language.Parser]::ParseInput($text,[ref]$tokens,[ref]$errors)
 if($errors.Count){throw ($errors.Message -join '; ')}
 ''', encoding="utf-8-sig")
     run([shell, "-NoProfile", "-File", str(parser), "-Source", str(ROOT / "client/RouterVPN-Windows-Product-v2.ps1")])
+    # The shipping loader decodes UTF-8 explicitly, including under PS 5.1.
+    # Keep parsing the complete source, and prove a real syntax defect fails.
+    malformed = directory / "malformed-product.ps1"
+    malformed.write_text(source + "\nfunction RouterVPNBrokenSyntax {\n", encoding="utf-8")
+    run([shell, "-NoProfile", "-File", str(parser), "-Source", str(malformed)], broken=True)
     variants = {
         "shipping": function,
         "replacement": function.replace("[string]$Captured.profile_id -cne $DisplayedProfileID", "$false"),
