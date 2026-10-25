@@ -24,6 +24,7 @@ type DesktopControl struct {
 	closed    atomic.Bool
 	pid       int
 	address   string
+	claimed   bool // guarded by operation; one captured session per child
 }
 
 // NewDesktopControl transfers ownership of connection, including on failure.
@@ -152,24 +153,39 @@ func desktopIdleConfiguration() map[string][]string {
 }
 
 func (c *DesktopControl) verifyIdle(ctx context.Context) error {
-	values, err := c.control.command(ctx, "GETINFO "+strings.Join(idleInventories, " "))
+	idle, err := c.idle(ctx)
 	if err != nil {
 		return err
+	}
+	if !idle {
+		return errors.New("desktop Tor child has unowned connections, cached addresses or listeners")
+	}
+	return nil
+}
+
+func (c *DesktopControl) idle(ctx context.Context) (bool, error) {
+	values, err := c.control.command(ctx, "GETINFO "+strings.Join(idleInventories, " "))
+	if err != nil {
+		return false, err
 	}
 	actual, err := keyedReply(values, idleInventories)
 	if err != nil {
-		return err
+		return false, err
 	}
+	idle := true
 	for _, key := range idleInventories {
-		want := ""
-		if key == "net/listeners/control" {
-			want = strconv.Quote(c.address)
+		if len(actual[key]) != 1 {
+			return false, errors.New("desktop Tor idle inventory is ambiguous")
 		}
-		if len(actual[key]) != 1 || actual[key][0] != want {
-			return errors.New("desktop Tor child has unowned connections, cached addresses or listeners")
+		if key == "net/listeners/control" {
+			if actual[key][0] != strconv.Quote(c.address) {
+				return false, errors.New("desktop Tor idle inventory has a different control owner")
+			}
+		} else if actual[key][0] != "" {
+			idle = false
 		}
 	}
-	return nil
+	return idle, nil
 }
 
 func desktopLoopbackAddress(address net.Addr) (string, error) {

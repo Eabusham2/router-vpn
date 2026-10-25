@@ -97,8 +97,11 @@ func newDesktopControlFixture(t *testing.T, alter func(string, string, int) stri
 				reply = strings.Replace(inventoryReply(""), "net/listeners/control=\r\n", "net/listeners/control="+strconv.Quote(fixture.address)+"\r\n", 1)
 			case command == "TAKEOWNERSHIP":
 			default:
-				t.Error("unexpected standalone control command", command)
-				return
+				if alter == nil {
+					t.Error("unexpected standalone control command", command)
+					return
+				}
+				reply = "552 fixture has no such command\r\n"
 			}
 			if alter != nil {
 				reply = alter(command, reply, pidReads)
