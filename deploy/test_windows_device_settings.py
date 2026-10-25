@@ -77,6 +77,7 @@ def main():
         ("busy-save", "helper", "if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'Disconnect Router VPN before saving device settings.'}", "if($false){throw 'Disconnect Router VPN before saving device settings.'}", "CONTROL active device policy was submitted"),
         ("displayed-capture", "unified", "-Owner $Window -DisplayedProfileID $DisplayedProfileID -DisplayedNodeKind $DisplayedNodeKind", "-Owner $Window -DisplayedProfileID 'replacement' -DisplayedNodeKind $DisplayedNodeKind", "CONTROL composed callback lost displayed external identity"),
         ("malformed-source", "helper", "Saved connection uses the selected protocol", "Saved connection uses this node’s protocol", "CONTROL whole-source parse"),
+        ("unproved-auto-label", "helper", 'Content="Auto — default" Tag="auto"', 'Content="Auto measured MTU" Tag="auto"', "CONTROL Tor Auto claimed a measured path"),
     ]
     if os.name == "nt":
         # PowerShell can wrap/color the long exception after this unique

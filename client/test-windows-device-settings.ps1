@@ -11,6 +11,15 @@ if($ParseErrors.Count){throw ('CONTROL whole-source parse: '+($ParseErrors.Messa
 $script:Checks=0
 function Check([bool]$Condition,[string]$Message){if(-not $Condition){throw ('CONTROL '+$Message)};$script:Checks++}
 function Reject([scriptblock]$Action,[string]$Message){$Caught=$false;try{[void](& $Action)}catch{$Caught=$true};Check $Caught $Message}
+# Windows PowerShell 5.1 reads this BOM-less -File fixture through its ANSI
+# code page. Keep the expected label ASCII in source, while still comparing
+# the actual UTF-8 shipping XAML and rendered control to the exact em dash.
+$script:AutoMTULabel='Auto '+[char]0x2014+' default'
+$SettingsXAML=[regex]::Match($Text,"(?s)\[xml\]\`$xaml = @'\r?\n(.*?)\r?\n'@")
+Check $SettingsXAML.Success 'shipping Settings XAML missing'
+[xml]$SettingsXML=$SettingsXAML.Groups[1].Value
+$AutoMTUItem=$SettingsXML.SelectSingleNode("//*[local-name()='ComboBox' and @Name='MTUPolicy']/*[local-name()='ComboBoxItem' and @Tag='auto']")
+Check ($null -ne $AutoMTUItem -and [string]$AutoMTUItem.Content -ceq $script:AutoMTULabel) 'Tor Auto claimed a measured path'
 function New-Capture {
     [pscustomobject]@{profile_id='node "quoted"';profile_token=('b'*64);node_kind='external';protocol='shadowsocks';device_policy_supported=$true;device_policy_reason='';home_lan_access=$true;kill_switch_policy='off';ipv6_mode='on';mtu_policy='auto';manual_mtu=0;effective_mtu=1420;mtu_source='historical fixture';startup_mode='smart-auto';auto_connect=$false;note='Save while disconnected.';password='never-copy';dns_host='keep-resolver';entry_id='independent-entry'}
 }
@@ -171,7 +180,7 @@ if($WPF){
                     'busy' {Check (-not$Save.IsEnabled-and-not$Node.IsEnabled-and-not$Startup.IsEnabled) 'busy WPF form enabled persistent edits';$Dialog.FindName('Cancel').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent));return}
                     'unsupported-startup' {Check (-not$Node.IsEnabled-and$Startup.IsEnabled-and$Save.IsEnabled) 'unsupported WPF form enabled common device fields or disabled startup';Select-Tag $Startup 'last';$Automatic.IsChecked=$true}
                     'save-common' {Check $Node.IsEnabled 'supported WPF form disabled common device fields';$Dialog.FindName('LAN').IsChecked=$false;Select-Tag ($Dialog.FindName('Kill')) 'always';Select-Tag ($Dialog.FindName('IPv6')) 'off';Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1412'}
-                    'tor-common' {Check $Node.IsEnabled 'supported Tor form disabled common device fields';Check ($Dialog.FindName('SettingsNote').Text -ceq $script:Capture.note) 'captured Tor capability note was replaced';Check ([string]$Dialog.FindName('MTUPolicy').SelectedItem.Content -ceq 'Auto — default') 'Tor Auto claimed a measured path'}
+                    'tor-common' {Check $Node.IsEnabled 'supported Tor form disabled common device fields';Check ($Dialog.FindName('SettingsNote').Text -ceq $script:Capture.note) 'captured Tor capability note was replaced';Check ([string]$Dialog.FindName('MTUPolicy').SelectedItem.Content -ceq $script:AutoMTULabel) 'Tor Auto claimed a measured path'}
                     'manual-startup' {$Automatic.IsChecked=$true;Select-Tag $Startup 'manual';Check (-not$Automatic.IsChecked-and-not$Automatic.IsEnabled) 'manual WPF startup retained auto-connect'}
                     'invalid-mtu' {Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1.5'}
                 }
