@@ -73,8 +73,13 @@ def bash_resolution_contracts():
             looked_up.append(name)
             return str(git if name == 'git' else shadow)
         for directory in ('bin', 'usr/bin'):
-            bash = root/directory/'bash.exe'; bash.parent.mkdir(parents=True); bash.write_bytes(b'fixture')
-            require(package_bash(windows=True, which=lookup) == str(bash), 'Did not select the explicit Git Bash')
+            parent = root/directory; parent.mkdir(parents=True)
+            # Preserve an alias so the fixture exercises file identity on every
+            # host, including Windows temporary paths with short-name aliases.
+            bash = parent/'..'/parent.name/'bash.exe'; bash.write_bytes(b'fixture')
+            selected = Path(package_bash(windows=True, which=lookup))
+            require(selected.samefile(bash), f'Did not select the explicit Git Bash: {selected!s} != {bash!s}')
+            require(not selected.samefile(shadow), 'Selected another Bash file with identical fixture contents')
             bash.unlink()
         # Existing WSL-style PATH entry cannot replace missing Git Bash.
         for missing_git in (False, True):
