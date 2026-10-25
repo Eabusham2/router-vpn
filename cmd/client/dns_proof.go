@@ -24,7 +24,7 @@ type dnsSelection struct {
 	Path       string
 }
 
-func expectedDNSSelection(p common.RouterProfile) dnsSelection {
+func expectedDNSSelection(p common.RouterProfile) (dnsSelection, error) {
 	mode := strings.ToLower(strings.TrimSpace(p.DNSMode))
 	if mode == "" {
 		mode = "home"
@@ -50,14 +50,11 @@ func expectedDNSSelection(p common.RouterProfile) dnsSelection {
 
 	switch mode {
 	case "home":
-		host = strings.Trim(strings.TrimSpace(p.AdGuardIPv4), "[]")
-		if host == "" {
-			host = strings.Trim(strings.TrimSpace(p.AdGuardIPv6), "[]")
+		selected, err := applyRouterHomeDNSPolicy(p, dnsPolicyRequest{Mode: "home", Protocol: p.DNSProtocol, Host: p.DNSHost, Port: p.DNSPort, ServerName: p.DNSServerName, Path: p.DNSPath})
+		if err != nil {
+			return dnsSelection{Mode: mode}, err
 		}
-		if host == "" {
-			host = "10.77.0.1"
-		}
-		protocol, port, serverName, path = "udp", 53, "", ""
+		return dnsSelection{Mode: mode, Protocol: selected.DNSProtocol, Host: selected.DNSHost, Port: selected.DNSPort, ServerName: selected.DNSServerName, Path: selected.DNSPath}, nil
 	case "fastest":
 		host, protocol, port, serverName, path = fastest, "udp", 53, "", ""
 	case "doh":
@@ -100,7 +97,7 @@ func expectedDNSSelection(p common.RouterProfile) dnsSelection {
 			}
 		}
 	}
-	return dnsSelection{Mode: mode, Protocol: protocol, Host: strings.Trim(host, "[]"), Port: port, ServerName: serverName, Path: path}
+	return dnsSelection{Mode: mode, Protocol: protocol, Host: strings.Trim(host, "[]"), Port: port, ServerName: serverName, Path: path}, nil
 }
 
 func clientRoot(a *app) string {
@@ -138,6 +135,9 @@ func parseDNSHint(path string) (map[string]string, error) {
 	for _, line := range strings.Split(string(b), "\n") {
 		key, value, ok := strings.Cut(strings.TrimSpace(line), "=")
 		if ok && key != "" {
+			if _, exists := out[key]; exists {
+				return nil, errors.New("selected DNS runtime hint contains an ambiguous duplicate field")
+			}
 			out[key] = value
 		}
 	}
@@ -184,6 +184,13 @@ configOK:
 	if err != nil {
 		return fmt.Errorf("selected DNS runtime hint unavailable: %w", err)
 	}
+	if err := verifyDNSHintSelection(hint, selected); err != nil {
+		return err
+	}
+	return probeLocalDNSProxyContext(ctx, "127.0.0.1:53")
+}
+
+func verifyDNSHintSelection(hint map[string]string, selected dnsSelection) error {
 	if !strings.EqualFold(hint["mode"], selected.Mode) {
 		return fmt.Errorf("runtime DNS mode %q does not match selected %q", hint["mode"], selected.Mode)
 	}
@@ -193,7 +200,15 @@ configOK:
 	if !hostPortEqual(hint["server"], selected) {
 		return fmt.Errorf("runtime DNS upstream %q does not match selected %s:%d", hint["server"], selected.Host, selected.Port)
 	}
-	return probeLocalDNSProxyContext(ctx, "127.0.0.1:53")
+	if selected.Protocol == "tls" || selected.Protocol == "https" || selected.Protocol == "h3" {
+		if hint["server_name"] != selected.ServerName {
+			return errors.New("runtime DNS TLS identity does not match the selected policy")
+		}
+		if (selected.Protocol == "https" || selected.Protocol == "h3") && hint["path"] != selected.Path {
+			return errors.New("runtime DNS HTTPS path does not match the selected policy")
+		}
+	}
+	return nil
 }
 
 func probeLocalDNSProxy() error {
@@ -260,15 +275,30 @@ func verifySingBoxDNSConfig(path string, selected dnsSelection) error {
 	}
 	servers, _ := dns["servers"].([]any)
 	matched := false
+	owners := 0
 	for _, raw := range servers {
 		server, _ := raw.(map[string]any)
 		if server == nil || server["tag"] != "selected-dns" {
 			continue
 		}
+		owners++
+		if owners != 1 {
+			return errors.New("active sing-box selected-DNS owner is ambiguous")
+		}
 		host, _ := server["server"].(string)
 		port := intFromJSON(server["server_port"])
 		protocol, _ := server["type"].(string)
 		if strings.EqualFold(strings.Trim(host, "[]"), selected.Host) && port == selected.Port && dnsProtocolCompatible(protocol, selected.Protocol) {
+			if protocol == "tls" || protocol == "https" || protocol == "h3" {
+				tls, _ := server["tls"].(map[string]any)
+				insecure, present := tls["insecure"]
+				if tls == nil || tls["enabled"] != true || tls["server_name"] != selected.ServerName || present && insecure != false {
+					return errors.New("active sing-box selected-DNS TLS identity differs from the saved policy")
+				}
+				if (protocol == "https" || protocol == "h3") && server["path"] != selected.Path {
+					return errors.New("active sing-box selected-DNS HTTPS path differs from the saved policy")
+				}
+			}
 			matched = true
 		}
 	}
@@ -323,8 +353,15 @@ func proveSelectedDNSContext(parent context.Context, a *app, s observedConnectio
 }
 
 func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error)) dnsProofState {
-	selected := expectedDNSSelection(s.Profile)
+	if externalHomeDNSObservation(s) {
+		return proveExternalHomeDNS(parent, a, s, runtimeID)
+	}
+	selected, selectionErr := expectedDNSSelection(s.Profile)
 	result := dnsProofState{Mode: selected.Mode, Host: selected.Host, Status: "failed"}
+	if selectionErr != nil {
+		result.Reason = selectionErr.Error()
+		return result
+	}
 	if parent == nil || lookup == nil {
 		result.Reason = "selected-DNS proof requires an owned context and resolver"
 		return result

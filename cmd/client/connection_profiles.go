@@ -41,6 +41,7 @@ type connectionProfilePreferences struct {
 	DNSPort                int       `json:"dns_port,omitempty"`
 	DNSServerName          string    `json:"dns_server_name,omitempty"`
 	DNSPath                string    `json:"dns_path,omitempty"`
+	HomeDNSCaptured        bool      `json:"home_dns_captured,omitempty"`
 	MultihopEnabled        bool      `json:"multihop_enabled"`
 	MultihopEntryID        string    `json:"multihop_entry_id,omitempty"`
 	MultihopExitID         string    `json:"multihop_exit_id,omitempty"`
@@ -242,6 +243,18 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		startup = "smart-auto"
 	}
 	autoConnect := p.AutoConnect
+	// Older Home snapshots described a node-derived UDP preset and may contain
+	// stale custom fields. New explicit Home captures retain their transport;
+	// the marker prevents legacy migration from silently rewriting that choice.
+	homeDNSCaptured := false
+	if strings.EqualFold(strings.TrimSpace(p.DNSMode), "home") && (p.DNSProtocol != "" || p.DNSHost != "" || p.DNSPort != 0 || p.DNSServerName != "" || p.DNSPath != "") {
+		updated, err := applyRouterHomeDNSPolicy(p, dnsPolicyRequest{Mode: "home", Protocol: p.DNSProtocol, Host: p.DNSHost, Port: p.DNSPort, ServerName: p.DNSServerName, Path: p.DNSPath})
+		if err != nil {
+			return nil, err
+		}
+		copyDNSPolicy(&p, updated)
+		homeDNSCaptured = true
+	}
 	return &connectionProfilePreferences{
 		HomeLANAccess: p.HomeLANAccess, KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode,
 		HomeLANCIDRs: &lan, StartupMode: &startup, AutoConnect: &autoConnect,
@@ -249,7 +262,7 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: startLayer, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
 		DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort,
-		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath,
+		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, HomeDNSCaptured: homeDNSCaptured,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,
 		CustomLayers: layers,
 	}, nil

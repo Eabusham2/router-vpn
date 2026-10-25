@@ -221,17 +221,7 @@ func applyDNSPolicyToProfile(profile common.RouterProfile, request dnsPolicyRequ
 
 	switch mode {
 	case "home":
-		if protocol != "" && protocol != "udp" {
-			return profile, errors.New("this Router Home preset uses UDP port 53; select Custom TCP, DoT, DoH or DoH3 explicitly to use another transport")
-		}
-		host = strings.TrimSpace(profile.AdGuardIPv4)
-		if host == "" {
-			host = strings.TrimSpace(profile.AdGuardIPv6)
-		}
-		if host == "" {
-			return profile, errors.New("Home AdGuard address is missing from this Router VPN node")
-		}
-		protocol, port, serverName, path = "udp", 53, "", ""
+		return applyRouterHomeDNSPolicy(profile, request)
 	case "fastest":
 		host = strings.TrimSpace(profile.FastestDNSHost)
 		if host == "" {

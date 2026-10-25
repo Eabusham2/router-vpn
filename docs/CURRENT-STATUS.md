@@ -57,8 +57,13 @@ The GTK Settings dialog now exposes those controls and atomically includes
 startup only when edited. Unchanged SMART AUTO aliases remain untouched; Manual
 startup cannot enable auto-connect. The actual GTK form passed 461 checks and
 seven deliberately broken variants, and the complete application and controller
-cleanup suite passed. The corresponding Windows/AppKit device forms and Tor
-adapter remain separate continuation work at this checkpoint.
+cleanup suite passed. Windows and AppKit now expose the same captured device
+transaction, including atomic startup changes only when edited. The shipping
+PowerShell checks and actual WPF form have passed; a Windows-only error-format
+matcher was repaired without removing its negative control. AppKit's shipping
+Swift serializer/composition checks passed, while current native SDK/release
+verification remains separate. The standalone Tor native adapter is still being
+integrated and is not closed by these ordinary-node forms.
 
 Desktop DNS editors now load and save ordinary external and Tor policies
 against the exact selected profile and saved entry. The saved transport,
@@ -88,9 +93,35 @@ Actual native/controller race suites, shipping UI ownership fixtures, loopback
 cancellation and negative controls passed. The complete GTK application built
 and its rendered panel was inspected; WPF/AppKit SDK and release checks remain
 the current exact-SHA native workflow evidence, separate from physical devices.
-Standalone desktop Tor still needs its own retained native DNS adapter. Router
-Home's UDP preset is still distinct from explicit DoT/DoH policy, and broader
-encrypted Home support remains to be completed.
+Standalone desktop Tor still needs its own retained native DNS adapter.
+
+Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
+AdGuard address, port, TLS name and HTTPS path. The address must belong to the
+captured node; missing or foreign addresses cannot become a public resolver.
+The controller editor, saved complete connection profiles, shared native graph
+compiler, Windows helpers and Unix helpers preserve that policy. New saved
+profiles mark explicit Home captures so the older migration of stale preset
+fields cannot erase encrypted settings; Load revalidates against the linked
+node and rolls back a changed resolver. Legacy snapshots retain their existing
+migration behavior. Tests exercise the real API, persisted profiles and all
+existing Router predecessor families with each transport.
+
+Selected-DNS proof now checks TLS identity and HTTPS path as well as address,
+port and transport. Kernel hints record those fields and duplicate hint fields
+are rejected. Home through an ordinary external exit uses its captured native
+entry proof and exact graph identity; the controller does not replace that proof
+with an ordinary-network lookup. Entry credential or policy changes cancel
+in-flight work and retire retained proof. Native proof receipt processing is
+not labelled as measured DNS latency. These are source and executable controller
+checks, including isolated child-process fixtures; they do not establish live
+AdGuard encrypted service availability or physical-device routing.
+
+The legacy raw kernel DNS proxy has no HTTP/3 engine. Its actual CLI now rejects
+H3 before binding listeners instead of silently changing it to HTTPS. Native
+sing-box paths retain H3 support; raw-path H3 remains unfinished. Unix launchers
+also stop when DNS capture fails, before inherited environment settings can
+reach the runtime. Windows and Unix Home config writers require an owned tunnel
+outbound and never fall through to direct DNS.
 
 Compact desktop Home and Rescue actions now capture the displayed node before
 reading its DNS revision. Re-selecting Home preserves an already-selected

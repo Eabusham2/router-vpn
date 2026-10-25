@@ -101,7 +101,10 @@ func encodeDesktopNodeAssets(files map[string][]byte) string {
 }
 
 func desktopNodeDNSBootstrap(p common.RouterProfile) (string, error) {
-	selection := expectedDNSSelection(p)
+	selection, err := expectedDNSSelection(p)
+	if err != nil {
+		return "", err
+	}
 	if _, err := netip.ParseAddr(selection.Host); err == nil {
 		return "", nil
 	}

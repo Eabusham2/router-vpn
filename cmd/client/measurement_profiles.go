@@ -17,6 +17,19 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if st.Mode == "external-node" {
+		if value, found := desktopNodeOwners.Load(a); found {
+			launch, typed := value.(*desktopNodeLaunch)
+			if typed && launch != nil && launch.external != nil {
+				if launch.command != a.cmd || launch.mode != st.RuntimeMode || launch.external.expected.ExitID != st.RouterID {
+					return nil, errors.New("measurement external native owner changed before capture")
+				}
+				if !launch.external.direct {
+					ids = []string{launch.external.expected.EntryID, st.RouterID}
+				}
+			}
+		}
+	}
 	tokens := make(map[string]string, len(ids))
 	for _, id := range ids {
 		if strings.TrimSpace(id) == "" {

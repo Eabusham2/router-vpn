@@ -15,32 +15,32 @@ import (
 // strings and historical path measurements remain in their linked node stores.
 // A separate field preserves schema-v4 external records that were selection-only.
 type connectionProfileExternalCapture struct {
-	Protocol         string   `json:"protocol"`
-	StartLayer       string   `json:"start_layer,omitempty"`
-	ExpectedPublicIP string   `json:"expected_public_ip"`
-	HomeLANAccess    bool     `json:"home_lan_access"`
-	HomeLANCIDRs     []string `json:"home_lan_cidrs"`
-	KillSwitchPolicy string   `json:"kill_switch_policy"`
-	IPv6Mode         string   `json:"ipv6_mode"`
-	StartupMode      string   `json:"startup_mode"`
-	AutoConnect      bool     `json:"auto_connect"`
-	MTUPolicy        string   `json:"mtu_policy"`
-	ManualMTU        int      `json:"manual_mtu"`
-	DAITAEnabled     bool     `json:"daita_enabled"`
-	JumboTUN         bool     `json:"jumbo_tun"`
-	SocksEnabled     bool     `json:"socks_enabled"`
-	DNSMode          string   `json:"dns_mode"`
-	DNSProtocol      string   `json:"dns_protocol"`
-	DNSHost          string   `json:"dns_host"`
-	DNSPort          int      `json:"dns_port"`
-	DNSServerName    string   `json:"dns_server_name"`
-	DNSPath          string   `json:"dns_path"`
-	FastestDNSHost   string   `json:"fastest_dns_host"`
-	MultihopEnabled  bool     `json:"multihop_enabled"`
-	MultihopEntryID  string   `json:"multihop_entry_id"`
-	MultihopExitID   string   `json:"multihop_exit_id"`
-	MultihopExecution string `json:"multihop_execution,omitempty"`
-	MultihopEntryMode string `json:"multihop_entry_mode,omitempty"`
+	Protocol          string   `json:"protocol"`
+	StartLayer        string   `json:"start_layer,omitempty"`
+	ExpectedPublicIP  string   `json:"expected_public_ip"`
+	HomeLANAccess     bool     `json:"home_lan_access"`
+	HomeLANCIDRs      []string `json:"home_lan_cidrs"`
+	KillSwitchPolicy  string   `json:"kill_switch_policy"`
+	IPv6Mode          string   `json:"ipv6_mode"`
+	StartupMode       string   `json:"startup_mode"`
+	AutoConnect       bool     `json:"auto_connect"`
+	MTUPolicy         string   `json:"mtu_policy"`
+	ManualMTU         int      `json:"manual_mtu"`
+	DAITAEnabled      bool     `json:"daita_enabled"`
+	JumboTUN          bool     `json:"jumbo_tun"`
+	SocksEnabled      bool     `json:"socks_enabled"`
+	DNSMode           string   `json:"dns_mode"`
+	DNSProtocol       string   `json:"dns_protocol"`
+	DNSHost           string   `json:"dns_host"`
+	DNSPort           int      `json:"dns_port"`
+	DNSServerName     string   `json:"dns_server_name"`
+	DNSPath           string   `json:"dns_path"`
+	FastestDNSHost    string   `json:"fastest_dns_host"`
+	MultihopEnabled   bool     `json:"multihop_enabled"`
+	MultihopEntryID   string   `json:"multihop_entry_id"`
+	MultihopExitID    string   `json:"multihop_exit_id"`
+	MultihopExecution string   `json:"multihop_execution,omitempty"`
+	MultihopEntryMode string   `json:"multihop_entry_mode,omitempty"`
 }
 
 type connectionProfileExternalWire connectionProfileExternalCapture
@@ -75,9 +75,15 @@ func (p *connectionProfileExternalCapture) UnmarshalJSON(data []byte) error {
 }
 
 func (p connectionProfileExternalCapture) validate() error {
-	if _, err := routeExecution(multihopConnectRequest{Execution: p.MultihopExecution}); err != nil { return err }
-	if !p.MultihopEnabled && p.MultihopExecution != "" && p.MultihopExecution != "local" { return errors.New("direct external profile cannot request server execution") }
-	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode)) { return errors.New("saved external entry requires an exact supported Router VPN mode") }
+	if _, err := routeExecution(multihopConnectRequest{Execution: p.MultihopExecution}); err != nil {
+		return err
+	}
+	if !p.MultihopEnabled && p.MultihopExecution != "" && p.MultihopExecution != "local" {
+		return errors.New("direct external profile cannot request server execution")
+	}
+	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode)) {
+		return errors.New("saved external entry requires an exact supported Router VPN mode")
+	}
 	if mode, err := common.NormalizeStartLayerMode(p.StartLayer); err != nil || p.StartLayer != "" && mode != p.StartLayer {
 		return errors.New("saved external Start Layer selection is invalid")
 	}
@@ -157,7 +163,9 @@ func snapshotExternalConnectionPolicy(node common.RouterProfile) (*connectionPro
 	c.StartLayer = p.StartLayer
 	c.MultihopExecution = p.MultihopExecution
 	c.MultihopEntryMode = p.MultihopEntryMode
-	if c.MultihopExecution == "" { c.MultihopExecution = "local" }
+	if c.MultihopExecution == "" {
+		c.MultihopExecution = "local"
+	}
 	if err := c.validate(); err != nil {
 		return nil, err
 	}
@@ -175,7 +183,9 @@ func (p connectionProfileExternalCapture) apply(node common.RouterProfile) (comm
 	c := p.policy()
 	updated.MultihopExecution = p.MultihopExecution
 	updated.MultihopEntryMode = p.MultihopEntryMode
-	if updated.MultihopExecution == "" { updated.MultihopExecution = "local" }
+	if updated.MultihopExecution == "" {
+		updated.MultihopExecution = "local"
+	}
 	if p.StartLayer != "" {
 		updated.StartLayer = p.StartLayer
 	}
@@ -288,7 +298,17 @@ func applySavedRouterConnectionPolicy(node common.RouterProfile, p *connectionPr
 		return node, err
 	}
 	if p.DNSMode != "" {
-		updated.DNSMode, updated.DNSProtocol, updated.DNSHost, updated.DNSPort, updated.DNSServerName, updated.DNSPath = p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath
+		if p.HomeDNSCaptured {
+			if p.DNSMode != "home" {
+				return node, errors.New("captured Home DNS cannot change its mode during restore")
+			}
+			updated, err = applyRouterHomeDNSPolicy(updated, dnsPolicyRequest{Mode: "home", Protocol: p.DNSProtocol, Host: p.DNSHost, Port: p.DNSPort, ServerName: p.DNSServerName, Path: p.DNSPath})
+			if err != nil {
+				return node, err
+			}
+		} else {
+			updated.DNSMode, updated.DNSProtocol, updated.DNSHost, updated.DNSPort, updated.DNSServerName, updated.DNSPath = p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort, p.DNSServerName, p.DNSPath
+		}
 	}
 	if p.HomeLANCIDRs != nil {
 		updated.HomeLANCIDRs = cloneStrings(*p.HomeLANCIDRs)

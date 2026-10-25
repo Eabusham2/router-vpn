@@ -24,7 +24,7 @@ var connectionProfilePreferenceKeys = map[string]struct{}{
 	"base_tunnel": {}, "base_fallback": {}, "start_layer": {}, "mtu_policy": {}, "manual_mtu": {},
 	"daita_enabled": {}, "jumbo_tun": {}, "socks_enabled": {},
 	"dns_mode": {}, "dns_protocol": {}, "dns_host": {}, "dns_port": {},
-	"dns_server_name": {}, "dns_path": {}, "multihop_enabled": {},
+	"dns_server_name": {}, "dns_path": {}, "home_dns_captured": {}, "multihop_enabled": {},
 	"multihop_entry_id": {}, "multihop_exit_id": {}, "custom_layers": {},
 }
 
@@ -41,7 +41,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("connection profile preferences contain unsupported field %q", key)
 		}
 	}
-	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect"} {
+	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured"} {
 		if value, ok := raw[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("saved connection policy cannot be null")
 		}
@@ -142,6 +142,18 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 
 func normalizeSavedConnectionDNS(p *connectionProfilePreferences) error {
 	mode := strings.ToLower(strings.TrimSpace(p.DNSMode))
+	if p.HomeDNSCaptured {
+		if mode != "home" {
+			return errors.New("a captured Home DNS policy must retain Home mode")
+		}
+		request, err := normalizeHomeDNSTransport(dnsPolicyRequest{Mode: "home", Protocol: p.DNSProtocol, Host: p.DNSHost, Port: p.DNSPort, ServerName: p.DNSServerName, Path: p.DNSPath})
+		if err != nil {
+			return fmt.Errorf("invalid captured Home DNS policy: %w", err)
+		}
+		p.DNSMode, p.DNSProtocol, p.DNSHost, p.DNSPort = "home", request.Protocol, request.Host, request.Port
+		p.DNSServerName, p.DNSPath = request.ServerName, request.Path
+		return nil
+	}
 	if mode == "" {
 		// Legacy profile with no DNS snapshot: leave the linked node's current DNS
 		// untouched when this connection profile is loaded.
