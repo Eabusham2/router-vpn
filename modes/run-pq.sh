@@ -12,9 +12,12 @@ python3 "$SCRIPT_DIR/runtime-pids.py" init "$ROOT" "$MODE"
 source "$CONF/rosenpass.env"
 RP_PORT=${ROSENPASS_PORT:-51822}
 RP_KEY="$CONF/${ROSENPASS_KEY_OUT:-rosenpass.psk}"
-# shellcheck disable=SC2046
-eval "$(python3 "$SCRIPT_DIR/dns-policy.py" env)"
+# Capture must fail before inherited DNS settings can reach a runtime.
+DNS_POLICY_ENV=$(python3 "$SCRIPT_DIR/dns-policy.py" env)
+eval "$DNS_POLICY_ENV"
+unset DNS_POLICY_ENV
 export HOMEVPN_DNS_MODE HOMEVPN_DNS_PROTOCOL HOMEVPN_DNS_HOST HOMEVPN_DNS_PORT HOMEVPN_DNS_SERVER_NAME HOMEVPN_DNS_PATH
+python3 "$SCRIPT_DIR/runtime-config.py" dns-hint "$ROOT" "$RUN/dns.txt" "$HOMEVPN_DNS_MODE" "$HOMEVPN_DNS_PROTOCOL" "$HOMEVPN_DNS_HOST" "$HOMEVPN_DNS_PORT" "$HOMEVPN_DNS_SERVER_NAME" "$HOMEVPN_DNS_PATH"
 
 # Standard PQ owns the public Rosenpass endpoint explicitly. Generic profile
 # staging deliberately leaves rosenpass.toml alone because MAX uses a private

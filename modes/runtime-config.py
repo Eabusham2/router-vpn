@@ -246,11 +246,13 @@ def local_socks(root: str, target: str, host: str, port_text: str) -> None:
     dump_json(root, target, cfg)
 
 
-def dns_hint(root: str, target: str, mode: str, protocol: str, host: str, port: str) -> None:
-    for value in (mode, protocol, host, port):
+def dns_hint(root: str, target: str, mode: str, protocol: str, host: str, port: str,
+             server_name: str = "", path: str = "") -> None:
+    for value in (mode, protocol, host, port, server_name, path):
         if any(ch in value for ch in "\r\n\x00"):
             raise RuntimeError("invalid DNS hint value")
-    atomic_write(root, target, f"mode={mode}\nprotocol={protocol}\nserver={host}:{port}\n".encode())
+    server = f"[{host}]:{port}" if ":" in host else f"{host}:{port}"
+    atomic_write(root, target, f"mode={mode}\nprotocol={protocol}\nserver={server}\nserver_name={server_name}\npath={path}\n".encode())
 
 
 def main(argv: list[str]) -> int:
@@ -268,8 +270,8 @@ def main(argv: list[str]) -> int:
             sing_variant(argv[2], argv[3], argv[4], argv[5])
         elif cmd == "local-socks" and len(argv) == 6:
             local_socks(argv[2], argv[3], argv[4], argv[5])
-        elif cmd == "dns-hint" and len(argv) == 8:
-            dns_hint(argv[2], argv[3], argv[4], argv[5], argv[6], argv[7])
+        elif cmd == "dns-hint" and len(argv) in (8, 10):
+            dns_hint(*argv[2:])
         else:
             raise RuntimeError("invalid runtime-config command")
         return 0

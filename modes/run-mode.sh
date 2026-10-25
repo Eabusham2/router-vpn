@@ -6,6 +6,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/profile-id.sh"
 PROFILE_ID=$(homevpn_profile_id)
+export HOMEVPN_PROFILE_ID="$PROFILE_ID"
 RUN="$ROOT/run"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend in the app first}
 
@@ -24,13 +25,15 @@ python3 "$SCRIPT_DIR/start-layer.py" prepare "$ROOT" "$PROFILE_ID" "$MODE" "$CON
 eval "$(python3 "$SCRIPT_DIR/start-layer.py" env "$CONF/start-layer.json")"
 export HOMEVPN_START_LAYER HOMEVPN_START_LAYER_XOR HOMEVPN_START_LAYER_KEY_CONFIG HOMEVPN_START_LAYER_RELAY_LISTEN HOMEVPN_START_LAYER_RELAY_TARGET
 "$SCRIPT_DIR/check-mode.sh" "$MODE" >/dev/null
-# shellcheck disable=SC2046
-eval "$(python3 "$SCRIPT_DIR/dns-policy.py" env)"
+# Capture must fail before inherited DNS settings can reach a runtime.
+DNS_POLICY_ENV=$(python3 "$SCRIPT_DIR/dns-policy.py" env)
+eval "$DNS_POLICY_ENV"
+unset DNS_POLICY_ENV
 export HOMEVPN_DNS_MODE HOMEVPN_DNS_PROTOCOL HOMEVPN_DNS_HOST HOMEVPN_DNS_PORT HOMEVPN_DNS_SERVER_NAME HOMEVPN_DNS_PATH
 
 LAST_BG_PID=''
 start_bg(){ "$@" >>"$RUN/$MODE.log" 2>&1 & LAST_BG_PID=$!; python3 "$SCRIPT_DIR/runtime-pids.py" record "$ROOT" "$MODE" "$LAST_BG_PID"; }
-set_dns_hint(){ python3 "$SCRIPT_DIR/runtime-config.py" dns-hint "$ROOT" "$RUN/dns.txt" "$HOMEVPN_DNS_MODE" "$HOMEVPN_DNS_PROTOCOL" "$HOMEVPN_DNS_HOST" "$HOMEVPN_DNS_PORT"; }
+set_dns_hint(){ python3 "$SCRIPT_DIR/runtime-config.py" dns-hint "$ROOT" "$RUN/dns.txt" "$HOMEVPN_DNS_MODE" "$HOMEVPN_DNS_PROTOCOL" "$HOMEVPN_DNS_HOST" "$HOMEVPN_DNS_PORT" "$HOMEVPN_DNS_SERVER_NAME" "$HOMEVPN_DNS_PATH"; }
 set_dns_hint
 socks_only(){ [[ ${HOMEVPN_SOCKS:-false} == true ]]; }
 dns_binary(){ if command -v router-vpn-dns >/dev/null 2>&1; then command -v router-vpn-dns; return; fi; if [[ -x "$ROOT/router-vpn-dns" ]]; then printf '%s\n' "$ROOT/router-vpn-dns"; return; fi; echo 'router-vpn-dns is missing; reinstall the current client bundle' >&2; return 1; }

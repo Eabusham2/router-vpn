@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import ipaddress
 import json
 import os
+import re
 import shlex
 import stat
 import sys
 import tempfile
 from pathlib import Path
+from urllib.parse import urlsplit
 
 from profile_id import validate_profile_id
 from private_profile_store import private_root, read_profile_store
@@ -61,9 +64,88 @@ def infer_server_name(host: str, explicit: str) -> str:
     return ""
 
 
+def profile_text(profile: dict, key: str) -> str:
+    value = profile.get(key)
+    if value is None:
+        return ""
+    if not isinstance(value, str) or any(ord(ch) < 32 or ord(ch) == 127 for ch in value):
+        raise RuntimeError(f"invalid captured DNS field: {key}")
+    return value
+
+
+def home_settings(profile: dict) -> dict:
+    kind = profile_text(profile, "node_kind").strip().lower() or "router-vpn"
+    if kind != "router-vpn" or profile.get("external") is not None:
+        raise RuntimeError("Home DNS requires the captured Router VPN node policy")
+    addresses = []
+    private_v4 = tuple(ipaddress.ip_network(value) for value in ("10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"))
+    private_v6 = ipaddress.ip_network("fc00::/7")
+    for key, version in (("adguard_ipv4", 4), ("adguard_ipv6", 6)):
+        text = profile_text(profile, key)
+        if not text:
+            continue
+        try:
+            address = ipaddress.ip_address(text)
+        except ValueError as error:
+            raise RuntimeError("Home DNS requires this node's canonical private AdGuard addresses") from error
+        private = any(address in network for network in private_v4) if version == 4 else address in private_v6
+        if address.version != version or str(address) != text or "%" in text or not private:
+            raise RuntimeError("Home DNS requires this node's canonical private AdGuard addresses")
+        addresses.append(text)
+    if not addresses:
+        raise RuntimeError("Home AdGuard address is missing from this captured node")
+    host = profile_text(profile, "dns_host").strip().strip("[]") or addresses[0]
+    try:
+        address = ipaddress.ip_address(host)
+    except ValueError as error:
+        raise RuntimeError("Home DNS requires this node's explicit private AdGuard address") from error
+    host = str(address)
+    if host not in addresses:
+        raise RuntimeError("Home DNS belongs to a different node; select this node's saved AdGuard address")
+    if address.version == 6 and profile_text(profile, "ipv6_mode").strip().lower() == "off":
+        raise RuntimeError("The selected IPv6 Home resolver cannot be used while IPv6 is Off")
+    protocol = profile_text(profile, "dns_protocol").strip().lower() or "udp"
+    protocol = {"dot": "tls", "doh": "https", "doh3": "h3"}.get(protocol, protocol)
+    if protocol not in ("udp", "tcp", "tls", "https", "h3"):
+        raise RuntimeError("Home DNS transport must be UDP, TCP, DoT, DoH or DoH3")
+    port = profile.get("dns_port")
+    if port is None:
+        port = 0
+    if type(port) is not int or not 0 <= port <= 65535:
+        raise RuntimeError("Home DNS port must be between 1 and 65535")
+    port = port or (853 if protocol == "tls" else 443 if protocol in ("https", "h3") else 53)
+    server_name, path = "", ""
+    if protocol in ("tls", "https", "h3"):
+        server_name = profile_text(profile, "dns_server_name").strip()
+        try:
+            ipaddress.ip_address(server_name)
+        except ValueError:
+            pass
+        else:
+            raise RuntimeError("Encrypted Home DNS requires its exact TLS certificate hostname")
+        if len(server_name) > 253 or "." not in server_name or any(
+            not re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", label)
+            for label in server_name.split(".")
+        ):
+            raise RuntimeError("Encrypted Home DNS requires its exact TLS certificate hostname")
+    if protocol in ("https", "h3"):
+        path = profile_text(profile, "dns_path").strip() or "/dns-query"
+        parsed = urlsplit(path)
+        if len(path.encode("utf-8")) > 2048 or not path.startswith("/") or path.startswith("//") or \
+                any(ord(ch) <= 32 or ord(ch) == 127 or ch in "\\?#" for ch in path) or re.search(r"%(?![0-9A-Fa-f]{2})", path) or \
+                parsed.scheme or parsed.netloc or parsed.query or parsed.fragment:
+            raise RuntimeError("Home DoH requires its exact local resolver path without a host, query or fragment")
+    return {"mode": "home", "protocol": protocol, "host": host, "port": port, "server_name": server_name, "path": path}
+
+
 def settings() -> dict:
     p = load_profile()
-    mode = str(p.get("dns_mode") or "fastest").lower()
+    mode = profile_text(p, "dns_mode").strip().lower() or "home"
+    if mode == "home":
+        selected = home_settings(p)
+        selected.update(fastest_name=str(p.get("fastest_dns_name") or "Fastest public DNS"),
+                        fastest_latency_ms=float(p.get("fastest_dns_latency_ms") or 0.0))
+        return selected
     fastest = str(p.get("fastest_dns_host") or "1.1.1.1")
     protocol = str(p.get("dns_protocol") or "udp").lower()
     host = str(p.get("dns_host") or fastest)
@@ -71,10 +153,7 @@ def settings() -> dict:
     server_name = str(p.get("dns_server_name") or "")
     path = str(p.get("dns_path") or "/dns-query")
 
-    if mode == "home":
-        host = str(p.get("adguard_ipv4") or p.get("adguard_ipv6") or "10.77.0.1")
-        protocol, port, server_name, path = "udp", 53, "", ""
-    elif mode == "fastest":
+    if mode == "fastest":
         host, protocol, port, server_name, path = fastest, "udp", 53, "", ""
     elif mode == "doh":
         protocol = "https"
@@ -270,6 +349,12 @@ def _atomic_private_runtime_json(
 def patch_sing(path: Path, s: dict) -> None:
     cfg, expected, expected_parent = _read_runtime_json_snapshot(path)
     detour = choose_detour(cfg)
+    if s["mode"] == "home":
+        owned = [outbound for outbound in cfg.get("outbounds", [])
+                 if isinstance(outbound, dict) and outbound.get("tag") == detour]
+        kind = owned[0].get("type") if len(owned) == 1 else None
+        if detour == "direct" or not isinstance(kind, str) or not kind.strip() or kind.strip().lower() in ("direct", "block", "dns"):
+            raise RuntimeError("Home DNS requires an owned tunnel outbound; direct fallback is forbidden")
     cfg["dns"] = {"servers": [sing_server(s, detour)], "final": "selected-dns"}
     route = cfg.setdefault("route", {})
     rules = route.setdefault("rules", [])

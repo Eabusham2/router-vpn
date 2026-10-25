@@ -5,6 +5,8 @@ import importlib.util
 import json
 import os
 from pathlib import Path
+import subprocess
+import sys
 import tempfile
 from unittest import mock
 
@@ -63,7 +65,22 @@ def main() -> int:
 
         hint = run / "dns.txt"
         CFG.dns_hint(str(root), str(hint), "home", "udp", "10.77.0.1", "53")
-        assert hint.read_text() == "mode=home\nprotocol=udp\nserver=10.77.0.1:53\n"
+        assert hint.read_text() == "mode=home\nprotocol=udp\nserver=10.77.0.1:53\nserver_name=\npath=\n"
+        result = subprocess.run([sys.executable, str(HERE / "runtime-config.py"), "dns-hint", str(root), str(hint),
+                                 "home", "https", "fd91::53", "8443", "DNS.Home.Example", "/owned-query"],
+                                text=True, capture_output=True, timeout=10)
+        assert result.returncode == 0, result.stderr
+        assert hint.read_text() == "mode=home\nprotocol=https\nserver=[fd91::53]:8443\nserver_name=DNS.Home.Example\npath=/owned-query\n"
+        assert hint.stat().st_mode & 0o777 == 0o600
+        original_hint = hint.read_bytes()
+        for server_name, path in (("dns.home.example\nmode=rescue", "/query"), ("dns.home.example", "/query\nserver=8.8.8.8:53")):
+            try:
+                CFG.dns_hint(str(root), str(hint), "home", "https", "10.91.0.53", "8443", server_name, path)
+            except RuntimeError as exc:
+                assert "invalid DNS hint" in str(exc)
+            else:
+                raise AssertionError("DNS hint accepted an injected proof field")
+            assert hint.read_bytes() == original_hint
 
         # Atomic replacement failure preserves prior complete bytes and cleans temp.
         original = wg.read_bytes()

@@ -6,6 +6,7 @@ SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 # shellcheck disable=SC1091
 . "$SCRIPT_DIR/profile-id.sh"
 PROFILE_ID=$(homevpn_profile_id)
+export HOMEVPN_PROFILE_ID="$PROFILE_ID"
 ENDPOINT=${HOMEVPN_ENDPOINT:?Choose a router backend first}
 RUN="$ROOT/run"
 
@@ -38,9 +39,12 @@ source "$CONF/chain.env"
 # shellcheck disable=SC1090
 source "$CONF/rosenpass.env"
 RP_KEY="$CONF/${ROSENPASS_KEY_OUT:-rosenpass.psk}"
-# shellcheck disable=SC2046
-eval "$(python3 "$SCRIPT_DIR/dns-policy.py" env)"
+# Capture must fail before inherited DNS settings can reach a runtime.
+DNS_POLICY_ENV=$(python3 "$SCRIPT_DIR/dns-policy.py" env)
+eval "$DNS_POLICY_ENV"
+unset DNS_POLICY_ENV
 export HOMEVPN_DNS_MODE HOMEVPN_DNS_PROTOCOL HOMEVPN_DNS_HOST HOMEVPN_DNS_PORT HOMEVPN_DNS_SERVER_NAME HOMEVPN_DNS_PATH
+python3 "$SCRIPT_DIR/runtime-config.py" dns-hint "$ROOT" "$RUN/dns.txt" "$HOMEVPN_DNS_MODE" "$HOMEVPN_DNS_PROTOCOL" "$HOMEVPN_DNS_HOST" "$HOMEVPN_DNS_PORT" "$HOMEVPN_DNS_SERVER_NAME" "$HOMEVPN_DNS_PATH"
 
 CFG=$FULL
 [[ ${HOMEVPN_SOCKS:-false} == true ]] && CFG=$SPLIT
