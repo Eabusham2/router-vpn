@@ -79,7 +79,9 @@ def main():
         ("malformed-source", "helper", "Saved connection uses the selected protocol", "Saved connection uses this node’s protocol", "CONTROL whole-source parse"),
     ]
     if os.name == "nt":
-        mutations.append(("unsupported-form", "helper", "$nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported", "$nodeSettings.IsEnabled=$true", "unsupported WPF form enabled common device fields or disabled startup"))
+        # PowerShell can wrap/color the long exception after this unique
+        # prefix. Keep the actual form mutation and require its own assertion.
+        mutations.append(("unsupported-form", "helper", "$nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported", "$nodeSettings.IsEnabled=$true", "CONTROL unsupported WPF form"))
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-device-") as temp:
         for name, kind, old, new, rejection in mutations:
             variant = replace_once(source if kind == "helper" else shell_source, old, new)
