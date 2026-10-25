@@ -153,14 +153,27 @@ function Remove-State([switch]$ForceRecovery) {
   }
   Remove-Item -LiteralPath $path -Force
 }
-function Get-SelectedProfile {
+function Get-SelectedProfiles {
   $rootPath = Resolve-Root
   Assert-NoReparseAncestors $rootPath
   $storePath = Join-Path $rootPath 'routers.json'
   $store = Read-SafeJsonFile $storePath 'Router profile store' 4194304
   $selected = if ($env:HOMEVPN_PROFILE_ID) { Safe-ProfileId([string]$env:HOMEVPN_PROFILE_ID) } elseif ($store.selected_id) { Safe-ProfileId([string]$store.selected_id) } else { 'router' }
-  foreach ($item in @($store.profiles)) { if ($item -and [string]$item.id -eq $selected) { return $item } }
-  throw "Selected Router VPN profile '$selected' was not found."
+  $capturedPolicy = [Environment]::GetEnvironmentVariable('HOMEVPN_POLICY_PROFILE_ID','Process')
+  $policyID = $selected
+  if ($null -ne $capturedPolicy) {
+    if ([string]::IsNullOrWhiteSpace($capturedPolicy) -or [string]::IsNullOrWhiteSpace($env:HOMEVPN_PROFILE_ID)) {
+      throw 'Captured Windows kill-switch policy and runtime profile IDs are required.'
+    }
+    $policyID = Safe-ProfileId $capturedPolicy
+  }
+  $runtimeProfiles = @($store.profiles | Where-Object { $_ -and [string]$_.id -ceq $selected })
+  $policyProfiles = @($store.profiles | Where-Object { $_ -and [string]$_.id -ceq $policyID })
+  if ($runtimeProfiles.Count -ne 1) { throw "Captured runtime/entry profile '$selected' is missing or ambiguous." }
+  if ($policyProfiles.Count -ne 1) { throw "Captured policy/control profile '$policyID' is missing or ambiguous." }
+  # The physical entry supplies endpoint exceptions; the captured control/exit
+  # owns kill-switch and LAN policy. Read both from the same private snapshot.
+  return [pscustomobject]@{ runtime=$runtimeProfiles[0]; policy=$policyProfiles[0] }
 }
 function Parse-Bool([string]$Value,[bool]$Default) {
   if ([string]::IsNullOrWhiteSpace($Value)) { return $Default }
@@ -235,11 +248,23 @@ function Captured-NativeEgress([string[]]$Addresses) {
 }
 function Resolve-Settings {
   $profile = $null
-  if (-not $Endpoint -or -not $Policy -or -not $HomeLANAccess) {
-    try { $profile = Get-SelectedProfile } catch { if ($Action -ne 'plan') { throw } }
+  $runtimeProfile = $null
+  $capturedPolicy = [Environment]::GetEnvironmentVariable('HOMEVPN_POLICY_PROFILE_ID','Process')
+  if ($null -ne $capturedPolicy -or -not $Endpoint -or -not $Policy -or -not $HomeLANAccess) {
+    try {
+      $selection = Get-SelectedProfiles
+      $profile = $selection.policy
+      $runtimeProfile = $selection.runtime
+    } catch { if ($Action -ne 'plan' -or $null -ne $capturedPolicy) { throw } }
   }
-  $effectiveEndpoint = if ($Endpoint) { $Endpoint } elseif ($env:HOMEVPN_ENDPOINT) { [string]$env:HOMEVPN_ENDPOINT } elseif ($profile) { [string]$profile.endpoint } else { '' }
+  if ($null -ne $capturedPolicy) {
+    if ([string]$profile.kill_switch_policy -cnotin @('off','on-connect','always')) { throw 'Captured Windows kill-switch owner has no valid policy.' }
+    if ($Policy -and $Policy -cne [string]$profile.kill_switch_policy) { throw 'Explicit policy differs from its captured Windows kill-switch owner.' }
+    if ($HomeLANAccess -and (Parse-Bool $HomeLANAccess $false) -ne [bool]$profile.home_lan_access) { throw 'Explicit LAN policy differs from its captured Windows kill-switch owner.' }
+  }
+  $effectiveEndpoint = if ($Endpoint) { $Endpoint } elseif ($env:HOMEVPN_ENDPOINT) { [string]$env:HOMEVPN_ENDPOINT } elseif ($runtimeProfile) { [string]$runtimeProfile.endpoint } else { '' }
   $effectivePolicy = if ($Policy) { $Policy } elseif ($profile -and $profile.kill_switch_policy) { [string]$profile.kill_switch_policy } else { 'off' }
+  if ($effectivePolicy -cnotin @('off','on-connect','always')) { throw 'Unsupported captured Windows kill-switch policy.' }
   $effectiveLAN = if ($HomeLANAccess) { Parse-Bool $HomeLANAccess $false } elseif ($profile) { [bool]$profile.home_lan_access } else { $false }
   $ip = $null
   if ($effectivePolicy -ne 'off' -and -not [System.Net.IPAddress]::TryParse($effectiveEndpoint.Trim().Trim('[',']'), [ref]$ip)) {

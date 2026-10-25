@@ -1,4 +1,4 @@
-param([switch]$PreserveJsonArrays)
+param([switch]$PreserveJsonArrays,[string]$Source='')
 $ErrorActionPreference = 'Stop'
 if ($PreserveJsonArrays) {
   if (-not (Get-Command Microsoft.PowerShell.Utility\ConvertFrom-Json).Parameters.ContainsKey('NoEnumerate')) { throw 'This compatibility test requires NoEnumerate support.' }
@@ -9,10 +9,10 @@ if ($PreserveJsonArrays) {
     process { Microsoft.PowerShell.Utility\ConvertFrom-Json -InputObject $InputObject -NoEnumerate }
   }
 }
-$script = Join-Path $PSScriptRoot 'windows-kill-switch.ps1'
+$script = if($Source){[IO.Path]::GetFullPath($Source)}else{Join-Path $PSScriptRoot 'windows-kill-switch.ps1'}
 $temp = Join-Path ([IO.Path]::GetTempPath()) ('router-vpn-killswitch-test-'+[Guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Force -Path $temp | Out-Null
-$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON')
+$nativeNames = @('HOMEVPN_STANDARD_ENGINE','HOMEVPN_EXTERNAL_SESSION','HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_PROFILE_ID','HOMEVPN_POLICY_PROFILE_ID','HOMEVPN_ENDPOINT','HOMEVPN_ROOT')
 $originalNative = @{}
 foreach ($name in $nativeNames) {
   $originalNative[$name] = [Environment]::GetEnvironmentVariable($name,'Process')
@@ -132,6 +132,61 @@ try {
     if (-not $rejected) { throw "Unowned native physical list was accepted: $badOwner" }
   }
   foreach ($name in $nativeNames) { Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue }
+
+  # Execute actual read-only plans against an owned private store. The entry
+  # controls physical endpoint exceptions; the captured exit/control owns
+  # kill-switch and LAN policy, independently of the currently selected node.
+  $profileRoot=Join-Path $temp 'policy-profiles';New-Item -ItemType Directory -Path $profileRoot|Out-Null
+  $policyStore=[pscustomobject]@{selected_id='ordinary';profiles=@(
+    [pscustomobject]@{id='ordinary';endpoint='203.0.113.30';kill_switch_policy='on-connect';home_lan_access=$true},
+    [pscustomobject]@{id='entry';endpoint='203.0.113.11';kill_switch_policy='off';home_lan_access=$true},
+    [pscustomobject]@{id='exit';endpoint='198.51.100.20';kill_switch_policy='always';home_lan_access=$false}
+  )}
+  function Write-PolicyStore {[IO.File]::WriteAllText((Join-Path $profileRoot 'routers.json'),($policyStore|ConvertTo-Json -Depth 10),(New-Object Text.UTF8Encoding($false)))}
+  function Assert-PolicyPlan([string]$ExpectedEndpoint,[string]$ExpectedPolicy,[bool]$ExpectedLAN) {
+    $value=(& $script -Action plan -Root $profileRoot -StateRoot $temp -TunnelAlias 'router-vpn'|ConvertFrom-Json)
+    if($value.endpoint-cne$ExpectedEndpoint-or$value.policy-cne$ExpectedPolicy-or[bool]$value.home_lan_access-ne$ExpectedLAN){throw 'Captured physical endpoint and policy owner were mixed.'}
+  }
+  function Assert-PolicyRejected {
+    $rejected=$false;try{& $script -Action plan -Root $profileRoot -StateRoot $temp -TunnelAlias 'router-vpn'|Out-Null}catch{$rejected=$true}
+    if(-not$rejected){throw 'Invalid captured policy owner fell back to an unrelated profile.'}
+  }
+  Write-PolicyStore
+  Assert-PolicyPlan '203.0.113.30' 'on-connect' $true
+  $env:HOMEVPN_PROFILE_ID='entry';Assert-PolicyPlan '203.0.113.11' 'off' $true
+  $env:HOMEVPN_PROFILE_ID='exit';Assert-PolicyPlan '198.51.100.20' 'always' $false
+  $env:HOMEVPN_PROFILE_ID='entry';$env:HOMEVPN_POLICY_PROFILE_ID='exit'
+  Assert-PolicyPlan '203.0.113.11' 'always' $false
+  $env:HOMEVPN_ENDPOINT='203.0.113.12';Assert-PolicyPlan '203.0.113.12' 'always' $false
+  Remove-Item Env:HOMEVPN_ENDPOINT
+  $policyStore.selected_id='missing';Write-PolicyStore
+  Assert-PolicyPlan '203.0.113.11' 'always' $false
+  $policyStore.profiles[1].kill_switch_policy='always';$policyStore.profiles[1].home_lan_access=$false
+  $policyStore.profiles[2].kill_switch_policy='off';$policyStore.profiles[2].home_lan_access=$true;Write-PolicyStore
+  Assert-PolicyPlan '203.0.113.11' 'off' $true
+  $policyStore.profiles[1].kill_switch_policy='off';$policyStore.profiles[1].home_lan_access=$true
+  $policyStore.profiles[2].kill_switch_policy='always';$policyStore.profiles[2].home_lan_access=$false;Write-PolicyStore
+  foreach($badID in @('missing','EXIT','../exit',' ')){$env:HOMEVPN_POLICY_PROFILE_ID=$badID;Assert-PolicyRejected}
+  $env:HOMEVPN_POLICY_PROFILE_ID='exit'
+  foreach($badID in @('missing','ENTRY','../entry',' ')){$env:HOMEVPN_PROFILE_ID=$badID;Assert-PolicyRejected}
+  $policyStore.selected_id='ordinary';Write-PolicyStore
+  Remove-Item Env:HOMEVPN_PROFILE_ID;Assert-PolicyRejected
+  $env:HOMEVPN_PROFILE_ID='entry'
+  foreach($index in @(1,2)){
+    $originalProfiles=$policyStore.profiles;$policyStore.profiles=@($originalProfiles)+@($originalProfiles[$index]);Write-PolicyStore
+    Assert-PolicyRejected;$policyStore.profiles=$originalProfiles;Write-PolicyStore
+  }
+  foreach($badPolicy in @('invalid','')){$policyStore.profiles[2].kill_switch_policy=$badPolicy;Write-PolicyStore;Assert-PolicyRejected}
+  $policyStore.profiles[2].kill_switch_policy='always';Write-PolicyStore
+  foreach($overrides in @(@{Policy='off';HomeLANAccess='false'},@{Policy='always';HomeLANAccess='true'})){
+    $rejected=$false;try{& $script -Action plan -Root $profileRoot -StateRoot $temp -Endpoint '203.0.113.11' @overrides|Out-Null}catch{$rejected=$true}
+    if(-not$rejected){throw 'Explicit arguments bypassed the captured kill-switch/LAN policy owner.'}
+  }
+  $env:HOMEVPN_POLICY_PROFILE_ID='missing'
+  $rejected=$false;try{& $script -Action plan -Root $profileRoot -StateRoot $temp -Endpoint '203.0.113.11' -Policy 'off' -HomeLANAccess 'true'|Out-Null}catch{$rejected=$true}
+  if(-not$rejected){throw 'Explicit plan arguments bypassed a missing captured policy owner.'}
+  foreach($name in $nativeNames){Remove-Item -LiteralPath ('Env:'+$name) -ErrorAction SilentlyContinue}
+  Write-Host 'Windows captured policy-owner plans: direct/router, opposing entry/exit policies, physical endpoint and stale-owner negatives OK'
 
   $caught = $null
   try {
