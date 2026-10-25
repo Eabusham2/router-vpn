@@ -51,6 +51,8 @@ jobs:
           python3 deploy/test_mobile_performance_shipping.py
           python3 deploy/test_bundled_xray.py
           python3 modes/test_runtime_pid_registration.py
+          python3 deploy/test_desktop_tor_unix_wrapper.py
+          python3 modes/test_cleanup_private_runtime.py
           python3 deploy/full-audit-v4.py
           python3 deploy/release-gap-audit.py
           python3 deploy/product-parity-audit.py
@@ -226,7 +228,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor)'
+          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab)'
           if ($LASTEXITCODE -ne 0) { throw 'Windows captured workspace or Tor child cleanup failed' }
       - name: Verify native Windows Tor host compatibility API
         shell: pwsh
@@ -292,6 +294,20 @@ jobs:
           foreach($shell in @('pwsh','powershell.exe')){
             & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
             if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch suspended-process Job tests failed in $shell"}
+          }
+      - name: Execute packaged Tor wrapper lifecycle
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $test=Join-Path $roots[0].FullName 'client/test-windows-tor-wrapper-lifecycle.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its Tor wrapper lifecycle test'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch Tor wrapper lifecycle tests failed in $shell"}
           }
       - name: Execute shipped Tor helpers on the actual Windows architecture
         shell: pwsh

@@ -25,6 +25,7 @@ jobs:
             'client/Private-RouterVPN-State.ps1',
             'client/Private-RouterVPN-Job.ps1',
             'client/test-windows-private-job.ps1',
+            'client/test-windows-tor-wrapper-lifecycle.ps1',
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
             'client/test-windows-home-dns.ps1',
@@ -138,6 +139,14 @@ jobs:
             & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-private-job.ps1 -SourceRoot $env:GITHUB_WORKSPACE
             if($LASTEXITCODE -ne 0){throw "Windows suspended-process Job tests failed in $shell"}
           }
+      - name: Tor wrapper ownership and prelaunch failure witnesses
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-tor-wrapper-lifecycle.ps1 -SourceRoot $env:GITHUB_WORKSPACE
+            if($LASTEXITCODE -ne 0){throw "Windows Tor wrapper lifecycle tests failed in $shell"}
+          }
       - name: Windows firewall primitives
         shell: pwsh
         run: |
@@ -189,7 +198,7 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor)'
+          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab)'
           if ($LASTEXITCODE -ne 0) { throw 'Windows captured workspace or Tor child cleanup failed' }
       - name: Standalone runtime verifier startup isolation
         shell: pwsh
