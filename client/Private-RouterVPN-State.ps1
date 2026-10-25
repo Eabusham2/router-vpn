@@ -195,6 +195,102 @@ function Get-RouterVPNSelectedProfile($Store, [string]$ProfileId) {
   throw "Selected Router VPN profile '$selected' was not found."
 }
 
+function Get-RouterVPNHomeDnsField($Profile, [string]$Name, [string]$Default = '') {
+  if ($null -ne $Profile -and $Profile.PSObject.Properties.Name -contains $Name) {
+    $value = ([string]$Profile.$Name).Trim()
+    if ($value.Length -gt 0) { return $value }
+  }
+  return $Default
+}
+
+function ConvertTo-RouterVPNHomeDnsAddress([string]$Value, [string]$Family = '') {
+  $address = $Value.Trim()
+  if ($address.StartsWith('[') -and $address.EndsWith(']')) {
+    $address = $address.Substring(1, $address.Length - 2)
+  }
+  $parsed = $null
+  if ($address.Contains('%') -or -not [Net.IPAddress]::TryParse($address, [ref]$parsed)) {
+    throw 'Home DNS requires a literal private AdGuard address without a scope or zone.'
+  }
+  $bytes = $parsed.GetAddressBytes()
+  if ($parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetwork) {
+    # .NET also accepts shortened, octal and integer IPv4 spellings. The saved
+    # node contract permits only the ordinary dotted-decimal address.
+    if ($Family -eq 'ipv6' -or $address -cne $parsed.ToString() -or -not (
+      $bytes[0] -eq 10 -or
+      ($bytes[0] -eq 172 -and $bytes[1] -ge 16 -and $bytes[1] -le 31) -or
+      ($bytes[0] -eq 192 -and $bytes[1] -eq 168)
+    )) { throw 'Home DNS requires the same node private IPv4 AdGuard address.' }
+  } elseif ($parsed.AddressFamily -eq [Net.Sockets.AddressFamily]::InterNetworkV6) {
+    if ($Family -eq 'ipv4' -or $parsed.IsIPv4MappedToIPv6 -or ($bytes[0] -band 254) -ne 252) {
+      throw 'Home DNS requires the same node ULA IPv6 AdGuard address.'
+    }
+  } else {
+    throw 'Home DNS requires a literal private AdGuard address.'
+  }
+  return $parsed.ToString()
+}
+
+function Get-RouterVPNHomeDnsSelection($Profile) {
+  if ($null -eq $Profile) { throw 'Selected Router VPN profile is unavailable for Home DNS policy.' }
+  $kind = Get-RouterVPNHomeDnsField $Profile 'node_kind' 'router-vpn'
+  $mode = (Get-RouterVPNHomeDnsField $Profile 'dns_mode' 'home').ToLowerInvariant()
+  if ($kind -cne 'router-vpn' -or $mode -ne 'home') {
+    throw 'Home DNS requires the captured Router VPN node policy.'
+  }
+  $addresses = @()
+  foreach ($family in @('ipv4', 'ipv6')) {
+    $property = $Profile.PSObject.Properties['adguard_' + $family]
+    $value = if ($null -ne $property) { [string]$property.Value } else { '' }
+    if ($value.Length -gt 0) {
+      $address = ConvertTo-RouterVPNHomeDnsAddress $value $family
+      if ($address -cne $value) { throw 'Home DNS saved AdGuard address must be canonical.' }
+      $addresses += $address
+    }
+  }
+  if ($addresses.Count -eq 0) { throw 'Home DNS has no saved AdGuard address for this node.' }
+  $dnsHost = Get-RouterVPNHomeDnsField $Profile 'dns_host'
+  if ($dnsHost) {
+    $dnsHost = ConvertTo-RouterVPNHomeDnsAddress $dnsHost
+    if ($addresses -cnotcontains $dnsHost) { throw 'Home DNS address does not belong to the captured node.' }
+  } else {
+    $dnsHost = $addresses[0]
+  }
+  $ipv6 = (Get-RouterVPNHomeDnsField $Profile 'ipv6_mode' 'on').ToLowerInvariant()
+  if ($ipv6 -notin @('on', 'auto', 'off')) { throw 'Home DNS has an invalid saved IPv6 policy.' }
+  if ($ipv6 -eq 'off' -and $dnsHost.Contains(':')) { throw 'Home DNS selected IPv6 while IPv6 is Off.' }
+
+  $protocol = (Get-RouterVPNHomeDnsField $Profile 'dns_protocol' 'udp').ToLowerInvariant()
+  switch ($protocol) { 'doh' { $protocol = 'https' }; 'dot' { $protocol = 'tls' }; 'doh3' { $protocol = 'h3' } }
+  if ($protocol -notin @('udp', 'tcp', 'tls', 'https', 'h3')) { throw 'Unsupported Home DNS protocol.' }
+  $portText = Get-RouterVPNHomeDnsField $Profile 'dns_port' '0'
+  $port = 0
+  if ($portText -notmatch '\A[0-9]+\z' -or -not [int]::TryParse($portText, [ref]$port) -or $port -gt 65535) {
+    throw 'Home DNS port must be an integer between 1 and 65535, or 0 for the transport default.'
+  }
+  if ($port -eq 0) {
+    $port = if ($protocol -eq 'tls') { 853 } elseif ($protocol -in @('https', 'h3')) { 443 } else { 53 }
+  }
+  $serverName = ''
+  $path = ''
+  if ($protocol -in @('tls', 'https', 'h3')) {
+    $serverName = Get-RouterVPNHomeDnsField $Profile 'dns_server_name'
+    $nameIP = $null
+    if ($serverName.Length -gt 253 -or -not $serverName.Contains('.') -or $serverName -notmatch '\A[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?(?:\.[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?)*\z' -or [Net.IPAddress]::TryParse($serverName, [ref]$nameIP)) {
+      throw 'Encrypted Home DNS requires the saved TLS server hostname.'
+    }
+    if ($protocol -in @('https', 'h3')) {
+      $path = Get-RouterVPNHomeDnsField $Profile 'dns_path' '/dns-query'
+      if ($path.Length -gt 2048 -or -not $path.StartsWith('/') -or $path.StartsWith('//') -or $path -match '[\x00-\x20\x7f?#\\]' -or $path -match '%(?![0-9a-fA-F]{2})') {
+        throw 'Home DNS HTTPS path must be a local absolute request path.'
+      }
+    }
+  }
+  # Never consult ambient HOMEVPN_DNS_* or HOMEVPN_ADGUARD* overrides here:
+  # this resolver belongs to the exact private node returned by its ID.
+  return [pscustomobject]@{ mode='home'; protocol=$protocol; host=$dnsHost; port=$port; server_name=$serverName; path=$path }
+}
+
 
 function Write-RouterVPNPrivateTextAtomic([string]$Path,[string]$Text) {
   $full=[IO.Path]::GetFullPath($Path)

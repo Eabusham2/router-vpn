@@ -87,7 +87,9 @@ function Source-Profile-Path {
 
 function Get-SelectedProfile {
   $store = Get-RouterVPNProfileStore $root
-  return Get-RouterVPNSelectedProfile $store $profileId
+  $profile = Get-RouterVPNSelectedProfile $store $profileId
+  if ([string]$profile.id -cne $profileId) { throw 'DNS profile identity does not match the captured node.' }
+  return $profile
 }
 
 function Profile-String($Profile,[string]$Name,[string]$Default='') {
@@ -128,7 +130,12 @@ function Infer-DnsServerName([string]$DnsHost,[string]$Explicit='') {
 function Get-DnsSelection {
   $p = Get-SelectedProfile
   if ($null -eq $p) { throw 'Selected Router VPN profile is unavailable for DNS policy.' }
-  $mode = (Profile-String $p 'dns_mode' 'home').ToLowerInvariant()
+  $mode = (Profile-String $p 'dns_mode' 'home').Trim().ToLowerInvariant()
+  if ($mode -eq 'home') {
+    $homeDNS = Get-RouterVPNHomeDnsSelection $p
+    if ($homeDNS.protocol -eq 'h3') { throw 'DoH3 is unavailable on raw Windows WireGuard because the bounded kernel-mode DNS proxy has no QUIC engine. Choose DoH/DoT or a native sing-box mode; Router VPN will not silently downgrade DoH3.' }
+    return [pscustomobject]@{mode=$homeDNS.mode;protocol=$homeDNS.protocol;dns_host=$homeDNS.host;port=$homeDNS.port;server_name=$homeDNS.server_name;path=$homeDNS.path}
+  }
   $fastest = Profile-String $p 'fastest_dns_host' '1.1.1.1'
   $protocol = (Profile-String $p 'dns_protocol' 'udp').ToLowerInvariant()
   $dnsHost = Profile-String $p 'dns_host' $fastest
@@ -136,7 +143,6 @@ function Get-DnsSelection {
   $serverName = Profile-String $p 'dns_server_name' ''
   $path = Profile-String $p 'dns_path' '/dns-query'
   switch ($mode) {
-    'home' { $dnsHost=Profile-String $p 'adguard_ipv4' (Profile-String $p 'adguard_ipv6' '10.77.0.1');$protocol='udp';$port=53;$serverName='';$path='' }
     'fastest' { $dnsHost=$fastest;$protocol='udp';$port=53;$serverName='';$path='' }
     'doh' { $protocol='https';if($port-le 0){$port=443} }
     'dot' { $protocol='tls';if($port-le 0){$port=853} }
@@ -217,7 +223,7 @@ function Start-DnsProxy($Dns) {
   Start-Sleep -Milliseconds 250
   if ($process.HasExited) { throw "Router VPN selected-DNS proxy exited during startup with code $($process.ExitCode)." }
   $server = if ([string]$Dns.dns_host -match ':') { "[$($Dns.dns_host)]:$($Dns.port)" } else { "$($Dns.dns_host):$($Dns.port)" }
-  $hint = "owner=$($script:dnsOwnerToken)`nmode=$($Dns.mode)`nprotocol=$($Dns.protocol)`nserver=$server`n"
+  $hint = "owner=$($script:dnsOwnerToken)`nmode=$($Dns.mode)`nprotocol=$($Dns.protocol)`nserver=$server`nserver_name=$($Dns.server_name)`npath=$($Dns.path)`n"
   New-Item -ItemType Directory -Force -Path (Split-Path -Parent $dnsHint) | Out-Null
   Write-Utf8NoBom $dnsHint $hint
 }

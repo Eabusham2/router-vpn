@@ -25,6 +25,7 @@ jobs:
             'client/Private-RouterVPN-State.ps1',
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
+            'client/test-windows-home-dns.ps1',
             'client/Optimize-RouterVPN-MTU.ps1',
             'client/RouterVPN-Windows-MTU.ps1',
             'client/RouterVPN-Windows-DNSMeasurement.ps1',
@@ -96,6 +97,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 DNS settings regressions failed' }
           python deploy/test_desktop_dns_settings.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 DNS settings regressions failed' }
+      - name: Home DNS runtime preserves the captured node and transport
+        shell: pwsh
+        run: |
+          python deploy/test_windows_home_dns.py --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 Home DNS runtime regressions failed' }
+          python deploy/test_windows_home_dns.py --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 Home DNS runtime regressions failed' }
       - name: Compact DNS and complete editor shipping composition
         shell: pwsh
         run: |
