@@ -22,12 +22,14 @@ func (a *app) externalProfileStopFailure(cmd *exec.Cmd, cause string) (string, b
 }
 
 type externalProfileConnectRequest struct {
-	ProfileID string `json:"profile_id"`
-	EntryID   string `json:"entry_id"`
-	EntryMode string `json:"entry_mode,omitempty"`
-	Base      string `json:"base"`
-	Direct    *bool  `json:"direct,omitempty"`
-	Execution string `json:"execution,omitempty"`
+	ProfileID              string            `json:"profile_id"`
+	EntryID                string            `json:"entry_id"`
+	EntryMode              string            `json:"entry_mode,omitempty"`
+	Base                   string            `json:"base"`
+	Direct                 *bool             `json:"direct,omitempty"`
+	Execution              string            `json:"execution,omitempty"`
+	ExpectedSelectedNodeID *string           `json:"expected_selected_node_id,omitempty"`
+	ExpectedProfileTokens  map[string]string `json:"expected_profile_tokens,omitempty"`
 }
 
 // The default adapter is the shipping native preparation and staging path.
@@ -61,15 +63,16 @@ func (a *app) externalProfileCapabilities(w http.ResponseWriter, r *http.Request
 	}
 	w.Header().Set("content-type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"node_kind":                "external",
-		"desktop_runtime":          runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
-		"protocols":                externalProfileProtocolCapabilities(),
-		"direct":                   true,
-		"router_vpn_entry_hop":     true,
-		"external_entry_hop":       true,
-		"external_entry_protocols": []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"},
-		"router_vpn_entry_modes":   a.externalRouterEntryModes(),
-		"entry_requirement":        "captured native Router VPN entry with its selected mode, base and Start Layer, or a supported external standard entry",
+		"node_kind":                    "external",
+		"desktop_runtime":              runtime.GOOS == "windows" || runtime.GOOS == "darwin" || runtime.GOOS == "linux",
+		"protocols":                    externalProfileProtocolCapabilities(),
+		"direct":                       true,
+		"router_vpn_entry_hop":         true,
+		"external_entry_hop":           true,
+		"external_entry_protocols":     []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"},
+		"router_vpn_entry_modes":       a.externalRouterEntryModes(),
+		"entry_requirement":            "captured native Router VPN entry with its selected mode, base and Start Layer, or a supported external standard entry",
+		"profile_source_preconditions": true,
 	})
 }
 
@@ -131,8 +134,8 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var q externalProfileConnectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+	q, err := decodeExternalProfileConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -166,9 +169,14 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 	a.mu.Lock()
 	externalProfile, ok := a.profileByIDLocked(profileID)
+	expectedErr := a.validateExternalProfileExpectedProfilesLocked(q, externalProfile)
 	externalProfile = cloneRouterProfile(externalProfile)
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	a.mu.Unlock()
+	if expectedErr != nil {
+		http.Error(w, expectedErr.Error(), http.StatusConflict)
+		return
+	}
 	if !ok {
 		http.Error(w, "external profile not found", http.StatusNotFound)
 		return
@@ -303,6 +311,10 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		}
 	} else if execution != "local" {
 		http.Error(w, "this external protocol needs a paired server credential adapter before Server/Compare can execute", http.StatusBadRequest)
+		return
+	}
+	if err := a.validateExternalProfileExpectedProfiles(q, externalProfile); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
 		return
 	}
 	currentSource, sourceErr := startupExternalSourceToken(a, entry, policy.MultihopEntryMode)
