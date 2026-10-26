@@ -23,6 +23,7 @@ type DesktopBridgePredecessorCapture struct {
 // the exact private Router API credentials; no getter exposes a mutable map.
 type DesktopPredecessor struct {
 	mode, profile, config, assets, tag string
+	kind                               PredecessorProofKind
 	proof                              *PredecessorProof
 }
 
@@ -66,7 +67,7 @@ func NewDesktopPredecessor(mode, profileJSON, configJSON, assetsSHA256 string) (
 	if err != nil {
 		return nil, err
 	}
-	return &DesktopPredecessor{mode: mode, profile: string(profileBytes), config: string(configBytes),
+	return &DesktopPredecessor{mode: mode, profile: string(profileBytes), config: string(configBytes), kind: RouterPredecessorProofKind,
 		assets: assetsSHA256, tag: profileString(graph["route"].(map[string]any), "final"), proof: proof}, nil
 }
 
@@ -77,6 +78,12 @@ func (p *DesktopPredecessor) Config() string           { return p.config }
 func (p *DesktopPredecessor) AssetsSHA256() string     { return p.assets }
 func (p *DesktopPredecessor) Tag() string              { return p.tag }
 func (p *DesktopPredecessor) Proof() *PredecessorProof { return p.proof }
+
+// IsRouter grants only the authority of a validated private Router capture.
+// A future external predecessor cannot inherit it from a generic proof pointer.
+func (p *DesktopPredecessor) IsRouter() bool {
+	return p != nil && p.kind == RouterPredecessorProofKind && p.proof != nil && p.proof.Kind() == RouterPredecessorProofKind
+}
 func (p *DesktopPredecessor) Capture() DesktopBridgePredecessorCapture {
 	return DesktopBridgePredecessorCapture{Schema: 1, EntryMode: p.mode, Profile: json.RawMessage(p.profile),
 		Config: json.RawMessage(p.config), AssetsSHA256: p.assets}

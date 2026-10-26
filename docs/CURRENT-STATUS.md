@@ -386,6 +386,16 @@ private entry, selected DNS transport and independent native ownership. Tor
 Server/Compare, ordinary external predecessors, exit-side desktop Tor padding
 and dynamic-bridge strict protection remain requirements to implement.
 
+The ordinary-external predecessor prerequisite now captures its exact native
+transport, credentials, selected DNS/bootstrap and MTU through the shared
+external-policy compiler. Its routed HTTPS public-address proof has a distinct
+type from authenticated private Router proof and cannot authorize Home AdGuard
+or Router-only protection. The existing external proof also now gives TLS
+cancellation and the outer deadline one joined raw-socket close owner, fixing
+a duplicate close. Eleven new tests cover 66 cases, with five behavioral
+negative controls. Actual external-to-Tor host/native composition and its
+restoration remain unfinished; this primitive does not advertise that path.
+
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
 AdGuard address, port, TLS name and HTTPS path. The address must belong to the
 captured node; missing or foreign addresses cannot become a public resolver.

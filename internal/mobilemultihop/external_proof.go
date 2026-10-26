@@ -3,9 +3,7 @@ package mobilemultihop
 import (
 	"bufio"
 	"context"
-	"crypto/rand"
 	"crypto/tls"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -322,18 +320,7 @@ func (r *ExternalProofRequest) provePrivateEntry(ctx context.Context) error {
 }
 
 func (r *ExternalProofRequest) provePublic(ctx context.Context, tag, expected string) error {
-	if !externalPublicIP(expected) {
-		return errors.New("external public proof has no selected address")
-	}
-	var nonce [16]byte
-	if _, err := rand.Read(nonce[:]); err != nil {
-		return errors.New("external proof nonce unavailable")
-	}
-	data, err := externalProofHTTP(ctx, r.engine.Dial, tag, "https://1.1.1.1/cdn-cgi/trace?routervpn_proof="+hex.EncodeToString(nonce[:]), "", nil)
-	if err != nil {
-		return err
-	}
-	return externalTraceAddress(data, expected)
+	return ProveExternalPublicIP(ctx, r.engine.Dial, tag, expected)
 }
 
 func externalTraceAddress(data []byte, expected string) error {
@@ -362,6 +349,13 @@ func externalTraceAddress(data []byte, expected string) error {
 func externalProofHTTP(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token string, testTLS *tls.Config) (data []byte, failure error) {
 	return externalProofHTTPName(parent, dial, tag, target, token, "", testTLS)
 }
+
+type externalProofOwnedConnection struct {
+	net.Conn
+	close func() error
+}
+
+func (c *externalProofOwnedConnection) Close() error { return c.close() }
 
 func externalProofHTTPName(parent context.Context, dial func(context.Context, string, string) (net.Conn, error), tag, target, token, serverName string, testTLS *tls.Config) (data []byte, failure error) {
 	u, err := url.Parse(target)
@@ -409,7 +403,13 @@ func externalProofHTTPName(parent context.Context, dial func(context.Context, st
 	if ctx.Err() != nil || connection.SetDeadline(deadline) != nil {
 		return nil, errors.New("external proof socket cannot enforce its deadline")
 	}
-	var stream net.Conn = connection
+	// HandshakeContext closes its connection when cancellation wins. Give TLS
+	// the same close owner as the outer deadline callback, including its join,
+	// so neither path closes or abandons the captured raw socket twice.
+	var stream net.Conn = &externalProofOwnedConnection{Conn: connection, close: func() error {
+		closeOwned()
+		return closeErr
+	}}
 	if u.Scheme == "https" {
 		config := &tls.Config{MinVersion: tls.VersionTLS12, ServerName: u.Hostname()}
 		if testTLS != nil {
@@ -419,7 +419,7 @@ func externalProofHTTPName(parent context.Context, dial func(context.Context, st
 		if serverName != "" {
 			config.ServerName = serverName
 		}
-		secure := tls.Client(connection, config)
+		secure := tls.Client(stream, config)
 		if secure.HandshakeContext(ctx) != nil {
 			return nil, errors.New("external proof TLS identity failed")
 		}
