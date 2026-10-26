@@ -46,6 +46,15 @@ including the resolver transport and captured entry/exit detour. Retained DNS
 and measurement results bind the original entry assets, native owner, session
 and network. Receipt validation supplies no fabricated DNS query timing.
 
+Desktop external Connect now captures the displayed node and saved/explicit
+entry source revisions in all three native interfaces. Primary, Direct and
+path-dialog requests carry those revisions to the Go admission checks. A fresh
+catalog validates the capture without replacing it; stale selection, same-ID
+relink, duplicate/missing nodes and unsupported source-capture capability stop
+the request before connection. Windows and GTK retain the catalog used by the
+actual node renderer, and GTK deep-copies its public JSON objects so a nested
+refresh cannot change a request already being prepared.
+
 The shared node compiler can now attach a complete MAX exit without bypassing
 its PQ, SS2022, outer transport or optional Start Layer. Public packet/PQ
 identities require the whole validated chain. Inner interface capacity and

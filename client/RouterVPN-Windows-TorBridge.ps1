@@ -51,6 +51,60 @@ function GetUnifiedExternalSavedExecution($Profile){
     if($Value -cnotin @('local','server','auto')){throw 'The selected external node has an invalid saved execution choice.'}
     return $Value
 }
+function AssertUnifiedExternalSourceCapability($Capabilities){
+    $Value=ExternalPublicValue $Capabilities 'profile_source_preconditions' $null
+    if($Value -isnot [bool] -or -not $Value){throw 'Update the local controller before connecting this captured external path.'}
+}
+function NewUnifiedExternalCapturedBody($Body,$Opened,$Current=$null){
+    $Selected=ExternalPublicValue $Opened 'selected_id' $null
+    if($Selected -isnot [string] -or ($Selected -and $Selected -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z')){throw 'The captured node selection is invalid. Refresh the node list.'}
+    $Profiles=@(ExternalPublicValue $Opened 'profiles' @())
+    $ID=[string]$Body.profile_id
+    $Exits=@($Profiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
+    if($ID -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $Exits.Count -ne 1){throw 'The captured external node is missing or ambiguous.'}
+    $IDs=@($ID);if($Selected){$IDs+=@($Selected)}
+    $Direct=ExternalPublicValue $Body 'direct' $false
+    if(-not $Direct){
+        $EntryID=[string](ExternalPublicValue $Body 'entry_id')
+        if(-not $EntryID -and (ExternalPublicValue $Exits[0] 'multihop_enabled' $false) -ceq $true){$EntryID=[string](ExternalPublicValue $Exits[0] 'multihop_entry_id')}
+        if($EntryID){if($EntryID -ceq $ID){throw 'External entry and exit must be different nodes.'};$IDs+=@($EntryID)}
+    }
+    $Tokens=[System.Collections.Hashtable]::new([StringComparer]::Ordinal)
+    foreach($NodeID in $IDs){
+        $NodeMatches=@($Profiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $NodeID})
+        if($NodeID -cnotmatch '\A[A-Za-z0-9_-]{1,64}\z' -or $NodeMatches.Count -ne 1){throw 'A captured path node is missing or ambiguous. Reopen the path settings.'}
+        $Token=ExternalPublicValue $NodeMatches[0] 'profile_token' $null
+        if($Token -isnot [string] -or $Token -cnotmatch '\A[a-f0-9]{64}\z'){throw 'A captured node revision is unavailable. Refresh the node list.'}
+        $Tokens[$NodeID]=$Token
+    }
+    if($null-ne$Current){
+        $NowSelected=ExternalPublicValue $Current 'selected_id' $null
+        if($NowSelected -isnot [string] -or $NowSelected -cne $Selected){throw 'The selected node changed while this dialog was open. Nothing was connected.'}
+        $NowProfiles=@(ExternalPublicValue $Current 'profiles' @())
+        foreach($NodeID in $Tokens.Keys){
+            $NodeMatches=@($NowProfiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $NodeID})
+            if($NodeMatches.Count -ne 1 -or (ExternalPublicValue $NodeMatches[0] 'profile_token' $null) -cne $Tokens[$NodeID]){throw 'A path node was changed or relinked while this dialog was open. Reopen its path settings.'}
+        }
+    }
+    $Result=@{};foreach($Key in $Body.Keys){$Result[$Key]=$Body[$Key]}
+    $Result.expected_selected_node_id=$Selected;$Result.expected_profile_tokens=$Tokens
+    return $Result
+}
+function NewUnifiedExternalPrimaryBody($Profile,$Opened,[bool]$Direct=$false,[bool]$RequireSelected=$true){
+    if($null-eq$Opened){throw 'The displayed node catalog is unavailable. Refresh the node list.'}
+    $OpenedStore=$Opened|ConvertTo-Json -Depth 32|ConvertFrom-Json
+    $ID=[string](ExternalPublicValue $Profile 'id')
+    $Displayed=@($OpenedStore.profiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
+    $Token=ExternalPublicValue $Profile 'profile_token' $null
+    if(($RequireSelected -and [string]$OpenedStore.selected_id -cne $ID) -or $Displayed.Count -ne 1 -or $Token -isnot [string] -or $Token -cnotmatch '\A[a-f0-9]{64}\z' -or
+       (ExternalPublicValue $Displayed[0] 'profile_token' $null) -cne $Token){throw 'The displayed external node changed before Connect. Refresh the node list.'}
+    $Execution=if($Direct){'local'}else{GetUnifiedExternalSavedExecution $Displayed[0]}
+    $Body=NewUnifiedExternalConnectBody $Displayed[0] '' $Execution $Direct
+    [void](NewUnifiedExternalCapturedBody $Body $OpenedStore)
+    AssertUnifiedExternalSourceCapability (Api '/api/external-profile/capabilities' -Timeout 5)
+    $Current=Api '/api/nodes' -Timeout 5
+    return NewUnifiedExternalCapturedBody $Body $OpenedStore $Current
+}
 function NewUnifiedExternalConnectBody($Profile,[string]$EntryID,[string]$Execution,[bool]$Direct){
     $ID=[string](ExternalPublicValue $Profile 'id');$Kind=[string](ExternalPublicValue $Profile 'node_kind')
     if(-not $ID -or $Kind -ne 'external'){throw 'Select an external node first.'}
@@ -63,7 +117,7 @@ function NewUnifiedExternalConnectBody($Profile,[string]$EntryID,[string]$Execut
 }
 function GetUnifiedExternalPathIdentity($Profile){
     $External=ExternalPublicValue $Profile 'external' $null
-    return (@([string](ExternalPublicValue $Profile 'id'),[string](ExternalPublicValue $Profile 'node_kind'),[string](ExternalPublicValue $Profile 'endpoint'),[string](ExternalPublicValue $Profile 'start_layer'),[string](ExternalPublicValue $Profile 'multihop_entry_mode'),[string](ExternalPublicValue $External 'protocol'),[string](ExternalPublicValue $External 'expected_public_ip'),(ExternalPublicValue $External 'has_response_probe' $false),(ExternalPublicValue $External 'has_server_peer' $false),(ExternalPublicValue $External 'has_openvpn_pairing' $false))|ConvertTo-Json -Compress)
+    return (@([string](ExternalPublicValue $Profile 'id'),[string](ExternalPublicValue $Profile 'profile_token'),[string](ExternalPublicValue $Profile 'node_kind'),[string](ExternalPublicValue $Profile 'endpoint'),[string](ExternalPublicValue $Profile 'start_layer'),[string](ExternalPublicValue $Profile 'multihop_entry_mode'),[string](ExternalPublicValue $External 'protocol'),[string](ExternalPublicValue $External 'expected_public_ip'),(ExternalPublicValue $External 'has_response_probe' $false),(ExternalPublicValue $External 'has_server_peer' $false),(ExternalPublicValue $External 'has_openvpn_pairing' $false))|ConvertTo-Json -Compress)
 }
 function GetUnifiedExternalEntryMode($Captured,$Entry,[string]$Selected,$Modes){
     $Kind=[string](ExternalPublicValue $Entry 'node_kind' 'router-vpn')
@@ -140,6 +194,7 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
         if($Matches.Count -ne 1 -or [string]$Matches[0].node_kind -ne 'external'){throw 'Select an external node first.'}
         $Captured=$Matches[0];$SavedExecution=GetUnifiedExternalSavedExecution $Captured
         $Capabilities=Api '/api/external-profile/capabilities' -Timeout 5
+        AssertUnifiedExternalSourceCapability $Capabilities
         $EntryModes=@(ExternalPublicValue $Capabilities 'router_vpn_entry_modes' @())
         $SavedMode=[string](ExternalPublicValue $Captured 'multihop_entry_mode')
         if($SavedMode -and @($EntryModes|Where-Object{[string]$_.id -ceq $SavedMode}).Count -ne 1){throw 'The saved Router entry mode is missing from the current native catalog.'}
@@ -189,6 +244,7 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
                 $Choice=[string]$Execution.SelectedItem.Tag
                 $Current=Api '/api/nodes' -Timeout 5
                 $Body=NewUnifiedExternalPathBody $Captured $EntryID $Choice $Direct @($Current.profiles) ([string]$EntryMode.SelectedValue) $EntryModes
+                $Body=NewUnifiedExternalCapturedBody $Body $Store $Current
                 $Dialog.Tag=$Body;$Dialog.Close()
             }catch{$ErrorText.Text=$_.Exception.Message}
         })

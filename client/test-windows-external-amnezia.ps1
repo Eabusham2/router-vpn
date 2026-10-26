@@ -40,10 +40,11 @@ $D=[pscustomobject]@{Fields=$Fields}
 $D|Add-Member -MemberType ScriptMethod -Name FindName -Value {param($Name) return $this.Fields[$Name]}
 $Protocol=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='amneziawg'}}
 $Status=[pscustomobject]@{Text=''}
-$script:Connected=$false;$script:Saved=$null;$script:CurrentPathCatalog=$null
+$script:Connected=$false;$script:Saved=$null;$script:CurrentPathCatalog=$null;$script:CurrentSelectedID=$null;$script:SourceCapability=$true
 function Api($Path,$Method='GET',$Body=$null,$Timeout=0){
     if($Path -eq '/api/status'){return [pscustomobject]@{connected=$script:Connected;phase='off'}}
-    if($Path -eq '/api/nodes'){if($null-ne$script:CurrentPathCatalog){return [pscustomobject]@{profiles=$script:CurrentPathCatalog}};return [pscustomobject]@{profiles=@($Captured)+@($Choices|Where-Object{$_.id})}}
+    if($Path -eq '/api/external-profile/capabilities'){return [pscustomobject]@{profile_source_preconditions=$script:SourceCapability}}
+    if($Path -eq '/api/nodes'){$Selected=if($null-ne$script:CurrentSelectedID){$script:CurrentSelectedID}else{[string]$Captured.id};if($null-ne$script:CurrentPathCatalog){return [pscustomobject]@{selected_id=$Selected;profiles=$script:CurrentPathCatalog}};return [pscustomobject]@{selected_id=$Selected;profiles=@($Captured)+@($Choices|Where-Object{$_.id})}}
     if($Path -ne '/api/external-profile/create' -or $Method -ne 'POST'){throw 'Unexpected form request.'}
     $script:Saved=$Body
     return [pscustomobject]@{profile=[pscustomobject]@{name='Fixture'}}
@@ -200,11 +201,12 @@ $PathCallbacks=@($Shipping.Ast.FindAll({param($Node)
 },$true))
 Check ($PathCallbacks.Count -eq 1) 'Shipping external path confirmation callback changed.'
 $ConfirmPath=$PathCallbacks[0].Arguments[0].ScriptBlock.GetScriptBlock()
-$Captured=[pscustomobject]@{id='captured-exit';node_kind='external';external=[pscustomobject]@{protocol='shadowsocks';has_response_probe=$true;has_server_peer=$true}}
+$Captured=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';external=[pscustomobject]@{protocol='shadowsocks';has_response_probe=$true;has_server_peer=$true}}
 $EntryMode=[pscustomobject]@{SelectedValue=''}
 $EntryModes=if($Output -and (Test-Path -LiteralPath (Join-Path $Output 'entry-mode-catalog.json'))){@((Get-Content -Raw -LiteralPath (Join-Path $Output 'entry-mode-catalog.json')|ConvertFrom-Json).router_vpn_entry_modes)}else{@((Get-Content -Raw -LiteralPath (Join-Path $Root 'configs/client/modes.json')|ConvertFrom-Json)|Where-Object{$_.id -cnotin @('all','smart-auto','custom')})}
 $Entry=[pscustomobject]@{SelectedValue='captured-entry'};$Execution=[pscustomobject]@{SelectedItem=[pscustomobject]@{Tag='server'}}
-$Choices=@([pscustomobject]@{id='';display_name='Direct'},[pscustomobject]@{id='captured-entry';node_kind='router-vpn'},[pscustomobject]@{id='external-entry';node_kind='external'})
+$Choices=@([pscustomobject]@{id='';display_name='Direct'},[pscustomobject]@{id='captured-entry';profile_token=('b'*64);node_kind='router-vpn'},[pscustomobject]@{id='external-entry';profile_token=('c'*64);node_kind='external'})
+$Store=[pscustomobject]@{selected_id='captured-exit';profiles=@($Captured)+@($Choices|Where-Object{$_.id})}
 $Dialog=[pscustomobject]@{Tag=$null;Closed=0};$Dialog|Add-Member ScriptMethod Close {$this.Closed++}
 $ErrorText=[pscustomobject]@{Text=''};$RequireEntry=$false;$HasProbe=$true
 # Deliberately unrelated Router controls must never supply this request.
@@ -235,9 +237,61 @@ $Entry.SelectedValue='captured-entry';$Captured.external.protocol='openvpn';$Dia
 $Captured.external.protocol='shadowsocks';$script:Connected=$true;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Actual path callback ignored a changed VPN owner.';$Count++
 $script:Connected=$false;$Entry.SelectedValue='';$Execution.SelectedItem.Tag='local';$RequireEntry=$true;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Via-entry action silently became Direct.';$Count++
 $RequireEntry=$false;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -ne $Dialog.Tag -and $Dialog.Tag.direct -and $Dialog.Tag.execution -ceq 'local' -and -not $Dialog.Tag.ContainsKey('entry_id')) 'Direct callback did not clear the previous entry/execution.';$Count++
+# The real confirmation callback must reject a same-ID credential relink.
+$Entry.SelectedValue='captured-entry';$Execution.SelectedItem.Tag='local'
+foreach($TargetID in @('captured-exit','captured-entry')){
+    $Fresh=@($Store.profiles|ConvertTo-Json -Depth 16|ConvertFrom-Json)
+    ($Fresh|Where-Object{$_.id -ceq $TargetID}).profile_token='d'*64
+    $script:CurrentPathCatalog=$Fresh;$Dialog.Tag=$null;& $ConfirmPath
+    Check ($null -eq $Dialog.Tag) ('Changed private source was accepted: '+$TargetID);$Count++
+}
+$script:CurrentPathCatalog=$null;$script:CurrentSelectedID='captured-entry';$Dialog.Tag=$null;& $ConfirmPath
+Check ($null -eq $Dialog.Tag) 'Changed main selection was accepted by the opened path dialog.';$Count++;$script:CurrentSelectedID=$null
+$Body=NewUnifiedExternalConnectBody $Captured 'captured-entry' 'local' $false
+$Frozen=NewUnifiedExternalCapturedBody $Body $Store $Store
+Check ($Frozen.expected_profile_tokens.Count -eq 2 -and $Frozen.expected_selected_node_id -ceq 'captured-exit') 'Path preconditions omitted selected/entry/exit ownership.';$Count++
+foreach($Bad in @('',('A'*64),'bad',17,$null)){
+    $BrokenStore=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json
+    $BrokenStore.profiles[0].profile_token=$Bad
+    $Rejected=$false;try{[void](NewUnifiedExternalCapturedBody $Body $BrokenStore)}catch{$Rejected=$true}
+    Check $Rejected 'Malformed or missing source token was accepted.';$Count++
+}
+$BrokenStore=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json;$BrokenStore.profiles+=@($BrokenStore.profiles[1])
+$Rejected=$false;try{[void](NewUnifiedExternalCapturedBody $Body $BrokenStore)}catch{$Rejected=$true};Check $Rejected 'Duplicate captured entry was accepted.';$Count++
+$Unrelated=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json;$Unrelated.profiles[2].profile_token='d'*64
+[void](NewUnifiedExternalCapturedBody $Body $Store $Unrelated);$Count++
+$FirstUse=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json;$FirstUse.selected_id=''
+$FirstBody=NewUnifiedExternalCapturedBody $Body $FirstUse $FirstUse
+Check ($FirstBody.ContainsKey('expected_selected_node_id') -and $FirstBody.expected_selected_node_id -is [string] -and $FirstBody.expected_selected_node_id -ceq '') 'First-use empty selection was omitted.';$Count++
+$SavedOnly=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json
+$SavedOnly.profiles[0]|Add-Member NoteProperty multihop_enabled $true -Force
+$SavedOnly.profiles[0]|Add-Member NoteProperty multihop_entry_id 'captured-entry' -Force
+$SavedBody=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $Captured '' 'local' $false) $SavedOnly
+Check ($SavedBody.expected_profile_tokens['captured-entry'] -ceq ('b'*64)) 'Saved entry was omitted from primary source capture.';$Count++
+$SavedOnly.profiles[0].multihop_entry_id='missing-entry'
+$DirectBody=NewUnifiedExternalCapturedBody (NewUnifiedExternalConnectBody $Captured '' 'local' $true) $SavedOnly
+Check ($DirectBody.expected_profile_tokens.Count -eq 1) 'Explicit Direct reused a stale saved entry.';$Count++
+$OverrideBody=NewUnifiedExternalCapturedBody $Body $SavedOnly
+Check ($OverrideBody.expected_profile_tokens['captured-entry'] -ceq ('b'*64)) 'Explicit entry did not override an unrelated saved entry.';$Count++
+$DetachedStore=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json;$DetachedBody=NewUnifiedExternalCapturedBody $Body $DetachedStore
+$DetachedStore.selected_id='captured-entry';$DetachedStore.profiles[0].profile_token='e'*64
+Check ($DetachedBody.expected_selected_node_id -ceq 'captured-exit' -and $DetachedBody.expected_profile_tokens['captured-exit'] -ceq ('a'*64)) 'Later catalog mutation changed an already captured request.';$Count++
+$CaseStore=[pscustomobject]@{selected_id='Exit';profiles=@([pscustomobject]@{id='Exit';profile_token=('a'*64)},[pscustomobject]@{id='exit';profile_token=('b'*64)})}
+$CaseBody=NewUnifiedExternalCapturedBody @{profile_id='Exit';entry_id='exit';execution='local'} $CaseStore
+Check ($CaseBody.expected_profile_tokens.Count -eq 2 -and $CaseBody.expected_profile_tokens['Exit'] -ceq ('a'*64) -and $CaseBody.expected_profile_tokens['exit'] -ceq ('b'*64)) 'Case-distinct node identities were merged.';$Count++
+foreach($Capability in @($false,$null,'true',1)){
+    $Rejected=$false;try{AssertUnifiedExternalSourceCapability ([pscustomobject]@{profile_source_preconditions=$Capability})}catch{$Rejected=$true};Check $Rejected 'Unsupported source capture silently fell back.';$Count++
+}
 # Exercise the exact shipping path-confirmation callback for every native entry.
-$Captured=[pscustomobject]@{id='exit';node_kind='external';base_tunnel='wg';multihop_entry_mode='wg';external=[pscustomobject]@{protocol='shadowsocks';has_response_probe=$true;has_server_peer=$false}}
-$Choices=@([pscustomobject]@{id='';display_name='Direct'},[pscustomobject]@{id='entry';node_kind='router-vpn';base_tunnel='awg'},[pscustomobject]@{id='external-entry';node_kind='external'})
+$Captured=[pscustomobject]@{id='exit';profile_token=('a'*64);node_kind='external';base_tunnel='wg';multihop_entry_mode='wg';external=[pscustomobject]@{protocol='shadowsocks';has_response_probe=$true;has_server_peer=$false}}
+$Choices=@([pscustomobject]@{id='';display_name='Direct'},[pscustomobject]@{id='entry';profile_token=('b'*64);node_kind='router-vpn';base_tunnel='awg'},[pscustomobject]@{id='external-entry';profile_token=('c'*64);node_kind='external'})
+$Store=[pscustomobject]@{selected_id='exit';profiles=@($Captured)+@($Choices|Where-Object{$_.id})}
+if($Output -and (Test-Path -LiteralPath (Join-Path $Output 'external-source-catalog.json'))){
+    $Store=Get-Content -Raw -LiteralPath (Join-Path $Output 'external-source-catalog.json')|ConvertFrom-Json
+    $Captured=@($Store.profiles|Where-Object{$_.id -ceq 'exit'})[0]
+    $Choices[1]=@($Store.profiles|Where-Object{$_.id -ceq 'entry'})[0]
+    $Store.profiles+=@($Choices[2])
+}
 $Entry.SelectedValue='entry'
 foreach($Mode in $EntryModes){foreach($Choice in @('local','server','auto')){
     $EntryMode.SelectedValue=$Mode.id;$Execution.SelectedItem.Tag=$Choice;$Dialog.Tag=$null;& $ConfirmPath
@@ -246,7 +300,7 @@ foreach($Mode in $EntryModes){foreach($Choice in @('local','server','auto')){
 }}
 $EntryMode.SelectedValue='';$Execution.SelectedItem.Tag='local';$Dialog.Tag=$null;& $ConfirmPath
 Check ($null -ne $Dialog.Tag -and $Dialog.Tag.entry_mode -ceq 'awg2-fast') 'Entry saved AWG base was replaced by the exit or unrelated Router choice.';$Count++
-$Choices[1].base_tunnel='wg';$Captured.base_tunnel='awg';$Dialog.Tag=$null;& $ConfirmPath
+$Choices[1].base_tunnel='wg';$Captured|Add-Member NoteProperty base_tunnel 'awg' -Force;$Dialog.Tag=$null;& $ConfirmPath
 Check ($null -ne $Dialog.Tag -and $Dialog.Tag.entry_mode -ceq 'wg') 'Entry saved WG base was replaced by the exit base.';$Count++
 foreach($Bad in @('all','smart-auto','custom','auto','unknown',' wg')){
     $EntryMode.SelectedValue=$Bad;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Unknown or uncompiled Router mode reached the controller.';$Count++
@@ -264,16 +318,18 @@ Check ($Primary.Count -eq 1) 'Shipping primary Connect function changed.'
 . ([ScriptBlock]::Create($Primary[0].Extent.Text))
 function UnifiedAsyncBusy{return $false}
 function UnifiedSelectedProfile{return $Captured}
+$RouterCombo=[pscustomobject]@{Tag=$null;SelectedValue=''}
 function Control($Name){throw ('Unrelated Router control read during external Connect: '+$Name)}
 function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){$script:DispatchPath=$Path;$script:DispatchBody=$Body;return $true}
 foreach($Choice in @('local','server','auto')){
-    $Captured=[pscustomobject]@{id='captured-exit';node_kind='external';multihop_execution=$Choice}
+    $Captured=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';multihop_execution=$Choice}
+    $RouterCombo.Tag=[pscustomobject]@{selected_id=$Captured.id;profiles=@($Captured)};$RouterCombo.SelectedValue=$Captured.id
     $script:DispatchPath='';$script:DispatchBody=$null;UnifiedConnect
-    Check ($DispatchPath -ceq '/api/external-profile/connect' -and $null -ne $DispatchBody -and $DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice -and $DispatchBody.Count -eq 2) 'Primary Connect borrowed Router controls or dropped saved external execution.'
+    Check ($DispatchPath -ceq '/api/external-profile/connect' -and $null -ne $DispatchBody -and $DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice -and $DispatchBody.Count -eq 4 -and $DispatchBody.expected_selected_node_id -ceq 'captured-exit' -and $DispatchBody.expected_profile_tokens['captured-exit'] -ceq ('a'*64)) 'Primary Connect borrowed Router controls or dropped saved external execution.'
     $Captured=[pscustomobject]@{id='replacement';node_kind='router-vpn';multihop_execution='auto'}
     Check ($DispatchBody.profile_id -ceq 'captured-exit' -and $DispatchBody.execution -ceq $Choice) 'Replacement selection changed captured primary request.';$Count++
 }
-$Captured=[pscustomobject]@{id='captured-exit';node_kind='external';multihop_execution='invalid'};$script:DispatchBody=$null;UnifiedConnect;Check ($null -eq $DispatchBody) 'Invalid external execution fell through to Router connect.';$Count++
+$Captured=[pscustomobject]@{id='captured-exit';profile_token=('a'*64);node_kind='external';multihop_execution='invalid'};$RouterCombo.Tag=[pscustomobject]@{selected_id=$Captured.id;profiles=@($Captured)};$script:DispatchBody=$null;UnifiedConnect;Check ($null -eq $DispatchBody) 'Invalid external execution fell through to Router connect.';$Count++
 # Use the real catalog lookup for failure paths; no Router controls may be read.
 $Lookup=@([ScriptBlock]::Create($UnifiedBlock.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name -eq 'UnifiedSelectedProfile'},$true))
 Check ($Lookup.Count -eq 1) 'Shipping selected-node lookup changed.'
@@ -291,6 +347,8 @@ function Api($Path,$Method='GET',$Body=$null,$Timeout=0){
     return [pscustomobject]@{}
 }
 foreach($CatalogCase in @('failure','missing','wrong','duplicate','unknown','malformed')){
+    $RouterCombo.SelectedValue='captured-exit'
+    $RouterCombo.Tag=if($CatalogCase -eq 'failure'){$null}else{Api '/api/profiles'}
     $script:DispatchPath='';$script:DispatchBody=$null;$script:RouterReads=0;UnifiedConnect
     Check ($null -eq $DispatchBody -and -not $DispatchPath -and $RouterReads -eq 0) 'Unavailable selected identity fell through to unrelated Router controls.';$Count++
 }

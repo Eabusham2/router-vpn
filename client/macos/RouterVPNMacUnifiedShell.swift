@@ -436,8 +436,16 @@ extension ProductWindowController {
             let profile = profiles[selectedIndex]
             if (profile["node_kind"] as? String ?? "router-vpn").lowercased() == "external" {
                 do {
-                    let body = try externalConnectBody(profile: profile, execution: externalSavedExecution(profile))
-                    asyncAction { try self.requireMutationIdle("starting an external saved path"); return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "External exit connected" }
+                    let opened: [String: Any] = ["selected_id": selectedID, "profiles": profiles]
+                    let body = try externalCapturedBody(externalConnectBody(profile: profile, execution: externalSavedExecution(profile)), opened: opened)
+                    asyncAction {
+                        try self.requireMutationIdle("starting an external saved path")
+                        guard let capabilities = try self.api.json("/api/external-profile/capabilities", timeout: 5) as? [String: Any],
+                              let current = try self.api.json("/api/nodes", timeout: 5) as? [String: Any] else { throw NSError(domain: "RouterVPN.ExternalNode", code: 1) }
+                        try externalRequireSourceCapability(capabilities)
+                        try externalValidateCapturedBody(body, current: current)
+                        return String(data: try self.api.request("/api/external-profile/connect", method: "POST", body: body, timeout: 180), encoding: .utf8) ?? "External exit connected"
+                    }
                 } catch { appendHelp(error.localizedDescription) }
                 return
             }

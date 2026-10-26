@@ -349,6 +349,7 @@ function ApplyUnifiedRefreshSnapshot($Status,$Store,$Session,$ModesRaw,$MH,$Time
 
         $Profiles=@($Store.profiles);$OldNode=[string]$NodesGrid.SelectedValue
         $RouterCombo.ItemsSource=$Profiles;$NodesGrid.ItemsSource=$Profiles
+        $RouterCombo.Tag=$Store|ConvertTo-Json -Depth 32|ConvertFrom-Json;$NodesGrid.Tag=$Store|ConvertTo-Json -Depth 32|ConvertFrom-Json
         if($Store.selected_id){$RouterCombo.SelectedValue=[string]$Store.selected_id}
         if($OldNode){$NodesGrid.SelectedValue=$OldNode}
         DrawMap $Profiles ([string]$Store.selected_id)
@@ -447,7 +448,7 @@ function SetUnifiedDNSPreset {
 }
 function SaveUnifiedModeID([string]$Value){[void](New-Item -ItemType Directory -Force -Path (Split-Path $script:UnifiedModeStateFile));Set-Content -LiteralPath $script:UnifiedModeStateFile -Value $Value -Encoding UTF8}
 function RefreshUnifiedModeChoices($Modes){$Wanted=GetUnifiedModeID;$Values=New-Object System.Collections.ArrayList;[void]$Values.Add([pscustomobject]@{id='smart-auto';display='SMART AUTO — recommended';available=$true});[void]$Values.Add([pscustomobject]@{id='auto';display='AUTO — first proven path';available=$true});foreach($M in @($Modes)){$Reason=[string]$M.reason_text;$Label=if([bool]$M.available){[string]$M.name}else{"$($M.name) — unavailable: $Reason"};[void]$Values.Add([pscustomobject]@{id=[string]$M.id;display=$Label;available=[bool]$M.available})};foreach($P in @(GetUnifiedPresets)){[void]$Values.Add([pscustomobject]@{id=('custom:'+[string]$P.name);display=('CUSTOM • '+[string]$P.name);available=$true})};[void]$Values.Add([pscustomobject]@{id='custom:new';display='New CUSTOM preset…';available=$true});$script:UnifiedModeChoices=@($Values);$ModeCombo.ItemsSource=$script:UnifiedModeChoices;$ModeCombo.SelectedValue=$Wanted;if(-not$ModeCombo.SelectedItem){$ModeCombo.SelectedValue='smart-auto';SaveUnifiedModeID 'smart-auto'}}
-function UnifiedSelectedProfile{try{$S=Api '/api/profiles' -Timeout 4;if(-not[string]$S.selected_id){return $null};$Matches=@($S.profiles|Where-Object{[string]$_.id -ceq [string]$S.selected_id});if($Matches.Count-ne1){return $null};return $Matches[0]}catch{return $null}}
+function UnifiedSelectedProfile{try{$S=$RouterCombo.Tag;$ID=[string]$RouterCombo.SelectedValue;if($null-eq$S -or -not$ID -or [string]$S.selected_id -cne $ID){return $null};$Found=@($S.profiles|Where-Object{[string]$_.id -ceq $ID});if($Found.Count-ne1){return $null};return $Found[0]}catch{return $null}}
 function OpenUnifiedDetail([int]$Index){(Control 'UnifiedShell').Visibility='Collapsed';(Control 'LegacyDetailTabs').Visibility='Visible';(Control 'LegacyDetailTabs').SelectedIndex=$Index;(Control 'UnifiedBackButton').Visibility='Visible'}
 function BackUnifiedMap{(Control 'LegacyDetailTabs').Visibility='Collapsed';(Control 'UnifiedBackButton').Visibility='Collapsed';(Control 'UnifiedShell').Visibility='Visible';RefreshProduct}
 function UnifiedConnect{
@@ -467,7 +468,7 @@ function UnifiedConnect{
         if(-not$P-or-not[string]$P.id){throw 'The selected node is unavailable. Refresh the node list before connecting.'}
         if(([string]$P.node_kind).ToLowerInvariant()-cnotin@('','router-vpn','external')){throw 'The selected node type is invalid.'}
         if($P-and(([string]$P.node_kind).ToLowerInvariant()-eq'external')){
-            $Path='/api/external-profile/connect';$Body=(NewUnifiedExternalConnectBody $P '' (GetUnifiedExternalSavedExecution $P) $false);$Timeout=180;$Label='Connecting external exit…'
+            $Path='/api/external-profile/connect';$Body=(NewUnifiedExternalPrimaryBody $P $RouterCombo.Tag);$Timeout=180;$Label='Connecting external exit…'
         }elseif((Control 'UnifiedMultihop').IsChecked){
             $Entry=[string]$MultihopEntryCombo.SelectedValue;$Exit=[string]$MultihopExitCombo.SelectedValue
             if(-not$Entry-or-not$Exit-or$Entry-eq$Exit){throw 'Multihop requires different entry and exit nodes.'}

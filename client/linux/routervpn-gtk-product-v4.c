@@ -70,6 +70,7 @@ static void refresh_nodes_order_v4(App *app, const char *order) {
     gtk_text_buffer_set_text(buffer, text->str, -1);
     g_string_free(text, TRUE);
     gtk_widget_queue_draw(app->map);
+    g_object_set_data_full(G_OBJECT(app->window), "router-vpn-source-catalog-v24", copy_public_source_value_v24(root), (GDestroyNotify)json_node_free);
     json_node_free(root); free(out.data); g_free(err);
 }
 
@@ -176,6 +177,8 @@ static void on_import_any_node(GtkButton *button, gpointer data) {
     gtk_widget_destroy(dialog);
 }
 
+static char *external_primary_body_v24(App *app, const char *id, gboolean direct, char **error);
+
 static void on_connect_external_node(GtkButton *button, gpointer data) {
     (void)button;
     App *app = data;
@@ -184,22 +187,10 @@ static void on_connect_external_node(GtkButton *button, gpointer data) {
         append_diag(app, "External connect failed: select a linked external node first.");
         return;
     }
-    JsonBuilder *builder = json_builder_new();
-    json_builder_begin_object(builder);
-    json_builder_set_member_name(builder, "profile_id");
-    json_builder_add_string_value(builder, id);
-    json_builder_set_member_name(builder, "execution");
-    json_builder_add_string_value(builder, "local");
-    json_builder_set_member_name(builder, "direct");
-    json_builder_add_boolean_value(builder, TRUE);
-    json_builder_end_object(builder);
-    JsonNode *root = json_builder_get_root(builder);
-    JsonGenerator *generator = json_generator_new();
-    json_generator_set_root(generator, root);
-    char *body = json_generator_to_data(generator, NULL);
-    json_node_free(root);
-    g_object_unref(generator);
-    g_object_unref(builder);
+    char *error = NULL;
+    char *body = external_primary_body_v24(app, id, TRUE, &error);
+    if (body == NULL) { append_diag(app, error != NULL ? error : "The captured external path is invalid."); g_free(error); return; }
+    g_free(error);
     post_and_log(app, "/api/external-profile/connect", body, 180000,
                  "External direct exit (exact public-exit proof required)");
     g_free(body);
@@ -240,6 +231,8 @@ static JsonObject *external_path_object_v4(JsonObject *object,const char *key) {
     return node!=NULL&&JSON_NODE_HOLDS_OBJECT(node)?json_node_get_object(node):NULL;
 }
 
+#include "routervpn-external-source-v24.inc"
+
 static char *external_path_current_body_v4(JsonObject *captured,JsonNode *current,const char *entry_id,const char *execution,gboolean direct,char **error) {
     const char *message=NULL;JsonObject *found=NULL,*entry=NULL;guint matches=0,entries=0;
     JsonObject *store=current!=NULL&&JSON_NODE_HOLDS_OBJECT(current)?json_node_get_object(current):NULL;
@@ -255,7 +248,7 @@ static char *external_path_current_body_v4(JsonObject *captured,JsonNode *curren
     }
     if(message==NULL&&(!id[0]||matches!=1||g_strcmp0(external_path_string_v4(found,"node_kind"),"external")!=0))message="The external node changed while this dialog was open. Reopen its path settings.";
     JsonObject *before=external_path_object_v4(captured,"external"),*after=external_path_object_v4(found,"external");
-    const char *identity[]={"id","node_kind","endpoint","start_layer","multihop_entry_mode"},*transport[]={"protocol","expected_public_ip"},*flags[]={"has_response_probe","has_server_peer","has_openvpn_pairing"};
+    const char *identity[]={"id","node_kind","endpoint","start_layer","multihop_entry_mode","profile_token"},*transport[]={"protocol","expected_public_ip"},*flags[]={"has_response_probe","has_server_peer","has_openvpn_pairing"};
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(identity);i++)if(g_strcmp0(external_path_string_v4(captured,identity[i]),external_path_string_v4(found,identity[i]))!=0)message="The external node changed while this dialog was open. Reopen its path settings.";
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(transport);i++)if(g_strcmp0(external_path_string_v4(before,transport[i]),external_path_string_v4(after,transport[i]))!=0)message="The external transport changed while this dialog was open. Reopen its path settings.";
     for(guint i=0;message==NULL&&i<G_N_ELEMENTS(flags);i++)if(external_path_flag_v4(before,flags[i])!=external_path_flag_v4(after,flags[i]))message="The external provisioning changed while this dialog was open. Reopen its path settings.";
@@ -352,6 +345,7 @@ static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
     JsonObject *capabilities=capability_root!=NULL&&JSON_NODE_HOLDS_OBJECT(capability_root)?json_node_get_object(capability_root):NULL;
     JsonNode *mode_list=capabilities!=NULL&&json_object_has_member(capabilities,"router_vpn_entry_modes")?json_object_get_member(capabilities,"router_vpn_entry_modes"):NULL;
     JsonArray *entry_modes=mode_list!=NULL&&JSON_NODE_HOLDS_ARRAY(mode_list)?json_node_get_array(mode_list):NULL;
+    if(!external_path_flag_v4(capabilities,"profile_source_preconditions")){append_diag(app,"Update the local controller before connecting this captured external path.");json_node_free(root);return;}
     if(entry_modes==NULL){append_diag(app,"The native Router entry mode catalog is invalid.");json_node_free(root);return;}
     JsonObject *external=json_object_has_member(captured,"external")?json_object_get_object_member(captured,"external"):NULL;
     gboolean has_probe=external!=NULL&&json_object_has_member(external,"has_response_probe")&&json_object_get_boolean_member(external,"has_response_probe");
@@ -390,7 +384,8 @@ static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
         Buffer fresh={0};char *fresh_error=NULL;
         if(!api_request("/api/nodes","GET",NULL,5000,&fresh,&fresh_error)){gtk_label_set_text(GTK_LABEL(error),"The current node catalog is unavailable. Nothing was connected.");g_free(fresh_error);free(fresh.data);continue;}
         JsonNode *current=parse_json(fresh.data);g_free(fresh_error);free(fresh.data);fresh_error=NULL;
-        char *body=external_path_mode_body_v4(captured,current,entry_id,choice,direct,gtk_combo_box_get_active_id(GTK_COMBO_BOX(entry_mode)),entry_modes,&fresh_error);if(current!=NULL)json_node_free(current);
+        char *prepared=external_path_mode_body_v4(captured,current,entry_id,choice,direct,gtk_combo_box_get_active_id(GTK_COMBO_BOX(entry_mode)),entry_modes,&fresh_error);
+        char *body=prepared!=NULL?external_captured_body_v24(prepared,root,current,&fresh_error):NULL;g_free(prepared);if(current!=NULL)json_node_free(current);
         if(body==NULL){gtk_label_set_text(GTK_LABEL(error),fresh_error!=NULL?fresh_error:"The captured external path is invalid.");g_free(fresh_error);continue;}
         post_and_log(app,"/api/external-profile/connect",body,180000,"External selected path (exact public-exit proof required)");g_free(body);refresh_all(app);break;
     }

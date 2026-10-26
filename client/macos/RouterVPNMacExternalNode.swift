@@ -1,5 +1,6 @@
 import AppKit
 import Foundation
+import CoreFoundation
 
 // Keep the provider's numeric strings and header ranges intact. The controller
 // performs the native AWG bounds/overlap validation before saving the profile.
@@ -50,9 +51,67 @@ func externalConnectBody(profile: [String: Any], entryID: String = "", execution
     return body
 }
 
+func externalRequireSourceCapability(_ capabilities: [String: Any]) throws {
+    guard let value = capabilities["profile_source_preconditions"] as? NSNumber,
+          CFGetTypeID(value) == CFBooleanGetTypeID(), value.boolValue else {
+        throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Update the local controller before connecting this captured external path."])
+    }
+}
+
+func externalValidateCapturedBody(_ body: [String: Any], current: [String: Any]) throws {
+    func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    guard let selected = body["expected_selected_node_id"] as? String,
+          let tokens = body["expected_profile_tokens"] as? [String: String], !tokens.isEmpty,
+          let currentSelected = current["selected_id"] as? String, currentSelected == selected,
+          let profiles = current["profiles"] as? [[String: Any]] else {
+        throw fail("The selected node changed before Connect. Refresh the node list.")
+    }
+    for (id, token) in tokens {
+        let matches = profiles.filter { $0["id"] as? String == id }
+        guard matches.count == 1, matches[0]["profile_token"] as? String == token else {
+            throw fail("A path node was changed or relinked. Reopen its path settings.")
+        }
+    }
+}
+
+func externalCapturedBody(_ body: [String: Any], opened: [String: Any], current: [String: Any]? = nil) throws -> [String: Any] {
+    func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    func validID(_ value: String) -> Bool { value.range(of: "^[A-Za-z0-9_-]{1,64}$", options: .regularExpression) != nil }
+    guard let selected = opened["selected_id"] as? String, selected.isEmpty || validID(selected),
+          let profiles = opened["profiles"] as? [[String: Any]],
+          let id = body["profile_id"] as? String, validID(id) else {
+        throw fail("The captured node selection is invalid. Refresh the node list.")
+    }
+    let exits = profiles.filter { $0["id"] as? String == id }
+    guard exits.count == 1 else { throw fail("The captured external node is missing or ambiguous.") }
+    var ids = Set([id]); if !selected.isEmpty { ids.insert(selected) }
+    if body["direct"] as? Bool != true {
+        var entry = body["entry_id"] as? String ?? ""
+        if entry.isEmpty, exits[0]["multihop_enabled"] as? Bool == true { entry = exits[0]["multihop_entry_id"] as? String ?? "" }
+        if !entry.isEmpty {
+            guard entry != id else { throw fail("External entry and exit must be different nodes.") }
+            ids.insert(entry)
+        }
+    }
+    var tokens: [String: String] = [:]
+    for nodeID in ids {
+        let matches = profiles.filter { $0["id"] as? String == nodeID }
+        guard validID(nodeID), matches.count == 1, let token = matches[0]["profile_token"] as? String,
+              token.utf8.count == 64, token.range(of: "^[a-f0-9]{64}$", options: .regularExpression) != nil else {
+            throw fail("A captured node revision is unavailable or ambiguous. Refresh the node list.")
+        }
+        tokens[nodeID] = token
+    }
+    var result = body
+    result["expected_selected_node_id"] = selected; result["expected_profile_tokens"] = tokens
+    if let current { try externalValidateCapturedBody(result, current: current) }
+    return result
+}
+
 func externalPathIdentity(_ profile: [String: Any]) -> [String: Any] {
     let ext = profile["external"] as? [String: Any] ?? [:]
     return ["id": profile["id"] as? String ?? "", "node_kind": profile["node_kind"] as? String ?? "",
+        "profile_token": profile["profile_token"] as? String ?? "",
         "endpoint": profile["endpoint"] as? String ?? "", "start_layer": profile["start_layer"] as? String ?? "",
         "multihop_entry_mode": profile["multihop_entry_mode"] as? String ?? "",
         "protocol": ext["protocol"] as? String ?? "", "expected_public_ip": ext["expected_public_ip"] as? String ?? "",
@@ -213,6 +272,7 @@ extension ProductWindowController {
                   let entryModes = capabilities["router_vpn_entry_modes"] as? [[String: Any]] else {
                 appendHelp("The native Router entry mode catalog is unavailable."); return
             }
+            try externalRequireSourceCapability(capabilities)
             let savedMode = captured["multihop_entry_mode"] as? String ?? ""
             guard savedMode.isEmpty || entryModes.filter({ $0["id"] as? String == savedMode }).count == 1 else {
                 appendHelp("The saved Router entry mode is missing from the current native catalog."); return
@@ -267,8 +327,9 @@ extension ProductWindowController {
                 do {
                     guard let current = try api.json("/api/nodes", timeout: 5) as? [String: Any], let currentCatalog = current["profiles"] as? [[String: Any]] else { throw NSError(domain: "RouterVPN.ExternalNode", code: 1) }
                     guard let selectedMode = entryMode.selectedItem?.representedObject as? String else { throw NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: "Choose a Router entry mode."]) }
-                    body = try externalPathConnectBody(captured: captured, entryID: entryID, execution: choice, direct: direct, current: currentCatalog,
+                    let prepared = try externalPathConnectBody(captured: captured, entryID: entryID, execution: choice, direct: direct, current: currentCatalog,
                         entryMode: selectedMode, entryModes: entryModes)
+                    body = try externalCapturedBody(prepared, opened: store, current: current)
                 } catch let failure { error.stringValue = failure.localizedDescription; continue }
                 asyncAction {
                     try self.requireMutationIdle("starting an external selected path")

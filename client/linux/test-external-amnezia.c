@@ -7,16 +7,19 @@
 typedef struct { GtkWidget *window; } App;
 typedef struct { char *data; } Buffer;
 static const char *dispatch_execution="local";
-static gboolean dispatch_connected=FALSE,dispatch_external=TRUE;
+static gboolean dispatch_connected=FALSE,dispatch_external=TRUE,dispatch_source_capability=TRUE;
 static char *dispatch_path=NULL,*dispatch_body=NULL;
 static guint router_dispatches=0;
 static const char *dispatch_catalog=NULL;static gboolean dispatch_catalog_failed=FALSE;
+static void (*dispatch_on_capability)(void)=NULL;
+static App *dispatch_snapshot_owner=NULL;static char *dispatch_mutated_catalog=NULL;
 static gboolean api_request(const char *path,const char *method,const char *body,int timeout,Buffer *out,char **err){
     (void)method;(void)body;(void)timeout;(void)err;
     if(g_strcmp0(path,"/api/status")==0){out->data=g_strdup_printf("{\"connected\":%s,\"phase\":\"off\"}",dispatch_connected?"true":"false");return TRUE;}
-    if(g_strcmp0(path,"/api/profiles")==0&&dispatch_catalog_failed)return FALSE;
-    if(g_strcmp0(path,"/api/profiles")==0&&dispatch_catalog!=NULL){out->data=g_strdup(dispatch_catalog);return TRUE;}
-    if(g_strcmp0(path,"/api/profiles")==0){out->data=g_strdup_printf("{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"captured-exit\",\"node_kind\":\"%s\",\"multihop_execution\":\"%s\"}]}",dispatch_external?"external":"router-vpn",dispatch_execution);return TRUE;}
+    if(g_strcmp0(path,"/api/external-profile/capabilities")==0){if(dispatch_on_capability!=NULL)dispatch_on_capability();out->data=g_strdup(dispatch_source_capability?"{\"profile_source_preconditions\":true}":"{\"profile_source_preconditions\":false}");return TRUE;}
+    if((g_strcmp0(path,"/api/profiles")==0||g_strcmp0(path,"/api/nodes")==0)&&dispatch_catalog_failed)return FALSE;
+    if((g_strcmp0(path,"/api/profiles")==0||g_strcmp0(path,"/api/nodes")==0)&&dispatch_catalog!=NULL){out->data=g_strdup(dispatch_catalog);return TRUE;}
+    if((g_strcmp0(path,"/api/profiles")==0||g_strcmp0(path,"/api/nodes")==0)){out->data=g_strdup_printf("{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"captured-exit\",\"profile_token\":\"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\",\"node_kind\":\"%s\",\"multihop_execution\":\"%s\"}]}",dispatch_external?"external":"router-vpn",dispatch_execution);return TRUE;}
     return FALSE;
 }
 static JsonNode *parse_json(const char *raw){JsonParser *p=json_parser_new();JsonNode *n=NULL;if(json_parser_load_from_data(p,raw,-1,NULL))n=json_node_copy(json_parser_get_root(p));g_object_unref(p);return n;}
@@ -24,16 +27,32 @@ static const char *obj_string(JsonObject *obj,const char *key){return json_objec
 static void append_diag(App *app,const char *text){(void)app;(void)text;}
 static void refresh_all(App *app){(void)app;}
 #include "routervpn-external-node-v14.inc"
-typedef struct { App *app; GtkWidget *multihop; GtkWidget *mode; } LinuxUnifiedV8;
+typedef struct { App *app; GtkWidget *multihop; GtkWidget *mode; GtkWidget *node; } LinuxUnifiedV8;
 static void post_and_log(App *app,const char *path,const char *body,int timeout,const char *label){(void)app;(void)timeout;(void)label;g_free(dispatch_path);g_free(dispatch_body);dispatch_path=g_strdup(path);dispatch_body=g_strdup(body);}
 static void on_linux_multihop_v7(GtkButton *button,App *app){(void)button;(void)app;router_dispatches++;}
 static char *linux_unified_custom_layers_for_mode_v8(const char *mode){(void)mode;return NULL;}
 static char *strategy_custom_body_v7(const char *layers){(void)layers;return NULL;}
 // EXTERNAL_PATH_TEST_HELPERS
 
+static void fixture_display_source(App *app) {
+    Buffer out={0};char *error=NULL;
+    if(api_request("/api/nodes","GET",NULL,5000,&out,&error)){
+        JsonNode *root=parse_json(out.data);
+        g_object_set_data_full(G_OBJECT(app->window),"router-vpn-source-catalog-v24",root,(GDestroyNotify)json_node_free);
+    }else g_object_set_data_full(G_OBJECT(app->window),"router-vpn-source-catalog-v24",NULL,(GDestroyNotify)json_node_free);
+    g_free(error);g_free(out.data);
+}
+
 static void check(gboolean ok,const char *message){if(!ok){g_printerr("%s\n",message);exit(1);}}
 static GtkWidget *field(const char *value){GtkWidget *w=gtk_entry_new();gtk_entry_set_text(GTK_ENTRY(w),value);return w;}
 static char *fixture_json_text(JsonNode *node){JsonGenerator *generator=json_generator_new();json_generator_set_root(generator,node);char *text=json_generator_to_data(generator,NULL);g_object_unref(generator);return text;}
+static void mutate_displayed_source_during_read(void) {
+    JsonNode *root=g_object_get_data(G_OBJECT(dispatch_snapshot_owner->window),"router-vpn-source-catalog-v24");
+    JsonArray *profiles=json_object_get_array_member(json_node_get_object(root),"profiles");
+    json_object_set_string_member(json_array_get_object_element(profiles,1),"profile_token","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+    g_free(dispatch_mutated_catalog);dispatch_mutated_catalog=fixture_json_text(root);dispatch_catalog=dispatch_mutated_catalog;
+}
+
 static void awg_text(LinuxExternalNodeV14 *s,const char *value){gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->awg_parameters)),value,-1);}
 static const char *parameters="Jc=3; Jmin=40; Jmax=900; S1=56; S2=48; S3=24; S4=32; H1=10000000-19999999; H2=20000000-29999999; H3=30000000-39999999; H4=40000000-49999999";
 
@@ -145,7 +164,7 @@ int main(int argc,char **argv){
     for(guint li=1;li<3;li++){
         char *layer_fixture_path=g_build_filename(argv[1],li==1?"external-openvpn-multihost-layered-aes-client.json":"external-openvpn-multihost-layered-xor-client.json",NULL),*layer_fixture_raw=NULL;check(g_file_get_contents(layer_fixture_path,&layer_fixture_raw,NULL,NULL),"Canonical layer fixture missing");g_free(layer_fixture_path);JsonNode *layer_fixture=parse_json(layer_fixture_raw);g_free(layer_fixture_raw);
         JsonObject *layered=json_object_get_object_member(json_node_get_object(layer_fixture),"external");check(g_strcmp0(obj_string(json_node_get_object(layer_fixture),"selected_layer"),layers[li])==0&&g_strcmp0(obj_string(json_object_get_object_member(layered,"openvpn"),"config"),obj_string(multi_inline,"config"))==0,"Layer fixture changed original provider source");
-        JsonNode *layer_map=json_node_copy(json_object_get_member(layered,"openvpn_start_layers"));json_node_free(layer_fixture);g_free(layer_map_raw);layer_map_raw=fixture_json_text(layer_map);char *layer_text=g_strconcat("\n",layer_map_raw,"\n",NULL);
+        JsonNode *layer_map=copy_public_source_value_v24(json_object_get_member(layered,"openvpn_start_layers"));json_node_free(layer_fixture);g_free(layer_map_raw);layer_map_raw=fixture_json_text(layer_map);char *layer_text=g_strconcat("\n",layer_map_raw,"\n",NULL);
         gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s.openvpn_start_layers)),layer_text,-1);gtk_combo_box_set_active_id(GTK_COMBO_BOX(s.start_layer),layers[li]);
         body=linux_external_payload_v14(&s,&error);check(body!=NULL,error?error:"Mapped OpenVPN layer rejected");root=parse_json(body);obj=json_node_get_object(root);JsonObject *inline_saved=json_object_get_object_member(obj,"openvpn");
         check(g_strcmp0(obj_string(obj,"openvpn_start_layers_json"),layer_text)==0&&g_strcmp0(obj_string(obj,"start_layer"),layers[li])==0&&!json_object_has_member(obj,"start_layer_provision")&&!json_object_has_member(obj,"response_probe")&&g_strcmp0(obj_string(inline_saved,"config"),obj_string(multi_inline,"config"))==0&&g_strcmp0(obj_string(inline_saved,"username"),obj_string(multi_inline,"username"))==0&&g_strcmp0(obj_string(inline_saved,"password"),obj_string(multi_inline,"password"))==0,"Layer map changed raw fields, credentials, or added single-host provision");
@@ -191,7 +210,7 @@ int main(int argc,char **argv){
     for(guint ci=0;ci<6;ci++){
         JsonNode *current=parse_json("{\"profiles\":[{\"id\":\"exit\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"wireguard\",\"has_response_probe\":true,\"has_server_peer\":true}},{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}]}");JsonArray *catalog=json_object_get_array_member(json_node_get_object(current),"profiles");JsonObject *fresh=json_array_get_object_element(catalog,0),*ext=json_object_get_object_member(fresh,"external");
         if(ci==0)json_array_remove_element(catalog,0);
-        if(ci==1)json_array_add_element(catalog,json_node_copy(captured_node));
+        if(ci==1)json_array_add_element(catalog,copy_public_source_value_v24(captured_node));
         if(ci==2)json_object_set_string_member(ext,"protocol","amneziawg");
         if(ci==3)json_object_set_boolean_member(ext,"has_server_peer",FALSE);
         if(ci==4)json_object_set_boolean_member(ext,"has_response_probe",FALSE);
@@ -202,17 +221,45 @@ int main(int argc,char **argv){
     check(g_file_get_contents(catalog_path,&catalog_text,NULL,NULL),"Shipping entry-mode capability response missing");g_free(catalog_path);
     JsonNode *mode_catalog=parse_json(catalog_text);g_free(catalog_text);JsonArray *entry_modes=json_object_get_array_member(json_node_get_object(mode_catalog),"router_vpn_entry_modes");
     check(entry_modes!=NULL&&json_array_get_length(entry_modes)==19,"Native Router mode catalog changed");
-    json_object_set_string_member(captured,"base_tunnel","wg");json_object_set_string_member(captured,"multihop_entry_mode","wg");json_object_set_string_member(json_object_get_object_member(captured,"external"),"protocol","shadowsocks");
-    JsonNode *mode_current=parse_json("{\"profiles\":[{\"id\":\"entry\",\"node_kind\":\"router-vpn\",\"base_tunnel\":\"awg\"},{\"id\":\"ordinary\",\"node_kind\":\"external\"}]}");
-    JsonArray *mode_nodes=json_object_get_array_member(json_node_get_object(mode_current),"profiles");
-    JsonNode *mode_exit=parse_json("{\"id\":\"exit\",\"node_kind\":\"external\",\"base_tunnel\":\"wg\",\"multihop_entry_mode\":\"wg\",\"external\":{\"protocol\":\"shadowsocks\",\"has_response_probe\":true,\"has_server_peer\":true}}");json_array_add_element(mode_nodes,mode_exit);
+    char *source_path=g_build_filename(argv[1],"external-source-catalog.json",NULL),*source_text=NULL;
+    check(g_file_get_contents(source_path,&source_text,NULL,NULL),"Actual public source catalog missing");g_free(source_path);
+    JsonNode *source_root=parse_json(source_text);g_free(source_text);JsonObject *source_store=json_node_get_object(source_root);
+    JsonArray *source_nodes=json_object_get_array_member(source_store,"profiles");
+    json_node_free(captured_node);captured_node=copy_public_source_value_v24(json_array_get_element(source_nodes,0));captured=json_node_get_object(captured_node);
+    JsonNode *mode_current=copy_public_source_value_v24(source_root);JsonArray *mode_nodes=json_array_new();
+    json_array_add_element(mode_nodes,copy_public_source_value_v24(json_array_get_element(source_nodes,1)));
+    json_array_add_element(mode_nodes,parse_json("{\"id\":\"ordinary\",\"node_kind\":\"external\"}"));
+    json_array_add_element(mode_nodes,copy_public_source_value_v24(json_array_get_element(source_nodes,0)));
+    json_object_set_array_member(json_node_get_object(mode_current),"profiles",mode_nodes);
     JsonObject *mode_entry=json_array_get_object_element(mode_nodes,0);
     for(guint mi=0;mi<json_array_get_length(entry_modes);mi++)for(guint ei=0;ei<G_N_ELEMENTS(executions);ei++){
         const char *mode=obj_string(json_array_get_object_element(entry_modes,mi),"id");
-        body=external_path_mode_body_v4(captured,mode_current,"entry",executions[ei],FALSE,mode,entry_modes,&error);check(body!=NULL,error?error:"Exact native entry rejected");root=parse_json(body);obj=json_node_get_object(root);
+        char *prepared=external_path_mode_body_v4(captured,mode_current,"entry",executions[ei],FALSE,mode,entry_modes,&error);check(prepared!=NULL,error?error:"Exact native entry rejected");body=external_captured_body_v24(prepared,source_root,mode_current,&error);g_free(prepared);check(body!=NULL,error?error:"Source capture failed");root=parse_json(body);obj=json_node_get_object(root);
         check(g_strcmp0(obj_string(obj,"profile_id"),"exit")==0&&g_strcmp0(obj_string(obj,"entry_id"),"entry")==0&&g_strcmp0(obj_string(obj,"entry_mode"),mode)==0&&g_strcmp0(obj_string(obj,"execution"),executions[ei])==0,"Exact Router mode changed");
         char *name=g_strdup_printf("entry-mode-%s-%s.json",mode,executions[ei]);output=g_build_filename(argv[1],name,NULL);check(g_file_set_contents(output,body,-1,NULL),"Entry mode fixture write failed");g_free(name);g_free(output);g_free(body);json_node_free(root);count++;
     }
+    char *source_body=json_external_hop_body("exit","entry","local",FALSE);
+    for(guint change=0;change<5;change++){
+        JsonNode *fresh=copy_public_source_value_v24(source_root);JsonObject *fresh_store=json_node_get_object(fresh);JsonArray *fresh_nodes=json_object_get_array_member(fresh_store,"profiles");
+        if(change<2)json_object_set_string_member(json_array_get_object_element(fresh_nodes,change),"profile_token","dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+        if(change==2)json_object_set_string_member(fresh_store,"selected_id","entry");
+        if(change==3)json_array_remove_element(fresh_nodes,1);
+        if(change==4)json_array_add_element(fresh_nodes,copy_public_source_value_v24(json_array_get_element(fresh_nodes,1)));
+        body=external_captured_body_v24(source_body,source_root,fresh,&error);check(body==NULL,"Changed path source was accepted");g_free(error);error=NULL;json_node_free(fresh);count++;
+    }
+    const char *bad_tokens[]={"","AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA","bad"};
+    for(guint i=0;i<G_N_ELEMENTS(bad_tokens);i++){
+        JsonNode *fresh=copy_public_source_value_v24(source_root);JsonArray *nodes=json_object_get_array_member(json_node_get_object(fresh),"profiles");json_object_set_string_member(json_array_get_object_element(nodes,0),"profile_token",bad_tokens[i]);
+        body=external_captured_body_v24(source_body,fresh,NULL,&error);check(body==NULL,"Malformed source token accepted");g_free(error);error=NULL;json_node_free(fresh);count++;
+    }
+    JsonNode *empty_selection=copy_public_source_value_v24(source_root);json_object_set_string_member(json_node_get_object(empty_selection),"selected_id","");
+    body=external_captured_body_v24(source_body,empty_selection,empty_selection,&error);check(body!=NULL,"Explicit first-use empty selection rejected");root=parse_json(body);
+    check(json_object_has_member(json_node_get_object(root),"expected_selected_node_id")&&g_strcmp0(obj_string(json_node_get_object(root),"expected_selected_node_id"),"")==0,"First-use empty selection omitted");json_node_free(root);g_free(body);json_node_free(empty_selection);count++;
+    JsonNode *saved_source=copy_public_source_value_v24(source_root);JsonObject *saved_exit=json_array_get_object_element(json_object_get_array_member(json_node_get_object(saved_source),"profiles"),0);json_object_set_string_member(saved_exit,"multihop_entry_id","missing-entry");
+    char *plain_direct=json_external_hop_body("exit","","local",TRUE);body=external_captured_body_v24(plain_direct,saved_source,NULL,&error);check(body!=NULL,"Explicit Direct borrowed stale saved entry");root=parse_json(body);check(json_object_get_size(json_object_get_object_member(json_node_get_object(root),"expected_profile_tokens"))==1,"Direct captured unused saved entry");json_node_free(root);g_free(body);g_free(plain_direct);count++;
+    body=external_captured_body_v24(source_body,saved_source,NULL,&error);check(body!=NULL,"Explicit entry did not override saved entry");g_free(body);json_node_free(saved_source);count++;
+    body=external_captured_body_v24(source_body,source_root,NULL,&error);check(body!=NULL,"Detached capture failed");JsonNode *detached=parse_json(body);g_free(body);
+    check(json_object_get_size(json_object_get_object_member(json_node_get_object(detached),"expected_profile_tokens"))==2,"Source capture omitted node ownership");json_node_free(detached);g_free(source_body);count++;
     char *mode=external_entry_mode_v4(captured,mode_entry,"",entry_modes,&error);check(mode!=NULL&&g_strcmp0(mode,"awg2-fast")==0,"Entry saved AWG base changed");g_free(mode);count++;
     json_object_set_string_member(mode_entry,"base_tunnel","wg");json_object_set_string_member(captured,"base_tunnel","awg");
     mode=external_entry_mode_v4(captured,mode_entry,"",entry_modes,&error);check(mode!=NULL&&g_strcmp0(mode,"wg")==0,"Exit base overrode selected entry WG");g_free(mode);count++;
@@ -226,21 +273,40 @@ int main(int argc,char **argv){
     body=external_path_mode_body_v4(captured,mode_current,"ordinary","local",FALSE,"",entry_modes,&error);check(body!=NULL,"External entry failed with disabled Router mode");root=parse_json(body);check(!json_object_has_member(json_node_get_object(root),"entry_mode"),"External entry retained Router mode");json_node_free(root);g_free(body);count++;
     json_object_set_string_member(json_array_get_object_element(mode_nodes,2),"multihop_entry_mode","hysteria2");
     body=external_path_mode_body_v4(captured,mode_current,"entry","local",FALSE,"wg",entry_modes,&error);check(body==NULL,"Changed saved entry mode owner accepted");g_free(error);error=NULL;count++;
-    json_node_free(mode_current);json_node_free(mode_catalog);
+    json_node_free(mode_current);json_node_free(mode_catalog);json_node_free(source_root);
     json_node_free(captured_node);
-    App app={0};LinuxUnifiedV8 dispatch={.app=&app,.multihop=gtk_check_button_new(),.mode=gtk_combo_box_text_new()};
+    App app={.window=gtk_window_new(GTK_WINDOW_TOPLEVEL)};LinuxUnifiedV8 dispatch={.app=&app,.multihop=gtk_check_button_new(),.mode=gtk_combo_box_text_new(),.node=gtk_combo_box_text_new()};
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(dispatch.node),"captured-exit","Captured");gtk_combo_box_set_active_id(GTK_COMBO_BOX(dispatch.node),"captured-exit");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(dispatch.multihop),TRUE);
     for(guint i=0;i<G_N_ELEMENTS(executions);i++){
         dispatch_execution=executions[i];g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);router_dispatches=0;
-        linux_unified_connect_v8(NULL,&dispatch);
+        fixture_display_source(&app);linux_unified_connect_v8(NULL,&dispatch);
         check(router_dispatches==0&&g_strcmp0(dispatch_path,"/api/external-profile/connect")==0&&dispatch_body!=NULL,"Unrelated Router toggle bypassed primary external Connect");
-        root=parse_json(dispatch_body);obj=json_node_get_object(root);check(g_strcmp0(obj_string(obj,"profile_id"),"captured-exit")==0&&g_strcmp0(obj_string(obj,"execution"),executions[i])==0&&json_object_get_size(obj)==2,"Primary external Connect changed captured choice");json_node_free(root);count++;
+        root=parse_json(dispatch_body);obj=json_node_get_object(root);check(g_strcmp0(obj_string(obj,"profile_id"),"captured-exit")==0&&g_strcmp0(obj_string(obj,"execution"),executions[i])==0&&json_object_get_size(obj)==4&&g_strcmp0(obj_string(obj,"expected_selected_node_id"),"captured-exit")==0&&json_object_get_size(json_object_get_object_member(obj,"expected_profile_tokens"))==1,"Primary external Connect changed captured choice");json_node_free(root);count++;
     }
-    dispatch_execution="invalid";g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Invalid external execution fell through to Router Connect");count++;
-    dispatch_catalog_failed=TRUE;linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Unavailable catalog fell through to Router Connect");count++;dispatch_catalog_failed=FALSE;
+    dispatch_source_capability=FALSE;g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Unsupported source capture silently fell back");count++;dispatch_source_capability=TRUE;
+    dispatch_execution="local";fixture_display_source(&app);
+    dispatch_catalog="{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"captured-exit\",\"profile_token\":\"dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\",\"node_kind\":\"external\",\"multihop_execution\":\"local\"}]}";
+    g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);linux_unified_connect_v8(NULL,&dispatch);
+    check(dispatch_path==NULL&&router_dispatches==0,"Primary Connect adopted a same-ID relink after display");count++;
+    body=external_primary_body_v24(&app,"captured-exit",TRUE,&error);check(body==NULL,"Direct adopted a same-ID relink after display");g_free(error);error=NULL;count++;dispatch_catalog=NULL;
+    char *mutation_path=g_build_filename(argv[1],"external-source-catalog.json",NULL),*mutation_text=NULL;
+    check(g_file_get_contents(mutation_path,&mutation_text,NULL,NULL),"Mutation source fixture missing");g_free(mutation_path);
+    g_object_set_data_full(G_OBJECT(app.window),"router-vpn-source-catalog-v24",parse_json(mutation_text),(GDestroyNotify)json_node_free);
+    dispatch_catalog=mutation_text;dispatch_snapshot_owner=&app;dispatch_on_capability=mutate_displayed_source_during_read;
+    body=external_primary_body_v24(&app,"exit",FALSE,&error);
+    check(body==NULL,"Primary borrowed a public JsonObject mutation during the fresh API read");g_free(error);error=NULL;count++;
+    g_object_set_data_full(G_OBJECT(app.window),"router-vpn-source-catalog-v24",parse_json(mutation_text),(GDestroyNotify)json_node_free);
+    dispatch_catalog=mutation_text;gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(dispatch.node),"exit","Mutation fixture");gtk_combo_box_set_active_id(GTK_COMBO_BOX(dispatch.node),"exit");
+    g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);linux_unified_connect_v8(NULL,&dispatch);
+    check(dispatch_path==NULL&&router_dispatches==0,"Unified Connect borrowed a public JsonObject mutation during the fresh API read");count++;
+    gtk_combo_box_set_active_id(GTK_COMBO_BOX(dispatch.node),"captured-exit");
+    dispatch_on_capability=NULL;dispatch_snapshot_owner=NULL;dispatch_catalog=NULL;g_clear_pointer(&dispatch_mutated_catalog,g_free);g_free(mutation_text);
+    dispatch_execution="invalid";fixture_display_source(&app);g_clear_pointer(&dispatch_path,g_free);g_clear_pointer(&dispatch_body,g_free);linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Invalid external execution fell through to Router Connect");count++;
+    dispatch_catalog_failed=TRUE;fixture_display_source(&app);linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Unavailable catalog fell through to Router Connect");count++;dispatch_catalog_failed=FALSE;
     const char *bad_catalogs[]={"{", "[]", "{}", "{\"selected_id\":\"captured-exit\",\"profiles\":[]}", "{\"selected_id\":\"captured-exit\",\"profiles\":null}", "{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"other\",\"node_kind\":\"external\"}]}", "{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"captured-exit\",\"node_kind\":\"external\"},{\"id\":\"captured-exit\",\"node_kind\":\"router-vpn\"}]}", "{\"selected_id\":\"captured-exit\",\"profiles\":[{\"id\":\"captured-exit\",\"node_kind\":\"unknown\"}]}"};
-    for(guint i=0;i<G_N_ELEMENTS(bad_catalogs);i++){dispatch_catalog=bad_catalogs[i];linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Malformed or missing selected node fell through to Router Connect");count++;}dispatch_catalog=NULL;
-    dispatch_external=FALSE;linux_unified_connect_v8(NULL,&dispatch);check(router_dispatches==1&&dispatch_path==NULL,"Router multihop was removed by external priority");count++;
+    for(guint i=0;i<G_N_ELEMENTS(bad_catalogs);i++){dispatch_catalog=bad_catalogs[i];fixture_display_source(&app);linux_unified_connect_v8(NULL,&dispatch);check(dispatch_path==NULL&&router_dispatches==0,"Malformed or missing selected node fell through to Router Connect");count++;}dispatch_catalog=NULL;
+    dispatch_external=FALSE;fixture_display_source(&app);linux_unified_connect_v8(NULL,&dispatch);check(router_dispatches==1&&dispatch_path==NULL,"Router multihop was removed by external priority");count++;
     dispatch_external=TRUE;dispatch_connected=TRUE;linux_unified_connect_v8(NULL,&dispatch);check(g_strcmp0(dispatch_path,"/api/disconnect")==0&&router_dispatches==1,"External priority bypassed Disconnect");g_free(dispatch_path);g_free(dispatch_body);count++;
-    g_print("PASS shipping GTK external form and captured primary requests: %u cases\n",count);return 0;
+    gtk_widget_destroy(app.window);g_print("PASS shipping GTK external form and captured primary requests: %u cases\n",count);return 0;
 }

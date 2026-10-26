@@ -63,6 +63,7 @@ def swift_form(directory):
         assert '.addItems(withTitles: names)' not in catalog
     test = r'''
 import Foundation
+import CoreFoundation
 HELPER
 final class Field { var stringValue: String; init(_ value: String) { stringValue = value } }
 final class Popup { var indexOfSelectedItem = 0 }
@@ -294,14 +295,47 @@ for ext: [String: Any] in [["protocol": "wireguard", "has_response_probe": true,
 let capabilityData = try Data(contentsOf: output.appendingPathComponent("entry-mode-catalog.json"))
 let capability = try JSONSerialization.jsonObject(with: capabilityData) as! [String: Any]
 let entryModes = capability["router_vpn_entry_modes"] as! [[String: Any]]
-var entryModeNode: [String: Any] = ["id": "entry", "node_kind": "router-vpn", "base_tunnel": "awg"]
-captured = ["id": "exit", "node_kind": "external", "base_tunnel": "wg", "multihop_entry_mode": "wg", "external": ["protocol": "shadowsocks", "has_response_probe": true]]
+let sourceStore = try JSONSerialization.jsonObject(with: Data(contentsOf: output.appendingPathComponent("external-source-catalog.json"))) as! [String: Any]
+let sourceProfiles = sourceStore["profiles"] as! [[String: Any]]
+var entryModeNode = sourceProfiles.first { $0["id"] as? String == "entry" }!
+captured = sourceProfiles.first { $0["id"] as? String == "exit" }!
+try externalRequireSourceCapability(capability)
 for mode in entryModes { for choice in ["local", "server", "auto"] {
     let id = mode["id"] as! String
-    let body = try externalPathConnectBody(captured: captured, entryID: "entry", execution: choice, direct: false, current: [captured, entryModeNode], entryMode: id, entryModes: entryModes)
+    let prepared = try externalPathConnectBody(captured: captured, entryID: "entry", execution: choice, direct: false, current: [captured, entryModeNode], entryMode: id, entryModes: entryModes)
+    let body = try externalCapturedBody(prepared, opened: sourceStore, current: sourceStore)
     check(body["entry_mode"] as? String == id && body["profile_id"] as? String == "exit" && body["entry_id"] as? String == "entry" && body["execution"] as? String == choice, "Exact Router entry mode changed")
     try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).write(to: output.appendingPathComponent("entry-mode-"+id+"-"+choice+".json")); count += 1
 } }
+let sourceBody = try externalConnectBody(profile: captured, entryID: "entry", execution: "local")
+let capturedBody = try externalCapturedBody(sourceBody, opened: sourceStore, current: sourceStore)
+for changed in ["exit", "entry", "selected", "missing", "duplicate"] {
+    var current = sourceStore, nodes = sourceProfiles
+    if changed == "selected" { current["selected_id"] = "entry" }
+    else if changed == "missing" { nodes.removeLast() }
+    else if changed == "duplicate" { nodes.append(nodes[1]) }
+    else { let index = nodes.firstIndex { $0["id"] as? String == changed }!; nodes[index]["profile_token"] = String(repeating: "d", count: 64) }
+    current["profiles"] = nodes
+    check(rejects { _ = try externalCapturedBody(sourceBody, opened: sourceStore, current: current) }, "Changed source accepted: "+changed); count += 1
+}
+for bad: Any in ["", String(repeating: "A", count: 64), "bad", 17, NSNull()] {
+    var opened = sourceStore, nodes = sourceProfiles; nodes[0]["profile_token"] = bad; opened["profiles"] = nodes
+    check(rejects { _ = try externalCapturedBody(sourceBody, opened: opened) }, "Invalid source token accepted"); count += 1
+}
+var firstUse = sourceStore; firstUse["selected_id"] = ""
+let firstUseBody = try externalCapturedBody(sourceBody, opened: firstUse, current: firstUse)
+check(firstUseBody["expected_selected_node_id"] as? String == "", "First-use selection omitted"); count += 1
+let savedBody = try externalCapturedBody(externalConnectBody(profile: captured, execution: "local"), opened: sourceStore)
+check((savedBody["expected_profile_tokens"] as? [String: String])?.count == 2, "Saved entry source was omitted"); count += 1
+var savedStore = sourceStore, savedNodes = sourceProfiles; savedNodes[0]["multihop_entry_id"] = "missing-entry"; savedStore["profiles"] = savedNodes
+let directCapture = try externalCapturedBody(externalConnectBody(profile: captured, execution: "local", direct: true), opened: savedStore)
+check((directCapture["expected_profile_tokens"] as? [String: String])?.count == 1, "Direct borrowed an unused saved entry"); count += 1
+let overrideCapture = try externalCapturedBody(sourceBody, opened: savedStore)
+check((overrideCapture["expected_profile_tokens"] as? [String: String])?.count == 2, "Explicit entry did not override saved entry"); count += 1
+for value: Any in [false, NSNull(), "true", 1] {
+    check(rejects { try externalRequireSourceCapability(["profile_source_preconditions": value]) }, "Unsupported source capture silently fell back"); count += 1
+}
+check(capturedBody["expected_selected_node_id"] as? String == "exit" && (capturedBody["expected_profile_tokens"] as? [String: String])?["entry"] == entryModeNode["profile_token"] as? String, "Captured source map changed"); count += 1
 check(try externalEntryMode(captured: captured, entry: entryModeNode, selected: "", modes: entryModes) == "awg2-fast", "Entry saved AWG base changed"); count += 1
 entryModeNode["base_tunnel"] = "wg"; captured["base_tunnel"] = "awg"
 check(try externalEntryMode(captured: captured, entry: entryModeNode, selected: "", modes: entryModes) == "wg", "Exit base overrode selected entry WG"); count += 1
@@ -336,6 +370,12 @@ check(menu.menu!.items.isEmpty, "Partial catalog exposed misaligned private iden
 }
 final class DispatchAPI {
     var body: [String: Any]?; var path = ""
+    var catalog: [String: Any] = [:]; var capability: Any = true
+    func json(_ path: String, timeout: Double) throws -> Any {
+        if path == "/api/external-profile/capabilities" { return ["profile_source_preconditions": capability] }
+        if path == "/api/nodes" { return catalog }
+        throw NSError(domain: "fixture", code: 404)
+    }
     func request(_ path: String, method: String, body: [String: Any], timeout: Double) throws -> Data {
         self.path = path; self.body = body; return Data("{}".utf8)
     }
@@ -350,21 +390,29 @@ final class DispatchAPI {
     func requireMutationIdle(_ action: String) throws { if !idle { throw NSError(domain: "fixture", code: 409) } }
     func asyncAction(_ action: @escaping () throws -> String) { pending = action }
     DISPATCH
-    func connect() { startUnifiedSelectedMode() }
+    func connect() { if api.catalog.isEmpty { api.catalog = ["selected_id": profiles.first?["id"] as? String ?? "", "profiles": profiles] }; startUnifiedSelectedMode() }
 }
 for choice in ["local", "server", "auto"] {
     let dispatch = DispatchForm(); DispatchDefaults.standard.reads = 0
-    dispatch.profiles = [["id": "captured-exit", "node_kind": "external", "multihop_execution": choice]]
+    dispatch.profiles = [["id": "captured-exit", "profile_token": String(repeating: "a", count: 64), "node_kind": "external", "multihop_execution": choice]]
     dispatch.connect()
     check(dispatch.pending != nil && dispatch.routerConnections == 0 && DispatchDefaults.standard.reads == 0, "Unrelated Router toggle bypassed external primary Connect")
     dispatch.profiles = [["id": "replacement", "node_kind": "router-vpn"]]
     _ = try dispatch.pending!()
     check(dispatch.api.path == "/api/external-profile/connect" && dispatch.api.body?["profile_id"] as? String == "captured-exit" && dispatch.api.body?["execution"] as? String == choice, "Asynchronous external dispatch changed its captured node/choice"); count += 1
 }
-let invalidDispatch = DispatchForm(); invalidDispatch.profiles = [["id": "captured-exit", "node_kind": "external", "multihop_execution": "invalid"]]; invalidDispatch.connect()
+let invalidDispatch = DispatchForm(); invalidDispatch.profiles = [["id": "captured-exit", "profile_token": String(repeating: "a", count: 64), "node_kind": "external", "multihop_execution": "invalid"]]; invalidDispatch.connect()
 check(invalidDispatch.pending == nil && invalidDispatch.routerConnections == 0, "Invalid external execution fell through to Router Connect"); count += 1
-let staleDispatch = DispatchForm(); staleDispatch.profiles = [["id": "captured-exit", "node_kind": "external", "multihop_execution": "server"]]; staleDispatch.connect(); staleDispatch.idle = false
+let staleDispatch = DispatchForm(); staleDispatch.profiles = [["id": "captured-exit", "profile_token": String(repeating: "a", count: 64), "node_kind": "external", "multihop_execution": "server"]]; staleDispatch.connect(); staleDispatch.idle = false
 check(rejects { _ = try staleDispatch.pending!() } && staleDispatch.api.body == nil, "Changed VPN owner accepted a queued external Connect"); count += 1
+for change in ["selection", "exit-token", "entry-token", "capability"] {
+    let guarded = DispatchForm(); guarded.profiles = sourceProfiles; guarded.connect()
+    check(guarded.pending != nil, "Valid source capture failed before queuing")
+    if change == "selection" { guarded.api.catalog["selected_id"] = "entry" }
+    else if change == "capability" { guarded.api.capability = false }
+    else { var nodes = sourceProfiles; nodes[change == "exit-token" ? 0 : 1]["profile_token"] = String(repeating: "d", count: 64); guarded.api.catalog["profiles"] = nodes }
+    check(rejects { _ = try guarded.pending!() } && guarded.api.body == nil, "Queued external Connect borrowed replacement source: "+change); count += 1
+}
 let routerDispatch = DispatchForm(); routerDispatch.profiles = [["id": "router", "node_kind": "router-vpn"]]; routerDispatch.connect()
 check(routerDispatch.routerConnections == 1 && routerDispatch.pending == nil, "Router multihop control was removed by external priority"); count += 1
 for (index, profiles) in [(-1, [["id": "captured-exit", "node_kind": "external"]]), (1, [["id": "captured-exit", "node_kind": "external"]]), (0, []), (0, [["id": "", "node_kind": "external"]]), (0, [["id": "bad", "node_kind": "unknown"]])] {
@@ -387,6 +435,8 @@ def linux_form(directory):
     helpers = block(product, 'static const char *external_saved_execution_v4(') + '\n' + block(product, 'static char *json_external_hop_body(')
     for marker in ('static const char *external_path_string_v4(', 'static gboolean external_path_flag_v4(', 'static JsonObject *external_path_object_v4(', 'static char *external_path_current_body_v4(', 'static char *external_entry_mode_v4(', 'static char *external_path_mode_body_v4('):
         helpers += '\n' + block(product, marker)
+    helpers += '\n' + block((ROOT/'client/linux/routervpn-gtk-product.c').read_text(), 'static JsonNode *copy_public_source_value_v24(')
+    helpers += '\n' + (ROOT/'client/linux/routervpn-external-source-v24.inc').read_text()
     unified = (ROOT/'client/linux/routervpn-unified-shell-v8.inc').read_text()
     helpers += '\n' + block(unified, 'static int linux_unified_selected_external_v8(') + '\n' + block(unified, 'static void linux_unified_connect_v8(')
     fixture = (ROOT/'client/linux/test-external-amnezia.c').read_text()
@@ -402,6 +452,9 @@ def windows_form(directory, shell):
     subprocess.run([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
                     str(ROOT/'client/test-windows-external-amnezia.ps1'), '-Root', str(ROOT),
                     '-Output', str(directory)], check=True, timeout=60)
+    subprocess.run([shell, '-NoProfile', '-ExecutionPolicy', 'Bypass', '-File',
+                    str(ROOT/'client/test-windows-external-source.ps1'), '-Root', str(ROOT),
+                    '-Catalog', str(directory/'external-source-catalog.json')], check=True, timeout=60)
 
 
 def main():

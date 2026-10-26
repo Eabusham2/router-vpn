@@ -214,34 +214,27 @@ static void linux_unified_mode_changed_v8(GtkComboBox *combo, gpointer data) {
 }
 static void linux_unified_custom_button_v8(GtkButton *button, gpointer data) { (void)button; linux_unified_custom_builder_v8(data); }
 
-static int linux_unified_selected_external_v8(char **profile_id,char **execution) {
-    Buffer out={0};char *err=NULL;int result=-1;*profile_id=NULL;*execution=NULL;
-    if(api_request("/api/profiles","GET",NULL,5000,&out,&err)) {
-        JsonNode *root=parse_json(out.data);
-        if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)) {
-            JsonObject *obj=json_node_get_object(root);JsonNode *selected_node=json_object_get_member(obj,"selected_id"),*profiles_node=json_object_get_member(obj,"profiles");
-            if(selected_node!=NULL&&JSON_NODE_HOLDS_VALUE(selected_node)&&json_node_get_value_type(selected_node)==G_TYPE_STRING&&profiles_node!=NULL&&JSON_NODE_HOLDS_ARRAY(profiles_node)) {
-                const char *selected=json_node_get_string(selected_node);JsonArray *profiles=json_node_get_array(profiles_node);JsonObject *matched=NULL;guint matches=0;
-                for(guint i=0;selected!=NULL&&selected[0]!='\0'&&i<json_array_get_length(profiles);i++) {
-                    JsonNode *item=json_array_get_element(profiles,i);if(item==NULL||!JSON_NODE_HOLDS_OBJECT(item))continue;JsonObject *profile=json_node_get_object(item);JsonNode *id=json_object_get_member(profile,"id");
-                    if(id!=NULL&&JSON_NODE_HOLDS_VALUE(id)&&json_node_get_value_type(id)==G_TYPE_STRING&&g_strcmp0(json_node_get_string(id),selected)==0){matched=profile;matches++;}
-                }
-                if(matches==1) {
-                    JsonNode *kind=json_object_get_member(matched,"node_kind");const char *value=kind==NULL?"router-vpn":JSON_NODE_HOLDS_VALUE(kind)&&json_node_get_value_type(kind)==G_TYPE_STRING?json_node_get_string(kind):NULL;
-                    if(value!=NULL&&(value[0]=='\0'||g_ascii_strcasecmp(value,"router-vpn")==0))result=0;
-                    else if(value!=NULL&&g_ascii_strcasecmp(value,"external")==0){result=1;*profile_id=g_strdup(selected);*execution=g_strdup(external_saved_execution_v4(matched));}
-                }
-            }
-        }
-        if(root!=NULL)json_node_free(root);
-    }
-    g_free(err);free(out.data);return result;
+static int linux_unified_selected_external_v8(App *app,const char *displayed_id,char **body) {
+    *body=NULL;
+    JsonNode *displayed=app!=NULL&&app->window!=NULL?g_object_get_data(G_OBJECT(app->window),"router-vpn-source-catalog-v24"):NULL;
+    g_autoptr(JsonNode) root=displayed!=NULL?copy_public_source_value_v24(displayed):NULL;
+    JsonObject *store=root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)?json_node_get_object(root):NULL;
+    const char *selected=external_source_selection_v24(store);
+    if(selected==NULL||!selected[0]||g_strcmp0(selected,displayed_id)!=0)return -1;
+    JsonObject *profile=external_source_profile_v24(store,selected);
+    if(profile==NULL)return -1;
+    JsonNode *kind=json_object_has_member(profile,"node_kind")?json_object_get_member(profile,"node_kind"):NULL;
+    const char *value=kind==NULL?"router-vpn":JSON_NODE_HOLDS_VALUE(kind)&&json_node_get_value_type(kind)==G_TYPE_STRING?json_node_get_string(kind):NULL;
+    if(value!=NULL&&(!value[0]||g_ascii_strcasecmp(value,"router-vpn")==0))return 0;
+    if(value==NULL||g_ascii_strcasecmp(value,"external")!=0)return -1;
+    *body=external_primary_captured_body_v24(root,selected,FALSE,NULL);
+    return *body!=NULL?1:-1;
 }
 static void linux_unified_connect_v8(GtkButton *button, gpointer data) {
     (void)button; LinuxUnifiedV8 *state=data; Buffer out={0};char *err=NULL;gboolean active=FALSE;
     if(api_request("/api/status","GET",NULL,4000,&out,&err)){JsonNode *root=parse_json(out.data);if(root!=NULL&&JSON_NODE_HOLDS_OBJECT(root)){JsonObject *obj=json_node_get_object(root);gboolean connected=json_object_has_member(obj,"connected")&&json_object_get_boolean_member(obj,"connected");const char *phase=obj_string(obj,"phase");active=connected||g_str_has_prefix(phase,"starting")||g_str_has_prefix(phase,"checking")||strstr(phase,"trying")!=NULL||strstr(phase,"proving")!=NULL;json_node_free(root);}}g_free(err);free(out.data);
     if(active){post_and_log(state->app,"/api/disconnect","{}",30000,"Disconnect");return;}
-    char *external_id=NULL,*external_execution=NULL;int selected_kind=linux_unified_selected_external_v8(&external_id,&external_execution);if(selected_kind<0){append_diag(state->app,"The selected node is unavailable. Refresh the node list before connecting.");return;}if(selected_kind==1){char *body=json_external_hop_body(external_id,"",external_execution,FALSE);if(body!=NULL){post_and_log(state->app,"/api/external-profile/connect",body,180000,"Custom/external exit");g_free(body);}else append_diag(state->app,"The external node has an invalid saved execution choice.");g_free(external_execution);g_free(external_id);return;}g_free(external_execution);g_free(external_id);
+    char *external_body=NULL;int selected_kind=linux_unified_selected_external_v8(state->app,gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->node)),&external_body);if(selected_kind<0){append_diag(state->app,"The selected node or captured revision is unavailable. Refresh the node list and local controller.");return;}if(selected_kind==1){post_and_log(state->app,"/api/external-profile/connect",external_body,180000,"Custom/external exit");g_free(external_body);return;}g_free(external_body);
     if(gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->multihop))){on_linux_multihop_v7(NULL,state->app);return;}
     const char *mode=gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));if(mode==NULL||mode[0]=='\0')mode="smart-auto";
     if(strcmp(mode,"smart-auto")==0)post_and_log(state->app,"/api/strategy/smart-auto","{}",240000,"SMART AUTO");

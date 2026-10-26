@@ -133,6 +133,16 @@ static JsonNode *parse_json(const char *text) {
     return node;
 }
 
+/* JsonNode copies retain object references. Snapshot public catalog values so
+ * later UI/controller callbacks cannot mutate an already displayed owner. */
+static JsonNode *copy_public_source_value_v24(JsonNode *root) {
+    if (root == NULL) return NULL;
+    char *text = json_to_string(root, FALSE);
+    JsonNode *copy = text != NULL ? parse_json(text) : NULL;
+    g_free(text);
+    return copy;
+}
+
 static const char *obj_string(JsonObject *obj, const char *key) {
     if (obj == NULL || !json_object_has_member(obj, key)) return "";
     JsonNode *node = json_object_get_member(obj, key);
@@ -379,6 +389,7 @@ static void refresh_profiles(App *app) {
     gtk_text_buffer_set_text(buffer, text->str, -1);
     g_string_free(text, TRUE);
     gtk_widget_queue_draw(app->map);
+    g_object_set_data_full(G_OBJECT(app->window), "router-vpn-source-catalog-v24", copy_public_source_value_v24(root), (GDestroyNotify)json_node_free);
     json_node_free(root); free(out.data); g_free(err);
 }
 
