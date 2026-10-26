@@ -5,6 +5,7 @@ import argparse
 import copy
 import importlib.util
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,48 @@ ROOT = Path(__file__).resolve().parents[1]
 spec = importlib.util.spec_from_file_location('native_runtime_test', ROOT/'deploy/build-native-runtime.py')
 BUILD = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(BUILD)
+
+
+NATIVE_CAPTURE_SELECTOR = '^Test(NativeMultihop|NativeServerGraph)'
+NATIVE_GRAPH_NAMES = (
+    'TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler',
+    'TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU',
+)
+NATIVE_TRAFFIC_NAMES = (
+    'TestNativeMultihopWGNaiveEncryptedLoopback',
+    'TestNativeMultihopWGWireGuardEncryptedLoopback',
+)
+
+
+def native_capture_groups(discovered):
+    """Partition every actual target test from the previous aggregate exactly once."""
+    names = [line.strip() for line in discovered.splitlines()
+             if line.startswith('Test')]
+    if not names or len(names) != len(set(names)) or any(
+            re.fullmatch(r'[A-Za-z0-9_]+', name) is None or
+            re.match(NATIVE_CAPTURE_SELECTOR, name) is None for name in names):
+        raise RuntimeError('Native capture test discovery is empty or ambiguous')
+    required = set(NATIVE_GRAPH_NAMES + NATIVE_TRAFFIC_NAMES)
+    if not required.issubset(names):
+        raise RuntimeError('Native graph or encrypted-traffic coverage disappeared')
+    exact = lambda selected: '^(' + '|'.join(re.escape(name) for name in selected) + ')$'
+    groups = (
+        ('captured graph/parser matrix', exact(NATIVE_GRAPH_NAMES), None),
+        ('policy, source, proof and restoration ownership', NATIVE_CAPTURE_SELECTOR,
+         exact(NATIVE_GRAPH_NAMES + NATIVE_TRAFFIC_NAMES)),
+        ('encrypted WG/Naive and WG/WG paths', exact(NATIVE_TRAFFIC_NAMES), None),
+    )
+    counts = {name: 0 for name in names}
+    for _, include, exclude in groups:
+        selected = [name for name in names if re.match(include, name) and
+                    (exclude is None or not re.match(exclude, name))]
+        if not selected:
+            raise RuntimeError('Native capture partition selected no actual tests')
+        for name in selected:
+            counts[name] += 1
+    if any(count != 1 for count in counts.values()):
+        raise RuntimeError('Native capture partition omitted or duplicated an actual test')
+    return groups, len(names)
 
 
 def test(bundle, target):
@@ -82,10 +125,22 @@ def test(bundle, target):
         # list` has no -race flag; an unrelated compiler failure must not be
         # caught and silently retried without race instrumentation.
         race = [] if target == 'windows/arm64' else ['-race']
-        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s',
-                        './cmd/client', '-run', '^Test(NativeMultihop|NativeServerGraph)'],
-                       cwd=ROOT, env=env, check=True, timeout=300)
-        print('Complete native runtime accepted captured WG/AWG Local and Server graphs with exact layers, DNS and cover; stale proof/source regressions passed', flush=True)
+        # The old aggregate includes multiple real encrypted network matrices
+        # plus hundreds of complete-parser invocations. Give each coherent
+        # phase its original bounded budget; do not stretch an individual
+        # handshake/assertion or silently omit platform-only ACL negatives.
+        discovered = subprocess.check_output(
+            ['go', 'test', *race, './cmd/client', '-list', NATIVE_CAPTURE_SELECTOR],
+            cwd=ROOT, env=env, text=True, timeout=300)
+        groups, total = native_capture_groups(discovered)
+        for label, include, exclude in groups:
+            command = ['go', 'test', *race, '-count=1', '-timeout=180s',
+                       './cmd/client', '-run', include]
+            if exclude is not None:
+                command += ['-skip', exclude]
+            subprocess.run(command, cwd=ROOT, env=env, check=True, timeout=300)
+            print('Complete native runtime passed ' + label, flush=True)
+        print(f'All {total} original native capture/ownership/traffic tests executed exactly once with unchanged per-test assertions', flush=True)
         # Every additional entry preserves its full engine/DNS/cover closure
         # through the same shipping capture and Server transformation. Keep
         # this new matrix bounded independently of the established groups.

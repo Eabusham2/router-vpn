@@ -62,6 +62,16 @@ encrypted traffic for every entry/exit combination. The package gate runs the
 expanded entry matrix in its own bounded group; existing gates keep their
 original budgets.
 
+The current ARM64 release exposed two native-fixture issues after successful
+engine builds: an initial WG response could be lost during UDP rebinding before
+a Naive H3 test, and the growing aggregate exceeded its Windows ARM64 budget.
+The fixture now proves an actual encrypted entry before the unchanged
+four-second exit assertions and owns a separate WG server for each trial. A
+deterministic dropped-first-handshake test reproduces the old failure and
+passes the corrected path. The package gate accounts for every discovered test
+exactly once across separate bounded graph, ownership and traffic groups.
+Isolated Linux AMD64 race tests pass; the actual ARM64 jobs still must rerun.
+
 Desktop WG-PQ and AWG-PQ exits retain mandatory native Rosenpass negotiation,
 exact packet/AWG parameters, selected DNS, Start Layers and captured MTU bounds.
 Server execution requires both an independently paired packet key and a

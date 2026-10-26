@@ -111,21 +111,42 @@ func TestNativeMultihopWGNaiveEncryptedLoopback(t *testing.T) {
 					map[string]any{"ip_cidr": []string{"127.0.0.1/32"}, "network": "udp", "port": udpEcho, "action": "route", "outbound": "echo-only"},
 					map[string]any{"action": "reject"}}},
 			}, exitPort)
-			entryPort := nativeMultihopTrafficPort(t, "udp")
-			nativeMultihopTrafficProcess(t, binary, map[string]any{
-				"endpoints": []any{map[string]any{"type": "wireguard", "tag": "entry-server", "system": false, "bind_interface": loopback, "address": []string{"10.77.0.1/24"}, "listen_port": entryPort, "private_key": base64.StdEncoding.EncodeToString(serverKey.Bytes()), "peers": []any{map[string]any{"public_key": base64.StdEncoding.EncodeToString(clientKey.PublicKey().Bytes()), "allowed_ips": []string{"10.77.0.2/32"}}}}},
-				"outbounds": []any{map[string]any{"type": "direct", "tag": "exit-only"}},
-				"route": map[string]any{"rules": []any{
-					map[string]any{"ip_cidr": []string{selection.Exit.Endpoint + "/32"}, "port": 8443, "action": "route", "outbound": "exit-only", "override_address": "127.0.0.1", "override_port": exitPort},
-					map[string]any{"action": "reject"}}},
-			}, 0)
-			for _, fault := range []string{"none", "wrong-exit-key", "restored-key"} {
+			faults := []string{"none", "wrong-exit-key", "restored-key"}
+			if mode == "naive-h3" {
+				faults = append(faults, "first-handshake-retry")
+			}
+			for _, fault := range faults {
 				t.Run(fault, func(t *testing.T) {
+
+					// Every trial owns its WG server. A late packet from a retired
+					// client cannot roam a shared peer into the replacement trial.
+					entryPort := nativeMultihopTrafficPort(t, "udp")
+					nativeMultihopTrafficProcess(t, binary, map[string]any{
+						"endpoints": []any{map[string]any{"type": "wireguard", "tag": "entry-server", "system": false, "bind_interface": loopback, "address": []string{"10.77.0.1/24"}, "listen_port": entryPort, "private_key": base64.StdEncoding.EncodeToString(serverKey.Bytes()), "peers": []any{map[string]any{"public_key": base64.StdEncoding.EncodeToString(clientKey.PublicKey().Bytes()), "allowed_ips": []string{"10.77.0.2/32"}}}}},
+						"outbounds": []any{map[string]any{"type": "direct", "tag": "exit-only"}},
+						"route": map[string]any{"rules": []any{
+							map[string]any{"ip_cidr": []string{selection.Exit.Endpoint + "/32"}, "port": 8443, "action": "route", "outbound": "exit-only", "override_address": "127.0.0.1", "override_port": exitPort},
+							map[string]any{"ip_cidr": []string{"10.77.0.1/32", "127.0.0.1/32"}, "network": "tcp", "port": tcpEcho, "action": "route", "outbound": "exit-only", "override_address": "127.0.0.1"},
+							map[string]any{"action": "reject"}}},
+					}, 0)
+
+					var retry *nativeWGFirstHandshakeGate
+					if fault == "first-handshake-retry" {
+						retry = nativeMultihopDelayFirstWGHandshake(t, entryPort, 4500*time.Millisecond)
+						entryPort = retry.port
+					}
 					graph := retainedGraph(t, launch.config)
 					clientPort := nativeMultihopTrafficPort(t, "tcp")
 					// This input substitution only avoids opening an OS interface.
 					// All compiled transports, DNS and entry/exit detours stay real.
-					graph["inbounds"] = []any{map[string]any{"type": "socks", "tag": "fixture-traffic", "listen": "127.0.0.1", "listen_port": clientPort}}
+					readyPort := nativeMultihopTrafficPort(t, "tcp")
+					graph["inbounds"] = []any{
+						map[string]any{"type": "socks", "tag": "fixture-traffic", "listen": "127.0.0.1", "listen_port": clientPort},
+						map[string]any{"type": "socks", "tag": "fixture-entry-ready", "listen": "127.0.0.1", "listen_port": readyPort},
+					}
+					route := graph["route"].(map[string]any)
+					route["rules"] = append([]any{map[string]any{"inbound": []string{"fixture-entry-ready"}, "action": "route", "outbound": "entry-wg"}}, route["rules"].([]any)...)
+
 					// The mapped physical socket is loopback, so the ordinary WAN
 					// interface binding is inapplicable in this isolated adapter.
 					graph["route"].(map[string]any)["auto_detect_interface"] = false
@@ -145,6 +166,13 @@ func TestNativeMultihopWGNaiveEncryptedLoopback(t *testing.T) {
 						}
 					}
 					nativeMultihopTrafficProcess(t, binary, graph, clientPort)
+					// Listener readiness is not encrypted path readiness. Match the
+					// application's bounded entry-proof phase, then retain the original
+					// four-second per-exit exchange assertions (including wrong keys).
+					nativeMultihopAwaitEncryptedEntry(t, readyPort, tcpEcho)
+					if retry != nil {
+						retry.requireObservedRetry(t)
+					}
 					for _, network := range []string{"tcp", "udp"} {
 						port := tcpEcho
 						if network == "udp" {
@@ -241,13 +269,15 @@ func nativeMultihopTrafficProcess(t *testing.T, binary string, graph map[string]
 			t.Fatal("owned native traffic process exited before readiness", err)
 		default:
 		}
-		if readyPort != 0 {
+		body, readErr := os.ReadFile(log.Name())
+		started := readErr == nil && bytes.Contains(body, []byte("sing-box started"))
+		if readyPort != 0 && started {
 			conn, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(readyPort)), 50*time.Millisecond)
 			if err == nil {
 				_ = conn.Close()
 				return
 			}
-		} else if body, err := os.ReadFile(log.Name()); err == nil && bytes.Contains(body, []byte("sing-box started")) {
+		} else if readyPort == 0 && started {
 			return
 		}
 		time.Sleep(10 * time.Millisecond)
