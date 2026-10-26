@@ -74,13 +74,30 @@ func TestSpeedLabDirectionDeadlineStopsUnfinishedDownload(t *testing.T) {
 func TestSpeedLabDirectionDeadlineCountsOnlyAcknowledgedUploads(t *testing.T) {
 	var requests atomic.Int32
 	var acknowledged atomic.Int64
+	var acknowledgementElapsed atomic.Int64
 	installSpeedLabDurationEdge(t, func(w http.ResponseWriter, r *http.Request) {
+		started := time.Now()
 		first := requests.Add(1) == 1
 		read, err := io.Copy(io.Discard, r.Body)
 		if err != nil {
 			return
 		}
 		if first {
+			// A loopback upload may finish within a single Windows clock tick.
+			// Make this successful fixture cross a real, cancellable interval;
+			// production must still reject an unmeasurable transfer itself.
+			tick := time.NewTicker(time.Millisecond)
+			defer tick.Stop()
+			var elapsed time.Duration
+			for elapsed <= 0 {
+				select {
+				case <-tick.C:
+					elapsed = time.Since(started)
+				case <-r.Context().Done():
+					return
+				}
+			}
+			acknowledgementElapsed.Store(int64(elapsed))
 			acknowledged.Store(read)
 			_, _ = w.Write([]byte("ok"))
 			return
@@ -98,6 +115,9 @@ func TestSpeedLabDirectionDeadlineCountsOnlyAcknowledgedUploads(t *testing.T) {
 	}
 	if err != nil {
 		t.Fatal(err)
+	}
+	if acknowledgementElapsed.Load() <= 0 {
+		t.Fatal("successful fixture acknowledgement had no measured transport interval")
 	}
 	if requests.Load() < 2 || acknowledged.Load() == 0 || result.Bytes != acknowledged.Load() {
 		t.Fatalf("unacknowledged upload was credited: requests=%d acknowledged=%d result=%+v", requests.Load(), acknowledged.Load(), result)
