@@ -25,7 +25,7 @@ using System.Management.Automation;
 public sealed class SpeedLabCombo {
     public object[] ItemsSource { get; set; }
     public SpeedLabCombo() { ItemsSource = new object[0]; }
-    public object[] Items { get { return ItemsSource; } }
+    public object[] Items { get { return ItemsSource ?? new object[0]; } }
     public string SelectionPath = "id";
     public bool IsEnabled = true;
     public int SelectedIndex = -1;
@@ -45,17 +45,25 @@ $Fields=@{};foreach($Name in @('DAITA','Jumbo','Encrypted','Obfuscated')){$Field
 $D=[pscustomobject]@{Tag='initial';Fields=$Fields};$D|Add-Member ScriptMethod FindName {param($Name)return $this.Fields[$Name]}
 $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
 $Opt=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'speed-lab-options.json')|ConvertFrom-Json
+$RouterCombo=Combo @($Opt.nodes);$RouterCombo.SelectedValue='exit'
+$MultihopEntryCombo=Combo @($Opt.nodes);$MultihopEntryCombo.SelectedValue='entry'
+$MultihopExitCombo=Combo @($Opt.nodes);$MultihopExitCombo.SelectedValue='exit-router'
+$MultihopExitModeCombo=Combo (Tags @($Xml.SelectNodes('//*[@Name="ExitMode"]/*')|ForEach-Object{[string]$_.Tag})) 'Tag'
+$MainFields=@{UnifiedMultihop=[pscustomobject]@{IsChecked=$true};UnifiedExecution=(Combo (Tags @('local','server','auto')) 'Tag')}
+function Control([string]$Name){return $MainFields[$Name]}
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+$D.Tag='owned-options'
 function Check([bool]$Condition,[string]$Message){if(-not$Condition){throw $Message}}
 function UnifiedAsyncBusy{return $false}
 function RefreshProduct{}
 function RefreshUnifiedTelemetry{}
 $script:Captured=$null
-function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';$script:Captured=$Body;return $true}
+function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Failure,$Finally){Check ($Path-eq'/api/speed-lab/run'-and$Method-eq'POST') 'Unexpected native Run endpoint.';$script:Captured=$Body;if($null-ne$Finally){&$Finally};return $true}
 & $Initializer $Opt
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
 $Count=0
-function Emit([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-ne$script:Captured) ('Actual Run rejected '+$Name+': '+$Detail.Text);[IO.File]::WriteAllText((Join-Path $Output ($Name+'.json')),($script:Captured|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false));$script:Count++}
+function Emit([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-ne$script:Captured) ('Actual Run rejected '+$Name+': '+$Detail.Text);Check ($script:Captured.expected_selected_node_id-ceq$CapturedSpeedLabSelection.selectedNodeID) 'Run lost its captured main selection.';foreach($id in @($CapturedSpeedLabSelection.selectedNodeID,$script:Captured['node_id'],$script:Captured['entry_id'],$script:Captured['exit_id'])|Where-Object{$_}){Check ($script:Captured.expected_profile_tokens[$id]-cmatch'^[a-f0-9]{64}$') ('Run omitted exact identity for '+$id)};[IO.File]::WriteAllText((Join-Path $Output ($Name+'.json')),($script:Captured|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false));$script:Count++}
 function Reject([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-eq$script:Captured) ('Invalid path reached controller: '+$Name);$script:Count++}
 Emit 'speed-lab-current'
 $Scope.SelectedValue='temporary';$Topology.SelectedValue='external'
@@ -80,4 +88,41 @@ $SpeedLabOptions.current=[pscustomobject]@{entry_id='entry';exit_id='exit-router
 $SpeedLabOptions.current.entry_id='different-entry';$ExitMode.SelectedValue='naive-h2';SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'naive-h2') 'Unrelated graph replaced selected exit mode.'
 $Exit.SelectedValue='entry';Reject 'identical multihop nodes';$Exit.SelectedValue='exit-router'
 $Topology.SelectedValue='system-direct';Emit 'speed-lab-system-direct'
+# The real options callback must adopt the detached visible profile, including
+# disconnected selections that do not exist in per-node metadata.
+$RouterOpt=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'speed-lab-options.json')|ConvertFrom-Json
+foreach($N in $RouterOpt.nodes){$N.selected=([string]$N.id-ceq'entry')}
+$RouterCombo.SelectedValue='entry';$MultihopEntryCombo.SelectedValue='entry';$MultihopExitCombo.SelectedValue='exit-router'
+foreach($M in @($SpeedLabOptions.supported_exit_modes)){foreach($E in @('local','server','auto')){
+ $MultihopExitModeCombo.SelectedValue=$M;$MainFields.UnifiedExecution.SelectedValue=$E;$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+ $D.Tag='owned-options';&$Initializer $RouterOpt
+ Check ($D.Tag-ceq'ready'-and(SelectedTag $Topology)-ceq'multihop'-and$Entry.SelectedValue-ceq'entry'-and$Exit.SelectedValue-ceq'exit-router'-and(SelectedTag $ExitMode)-ceq$M-and$Execution.SelectedValue-ceq$E) 'Disconnected profile snapshot changed before Speed Lab.'
+ Emit ('speed-lab-multihop-'+$M+'-'+$E)
+}}
+# Readiness does not authorize a later replacement of the captured selection.
+$readyMode=[string](SelectedTag $MultihopExitModeCombo);$MultihopExitModeCombo.SelectedValue='reality-xhttp';Reject 'main mode changed after Ready';$MultihopExitModeCombo.SelectedValue=$readyMode
+$RouterCombo.SelectedValue='exit-router';Reject 'main node changed after Ready';$RouterCombo.SelectedValue='entry'
+$readyNode=$RouterCombo.SelectedItem;$readyToken=[string]$readyNode.profile_token;$readyNode.profile_token='b'*64;Reject 'same-ID main relink after Ready';$readyNode.profile_token=$readyToken
+$readyExit=SpeedLabFind 'nodes' 'exit-router';$readyExitToken=[string]$readyExit.profile_token;$readyExit.profile_token='';Reject 'missing requested-hop revision';$readyExit.profile_token=$readyExitToken
+Emit 'speed-lab-multihop-naive-h3-auto'
+$MultihopExitModeCombo.SelectedValue='naive-h2';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$before=[string](SelectedTag $ExitMode)
+$MultihopExitModeCombo.SelectedValue='reality-xhttp';$D.Tag='owned-options';&$Initializer $RouterOpt
+Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled-and(SelectedTag $ExitMode)-ceq$before) 'Replacement profile was installed by stale options.';Reject 'stale options owner'
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$RouterCombo.SelectedValue='exit-router';$D.Tag='owned-options';&$Initializer $RouterOpt
+Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled) 'Changed main node accepted old options.';$RouterCombo.SelectedValue='entry'
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $Opt
+Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled) 'Unrelated selected API node adopted saved multihop.'
+$MultihopEntryCombo.ItemsSource=@($RouterOpt.nodes)+@([pscustomobject]@{id='removed-entry';name='Removed Router'});$MultihopEntryCombo.SelectedValue='removed-entry';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $RouterOpt
+Check ($D.Tag-ceq'ready'-and$Entry.SelectedValue-ceq'removed-entry') 'Missing saved identity was replaced by another entry.';Reject 'snapshot removed entry'
+$MultihopEntryCombo.ItemsSource=@($RouterOpt.nodes);$MultihopEntryCombo.SelectedValue='entry';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='closed';$before=$Entry.SelectedValue;&$Initializer $RouterOpt
+Check ($D.Tag-ceq'closed'-and$Entry.SelectedValue-ceq$before) 'Closed dialog adopted options.'
+$RouterCombo.SelectedItem|Add-Member NoteProperty profile_token ('a'*64) -Force
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+$Relinked=($RouterOpt|ConvertTo-Json -Depth 20)|ConvertFrom-Json;($Relinked.nodes|Where-Object{$_.id-ceq'entry'})|Add-Member NoteProperty profile_token ('b'*64) -Force
+$D.Tag='owned-options';&$Initializer $Relinked
+Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled) 'Same-ID node relink ignored a captured profile token.'
+$RouterCombo.ItemsSource=@();$RouterCombo.SelectedIndex=-1;$MainFields.UnifiedMultihop.IsChecked=$false
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$Empty=($Opt|ConvertTo-Json -Depth 20)|ConvertFrom-Json;$Empty.nodes=@();$D.Tag='owned-options';&$Initializer $Empty
+$Scope.SelectedValue='temporary';$Topology.SelectedValue='system-direct';$script:Captured=$null;&$RunCallback
+Check ($null-ne$script:Captured-and$script:Captured.ContainsKey('expected_selected_node_id')-and$script:Captured.expected_selected_node_id-ceq''-and$script:Captured.ContainsKey('expected_profile_tokens')-and$script:Captured.expected_profile_tokens.Count-eq0) 'No-node System Direct silently omitted its empty-selection precondition.';$Count++
 Write-Output ("Actual Windows Speed Lab options/defaults/Run callback: $Count checks PASS")

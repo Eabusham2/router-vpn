@@ -509,7 +509,7 @@ extension ProductWindowController {
         let root = NSStackView(); root.orientation = .vertical; root.spacing = 8; root.edgeInsets = NSEdgeInsets(top: 10, left: 10, bottom: 10, right: 10); root.addArrangedSubview(view); panel.contentView = root; panel.center(); panel.makeKeyAndOrderFront(nil); NSApp.activate(ignoringOtherApps: true)
     }
 
-    @objc func unifiedMultihopChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); refreshUnifiedHopOverlay() }
+    @objc func unifiedMultihopChanged(_ sender: NSButton) { UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); recordVisibleConnectionProfileSelection(); refreshUnifiedHopOverlay() }
 
     @objc func toggleUnifiedKillSwitch(_ sender: NSButton) {
         guard ensureMutationIdle("changing persistent kill-switch policy") else { refreshUnifiedChrome(); return }

@@ -99,7 +99,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	control, _ := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	state := a.state
 	a.mu.Unlock()
 	graph, graphOK := getActiveMultihopGraph(a)
@@ -120,10 +120,11 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 	external := make([]map[string]any, 0)
 	for _, p := range profiles {
 		if p.NodeKind == "external" && p.External != nil {
-			external = append(external, map[string]any{"id": p.ID, "name": p.Name, "protocol": p.External.Protocol, "endpoint": p.Endpoint, "expected_public_ip": p.External.ExpectedPublicIP, "location": p.Location, "latitude": p.Latitude, "longitude": p.Longitude})
+			external = append(external, map[string]any{"id": p.ID, "profile_token": publicProfileToken(p), "name": p.Name, "protocol": p.External.Protocol, "endpoint": p.Endpoint, "expected_public_ip": p.External.ExpectedPublicIP, "location": p.Location, "latitude": p.Latitude, "longitude": p.Longitude})
 		}
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"platform":                   runtime.GOOS,
 		"platform_supported":         nativeMultihopPlatformSupported(),

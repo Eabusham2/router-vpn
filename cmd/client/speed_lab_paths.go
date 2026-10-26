@@ -16,25 +16,27 @@ import (
 )
 
 type speedLabRequest struct {
-	preparedExternal   *speedLabExternalPreparation
-	Scope              string   `json:"scope,omitempty"`
-	Topology           string   `json:"topology,omitempty"`
-	NodeID             string   `json:"node_id,omitempty"`
-	EntryID            string   `json:"entry_id,omitempty"`
-	EntryMode          string   `json:"entry_mode,omitempty"`
-	ExitID             string   `json:"exit_id,omitempty"`
-	Mode               string   `json:"mode,omitempty"`
-	Base               string   `json:"base,omitempty"`
-	ExitMode           string   `json:"exit_mode,omitempty"`
-	Execution          string   `json:"execution,omitempty"`
-	CustomLayers       []string `json:"custom_layers,omitempty"`
-	DurationMode       string   `json:"duration_mode,omitempty"`
-	MinSeconds         float64  `json:"min_seconds,omitempty"`
-	MaxSeconds         float64  `json:"max_seconds,omitempty"`
-	DAITA              *bool    `json:"daita,omitempty"`
-	Jumbo              *bool    `json:"jumbo,omitempty"`
-	RequireEncrypted   *bool    `json:"require_encrypted,omitempty"`
-	RequireObfuscation *bool    `json:"require_obfuscation,omitempty"`
+	preparedExternal       *speedLabExternalPreparation
+	Scope                  string            `json:"scope,omitempty"`
+	Topology               string            `json:"topology,omitempty"`
+	NodeID                 string            `json:"node_id,omitempty"`
+	EntryID                string            `json:"entry_id,omitempty"`
+	EntryMode              string            `json:"entry_mode,omitempty"`
+	ExitID                 string            `json:"exit_id,omitempty"`
+	Mode                   string            `json:"mode,omitempty"`
+	Base                   string            `json:"base,omitempty"`
+	ExitMode               string            `json:"exit_mode,omitempty"`
+	Execution              string            `json:"execution,omitempty"`
+	CustomLayers           []string          `json:"custom_layers,omitempty"`
+	DurationMode           string            `json:"duration_mode,omitempty"`
+	MinSeconds             float64           `json:"min_seconds,omitempty"`
+	MaxSeconds             float64           `json:"max_seconds,omitempty"`
+	DAITA                  *bool             `json:"daita,omitempty"`
+	Jumbo                  *bool             `json:"jumbo,omitempty"`
+	RequireEncrypted       *bool             `json:"require_encrypted,omitempty"`
+	RequireObfuscation     *bool             `json:"require_obfuscation,omitempty"`
+	ExpectedSelectedNodeID string            `json:"expected_selected_node_id,omitempty"`
+	ExpectedProfileTokens  map[string]string `json:"expected_profile_tokens,omitempty"`
 }
 
 type speedLabPath struct {

@@ -19,6 +19,7 @@ type publicExternalNode struct {
 type publicProfile struct {
 	SchemaVersion            int                         `json:"schema_version"`
 	ID                       string                      `json:"id"`
+	ProfileToken             string                      `json:"profile_token"`
 	Name                     string                      `json:"name"`
 	DisplayName              string                      `json:"display_name"`
 	NodeKind                 string                      `json:"node_kind"`
@@ -122,7 +123,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 	}
 	baseName := publicNodeBaseName(p)
 	out := publicProfile{
-		SchemaVersion: p.SchemaVersion, ID: p.ID, Name: p.Name, DisplayName: baseName, NodeKind: kind,
+		SchemaVersion: p.SchemaVersion, ID: p.ID, ProfileToken: publicProfileToken(p), Name: p.Name, DisplayName: baseName, NodeKind: kind,
 		Endpoint: p.Endpoint, RouterAPI: p.RouterAPI, AdGuardIPv4: p.AdGuardIPv4, AdGuardIPv6: p.AdGuardIPv6,
 		SocksHost: p.SocksHost, SocksPort: p.SocksPort, BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback,
 		CustomLayers: append([]string(nil), p.CustomLayers...), HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: append([]string(nil), p.HomeLANCIDRs...),
@@ -197,7 +198,7 @@ func (a *app) listPublicNodes(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	a.mu.Lock()
-	store := a.profiles
+	store := cloneRouterProfileStore(a.profiles)
 	a.mu.Unlock()
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")

@@ -242,6 +242,7 @@ extension ProductWindowController {
         let controller = RouterVPNMacViaEntryController(api: api, entryID: entryID, entryName: entryName, base: base, candidates: candidates, names: names, contextCurrent: stillCurrent) { [weak self] id in
             guard let self, stillCurrent(), let exitIndex = self.multihopNodeIDs.firstIndex(of: id), id != entryID else { return false }
             self.multihopExitPopup.selectItem(at: exitIndex)
+            self.recordVisibleConnectionProfileSelection()
             self.multihopComparisonLabel.stringValue = "Selected \(names[id] ?? id) from measured responses via \(entryName). Press Connect when ready."
             self.refreshUnifiedHopOverlay()
             return true

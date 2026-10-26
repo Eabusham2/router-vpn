@@ -26,6 +26,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	selectedID := a.profiles.SelectedID
 	st := a.state
+	command := a.cmd
 	a.mu.Unlock()
 
 	nodes := make([]map[string]any, 0, len(profiles))
@@ -43,7 +44,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			endpoint = ""
 		}
 		node := map[string]any{
-			"id": p.ID, "name": p.Name, "node_kind": kind, "external_protocol": protocol,
+			"id": p.ID, "profile_token": publicProfileToken(p), "name": p.Name, "node_kind": kind, "external_protocol": protocol,
 			"endpoint": endpoint, "location": p.Location, "base_tunnel": p.BaseTunnel,
 			"latitude": p.Latitude, "longitude": p.Longitude,
 			"latency_median_ms": p.LatencyMedianMs, "latency_trimmed_mean_ms": p.LatencyTrimmedMeanMs,
@@ -87,6 +88,14 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	if graph, ok := getActiveMultihopGraph(a); ok && st.Connected && st.Mode == "multihop" {
 		current["entry_id"], current["exit_id"], current["exit_mode"] = graph.EntryID, graph.ExitID, graph.ExitMode
 	}
+	if raw, exists := desktopNodeOwners.Load(a); exists && st.Connected && st.Mode == "external-node" {
+		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.external != nil {
+			current["exit_id"] = launch.profileID
+			if !launch.external.direct {
+				current["entry_id"] = launch.external.entry.ID
+			}
+		}
+	}
 
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -124,12 +133,15 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-func (a *app) speedLabSystemDirect(r *http.Request, duration speedLabDuration, minDuration, maxDuration time.Duration, scope string) (speedLabPath, speedLabMeasurement, error) {
+func (a *app) speedLabSystemDirect(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration, scope string) (speedLabPath, speedLabMeasurement, error) {
 	release, err := a.beginNodeBoundOperation()
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, err
 	}
 	defer release()
+	if err := a.validateSpeedLabExpectedProfiles(q, nil); err != nil {
+		return speedLabPath{}, speedLabMeasurement{}, err
+	}
 	a.mu.Lock()
 	connected, phase := a.state.Connected, a.state.Phase
 	a.mu.Unlock()
@@ -149,14 +161,18 @@ func (a *app) speedLabSystemDirect(r *http.Request, duration speedLabDuration, m
 }
 
 func (a *app) speedLabCurrent(r *http.Request, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
+	return a.speedLabCurrentExpected(r, speedLabRequest{}, duration, minDuration, maxDuration)
+}
+
+func (a *app) speedLabCurrentExpected(r *http.Request, q speedLabRequest, duration speedLabDuration, minDuration, maxDuration time.Duration) (speedLabPath, speedLabMeasurement, []speedLabHopMeasurement, error) {
 	a.mu.Lock()
 	connected := a.state.Connected
 	a.mu.Unlock()
 	if !connected {
-		path, measurement, err := a.speedLabSystemDirect(r, duration, minDuration, maxDuration, "current")
+		path, measurement, err := a.speedLabSystemDirect(r, q, duration, minDuration, maxDuration, "current")
 		return path, measurement, nil, err
 	}
-	identity, path, err := captureSpeedLabIdentity(a)
+	identity, path, err := a.captureExpectedSpeedLabIdentity(q)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
@@ -228,7 +244,7 @@ func (a *app) speedLabTemporary(r *http.Request, q speedLabRequest, duration spe
 	default:
 		return speedLabPath{}, speedLabMeasurement{}, nil, errors.New("unsupported temporary Speed Lab topology")
 	}
-	operationCtx, snapshot, finish, err := a.beginSpeedLabTemporaryOperation()
+	operationCtx, snapshot, finish, err := a.beginSpeedLabTemporaryOperationExpected(&q)
 	if err != nil {
 		return speedLabPath{}, speedLabMeasurement{}, nil, err
 	}
@@ -362,6 +378,10 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer finishMeasurement()
+	if err := a.validateSpeedLabExpectedProfiles(q, nil); err != nil {
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	releaseMTU, err := a.holdDesktopMTUForMeasurement(r.Context())
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusConflict)
@@ -373,7 +393,7 @@ func (a *app) speedLabRun(w http.ResponseWriter, r *http.Request) {
 	var hops []speedLabHopMeasurement
 	switch scope {
 	case "current":
-		path, measurement, hops, err = a.speedLabCurrent(r, duration, minDuration, maxDuration)
+		path, measurement, hops, err = a.speedLabCurrentExpected(r, q, duration, minDuration, maxDuration)
 	case "temporary":
 		path, measurement, hops, err = a.speedLabTemporary(r, q, duration, minDuration, maxDuration)
 	default:

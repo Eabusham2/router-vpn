@@ -133,6 +133,12 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let forwardInput = NSTextView(); let forwardOutput = NSTextView()
     var routerIDs: [String] = []; var modeIDs: [String] = []; var profiles: [[String: Any]] = []; var eventSeq: UInt64 = 0; var timer: Timer?
     var multihopNodeIDs: [String] = []
+    var multihopNodeTokens: [String: String] = [:]
+    var connectionProfileSelection: RouterVPNConnectionProfileSelection?
+    var connectionProfileSelectionGeneration = UUID()
+    var connectionProfileNodesRequest = UUID()
+    var connectionProfileHopsRequest = UUID()
+    var connectionProfileCatalogSelectedID = ""
     let dnsModeIDs = ["home", "fastest", "custom", "dot", "doh", "doh3", "rescue"]
     let dnsProtocolIDs = ["udp", "tcp", "tls", "https", "h3"]
 
@@ -257,7 +263,11 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func configureMultihopExecution() {
         multihopEntryPopup.target = self
-        multihopEntryPopup.action = #selector(unifiedEntryCandidatesChanged)
+        multihopEntryPopup.action = #selector(connectionProfileEntryChanged)
+        multihopExitPopup.target = self
+        multihopExitPopup.action = #selector(connectionProfileHopChanged)
+        multihopExitModePopup.target = self
+        multihopExitModePopup.action = #selector(connectionProfileHopChanged)
         if multihopExecutionPopup.numberOfItems == 0 {
             multihopExecutionPopup.addItems(withTitles: ["Local — exit runs on device", "Server — exit runs on entry node", "Compare both — lowest valid average"])
             let saved = UserDefaults.standard.string(forKey: "routervpn.multihop.execution.v1") ?? "auto"
@@ -270,8 +280,9 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         multihopComparisonLabel.textColor = .secondaryLabelColor
     }
     @objc func multihopExecutionChanged() {
-        guard ensureMutationIdle("changing multihop execution") else { return }
+        guard ensureMutationIdle("changing multihop execution") else { restoreOwnedConnectionProfileSelection(); return }
         UserDefaults.standard.set(multihopExecutionChoice(), forKey: "routervpn.multihop.execution.v1")
+        recordVisibleConnectionProfileSelection()
     }
     func multihopExecutionChoice() -> String {
         let index = multihopExecutionPopup.indexOfSelectedItem
@@ -298,6 +309,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func autoConnect() { asyncAction { String(data: try self.api.request("/api/auto", method: "POST", body: [:], timeout: 150), encoding: .utf8) ?? "AUTO connected" } }
     @objc func connectSelected() { let i = modePopup.indexOfSelectedItem; guard i >= 0 && i < modeIDs.count else { return }; let mode = modeIDs[i]; let base = ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))]; asyncAction { String(data: try self.api.request("/api/connect-logical", method: "POST", body: ["mode": mode, "base": base], timeout: 180), encoding: .utf8) ?? "Connected" } }
     @objc func connectMultihop() {
+        do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }
         let ei = multihopEntryPopup.indexOfSelectedItem; let xi = multihopExitPopup.indexOfSelectedItem
         guard ei >= 0, xi >= 0, ei < multihopNodeIDs.count, xi < multihopNodeIDs.count else { appendHelp("Choose both multihop nodes."); return }
         let entryID = multihopNodeIDs[ei], exitID = multihopNodeIDs[xi]
@@ -370,8 +382,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
             return "Selected the lowest measured median-latency node \(id)."
         }
     }
-    @objc func selectRouter() { let i = routerPopup.indexOfSelectedItem; guard i >= 0 && i < routerIDs.count else { return }; let id = routerIDs[i]; asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected router \(id)" } }
-    @objc func selectNode() { guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected node \(id)" } }
+    @objc func selectRouter() { let i = routerPopup.indexOfSelectedItem; guard i >= 0 && i < routerIDs.count else { return }; let id = routerIDs[i]; recordConnectionProfileNodeChoice(id); asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected router \(id)" } }
+    @objc func selectNode() { guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; recordConnectionProfileNodeChoice(id); asyncAction { _ = try self.api.request("/api/profile/select", method: "POST", body: ["id": id], timeout: 10); return "Selected node \(id)" } }
     @objc func latencySelected() { guard let id = selectedNodeID() else { appendHelp("Select a node first."); return }; asyncAction { String(data: try self.api.request("/api/profile/latency", method: "POST", body: ["id": id, "samples": 50], timeout: 180), encoding: .utf8) ?? "" } }
     @objc func pairNode() {
         let alert = NSAlert(); alert.messageText = "Pair Router VPN home node"; alert.informativeText = "Create a short-lived 6-digit code in the authenticated private Setup Center. Pairing is private-LAN only and the code is one-time."
@@ -409,12 +421,35 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     @objc func applyForward() { guard let d = forwardInput.string.data(using: .utf8), let obj = try? JSONSerialization.jsonObject(with: d), let body = obj as? [String: Any] else { appendHelp("Forwarding payload must be a JSON object."); return }; asyncAction { String(data: try self.api.request("/api/forward", method: "POST", body: body, timeout: 20), encoding: .utf8) ?? "" } }
     @objc func clearForward() { asyncAction { String(data: try self.api.request("/api/forward/clear", method: "POST", body: [:], timeout: 20), encoding: .utf8) ?? "Forwarding cleared" } }
 
-    func refreshAll() { refreshProfiles(); refreshModes(); refreshLive(); refreshAdvanced() }
+    func refreshAll() { refreshProfiles(); refreshModes(); refreshLive() }
     func refreshLive() { refreshStatus(); refreshSessionEvents() }
     func refreshStatus() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/status") as? [String: Any] else { return }; DispatchQueue.main.async { let connected = o["connected"] as? Bool ?? false; let phase = o["phase"] as? String ?? "off"; self.statusLabel.stringValue = connected ? "● Connected" : "○ \(phase)"; self.statusLabel.textColor = connected ? .systemGreen : (phase == "failed" ? .systemRed : .secondaryLabelColor); self.detailLabel.stringValue = "Logical: \(o["logical_mode"] as? String ?? "—")   Runtime: \((o["runtime_mode"] as? String) ?? (o["mode"] as? String) ?? "—")   Base: \(o["base"] as? String ?? "—")   Router: \(o["router_id"] as? String ?? "—")"; self.errorLabel.stringValue = o["last_error"] as? String ?? "" } } catch { DispatchQueue.main.async { self.statusLabel.stringValue = "● Controller unavailable"; self.statusLabel.textColor = .systemRed; self.errorLabel.stringValue = error.localizedDescription } } } }
     func refreshSessionEvents() { let after = eventSeq; DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/session/events?after=\(after)") as? [String: Any] else { return }; let events = o["events"] as? [[String: Any]] ?? []; let last = (o["last_event_seq"] as? NSNumber)?.uint64Value ?? after; DispatchQueue.main.async { for e in events { let seq = (e["seq"] as? NSNumber)?.uint64Value ?? 0; guard seq > self.eventSeq else { continue }; var parts: [String] = [e["phase"] as? String ?? ""]; if let r = e["runtime_mode"] as? String, !r.isEmpty { parts.append("runtime=\(r)") }; if let b = e["base"] as? String, !b.isEmpty { parts.append("base=\(b)") }; if let m = e["message"] as? String, !m.isEmpty { parts.append(m) }; self.appendHelp("Session #\(seq) \(e["type"] as? String ?? "event"): " + parts.filter { !$0.isEmpty }.joined(separator: " | ")); self.eventSeq = seq }; self.eventSeq = max(self.eventSeq, last) } } catch { } } }
     func refreshProfiles() { refreshProfiles(order: ["current", "last-used", "latency", "name"][max(0, min(nodeSortPopup.indexOfSelectedItem, 3))]) }
-    func refreshProfiles(order: String) { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let o = try api.json("/api/nodes?sort=\(order)") as? [String: Any], let p = o["profiles"] as? [[String: Any]] else { return }; let selected = o["selected_id"] as? String ?? ""; DispatchQueue.main.async { let oldIDs = self.routerIDs; let oldNode = self.nodePopup.indexOfSelectedItem >= 0 && self.nodePopup.indexOfSelectedItem < oldIDs.count ? oldIDs[self.nodePopup.indexOfSelectedItem] : selected; let oldEntry = self.externalEntryPopup.indexOfSelectedItem >= 0 && self.externalEntryPopup.indexOfSelectedItem < oldIDs.count ? oldIDs[self.externalEntryPopup.indexOfSelectedItem] : ""; self.profiles = p; self.routerIDs = p.compactMap { $0["id"] as? String }; let names = p.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; self.routerPopup.removeAllItems(); self.nodePopup.removeAllItems(); self.externalEntryPopup.removeAllItems(); self.populateIdentityPopup(self.routerPopup, names: names, ids: self.routerIDs); self.populateIdentityPopup(self.nodePopup, names: names, ids: self.routerIDs); self.populateIdentityPopup(self.externalEntryPopup, names: names, ids: self.routerIDs); if let i = self.routerIDs.firstIndex(of: selected) { self.routerPopup.selectItem(at: i) }; if let i = self.routerIDs.firstIndex(of: oldNode) { self.nodePopup.selectItem(at: i) } else if let i = self.routerIDs.firstIndex(of: selected) { self.nodePopup.selectItem(at: i) }; if let i = self.routerIDs.firstIndex(of: oldEntry) { self.externalEntryPopup.selectItem(at: i) }; self.renderProfiles(selected: selected) } } catch { DispatchQueue.main.async { self.errorLabel.stringValue = error.localizedDescription } } } }
+    func refreshProfiles(order: String) {
+        let capture = beginConnectionProfileRefresh(hops: false)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            do {
+                guard let payload = try self.api.json("/api/nodes?sort=\(order)") as? [String: Any] else { return }
+                DispatchQueue.main.async {
+                    do {
+                        guard try self.applyConnectionProfileNodeCatalog(payload, capture: capture) else { return }
+                        // Hop refresh starts only after its selected-node catalog
+                        // has been accepted; parallel initial catalogs must not
+                        // invalidate one another's empty initial selection.
+                        self.refreshAdvanced()
+                    } catch {
+                        if self.ownsConnectionProfileRefresh(capture, hops: false) { self.errorLabel.stringValue = error.localizedDescription }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    if self.ownsConnectionProfileRefresh(capture, hops: false) { self.errorLabel.stringValue = error.localizedDescription }
+                }
+            }
+        }
+    }
     func renderProfiles(selected: String) {
         nodesText.string = profiles.map { p in let name = p["name"] as? String ?? p["id"] as? String ?? "Router"; let loc = p["location"] as? String ?? ""; let endpoint = p["endpoint"] as? String ?? "—"; let kind = p["node_kind"] as? String ?? "router-vpn"; let median = (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0; let lastUsed = p["last_used_at"] as? String ?? ""; return "\((p["id"] as? String) == selected ? "●" : "○") [\(kind)] \(name) \(loc)\n  endpoint: \(endpoint)\n  median: \(median > 0 ? String(format: "%.1f ms", median) : "not measured")\n  last used: \(lastUsed.isEmpty ? "never" : lastUsed)" }.joined(separator: "\n\n")
         settingsText.string = profiles.map { p in let name = p["name"] as? String ?? "Router"; let mtu = (p["effective_mtu"] as? NSNumber)?.intValue ?? 0; let source = p["effective_mtu_source"] as? String ?? "default"; let mbps = (p["effective_mtu_mbps"] as? NSNumber)?.doubleValue ?? 0; let rtt = (p["effective_mtu_median_rtt_ms"] as? NSNumber)?.doubleValue ?? 0; let success = (p["effective_mtu_success_ratio"] as? NSNumber)?.doubleValue ?? 0; let perf = mbps > 0 ? String(format: "  Retest performance=%.1f Mbps median RTT=%.2f ms success=%.1f%%\n", mbps, rtt, success * 100.0) : ""; return "\(name)\n  base=\(p["base_tunnel"] as? String ?? "auto") DNS=\(p["dns_mode"] as? String ?? "home")/\(p["dns_protocol"] as? String ?? "udp")\n  kill-switch=\(p["kill_switch_policy"] as? String ?? "off") LAN=\((p["home_lan_access"] as? Bool ?? false) ? "on" : "off") MTU=\(mtu > 0 ? String(mtu) : "default") source=\(source)\n\(perf)  tested=\(p["effective_mtu_tested_at"] as? String ?? "not retested")" }.joined(separator: "\n\n")
@@ -468,7 +503,31 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     }
     func renderMap() { map.removeAnnotations(map.annotations); var annotations: [RouterAnnotation] = []; for p in profiles { let lat = (p["latitude"] as? NSNumber)?.doubleValue ?? 0; let lon = (p["longitude"] as? NSNumber)?.doubleValue ?? 0; guard CLLocationCoordinate2DIsValid(CLLocationCoordinate2D(latitude: lat, longitude: lon)), !(lat == 0 && lon == 0) else { continue }; annotations.append(RouterAnnotation(id: p["id"] as? String ?? "", name: p["name"] as? String ?? "Router", location: p["location"] as? String ?? "", latency: (p["latency_median_ms"] as? NSNumber)?.doubleValue ?? 0, lat: lat, lon: lon)) }; map.addAnnotations(annotations); if !annotations.isEmpty { map.showAnnotations(annotations, animated: false) } }
     func refreshModes() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { guard let modes = try api.json("/api/logical-modes", timeout: 12) as? [[String: Any]] else { return }; let ready = modes.filter { $0["available"] as? Bool == true }; DispatchQueue.main.async { self.modeIDs = ready.compactMap { $0["id"] as? String }; self.modePopup.removeAllItems(); self.modePopup.addItems(withTitles: ready.map { $0["name"] as? String ?? $0["id"] as? String ?? "Mode" }); self.modesText.string = modes.map { mode in var layerSet = Set<String>(); if let variants = mode["variants"] as? [String: Any] { for value in variants.values { if let variant = value as? [String: Any], let raw = variant["mode"] as? [String: Any], let layers = raw["layers"] as? [String] { for layer in layers { if !layer.isEmpty { layerSet.insert(layer) } } } } }; let layers = layerSet.sorted().isEmpty ? "—" : layerSet.sorted().joined(separator: " • "); let pingMin=(mode["ping_min_ms"] as? NSNumber)?.doubleValue ?? 0, pingMax=(mode["ping_max_ms"] as? NSNumber)?.doubleValue ?? 0, trafficMin=(mode["traffic_min_pct"] as? NSNumber)?.doubleValue ?? 0, trafficMax=(mode["traffic_max_pct"] as? NSNumber)?.doubleValue ?? 0, speedMin=(mode["speed_loss_min_pct"] as? NSNumber)?.doubleValue ?? 0, speedMax=(mode["speed_loss_max_pct"] as? NSNumber)?.doubleValue ?? 0; let available=mode["available"] as? Bool ?? false; let bases=(mode["ready_bases"] as? [String] ?? []).joined(separator: ", "); let reason=(mode["reason"] as? String ?? "").isEmpty ? (available ? "selected variant is runnable; final Connected still requires selected-path proof" : "no runnable variant") : (mode["reason"] as? String ?? ""); return "\(available ? "✓" : "—") \(mode["name"] as? String ?? "Mode")\n  \(mode["description"] as? String ?? "")\n  layers: \(layers)\n  added latency \(String(format: "%.1f–%.1f ms", pingMin,pingMax)) • traffic \(String(format: "+%.1f–%.1f%%",trafficMin,trafficMax)) • speed loss \(String(format: "%.1f–%.1f%%",speedMin,speedMax))\n  readiness: \(available ? "Ready" : "Unavailable")\(bases.isEmpty ? "" : " • bases: \(bases)")\n  reason: \(reason)" }.joined(separator: "\n\n") } } catch { } } }
-    func refreshAdvanced() { DispatchQueue.global(qos: .utility).async { [weak self] in guard let self else { return }; do { let data = try api.request("/api/multihop/status", timeout: 10); guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }; let nodes = obj["nodes"] as? [[String: Any]] ?? []; let ids = nodes.compactMap { $0["id"] as? String }; let names = nodes.map { $0["name"] as? String ?? $0["id"] as? String ?? "Node" }; let savedEntry = obj["entry_id"] as? String ?? ""; let savedExit = obj["exit_id"] as? String ?? ""; let prettyData = try JSONSerialization.data(withJSONObject: obj, options: [.prettyPrinted, .sortedKeys]); let pretty = String(data: prettyData, encoding: .utf8) ?? ""; DispatchQueue.main.async { let oldEntry = self.multihopEntryPopup.indexOfSelectedItem >= 0 && self.multihopEntryPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopEntryPopup.indexOfSelectedItem] : savedEntry; let oldExit = self.multihopExitPopup.indexOfSelectedItem >= 0 && self.multihopExitPopup.indexOfSelectedItem < self.multihopNodeIDs.count ? self.multihopNodeIDs[self.multihopExitPopup.indexOfSelectedItem] : savedExit; self.multihopNodeIDs = ids; self.multihopEntryPopup.removeAllItems(); self.multihopExitPopup.removeAllItems(); self.populateIdentityPopup(self.multihopEntryPopup, names: names, ids: ids); self.populateIdentityPopup(self.multihopExitPopup, names: names, ids: ids); if let i = ids.firstIndex(of: oldEntry) { self.multihopEntryPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedEntry) { self.multihopEntryPopup.selectItem(at: i) }; if let i = ids.firstIndex(of: oldExit) { self.multihopExitPopup.selectItem(at: i) } else if let i = ids.firstIndex(of: savedExit) { self.multihopExitPopup.selectItem(at: i) }; self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(obj); self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest opens the captured-path progress panel. Auto status, reported candidate measurements, effective MTU and cancellation remain tied to that connection until rollback and the owned request finish. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof." } } catch { DispatchQueue.main.async { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" } } } }
+    func refreshAdvanced() {
+        let capture = beginConnectionProfileRefresh(hops: true)
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            do {
+                let data = try self.api.request("/api/multihop/status", timeout: 10)
+                guard let payload = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { return }
+                let prettyData = try JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+                let pretty = String(data: prettyData, encoding: .utf8) ?? ""
+                DispatchQueue.main.async {
+                    do {
+                        guard try self.applyConnectionProfileHopCatalog(payload, capture: capture) else { return }
+                        self.multihopComparisonLabel.stringValue = self.multihopComparisonSummary(payload)
+                        self.advancedText.string = "Multihop status and proof:\n\(pretty)\n\nMTU Retest opens the captured-path progress panel. Auto status, reported candidate measurements, effective MTU and cancellation remain tied to that connection until rollback and the owned request finish. Strict kill switch is applied before the full-device TUN starts. External direct/entry→exit uses the separate validated external profile path and exact expected public-exit proof."
+                    } catch {
+                        if self.ownsConnectionProfileRefresh(capture, hops: true) { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" }
+                    }
+                }
+            } catch {
+                DispatchQueue.main.async {
+                    if self.ownsConnectionProfileRefresh(capture, hops: true) { self.advancedText.string = "Advanced status unavailable: \(error.localizedDescription)" }
+                }
+            }
+        }
+    }
     func appendHelp(_ message: String) { let f = DateFormatter(); f.dateFormat = "HH:mm:ss"; helpText.textStorage?.append(NSAttributedString(string: "[\(f.string(from: Date()))] \(message.trimmingCharacters(in: .whitespacesAndNewlines))\n")); helpText.scrollToEndOfDocument(nil) }
 }
 

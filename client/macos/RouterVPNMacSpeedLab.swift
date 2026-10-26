@@ -7,6 +7,14 @@ private var macSpeedLabButtonKey: UInt8 = 0
 private var macSpeedLabControllerKey: UInt8 = 0
 
 private enum RouterVPNMacSpeedLabPathPolicy {
+    static func activeSelection(_ selection: RouterVPNConnectionProfileSelection) -> RouterVPNConnectionProfileSelection {
+        var value = selection
+        if !value.multihopEnabled {
+            value.entryID = ""; value.exitID = ""; value.exitMode = ""; value.execution = ""
+            value.profileTokens = value.profileTokens.filter { $0.key == value.selectedNodeID }
+        }
+        return value
+    }
     static func find(_ values: [[String: Any]], _ id: String) -> [String: Any]? {
         guard !id.isEmpty else { return nil }
         let matches = values.filter { $0["id"] as? String == id }
@@ -50,6 +58,8 @@ private enum RouterVPNMacSpeedLabPathPolicy {
 private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindowDelegate {
     private weak var product: ProductWindowController?
     private let api: ProductAPI
+    private let capturedSelection: RouterVPNConnectionProfileSelection
+    private let selectionGeneration: UUID
     private let scope = NSPopUpButton()
     private let topology = NSPopUpButton()
     private let node = NSPopUpButton()
@@ -95,6 +105,8 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     init(api: ProductAPI, product: ProductWindowController) {
         self.api = api
         self.product = product
+        self.capturedSelection = RouterVPNMacSpeedLabPathPolicy.activeSelection(product.captureConnectionProfileSelection())
+        self.selectionGeneration = product.connectionProfileSelectionGeneration
         let window = NSWindow(contentRect: NSRect(x: 0, y: 0, width: 950, height: 740), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         window.title = "Router VPN Speed Lab"
         window.minSize = NSSize(width: 760, height: 600)
@@ -187,6 +199,38 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         else { popup.addItem(withTitle: "Unavailable saved choice: \(id)"); popup.lastItem?.representedObject = id; popup.selectItem(at: popup.numberOfItems - 1) }
     }
 
+    private func validateCapturedSelection(_ options: [String: Any]) throws {
+        func reject(_ reason: String) throws { throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: reason]) }
+        guard let product, product.connectionProfileSelectionGeneration == selectionGeneration,
+            RouterVPNMacSpeedLabPathPolicy.activeSelection(product.captureConnectionProfileSelection()) == capturedSelection else {
+            try reject("The visible connection profile changed while Speed Lab loaded. Reopen Speed Lab for that selection."); return
+        }
+        let catalog = options["nodes"] as? [[String: Any]] ?? []
+        if !capturedSelection.selectedNodeID.isEmpty {
+            let selected = catalog.filter { $0["selected"] as? Bool == true }
+            guard selected.count == 1, selected[0]["id"] as? String == capturedSelection.selectedNodeID,
+                RouterVPNMacSpeedLabPathPolicy.find(catalog, capturedSelection.selectedNodeID) != nil else {
+                try reject("The selected node changed or disappeared while Speed Lab loaded. Reopen Speed Lab."); return
+            }
+        }
+        for (id, token) in capturedSelection.profileTokens where !token.isEmpty {
+            guard let node = RouterVPNMacSpeedLabPathPolicy.find(catalog, id), node["profile_token"] as? String == token else {
+                try reject("A captured node was removed or relinked while Speed Lab loaded. Reopen Speed Lab for its current identity."); return
+            }
+        }
+    }
+
+    private func applyCapturedSelection() throws {
+        guard capturedSelection.multihopEnabled else { return }
+        guard RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, capturedSelection.selectedNodeID)) == "router-vpn" else {
+            throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "The captured multihop profile no longer belongs to a linked Router VPN node."])
+        }
+        updatingChoices = true; defer { updatingChoices = false }
+        selectPreserving(topology, "multihop"); selectPreserving(node, capturedSelection.selectedNodeID)
+        selectPreserving(entry, capturedSelection.entryID); selectPreserving(exit, capturedSelection.exitID)
+        selectPreserving(exitMode, capturedSelection.exitMode); selectPreserving(execution, capturedSelection.execution)
+    }
+
     private func applyPathDefaults() {
         guard !updatingChoices, let value = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)) else { return }
         updatingChoices = true; defer { updatingChoices = false }
@@ -257,10 +301,11 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         optionsReady = false; loadingOptions = true; status.stringValue = "Loading Speed Lab paths…"
         do {
             try performLocalRequest("/api/speed-lab/options", body: nil, timeout: 10) { [weak self] result in
-                guard let self else { return }
+                guard let self, !self.closed else { return }
                 do {
                     let data = try result.get()
                     guard let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw NSError(domain: "RouterVPNSpeedLab", code: 1) }
+                    try self.validateCapturedSelection(root)
                     self.updatingChoices = true
                     self.nodes = root["nodes"] as? [[String: Any]] ?? []
                     self.entryModes = root["router_vpn_entry_modes"] as? [[String: Any]] ?? []
@@ -276,7 +321,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                     if selectedNodes.count == 1, let id = selectedNodes[0]["id"] as? String { self.selectPreserving(self.node, id) }
                     let selectedNode = RouterVPNMacSpeedLabPathPolicy.find(self.nodes, self.selected(self.node))
                     self.selectPreserving(self.topology, RouterVPNMacSpeedLabPathPolicy.kind(selectedNode) == "external" ? "external" : selectedNode?["multihop_enabled"] as? Bool == true ? "multihop" : "router")
-                    self.updatingChoices = false; self.applyPathDefaults(); self.optionsReady = true
+                    self.updatingChoices = false; self.applyPathDefaults(); try self.applyCapturedSelection(); self.optionsReady = true
                     self.status.stringValue = "Ready • current configuration selected; no saved preferences changed"
                     self.refreshControls()
                 } catch {
@@ -311,14 +356,39 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         minLabel.stringValue = String(format: "Min %.0f s", minTime.doubleValue); maxLabel.stringValue = String(format: "Max %.0f s", maxTime.doubleValue)
     }
 
+    private func bindCapturedProfiles(_ request: [String: Any]) throws -> [String: Any] {
+        var body = request
+        var ids = Set(capturedSelection.profileTokens.keys)
+        if !capturedSelection.selectedNodeID.isEmpty { ids.insert(capturedSelection.selectedNodeID) }
+        if capturedSelection.multihopEnabled { ids.insert(capturedSelection.entryID); ids.insert(capturedSelection.exitID) }
+        if body["scope"] as? String == "temporary" {
+            if body["topology"] as? String != "system-direct" {
+                for key in ["node_id", "entry_id", "exit_id"] { if let id = body[key] as? String, !id.isEmpty { ids.insert(id) } }
+            }
+        } else if currentPath["connected"] as? Bool == true {
+            for key in ["router_id", "entry_id", "exit_id"] { if let id = currentPath[key] as? String, !id.isEmpty { ids.insert(id) } }
+        }
+        var tokens: [String: String] = [:]
+        for id in ids where !id.isEmpty {
+            guard let record = RouterVPNMacSpeedLabPathPolicy.find(nodes, id), let token = record["profile_token"] as? String,
+                token.count == 64, token.utf8.allSatisfy({ (48...57).contains($0) || (97...102).contains($0) }) else {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "A test node has no current identity. Reopen Speed Lab before running this path."])
+            }
+            tokens[id] = token
+        }
+        body["expected_selected_node_id"] = capturedSelection.selectedNodeID; body["expected_profile_tokens"] = tokens
+        return body
+    }
+
     private func requestBody() throws -> [String: Any] {
+        try validateCapturedSelection(["nodes": nodes])
         var body: [String: Any] = ["scope": selected(scope), "duration_mode": selected(durationMode)]
         if selected(durationMode) == "custom" { body["min_seconds"] = minTime.doubleValue; body["max_seconds"] = maxTime.doubleValue }
-        guard selected(scope) == "temporary" else { return body }
+        guard selected(scope) == "temporary" else { return try bindCapturedProfiles(body) }
         let top = selected(topology)
         try RouterVPNMacSpeedLabPathPolicy.validate(nodes: nodes, entryModes: entryModes, executions: executions, topology: top, nodeID: selected(node), entryID: selected(entry), exitID: selected(exit), entryMode: selected(entryMode), execution: selected(execution))
         body["topology"] = top
-        if top == "system-direct" { return body }
+        if top == "system-direct" { return try bindCapturedProfiles(body) }
         if ["router", "external"].contains(top) { body["node_id"] = selected(node) }
         if top == "router" {
             body["mode"] = selected(mode); body["base"] = selected(base)
@@ -335,7 +405,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             if RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn" { body["entry_mode"] = selected(entryMode) }
         }
         body["daita"] = daita.state == .on; body["jumbo"] = jumbo.state == .on; body["require_encrypted"] = encrypted.state == .on; body["require_obfuscation"] = obfuscated.state == .on
-        return body
+        return try bindCapturedProfiles(body)
     }
 
     private func hopSummary(_ root: [String: Any]) -> String {

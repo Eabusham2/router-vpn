@@ -183,6 +183,16 @@ def transform(source: str, mode: str) -> str:
     for old64, new64 in _captured_dns_editor_pairs(_captured_quick_dns_pairs(_captured_protection_pairs(_external_path_pairs(_pairs_for(mode), mode), mode), mode), mode):
         old=base64.b64decode(old64).decode('utf-8')
         new=base64.b64decode(new64).decode('utf-8')
+        # Preserve the existing mutation guards while following the shipping
+        # profile-selection owner hooks on both sides of each exact anchor.
+        for before, after in (
+            ('    @objc func connectMultihop() {\n', '    @objc func connectMultihop() {\n        do { try requireResolvedConnectionProfileSelection() } catch { appendHelp(error.localizedDescription); return }\n'),
+            ('let id = routerIDs[i]; asyncAction', 'let id = routerIDs[i]; recordConnectionProfileNodeChoice(id); asyncAction'),
+            ('guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; asyncAction', 'guard let id = selectedNodeID() else { appendHelp("Select a linked node first."); return }; recordConnectionProfileNodeChoice(id); asyncAction'),
+            ('UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); refreshUnifiedHopOverlay()', 'UserDefaults.standard.set(sender.state == .on, forKey: unifiedMultihopEnabledKey); recordVisibleConnectionProfileSelection(); refreshUnifiedHopOverlay()'),
+        ):
+            old = old.replace(before, after)
+            new = new.replace(before, after)
         count=source.count(old)
         if count != 1:
             raise SystemExit(f"{mode} session-mutation source contract drifted: anchor count={count}")

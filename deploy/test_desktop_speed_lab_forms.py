@@ -120,23 +120,28 @@ def swift_form(directory):
     policy = block(source, 'private enum RouterVPNMacSpeedLabPathPolicy')
     exit_modes = block((ROOT/'client/macos/RouterVPNMacProduct.swift').read_text(), 'enum RouterVPNNodeExitModes')
     exit_initializer = block(source, 'for choice in RouterVPNNodeExitModes.choices')
+    profile_source = (ROOT/'client/macos/RouterVPNConnectionProfiles.swift').read_text()
+    profile_selection = block(profile_source, 'struct RouterVPNConnectionProfileSelection:')
+    profile_capture = block(profile_source, '    func captureConnectionProfileSelection(')
     methods = '\n'.join(block(source, marker) for marker in (
         '    private func selected(', '    private func populate(', '    private func selectPreserving(',
+        '    private func validateCapturedSelection(', '    private func applyCapturedSelection(',
         '    private func applyPathDefaults(', '    private func setEntryModeDefault(',
         '    @objc private func pathChanged(', '    private func loadOptions(',
-        '    @objc private func refreshControls(', '    private func requestBody(',
+        '    @objc private func refreshControls(', '    private func bindCapturedProfiles(', '    private func requestBody(',
         '    private func hopSummary(', '    @objc private func runSpeedLab(',
     )).replace('@objc ', '').replace('private func ', 'func ')
     program = r'''
 import Foundation
 import CoreFoundation
 EXIT_MODES
+PROFILE_SELECTION
 POLICY
 class NSControl { var isEnabled = true }
 final class Item { var title: String; var representedObject: Any?; init(_ title:String){self.title=title} }
 final class NSPopUpButton: NSControl {
  var items:[Item]=[];var index = -1
- var numberOfItems:Int{items.count};var selectedItem:Item?{index>=0&&index<items.count ? items[index]:nil};var lastItem:Item?{items.last}
+ var numberOfItems:Int{items.count};var indexOfSelectedItem:Int{index};var selectedItem:Item?{index>=0&&index<items.count ? items[index]:nil};var lastItem:Item?{items.last}
  func item(at:Int)->Item?{at>=0&&at<items.count ? items[at]:nil};func selectItem(at:Int){index=at}
  func addItem(withTitle:String){items.append(Item(withTitle))};func insertItem(withTitle:String,at:Int){items.insert(Item(withTitle),at:at)};func removeAllItems(){items=[];index = -1}
 }
@@ -144,32 +149,53 @@ final class Field: NSControl { var stringValue="";var doubleValue:Double=4 }
 final class TextArea {var string=""}
 final class Button: NSControl { enum State {case on,off};var state=State.off;var title="" }
 final class Request {func cancel(){}}
+private let macConnectionMultihopEnabledKey="routervpn.unified.multihop-enabled.v1"
+final class ProductWindowController {
+ let routerPopup=NSPopUpButton(),multihopEntryPopup=NSPopUpButton(),multihopExitPopup=NSPopUpButton(),multihopExitModePopup=NSPopUpButton(),multihopExecutionPopup=NSPopUpButton()
+ var connectionProfileSelection:RouterVPNConnectionProfileSelection?
+ var connectionProfileSelectionGeneration=UUID()
+ var routerIDs:[String]=[],multihopNodeIDs:[String]=[],profiles:[[String:Any]]=[],multihopNodeTokens:[String:String]=[:]
+ PROFILE_CAPTURE
+}
 final class Form {
+ weak var product:ProductWindowController?
+ let capturedSelection:RouterVPNConnectionProfileSelection
+ let selectionGeneration:UUID
  let scope=NSPopUpButton(),topology=NSPopUpButton(),node=NSPopUpButton(),entry=NSPopUpButton(),exit=NSPopUpButton(),mode=NSPopUpButton(),base=NSPopUpButton(),exitMode=NSPopUpButton(),entryMode=NSPopUpButton(),execution=NSPopUpButton(),durationMode=NSPopUpButton()
  let minTime=Field(),maxTime=Field(),layers=Field(),idle=Field(),download=Field(),upload=Field(),idleDetail=Field(),downloadDetail=Field(),uploadDetail=Field(),status=Field()
  let daita=Button(),jumbo=Button(),encrypted=Button(),obfuscated=Button(),runButton=Button();let detail=TextArea()
  var nodes:[[String:Any]]=[],entryModes:[[String:Any]]=[],executions:[[String:Any]]=[]
  var exitModes:[String]=[],currentPath:[String:Any]=[:]
  var updatingChoices=false,closed=false,optionsReady=false,cancelled=false,loadingOptions=false
- var request:Request?;var captured:[String:Any]?;var options=Data()
+ var request:Request?;var captured:[String:Any]?;var options=Data();var deferOptions=false;var pendingOptions:((Result<Data,Error>)->Void)?
+ init(_ product:ProductWindowController){self.product=product;self.capturedSelection=RouterVPNMacSpeedLabPathPolicy.activeSelection(product.captureConnectionProfileSelection());self.selectionGeneration=product.connectionProfileSelectionGeneration}
  func performLocalRequest(_ path:String,body:[String:Any]?,timeout:TimeInterval,completion:@escaping(Result<Data,Error>)->Void)throws{
-  if path=="/api/speed-lab/options"{loadingOptions=false;completion(.success(options))}
+  if path=="/api/speed-lab/options"{if deferOptions{pendingOptions=completion}else{loadingOptions=false;completion(.success(options))}}
   else {precondition(path=="/api/speed-lab/run"&&body != nil);captured=body}
  }
  func initializeExitModes(){EXIT_INITIALIZER}
+ func finishOptions(){let completion=pendingOptions;pendingOptions=nil;loadingOptions=false;completion?(.success(options))}
  METHODS
 }
 var checks=0
 func check(_ result:Bool,_ message:String){checks+=1;precondition(result,message)}
 func fill(_ popup:NSPopUpButton,_ values:[String]){for v in values{popup.addItem(withTitle:v);popup.lastItem?.representedObject=v};popup.selectItem(at:0)}
 func choose(_ popup:NSPopUpButton,_ value:String){guard let index=popup.items.firstIndex(where:{$0.representedObject as? String==value})else{fatalError("Missing choice "+value)};popup.selectItem(at:index)}
-let output=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true),f=Form()
-fill(f.scope,["current","temporary"]);fill(f.topology,["system-direct","router","multihop","external"]);fill(f.base,["auto","wg","awg"]);f.initializeExitModes();f.exitMode.selectItem(at:0);fill(f.durationMode,["auto","custom"]);f.maxTime.doubleValue=12
-f.options=try Data(contentsOf:output.appendingPathComponent("speed-lab-options.json"));f.loadOptions()
+let output=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true)
+let originalOptions=try Data(contentsOf:output.appendingPathComponent("speed-lab-options.json"))
+let originalRoot=try JSONSerialization.jsonObject(with:originalOptions) as! [String:Any]
+func product(_ id:String,_ mode:String="shadowsocks",_ execution:String="local")->ProductWindowController{
+ let p=ProductWindowController();p.profiles=originalRoot["nodes"] as! [[String:Any]];p.routerIDs=p.profiles.map{$0["id"] as! String};p.multihopNodeIDs=p.profiles.filter{RouterVPNMacSpeedLabPathPolicy.kind($0)=="router-vpn"}.map{$0["id"] as! String}
+ for node in p.profiles{if let id=node["id"] as? String,let token=node["profile_token"] as? String{p.multihopNodeTokens[id]=token}}
+ fill(p.routerPopup,p.routerIDs);choose(p.routerPopup,id);fill(p.multihopEntryPopup,p.multihopNodeIDs);choose(p.multihopEntryPopup,"entry");fill(p.multihopExitPopup,p.multihopNodeIDs);choose(p.multihopExitPopup,"exit-router");fill(p.multihopExitModePopup,RouterVPNNodeExitModes.choices.map{$0.id});choose(p.multihopExitModePopup,mode);fill(p.multihopExecutionPopup,["local","server","auto"]);choose(p.multihopExecutionPopup,execution);return p
+}
+func configure(_ f:Form,_ options:Data){fill(f.scope,["current","temporary"]);fill(f.topology,["system-direct","router","multihop","external"]);fill(f.base,["auto","wg","awg"]);f.initializeExitModes();f.exitMode.selectItem(at:0);fill(f.durationMode,["auto","custom"]);f.maxTime.doubleValue=12;f.options=options}
+UserDefaults.standard.setVolatileDomain([macConnectionMultihopEnabledKey:true],forName:UserDefaults.argumentDomain)
+let mainProduct=product("exit"),f=Form(mainProduct);configure(f,originalOptions);f.loadOptions()
 check(f.selected(f.node)=="exit"&&f.selected(f.entry)=="entry"&&f.selected(f.entryMode)=="awg2-strong"&&f.selected(f.execution)=="auto","Saved path defaults changed")
 check(f.entryModes.count==19,"Reduced raw entry catalog")
 check(f.exitModes==RouterVPNNodeExitModes.choices.map{$0.id},"UI and native exit catalogs differ")
-func emit(_ name:String)throws{f.captured=nil;f.runSpeedLab();check(f.captured != nil,f.detail.string);try JSONSerialization.data(withJSONObject:f.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))}
+func emit(_ name:String)throws{f.captured=nil;f.runSpeedLab();check(f.captured != nil,f.detail.string);check(f.captured!["expected_selected_node_id"] as? String==f.capturedSelection.selectedNodeID,"Run lost its captured main selection");let tokens=f.captured!["expected_profile_tokens"] as? [String:String] ?? [:];for id in [f.capturedSelection.selectedNodeID]+["node_id","entry_id","exit_id"].compactMap({f.captured![$0] as? String}) where !id.isEmpty{check(tokens[id]?.count==64,"Run omitted exact identity for "+id)};try JSONSerialization.data(withJSONObject:f.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))}
 func reject(){f.captured=nil;f.runSpeedLab();check(f.captured==nil,"Invalid selection reached controller")}
 try emit("speed-lab-current");choose(f.scope,"temporary")
 for m in f.entryModes{let id=m["id"] as! String;for execution in ["local","server","auto"]{choose(f.entryMode,id);choose(f.execution,execution);try emit("speed-lab-external-"+id+"-"+execution)}}
@@ -190,8 +216,36 @@ let supportedExitModes=f.exitModes;f.exitModes.removeAll{$0=="naive-h3"};reject(
 f.currentPath=["entry_id":"entry","exit_id":"exit-router","exit_mode":"reality-pq-vision"];f.applyPathDefaults();check(f.selected(f.exitMode)=="reality-pq-vision","Matching current graph lost its exact exit mode")
 f.currentPath["entry_id"]="different-entry";choose(f.exitMode,"naive-h2");f.applyPathDefaults();check(f.selected(f.exitMode)=="naive-h2","Unrelated graph replaced the selected exit mode")
 choose(f.exit,"entry");reject();choose(f.exit,"exit-router");choose(f.topology,"system-direct");try emit("speed-lab-system-direct")
+var routerRoot=originalRoot;var routerNodes=originalRoot["nodes"] as! [[String:Any]]
+for i in routerNodes.indices{routerNodes[i]["selected"]=routerNodes[i]["id"] as? String=="entry"};routerRoot["nodes"]=routerNodes
+let routerOptions=try JSONSerialization.data(withJSONObject:routerRoot)
+for mode in RouterVPNNodeExitModes.choices.map({$0.id}){for execution in ["local","server","auto"]{
+ let owner=product("entry",mode,execution),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();snapshot.finishOptions()
+ check(snapshot.optionsReady&&snapshot.selected(snapshot.topology)=="multihop"&&snapshot.selected(snapshot.entry)=="entry"&&snapshot.selected(snapshot.exit)=="exit-router"&&snapshot.selected(snapshot.exitMode)==mode&&snapshot.selected(snapshot.execution)==execution,"Disconnected whole-profile snapshot changed")
+ choose(snapshot.scope,"temporary");snapshot.runSpeedLab();check(snapshot.captured != nil,snapshot.detail.string);try JSONSerialization.data(withJSONObject:snapshot.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent("speed-lab-multihop-"+mode+"-"+execution+".json"))
+}}
+do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopExitModePopup,"reality-xhttp");snapshot.finishOptions();check(!snapshot.optionsReady && !snapshot.runButton.isEnabled && snapshot.nodes.isEmpty,"Replaced visible profile was adopted by stale options");snapshot.runSpeedLab();check(snapshot.captured==nil,"Stale options still allowed Run")}
+do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.routerPopup,"exit-router");snapshot.finishOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Changed main node accepted old options")}
+do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,originalOptions);snapshot.loadOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Unrelated selected API node adopted saved multihop")}
+do{let owner=product("entry","naive-h2","auto");owner.connectionProfileSelection=RouterVPNConnectionProfileSelection(selectedNodeID:"entry",multihopEnabled:true,entryID:"removed-entry",exitID:"exit-router",exitMode:"naive-h2",execution:"auto");owner.multihopEntryPopup.selectItem(at:-1);let snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions();check(snapshot.optionsReady&&snapshot.selected(snapshot.entry)=="removed-entry","Missing saved entry became a different path");choose(snapshot.scope,"temporary");snapshot.runSpeedLab();check(snapshot.captured==nil,"Missing saved entry reached controller")}
+do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();snapshot.closed=true;snapshot.finishOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Closed window adopted options")}
+do{let owner=product("entry","naive-h2","auto");let index=owner.routerIDs.firstIndex(of:"entry")!;owner.profiles[index]["profile_token"]=String(repeating:"a",count:64);owner.multihopNodeTokens["entry"]=String(repeating:"a",count:64);let snapshot=Form(owner);var relinked=routerRoot;var nodes=routerNodes;nodes[index]["profile_token"]=String(repeating:"b",count:64);relinked["nodes"]=nodes;configure(snapshot,try JSONSerialization.data(withJSONObject:relinked));snapshot.loadOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Same-ID relink ignored captured source token")}
+do{let owner=product("exit","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,originalOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopExitModePopup,"reality-xhttp");owner.multihopNodeTokens["entry"]=String(repeating:"b",count:64);snapshot.finishOptions();check(snapshot.optionsReady&&snapshot.selected(snapshot.topology)=="external","Inactive main hop choices blocked an external-node path")}
+do{let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.deferOptions=true;snapshot.loadOptions();choose(owner.multihopExitModePopup,"reality-xhttp");choose(owner.multihopExitModePopup,"naive-h2");owner.connectionProfileSelectionGeneration=UUID();snapshot.finishOptions();check(!snapshot.optionsReady&&snapshot.nodes.isEmpty,"Main selection ABA accepted an old options owner")}
+for change in ["mode","node","relink","generation","missing-hop-token"]{
+ let owner=product("entry","naive-h2","auto"),snapshot=Form(owner);configure(snapshot,routerOptions);snapshot.loadOptions();check(snapshot.optionsReady,"Test did not reach Ready");choose(snapshot.scope,"temporary")
+ if change=="mode"{choose(owner.multihopExitModePopup,"reality-xhttp")}
+ if change=="node"{choose(owner.routerPopup,"exit-router")}
+ if change=="relink"{let i=owner.routerIDs.firstIndex(of:"entry")!;owner.profiles[i]["profile_token"]=String(repeating:"b",count:64);owner.multihopNodeTokens["entry"]=String(repeating:"b",count:64)}
+ if change=="generation"{owner.connectionProfileSelectionGeneration=UUID()}
+ if change=="missing-hop-token"{let i=snapshot.nodes.firstIndex(where:{$0["id"] as? String=="exit-router"})!;snapshot.nodes[i].removeValue(forKey:"profile_token")}
+ snapshot.runSpeedLab();check(snapshot.captured==nil,"Post-Ready replacement reached controller: "+change)
+}
+UserDefaults.standard.setVolatileDomain([macConnectionMultihopEnabledKey:false],forName:UserDefaults.argumentDomain)
+do{let owner=ProductWindowController(),snapshot=Form(owner);var empty=originalRoot;empty["nodes"]=[[String:Any]]();configure(snapshot,try JSONSerialization.data(withJSONObject:empty));snapshot.loadOptions();choose(snapshot.scope,"temporary");choose(snapshot.topology,"system-direct");snapshot.runSpeedLab();check(snapshot.captured != nil,snapshot.detail.string);check(snapshot.captured?["expected_selected_node_id"] as? String=="" && (snapshot.captured?["expected_profile_tokens"] as? [String:String])==[:],"No-node System Direct omitted its empty-selection precondition")}
+UserDefaults.standard.removeVolatileDomain(forName:UserDefaults.argumentDomain)
 print("Actual Swift Speed Lab options/defaults/Run callback: \(checks) checks PASS")
-'''.replace('EXIT_MODES', exit_modes).replace('EXIT_INITIALIZER', exit_initializer).replace('POLICY', policy).replace('METHODS', methods)
+'''.replace('EXIT_MODES', exit_modes).replace('PROFILE_SELECTION', profile_selection).replace('PROFILE_CAPTURE', profile_capture).replace('EXIT_INITIALIZER', exit_initializer).replace('POLICY', policy).replace('METHODS', methods)
     path = directory/'main.swift'; path.write_text(program)
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(path),'-o',str(directory/'speed-lab-swift')],check=True,timeout=120)
     subprocess.run([str(directory/'speed-lab-swift'),str(directory)],check=True,timeout=60)
@@ -207,7 +261,8 @@ def main():
         if not shells: raise SystemExit('PowerShell is required')
     for shell in shells:
         with tempfile.TemporaryDirectory(prefix='router-vpn-speed-lab-forms-') as temporary:
-            directory=Path(temporary);env=dict(os.environ,ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory))
+            directory=Path(temporary);env=dict(os.environ,ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory),
+                ROUTERVPN_SPEED_LAB_FORM_CAPTURE_REQUIRED='1' if args.platform in ('windows','darwin') else '0')
             subprocess.run(['go','test','-count=1','./cmd/client','-run','^TestDesktopSpeedLabPathFormCatalog$'],cwd=ROOT,env=env,check=True,timeout=180)
             if args.platform=='linux': linux_form(directory)
             elif args.platform=='darwin': swift_form(directory)

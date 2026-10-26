@@ -170,6 +170,10 @@ type speedLabExternalRestore struct {
 }
 
 func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTemporarySnapshot, func(), error) {
+	return a.beginSpeedLabTemporaryOperationExpected(nil)
+}
+
+func (a *app) beginSpeedLabTemporaryOperationExpected(request *speedLabRequest) (context.Context, speedLabTemporarySnapshot, func(), error) {
 	if !a.operationMu.TryLock() {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("another Router VPN connection or settings transaction is already in progress")
 	}
@@ -185,7 +189,14 @@ func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTempor
 	a.mu.Lock()
 	st := a.state
 	busy := a.closing || st.Connected && st.Phase != "connected" || !st.Connected && profileSettingsBusy(st.Connected, st.Phase) || a.connectionContext != nil
+	var expectedErr error
+	if request != nil {
+		expectedErr = a.validateSpeedLabExpectedProfilesLocked(*request, nil)
+	}
 	a.mu.Unlock()
+	if expectedErr != nil {
+		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
+	}
 	if busy {
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("wait for the current VPN transition before a temporary Speed Lab test")
 	}
@@ -205,6 +216,16 @@ func (a *app) beginSpeedLabTemporaryOperation() (context.Context, speedLabTempor
 		return nil, speedLabTemporarySnapshot{}, nil, errors.New("temporary Speed Lab could not capture the physical network")
 	}
 	a.mu.Lock()
+	if request != nil {
+		expectedErr = a.validateSpeedLabExpectedProfilesLocked(*request, nil)
+	}
+	if expectedErr != nil {
+		a.mu.Unlock()
+		cancelTest()
+		cancelIntent()
+		clearSpeedLabRestorePlan(snapshot.Plan)
+		return nil, speedLabTemporarySnapshot{}, nil, expectedErr
+	}
 	if a.closing || a.state != snapshot.State || a.cmd != snapshot.Runtime || !reflect.DeepEqual(a.profiles, snapshot.Profiles) || a.connectionContext != nil {
 		a.mu.Unlock()
 		cancelTest()

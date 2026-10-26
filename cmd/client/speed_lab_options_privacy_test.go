@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -12,6 +13,51 @@ import (
 
 	"router-vpn/internal/common"
 )
+
+func TestSpeedLabOptionsBindCurrentExternalHopToRuntimeOwner(t *testing.T) {
+	for _, variant := range []string{"hopped", "direct", "different-command", "different-node", "disconnected", "router-mode"} {
+		t.Run(variant, func(t *testing.T) {
+			a := setupProfileTestApp(t)
+			a.cmd = &exec.Cmd{}
+			a.state = state{Connected: true, Phase: "connected", Mode: "external-node", RouterID: "external"}
+			entry, _ := a.profileByIDLocked("entry")
+			launch := &desktopNodeLaunch{command: a.cmd, profileID: "external", external: &desktopExternalRuntime{entry: entry}}
+			switch variant {
+			case "direct":
+				launch.external.direct = true
+			case "different-command":
+				launch.command = &exec.Cmd{}
+			case "different-node":
+				launch.profileID = "exit"
+			case "disconnected":
+				a.state.Connected = false
+			case "router-mode":
+				a.state.Mode = "wg"
+			}
+			desktopNodeOwners.Store(a, launch)
+			t.Cleanup(func() { desktopNodeOwners.Delete(a) })
+			response := httptest.NewRecorder()
+			a.speedLabOptions(response, httptest.NewRequest(http.MethodGet, "/api/speed-lab/options", nil))
+			var options struct {
+				Current map[string]any `json:"current"`
+			}
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &options) != nil {
+				t.Fatal("current-path options failed", response.Code)
+			}
+			if variant == "hopped" {
+				if options.Current["entry_id"] != "entry" || options.Current["exit_id"] != "external" {
+					t.Fatal("current native path omitted its exact hop identities", options.Current)
+				}
+			} else if variant == "direct" {
+				if options.Current["entry_id"] != nil || options.Current["exit_id"] != "external" {
+					t.Fatal("current direct path acquired a hop", options.Current)
+				}
+			} else if options.Current["entry_id"] != nil || options.Current["exit_id"] != nil {
+				t.Fatal("stale native owner supplied current path identity", options.Current)
+			}
+		})
+	}
+}
 
 func TestSpeedLabOptionsKeepPrivatePairedPathDefaultsAndNativeEntryCatalog(t *testing.T) {
 	request := desktopOpenVPNCreateFixture(t, common.StartLayerAES256GCMXOR)
@@ -42,6 +88,9 @@ func TestSpeedLabOptionsKeepPrivatePairedPathDefaultsAndNativeEntryCatalog(t *te
 		t.Fatal("Speed Lab options lost the captured node")
 	}
 	node := options.Nodes[0]
+	if node["profile_token"] != publicProfileFor(profile).ProfileToken {
+		t.Fatal("Speed Lab options cannot validate the captured public node revision")
+	}
 	for key, expected := range map[string]any{"multihop_enabled": true, "multihop_entry_id": "saved-entry", "multihop_exit_id": profile.ID, "multihop_entry_mode": "max-quic-awg", "multihop_execution": "auto", "has_response_probe": true, "has_openvpn_pairing": true, "selected": true} {
 		if node[key] != expected {
 			t.Fatalf("Speed Lab lost saved %s: %v", key, node[key])

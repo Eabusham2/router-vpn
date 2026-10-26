@@ -95,6 +95,35 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 		if _, _, _, err := normalizeSpeedLabDuration(request.DurationMode, request.MinSeconds, request.MaxSeconds); err != nil {
 			t.Fatal(name, err)
 		}
+		if os.Getenv("ROUTERVPN_SPEED_LAB_FORM_CAPTURE_REQUIRED") == "1" && !request.hasExpectedProfiles() {
+			t.Fatal(name, "native Run omitted its captured source revisions")
+		}
+		if request.hasExpectedProfiles() {
+			expectedSelected := "exit"
+			for _, mode := range mobilemultihop.NodeMultihopExitModes() {
+				if strings.HasPrefix(name, "speed-lab-multihop-"+mode+"-") {
+					expectedSelected = "entry"
+				}
+			}
+			if request.ExpectedSelectedNodeID != expectedSelected {
+				t.Fatal(name, "Run substituted another visible main selection")
+			}
+			previous := a.profiles.SelectedID
+			a.profiles.SelectedID = expectedSelected
+			if err := a.validateSpeedLabExpectedProfiles(request, nil); err != nil {
+				t.Fatal(name, "actual form revisions differ from the captured private fixture", err)
+			}
+			changed := request
+			changed.ExpectedProfileTokens = make(map[string]string, len(request.ExpectedProfileTokens))
+			for id, token := range request.ExpectedProfileTokens {
+				changed.ExpectedProfileTokens[id] = token
+			}
+			delete(changed.ExpectedProfileTokens, expectedSelected)
+			if a.validateSpeedLabExpectedProfiles(changed, nil) == nil {
+				t.Fatal(name, "partial form capture did not fail closed")
+			}
+			a.profiles.SelectedID = previous
+		}
 		return request, fields
 	}
 	for _, mode := range a.externalRouterEntryModes() {

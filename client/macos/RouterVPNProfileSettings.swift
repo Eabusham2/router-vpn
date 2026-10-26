@@ -257,7 +257,12 @@ private final class MacConnectionProfileControls: NSObject {
 
     private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String, execution: String) {
         let enabled = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
-        guard enabled, let owner else { return (false, "", "", "", "") }
+        guard let owner else {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
+        }
+        try owner.requireMutationIdle("saving a connection profile")
+        try owner.requireResolvedConnectionProfileSelection()
+        guard enabled else { return (false, "", "", "", "") }
         let entryIndex = owner.multihopEntryPopup.indexOfSelectedItem
         let exitIndex = owner.multihopExitPopup.indexOfSelectedItem
         guard entryIndex >= 0, exitIndex >= 0,
@@ -273,32 +278,13 @@ private final class MacConnectionProfileControls: NSObject {
         return (true, entry, exit, exitMode, owner.multihopExecutionChoice())
     }
 
-    private func applyLoadedMultihop(_ root: [String: Any]) {
-        let enabled = root["multihop_enabled"] as? Bool ?? false
-        UserDefaults.standard.set(enabled, forKey: macConnectionMultihopEnabledKey)
-        guard let owner else { return }
-        if enabled {
-            let entry = root["multihop_entry_id"] as? String ?? ""
-            let exit = root["multihop_exit_id"] as? String ?? ""
-            let exitMode = root["multihop_exit_mode"] as? String ?? ""
-            if let index = owner.multihopNodeIDs.firstIndex(of: entry) { owner.multihopEntryPopup.selectItem(at: index) }
-            if let index = owner.multihopNodeIDs.firstIndex(of: exit) { owner.multihopExitPopup.selectItem(at: index) }
-            owner.multihopExitModePopup.selectItem(at: RouterVPNNodeExitModes.index(for: exitMode) ?? -1)
-            let choice = root["multihop_execution"] as? String ?? "local"
-            let execution = ["local", "server", "auto"].contains(choice) ? choice : "local"
-            UserDefaults.standard.set(execution, forKey: "routervpn.multihop.execution.v1")
-            owner.multihopExecutionPopup.selectItem(at: ["local", "server", "auto"].firstIndex(of: execution) ?? 0)
-            owner.refreshAdvanced()
+    private func applyLoadedMultihop(_ root: [String: Any]) throws {
+        guard let owner else {
+            throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
         }
-        if let content = owner.window?.contentView {
-            func find(_ view: NSView) -> NSButton? {
-                if view.identifier?.rawValue == "unified-multihop-toggle" { return view as? NSButton }
-                for child in view.subviews { if let found = find(child) { return found } }
-                return nil
-            }
-            find(content)?.state = enabled ? .on : .off
-        }
-        owner.refreshUnifiedHopOverlay()
+        try owner.requireMutationIdle("loading a connection profile")
+        let selection = try owner.validatedLoadedConnectionProfileSelection(root)
+        owner.adoptLoadedConnectionProfileSelection(selection)
     }
 
     private func write(path: String, updating: Bool) throws -> [String: Any] {
@@ -330,13 +316,19 @@ private final class MacConnectionProfileControls: NSObject {
     @objc private func loadProfile() {
         do {
             try requireIdle("loading a connection profile")
-            let data = try api.request("/api/connection-profile/setup/load", method: "POST", body: ["id": try selectedID()], timeout: 12)
+            let id = try selectedID()
+            guard let owner else {
+                throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
+            }
+            try owner.requireMutationIdle("loading a connection profile")
+            owner.beginConnectionProfileLoad()
+            let data = try api.request("/api/connection-profile/setup/load", method: "POST", body: ["id": id], timeout: 12)
             let rootJSON = try JSONSerialization.jsonObject(with: data) as? [String: Any] ?? [:]
+            try applyLoadedMultihop(rootJSON)
             macApplyLoadedConnectionMode(rootJSON)
-            applyLoadedMultihop(rootJSON)
             let loaded = rootJSON["profile"] as? [String: Any]
             status.stringValue = "Loaded \(loaded?["name"] as? String ?? "profile") • node \(rootJSON["selected_node_id"] as? String ?? "") • mode \(rootJSON["mode"] as? String ?? "smart-auto") • exact multihop graph restored."
-            owner?.refreshAll(); owner?.refreshUnifiedModeMenu(preferred: rootJSON["mode"] as? String); owner?.refreshUnifiedChrome(); owner?.refreshUnifiedTelemetry()
+            owner.refreshAll(); owner.refreshUnifiedModeMenu(preferred: rootJSON["mode"] as? String); owner.refreshUnifiedChrome(); owner.refreshUnifiedTelemetry()
         } catch { status.stringValue = "Load failed: \(error.localizedDescription)" }
     }
 

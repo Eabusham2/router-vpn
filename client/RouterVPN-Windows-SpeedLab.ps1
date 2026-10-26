@@ -59,6 +59,40 @@ function ShowUnifiedSpeedLab{
   if($null-eq$Item){return $Default};$P=$Item.PSObject.Properties[$Name];if($null-eq$P-or$null-eq$P.Value){return $Default};return $P.Value
  }
  function SpeedLabKind($Item){return [string](SpeedLabValue $Item 'node_kind' 'router-vpn')}
+ function CaptureSpeedLabSelection{
+  $enabled=[bool](Control 'UnifiedMultihop').IsChecked-and(SpeedLabKind $RouterCombo.SelectedItem)-ne'external'
+  return [pscustomobject]@{selectedNodeID=[string]$RouterCombo.SelectedValue;selectedNodeToken=[string](SpeedLabValue $RouterCombo.SelectedItem 'profile_token');multihopEnabled=$enabled;entryID=$(if($enabled){[string]$MultihopEntryCombo.SelectedValue}else{''});exitID=$(if($enabled){[string]$MultihopExitCombo.SelectedValue}else{''});entryToken=$(if($enabled){[string](SpeedLabValue $MultihopEntryCombo.SelectedItem 'profile_token')}else{''});exitToken=$(if($enabled){[string](SpeedLabValue $MultihopExitCombo.SelectedItem 'profile_token')}else{''});exitMode=$(if($enabled){SelectedTag $MultihopExitModeCombo}else{''});execution=$(if($enabled){SelectedTag (Control 'UnifiedExecution')}else{''})}
+ }
+ function AssertSpeedLabSelection($Opt){
+  $visible=CaptureSpeedLabSelection
+  foreach($key in @('selectedNodeID','selectedNodeToken','multihopEnabled','entryID','exitID','entryToken','exitToken','exitMode','execution')){if($visible.$key-cne$CapturedSpeedLabSelection.$key){throw 'The visible connection profile changed while Speed Lab loaded. Reopen Speed Lab for that selection.'}}
+  if($CapturedSpeedLabSelection.selectedNodeID){
+   $selected=@($Opt.nodes|Where-Object{[bool](SpeedLabValue $_ 'selected' $false)})
+   $matching=@($Opt.nodes|Where-Object{[string]$_.id-ceq$CapturedSpeedLabSelection.selectedNodeID})
+   if($selected.Count-ne1-or$matching.Count-ne1-or[string]$selected[0].id-cne$CapturedSpeedLabSelection.selectedNodeID){throw 'The selected node changed or disappeared while Speed Lab loaded. Reopen Speed Lab.'}
+  }
+  foreach($pair in @(@('selectedNodeID','selectedNodeToken'),@('entryID','entryToken'),@('exitID','exitToken'))){
+   $token=[string]$CapturedSpeedLabSelection.($pair[1]);if(-not$token){continue};$id=[string]$CapturedSpeedLabSelection.($pair[0]);$found=@($Opt.nodes|Where-Object{[string]$_.id-ceq$id})
+   if($found.Count-ne1-or[string](SpeedLabValue $found[0] 'profile_token')-cne$token){throw 'A captured node was removed or relinked while Speed Lab loaded. Reopen Speed Lab for its current identity.'}
+  }
+ }
+ function SelectSpeedLabTag($Combo,[string]$ID){
+  $Combo.SelectedIndex=-1;for($i=0;$i-lt$Combo.Items.Count;$i++){if([string]$Combo.Items[$i].Tag-ceq$ID){$Combo.SelectedIndex=$i;break}}
+ }
+ function ApplySpeedLabSelection{
+  if(-not$CapturedSpeedLabSelection.multihopEnabled){return}
+  $selected=SpeedLabFind 'nodes' $CapturedSpeedLabSelection.selectedNodeID
+  if($null-eq$selected-or(SpeedLabKind $selected)-ne'router-vpn'){throw 'The captured multihop profile no longer belongs to a linked Router VPN node.'}
+  $SpeedLabOptions.updating=$true
+  try{
+   SelectSpeedLabTag $Topology 'multihop';SelectSpeedLabChoice $Node $CapturedSpeedLabSelection.selectedNodeID
+   SelectSpeedLabChoice $Entry $CapturedSpeedLabSelection.entryID;SelectSpeedLabChoice $Exit $CapturedSpeedLabSelection.exitID
+   SelectSpeedLabTag $ExitMode $CapturedSpeedLabSelection.exitMode;SelectSpeedLabChoice $Execution $CapturedSpeedLabSelection.execution
+  }finally{$SpeedLabOptions.updating=$false}
+ }
+ # Detached values belong to this window. Later callbacks only compare the
+ # current main controls to this snapshot; they never recapture its defaults.
+ $CapturedSpeedLabSelection=CaptureSpeedLabSelection
  function SpeedLabFind([string]$Key,[string]$ID){
   if(-not$ID){return $null};$found=@($SpeedLabOptions[$Key]|Where-Object{[string]$_.id-ceq$ID});if($found.Count-ne1){return $null};return $found[0]
  }
@@ -114,11 +148,29 @@ function ShowUnifiedSpeedLab{
   if($protocol-eq'openvpn'){return [bool](SpeedLabValue $NodeValue 'has_openvpn_pairing' $false)}
   return $protocol-in@('shadowsocks','hysteria2','socks5','http-connect','https-connect')
  }
+ function CompleteSpeedLabRequest($Payload){
+  $ids=@($CapturedSpeedLabSelection.selectedNodeID)
+  if($CapturedSpeedLabSelection.multihopEnabled){$ids+=@($CapturedSpeedLabSelection.entryID,$CapturedSpeedLabSelection.exitID)}
+  if($Payload['scope']-eq'temporary'){
+   if($Payload['topology']-ne'system-direct'){foreach($key in @('node_id','entry_id','exit_id')){$ids+=[string]$Payload[$key]}}
+  }elseif([bool](SpeedLabValue $SpeedLabOptions.current 'connected' $false)){
+   foreach($key in @('router_id','entry_id','exit_id')){$ids+=[string](SpeedLabValue $SpeedLabOptions.current $key)}
+  }
+  $tokens=@{}
+  foreach($id in @($ids|Where-Object{$_}|Select-Object -Unique)){
+   $record=SpeedLabFind 'nodes' $id;$token=[string](SpeedLabValue $record 'profile_token')
+   if($null-eq$record-or$token-cnotmatch'^[a-f0-9]{64}$'){throw 'A test node has no current identity. Reopen Speed Lab before running this path.'}
+   $tokens[$id]=$token
+  }
+  $Payload.expected_selected_node_id=[string]$CapturedSpeedLabSelection.selectedNodeID;$Payload.expected_profile_tokens=$tokens
+  return $Payload
+ }
  function NewSpeedLabRequest{
+  AssertSpeedLabSelection $SpeedLabOptions
   $scope=SelectedTag $Scope;$top=SelectedTag $Topology;$duration=SelectedTag $DurationMode;$payload=@{scope=$scope;duration_mode=$duration}
   if($duration-eq'custom'){$payload.min_seconds=[Math]::Round($MinTime.Value);$payload.max_seconds=[Math]::Round($MaxTime.Value)}
-  if($scope-ne'temporary'){return $payload};$payload.topology=$top
-  if($top-eq'system-direct'){return $payload}
+  if($scope-ne'temporary'){return CompleteSpeedLabRequest $payload};$payload.topology=$top
+  if($top-eq'system-direct'){return CompleteSpeedLabRequest $payload}
   $n=SpeedLabFind 'nodes' ([string]$Node.SelectedValue);$entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$executionValue=[string]$Execution.SelectedValue
   if($top-eq'router'){
    if($null-eq$n-or(SpeedLabKind $n)-ne'router-vpn'){throw 'Select a linked Router VPN node.'}
@@ -141,7 +193,7 @@ function ShowUnifiedSpeedLab{
   }else{throw 'Select a supported test topology.'}
   if($top-in@('multihop','external')){if($executionValue-notin@('local','server','auto')-or$null-eq(SpeedLabFind 'execution_choices' $executionValue)){throw 'Select Local, Server, or Compare both from the current capabilities.'}}
   $payload.daita=[bool]$D.FindName('DAITA').IsChecked;$payload.jumbo=[bool]$D.FindName('Jumbo').IsChecked;$payload.require_encrypted=[bool]$D.FindName('Encrypted').IsChecked;$payload.require_obfuscation=[bool]$D.FindName('Obfuscated').IsChecked
-  return $payload
+  return CompleteSpeedLabRequest $payload
  }
  function RefreshSpeedLabControls{
   $temporary=(SelectedTag $Scope)-eq'temporary';foreach($c in @($Topology,$Mode,$Node,$Entry,$Exit,$Base,$ExitMode,$EntryMode,$Execution,$Layers,$D.FindName('DAITA'),$D.FindName('Jumbo'),$D.FindName('Encrypted'),$D.FindName('Obfuscated'))){$c.IsEnabled=$temporary}
@@ -153,6 +205,8 @@ function ShowUnifiedSpeedLab{
  $D.Add_Loaded({
   if([string]$D.Tag-ne'initial'){return};$D.Tag='owned-options';$Status.Text='Loading Speed Lab paths…';$Detail.Text='Loading current node/mode capabilities without blocking the app.'
   $Success={param($Opt)
+   if([string]$D.Tag-ne'owned-options'){return}
+   try{AssertSpeedLabSelection $Opt}catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab selection changed.';$Run.IsEnabled=$false;$D.Tag='error';return}
    $SpeedLabOptions.updating=$true
    try{
     $SpeedLabOptions.supported_exit_modes=@(SpeedLabValue $Opt 'supported_exit_modes' @());$SpeedLabOptions.current=SpeedLabValue $Opt 'current' $null
@@ -165,6 +219,7 @@ function ShowUnifiedSpeedLab{
     $selectedNode=SpeedLabFind 'nodes' ([string]$Node.SelectedValue);$topDefault=if($null-ne$selectedNode-and(SpeedLabKind $selectedNode)-eq'external'){'external'}elseif([bool](SpeedLabValue $selectedNode 'multihop_enabled' $false)){'multihop'}else{'router'}
     foreach($item in $Topology.Items){if([string]$item.Tag-ceq$topDefault){$Topology.SelectedItem=$item;break}}
    }finally{$SpeedLabOptions.updating=$false};SetSpeedLabDefaults
+   try{ApplySpeedLabSelection}catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab selection unavailable.';$Run.IsEnabled=$false;$D.Tag='error';return}
    $Run.IsEnabled=$true;$D.Tag='ready';$Status.Text='Cloudflare Speed Test edge • no Mbps derived from RTT';$Detail.Text='Ready. Current path uses the path that is actually connected. Temporary tests capture and restore the complete connected path and its proved execution choice.';RefreshSpeedLabControls
   }.GetNewClosure()
   $Failure={param($E)$Detail.Text='Could not load Speed Lab options: '+$E;$Status.Text='Speed Lab options unavailable.';$Run.IsEnabled=$false;$D.Tag='error'}.GetNewClosure()
@@ -177,7 +232,9 @@ function ShowUnifiedSpeedLab{
  RefreshSpeedLabControls
  $Advanced.Add_Click({ShowUnifiedAdvancedPerformance})
  $D.FindName('Close').Add_Click({if(([string]$D.Tag).StartsWith('owned')-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)};$D.Close()})
+ $D.Add_Closed({$owned=([string]$D.Tag).StartsWith('owned');$D.Tag='closed';if($owned-and(UnifiedAsyncBusy)){[void](CancelUnifiedApiAsync $false)}})
  $Run.Add_Click({
+  if([string]$D.Tag-ne'ready'){return}
   try{
    if(UnifiedAsyncBusy){throw 'Another Router VPN action is still running.'}
    $Run.IsEnabled=$false;$Advanced.IsEnabled=$false;$D.Tag='owned-run';$Status.Text='Building/proving path and running download + upload…';$Detail.Text='Speed Lab running. Temporary paths are transactional and will be torn down/restored when the test completes or is cancelled.'

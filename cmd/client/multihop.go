@@ -41,6 +41,7 @@ type multihopSelection struct {
 
 type multihopNodeSummary struct {
 	ID              string  `json:"id"`
+	ProfileToken    string  `json:"profile_token"`
 	Name            string  `json:"name"`
 	Location        string  `json:"location,omitempty"`
 	Endpoint        string  `json:"endpoint,omitempty"`
@@ -116,7 +117,7 @@ func multihopNodeSummaries(profiles []common.RouterProfile) []multihopNodeSummar
 	out := make([]multihopNodeSummary, 0, len(profiles))
 	for _, p := range profiles {
 		out = append(out, multihopNodeSummary{
-			ID: p.ID, Name: p.Name, Location: p.Location, Endpoint: p.Endpoint,
+			ID: p.ID, ProfileToken: publicProfileToken(p), Name: p.Name, Location: p.Location, Endpoint: p.Endpoint,
 			BaseTunnel: p.BaseTunnel, Latitude: p.Latitude, Longitude: p.Longitude,
 			LatencyMedianMs: p.LatencyMedianMs, LatencyTrimmed: p.LatencyTrimmedMeanMs,
 			LatencyP90Ms: p.LatencyP90Ms,
@@ -208,7 +209,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	control, _ := a.profileByIDLocked(a.profiles.SelectedID)
-	profiles := append([]common.RouterProfile(nil), a.profiles.Profiles...)
+	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	state := a.state
 	a.mu.Unlock()
 	graph, graphOK := getActiveMultihopGraph(a)
@@ -219,6 +220,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		entryID, exitID = graph.EntryID, graph.ExitID
 	}
 	w.Header().Set("content-type", "application/json")
+	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"platform":              runtime.GOOS,
 		"platform_supported":    runtime.GOOS == "linux",

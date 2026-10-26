@@ -532,6 +532,13 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	if saved.Prefs != nil || saved.External != nil {
 		a.syncProfileOptionStateLocked(updated)
 	}
+	profileTokens, err := a.connectionProfileTokensLocked(updated)
+	if err != nil {
+		a.rollbackProfilesLocked(old)
+		a.state = oldState
+		http.Error(w, err.Error(), http.StatusConflict)
+		return
+	}
 	if err := a.persistProfilesLocked(); err != nil {
 		a.rollbackProfilesLocked(old)
 		a.state = oldState
@@ -541,7 +548,7 @@ func (a *app) loadConnectionProfile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok": true, "profile": saved, "selected_node_id": updated.ID, "mode": saved.Mode,
+		"ok": true, "profile": saved, "selected_node_id": updated.ID, "mode": saved.Mode, "profile_tokens": profileTokens,
 		"custom_layers": func() []string {
 			if saved.Prefs == nil {
 				return nil

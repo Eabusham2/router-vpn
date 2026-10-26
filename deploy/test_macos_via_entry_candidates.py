@@ -208,7 +208,13 @@ def main():
     assert body.index('transaction.acceptValidation(') < body.index('guard adopt(id)')
     for forbidden in ['"/api/connect', '"/api/profile/select', '"/api/multihop/connect', '"/api/multihop/live-latency', 'latency_median_ms', 'UserDefaults.standard.set']:
         assert forbidden not in body, forbidden
-    assert 'multihopEntryPopup.action = #selector(unifiedEntryCandidatesChanged)' in product
+    assert 'multihopEntryPopup.action = #selector(connectionProfileEntryChanged)' in product
+    profile_ui = (MAC / "RouterVPNConnectionProfiles.swift").read_text()
+    entry_action = profile_ui[profile_ui.index('    @objc func connectionProfileEntryChanged()'):]
+    entry_action = entry_action[:entry_action.index('\n    }')]
+    assert 'ensureMutationIdle("changing multihop entry")' in entry_action
+    assert entry_action.index('recordVisibleConnectionProfileSelection()') < entry_action.index('unifiedEntryCandidatesChanged()')
+    assert 'self.recordVisibleConnectionProfileSelection()' in body
     assert 'MacViaEntryCandidateReservation.shared.active { return true }' in product
     assert 'Retest exits via entry' in unified
     assert 'baseRow.addArrangedSubview(basePopup)' in unified
