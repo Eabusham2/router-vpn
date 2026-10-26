@@ -48,8 +48,23 @@ class XrayEntryBindings(unittest.TestCase):
         self.assertIn('Libbox.routerCompileProxyEntry(',java)
         self.assertIn('LibboxRouterCompileProxyEntry(',swift)
         self.assertIn('"entry_mode"',java);self.assertIn('"entry_mode"',swift)
-        self.assertIn('entrySnapshot.equals(loadBundle(entryBundle).toString())',java)
-        self.assertIn('exitSnapshot.equals(loadBundle(exitBundle).toString())',java)
+        # The compiled JSONObject and retained digest must come from the same
+        # original bytes. Re-serializing JSON would bless formatting changes and
+        # cannot bind restoration to its original private file.
+        captured=java.split('private static final class LoadedBundle',1)[1].split('private static final class EntryPrivate',1)[0]
+        self.assertIn('byte[] raw = readBundleBytes(file);',captured)
+        self.assertIn('source = new Source(file, raw);',captured)
+        self.assertIn('.decode(java.nio.ByteBuffer.wrap(raw))',captured)
+        source=java.split('static final class Source',1)[1].split('private static final class LoadedBundle',1)[0]
+        self.assertIn('file.equals(candidate.getCanonicalFile())',source)
+        self.assertIn('digest.equals(sourceDigest(readBundleBytes(candidate)))',source)
+        self.assertIn('capturedEntry.source.require(entryBundle); capturedExit.source.require(exitBundle);',java)
+        self.assertIn('!expectedEntry.same(capturedEntry.source) || !expectedExit.same(capturedExit.source)',java)
+        host=(ROOT/'android/test_android_multihop_graph.py').read_text()
+        for required in ('restoreIdentityChecks(dir);','same-bytes-other-file','changed-entry','changed-exit',
+                         'entry snapshot did not capture exact input bytes','exit snapshot did not capture exact input bytes',
+                         'changed captured entry staged a session'):
+            self.assertIn(required,host)
         self.assertIn('expectedNodeID: entryProofID',swift);self.assertIn('expectedNodeID: exitProofID',swift)
     def test_native_parser_reads_expanded_generated_matrix(self):
         gate=(ROOT/'deploy/test_android_multihop_pinned.py').read_text()
