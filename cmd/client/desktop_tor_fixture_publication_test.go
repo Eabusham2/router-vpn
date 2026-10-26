@@ -47,8 +47,8 @@ func desktopTorFixturePauseIdentity(expected mobiletor.DesktopBridgeMetadata) st
 	return expected.SessionID + "\n" + expected.SourceSHA256 + "\n" + expected.ConfigSHA256 + "\n"
 }
 
-// This barrier is reached only between completed publications. In particular,
-// atomicWritePrivate's best-effort directory Sync handle has already closed.
+// This barrier is reached only between completed captured-root publications;
+// every temporary write and replacement has completed before acknowledgement.
 // The private acknowledgement lives outside the directory about to be renamed.
 // The real child remains alive until its parent explicitly releases or kills it.
 func desktopTorFixturePublicationBarrier(kind string, expected mobiletor.DesktopBridgeMetadata) {

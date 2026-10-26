@@ -33,10 +33,15 @@ func TestDesktopTorMTUTransitionChildFixture(t *testing.T) {
 	if json.Unmarshal(raw, &expected) != nil {
 		os.Exit(91)
 	}
+	publisher, err := newDesktopNativeFixturePublisher(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.root.Close()
 	write := func(name string, value any) {
 		raw, err := json.Marshal(value)
 		if err == nil {
-			err = atomicWritePrivate(filepath.Join(directory, name), raw)
+			err = publisher.publish(name, raw)
 		}
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "isolated Tor transition fixture %s: %v\n", name, err)

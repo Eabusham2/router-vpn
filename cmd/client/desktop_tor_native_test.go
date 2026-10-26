@@ -170,9 +170,14 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	if json.Unmarshal(raw, &expected) != nil {
 		os.Exit(91)
 	}
+	publisher, err := newDesktopNativeFixturePublisher(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.root.Close()
 	write := func(name string, value any) {
 		raw, _ := json.Marshal(value)
-		if err := atomicWritePrivate(filepath.Join(directory, name), raw); err != nil {
+		if err := publisher.publish(name, raw); err != nil {
 			fmt.Fprintf(os.Stderr, "isolated Tor fixture publication %s: %v\n", name, err)
 			os.Exit(92)
 		}

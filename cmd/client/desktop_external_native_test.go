@@ -280,9 +280,14 @@ func TestDesktopExternalProcessFixture(t *testing.T) {
 	if kind == "crash" {
 		os.Exit(7)
 	}
+	publisher, err := newDesktopNativeFixturePublisher(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer publisher.root.Close()
 	write := func(name string, value any) {
 		data, _ := json.Marshal(value)
-		if err := atomicWritePrivate(filepath.Join(dir, name), data); err != nil {
+		if err := publisher.publish(name, data); err != nil {
 			fmt.Fprintf(os.Stderr, "isolated external fixture publication %s: %v\n", name, err)
 			os.Exit(92)
 		}
