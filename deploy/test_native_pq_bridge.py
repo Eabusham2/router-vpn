@@ -14,10 +14,12 @@ P=importlib.util.module_from_spec(spec);spec.loader.exec_module(P)
 
 class Prepare(unittest.TestCase):
     def test_exact_lifecycle_patch_and_drift_rejection(self):
-        source=P.START+'\n    return nil\n}\n'+P.CLOSE+'\n'
+        source='type Endpoint struct {\n'+P.FIELD+'}\n'+P.START+'\n'+P.CLOSE+'\n'
         with mock.patch.object(P,'WG_SHA',P.blobsha(source.encode())):
             result=P.patch_wireguard(source)
             self.assertEqual(P.patch_wireguard(result),result)
+            previous=source.replace(P.START,P.START_OLD,1).replace(P.CLOSE,P.CLOSE_OLD,1)
+            self.assertEqual(P.patch_wireguard(previous),result)
             self.assertIn(P.START_NEW,result);self.assertIn(P.CLOSE_NEW,result)
             for wrong in (source+'drift',result+'drift',source.replace(P.START,P.START_NEW),result.replace('defer w.bindAccess.Unlock()','w.bindAccess.Unlock()',1)):
                 with self.assertRaises(ValueError):P.patch_wireguard(wrong)
@@ -27,7 +29,7 @@ class Prepare(unittest.TestCase):
             registry=vendor/'include/registry.go';registry.parent.mkdir()
             registry.write_text('"github.com/sagernet/sing-box/protocol/routervpnamnezia"\n\troutervpnamnezia.RegisterEndpoint(registry)\n')
             wg=vendor/'protocol/wireguard/endpoint.go';wg.parent.mkdir(parents=True)
-            source=P.START+'\n    return nil\n}\n'+P.CLOSE+'\n';wg.write_text(source)
+            source='type Endpoint struct {\n'+P.FIELD+'}\n'+P.START+'\n'+P.CLOSE+'\n';wg.write_text(source)
             with mock.patch.object(P,'WG_SHA',P.blobsha(source.encode())),mock.patch.object(P.subprocess,'check_output',return_value=P.CORE+'\n'):
                 P.prepare(vendor)
                 self.assertEqual((vendor/'protocol/routervpnpq/endpoint.go').read_bytes(),(ROOT/'mobile/pq/endpoint.go.tmpl').read_bytes())

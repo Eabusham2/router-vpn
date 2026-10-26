@@ -1,0 +1,167 @@
+//go:build with_gvisor
+
+package wireguard
+
+import (
+	"context"
+	"crypto/ecdh"
+	"crypto/rand"
+	"encoding/base64"
+	"errors"
+	"net"
+	"net/netip"
+	"sync"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/log"
+	WG "github.com/sagernet/sing-box/transport/wireguard"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service/pause"
+)
+
+// Only the captured disposable loopback socket can be used by this phase
+// fixture. The separate desktop gate proves encrypted payload traffic.
+type routerVPNReadinessDialer struct{ target string }
+
+func (d routerVPNReadinessDialer) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if network != "udp" || destination != M.ParseSocksaddr("192.0.2.1:51820") {
+		return nil, errors.New("phase fixture rejects an unowned physical target")
+	}
+	return (&net.Dialer{}).DialContext(ctx, "udp4", d.target)
+}
+func (routerVPNReadinessDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return net.ListenPacket("udp4", "127.0.0.1:0")
+}
+
+func routerVPNReadinessEndpoint(t *testing.T, ctx context.Context, domain, invalid bool) *Endpoint {
+	t.Helper()
+	ctx = pause.WithDefaultManager(ctx)
+	key, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal("failed to generate disposable key")
+	}
+	private := base64.StdEncoding.EncodeToString(key.Bytes())
+	if invalid {
+		// The real constructor decodes this; the actual device rejects its
+		// invalid size at IpcSet after creating the userspace TUN.
+		private = base64.StdEncoding.EncodeToString([]byte{1})
+	}
+	peerKey, err := ecdh.X25519().GenerateKey(rand.Reader)
+	if err != nil {
+		t.Fatal("failed to generate independent disposable peer")
+	}
+	listener, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal("failed to bind disposable loopback peer")
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	peer := M.ParseSocksaddr("192.0.2.1:51820")
+	if domain {
+		peer = M.ParseSocksaddr("deferred.invalid:51820")
+	}
+	logger := log.NewNOPFactory().Logger()
+	transport, err := WG.NewEndpoint(WG.EndpointOptions{
+		Context: ctx, Logger: logger, System: false, Dialer: routerVPNReadinessDialer{listener.LocalAddr().String()},
+		MTU: 1280, Address: []netip.Prefix{netip.MustParsePrefix("10.78.0.2/32")},
+		PrivateKey: private, ResolvePeer: func(string) ([]netip.Addr, error) {
+			return nil, errors.New("phase fixture does not resolve a hostname")
+		},
+		Peers: []WG.PeerOptions{{Endpoint: peer,
+			PublicKey:  base64.StdEncoding.EncodeToString(peerKey.PublicKey().Bytes()),
+			AllowedIPs: []netip.Prefix{netip.MustParsePrefix("0.0.0.0/0")}}},
+	})
+	if err != nil {
+		t.Fatal("failed to construct actual userspace WireGuard endpoint")
+	}
+	owner := &Endpoint{ctx: ctx, logger: logger, endpoint: transport}
+	t.Cleanup(func() { _ = owner.Close() })
+	return owner
+}
+
+func routerVPNReadinessDial(t *testing.T, owner *Endpoint, allowed bool) {
+	t.Helper()
+	connection, err := owner.DialContext(context.Background(), "udp", M.ParseSocksaddr("192.0.2.99:9999"))
+	if connection != nil {
+		_ = connection.Close()
+	}
+	if (err == nil) != allowed || (connection != nil) != allowed {
+		t.Fatalf("actual guarded UDP dependency readiness differs: allowed=%v error=%v", allowed, err != nil)
+	}
+}
+
+func TestRouterVPNWireGuardLiteralReadyAtStart(t *testing.T) {
+	owner := routerVPNReadinessEndpoint(t, context.Background(), false, false)
+	if err := owner.Start(adapter.StartStateStart); err != nil {
+		t.Fatal("literal peer did not start its actual userspace device")
+	}
+	if !owner.started.Load() {
+		t.Fatal("literal WireGuard device withheld dependency readiness until PostStart")
+	}
+	routerVPNReadinessDial(t, owner, true)
+	if err := owner.Start(adapter.StartStatePostStart); err != nil || !owner.started.Load() {
+		t.Fatal("literal peer lost readiness in its no-op PostStart")
+	}
+}
+
+func TestRouterVPNWireGuardDeferredFailedCancelledClosedStayUnready(t *testing.T) {
+	t.Run("domain", func(t *testing.T) {
+		owner := routerVPNReadinessEndpoint(t, context.Background(), true, false)
+		if owner.Start(adapter.StartStateStart) != nil || owner.started.Load() {
+			t.Fatal("deferred domain was published before its actual device")
+		}
+		routerVPNReadinessDial(t, owner, false)
+		if owner.Start(adapter.StartStatePostStart) != nil || !owner.started.Load() {
+			t.Fatal("domain peer did not acquire its actual PostStart device")
+		}
+		routerVPNReadinessDial(t, owner, true)
+	})
+	t.Run("native-failure", func(t *testing.T) {
+		owner := routerVPNReadinessEndpoint(t, context.Background(), false, true)
+		if owner.Start(adapter.StartStateStart) == nil || owner.started.Load() {
+			t.Fatal("failed native IpcSet became a ready peer")
+		}
+		routerVPNReadinessDial(t, owner, false)
+		if owner.Start(adapter.StartStatePostStart) != nil || owner.started.Load() {
+			t.Fatal("a no-op PostStart fabricated a device after native failure")
+		}
+	})
+	t.Run("cancelled", func(t *testing.T) {
+		ctx, cancel := context.WithCancel(context.Background())
+		defer cancel()
+		owner := routerVPNReadinessEndpoint(t, ctx, false, false)
+		if owner.Start(adapter.StartStateStart) != nil {
+			t.Fatal("captured peer failed before cancellation")
+		}
+		cancel()
+		if owner.Start(adapter.StartStatePostStart) == nil || owner.started.Load() {
+			t.Fatal("cancelled owner was republished by a late lifecycle phase")
+		}
+		routerVPNReadinessDial(t, owner, false)
+	})
+	for _, domain := range []bool{false, true} {
+		t.Run(map[bool]string{false: "closed-literal", true: "closed-domain"}[domain], func(t *testing.T) {
+			owner := routerVPNReadinessEndpoint(t, context.Background(), domain, false)
+			if owner.Start(adapter.StartStateStart) != nil || owner.Close() != nil {
+				t.Fatal("captured peer lifecycle failed before close")
+			}
+			if owner.Start(adapter.StartStatePostStart) == nil || owner.Start(adapter.StartStateStart) == nil || owner.started.Load() {
+				t.Fatal("closed peer was resurrected by a late lifecycle phase")
+			}
+			routerVPNReadinessDial(t, owner, false)
+		})
+	}
+}
+
+func TestRouterVPNWireGuardCloseJoinsStartupPublication(t *testing.T) {
+	owner := routerVPNReadinessEndpoint(t, context.Background(), false, false)
+	var workers sync.WaitGroup
+	workers.Add(2)
+	go func() { defer workers.Done(); _ = owner.Start(adapter.StartStateStart) }()
+	go func() { defer workers.Done(); _ = owner.Close() }()
+	workers.Wait()
+	if owner.started.Load() || owner.Start(adapter.StartStatePostStart) == nil {
+		t.Fatal("closed endpoint retained or resurrected a published device")
+	}
+	routerVPNReadinessDial(t, owner, false)
+}

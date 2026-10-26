@@ -5,6 +5,10 @@ import (
 	"errors"
 )
 
+// Called only under the protocol endpoint's lifecycle lock. Start(false) may
+// intentionally defer a domain peer; success alone is not device ownership.
+func (e *Endpoint) RouterVPNStarted() bool { return e.device != nil }
+
 // Called only under the protocol endpoint's lifecycle lock. The generated
 // single-peer configuration is immutable except for this negotiated PSK.
 func (e *Endpoint) RouterVPNSetPQKey(publicKey, key []byte) error {

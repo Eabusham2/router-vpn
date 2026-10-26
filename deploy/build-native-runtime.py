@@ -478,6 +478,9 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
             # desktop hosts except Windows ARM64 (internal/platform/supported.go).
             race = [] if target == 'windows/arm64' else ['-race']
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
+                 '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
+                 '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)
+            run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './cmd/sing-box', '-run', '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                  '-count=1', '-timeout=120s'], cwd=source, env=env, timeout=600)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
