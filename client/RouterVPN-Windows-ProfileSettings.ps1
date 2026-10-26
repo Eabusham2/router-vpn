@@ -28,6 +28,11 @@ function global:Assert-RouterVPNProfileDeviceCapture {
        [string]$Captured.node_kind -cne 'external' -or $Captured.device_policy_supported -isnot [bool]){
         throw 'The selected node changed or its device settings could not be captured. Reopen Settings.'
     }
+    $jumbo=$Captured.PSObject.Properties['jumbo_tun'];$jumboSupport=$Captured.PSObject.Properties['jumbo_tun_supported']
+    if(($null -ne $jumbo) -ne ($null -ne $jumboSupport) -or
+       ($null -ne $jumbo -and ($jumbo.Value -isnot [bool] -or $jumboSupport.Value -isnot [bool]))){
+        throw 'The captured Jumbo capability is incomplete or invalid. Reopen Settings.'
+    }
 }
 
 function global:Get-RouterVPNProfileDevice {
@@ -38,7 +43,7 @@ function global:Get-RouterVPNProfileDevice {
 }
 
 function global:New-RouterVPNProfileDevicePayload {
-    param($Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect)
+    param($Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN)
     Assert-RouterVPNProfileDeviceCapture -Captured $Captured -DisplayedProfileID $DisplayedProfileID
     if(-not $Captured.device_policy_supported){throw 'This node cannot apply common device settings through its native runtime.'}
     if($HomeLANAccess -isnot [bool]){throw 'LAN access must be an explicit Boolean.'}
@@ -52,7 +57,20 @@ function global:New-RouterVPNProfileDevicePayload {
     if(($MTUPolicy -ceq 'manual' -and ($manualValue -lt 1280 -or $manualValue -gt 9000)) -or ($MTUPolicy -cne 'manual' -and $manualValue -ne 0)){
         throw 'Fixed MTU must be 1280 to 9000; Auto and Runtime default require zero.'
     }
+    $jumboCapture=$Captured.PSObject.Properties['jumbo_tun'];$jumboSupport=$Captured.PSObject.Properties['jumbo_tun_supported']
+    $jumboChanged=$false;$selectedJumbo=$null
+    if($null -ne $jumboCapture){$selectedJumbo=$jumboCapture.Value}
+    if($PSBoundParameters.ContainsKey('JumboTUN')){
+        if($JumboTUN -isnot [bool]){throw 'Jumbo must be an explicit Boolean.'}
+        $jumboChanged=$null -eq $jumboCapture -or $JumboTUN -ne $jumboCapture.Value
+        if($jumboChanged -and ($null -eq $jumboSupport -or -not $jumboSupport.Value)){throw 'This captured native runtime cannot change Jumbo.'}
+        $selectedJumbo=$JumboTUN
+    }
+    if($selectedJumbo -eq $true -and $MTUPolicy -ceq 'manual' -and $manualValue -ne 9000){
+        throw 'Jumbo uses a 9000-byte virtual interface. Choose Fixed 9000 or disable Jumbo; no MTU choice was changed.'
+    }
     $body=@{profile_id=$DisplayedProfileID;profile_token=[string]$Captured.profile_token;home_lan_access=$HomeLANAccess;kill_switch_policy=$KillSwitchPolicy;ipv6_mode=$IPv6Mode;mtu_policy=$MTUPolicy;manual_mtu=$manualValue}
+    if($jumboChanged){$body.jumbo_tun=$JumboTUN}
     $hasMode=$PSBoundParameters.ContainsKey('StartupMode');$hasAutomatic=$PSBoundParameters.ContainsKey('AutoConnect')
     if($hasMode -ne $hasAutomatic){throw 'Startup mode and auto-connect must be edited together.'}
     if($hasMode){
@@ -73,11 +91,30 @@ function global:New-RouterVPNProfileDevicePayload {
 }
 
 function global:Save-RouterVPNProfileDevice {
-    param([string]$BaseUrl,$Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect)
+    param([string]$BaseUrl,$Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN)
     $arguments=@{};foreach($key in $PSBoundParameters.Keys){if($key -cne 'BaseUrl'){$arguments[$key]=$PSBoundParameters[$key]}}
     $body=New-RouterVPNProfileDevicePayload @arguments
     if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'Disconnect Router VPN before saving device settings.'}
-    Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/device') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
+    $saved=Invoke-RestMethod -Uri ($BaseUrl.TrimEnd('/') + '/api/profile/device') -Method Post -ContentType 'application/json' -Body ($body | ConvertTo-Json -Compress) -TimeoutSec 8
+    Assert-RouterVPNProfileDeviceCapture -Captured $saved -DisplayedProfileID $DisplayedProfileID
+    if(-not $saved.device_policy_supported){throw 'The controller did not confirm native device support.'}
+    foreach($key in @('home_lan_access')){
+        if($saved.$key -isnot [bool] -or $saved.$key -ne $body[$key]){throw 'The controller did not confirm the selected device settings.'}
+    }
+    foreach($key in @('kill_switch_policy','ipv6_mode','mtu_policy')){
+        if($saved.$key -isnot [string] -or $saved.$key -cne $body[$key]){throw 'The controller did not confirm the selected device settings.'}
+    }
+    if(($saved.manual_mtu -isnot [int] -and $saved.manual_mtu -isnot [long]) -or $saved.manual_mtu -ne $body.manual_mtu){throw 'The controller did not confirm the requested MTU.'}
+    $expectedStartup=if($body.ContainsKey('startup_mode')){$body.startup_mode}else{$Captured.startup_mode}
+    $expectedAutomatic=if($body.ContainsKey('auto_connect')){$body.auto_connect}else{$Captured.auto_connect}
+    if($saved.startup_mode -isnot [string] -or $saved.startup_mode -cne $expectedStartup -or $saved.auto_connect -isnot [bool] -or $saved.auto_connect -ne $expectedAutomatic){throw 'The controller did not confirm the captured startup settings.'}
+    $originalJumbo=$Captured.PSObject.Properties['jumbo_tun'];$savedJumbo=$saved.PSObject.Properties['jumbo_tun']
+    if($null -ne $originalJumbo){
+        $expectedJumbo=if($body.ContainsKey('jumbo_tun')){$body.jumbo_tun}else{$originalJumbo.Value}
+        if($null -eq $savedJumbo -or $savedJumbo.Value -ne $expectedJumbo){throw 'The controller did not confirm the captured Jumbo setting.'}
+    }
+    if($body.ContainsKey('jumbo_tun') -and -not $saved.jumbo_tun_supported){throw 'The controller did not confirm native Jumbo support.'}
+    return $saved
 }
 
 function global:Set-RouterVPNProfileProtection {
@@ -203,8 +240,9 @@ function global:Show-RouterVPNProfileSettingsDialog {
 <TextBlock Text="Start encryption / obfuscation layer" FontWeight="SemiBold"/><ComboBox Name="StartLayer" Margin="0,3,0,4"><ComboBoxItem Content="Off — default" Tag="off"/><ComboBoxItem Content="AES-256-GCM — authenticated" Tag="aes-256-gcm"/><ComboBoxItem Content="AES-256-GCM + XOR whitening" Tag="aes-256-gcm+xor-whitening"/></ComboBox><TextBlock Name="StartLayerTruth" Text="AES uses vetted Shadowsocks 2022 AES-256-GCM. XOR is reversible whitening of already-authenticated ciphertext only; it is never counted as encryption. Unsupported runtime graphs fail closed." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 </StackPanel>
 <TextBlock Text="MTU policy"/><ComboBox Name="MTUPolicy" Margin="0,3,0,5"><ComboBoxItem Content="Auto — default" Tag="auto"/><ComboBoxItem Content="Fixed / manual" Tag="manual"/><ComboBoxItem Content="Runtime default" Tag="default"/></ComboBox><TextBox Name="ManualMTU" Margin="0,0,0,5" ToolTip="Fixed MTU 576–9000; ignored for Auto/Runtime default"/><TextBlock Name="Effective" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
+<CheckBox Name="Jumbo" Content="Jumbo virtual interface (9000)" Margin="0,5"/>
 <StackPanel Name="RouterFeatureSettings">
-<CheckBox Name="DAITA" Content="DAITA-like traffic padding (bounded; supported modes only)" Margin="0,5"/><CheckBox Name="Jumbo" Content="Jumbo TUN / jumbo packet mode (compatible paths only)" Margin="0,5"/><CheckBox Name="Socks" Content="Enable private in-tunnel SOCKS5 utility" Margin="0,5"/>
+<CheckBox Name="DAITA" Content="DAITA-like traffic padding (bounded; supported modes only)" Margin="0,5"/><CheckBox Name="Socks" Content="Enable private in-tunnel SOCKS5 utility" Margin="0,5"/>
 <StackPanel Orientation="Horizontal" Margin="0,4,0,10"><Button Name="Forwarding" Content="Port forwarding / Protected DMZ…" Padding="10,6"/></StackPanel>
 <TextBlock Text="Retest is path/config specific. A fixed MTU stays fixed until changed. Incoming forwarding is owned by the authenticated private home node and is available only to routable tunnel modes; proxy-only paths never claim arbitrary DNAT." TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,12"/>
 </StackPanel>
@@ -240,6 +278,9 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $lan.IsChecked=[bool]$externalDevice.home_lan_access;SetTag $kill ([string]$externalDevice.kill_switch_policy);SetTag $ipv6 ([string]$externalDevice.ipv6_mode);SetTag $mtuPolicy ([string]$externalDevice.mtu_policy)
         $manual.Text=if([int]$externalDevice.manual_mtu-gt0){[string]$externalDevice.manual_mtu}else{''}
         $manual.ToolTip='Fixed interface MTU 1280 to 9000; the native transport validates its actual limit.'
+        $jumboCapture=$externalDevice.PSObject.Properties['jumbo_tun'];$jumboSupport=$externalDevice.PSObject.Properties['jumbo_tun_supported']
+        $jumbo.IsChecked=$null -ne $jumboCapture -and [bool]$jumboCapture.Value
+        $jumbo.IsEnabled=$null -ne $jumboSupport -and [bool]$jumboSupport.Value -and [bool]$externalDevice.device_policy_supported
         $effective.Text="Last recorded interface MTU: $(if([int]$externalDevice.effective_mtu-gt0){$externalDevice.effective_mtu}else{'not recorded'}) - $($externalDevice.mtu_source). This is historical interface readback."
         $nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported
         $settingsSave.IsEnabled=[bool]$externalDevice.device_policy_supported -or $null -ne $externalStartup
@@ -288,7 +329,8 @@ function global:Show-RouterVPNProfileSettingsDialog {
     if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'VPN became active or began transitioning before settings save; disconnect and try again.'}
     if($null -ne $externalDevice -and $externalDevice.device_policy_supported){
         $externalManual=if([string]$mtuPolicy.SelectedItem.Tag -ceq 'manual'){$manual.Text.Trim()}else{0}
-        return Save-RouterVPNProfileDevice -BaseUrl $BaseUrl -Captured $externalDevice -DisplayedProfileID $DisplayedProfileID -HomeLANAccess ([bool]$lan.IsChecked) -KillSwitchPolicy ([string]$kill.SelectedItem.Tag) -IPv6Mode ([string]$ipv6.SelectedItem.Tag) -MTUPolicy ([string]$mtuPolicy.SelectedItem.Tag) -ManualMTU $externalManual -StartupMode ([string]$startup.SelectedItem.Tag) -AutoConnect ([bool]$autoConnect.IsChecked)
+        $jumboArguments=@{};if($null -ne $externalDevice.PSObject.Properties['jumbo_tun']){$jumboArguments.JumboTUN=[bool]$jumbo.IsChecked}
+        return Save-RouterVPNProfileDevice @jumboArguments -BaseUrl $BaseUrl -Captured $externalDevice -DisplayedProfileID $DisplayedProfileID -HomeLANAccess ([bool]$lan.IsChecked) -KillSwitchPolicy ([string]$kill.SelectedItem.Tag) -IPv6Mode ([string]$ipv6.SelectedItem.Tag) -MTUPolicy ([string]$mtuPolicy.SelectedItem.Tag) -ManualMTU $externalManual -StartupMode ([string]$startup.SelectedItem.Tag) -AutoConnect ([bool]$autoConnect.IsChecked)
     }
     if($null -ne $externalStartup){
         $displayedStartup=if([string]$externalStartup.startup_mode -ceq 'smart-auto'){'auto'}else{[string]$externalStartup.startup_mode}

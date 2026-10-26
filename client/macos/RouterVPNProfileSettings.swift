@@ -378,6 +378,7 @@ extension ProductWindowController {
                 settings.ipv6Mode = capturedDevice.ipv6Mode
                 settings.mtuPolicy = capturedDevice.mtuPolicy
                 settings.manualMTU = capturedDevice.manualMTU
+                settings.jumboTUN = capturedDevice.jumboTUN ?? false
                 settings.effectiveMTU = capturedDevice.effectiveMTU
                 settings.effectiveMTUSource = capturedDevice.mtuSource
                 if supportsDeviceSettings {
@@ -450,7 +451,7 @@ extension ProductWindowController {
                 let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not recorded yet") • \(settings.effectiveMTUSource ?? "historical interface readback")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
                 let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
-                let jumbo = check("Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
+                let jumbo = check(capturedDevice != nil ? "Jumbo virtual interface (9000)" : "Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
                 let startupValues = importedSettings
                     ? [("Saved connection","auto"),("Last proven connection","last"),("Manual / stay disconnected","manual")]
@@ -462,8 +463,9 @@ extension ProductWindowController {
 
                 let connectionProfiles = MacConnectionProfileControls(api: self.api, owner: self)
                 form.addArrangedSubview(connectionProfiles.root)
-                let routerPreferenceViews: [NSControl] = [base, fallback, autoEncrypted, autoObfuscated, startLayer, daita, jumbo, socks, forwarding]
+                let routerPreferenceViews: [NSControl] = [base, fallback, autoEncrypted, autoObfuscated, startLayer, daita, socks, forwarding]
                 routerPreferenceViews.forEach { $0.isEnabled = supportsNodeSettings && !settingsMutationBusy }
+                jumbo.isEnabled = (supportsNodeSettings || supportsDeviceSettings && capturedDevice?.jumboTUNSupported == true) && !settingsMutationBusy
                 let commonPreferenceViews: [NSControl] = [lan, kill, ipv6, mtu]
                 commonPreferenceViews.forEach { $0.isEnabled = supportsCommonSettings && !settingsMutationBusy }
                 startup.isEnabled = supportsStartupSettings && !settingsMutationBusy
@@ -500,7 +502,8 @@ extension ProductWindowController {
                         let edits = MacProfileDeviceSettings.Edits(homeLANAccess: settings.homeLANAccess,
                             killSwitchPolicy: settings.killSwitchPolicy, ipv6Mode: settings.ipv6Mode,
                             mtuPolicy: settings.mtuPolicy, manualMTUText: manual.stringValue,
-                            startupMode: settings.startupMode, autoConnect: settings.autoConnect)
+                            startupMode: settings.startupMode, autoConnect: settings.autoConnect,
+                            jumboTUN: capturedDevice.jumboTUN == nil ? nil : settings.jumboTUN)
                         do { _ = try capturedDevice.saveData(displayedProfileID: displayedProfileID, edits: edits); deviceEdits = edits }
                         catch { validationError = error.localizedDescription }
                     }

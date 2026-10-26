@@ -35,6 +35,12 @@ def main():
     callback = settings.split("static void on_profile_settings_v7(", 1)[1]
     assert callback.index("linux_device_settings_open_v1(app)") < callback.index('api_request("/api/profile/settings"')
     variants = {
+        "jumbo-capability": ('if (jumbo_changed && (!s->jumbo_known || !s->jumbo_supported))', 'if (FALSE && (!s->jumbo_known || !s->jumbo_supported))'),
+        "jumbo-fixed-conflict": ('if (jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000)', 'if (FALSE && jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000)'),
+        "jumbo-explicit-edit": ('if (jumbo_changed) json_object_set_boolean_member(o, "jumbo_tun", jumbo);', 'if (s->jumbo_known) json_object_set_boolean_member(o, "jumbo_tun", jumbo);'),
+        "jumbo-form": ('gtk_widget_set_sensitive(s->jumbo, supported && s->idle && jumbo_supported);', 'gtk_widget_set_sensitive(s->jumbo, supported && s->idle);'),
+        "saved-confirmation": ('if (saved && !linux_device_confirm_v1(s, body, response.data))', 'if (FALSE && saved && !linux_device_confirm_v1(s, body, response.data))'),
+        "startup-alias": ('json_object_set_string_member(o, "startup_mode", g_strcmp0(startup, s->initial_startup) == 0 ? s->original_startup : startup);', 'json_object_set_string_member(o, "startup_mode", startup);'),
         "selected-owner": ('if (g_strcmp0(active_router_id(s->app), s->profile) != 0)', 'if (FALSE && g_strcmp0(active_router_id(s->app), s->profile) != 0)'),
         "fresh-idle": ('if (!routervpn_require_mutation_idle(s->app, "saving imported-node device settings"))', 'if (!routervpn_require_mutation_idle(s->app, "saving imported-node device settings") && FALSE)'),
         "unsupported-save": ('if (!s->supported || !s->idle)', 'if (!s->idle)'),

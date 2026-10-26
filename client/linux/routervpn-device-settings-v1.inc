@@ -2,9 +2,10 @@
  * native transport and repeats the idle/source checks under its persistence lock. */
 typedef struct {
     App *app;
-    GtkWidget *dialog, *message, *lan, *kill, *ipv6, *mtu, *manual, *startup, *automatic;
-    char *profile, *token, *initial_startup;
+    GtkWidget *dialog, *message, *lan, *kill, *ipv6, *mtu, *manual, *jumbo, *startup, *automatic;
+    char *profile, *token, *initial_startup, *original_startup;
     gboolean supported, idle, initial_automatic;
+    gboolean jumbo_known, jumbo_supported, initial_jumbo;
 } LinuxDeviceSettingsV1;
 
 static const char *linux_device_string_v1(JsonObject *o, const char *name) {
@@ -89,6 +90,14 @@ static char *linux_device_payload_v1(LinuxDeviceSettingsV1 *s) {
     if (g_strcmp0(startup, "manual") == 0 && automatic) {
         linux_device_message_v1(s, "Manual startup must remain disconnected."); return NULL;
     }
+    gboolean jumbo = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s->jumbo));
+    gboolean jumbo_changed = jumbo != s->initial_jumbo;
+    if (jumbo_changed && (!s->jumbo_known || !s->jumbo_supported)) {
+        linux_device_message_v1(s, "This captured native runtime cannot change Jumbo."); return NULL;
+    }
+    if (jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000) {
+        linux_device_message_v1(s, "Jumbo uses a 9000-byte virtual interface. Choose Fixed 9000 or disable Jumbo; no MTU choice was changed."); return NULL;
+    }
     JsonObject *o = json_object_new();
     json_object_set_string_member(o, "profile_id", s->profile);
     json_object_set_string_member(o, "profile_token", s->token);
@@ -97,16 +106,52 @@ static char *linux_device_payload_v1(LinuxDeviceSettingsV1 *s) {
     json_object_set_string_member(o, "ipv6_mode", ipv6);
     json_object_set_string_member(o, "mtu_policy", mtu);
     json_object_set_int_member(o, "manual_mtu", manual);
+    if (jumbo_changed) json_object_set_boolean_member(o, "jumbo_tun", jumbo);
     // An unchanged display alias (SMART AUTO -> Saved connection) cannot
     // rewrite the source's startup choice during a device-only edit.
     if (g_strcmp0(startup, s->initial_startup) != 0 || automatic != s->initial_automatic) {
-        json_object_set_string_member(o, "startup_mode", startup);
+        json_object_set_string_member(o, "startup_mode", g_strcmp0(startup, s->initial_startup) == 0 ? s->original_startup : startup);
         json_object_set_boolean_member(o, "auto_connect", automatic);
     }
     JsonNode *root = json_node_new(JSON_NODE_OBJECT); json_node_take_object(root, o);
     JsonGenerator *generator = json_generator_new(); json_generator_set_root(generator, root);
     char *body = json_generator_to_data(generator, NULL);
     g_object_unref(generator); json_node_free(root); return body;
+}
+static gboolean linux_device_confirm_v1(LinuxDeviceSettingsV1 *s, const char *body, const char *response) {
+    JsonNode *sent = body != NULL ? parse_json(body) : NULL;
+    JsonNode *received = response != NULL ? parse_json(response) : NULL;
+    JsonObject *request = sent != NULL && JSON_NODE_HOLDS_OBJECT(sent) ? json_node_get_object(sent) : NULL;
+    JsonObject *saved = received != NULL && JSON_NODE_HOLDS_OBJECT(received) ? json_node_get_object(received) : NULL;
+    gboolean supported = FALSE, automatic = FALSE, jumbo = FALSE, jumbo_supported = FALSE;
+    gboolean valid = request != NULL && saved != NULL &&
+        g_strcmp0(linux_device_string_v1(saved, "profile_id"), s->profile) == 0 &&
+        g_strcmp0(linux_device_string_v1(saved, "node_kind"), "external") == 0 &&
+        linux_device_token_v1(linux_device_string_v1(saved, "profile_token")) &&
+        linux_device_bool_v1(saved, "device_policy_supported", &supported) && supported;
+    if (valid) {
+        GList *members = json_object_get_members(request);
+        for (GList *item = members; item != NULL; item = item->next) {
+            const char *key = item->data;
+            if (g_strcmp0(key, "profile_token") == 0) continue;
+            JsonNode *wanted = json_object_get_member(request, key), *actual = json_object_get_member(saved, key);
+            if (actual == NULL || !JSON_NODE_HOLDS_VALUE(actual) ||
+                json_node_get_value_type(wanted) != json_node_get_value_type(actual) || !json_node_equal(wanted, actual)) valid = FALSE;
+        }
+        g_list_free(members);
+        if (!json_object_has_member(request, "startup_mode") &&
+            g_strcmp0(linux_device_string_v1(saved, "startup_mode"), s->original_startup) != 0) valid = FALSE;
+        if (!json_object_has_member(request, "auto_connect") &&
+            (!linux_device_bool_v1(saved, "auto_connect", &automatic) || automatic != s->initial_automatic)) valid = FALSE;
+        gboolean has_jumbo = json_object_has_member(saved, "jumbo_tun"), has_support = json_object_has_member(saved, "jumbo_tun_supported");
+        if (has_jumbo != has_support || (has_jumbo &&
+            (!linux_device_bool_v1(saved, "jumbo_tun", &jumbo) || !linux_device_bool_v1(saved, "jumbo_tun_supported", &jumbo_supported)))) valid = FALSE;
+        if (s->jumbo_known && (!has_jumbo || (!json_object_has_member(request, "jumbo_tun") && jumbo != s->initial_jumbo))) valid = FALSE;
+        if (json_object_has_member(request, "jumbo_tun") && !jumbo_supported) valid = FALSE;
+    }
+    if (sent != NULL) json_node_free(sent);
+    if (received != NULL) json_node_free(received);
+    return valid;
 }
 static gboolean linux_device_save_v1(LinuxDeviceSettingsV1 *s) {
     if (!s->supported || !s->idle) {
@@ -122,12 +167,16 @@ static gboolean linux_device_save_v1(LinuxDeviceSettingsV1 *s) {
     if (body == NULL) return FALSE;
     Buffer response = {0}; char *error = NULL;
     gboolean saved = api_request("/api/profile/device", "POST", body, 8000, &response, &error);
+    if (saved && !linux_device_confirm_v1(s, body, response.data)) {
+        saved = FALSE;
+        g_free(error); error = g_strdup("The controller did not confirm the captured settings. Refresh Settings before retrying.");
+    }
     if (saved) append_diag(s->app, "Device and startup settings saved for the captured imported node.");
     else linux_device_message_v1(s, error != NULL ? error : "Settings were not saved. Reopen them if the node changed.");
     free(response.data); g_free(error); g_free(body); return saved;
 }
 static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonObject *captured, const char *expected) {
-    gboolean lan, automatic, supported;
+    gboolean lan, automatic, supported, jumbo = FALSE, jumbo_supported = FALSE;
     gint64 manual;
     const char *profile = linux_device_string_v1(captured, "profile_id");
     const char *token = linux_device_string_v1(captured, "profile_token");
@@ -136,6 +185,9 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     const char *ipv6 = linux_device_string_v1(captured, "ipv6_mode");
     const char *mtu = linux_device_string_v1(captured, "mtu_policy");
     const char *startup = linux_device_string_v1(captured, "startup_mode");
+    const char *original_startup = startup;
+    gboolean has_jumbo = captured != NULL && json_object_has_member(captured, "jumbo_tun");
+    gboolean has_jumbo_support = captured != NULL && json_object_has_member(captured, "jumbo_tun_supported");
     if (g_strcmp0(startup, "smart-auto") == 0) startup = "auto";
     if (expected == NULL || !expected[0] || g_strcmp0(profile, expected) != 0 ||
         g_strcmp0(active_router_id(app), expected) != 0 || g_strcmp0(kind, "external") != 0 || !linux_device_token_v1(token) ||
@@ -147,9 +199,13 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
         !linux_device_choice_v1(ipv6, linux_device_ipv6_ids_v1, G_N_ELEMENTS(linux_device_ipv6_ids_v1)) ||
         !linux_device_choice_v1(mtu, linux_device_mtu_ids_v1, G_N_ELEMENTS(linux_device_mtu_ids_v1)) ||
         !linux_device_choice_v1(startup, linux_device_startup_ids_v1, G_N_ELEMENTS(linux_device_startup_ids_v1)) ||
-        (g_strcmp0(mtu, "manual") == 0 ? manual < 1280 || manual > 9000 : manual != 0)) return FALSE;
+        (g_strcmp0(mtu, "manual") == 0 ? manual < 1280 || manual > 9000 : manual != 0) ||
+        has_jumbo != has_jumbo_support || (has_jumbo &&
+        (!linux_device_bool_v1(captured, "jumbo_tun", &jumbo) || !linux_device_bool_v1(captured, "jumbo_tun_supported", &jumbo_supported)))) return FALSE;
     s->app = app; s->profile = g_strdup(profile); s->token = g_strdup(token);
     s->initial_startup = g_strdup(startup); s->initial_automatic = automatic;
+    s->original_startup = g_strdup(original_startup);
+    s->jumbo_known = has_jumbo; s->jumbo_supported = jumbo_supported; s->initial_jumbo = jumbo;
     s->supported = supported; s->idle = !routervpn_mutation_busy(app);
     s->dialog = gtk_dialog_new_with_buttons("Imported node settings", GTK_WINDOW(app->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Cancel", GTK_RESPONSE_CANCEL,
@@ -181,6 +237,10 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     linux_device_row_v1(grid, 1, "Kill switch", s->kill); linux_device_row_v1(grid, 2, "IPv6", s->ipv6);
     linux_device_row_v1(grid, 3, "MTU", s->mtu); linux_device_row_v1(grid, 4, "Fixed MTU", s->manual);
     linux_device_row_v1(grid, 5, "Startup", s->startup);
+    s->jumbo = gtk_check_button_new_with_label("Jumbo virtual interface (9000)");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->jumbo), jumbo);
+    gtk_widget_set_sensitive(s->jumbo, supported && s->idle && jumbo_supported);
+    gtk_box_pack_start(GTK_BOX(box), s->jumbo, FALSE, FALSE, 0);
     s->automatic = gtk_check_button_new_with_label("Auto-connect when Router VPN starts");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->automatic), automatic);
     gtk_box_pack_start(GTK_BOX(box), s->automatic, FALSE, FALSE, 0);
@@ -211,7 +271,7 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
 }
 static void linux_device_clear_v1(LinuxDeviceSettingsV1 *s) {
     if (s->dialog != NULL) { gtk_widget_destroy(s->dialog); g_object_unref(s->dialog); }
-    g_free(s->profile); g_free(s->token); g_free(s->initial_startup); memset(s, 0, sizeof(*s));
+    g_free(s->profile); g_free(s->token); g_free(s->initial_startup); g_free(s->original_startup); memset(s, 0, sizeof(*s));
 }
 static gboolean linux_device_settings_open_v1(App *app) {
     char *expected = g_strdup(active_router_id(app));

@@ -21,12 +21,12 @@ Check $SettingsXAML.Success 'shipping Settings XAML missing'
 $AutoMTUItem=$SettingsXML.SelectSingleNode("//*[local-name()='ComboBox' and @Name='MTUPolicy']/*[local-name()='ComboBoxItem' and @Tag='auto']")
 Check ($null -ne $AutoMTUItem -and [string]$AutoMTUItem.Content -ceq $script:AutoMTULabel) 'Tor Auto claimed a measured path'
 function New-Capture {
-    [pscustomobject]@{profile_id='node "quoted"';profile_token=('b'*64);node_kind='external';protocol='shadowsocks';device_policy_supported=$true;device_policy_reason='';home_lan_access=$true;kill_switch_policy='off';ipv6_mode='on';mtu_policy='auto';manual_mtu=0;effective_mtu=1420;mtu_source='historical fixture';startup_mode='smart-auto';auto_connect=$false;note='Save while disconnected.';password='never-copy';dns_host='keep-resolver';entry_id='independent-entry'}
+    [pscustomobject]@{profile_id='node "quoted"';profile_token=('b'*64);node_kind='external';protocol='shadowsocks';jumbo_tun=$false;jumbo_tun_supported=$false;device_policy_supported=$true;device_policy_reason='';home_lan_access=$true;kill_switch_policy='off';ipv6_mode='on';mtu_policy='auto';manual_mtu=0;effective_mtu=1420;mtu_source='historical fixture';startup_mode='smart-auto';auto_connect=$false;note='Save while disconnected.';password='never-copy';dns_host='keep-resolver';entry_id='independent-entry'}
 }
 function New-Arguments($Capture) {
     @{Captured=$Capture;DisplayedProfileID=$Capture.profile_id;HomeLANAccess=$false;KillSwitchPolicy='always';IPv6Mode='off';MTUPolicy='manual';ManualMTU=1412}
 }
-$script:Capture=New-Capture;$script:Busy=$false;$script:Unavailable=$false;$script:PostFailure=$false
+$script:Capture=New-Capture;$script:Busy=$false;$script:Unavailable=$false;$script:PostFailure=$false;$script:ResponseMutation=@{}
 $script:Posts=[Collections.Generic.List[object]]::new();$script:Gets=[Collections.Generic.List[string]]::new()
 function global:Invoke-RestMethod {
     param($Uri,$Method,$ContentType,$Body,$TimeoutSec)
@@ -44,7 +44,15 @@ function global:Invoke-RestMethod {
     if($Method -ne 'Post' -or $Path -notin @('/api/profile/device','/api/profile/startup','/api/profile/settings')){throw 'unexpected POST route'}
     if($script:PostFailure){throw 'stale captured source'}
     $Value=$Body|ConvertFrom-Json
+    Check (-not ($Path -ceq '/api/profile/settings' -and $null -ne $Value.PSObject.Properties['profile_token'])) 'device save did not use its own endpoint'
     [void]$script:Posts.Add([pscustomobject]@{Path=$Path;Body=$Value})
+    if($Path -ceq '/api/profile/device'){
+        $Response=@{};foreach($Property in $script:Capture.PSObject.Properties){$Response[$Property.Name]=$Property.Value}
+        foreach($Property in $Value.PSObject.Properties){$Response[$Property.Name]=$Property.Value}
+        $Response.profile_token='d'*64
+        foreach($Key in $script:ResponseMutation.Keys){$Response[$Key]=$script:ResponseMutation[$Key]}
+        return [pscustomobject]$Response
+    }
     return $Value
 }
 
@@ -102,7 +110,47 @@ Reject {New-RouterVPNProfileDevicePayload @Invalid} 'unsupported runtime receive
 $Before=$script:Posts.Count
 $Result=Save-RouterVPNProfileDevice -BaseUrl 'http://127.0.0.1:8788/' @ArgsForSave -StartupMode 'auto' -AutoConnect $false
 Check ($script:Posts.Count -eq $Before+1 -and $script:Posts[$Before].Path -ceq '/api/profile/device') 'device save did not use its own endpoint'
-Check (@($Result.PSObject.Properties).Count -eq 7 -and $Result.profile_token -ceq $Captured.profile_token) 'device save changed its typed captured payload'
+Check ($Result.profile_id -ceq $Captured.profile_id -and $Result.profile_token -ceq ('d'*64) -and $Result.manual_mtu -eq 1412) 'device save lost its confirmed captured policy'
+foreach($Initial in @($false,$true)){
+    foreach($Policy in @('auto','default','manual')){
+        $Tor=New-Capture;$Tor.protocol='tor-bridge';$Tor.jumbo_tun=$Initial;$Tor.jumbo_tun_supported=$true
+        $ArgsForJumbo=New-Arguments $Tor;$ArgsForJumbo.MTUPolicy=$Policy;$ArgsForJumbo.ManualMTU=if($Policy -ceq 'manual'){9000}else{0}
+        foreach($Selected in @($false,$true)){
+            $Body=New-RouterVPNProfileDevicePayload @ArgsForJumbo -JumboTUN $Selected
+            Check ($Body.ContainsKey('jumbo_tun') -eq ($Selected -ne $Initial)) 'Jumbo payload lost explicit-edit ownership'
+            if($Body.ContainsKey('jumbo_tun')){Check ($Body.jumbo_tun -is [bool] -and $Body.jumbo_tun -eq $Selected) 'Jumbo payload changed selected Boolean'}
+            Check ($Body.mtu_policy -ceq $Policy -and $Body.manual_mtu -eq $ArgsForJumbo.ManualMTU) 'Jumbo silently rewrote requested MTU policy'
+        }
+    }
+}
+$Tor=New-Capture;$Tor.protocol='tor-bridge';$Tor.jumbo_tun_supported=$true
+$ArgsForJumbo=New-Arguments $Tor
+Reject {New-RouterVPNProfileDevicePayload @ArgsForJumbo -JumboTUN $true} 'Jumbo accepted conflicting Fixed MTU'
+$ArgsForJumbo.MTUPolicy='auto';$ArgsForJumbo.ManualMTU=0
+$Body=New-RouterVPNProfileDevicePayload @ArgsForJumbo -JumboTUN $true -StartupMode 'auto' -AutoConnect $true
+Check ($Body.Count -eq 10 -and $Body.jumbo_tun -and $Body.startup_mode -ceq 'smart-auto') 'Jumbo lost atomic captured startup pair'
+foreach($Bad in @('true',1,$null)){Reject {New-RouterVPNProfileDevicePayload @ArgsForJumbo -JumboTUN $Bad} 'Jumbo accepted a coerced Boolean'}
+$Ordinary=New-Arguments (New-Capture);$Ordinary.MTUPolicy='auto';$Ordinary.ManualMTU=0
+Reject {New-RouterVPNProfileDevicePayload @Ordinary -JumboTUN $true} 'unsupported Jumbo changed'
+$Legacy=New-Capture;$Legacy.PSObject.Properties.Remove('jumbo_tun');$Legacy.PSObject.Properties.Remove('jumbo_tun_supported')
+$LegacyArgs=New-Arguments $Legacy
+Check (-not (New-RouterVPNProfileDevicePayload @LegacyArgs).ContainsKey('jumbo_tun')) 'missing Jumbo capability invented a write'
+Reject {New-RouterVPNProfileDevicePayload @LegacyArgs -JumboTUN $false} 'missing Jumbo capability accepted explicit mutation'
+foreach($Field in @('jumbo_tun','jumbo_tun_supported')){
+    $Partial=New-Capture;$Partial.PSObject.Properties.Remove($Field)
+    Reject {Assert-RouterVPNProfileDeviceCapture -Captured $Partial -DisplayedProfileID $Partial.profile_id} 'partial Jumbo capability accepted'
+    foreach($Bad in @('true',1,$null)){
+        $Malformed=New-Capture;$Malformed.$Field=$Bad
+        Reject {Assert-RouterVPNProfileDeviceCapture -Captured $Malformed -DisplayedProfileID $Malformed.profile_id} 'malformed Jumbo capability accepted'
+    }
+}
+$script:Capture=$Tor
+foreach($Field in @('jumbo_tun','jumbo_tun_supported','home_lan_access','mtu_policy','profile_token')){
+    $script:ResponseMutation=@{}
+    $script:ResponseMutation[$Field]=switch($Field){'jumbo_tun'{$false};'jumbo_tun_supported'{$false};'home_lan_access'{$true};'mtu_policy'{'manual'};'profile_token'{'unbound'}}
+    Reject {Save-RouterVPNProfileDevice -BaseUrl 'http://127.0.0.1:8788' @ArgsForJumbo -JumboTUN $true} ('unconfirmed saved policy announced success '+$Field)
+}
+$script:ResponseMutation=@{};$script:Capture=New-Capture
 $script:Busy=$true;$Before=$script:Posts.Count
 Reject {Save-RouterVPNProfileDevice -BaseUrl 'http://127.0.0.1:8788' @ArgsForSave} 'active device policy was submitted'
 Check ($script:Posts.Count -eq $Before) 'active device save reached the server'
@@ -163,10 +211,15 @@ if($WPF){
     Add-Type -AssemblyName WindowsBase
     if($null -eq [Windows.Application]::Current){$script:DeviceApplication=New-Object Windows.Application;$script:DeviceApplication.ShutdownMode='OnExplicitShutdown'}
     function Select-Tag($Combo,[string]$Tag){foreach($Item in $Combo.Items){if([string]$Item.Tag -ceq $Tag){$Combo.SelectedItem=$Item;return}};throw ('missing UI choice '+$Tag)}
-    foreach($Scenario in @('save-common','tor-common','startup-unchanged','manual-startup','invalid-mtu','unsupported-startup','busy')){
+    foreach($Scenario in @('save-common','tor-common','startup-unchanged','manual-startup','invalid-mtu','unsupported-startup','busy','jumbo-enable','jumbo-disable','jumbo-default','jumbo-fixed','jumbo-conflict','jumbo-unsupported','jumbo-legacy')){
         $script:Capture=New-Capture;$script:Busy=$Scenario-ceq'busy';$script:Posts.Clear();$script:WPFError='';$script:Scenario=$Scenario
+        if($Scenario -ceq 'busy'){$script:Capture.protocol='tor-bridge';$script:Capture.jumbo_tun_supported=$true}
         if($Scenario -ceq 'unsupported-startup'){$script:Capture.device_policy_supported=$false;$script:Capture.device_policy_reason='Native common device policy unavailable.'}
         if($Scenario -ceq 'tor-common'){$script:Capture.protocol='tor-bridge';$script:Capture.note='Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented.'}
+        if($Scenario -clike 'jumbo-*' -and $Scenario -cnotin @('jumbo-unsupported','jumbo-legacy')){$script:Capture.protocol='tor-bridge';$script:Capture.jumbo_tun_supported=$true}
+        if($Scenario -ceq 'jumbo-disable'){$script:Capture.jumbo_tun=$true}
+        if($Scenario -ceq 'jumbo-default'){$script:Capture.mtu_policy='default'}
+        if($Scenario -ceq 'jumbo-legacy'){$script:Capture.PSObject.Properties.Remove('jumbo_tun');$script:Capture.PSObject.Properties.Remove('jumbo_tun_supported')}
         $Timer=New-Object Windows.Threading.DispatcherTimer;$Timer.Interval=[TimeSpan]::FromMilliseconds(20)
         $Timer.Add_Tick({
             $Dialog=@([Windows.Application]::Current.Windows|Where-Object{$_.Title -eq 'Settings'})
@@ -177,10 +230,17 @@ if($WPF){
                 Check ($Dialog.FindName('Effective').Text -match '^Last recorded interface MTU:' -and $Dialog.FindName('Effective').Text -notmatch 'Retest') 'external form claimed historical interface MTU was a fresh path test'
                 $Save=$Dialog.FindName('Save');$Node=$Dialog.FindName('NodeSettings');$Startup=$Dialog.FindName('Startup');$Automatic=$Dialog.FindName('AutoConnect')
                 switch($script:Scenario){
-                    'busy' {Check (-not$Save.IsEnabled-and-not$Node.IsEnabled-and-not$Startup.IsEnabled) 'busy WPF form enabled persistent edits';$Dialog.FindName('Cancel').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent));return}
+                    'busy' {Check (-not$Save.IsEnabled-and-not$Node.IsEnabled-and-not$Startup.IsEnabled-and-not$Dialog.FindName('Jumbo').IsEnabled) 'busy WPF form enabled persistent edits';$Dialog.FindName('Cancel').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent));return}
                     'unsupported-startup' {Check (-not$Node.IsEnabled-and$Startup.IsEnabled-and$Save.IsEnabled) 'unsupported WPF form enabled common device fields or disabled startup';Select-Tag $Startup 'last';$Automatic.IsChecked=$true}
                     'save-common' {Check $Node.IsEnabled 'supported WPF form disabled common device fields';$Dialog.FindName('LAN').IsChecked=$false;Select-Tag ($Dialog.FindName('Kill')) 'always';Select-Tag ($Dialog.FindName('IPv6')) 'off';Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1412'}
                     'tor-common' {Check $Node.IsEnabled 'supported Tor form disabled common device fields';Check ($Dialog.FindName('SettingsNote').Text -ceq $script:Capture.note) 'captured Tor capability note was replaced';Check ([string]$Dialog.FindName('MTUPolicy').SelectedItem.Content -ceq $script:AutoMTULabel) 'Tor Auto claimed a measured path'}
+                    {$_ -cin @('jumbo-enable','jumbo-disable','jumbo-default','jumbo-fixed','jumbo-conflict','jumbo-unsupported','jumbo-legacy')} {
+                        $Jumbo=$Dialog.FindName('Jumbo')
+                        Check ([string]$Jumbo.Content -ceq 'Jumbo virtual interface (9000)') 'native Jumbo label changed its virtual-interface meaning'
+                        Check ($Jumbo.IsEnabled -eq ($script:Scenario -cnotin @('jumbo-unsupported','jumbo-legacy'))) 'native Jumbo capability was not enforced by form'
+                        if($script:Scenario -cne 'jumbo-legacy'){$Jumbo.IsChecked=$script:Scenario -cne 'jumbo-disable'}
+                        if($script:Scenario -cin @('jumbo-fixed','jumbo-conflict')){Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text=if($script:Scenario -ceq 'jumbo-fixed'){'9000'}else{'1400'}}
+                    }
                     'manual-startup' {$Automatic.IsChecked=$true;Select-Tag $Startup 'manual';Check (-not$Automatic.IsChecked-and-not$Automatic.IsEnabled) 'manual WPF startup retained auto-connect'}
                     'invalid-mtu' {Select-Tag ($Dialog.FindName('MTUPolicy')) 'manual';$Dialog.FindName('ManualMTU').Text='1.5'}
                 }
@@ -188,9 +248,9 @@ if($WPF){
             }catch{$script:WPFError=$_.ToString();$Dialog.Close()}
         })
         $Timer.Start();$Failed=$false
-        try{[void](Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -DisplayedProfileID $script:Capture.profile_id -DisplayedNodeKind 'external')}catch{$Failed=$true;if($Scenario -cne 'invalid-mtu'){$script:WPFError=$_.ToString()}}finally{$Timer.Stop()}
+        try{[void](Show-RouterVPNProfileSettingsDialog -BaseUrl $BaseUrl -DisplayedProfileID $script:Capture.profile_id -DisplayedNodeKind 'external')}catch{$Failed=$true;if($Scenario -cnotin @('invalid-mtu','jumbo-conflict','jumbo-unsupported')){$script:WPFError=$_.ToString()}}finally{$Timer.Stop()}
         Check ([string]::IsNullOrEmpty($script:WPFError)) ('actual WPF form failed '+$Scenario+' '+$script:WPFError)
-        if($Scenario -cin @('busy','invalid-mtu')){Check ($script:Posts.Count-eq0) ('rejected WPF edit posted '+$Scenario);if($Scenario-ceq'invalid-mtu'){Check $Failed 'WPF invalid fixed MTU was normalized'};continue}
+        if($Scenario -cin @('busy','invalid-mtu','jumbo-conflict','jumbo-unsupported')){Check ($script:Posts.Count-eq0) ('rejected WPF edit posted '+$Scenario);if($Scenario-cin@('invalid-mtu','jumbo-conflict','jumbo-unsupported')){Check $Failed 'WPF invalid fixed MTU was normalized'};continue}
         Check ($script:Posts.Count-eq1) ('WPF form did not save exactly one transaction '+$Scenario)
         $Sent=$script:Posts[0]
         if($Scenario-ceq'unsupported-startup'){
@@ -198,6 +258,11 @@ if($WPF){
         }else{
             Check ($Sent.Path-ceq'/api/profile/device'-and$Sent.Body.profile_token-ceq('b'*64)) 'WPF common save changed its captured route or source'
             if($Scenario-ceq'manual-startup'){Check (@($Sent.Body.PSObject.Properties).Count-eq9-and$Sent.Body.startup_mode-ceq'manual'-and-not$Sent.Body.auto_connect) 'WPF startup was not atomic'}
+            elseif($Scenario -cin @('jumbo-enable','jumbo-disable','jumbo-default','jumbo-fixed')){
+                Check (@($Sent.Body.PSObject.Properties).Count-eq8-and$Sent.Body.jumbo_tun -eq ($Scenario -cne 'jumbo-disable')) 'WPF Jumbo did not reach narrow atomic transaction'
+                $ExpectedPolicy=if($Scenario-ceq'jumbo-default'){'default'}elseif($Scenario-ceq'jumbo-fixed'){'manual'}else{'auto'}
+                Check ($Sent.Body.mtu_policy -ceq $ExpectedPolicy -and $Sent.Body.manual_mtu -eq $(if($ExpectedPolicy-ceq'manual'){9000}else{0})) 'WPF Jumbo silently changed MTU policy'
+            }
             else{Check (@($Sent.Body.PSObject.Properties).Count-eq7) 'WPF unchanged startup alias was serialized'}
             if($Scenario-ceq'save-common'){Check ($Sent.Body.manual_mtu-eq1412-and$Sent.Body.mtu_policy-ceq'manual'-and$Sent.Body.kill_switch_policy-ceq'always'-and$Sent.Body.ipv6_mode-ceq'off'-and-not$Sent.Body.home_lan_access) 'WPF selected common fields did not reach the real serializer'}
         }

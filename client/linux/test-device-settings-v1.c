@@ -9,7 +9,10 @@ typedef struct { char *data; size_t size; } Buffer;
 static gboolean idle = TRUE, reject_save = FALSE, replace_during_read = FALSE;
 static guint checks = 0, posts = 0, gets = 0, diagnostics = 0;
 static char *last_body = NULL, *get_body = NULL;
+static gboolean reply_jumbo = FALSE, reply_jumbo_supported = FALSE;
+static const char *reply_fault = NULL;
 static App *active_app = NULL;
+static JsonNode *fixture(void);
 static const char *active_router_id(App *app) { return app->selected; }
 static gboolean routervpn_mutation_busy(App *app) { (void)app; return !idle; }
 static gboolean routervpn_require_mutation_idle(App *app, const char *reason) { (void)app; (void)reason; return idle; }
@@ -34,7 +37,23 @@ static gboolean api_request(const char *path, const char *method, const char *bo
     check(g_strcmp0(method, "POST") == 0, "unexpected controller method");
     posts++; g_free(last_body); last_body = g_strdup(body);
     if (reject_save) { *error = g_strdup("Captured source changed; settings were not saved."); return FALSE; }
-    out->data = g_strdup("{\"ok\":true}"); return TRUE;
+    JsonNode *saved = fixture(), *sent = parse_json(body);
+    JsonObject *result = json_node_get_object(saved), *request = json_node_get_object(sent);
+    json_object_set_boolean_member(result, "jumbo_tun", reply_jumbo);
+    json_object_set_boolean_member(result, "jumbo_tun_supported", reply_jumbo_supported);
+    GList *members = json_object_get_members(request);
+    for (GList *p = members; p != NULL; p = p->next)
+        json_object_set_member(result, p->data, json_node_copy(json_object_get_member(request, p->data)));
+    g_list_free(members);
+    json_object_set_string_member(result, "profile_token", "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd");
+    if (g_strcmp0(reply_fault, "jumbo") == 0) json_object_set_boolean_member(result, "jumbo_tun", FALSE);
+    if (g_strcmp0(reply_fault, "capability") == 0) json_object_set_boolean_member(result, "jumbo_tun_supported", FALSE);
+    if (g_strcmp0(reply_fault, "profile") == 0) json_object_set_string_member(result, "profile_id", "replacement");
+    if (g_strcmp0(reply_fault, "startup") == 0) json_object_set_string_member(result, "startup_mode", "manual");
+    if (g_strcmp0(reply_fault, "mtu") == 0) json_object_set_int_member(result, "manual_mtu", 8999);
+    JsonGenerator *generator = json_generator_new(); json_generator_set_root(generator, saved);
+    out->data = json_generator_to_data(generator, NULL);
+    g_object_unref(generator); json_node_free(saved); json_node_free(sent); return TRUE;
 }
 #include "routervpn-device-settings-v1.inc"
 
@@ -43,6 +62,7 @@ static JsonNode *fixture(void) {
         "\"node_kind\":\"external\",\"protocol\":\"wireguard\",\"home_lan_access\":false,\"kill_switch_policy\":\"always\","
         "\"ipv6_mode\":\"on\",\"mtu_policy\":\"auto\",\"manual_mtu\":0,\"startup_mode\":\"auto\",\"auto_connect\":false,"
         "\"effective_mtu\":1392,\"mtu_source\":\"past path\",\"device_policy_supported\":true,\"device_policy_reason\":\"\","
+        "\"jumbo_tun\":false,\"jumbo_tun_supported\":false,"
         "\"password\":\"must-not-copy\",\"entry_id\":\"independent-entry\",\"dns_resolver\":\"preserve\"}");
 }
 static gboolean modal_save(gpointer data) {
@@ -60,6 +80,48 @@ static gboolean modal_save(gpointer data) {
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv);
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "exit-\"quoted\""}; active_app = &app;
+    for (guint initial = 0; initial < 2; initial++) for (guint policy = 0; policy < 3; policy++) {
+        JsonNode *jumbo_root = fixture(); JsonObject *jumbo_capture = json_node_get_object(jumbo_root);
+        json_object_set_string_member(jumbo_capture, "protocol", "tor-bridge");
+        json_object_set_boolean_member(jumbo_capture, "jumbo_tun", initial);
+        json_object_set_boolean_member(jumbo_capture, "jumbo_tun_supported", TRUE);
+        json_object_set_string_member(jumbo_capture, "mtu_policy", linux_device_mtu_ids_v1[policy]);
+        json_object_set_int_member(jumbo_capture, "manual_mtu", policy == 1 ? 9000 : 0);
+        reply_jumbo = initial; reply_jumbo_supported = TRUE;
+        LinuxDeviceSettingsV1 jumbo_settings = {0};
+        check(linux_device_build_v1(&jumbo_settings, &app, jumbo_capture, app.selected), "valid Tor Jumbo form rejected");
+        check(gtk_widget_get_sensitive(jumbo_settings.jumbo) &&
+            gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(jumbo_settings.jumbo)) == (gboolean)initial &&
+            g_strcmp0(gtk_button_get_label(GTK_BUTTON(jumbo_settings.jumbo)), "Jumbo virtual interface (9000)") == 0, "Jumbo control lost captured support/value");
+        for (guint selected = 0; selected < 2; selected++) {
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(jumbo_settings.jumbo), selected);
+            check(linux_device_save_v1(&jumbo_settings), "actual Jumbo checkbox did not save");
+            JsonNode *posted = parse_json(last_body); JsonObject *payload = json_node_get_object(posted);
+            check(json_object_has_member(payload, "jumbo_tun") == (selected != initial), "Jumbo payload lost explicit-edit ownership");
+            if (selected != initial) check(json_object_get_boolean_member(payload, "jumbo_tun") == (gboolean)selected, "Jumbo Boolean was replaced");
+            check(g_strcmp0(linux_device_string_v1(payload, "mtu_policy"), linux_device_mtu_ids_v1[policy]) == 0 &&
+                json_object_get_int_member(payload, "manual_mtu") == (policy == 1 ? 9000 : 0), "Jumbo silently changed saved MTU policy");
+            json_node_free(posted);
+        }
+        if (!initial && policy == 0) {
+            gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(jumbo_settings.jumbo), TRUE);
+            const char *faults[] = {"jumbo", "capability", "profile", "startup", "mtu"};
+            for (guint f = 0; f < G_N_ELEMENTS(faults); f++) {
+                reply_fault = faults[f]; check(!linux_device_save_v1(&jumbo_settings), "unconfirmed Jumbo/device policy announced as saved");
+            }
+            reply_fault = NULL;
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(jumbo_settings.mtu), "manual"); gtk_entry_set_text(GTK_ENTRY(jumbo_settings.manual), "1400");
+            guint before = posts;
+            check(!linux_device_save_v1(&jumbo_settings) && posts == before, "conflicting Fixed MTU was silently rewritten for Jumbo");
+        }
+        linux_device_clear_v1(&jumbo_settings);
+        idle = FALSE;
+        check(linux_device_build_v1(&jumbo_settings, &app, jumbo_capture, app.selected), "busy Jumbo cannot be inspected");
+        check(!gtk_widget_get_sensitive(jumbo_settings.jumbo), "busy Jumbo control remained editable");
+        linux_device_clear_v1(&jumbo_settings); idle = TRUE;
+        json_node_free(jumbo_root);
+    }
+    reply_jumbo = FALSE; reply_jumbo_supported = FALSE;
     JsonNode *tor_root = fixture(); JsonObject *tor_capture = json_node_get_object(tor_root);
     const char *tor_note = "Tor Auto uses a 1280-byte virtual interface. Retest is not yet implemented.";
     json_object_set_string_member(tor_capture, "protocol", "tor-bridge");
@@ -73,6 +135,11 @@ int main(int argc, char **argv) {
     JsonNode *root = fixture(); JsonObject *captured = json_node_get_object(root);
     LinuxDeviceSettingsV1 s = {0};
     check(linux_device_build_v1(&s, &app, captured, app.selected), "valid device panel rejected");
+    check(!gtk_widget_get_sensitive(s.jumbo), "unsupported Jumbo checkbox enabled");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s.jumbo), TRUE);
+    guint unsupported_before = posts;
+    check(!linux_device_save_v1(&s) && posts == unsupported_before, "unsupported Jumbo was posted");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s.jumbo), FALSE);
     check(!gtk_widget_get_sensitive(s.manual), "Auto exposed fixed input");
     for (guint k = 0; k < 3; k++) for (guint v = 0; v < 3; v++) for (guint m = 0; m < 3; m++) {
         gboolean lan = (k + v + m) % 2, automatic = (k + m) % 2 && (k + v) % 3 != 2;
@@ -124,18 +191,34 @@ int main(int argc, char **argv) {
         check(pixels != NULL && gdk_pixbuf_save(pixels, argv[2], "png", NULL, NULL), "screenshot failed"); g_object_unref(pixels);
     }
     linux_device_clear_v1(&s);
-    const char *bad_fields[] = {"profile_token", "home_lan_access", "auto_connect", "device_policy_supported", "manual_mtu", "kill_switch_policy", "ipv6_mode", "mtu_policy", "startup_mode"};
+    const char *bad_fields[] = {"profile_token", "home_lan_access", "auto_connect", "device_policy_supported", "manual_mtu", "kill_switch_policy", "ipv6_mode", "mtu_policy", "startup_mode", "jumbo_tun", "jumbo_tun_supported"};
     for (guint i = 0; i < G_N_ELEMENTS(bad_fields); i++) {
         JsonNode *wrong = fixture(); JsonObject *o = json_node_get_object(wrong);
         json_object_set_string_member(o, bad_fields[i], "invalid");
         check(!linux_device_build_v1(&s, &app, o, app.selected), "malformed captured policy became editable"); json_node_free(wrong);
     }
+    for (guint missing = 0; missing < 2; missing++) {
+        JsonNode *partial = fixture(); JsonObject *o = json_node_get_object(partial);
+        json_object_remove_member(o, missing == 0 ? "jumbo_tun" : "jumbo_tun_supported");
+        check(!linux_device_build_v1(&s, &app, o, app.selected), "partial Jumbo capability enabled a form"); json_node_free(partial);
+    }
+    JsonNode *legacy = fixture(); JsonObject *legacy_capture = json_node_get_object(legacy);
+    json_object_remove_member(legacy_capture, "jumbo_tun"); json_object_remove_member(legacy_capture, "jumbo_tun_supported");
+    check(linux_device_build_v1(&s, &app, legacy_capture, app.selected) && !gtk_widget_get_sensitive(s.jumbo), "missing Jumbo capability invented support");
+    char *legacy_body = linux_device_payload_v1(&s); JsonNode *legacy_posted = parse_json(legacy_body);
+    check(!json_object_has_member(json_node_get_object(legacy_posted), "jumbo_tun"), "missing Jumbo capability invented a write");
+    g_free(legacy_body); json_node_free(legacy_posted); linux_device_clear_v1(&s); json_node_free(legacy);
     check(!linux_device_build_v1(&s, &app, captured, "wrong-opening-node"), "GET adopted another displayed node");
     json_object_set_string_member(captured, "startup_mode", "smart-auto");
     check(linux_device_build_v1(&s, &app, captured, app.selected), "legacy SMART AUTO not displayed");
     char *unchanged = linux_device_payload_v1(&s); JsonNode *unchanged_root = parse_json(unchanged);
     check(json_object_get_size(json_node_get_object(unchanged_root)) == 7, "unchanged SMART AUTO rewritten by device Save");
-    json_node_free(unchanged_root); g_free(unchanged); linux_device_clear_v1(&s);
+    json_node_free(unchanged_root); g_free(unchanged);
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s.automatic), TRUE);
+    check(linux_device_save_v1(&s), "auto-connect-only saved alias failed");
+    JsonNode *alias = parse_json(last_body);
+    check(g_strcmp0(linux_device_string_v1(json_node_get_object(alias), "startup_mode"), "smart-auto") == 0, "auto-connect-only edit replaced original startup alias");
+    json_node_free(alias); linux_device_clear_v1(&s);
     json_object_set_string_member(captured, "startup_mode", "auto");
     idle = FALSE; check(linux_device_build_v1(&s, &app, captured, app.selected), "connected settings could not be inspected");
     check(!gtk_widget_get_sensitive(s.kill) && !gtk_widget_get_sensitive(s.lan) &&

@@ -15,6 +15,8 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
     let ipv6Mode: String
     let mtuPolicy: String
     let manualMTU: Int
+    let jumboTUN: Bool?
+    let jumboTUNSupported: Bool?
     let effectiveMTU: Int?
     let mtuSource: String?
     let startupMode: String
@@ -27,6 +29,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         case devicePolicyReason = "device_policy_reason", homeLANAccess = "home_lan_access"
         case killSwitchPolicy = "kill_switch_policy", ipv6Mode = "ipv6_mode", mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu", effectiveMTU = "effective_mtu", mtuSource = "mtu_source"
+        case jumboTUN = "jumbo_tun", jumboTUNSupported = "jumbo_tun_supported"
         case startupMode = "startup_mode", autoConnect = "auto_connect"
         case note
     }
@@ -42,13 +45,18 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
 
     static func capture(_ data: Data, displayedProfileID: String) throws -> Self {
         let value = try JSONDecoder().decode(Self.self, from: data)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
+        let hasJumbo = object?["jumbo_tun"] != nil
+        let hasJumboSupport = object?["jumbo_tun_supported"] != nil
         guard !displayedProfileID.isEmpty, value.profileID == displayedProfileID,
               validToken(value.profileToken), value.nodeKind == "external", !value.protocolName.isEmpty,
               ["off", "on-connect", "always"].contains(value.killSwitchPolicy),
               ["on", "off", "auto"].contains(value.ipv6Mode),
               ["auto", "manual", "default"].contains(value.mtuPolicy),
               ["auto", "smart-auto", "last", "manual"].contains(value.startupMode),
-              (value.mtuPolicy == "manual" ? (1280...9000).contains(value.manualMTU) : value.manualMTU == 0) else {
+              (value.mtuPolicy == "manual" ? (1280...9000).contains(value.manualMTU) : value.manualMTU == 0),
+              hasJumbo == hasJumboSupport,
+              !hasJumbo || (value.jumboTUN != nil && value.jumboTUNSupported != nil) else {
             throw issue("The selected node or its device policy changed. Reopen Settings.")
         }
         return value
@@ -66,6 +74,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         var manualMTUText: String
         var startupMode: String
         var autoConnect: Bool
+        var jumboTUN: Bool? = nil
     }
 
     func saveData(displayedProfileID: String, edits: Edits) throws -> Data {
@@ -91,6 +100,15 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
             }
             fixed = value
         }
+        let selectedJumbo = edits.jumboTUN ?? jumboTUN
+        if let changed = edits.jumboTUN, changed != jumboTUN {
+            guard jumboTUNSupported == true, jumboTUN != nil else {
+                throw Self.issue("This captured native runtime cannot change Jumbo. Reopen Settings.")
+            }
+        }
+        guard selectedJumbo != true || edits.mtuPolicy != "manual" || fixed == 9000 else {
+            throw Self.issue("Jumbo uses a 9000-byte virtual interface. Choose Fixed 9000 or disable Jumbo; no MTU choice was changed.")
+        }
         var body: [String: Any] = [
             "profile_id": profileID, "profile_token": profileToken,
             "home_lan_access": edits.homeLANAccess, "kill_switch_policy": edits.killSwitchPolicy,
@@ -99,6 +117,9 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         if edits.startupMode != displayedStartup || edits.autoConnect != autoConnect {
             body["startup_mode"] = edits.startupMode == displayedStartup ? startupMode : edits.startupMode
             body["auto_connect"] = edits.autoConnect
+        }
+        if let changed = edits.jumboTUN, changed != jumboTUN {
+            body["jumbo_tun"] = changed
         }
         return try JSONSerialization.data(withJSONObject: body)
     }
@@ -129,7 +150,9 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
               saved.ipv6Mode == edits.ipv6Mode, saved.mtuPolicy == edits.mtuPolicy,
               saved.manualMTU == (request?["manual_mtu"] as? Int),
               saved.startupMode == (request?["startup_mode"] as? String ?? startupMode),
-              saved.autoConnect == (request?["auto_connect"] as? Bool ?? autoConnect) else {
+              saved.autoConnect == (request?["auto_connect"] as? Bool ?? autoConnect),
+              jumboTUN == nil || saved.jumboTUN == (request?["jumbo_tun"] as? Bool ?? jumboTUN),
+              request?["jumbo_tun"] == nil || saved.jumboTUNSupported == true else {
             throw Self.issue("The controller did not confirm the captured device settings. Refresh Settings before retrying.")
         }
     }

@@ -44,15 +44,17 @@ def main():
         raise AssertionError("Shipping Settings XAML missing")
     window = ET.fromstring(match.group(1))
     controls = {element.attrib.get("Name"): element for element in window.iter() if element.attrib.get("Name")}
-    for name in ("LAN", "Kill", "IPv6", "MTUPolicy", "ManualMTU", "Effective"):
+    for name in ("LAN", "Kill", "IPv6", "MTUPolicy", "ManualMTU", "Effective", "Jumbo"):
         if controls[name] not in list(controls["NodeSettings"].iter()):
             raise AssertionError("Common device field moved out of its owned form: " + name)
     for name in ("Base", "Fallback", "RequireEncrypted", "RequireObfuscation", "StartLayer"):
         if controls[name] not in list(controls["RouterTransportSettings"].iter()):
             raise AssertionError("Router-only transport field escaped its container: " + name)
-    for name in ("DAITA", "Jumbo", "Socks", "Forwarding"):
+    for name in ("DAITA", "Socks", "Forwarding"):
         if controls[name] not in list(controls["RouterFeatureSettings"].iter()):
             raise AssertionError("Router-only feature escaped its container: " + name)
+    if controls["Jumbo"] in list(controls["RouterFeatureSettings"].iter()) or controls["Jumbo"].attrib.get("Content") != "Jumbo virtual interface (9000)":
+        raise AssertionError("Captured native Jumbo control is hidden or mislabeled")
     for name in ("Startup", "AutoConnect"):
         if controls[name] not in list(controls["StartupSettings"].iter()) or controls[name] in list(controls["NodeSettings"].iter()):
             raise AssertionError("Independent startup field moved into unsupported common settings")
@@ -63,6 +65,10 @@ def main():
     if args.shipping_only:
         return
     mutations = [
+        ("jumbo-capability", "helper", "if($jumboChanged -and ($null -eq $jumboSupport -or -not $jumboSupport.Value))", "if($false -and ($null -eq $jumboSupport -or -not $jumboSupport.Value))", "CONTROL unsupported Jumbo changed"),
+        ("jumbo-fixed-conflict", "helper", "if($selectedJumbo -eq $true -and $MTUPolicy -ceq 'manual' -and $manualValue -ne 9000)", "if($false)", "CONTROL Jumbo accepted conflicting Fixed MTU"),
+        ("jumbo-explicit-edit", "helper", "if($jumboChanged){$body.jumbo_tun=$JumboTUN}", "if($null -ne $jumboCapture){$body.jumbo_tun=$selectedJumbo}", "CONTROL device payload copied unrelated or private fields"),
+        ("jumbo-confirmation", "helper", "$null -eq $savedJumbo -or $savedJumbo.Value -ne $expectedJumbo", "$null -eq $savedJumbo", "CONTROL unconfirmed saved policy announced success jumbo_tun"),
         ("copied-private", "helper", "home_lan_access=$HomeLANAccess;kill_switch_policy", "home_lan_access=$HomeLANAccess;password=$Captured.password;kill_switch_policy", "CONTROL device payload copied unrelated or private fields"),
         ("wrong-token", "helper", "profile_token=[string]$Captured.profile_token;home_lan_access", "profile_token=('f'*64);home_lan_access", "CONTROL device payload replaced captured identity"),
         ("wrong-kill", "helper", "kill_switch_policy=$KillSwitchPolicy;ipv6_mode", "kill_switch_policy='off';ipv6_mode", "CONTROL device payload changed selected protection policy"),
@@ -83,6 +89,7 @@ def main():
         # PowerShell can wrap/color the long exception after this unique
         # prefix. Keep the actual form mutation and require its own assertion.
         mutations.append(("unsupported-form", "helper", "$nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported", "$nodeSettings.IsEnabled=$true", "CONTROL unsupported WPF form"))
+        mutations.append(("jumbo-form", "helper", "$jumbo.IsEnabled=$null -ne $jumboSupport -and [bool]$jumboSupport.Value -and [bool]$externalDevice.device_policy_supported", "$jumbo.IsEnabled=$false", "CONTROL native Jumbo capability was not enforced by form"))
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-device-") as temp:
         for name, kind, old, new, rejection in mutations:
             variant = replace_once(source if kind == "helper" else shell_source, old, new)

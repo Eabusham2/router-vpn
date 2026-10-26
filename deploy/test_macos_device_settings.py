@@ -54,7 +54,7 @@ def shipping(model=None, settings=None, build=None):
     workflow = (ROOT / ".github/workflows/macos-native-app.yml").read_text()
     assert workflow.count("- 'deploy/test_macos_device_settings.py'") == 2, "Fixture-only edits do not trigger both native workflow events"
     assert 'run: python3 deploy/test_macos_device_settings.py\n' in workflow, "macOS workflow omitted executable device defects"
-    for key in ('"dns_mode":', '"effective_mtu":', '"jumbo_tun":', '"start_layer":', '"external":'):
+    for key in ('"dns_mode":', '"effective_mtu":', '"start_layer":', '"external":'):
         assert key not in model, "Narrow common policy copied unrelated field " + key
 
 
@@ -100,7 +100,7 @@ func saved(_ override: [String: Any] = [:]) -> [String: Any] {
         "home_lan_access": true, "kill_switch_policy": "always", "ipv6_mode": "off",
         "mtu_policy": "auto", "manual_mtu": 0, "effective_mtu": 1392, "mtu_source": "historical path",
         "startup_mode": "smart-auto", "auto_connect": false,
-        "external": ["password": "must-never-copy"], "jumbo_tun": true,
+        "external": ["password": "must-never-copy"], "jumbo_tun": false, "jumbo_tun_supported": false,
         "dns_mode": "home", "entry_id": "independent-entry", "start_layer": "private-policy"
     ]
     result.merge(override) { _, current in current }
@@ -110,7 +110,7 @@ func edited(_ capture: MacProfileDeviceSettings) -> MacProfileDeviceSettings.Edi
     MacProfileDeviceSettings.Edits(homeLANAccess: capture.homeLANAccess,
         killSwitchPolicy: capture.killSwitchPolicy, ipv6Mode: capture.ipv6Mode,
         mtuPolicy: capture.mtuPolicy, manualMTUText: String(capture.manualMTU),
-        startupMode: capture.displayedStartup, autoConnect: capture.autoConnect)
+        startupMode: capture.displayedStartup, autoConnect: capture.autoConnect, jumboTUN: capture.jumboTUN)
 }
 func echo(_ body: Data, original: [String: Any] = saved()) -> Data {
     var response = original
@@ -296,11 +296,49 @@ do {
     check(tor.note == note && body["note"] == nil,
           "Captured Tor capability note was lost or copied into policy")
 }
+for initial in [false,true] {
+    for policy in ["auto","default","manual"] {
+        let tor = try MacProfileDeviceSettings.capture(data(saved(["protocol":"tor-bridge", "jumbo_tun":initial, "jumbo_tun_supported":true,
+            "mtu_policy":policy, "manual_mtu":policy == "manual" ? 9000 : 0])), displayedProfileID:fixtureID)
+        for selected in [false,true] {
+            var values = edited(tor); values.jumboTUN = selected
+            let body = object(try tor.saveData(displayedProfileID:fixtureID, edits:values))
+            check((body["jumbo_tun"] as? Bool) == (initial == selected ? nil : selected), "Jumbo payload did not preserve explicit-edit ownership")
+            check(body["mtu_policy"] as? String == policy && body["manual_mtu"] as? Int == (policy == "manual" ? 9000 : 0), "Jumbo silently rewrote the saved MTU policy")
+        }
+    }
+}
+do {
+    let tor = try MacProfileDeviceSettings.capture(data(saved(["protocol":"tor-bridge", "jumbo_tun_supported":true])), displayedProfileID:fixtureID)
+    var values = edited(tor); values.jumboTUN = true; values.mtuPolicy = "manual"; values.manualMTUText = "1400"
+    rejects("Conflicting Fixed MTU was silently changed for Jumbo") { _ = try tor.saveData(displayedProfileID:fixtureID, edits:values) }
+    values.mtuPolicy = "auto"; values.autoConnect = true
+    let body = object(try tor.saveData(displayedProfileID:fixtureID, edits:values))
+    check(Set(body.keys) == keys.union(["jumbo_tun","startup_mode","auto_connect"]) && body["startup_mode"] as? String == "smart-auto", "Jumbo and startup did not share their captured atomic transaction")
+    for field in ["jumbo_tun","jumbo_tun_supported"] {
+        rejects("Unconfirmed Jumbo was announced as saved") {
+            try tor.save(edits:values, displayedProfileID:{fixtureID}, readStatus:{data(idleState)}, persist:{
+                var response = object(echo($0,original:saved(["protocol":"tor-bridge","jumbo_tun_supported":true])))
+                response[field] = false; return data(response)
+            })
+        }
+    }
+    var unsupported = edited(capture); unsupported.jumboTUN = true
+    rejects("Unsupported Jumbo change was admitted") { _ = try capture.saveData(displayedProfileID:fixtureID, edits:unsupported) }
+    var legacy = saved(); legacy.removeValue(forKey:"jumbo_tun"); legacy.removeValue(forKey:"jumbo_tun_supported")
+    let old = try MacProfileDeviceSettings.capture(data(legacy), displayedProfileID:fixtureID)
+    check(object(try old.saveData(displayedProfileID:fixtureID, edits:edited(old)))["jumbo_tun"] == nil, "Missing Jumbo capability invented a write")
+    for field in ["jumbo_tun","jumbo_tun_supported"] {
+        var partial = saved(); partial.removeValue(forKey:field)
+        rejects("Partial Jumbo capability was accepted") { _ = try MacProfileDeviceSettings.capture(data(partial), displayedProfileID:fixtureID) }
+    }
+}
 let invalidCaptures: [[String:Any]] = [
     ["profile_id":"foreign"], ["profile_token":"short"], ["profile_token":String(repeating:"G",count:64)],
     ["node_kind":"router-vpn"], ["device_policy_supported":"true"], ["home_lan_access":"false"],
     ["auto_connect":1], ["manual_mtu":"1280"], ["mtu_policy":"fixed"], ["startup_mode":"unknown"],
     ["ipv6_mode":"maybe"], ["kill_switch_policy":"maybe"], ["manual_mtu":1392],
+    ["jumbo_tun":"true"], ["jumbo_tun_supported":1], ["jumbo_tun":NSNull(),"jumbo_tun_supported":NSNull()],
     ["mtu_policy":"manual","manual_mtu":1279], ["mtu_policy":"manual","manual_mtu":9001]
 ]
 for override in invalidCaptures {
@@ -398,7 +436,7 @@ func inspectCommon(_ alert: NSAlert, editable: Bool) {
     for title in ["WG / AWG base","Start layer"] {
         check(!popup(alert,title).isEnabled, "Imported node enabled a Router-only control")
     }
-    for title in ["DAITA-like traffic padding (bounded; supported modes only)","Jumbo TUN / jumbo packet mode (compatible paths only)","Private in-tunnel SOCKS5 utility"] {
+    for title in ["DAITA-like traffic padding (bounded; supported modes only)","Jumbo virtual interface (9000)","Private in-tunnel SOCKS5 utility"] {
         check(!button(alert,title).isEnabled, "Imported node enabled unsupported Router-only mutation")
     }
 }
@@ -466,6 +504,31 @@ do {
     check(Set(body.keys) == ["profile_id","profile_token","startup_mode","auto_connect"], "Unsupported Tor posted disabled common defaults")
     check(body["profile_token"] as? String == startupToken, "Startup-only Save substituted the device/entry token")
 }
+for initial in [false,true] {
+    for policy in ["auto","default","manual"] {
+        let api = ProductAPI(); api.device = saved(["protocol":"tor-bridge","jumbo_tun_supported":true,"jumbo_tun":initial,
+            "mtu_policy":policy,"manual_mtu":policy == "manual" ? 9000 : 0])
+        let owner = runEditor(api) {alert,_ in
+            let jumbo = button(alert,"Jumbo virtual interface (9000)")
+            check(jumbo.isEnabled && (jumbo.state == .on) == initial, "Native Jumbo checkbox lost captured capability/value")
+            jumbo.state = initial ? .off : .on
+            return .alertFirstButtonReturn
+        }
+        check(owner.error.isEmpty && api.writes.count == 1, "Real Jumbo toggle did not save once")
+        let body = object(api.writes[0].1)
+        check(body["jumbo_tun"] as? Bool == !initial && Set(body.keys) == keys.union(["jumbo_tun"]), "Real Jumbo toggle missed its narrow atomic payload")
+        check(body["mtu_policy"] as? String == policy && body["manual_mtu"] as? Int == (policy == "manual" ? 9000 : 0), "Real Jumbo control changed MTU choice")
+    }
+}
+for conflict in ["fixed","unsupported"] {
+    let api = ProductAPI(); api.device = saved(["protocol":"tor-bridge","jumbo_tun_supported":conflict != "unsupported"])
+    let owner = runEditor(api) {alert,_ in
+        button(alert,"Jumbo virtual interface (9000)").state = .on
+        if conflict == "fixed" { choose(popup(alert,"MTU"),"manual"); manual(alert).stringValue = "1400" }
+        return .alertFirstButtonReturn
+    }
+    check(!owner.error.isEmpty && api.writes.isEmpty, "Real unsupported or conflicting Jumbo edit reached persistence")
+}
 for automatic in [false,true] {
     let api = ProductAPI()
     api.device = saved(["protocol":"tor","device_policy_supported":false,"device_policy_reason":"Native owner pending"])
@@ -510,7 +573,7 @@ for phase in ["connected","reasserting","future-phase"] {
     check(!owner.error.isEmpty && api.writes.isEmpty, "Real callback skipped fresh idle check: " + phase)
 }
 do {
-    let api = ProductAPI(); api.onStatus = {_ in data(["connected":false,"phase":"future-phase"])}
+    let api = ProductAPI(); api.device = saved(["protocol":"tor-bridge","jumbo_tun_supported":true]); api.onStatus = {_ in data(["connected":false,"phase":"future-phase"])}
     let owner = runEditor(api) {alert,_ in
         inspectCommon(alert,editable:false)
         check(alert.buttons.first?.isEnabled == false, "Unknown initial connection phase enabled Save")
@@ -595,6 +658,10 @@ def executable(negative=True):
         if negative:
             variants = (
                 ("fresh-idle", "model", "try Self.requireIdle(readStatus())", "_ = try readStatus()"),
+                ("jumbo-capability", "model", "guard jumboTUNSupported == true, jumboTUN != nil else", "guard jumboTUN != nil else"),
+                ("jumbo-fixed-conflict", "model", 'guard selectedJumbo != true || edits.mtuPolicy != "manual" || fixed == 9000 else', "guard true else"),
+                ("jumbo-form", "settings", "supportsDeviceSettings && capturedDevice?.jumboTUNSupported == true", "false"),
+                ("jumbo-confirmation", "model", 'jumboTUN == nil || saved.jumboTUN == (request?["jumbo_tun"] as? Bool ?? jumboTUN),', "true,"),
                 ("post-read-owner", "model", "guard displayedProfileID() == profileID else", "guard true else"),
                 ("unchanged-startup", "model", "if edits.startupMode != displayedStartup || edits.autoConnect != autoConnect {", "if true {"),
                 ("device-startup-alias", "model", 'body["startup_mode"] = edits.startupMode == displayedStartup ? startupMode : edits.startupMode', 'body["startup_mode"] = edits.startupMode'),
