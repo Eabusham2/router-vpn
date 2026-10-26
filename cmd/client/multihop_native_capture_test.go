@@ -95,6 +95,9 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 	for _, selected := range []string{"ss-v2ray", "split", "max"} {
 		write(exit.ID, selected, nativeMultihopCompositeExitAssets(t, exit, selected))
 	}
+	for _, selected := range []string{"max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"} {
+		write(exit.ID, selected, nativeMultihopMAXAssets(t, exit, selected))
+	}
 	return root, multihopSelection{Control: cloneRouterProfile(entry), Entry: entry, Exit: exit, Base: entry.BaseTunnel, ExitMode: "shadowsocks"}
 }
 
@@ -212,7 +215,7 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 							t.Fatal("Server substitution changed the captured entry or policy", key)
 						}
 					}
-					if mobilemultihop.NodeMultihopPacketExitMode(exitMode) {
+					if nativeMultihopPacketExitMode(exitMode) {
 						serverEndpoints := server["endpoints"].([]any)
 						if len(serverEndpoints) != 1 || !reflect.DeepEqual(serverEndpoints[0], endpoint) || len(local["endpoints"].([]any)) != 2 || sel.Native.localPacketPublic[exitMode] == "" {
 							t.Fatal("Server did not remove only the captured local WG/AWG exit")

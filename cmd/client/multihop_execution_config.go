@@ -70,6 +70,13 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		return nil, err
 	}
 	defer clear(entrySnapshot)
+	removedExitOwners := map[string]bool{}
+	if mobilemultihop.MAXMode(sel.ExitMode) {
+		removedExitOwners, err = nativeMAXExitOwners(cfg, sel)
+		if err != nil {
+			return nil, err
+		}
+	}
 	endpoints, ok := cfg["endpoints"].([]any)
 	if cfg["endpoints"] != nil && !ok {
 		return nil, errors.New("native server path requires its owned endpoints")
@@ -91,10 +98,10 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			wantType := "wireguard"
 			if awgpolicy.IsMode(sel.ExitMode) {
 				wantType = mobilemultihop.AmneziaType
-			} else if mobilemultihop.IsPQMode(sel.ExitMode) {
+			} else if nativeMultihopPQExitMode(sel.ExitMode) {
 				wantType = mobilemultihop.PQType
 			}
-			if !mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) || endpoint["type"] != wantType || packetExits != 0 {
+			if !nativeMultihopPacketExitMode(sel.ExitMode) || endpoint["type"] != wantType || packetExits != 0 {
 				return nil, errors.New("native server path has an unowned packet exit")
 			}
 			if awgpolicy.IsMode(sel.ExitMode) {
@@ -103,11 +110,15 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 					return nil, errors.New("native AWG exit lost its captured parameters")
 				}
 			}
-			if mobilemultihop.IsPQMode(sel.ExitMode) {
+			if nativeMultihopPQExitMode(sel.ExitMode) {
+				baseMode := sel.ExitMode
+				if mobilemultihop.MAXMode(baseMode) {
+					baseMode = multihoprelay.MAXBaseMode(baseMode)
+				}
 				encoded, _ := json.Marshal(endpoint)
 				captured, err := mobilemultihop.PQRuntimeConfig(string(encoded))
 				captured.PQ.Erase()
-				if err != nil || endpoint["mode"] != sel.ExitMode || endpoint["node_id"] != sel.Exit.NodeProofID {
+				if err != nil || endpoint["mode"] != baseMode || endpoint["node_id"] != sel.Exit.NodeProofID {
 					return nil, errors.New("native PQ exit lost its captured packet and negotiation owner")
 				}
 			}
@@ -116,14 +127,13 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			return nil, errors.New("native server path contains an unrelated endpoint")
 		}
 	}
-	if mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) != (packetExits == 1) {
+	if nativeMultihopPacketExitMode(sel.ExitMode) != (packetExits == 1) {
 		return nil, errors.New("native server path lost its captured packet exit")
 	}
 	outbounds, ok := cfg["outbounds"].([]any)
 	if !ok {
 		return nil, errors.New("native multihop outbounds missing")
 	}
-	removedExitOwners := map[string]bool{}
 	if nativecomposite.Mode(sel.ExitMode) {
 		// The lease executes this exact complete paired transport. Validate
 		// both local lanes before removing their entire owned closure; merely
@@ -138,7 +148,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		}
 	}
 	found := 0
-	removedExitLayer := false
+	removedExitLayer := mobilemultihop.MAXMode(sel.ExitMode) && removedExitOwners[mobilemultihop.MAXExitPrefix+"start"]
 	retained := make([]any, 0, len(outbounds))
 	serverExit := map[string]any{"type": "socks", "tag": "proxy", "version": "5", "server": d.Lease.Host, "server_port": d.Lease.Port, "username": d.Lease.Username, "password": d.Lease.Password, "detour": "entry-wg"}
 	if packetExits == 1 {
@@ -168,7 +178,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		} else if out["tag"] == mobilemultihop.NativeStartLayerTag {
 			// The authenticated lease owns this exact exit layer on the entry
 			// server. The namespaced entry layer stays in the local graph.
-			if !multihoprelay.ValidLayerMode(d.Lease.ExitStartLayer) || out["detour"] != "entry-wg" {
+			if mobilemultihop.MAXMode(sel.ExitMode) || !multihoprelay.ValidLayerMode(d.Lease.ExitStartLayer) || out["detour"] != "entry-wg" {
 				return nil, errors.New("server lease does not own the captured exit Start Layer")
 			}
 			removedExitLayer = true

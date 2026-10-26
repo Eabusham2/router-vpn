@@ -3,7 +3,6 @@ package main
 import (
 	"errors"
 
-	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
 )
 
@@ -27,7 +26,7 @@ func (d *desktopExecutionDriver) captureServerPeer(owner *desktopRelayOwner) err
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	mode := owner.request.ExitMode
-	if !mobilemultihop.NodeMultihopPacketExitMode(mode) {
+	if !nativeMultihopPacketExitMode(mode) {
 		return nil
 	}
 	bad := errors.New("Server peer changed during the captured comparison")

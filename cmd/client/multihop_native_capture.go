@@ -112,7 +112,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	for _, mode := range modes {
-		if !mobilemultihop.NodeMultihopExitMode(mode) {
+		if !nativeMultihopExitMode(mode) {
 			return sel, errors.New("native multihop exit mode is not supported")
 		}
 		if _, exists := c.configs[mode]; exists {
@@ -121,10 +121,10 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		exit, _, e := compile(sel.Exit, mode)
 		if e == nil {
 			public, pqIdentity := "", ""
-			if mobilemultihop.NodeMultihopPacketExitMode(mode) {
+			if nativeMultihopPacketExitMode(mode) {
 				public, e = exit.PacketClientPublicKey()
 			}
-			if e == nil && mobilemultihop.IsPQMode(mode) {
+			if e == nil && nativeMultihopPQExitMode(mode) {
 				pqIdentity, e = exit.PQClientIdentity()
 			}
 			var config string

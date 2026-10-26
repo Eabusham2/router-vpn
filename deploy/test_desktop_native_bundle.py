@@ -148,6 +148,13 @@ def test(bundle, target):
                         './cmd/client', '-run', '^TestNativeEntryMultihop'],
                        cwd=ROOT, env=env, check=True, timeout=360)
         print('Complete native runtime passed exact 19-mode entry capture/parser and retained-owner checks, plus SS/HY2/Naive encrypted Local/Server TCP and UDP', flush=True)
+        # Complete MAX retains mandatory PQ, SS2022 and outer owners. Its host
+        # capture/Server substitution and retained identity checks form a new
+        # bounded phase; the established native phases keep their old budgets.
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s',
+                        './cmd/client', '-run', '^TestNativeMAXDesktop(Capture|Rejects|Independent|ServerMoves)'],
+                       cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed complete-MAX capture/parser, Server closure and paired-identity restoration checks', flush=True)
         # The production AWG endpoint deliberately accepts only client peers.
         # Build a separate test-only cryptographic server; never widen that
         # production boundary or add the helper to the sealed runtime payload.

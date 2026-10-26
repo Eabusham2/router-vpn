@@ -37,10 +37,14 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 	}
 	public := first.Native.localPacketPublic[mode]
 	seed, full, split := byte('p'), "wg.conf", "wg-socks.conf"
-	if mode != "wg" && mode != "wg-pq" {
+	baseMode := mode
+	if mobilemultihop.MAXMode(mode) {
+		baseMode = multihoprelay.MAXBaseMode(mode)
+	}
+	if baseMode != "wg" && baseMode != "wg-pq" {
 		seed, full, split = 'v', "awg.conf", "awg-socks.conf"
 	}
-	if mobilemultihop.IsPQMode(mode) {
+	if nativeMultihopPQExitMode(mode) {
 		seed = 'v'
 	}
 	private, err := base64.StdEncoding.DecodeString(testWGKey(seed))
@@ -121,7 +125,7 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 		t.Fatal("independent fixture peer reused the local identity")
 	}
 	faults := []string{"same-private", "same-public-alias", "missing-server", "missing-local", "wrong-node", "wrong-layer", "malformed-key", "independent"}
-	if mobilemultihop.IsPQMode(mode) {
+	if nativeMultihopPQExitMode(mode) {
 		faults = append(faults, "pq-same-key", "pq-missing-server", "pq-missing-local", "pq-malformed-key")
 	}
 	for _, fault := range faults {
@@ -132,7 +136,7 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 			lease := multihoprelay.Lease{Request: request, NodeID: selection.Entry.NodeProofID, ExitNodeID: selection.Exit.NodeProofID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password, ExpiresAt: time.Now().Add(time.Minute)}
 			owner := &desktopRelayOwner{app: app, command: command, entry: selection.Entry, request: request, expected: lease, localPacketPublic: selection.Native.localPacketPublic[mode]}
 			exit := multihoprelay.Capability{ID: selection.Exit.ID, Mode: mode, NodeID: selection.Exit.NodeProofID, PublicKey: independent}
-			if mobilemultihop.IsPQMode(mode) {
+			if nativeMultihopPQExitMode(mode) {
 				owner.localPQIdentity = selection.Native.localPQIdentity[mode]
 				exit.PQIdentity = strings.Repeat("e", 64)
 			}
@@ -189,7 +193,7 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 			if retained.serverPacketPublic != owner.serverPacketPublic || retained.serverPQIdentity != owner.serverPQIdentity {
 				t.Fatal("Compare reacquisition dropped its captured Server peer")
 			}
-			if mobilemultihop.IsPQMode(mode) && (owner.serverPQIdentity != exit.PQIdentity || owner.request.ExpectedPQClientIdentity != exit.PQIdentity) {
+			if nativeMultihopPQExitMode(mode) && (owner.serverPQIdentity != exit.PQIdentity || owner.request.ExpectedPQClientIdentity != exit.PQIdentity) {
 				t.Fatal("prepared listener did not adopt the exact independent PQ peer pin")
 			}
 			gate.Lock()
@@ -215,7 +219,7 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 					t.Fatal("original paired identity could not be revalidated", err)
 				}
 			}
-			if mobilemultihop.IsPQMode(mode) {
+			if nativeMultihopPQExitMode(mode) {
 				for _, changed := range []string{"", owner.localPQIdentity, strings.Repeat("f", 64)} {
 					gate.Lock()
 					offered.Exits[0].PQIdentity = changed
@@ -235,7 +239,7 @@ func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
 			// first trial, not learn a replacement registry entry. These requests
 			// use the actual discovery/PUT code and the same owned control lane.
 			for _, changed := range []string{"packet", "pq"} {
-				if changed == "pq" && !mobilemultihop.IsPQMode(mode) {
+				if changed == "pq" && !nativeMultihopPQExitMode(mode) {
 					continue
 				}
 				next := &desktopRelayOwner{app: app, command: command, entry: selection.Entry, request: request, expected: lease,

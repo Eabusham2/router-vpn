@@ -24,7 +24,6 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
-	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
 )
@@ -315,13 +314,13 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		}
 		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: layer, Port: 26240 + int(number.Int64()), Username: user, Password: password, ExpectedPacketPublicKey: sel.serverPacketPublic, ExpectedPQClientIdentity: sel.serverPQIdentity}
 		localPacketPublic, localPQIdentity := "", ""
-		if mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) {
+		if nativeMultihopPacketExitMode(sel.ExitMode) {
 			if sel.Native == nil || sel.Native.validate(sel) != nil || sel.Native.localPacketPublic[sel.ExitMode] == "" {
 				return nil, errors.New("server WG/AWG requires the exact captured local client identity")
 			}
 			localPacketPublic = sel.Native.localPacketPublic[sel.ExitMode]
 		}
-		if mobilemultihop.IsPQMode(sel.ExitMode) {
+		if nativeMultihopPQExitMode(sel.ExitMode) {
 			localPQIdentity = sel.Native.localPQIdentity[sel.ExitMode]
 			if !common.ValidNodeProofID(localPQIdentity) {
 				return nil, errors.New("server PQ requires its exact captured local negotiation identity")
@@ -468,7 +467,7 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	return nil
 }
 func (o *desktopRelayOwner) available(ctx context.Context) error {
-	if mobilemultihop.NodeMultihopPacketExitMode(o.request.ExitMode) {
+	if nativeMultihopPacketExitMode(o.request.ExitMode) {
 		o.packetCapabilityReady = false
 	}
 	var response multihoprelay.Capabilities
@@ -480,14 +479,14 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 	}
 	for _, exit := range response.Exits {
 		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == o.request.ExitStartLayer {
-			if mobilemultihop.NodeMultihopPacketExitMode(o.request.ExitMode) {
+			if nativeMultihopPacketExitMode(o.request.ExitMode) {
 				if o.localPacketPublic == "" || exit.PublicKey == "" || exit.PublicKey == o.localPacketPublic {
 					return errors.New("server WG/AWG needs an independently paired client public identity to avoid peer roaming")
 				}
 				if o.serverPacketPublic != "" && o.serverPacketPublic != exit.PublicKey {
 					return errors.New("server WG/AWG paired identity changed after capture")
 				}
-				if mobilemultihop.IsPQMode(o.request.ExitMode) {
+				if nativeMultihopPQExitMode(o.request.ExitMode) {
 					if !common.ValidNodeProofID(o.localPQIdentity) || !common.ValidNodeProofID(exit.PQIdentity) || exit.PQIdentity == o.localPQIdentity {
 						return errors.New("server PQ needs an independently paired negotiation identity")
 					}
@@ -509,7 +508,7 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 }
 
 func (o *desktopRelayOwner) put(ctx context.Context) error {
-	if mobilemultihop.NodeMultihopPacketExitMode(o.request.ExitMode) {
+	if nativeMultihopPacketExitMode(o.request.ExitMode) {
 		if !o.packetCapabilityReady || o.localPacketPublic == "" || o.serverPacketPublic == "" || o.serverPacketPublic == o.localPacketPublic || o.request.ExpectedPacketPublicKey != o.serverPacketPublic || o.expected.Request != o.request {
 			return errors.New("server WG/AWG lease has no validated independent peer identity")
 		}

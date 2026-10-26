@@ -86,7 +86,7 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if exitMode == "" {
 		exitMode = "shadowsocks"
 	}
-	if !mobilemultihop.NodeMultihopExitMode(exitMode) {
+	if !nativeMultihopExitMode(exitMode) {
 		return multihopSelection{}, errors.New("native desktop multihop requires a supported complete exit transport")
 	}
 	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, EntryMode: entryMode, ExitMode: exitMode}, nil

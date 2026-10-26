@@ -48,8 +48,10 @@ The shared node compiler can now attach a complete MAX exit without bypassing
 its PQ, SS2022, outer transport or optional Start Layer. Public packet/PQ
 identities require the whole validated chain. Inner interface capacity and
 the outer QUIC datagram envelope have separate checks. This prerequisite does
-not expand the desktop catalog: host Server substitution, renewal/restoration
-and native controls must adopt these exits before they are offered there.
+not yet expand the desktop catalog. Desktop host Server substitution,
+independent packet/KEM pins, renewal and already-proved restoration now pass
+actual sealed-engine parsing and ownership tests. Full encrypted MAX chains
+and native controls remain before these exits are offered in the catalog.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2

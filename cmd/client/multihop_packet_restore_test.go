@@ -8,8 +8,6 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"router-vpn/internal/mobilemultihop"
 )
 
 func TestNativeMultihopPacketRestoreRetainsProvedServerPeerAndExecution(t *testing.T) {
@@ -46,7 +44,7 @@ func nativeMultihopPacketRestoreRetainsProvedServerPeerAndExecution(t *testing.T
 				if plan.multihop.serverPacketPublic != relay.request.ExpectedPacketPublicKey || plan.multihop.serverPacketPublic == "" {
 					t.Fatal("restoration dropped the authenticated server peer pin")
 				}
-				if mobilemultihop.IsPQMode(mode) {
+				if nativeMultihopPQExitMode(mode) {
 					if plan.multihop.serverPQIdentity != relay.request.ExpectedPQClientIdentity || plan.multihop.serverPQIdentity == "" {
 						t.Fatal("restoration dropped the independently paired server PQ identity")
 					}
@@ -75,7 +73,7 @@ func TestNativeMultihopPacketRestoreRejectsRetiredLeaseIdentity(t *testing.T) {
 func nativeMultihopPacketRestoreRejectsRetiredLeaseIdentity(t *testing.T, mode string) {
 	t.Helper()
 	faults := []string{"missing", "command", "unproved", "stale-capability", "expired", "request-pin", "receipt-pin", "entry", "exit", "local-key", "duplicate-peer"}
-	if mobilemultihop.IsPQMode(mode) {
+	if nativeMultihopPQExitMode(mode) {
 		faults = append(faults, "pq-request-pin", "pq-receipt-pin", "pq-local-key", "pq-duplicate-peer", "pq-missing-server", "pq-malformed-server")
 	}
 	for _, fault := range faults {
