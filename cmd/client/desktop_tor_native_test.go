@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -168,7 +169,8 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	}
 	write := func(name string, value any) {
 		raw, _ := json.Marshal(value)
-		if atomicWritePrivate(filepath.Join(directory, name), raw) != nil {
+		if err := atomicWritePrivate(filepath.Join(directory, name), raw); err != nil {
+			fmt.Fprintf(os.Stderr, "isolated Tor fixture publication %s: %v\n", name, err)
 			os.Exit(92)
 		}
 	}
@@ -180,6 +182,7 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	write("progress.json", desktopTorProgress{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving"})
 	dnsTick := desktopTorDNSChildFixture(kind, directory, expected, write)
 	for {
+		desktopTorFixturePublicationBarrier(kind, expected)
 		dnsTick()
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
@@ -236,7 +239,8 @@ func desktopTorRunningFixture(t *testing.T, kind string) (*app, *desktopNodeLaun
 	expected, _ := json.Marshal(launch.tor.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorProcessFixture$")
 	command.Env = append(os.Environ(), "ROUTERVPN_TOR_TEST_CHILD="+kind, "ROUTERVPN_TOR_TEST_DIRECTORY="+directory, "ROUTERVPN_TOR_TEST_EXPECTED="+base64.StdEncoding.EncodeToString(expected), "ROUTERVPN_TOR_TEST_RELEASE="+release, "GORACE=atexit_sleep_ms=0")
-	command.Stdout, command.Stderr = io.Discard, io.Discard
+	var childOutput desktopTorFixtureOutput
+	command.Stdout, command.Stderr = io.Discard, &childOutput
 	launch.command = command
 	launch.tor.started = time.Now()
 	a := &app{profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{profile}}, state: state{Mode: "external-node", RuntimeMode: launch.mode, RouterID: profile.ID}}
@@ -246,8 +250,15 @@ func desktopTorRunningFixture(t *testing.T, kind string) (*app, *desktopNodeLaun
 	a.cmd = command
 	desktopNodeOwners.Store(a, launch)
 	t.Cleanup(func() {
+		if t.Failed() && strings.HasPrefix(kind, "tor-dns-") {
+			record, err := readDesktopDNSDrainRecord(launch)
+			t.Logf("isolated Tor DNS mailbox before fixture cleanup: generation=%d request=%q status=%+v error=%v", record.Generation, record.Request, record.Status, err)
+		}
 		_ = command.Process.Kill()
 		<-desktopNodeProcessDone(launch)
+		if t.Failed() {
+			t.Logf("isolated Tor fixture process status: %v; stderr:\n%s", command.ProcessState, childOutput.String())
+		}
 		desktopNodeOwners.Delete(a)
 		_ = launch.directoryRoot.Close()
 	})
@@ -352,7 +363,11 @@ func TestDesktopTorWrongOrAbsentReceiptRetainsPrivateOwner(t *testing.T) {
 func TestDesktopTorRetiredNetworkProfileAndProcessCannotAdopt(t *testing.T) {
 	for _, kind := range []string{"network", "profile", "command", "map", "directory", "cancel"} {
 		t.Run(kind, func(t *testing.T) {
-			a, launch, _ := desktopTorRunningFixture(t, "proof")
+			fixtureKind := "proof"
+			if kind == "directory" {
+				fixtureKind = "proof-directory-retire"
+			}
+			a, launch, control := desktopTorRunningFixture(t, fixtureKind)
 			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 			defer cancel()
 			if _, err := a.waitDesktopTorProof(ctx, launch); err != nil {
@@ -372,6 +387,7 @@ func TestDesktopTorRetiredNetworkProfileAndProcessCannotAdopt(t *testing.T) {
 			case "map":
 				desktopNodeOwners.Store(a, &desktopNodeLaunch{})
 			case "directory":
+				pauseDesktopTorFixturePublications(t, ctx, launch, control)
 				if err := os.Rename(launch.directory, launch.directory+"-old"); err != nil {
 					t.Fatal(err)
 				}
