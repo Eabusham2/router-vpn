@@ -99,12 +99,17 @@ type desktopTorTransitionCommandFixture struct {
 	transitions      chan routerVPNTorMTUTransitionRequest
 	entered, release chan struct{}
 	once             sync.Once
+	cancelledAt      atomic.Int64
 }
 
 func (f *desktopTorTransitionCommandFixture) MTUTransitions() <-chan routerVPNTorMTUTransitionRequest {
 	return f.transitions
 }
 func (f *desktopTorTransitionCommandFixture) LifetimeCurrent() bool { return f.base.Healthy() }
+func (f *desktopTorTransitionCommandFixture) Cancel() {
+	f.cancelledAt.CompareAndSwap(0, time.Now().UnixMilli())
+	f.desktopTorMeasuredCommandFixture.Cancel()
+}
 func (f *desktopTorTransitionCommandFixture) VerifyCurrentPath(ctx context.Context) error {
 	if f.entered != nil {
 		f.once.Do(func() { close(f.entered) })
@@ -128,9 +133,19 @@ func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReade
 			defer cancel()
 			var releaseOnce sync.Once
 			release := func() { releaseOnce.Do(func() { close(owner.release) }) }
-			defer release()
 			done := make(chan error, 1)
+			joined := make(chan struct{})
+			t.Cleanup(func() {
+				cancel()
+				release()
+				select {
+				case <-joined:
+				case <-time.After(3 * time.Second):
+					t.Error("captured transition command did not join during fixture cleanup")
+				}
+			})
 			go func() {
+				defer close(joined)
 				done <- routerVPNRunTor(parent, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(_ context.Context, owned *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
 					owner.current = owned.current
 					return owner, nil
@@ -145,12 +160,20 @@ func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReade
 			now := time.Now()
 			receipt := desktopTorTransitionReceipt(initial, now)
 			if expires {
-				receipt.ExpiresAt = now.Add(200 * time.Millisecond).UnixMilli()
+				// Admission publishes two durable files before acknowledging.
+				// Keep this real expiry beyond the fixture's admission watchdog;
+				// a loaded Windows filesystem must not invalidate the request
+				// merely because a 200ms fixture scheduling window elapsed.
+				receipt.ExpiresAt = now.Add(4 * time.Second).UnixMilli()
 			}
 			request := routerVPNTorMTUTransitionRequest{context: parent, receipt: receipt, result: make(chan error, 1), finished: make(chan struct{})}
+			admission := time.NewTimer(3 * time.Second)
+			defer admission.Stop()
 			select {
 			case owner.transitions <- request:
-			case <-time.After(time.Second):
+			case <-owner.base.cancel:
+				t.Fatal("command cancelled before captured transition admission")
+			case <-admission.C:
 				t.Fatal("slow reader blocked transition admission")
 			}
 			select {
@@ -158,12 +181,14 @@ func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReade
 				if err != nil {
 					t.Fatal(err)
 				}
-			case <-time.After(time.Second):
+			case <-owner.base.cancel:
+				t.Fatal("command cancelled before durable transition acknowledgement")
+			case <-admission.C:
 				t.Fatal("transition was not acknowledged")
 			}
 			published := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.MTUReadback != nil })
 			if !expires {
-				wait := time.NewTimer(3200 * time.Millisecond)
+				wait := time.NewTimer(mobiletor.DesktopBridgeHeartbeatMaxAge + 100*time.Millisecond)
 				select {
 				case err := <-done:
 					wait.Stop()
@@ -177,10 +202,17 @@ func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReade
 				}
 				cancel()
 			}
+			cancelWait := 3 * time.Second
+			if expires {
+				cancelWait += time.Until(time.UnixMilli(receipt.ExpiresAt))
+			}
 			select {
 			case <-owner.base.cancel:
-			case <-time.After(time.Second):
+			case <-time.After(cancelWait):
 				t.Fatal("Stop/deadline was blocked by native reader verification")
+			}
+			if expires && owner.cancelledAt.Load() < receipt.ExpiresAt {
+				t.Fatal("transition cancelled before its actual receipt deadline", owner.cancelledAt.Load(), receipt.ExpiresAt)
 			}
 			if _, err := os.Stat(filepath.Join(files.directory, "stopped.json")); !os.IsNotExist(err) {
 				t.Fatal("undrained reader was acknowledged as stopped", err)

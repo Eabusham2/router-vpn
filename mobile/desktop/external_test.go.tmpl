@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -150,12 +151,62 @@ func desktopExternalWait(t *testing.T, done <-chan error) error {
 func desktopExternalStopFile(t *testing.T, directory, session, source string) {
 	t.Helper()
 	raw, _ := json.Marshal(routerVPNExternalStop{Schema: 1, Session: session, SourceSHA256: source})
-	path := filepath.Join(directory, "stop.json.pending")
-	if err := os.WriteFile(path, raw, 0600); err != nil {
+	root, err := os.OpenRoot(directory)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Rename(path, filepath.Join(directory, "stop.json")); err != nil {
+	defer root.Close()
+	file, err := root.OpenFile("stop.json.pending", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+	if err != nil {
 		t.Fatal(err)
+	}
+	_, writeErr := file.Write(raw)
+	closeErr := file.Close()
+	if writeErr != nil || closeErr != nil {
+		t.Fatal("fixture stop publication failed", writeErr, closeErr)
+	}
+	// The foreign-stop case deliberately replaces an earlier ignored record.
+	// Use the captured-root replacement API used by native mailboxes: pathname
+	// Rename on Windows cannot replace the record while a reader retains it.
+	if err := root.Rename("stop.json.pending", "stop.json"); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestRouterVPNDesktopExternalStopFixturePreservesRetainedForeignReader(t *testing.T) {
+	directory := t.TempDir()
+	foreign, source := strings.Repeat("b", 32), strings.Repeat("c", 64)
+	desktopExternalStopFile(t, directory, foreign, source)
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	reader, err := root.Open("stop.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reader.Close()
+	before, err := reader.Stat()
+	if err != nil {
+		t.Fatal(err)
+	}
+	files := &routerVPNExternalFiles{root: root}
+	if files.stopRequested(desktopExternalSession, source) {
+		t.Fatal("foreign stop was accepted before replacement")
+	}
+	desktopExternalStopFile(t, directory, desktopExternalSession, source)
+	after, err := root.Lstat("stop.json")
+	if err != nil || os.SameFile(before, after) {
+		t.Fatal("stop replacement modified the retained reader's file", err)
+	}
+	retained, err := io.ReadAll(reader)
+	var old routerVPNExternalStop
+	if err != nil || json.Unmarshal(retained, &old) != nil || old.Session != foreign || old.SourceSHA256 != source {
+		t.Fatal("replacement changed the earlier foreign stop snapshot", err)
+	}
+	if files.stopRequested(foreign, source) || !files.stopRequested(desktopExternalSession, source) {
+		t.Fatal("stop replacement lost exact session and source ownership")
 	}
 }
 
