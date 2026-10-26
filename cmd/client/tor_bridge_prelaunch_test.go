@@ -1,15 +1,104 @@
 package main
 
 import (
+	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	"router-vpn/internal/common"
 )
+
+func TestTorBridgePrelaunchHistoricalMTUKeepsExactPolicyAndAdmissionGuards(t *testing.T) {
+	for _, changed := range []string{"none", "derived-history", "bridge-key", "dns-policy", "manual-mtu", "protection", "network", "replacement-command", "final-cancel"} {
+		t.Run(changed, func(t *testing.T) {
+			profile, _ := desktopTorPolicyFixture(t, func(profile *common.RouterProfile) {
+				profile.EffectiveMTU, profile.EffectiveMTUSource = 1350, "historical-fixture"
+				profile.EffectiveMTUPathKey = strings.Repeat("a", 64)
+			})
+			root := t.TempDir()
+			tor := installFakeExecutable(t, t.TempDir(), "tor")
+			native := installFakeExecutable(t, t.TempDir(), "sing-box-routervpn")
+			prepared, err := stageDesktopTorInputs(root, profile, profile, tor, native)
+			if err != nil {
+				t.Fatal(err)
+			}
+			launch := prepared.Launch
+			launch.tor.network = "captured-test-network"
+			launch.tor.networkIdentity = func() string { return "captured-test-network" }
+			a := &app{cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "profiles.json")}, profiles: common.RouterProfileStore{SelectedID: profile.ID, Profiles: []common.RouterProfile{common.CloneRouterProfile(profile)}}}
+			owner := desktopTorPreparedOwner(t, a, prepared)
+			owner.command = exec.Command(os.Args[0], "-test.run=^TestStartupExternalProcessFixture$")
+			owner.command.Env = envWithValue(os.Environ(), "ROUTERVPN_STARTUP_EXTERNAL_CHILD", "cleanup")
+			owner.command.Env = envWithValue(owner.command.Env, "GORACE", "atexit_sleep_ms=0")
+			t.Cleanup(func() {
+				if owner.command.Process != nil {
+					_ = owner.command.Process.Kill()
+					<-desktopNodeProcessDone(launch)
+				}
+				_ = launch.directoryRoot.Close()
+				desktopNodeOwners.Delete(a)
+				activeDNSRuntimeIdentities.Delete(a)
+			})
+			raw, err := readDesktopRuntimeFile(launch, "tor-profile.json", 4<<20)
+			var captured common.RouterProfile
+			if err != nil || json.Unmarshal(raw, &captured) != nil || captured.EffectiveMTU != 1350 ||
+				launch.tor.profileToken != desktopTorSourceIdentityToken(captured) || launch.tor.profileToken == asyncMeasurementProfileToken(captured) {
+				t.Fatal("prelaunch did not stage the actual profile with historical MTU", err)
+			}
+			switch changed {
+			case "derived-history":
+				a.profiles.Profiles[0].EffectiveMTU = 1380
+				a.profiles.Profiles[0].EffectiveMTUSource = "measured-tor-system-tun-transfer"
+			case "bridge-key":
+				a.profiles.Profiles[0].External.TorBridge.Bridges[0] += " replacement-credential"
+			case "dns-policy":
+				a.profiles.Profiles[0].DNSPort++
+			case "manual-mtu":
+				a.profiles.Profiles[0].MTUPolicy, a.profiles.Profiles[0].ManualMTU = "manual", 1400
+			case "protection":
+				a.profiles.Profiles[0].KillSwitchPolicy += "-replacement"
+			case "network":
+				launch.tor.networkIdentity = func() string { return "replacement-network" }
+			case "replacement-command":
+				a.cmd = exec.Command("replacement")
+			}
+			previous := a.cmd
+			checks := 0
+			err = owner.start(func() error {
+				checks++
+				if changed == "final-cancel" && checks == 2 {
+					return context.Canceled
+				}
+				return nil
+			})
+			if changed != "none" && changed != "derived-history" {
+				if !errors.Is(err, errTorPrelaunchRejected) || owner.command.Process != nil || a.cmd != previous {
+					t.Fatal("changed policy or stale admission reached the real child", changed, err)
+				}
+				if _, exists := desktopNodeOwners.Load(a); exists {
+					t.Fatal("rejected prelaunch retained native admission")
+				}
+				return
+			}
+			if err != nil || checks != 2 || owner.command.Process == nil {
+				t.Fatal("historical MTU rejected the unchanged captured Tor source before exec", err)
+			}
+			if current, exists := desktopNodeOwners.Load(a); !exists || current != launch {
+				t.Fatal("prelaunch did not register the exact started child")
+			}
+			<-desktopNodeProcessDone(launch)
+			if owner.command.ProcessState == nil || !owner.command.ProcessState.Success() {
+				t.Fatal("captured prelaunch child did not execute and join successfully")
+			}
+		})
+	}
+}
 
 func torPrelaunchFixture(t *testing.T) (*app, *torBridgePrelaunch) {
 	t.Helper()

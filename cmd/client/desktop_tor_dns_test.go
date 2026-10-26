@@ -20,7 +20,7 @@ import (
 // The child exchanges isolated typed IPC records. It does not claim public
 // DNS timings; native Box/service fixtures execute the actual query path.
 func desktopTorDNSChildFixture(kind, directory string, expected mobiletor.DesktopBridgeMetadata, write func(string, any)) func() {
-	if !strings.HasPrefix(kind, "tor-dns-") {
+	if !strings.HasPrefix(kind, "tor-dns-") && kind != "tor-mtu-dns-complete" {
 		return func() {}
 	}
 	record := desktopDNSNativeRecord{desktopDNSNativeRequest: desktopDNSNativeRequest{Schema: 1, Session: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256},
@@ -157,6 +157,46 @@ func TestDesktopTorDNSUsesCapturedMailboxAndExplicitMeasuredDraft(t *testing.T) 
 	}
 }
 
+func TestDesktopTorDNSRetestAfterMeasuredMTURetainsTheSameNativeOwner(t *testing.T) {
+	// Both services exchange explicit synthetic IPC data with the same real
+	// child. This tests controller ownership, not live Tor DNS or throughput.
+	a, launch := desktopTorMTUControllerFixture(t, "tor-mtu-dns-complete")
+	t.Cleanup(func() { invalidateDesktopDNSResults(a) })
+	before := desktopTorSavedMTU(t, a)
+	if before.EffectiveMTU != 1350 || asyncMeasurementProfileToken(before) == launch.tor.profileToken {
+		t.Fatal("fixture did not capture distinct historical MTU metadata")
+	}
+	initial := desktopDNSCaptureForTest(t, a)
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	measured, err := a.runDesktopExternalMTU(ctx, launch, true)
+	if err != nil || !measured.Status.Measured || measured.Status.EffectiveMTU != 1380 || measured.MTUReadback == nil {
+		t.Fatal("real Tor child did not commit its synthetic MTU transfer result", err, measured)
+	}
+	after := desktopTorSavedMTU(t, a)
+	if after.EffectiveMTU != 1380 || desktopTorSourceIdentityToken(after) != launch.tor.profileToken {
+		t.Fatal("MTU persistence replaced the captured Tor policy identity")
+	}
+	operation, request := desktopDNSStartForTest(t, a, "https")
+	view := desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Complete && v.Status.Drained })
+	<-operation.done
+	if view.Status.Stage != "complete" || len(view.Status.Results) != 13 || view.SessionID != initial.SessionID ||
+		view.SessionID != launch.tor.expected.SessionID || view.Status.Request != request.Request || launch.external != nil || a.cmd != launch.command {
+		t.Fatal("DNS Retest after MTU did not retain the exact Tor child", view.Status)
+	}
+	proof, err := a.readDesktopTorProof(launch)
+	if err != nil || proof.MTUReadback == nil || *proof.MTUReadback != *measured.MTUReadback || proof.EffectiveMTU != 1380 {
+		t.Fatal("DNS Retest replaced the committed Tor reader", err)
+	}
+	if !reflect.DeepEqual(after, desktopTorSavedMTU(t, a)) {
+		t.Fatal("DNS Retest changed saved credentials, resolver or MTU metadata")
+	}
+	request.Transport, request.ResultID = "", "fastest"
+	if response := desktopDNSHTTP(t, a, http.MethodPost, "/api/dns/measurement/select", request); response.Code != http.StatusOK {
+		t.Fatal("current measured DNS draft was rejected after MTU persistence", response.Code, response.Body.String())
+	}
+}
+
 func TestDesktopTorDNSCancellationRetainsNativeOwnerAndHoldUntilDrain(t *testing.T) {
 	for _, kind := range []string{"tor-dns-cancel-delay", "tor-dns-read-fail"} {
 		t.Run(kind, func(t *testing.T) {
@@ -214,7 +254,7 @@ func TestDesktopTorDNSRejectsResolverTransportRouteAndReplacementOwners(t *testi
 			}
 		})
 	}
-	for _, changed := range []string{"profile", "network", "command", "native-owner", "session", "expired"} {
+	for _, changed := range []string{"profile", "dns-policy", "network", "command", "native-owner", "session", "request", "profile-id", "profile-token", "expired"} {
 		t.Run(changed, func(t *testing.T) {
 			a, launch := desktopTorDNSControllerFixture(t, "tor-dns-complete")
 			operation, request := desktopDNSStartForTest(t, a, "https")
@@ -224,6 +264,8 @@ func TestDesktopTorDNSRejectsResolverTransportRouteAndReplacementOwners(t *testi
 			switch changed {
 			case "profile":
 				a.profiles.Profiles[0].External.TorBridge.Bridges[0] = torImportSnowflakeBridge
+			case "dns-policy":
+				a.profiles.Profiles[0].DNSPort++
 			case "network":
 				launch.tor.networkIdentity = func() string { return "replacement" }
 			case "command":
@@ -232,6 +274,12 @@ func TestDesktopTorDNSRejectsResolverTransportRouteAndReplacementOwners(t *testi
 				desktopNodeOwners.Store(a, &desktopNodeLaunch{})
 			case "session":
 				request.SessionID = strings.Repeat("f", 32)
+			case "request":
+				request.Request = strings.Repeat("f", 32)
+			case "profile-id":
+				request.ProfileID += "-replacement"
+			case "profile-token":
+				request.ProfileToken = strings.Repeat("f", 64)
 			case "expired":
 				operation.completedAt = time.Now().Add(-3 * time.Minute)
 			}

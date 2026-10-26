@@ -96,7 +96,7 @@ func (owner *torBridgePrelaunch) start(check func() error) error {
 		}
 		owner.app.mu.Lock()
 		profile, found := owner.app.profileByIDLocked(launch.profileID)
-		current := found && owner.app.cmd == nil && asyncMeasurementProfileToken(profile) == launch.tor.profileToken
+		current := found && owner.app.cmd == nil && desktopTorSourceIdentityToken(profile) == launch.tor.profileToken
 		owner.app.mu.Unlock()
 		if !current {
 			return errors.Join(errTorPrelaunchRejected, errors.New("Tor node or process changed before launch"), owner.cleanup())

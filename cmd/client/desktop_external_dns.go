@@ -106,7 +106,7 @@ func captureDesktopDNSSnapshot(a *app) (desktopDNSSnapshot, error) {
 		return snapshot, errors.New("select the connected external node and its captured entry before DNS Retest")
 	}
 	if launch.tor != nil {
-		if entry.ID != "" || profile.MultihopEnabled || asyncMeasurementProfileToken(profile) != launch.tor.profileToken {
+		if entry.ID != "" || profile.MultihopEnabled || desktopTorSourceIdentityToken(profile) != launch.tor.profileToken {
 			return snapshot, errors.New("Tor DNS Retest belongs to another saved path or policy")
 		}
 		baseline = &desktopMTUSession{profileToken: mtuProfileSnapshotToken(profile)}
