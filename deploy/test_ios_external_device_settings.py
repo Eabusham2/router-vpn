@@ -91,7 +91,7 @@ enum IOSDNSRuntimePolicy {
   var bootstrap=ExternalDNSBootstrap(server:.init(type:"tcp",server:"9.9.9.9",serverPort:5353))
   bootstrap.query.strategy="prefer_ipv4";bootstrap.query.timeout="3.5s";bootstrap.query.disableCache=true;bootstrap.query.rewriteTTL=19
   p.dnsBootstrap=bootstrap
-  if kind.hasPrefix("tor"){p.dnsHost="1.1.1.1";p.dnsServerName="cloudflare-dns.com";p.dnsBootstrap=nil}
+  if kind.hasPrefix("tor"){p.dnsHost="1.1.1.1";p.dnsServerName="cloudflare-dns.com";p.dnsBootstrap=nil;p.jumboTUN=false}
   return p
  }
  static func bundle(_ p:RouterProfile)throws->ClientBundle {
@@ -176,9 +176,24 @@ enum IOSDNSRuntimePolicy {
    try check("unresolved Home draft remains owned "+kind,model.imports==1 && model.bundle!.routerProfiles[1].dnsMode=="home" && model.bundle!.routerProfiles[1].dnsHost=="")
   }
  }
+ static func torJumboNativePolicy()throws {
+  for kind in ["tor","tor-bridge"] {
+   var p=try profile(kind);p.jumboTUN=true;p.mtuPolicy="manual";p.manualMTU=9000
+   for selected in ["auto","default","manual"] {
+    let model=RouterVPNModel();model.bundle=try bundle(p);let editor=Settings(model);editor.load()
+    editor.mtuPolicy=selected;editor.manualMTU="9000";editor.saveExternalDevicePolicy()
+    try check("valid native Tor Jumbo preserves saved preference "+kind+":"+selected,model.imports==1 && model.bundle!.routerProfiles[1].jumboTUN==true && model.bundle!.routerProfiles[1].mtuPolicy==selected)
+   }
+   for fixed in ["1280","1420","8999"] {
+    let model=RouterVPNModel();model.bundle=try bundle(p);let before=try encoded(model.bundle!),editor=Settings(model);editor.load()
+    editor.mtuPolicy="manual";editor.manualMTU=fixed;editor.saveExternalDevicePolicy()
+    try check("native Tor Jumbo rejects conflicting Fixed MTU "+kind+":"+fixed,model.imports==0 && encoded(model.bundle!)==before && editor.status.hasPrefix("Device policy rejected:") && editor.status.contains("Jumbo"))
+   }
+  }
+ }
  static func main(){
   defer{RouterVPNTorTestClose()}
-  do{try saveMatrix();try invalidDrafts();try nativeRejections();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
+  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }
