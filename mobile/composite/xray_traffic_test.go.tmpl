@@ -13,7 +13,10 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"encoding/base64"
+	"encoding/json"
 	"encoding/pem"
+	"errors"
+	"fmt"
 	"io"
 	"math/big"
 	"net"
@@ -22,9 +25,13 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
+	goruntime "runtime"
 	"sort"
 	"strconv"
+	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -128,8 +135,8 @@ func startCompositeXray(t *testing.T, node *node) (int, map[string]any) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	port, listenAddress := listener.Addr().(*net.TCPAddr).Port, listener.Addr().String()
-	listener.Close()
+	port := listener.Addr().(*net.TCPAddr).Port
+	defer listener.Close()
 	reality, err := ecdh.X25519().GenerateKey(rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -173,49 +180,260 @@ func startCompositeXray(t *testing.T, node *node) (int, map[string]any) {
 		rules = append(rules, map[string]any{"type": "field", "network": "tcp", "ip": []string{host + "/32"}, "port": destPort, "outboundTag": tag})
 	}
 	server := map[string]any{"log": map[string]any{"loglevel": "debug"}, "inbounds": []any{map[string]any{"tag": "captured-node", "listen": "127.0.0.1", "port": port, "protocol": "vless", "settings": map[string]any{"clients": []any{map[string]any{"id": user["id"], "flow": user["flow"]}}, "decryption": decryption}, "streamSettings": serverStream}}, "outbounds": outputs, "routing": map[string]any{"domainStrategy": "AsIs", "rules": rules}}
-	path := filepath.Join(t.TempDir(), "owned-server.json")
-	if err := os.WriteFile(path, encode(t, server), 0600); err != nil {
-		t.Fatal(err)
-	}
-	log, err := os.Create(filepath.Join(t.TempDir(), "owned-server.log"))
+	// Keep the candidate occupied while the camouflage and all forwarding
+	// listeners are constructed. None may reclaim this port and impersonate
+	// the Xray child during readiness. A foreign process may still win the
+	// final handoff; the bounded launcher recognizes only that exact failure.
+	process, actualPort, err := launchCompositeXray(binary, t.TempDir(), server, listener, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	command := exec.Command(binary, "run", "-c", path)
-	command.Stdout, command.Stderr = log, log
-	if err := command.Start(); err != nil {
-		log.Close()
-		t.Fatal(err)
-	}
-	done := make(chan struct{})
-	var processErr error
-	go func() { processErr = command.Wait(); close(done) }()
+	client["outbounds"].([]any)[0].(map[string]any)["settings"].(map[string]any)["vnext"].([]any)[0].(map[string]any)["port"] = actualPort
 	t.Cleanup(func() {
-		_ = command.Process.Kill()
-		select {
-		case <-done:
-		case <-time.After(3 * time.Second):
-			t.Error("owned Xray fixture process did not exit")
+		if err := process.close(); err != nil {
+			t.Error(err)
 		}
-		log.Close()
 		if t.Failed() {
-			body, _ := os.ReadFile(log.Name())
-			t.Logf("owned exact Xray server diagnostics: %s", body)
+			t.Logf("owned exact Xray server diagnostics: %s", process.diagnostics())
 		}
 	})
-	for until := time.Now().Add(5 * time.Second); time.Now().Before(until); {
+	return actualPort, client
+}
+
+type compositeXrayProcess struct {
+	command   *exec.Cmd
+	log       *os.File
+	done      chan struct{}
+	err       error // Published only by closing done after the actual Wait.
+	closeOnce sync.Once
+	closeErr  error
+}
+
+func (p *compositeXrayProcess) diagnostics() string {
+	file, err := os.Open(p.log.Name())
+	if err != nil {
+		return ""
+	}
+	defer file.Close()
+	raw, _ := io.ReadAll(io.LimitReader(file, 64<<10))
+	return string(raw)
+}
+
+func (p *compositeXrayProcess) close() error {
+	p.closeOnce.Do(func() {
 		select {
-		case <-done:
-			t.Fatal("owned Xray fixture exited", processErr)
+		case <-p.done:
+		default:
+			_ = p.command.Process.Kill()
+			select {
+			case <-p.done:
+			case <-time.After(3 * time.Second):
+				p.closeErr = errors.New("owned Xray fixture process did not join")
+				return
+			}
+		}
+		p.closeErr = p.log.Close()
+	})
+	return p.closeErr
+}
+
+func (p *compositeXrayProcess) ready(address string) (bool, error) {
+	deadline := time.NewTimer(5 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		select {
+		case <-p.done:
+			// Only a naturally exited child with its own exact bind diagnostic
+			// permits another port. TLS, key, config and timeout errors do not.
+			diagnostic := p.diagnostics()
+			bindError := syscall.EADDRINUSE.Error()
+			if goruntime.GOOS == "windows" {
+				// Windows net.Listen returns the localized Winsock error, not
+				// the synthetic POSIX EADDRINUSE text in package syscall.
+				bindError = syscall.Errno(10048).Error() // WSAEADDRINUSE
+			}
+			collision := p.err != nil && strings.Contains(diagnostic, "listen tcp "+address+": bind: "+bindError)
+			return collision, fmt.Errorf("owned Xray fixture exited before readiness: %v\n%s", p.err, diagnostic)
 		default:
 		}
-		conn, err := net.DialTimeout("tcp", listenAddress, 100*time.Millisecond)
-		if err == nil {
-			conn.Close()
-			return port, client
+		diagnostic := p.diagnostics()
+		// A TCP accept alone might belong to the port thief. These two records
+		// come from this captured child's private log and prove its actual bind
+		// and completed startup before the final live-process/socket checks.
+		bound := strings.Contains(diagnostic, "transport/internet/tcp: listening TCP on "+address+"\n")
+		started := strings.Contains(diagnostic, "core: Xray ") && strings.Contains(diagnostic, " started\n")
+		if bound && started {
+			connection, err := net.DialTimeout("tcp", address, 100*time.Millisecond)
+			if err == nil {
+				_ = connection.Close()
+				select {
+				case <-p.done:
+					return false, errors.New("owned Xray fixture exited during readiness")
+				default:
+					return false, nil
+				}
+			}
 		}
-		time.Sleep(10 * time.Millisecond)
+		select {
+		case <-p.done:
+		case <-deadline.C:
+			return false, errors.New("owned Xray fixture did not publish its listener and startup within the bound")
+		case <-tick.C:
+		}
 	}
-	t.Fatal("owned Xray fixture did not become ready")
-	return 0, nil
+}
+
+// The optional handoff hook belongs only to the deterministic bind-collision
+// regression. Ordinary fixtures pass nil and retain their generated identity,
+// credentials, routes and TLS parameters across at most three port attempts.
+func launchCompositeXray(binary, directory string, server map[string]any, reservation net.Listener, handoff func(int, string) error) (*compositeXrayProcess, int, error) {
+	defer func() {
+		if reservation != nil {
+			_ = reservation.Close()
+		}
+	}()
+	for attempt := 0; attempt < 3; attempt++ {
+		address := reservation.Addr().String()
+		port := reservation.Addr().(*net.TCPAddr).Port
+		server["inbounds"].([]any)[0].(map[string]any)["port"] = port
+		path := filepath.Join(directory, fmt.Sprintf("owned-server-%d.json", attempt))
+		raw, err := json.Marshal(server)
+		if err != nil {
+			return nil, 0, err
+		}
+		if err := os.WriteFile(path, raw, 0600); err != nil {
+			return nil, 0, err
+		}
+		log, err := os.OpenFile(filepath.Join(directory, fmt.Sprintf("owned-server-%d.log", attempt)), os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			return nil, 0, err
+		}
+		command := exec.Command(binary, "run", "-c", path)
+		command.Stdout, command.Stderr = log, log
+		if err := reservation.Close(); err != nil {
+			_ = log.Close()
+			return nil, 0, err
+		}
+		if handoff != nil {
+			if err := handoff(attempt, address); err != nil {
+				_ = log.Close()
+				return nil, 0, err
+			}
+		}
+		if err := command.Start(); err != nil {
+			_ = log.Close()
+			return nil, 0, err
+		}
+		process := &compositeXrayProcess{command: command, log: log, done: make(chan struct{})}
+		go func() { process.err = command.Wait(); close(process.done) }()
+		collision, err := process.ready(address)
+		if err == nil {
+			return process, port, nil
+		}
+		if joinErr := process.close(); joinErr != nil {
+			return nil, 0, joinErr
+		}
+		if !collision || attempt == 2 {
+			return nil, 0, err
+		}
+		reservation, err = net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			return nil, 0, err
+		}
+	}
+	return nil, 0, errors.New("owned Xray fixture exhausted bounded bind attempts")
+}
+
+func TestCompositeXrayFixtureRetriesOnlyOwnedBindCollision(t *testing.T) {
+	binary := os.Getenv("ROUTER_VPN_XRAY_TEST_BINARY")
+	if binary == "" {
+		t.Fatal("exact pinned Xray server binary required for startup ownership regression")
+	}
+	for _, scenario := range []string{"foreign-listener", "configuration-failure", "live-child-with-foreign-tcp"} {
+		t.Run(scenario, func(t *testing.T) {
+			invalid := scenario == "configuration-failure"
+			wrongTransport := scenario == "live-child-with-foreign-tcp"
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			originalAddress := listener.Addr().String()
+			originalPort := listener.Addr().(*net.TCPAddr).Port
+			protocol := "socks"
+			if invalid {
+				protocol = "routervpn-invalid-fixture"
+			}
+			server := map[string]any{
+				"log": map[string]any{"loglevel": "debug"},
+				"inbounds": []any{map[string]any{"tag": "captured-node", "listen": "127.0.0.1", "port": originalPort, "protocol": protocol,
+					"settings": map[string]any{"auth": "password", "accounts": []any{map[string]any{"user": "captured-test-user", "pass": "captured-test-password"}}, "udp": false}}},
+				"outbounds": []any{map[string]any{"tag": "block", "protocol": "blackhole"}},
+			}
+			if wrongTransport {
+				// Keep an actual Xray child alive on UDP while a foreign TCP
+				// listener occupies the desired address. Liveness alone is not
+				// evidence that this child owns the promised TCP transport.
+				inbound := server["inbounds"].([]any)[0].(map[string]any)
+				inbound["protocol"] = "dokodemo-door"
+				inbound["settings"] = map[string]any{"network": "udp", "address": "127.0.0.1", "port": 9}
+			}
+			attempts := 0
+			var foreign net.Listener
+			directory := t.TempDir()
+			process, port, err := launchCompositeXray(binary, directory, server, listener, func(attempt int, address string) error {
+				attempts++
+				if attempt != 0 {
+					return nil
+				}
+				var bindErr error
+				foreign, bindErr = net.Listen("tcp", address)
+				if bindErr == nil {
+					t.Cleanup(func() { _ = foreign.Close() })
+				}
+				return bindErr
+			})
+			if process != nil {
+				t.Cleanup(func() {
+					if err := process.close(); err != nil {
+						t.Error(err)
+					}
+				})
+			}
+			if invalid || wrongTransport {
+				if err == nil || process != nil || attempts != 1 {
+					t.Fatal("non-bind startup error was hidden by a port retry", attempts, err)
+				}
+				if wrongTransport {
+					diagnostic, readErr := os.ReadFile(filepath.Join(directory, "owned-server-0.log"))
+					if readErr != nil || !strings.Contains(string(diagnostic), "listening UDP on "+originalAddress) || !strings.Contains(string(diagnostic), " started\n") || !strings.Contains(err.Error(), "did not publish") {
+						t.Fatal("foreign-listener regression did not retain a live non-TCP child until readiness rejection", err, readErr, string(diagnostic))
+					}
+				}
+			} else {
+				if err != nil || process == nil || port == originalPort || attempts != 2 {
+					t.Fatal("fixture accepted a foreign listener or failed its bounded bind retry", attempts, err)
+				}
+				before, after := map[string]any{}, map[string]any{}
+				first, e1 := os.ReadFile(filepath.Join(directory, "owned-server-0.json"))
+				second, e2 := os.ReadFile(filepath.Join(directory, "owned-server-1.json"))
+				if e1 != nil || e2 != nil || json.Unmarshal(first, &before) != nil || json.Unmarshal(second, &after) != nil {
+					t.Fatal("fixture retry lost a captured attempt")
+				}
+				before["inbounds"].([]any)[0].(map[string]any)["port"] = float64(port)
+				if !reflect.DeepEqual(before, after) {
+					t.Fatal("fixture bind retry changed credentials or routing")
+				}
+			}
+			// The wrong listener remains available. A bare TCP readiness check
+			// would accept it; the launcher must neither use nor close it.
+			connection, dialErr := net.DialTimeout("tcp", originalAddress, time.Second)
+			if dialErr != nil {
+				t.Fatal("fixture altered the retained foreign listener", dialErr)
+			}
+			_ = connection.Close()
+		})
+	}
 }
