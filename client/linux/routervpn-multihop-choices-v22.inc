@@ -9,6 +9,8 @@ static const struct { const char *id; const char *label; } linux_multihop_exits_
     {"naive-h2", "Naive H2 exit"},
     {"naive-h3", "Naive H3 exit"},
     {"wg", "WireGuard exit"},
+    {"awg2-fast", "AWG Fast exit"},
+    {"awg2-strong", "AWG Strong exit"},
 };
 
 static gboolean linux_multihop_exit_supported_v22(const char *mode) {

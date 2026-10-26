@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os/exec"
 	"path/filepath"
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
 	"runtime"
@@ -80,15 +81,25 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			}
 			entry = endpoint
 		case "proxy":
-			if sel.ExitMode != "wg" || endpoint["type"] != "wireguard" || packetExits != 0 {
+			wantType := "wireguard"
+			if awgpolicy.IsMode(sel.ExitMode) {
+				wantType = mobilemultihop.AmneziaType
+			}
+			if !awgpolicy.WireGuardFamily(sel.ExitMode) || endpoint["type"] != wantType || packetExits != 0 {
 				return nil, errors.New("native server path has an unowned packet exit")
+			}
+			if awgpolicy.IsMode(sel.ExitMode) {
+				encoded, _ := json.Marshal(endpoint)
+				if _, err := mobilemultihop.AmneziaRuntimeConfig(string(encoded)); err != nil {
+					return nil, errors.New("native AWG exit lost its captured parameters")
+				}
 			}
 			packetExits++
 		default:
 			return nil, errors.New("native server path contains an unrelated endpoint")
 		}
 	}
-	if entry == nil || (sel.ExitMode == "wg") != (packetExits == 1) {
+	if entry == nil || awgpolicy.WireGuardFamily(sel.ExitMode) != (packetExits == 1) {
 		return nil, errors.New("native server path lost its captured entry or packet exit")
 	}
 	if entry["type"] == mobilemultihop.AmneziaType {

@@ -11,7 +11,7 @@ import (
 // Local and Server node-to-node execution. WireGuard retains its packet
 // endpoint; it is never represented as a proxy in the Local graph.
 func NodeMultihopExitModes() []string {
-	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg"}
+	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong"}
 }
 
 func NodeMultihopExitMode(mode string) bool {
@@ -49,9 +49,9 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	// The final proxy may already route through its own authenticated Start
+	// The final transport may already route through its authenticated Start
 	// Layer. Attach the complete exit's outer edge to the entry, never overwrite
-	// that edge on the inner proxy and silently bypass the saved layer.
+	// that edge on the inner transport and silently bypass the saved layer.
 	outer := last.final
 	for depth := 0; outer["detour"] != nil; depth++ {
 		if depth > 1 {
@@ -63,7 +63,7 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 		}
 	}
 	selection := externalPolicyCapture{Profile: predecessorCopy(exit.profile), Entry: predecessorCopy(entry.profile)}
-	envelope, err := nodeWireGuardPacketEnvelope(last, exit.mode)
+	envelope, err := nodePacketEnvelope(last, exit.mode)
 	if err != nil {
 		return "", err
 	}

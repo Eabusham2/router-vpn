@@ -1,0 +1,544 @@
+package routervpnamnezia
+
+import (
+	"bytes"
+	"context"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"runtime"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"testing"
+	"time"
+
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
+	awg "github.com/amnezia-vpn/amneziawg-go/v3/device"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/awgpolicy"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
+	"github.com/sagernet/sing-box/log"
+	wg "github.com/sagernet/sing-box/transport/wireguard"
+	"github.com/sagernet/sing-tun"
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+// This test binary is also the isolated peer for the shipping desktop graph
+// gate. It cannot be selected by the application or enter a production image.
+// --config starts only a loopback cryptographic reference; normal go test runs
+// retain their usual behavior. The actual AWG endpoint stays client-only.
+var desktopReferenceConfig = flag.String("config", "", "Private loopback AWG reference fixture JSON")
+var desktopReferenceStdin = flag.Bool("shutdown-stdin", false, "Join reference ownership when the captured stdin pipe closes")
+
+func TestMain(m *testing.M) {
+	flag.Parse()
+	if *desktopReferenceConfig == "" {
+		os.Exit(m.Run())
+	}
+	if err := runDesktopAWGReference(*desktopReferenceConfig); err != nil {
+		fmt.Fprintln(os.Stderr, "isolated AWG reference failed:", err)
+		os.Exit(1)
+	}
+}
+
+type desktopReferencePeer struct {
+	PublicKey    string   `json:"public_key"`
+	PreSharedKey string   `json:"pre_shared_key,omitempty"`
+	AllowedIPs   []string `json:"allowed_ips"`
+}
+type desktopReferenceRule struct {
+	Network string `json:"network"`
+	Address string `json:"address"`
+	Port    int    `json:"port"`
+	Target  string `json:"target,omitempty"`
+}
+type desktopReferenceConfiguration struct {
+	ListenPort int                    `json:"listen_port"`
+	PrivateKey string                 `json:"private_key"`
+	Addresses  []string               `json:"addresses"`
+	Parameters map[string]string      `json:"parameters"`
+	Peers      []desktopReferencePeer `json:"peers"`
+	Echo       []desktopReferenceRule `json:"echo"`
+	Forward    []desktopReferenceRule `json:"forward"`
+}
+
+func readDesktopReferenceConfiguration(path string) (desktopReferenceConfiguration, error) {
+	var config desktopReferenceConfiguration
+	bad := errors.New("reference requires one unchanged private regular configuration")
+	if !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return config, bad
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 64<<10 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		return config, bad
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return config, bad
+	}
+	defer file.Close()
+	opened, err := file.Stat()
+	if err != nil || !os.SameFile(info, opened) {
+		return config, bad
+	}
+	raw, err := io.ReadAll(io.LimitReader(file, (64<<10)+1))
+	if err != nil || int64(len(raw)) != info.Size() {
+		return config, bad
+	}
+	defer clear(raw)
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&config) != nil || decoder.Decode(new(any)) != io.EOF {
+		return config, bad
+	}
+	return config, nil
+}
+
+func desktopReferenceKey(value string) ([]byte, error) {
+	raw, err := base64.StdEncoding.Strict().DecodeString(value)
+	if err != nil || len(raw) != 32 || bytes.Equal(raw, make([]byte, 32)) {
+		clear(raw)
+		return nil, errors.New("reference key must be a generated nonzero 32-byte value")
+	}
+	return raw, nil
+}
+
+func validateDesktopReference(config desktopReferenceConfiguration) (string, []netip.Prefix, map[string]desktopReferenceRule, error) {
+	bad := errors.New("invalid or unbounded isolated AWG reference configuration")
+	if config.ListenPort < 0 || config.ListenPort > 65535 || len(config.Addresses) == 0 || len(config.Addresses) > 4 || len(config.Peers) == 0 || len(config.Peers) > 2 || len(config.Echo)+len(config.Forward) == 0 || len(config.Echo)+len(config.Forward) > 12 {
+		return "", nil, nil, bad
+	}
+	parameters, err := awgpolicy.ParametersUAPI(config.Parameters)
+	if err != nil {
+		return "", nil, nil, bad
+	}
+	private, err := desktopReferenceKey(config.PrivateKey)
+	if err != nil {
+		return "", nil, nil, bad
+	}
+	defer clear(private)
+	var ipc strings.Builder
+	fmt.Fprintf(&ipc, "private_key=%x\n%s", private, parameters)
+	addresses := make([]netip.Prefix, 0, len(config.Addresses))
+	for _, value := range config.Addresses {
+		prefix, err := netip.ParsePrefix(value)
+		if err != nil || prefix.Addr().Is4In6() || !prefix.Addr().IsPrivate() || prefix.Bits() == 0 {
+			return "", nil, nil, bad
+		}
+		addresses = append(addresses, prefix)
+	}
+	seenKeys, seenAddresses := map[string]bool{}, map[netip.Addr]bool{}
+	for _, peer := range config.Peers {
+		key, err := desktopReferenceKey(peer.PublicKey)
+		if err != nil || seenKeys[peer.PublicKey] || len(peer.AllowedIPs) == 0 || len(peer.AllowedIPs) > 4 {
+			clear(key)
+			return "", nil, nil, bad
+		}
+		seenKeys[peer.PublicKey] = true
+		fmt.Fprintf(&ipc, "public_key=%x\n", key)
+		clear(key)
+		if peer.PreSharedKey != "" {
+			key, err = desktopReferenceKey(peer.PreSharedKey)
+			if err != nil {
+				return "", nil, nil, bad
+			}
+			fmt.Fprintf(&ipc, "preshared_key=%x\n", key)
+			clear(key)
+		}
+		for _, value := range peer.AllowedIPs {
+			prefix, err := netip.ParsePrefix(value)
+			if err != nil || !prefix.Addr().IsPrivate() || prefix.Addr().Is4In6() || prefix.Bits() != prefix.Addr().BitLen() || seenAddresses[prefix.Addr()] {
+				return "", nil, nil, bad
+			}
+			seenAddresses[prefix.Addr()] = true
+			fmt.Fprintf(&ipc, "allowed_ip=%s\n", prefix)
+		}
+	}
+	rules := map[string]desktopReferenceRule{}
+	add := func(rule desktopReferenceRule, forward bool) error {
+		address, err := netip.ParseAddr(rule.Address)
+		if err != nil || address.Is4In6() || address.Zone() != "" || address.IsUnspecified() || address.IsMulticast() || rule.Port < 1 || rule.Port > 65535 || rule.Network != "tcp" && rule.Network != "udp" {
+			return bad
+		}
+		if forward {
+			target, err := netip.ParseAddrPort(rule.Target)
+			if err != nil || !target.Addr().IsLoopback() || target.Addr().Is4In6() || target.Addr().Zone() != "" || target.Port() == 0 {
+				return bad
+			}
+		} else if rule.Target != "" {
+			return bad
+		}
+		key := rule.Network + "/" + netip.AddrPortFrom(address, uint16(rule.Port)).String()
+		if _, duplicate := rules[key]; duplicate {
+			return bad
+		}
+		rules[key] = rule
+		return nil
+	}
+	for _, rule := range config.Echo {
+		if add(rule, false) != nil {
+			return "", nil, nil, bad
+		}
+	}
+	for _, rule := range config.Forward {
+		if add(rule, true) != nil {
+			return "", nil, nil, bad
+		}
+	}
+	return ipc.String(), addresses, rules, nil
+}
+
+type desktopReferenceBind struct {
+	referenceBind
+	port uint16
+}
+
+func (b *desktopReferenceBind) Open(uint16) ([]awgconn.ReceiveFunc, uint16, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if b.c != nil {
+		return nil, 0, errors.New("reference listener already owned")
+	}
+	c, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: int(b.port)})
+	if err != nil {
+		return nil, 0, err
+	}
+	b.c = c
+	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
+		n, remote, err := c.ReadFromUDPAddrPort(packets[0])
+		if err != nil {
+			return 0, err
+		}
+		if !remote.Addr().IsLoopback() {
+			return 0, errors.New("reference received a non-loopback peer")
+		}
+		sizes[0], endpoints[0] = n, peerEndpoint(remote)
+		b.packets.Add(1)
+		return 1, nil
+	}
+	return []awgconn.ReceiveFunc{receive}, uint16(c.LocalAddr().(*net.UDPAddr).Port), nil
+}
+
+type desktopReferenceHandler struct {
+	ctx     context.Context
+	cancel  context.CancelFunc
+	rules   map[string]desktopReferenceRule
+	mu      sync.Mutex
+	closed  bool
+	owned   map[io.Closer]bool
+	workers sync.WaitGroup
+}
+
+func (h *desktopReferenceHandler) rule(network string, destination M.Socksaddr) (desktopReferenceRule, bool) {
+	if !destination.IsIP() {
+		return desktopReferenceRule{}, false
+	}
+	rule, found := h.rules[network+"/"+destination.String()]
+	return rule, found
+}
+func (h *desktopReferenceHandler) JudgeFlow(protocol uint8, _, destination netip.AddrPort, _ []byte) tun.FlowVerdict {
+	network := ""
+	if protocol == 6 {
+		network = "tcp"
+	} else if protocol == 17 {
+		network = "udp"
+	}
+	if _, ok := h.rules[network+"/"+destination.String()]; ok {
+		return tun.FlowVerdict{Action: tun.ActionAccept}
+	}
+	return tun.FlowVerdict{Action: tun.ActionReject}
+}
+func (*desktopReferenceHandler) NewDNSPacket([]byte, M.Socksaddr, M.Socksaddr, N.PacketWriter) {}
+func (h *desktopReferenceHandler) adopt(c io.Closer, worker bool) bool {
+	h.mu.Lock()
+	if h.closed {
+		h.mu.Unlock()
+		_ = c.Close()
+		return false
+	}
+	h.owned[c] = true
+	if worker {
+		h.workers.Add(1)
+	}
+	h.mu.Unlock()
+	return true
+}
+func (h *desktopReferenceHandler) forget(c io.Closer) {
+	_ = c.Close()
+	h.mu.Lock()
+	delete(h.owned, c)
+	h.mu.Unlock()
+}
+func (h *desktopReferenceHandler) close() {
+	h.cancel()
+	h.mu.Lock()
+	h.closed = true
+	owned := make([]io.Closer, 0, len(h.owned))
+	for c := range h.owned {
+		owned = append(owned, c)
+	}
+	h.mu.Unlock()
+	for _, c := range owned {
+		_ = c.Close()
+	}
+	h.workers.Wait()
+}
+func (h *desktopReferenceHandler) NewConnectionEx(_ context.Context, c net.Conn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	rule, ok := h.rule("tcp", destination)
+	if !ok || !h.adopt(c, true) {
+		_ = c.Close()
+		if done != nil {
+			done(errors.New("unowned reference TCP destination"))
+		}
+		return
+	}
+	go func() {
+		defer h.workers.Done()
+		defer h.forget(c)
+		_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+		var result error
+		if rule.Target == "" {
+			_, result = io.Copy(c, c)
+		} else {
+			upstream, err := (&net.Dialer{Timeout: 5 * time.Second}).DialContext(h.ctx, "tcp", rule.Target)
+			if err == nil && !h.adopt(upstream, false) {
+				err = net.ErrClosed
+			}
+			if err != nil {
+				result = err
+			} else {
+				defer h.forget(upstream)
+				_ = upstream.SetDeadline(time.Now().Add(30 * time.Second))
+				joined := make(chan error, 1)
+				go func() { _, err := io.Copy(upstream, c); _ = upstream.Close(); _ = c.Close(); joined <- err }()
+				_, result = io.Copy(c, upstream)
+				_ = c.Close()
+				_ = upstream.Close()
+				_ = <-joined
+			}
+		}
+		if done != nil {
+			done(result)
+		}
+	}()
+}
+func (h *desktopReferenceHandler) NewPacketConnectionEx(_ context.Context, c N.PacketConn, _, destination M.Socksaddr, done N.CloseHandlerFunc) {
+	rule, ok := h.rule("udp", destination)
+	if !ok || !h.adopt(c, true) {
+		_ = c.Close()
+		if done != nil {
+			done(errors.New("unowned reference UDP destination"))
+		}
+		return
+	}
+	go func() {
+		defer h.workers.Done()
+		defer h.forget(c)
+		_ = c.SetDeadline(time.Now().Add(30 * time.Second))
+		var upstream net.Conn
+		var joined chan struct{}
+		var result error
+		if rule.Target != "" {
+			upstream, result = (&net.Dialer{Timeout: 5 * time.Second}).DialContext(h.ctx, "udp", rule.Target)
+			if result == nil && !h.adopt(upstream, false) {
+				result = net.ErrClosed
+			}
+			if result == nil {
+				defer h.forget(upstream)
+				_ = upstream.SetDeadline(time.Now().Add(30 * time.Second))
+				joined = make(chan struct{})
+				go func() {
+					defer close(joined)
+					defer c.Close()
+					data := make([]byte, 65535)
+					for {
+						n, err := upstream.Read(data)
+						if err != nil {
+							return
+						}
+						packet := buf.NewPacket()
+						_, _ = packet.Write(data[:n])
+						if c.WritePacket(packet, destination) != nil {
+							return
+						}
+					}
+				}()
+			}
+		}
+		for result == nil {
+			packet := buf.NewPacket()
+			address, err := c.ReadPacket(packet)
+			if err == nil && address != destination {
+				err = errors.New("reference packet destination changed")
+			}
+			if err != nil {
+				packet.Release()
+				result = err
+				break
+			}
+			if upstream == nil {
+				result = c.WritePacket(packet, address)
+			} else {
+				_, result = upstream.Write(packet.Bytes())
+				packet.Release()
+			}
+		}
+		if joined != nil {
+			_ = upstream.Close()
+			_ = c.Close()
+			<-joined
+		}
+		if done != nil {
+			done(result)
+		}
+	}()
+}
+
+type desktopAWGReference struct {
+	device  *awg.Device
+	bind    *desktopReferenceBind
+	handler *desktopReferenceHandler
+	once    sync.Once
+}
+
+func startDesktopAWGReference(config desktopReferenceConfiguration) (*desktopAWGReference, error) {
+	ipc, addresses, rules, err := validateDesktopReference(config)
+	if err != nil {
+		return nil, err
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	handler := &desktopReferenceHandler{ctx: ctx, cancel: cancel, rules: rules, owned: map[io.Closer]bool{}}
+	stack, err := wg.NewDevice(wg.DeviceOptions{Context: ctx, Logger: log.NewNOPFactory().Logger(), Handler: handler, UDPTimeout: 30 * time.Second, ICMPTimeout: time.Second, MTU: 1400, Address: addresses})
+	if err != nil {
+		cancel()
+		return nil, errors.New("reference userspace stack failed")
+	}
+	wrapped := wrapTun(stack)
+	binding := &desktopReferenceBind{port: uint16(config.ListenPort)}
+	device := awg.NewDevice(wrapped, binding, &awg.Logger{Verbosef: func(string, ...any) {}, Errorf: func(string, ...any) {}})
+	owner := &desktopAWGReference{device: device, bind: binding, handler: handler}
+	padding, _ := strconv.Atoi(config.Parameters["s4"])
+	if device.IpcSet(ipc) != nil || wrapped.configuredPadding(padding) != nil || wrapped.Device.Start() != nil || device.Up() != nil {
+		owner.close()
+		return nil, errors.New("reference rejected its exact generated AWG configuration")
+	}
+	return owner, nil
+}
+func (r *desktopAWGReference) close() { r.once.Do(func() { r.handler.close(); r.device.Close() }) }
+
+func runDesktopAWGReference(path string) error {
+	config, err := readDesktopReferenceConfiguration(path)
+	if err != nil {
+		return err
+	}
+	owner, err := startDesktopAWGReference(config)
+	if err != nil {
+		return err
+	}
+	defer owner.close()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if *desktopReferenceStdin {
+		// The fixture launcher owns this pipe. Windows cannot deliver POSIX
+		// signals, so EOF provides the same joined teardown on every runner.
+		joined := make(chan struct{})
+		go func() {
+			defer close(joined)
+			_, _ = io.Copy(io.Discard, io.LimitReader(os.Stdin, 1))
+			stop()
+		}()
+		defer func() { _ = os.Stdin.Close(); <-joined }()
+	}
+	if json.NewEncoder(os.Stdout).Encode(map[string]any{"listen": owner.bind.address(), "ready": true}) != nil {
+		return errors.New("reference readiness owner closed")
+	}
+	<-ctx.Done()
+	return nil
+}
+
+func desktopReferenceFixture(t *testing.T) (desktopReferenceConfiguration, Options) {
+	t.Helper()
+	client, public := keys(t)
+	server, serverPublic := keys(t)
+	psk, _ := keys(t)
+	config := desktopReferenceConfiguration{PrivateKey: server, Addresses: []string{"10.78.0.1/24", "fd78:78::1/64"}, Parameters: parameters(),
+		Peers: []desktopReferencePeer{{PublicKey: public, PreSharedKey: psk, AllowedIPs: []string{"10.78.0.2/32", "fd78:78::2/128"}}},
+		Echo:  []desktopReferenceRule{{Network: "tcp", Address: "192.0.2.99", Port: 9999}, {Network: "udp", Address: "192.0.2.99", Port: 9999}}}
+	options := Options{Type: mobilemultihop.AmneziaType, MTU: 1280, Address: []string{"10.78.0.2/32", "fd78:78::2/128"}, PrivateKey: client, Parameters: parameters(),
+		Peers: []mobilemultihop.AmneziaPeer{{Address: "192.0.2.1", Port: 51820, PublicKey: serverPublic, PreSharedKey: psk, AllowedIPs: []string{"0.0.0.0/0", "::/0"}}}}
+	return config, options
+}
+
+func TestDesktopAWGReferenceRejectsEscape(t *testing.T) {
+	for _, mutate := range []func(*desktopReferenceConfiguration){
+		func(c *desktopReferenceConfiguration) {
+			c.Forward = []desktopReferenceRule{{Network: "udp", Address: "192.0.2.1", Port: 51820, Target: "198.51.100.1:51820"}}
+		},
+		func(c *desktopReferenceConfiguration) {
+			c.Forward = []desktopReferenceRule{{Network: "tcp", Address: "10.77.0.1", Port: 26241, Target: "localhost:26241"}}
+		},
+		func(c *desktopReferenceConfiguration) { c.Echo[0].Target = "127.0.0.1:80" },
+		func(c *desktopReferenceConfiguration) { c.Echo[0].Address = "example.test" },
+		func(c *desktopReferenceConfiguration) { c.Echo = append(c.Echo, c.Echo[0]) },
+		func(c *desktopReferenceConfiguration) { c.Peers[0].AllowedIPs = []string{"0.0.0.0/0"} },
+		func(c *desktopReferenceConfiguration) { c.Peers = append(c.Peers, c.Peers[0]) },
+		func(c *desktopReferenceConfiguration) { delete(c.Parameters, "s4") },
+		func(c *desktopReferenceConfiguration) { c.Parameters["s4"] = "0\nlisten_port=51820" },
+	} {
+		config, _ := desktopReferenceFixture(t)
+		mutate(&config)
+		if _, _, _, err := validateDesktopReference(config); err == nil {
+			t.Fatal("reference accepted unowned configuration")
+		}
+	}
+}
+
+func TestDesktopAWGReferenceEncryptedEchoAndJoinedClose(t *testing.T) {
+	config, options := desktopReferenceFixture(t)
+	owner, err := startDesktopAWGReference(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(owner.close)
+	client, err := newEndpoint(context.Background(), nil, log.NewNOPFactory().Logger(), "client", options, &mappedDialer{target: netip.MustParseAddrPort("192.0.2.1:51820"), actual: owner.bind.address()}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = client.Close() })
+	if err = client.Start(adapter.StartStateStart); err != nil {
+		t.Fatal(err)
+	}
+	for _, network := range []string{"tcp", "udp"} {
+		if err = exchange(t, &actualPair{client: client}, network, "192.0.2.99"); err != nil {
+			t.Fatal(network, err)
+		}
+	}
+	if owner.bind.packets.Load() == 0 {
+		t.Fatal("reference did not receive encrypted native traffic")
+	}
+	address := owner.bind.address()
+	closed := make(chan struct{})
+	go func() { owner.close(); close(closed) }()
+	select {
+	case <-closed:
+	case <-time.After(3 * time.Second):
+		t.Fatal("reference did not join its packet/stream workers")
+	}
+	listener, err := net.ListenPacket("udp4", address)
+	if err != nil {
+		t.Fatal("reference retained its physical listener", err)
+	}
+	_ = listener.Close()
+}

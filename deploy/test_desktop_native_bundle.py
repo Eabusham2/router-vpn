@@ -7,6 +7,7 @@ import importlib.util
 import json
 import shutil
 import subprocess
+import sys
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -85,6 +86,30 @@ def test(bundle, target):
                         './cmd/client', '-run', '^Test(NativeMultihop|NativeServerGraph)'],
                        cwd=ROOT, env=env, check=True, timeout=300)
         print('Complete native runtime accepted captured WG/AWG Local and Server graphs with exact layers, DNS and cover; stale proof/source regressions passed', flush=True)
+        # The production AWG endpoint deliberately accepts only client peers.
+        # Build a separate test-only cryptographic server; never widen that
+        # production boundary or add the helper to the sealed runtime payload.
+        # Build may reuse a cache and removes its disposable core, so this gate
+        # owns a fresh exact-pinned checkout and prepares the shared AWG sources
+        # on every invocation. No stale helper can silently satisfy the gate.
+        core = Path(temporary)/'reference-core'
+        BUILD.checkout(core, 'https://github.com/SagerNet/sing-box.git', BUILD.PIN)
+        subprocess.run([sys.executable, str(ROOT/'deploy/prepare-mobile-amnezia.py'), str(core)],
+                       cwd=ROOT, env=env, check=True, timeout=300)
+        subprocess.run(['go', 'mod', 'tidy'], cwd=core, env=env, check=True, timeout=300)
+        subprocess.run([sys.executable, str(ROOT/'deploy/prepare-mobile-amnezia.py'),
+                        '--verify-dependency', str(core)], cwd=ROOT, env=env, check=True, timeout=60)
+        reference = Path(temporary)/('awg-reference.exe' if target.startswith('windows/') else 'awg-reference')
+        subprocess.run([sys.executable, str(ROOT/'deploy/build_awg_reference_fixture.py'),
+                        '--core', str(core), '--output', str(reference), *(['--race'] if race else [])],
+                       cwd=ROOT, env=env, check=True, timeout=660)
+        subprocess.run([str(reference), '-test.run', '^TestDesktopAWGReference', '-test.count=1',
+                        '-test.timeout=45s'], cwd=ROOT, env=env, check=True, timeout=60)
+        env['ROUTERVPN_AWG_REFERENCE_CLI'] = str(reference)
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
+                        '-run', '^TestNativeAmneziaMultihopEncryptedLoopback$'],
+                       cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed actual AWG Fast/Strong Local and Server encrypted traffic with independent reference peers', flush=True)
 
 
 if __name__ == '__main__':

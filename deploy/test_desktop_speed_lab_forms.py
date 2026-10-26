@@ -107,7 +107,7 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  JsonArray*nodes=linux_speed_lab_catalog_v19(&s,"nodes");json_array_add_object_element(nodes,json_object_ref(node));reject(&s);json_array_remove_element(nodes,json_array_get_length(nodes)-1);
  json_object_set_string_member(node,"multihop_entry_id","removed-entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.entry),"removed-entry")==0,"Unavailable entry became Direct");reject(&s);json_object_set_string_member(node,"multihop_entry_id","entry");linux_speed_lab_defaults_v19(&s);
  choose(s.topology,"multihop");choose(s.entry,"entry");choose(s.exit,"exit-router");for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s",executions[j]);emit(&s,argv[1],name);g_free(name);}
- JsonArray*exit_modes=linux_speed_lab_catalog_v19(&s,"supported_exit_modes");check(exit_modes!=NULL&&json_array_get_length(exit_modes)==8,"Reduced Router exit catalog");
+ JsonArray*exit_modes=linux_speed_lab_catalog_v19(&s,"supported_exit_modes");check(exit_modes!=NULL&&json_array_get_length(exit_modes)==10,"Reduced Router exit catalog");
  for(guint i=0;i<json_array_get_length(exit_modes);i++){const char*mode=json_array_get_string_element(exit_modes,i);choose(s.exit_mode,mode);for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s-%s",mode,executions[j]);emit(&s,argv[1],name);g_free(name);}}
  linux_speed_lab_select_v19(s.exit_mode,"unknown-exit");reject(&s);choose(s.exit_mode,"naive-h3");
  json_array_add_string_element(exit_modes,"naive-h3");reject(&s);json_array_remove_element(exit_modes,json_array_get_length(exit_modes)-1);

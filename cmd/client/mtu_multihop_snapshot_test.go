@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/multihoprelay"
 )
@@ -77,8 +78,8 @@ func newRetainedMultihopModeFixture(t *testing.T, execution, exitMode string) *r
 	if execution == "server" {
 		request := multihoprelay.Request{SessionID: strings.Repeat("c", 32), EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: sel.Exit.StartLayer}
 		relay := &desktopRelayOwner{app: a, command: launch.command, entry: sel.Entry, request: request, renewed: true, expected: multihoprelay.Lease{Request: request, NodeID: sel.Entry.NodeProofID, ExitNodeID: sel.Exit.NodeProofID, ExpiresAt: time.Now().Add(time.Minute)}}
-		if exitMode == "wg" {
-			relay.localPacketPublic, relay.serverPacketPublic = sel.Native.localPacketPublic["wg"], testWGKey('z')
+		if awgpolicy.WireGuardFamily(exitMode) {
+			relay.localPacketPublic, relay.serverPacketPublic = sel.Native.localPacketPublic[exitMode], testWGKey('z')
 			relay.request.ExpectedPacketPublicKey, relay.packetCapabilityReady = relay.serverPacketPublic, true
 			relay.expected.Request = relay.request
 		}
@@ -86,7 +87,7 @@ func newRetainedMultihopModeFixture(t *testing.T, execution, exitMode string) *r
 	}
 	f := &retainedMultihopFixture{a: a, selection: sel, launch: launch, graph: graph, native: owner,
 		readback: desktopNodeMTURecord{Schema: 1, Session: launch.mtuSession, Config: launch.configSHA256, Path: strings.Repeat("d", 64), Reader: 2, Interface: "router-vpn", Index: 7, MTU: 1360}}
-	if exitMode == "wg" {
+	if awgpolicy.WireGuardFamily(exitMode) {
 		f.readback.MTU = 1280
 	}
 	f.publish(t, f.readback)

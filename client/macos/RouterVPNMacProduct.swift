@@ -10,6 +10,7 @@ enum RouterVPNNodeExitModes {
         ("shadowsocks", "Shadowsocks"), ("hysteria2", "Hysteria2"),
         ("reality-vision", "REALITY Vision"), ("reality-pq-vision", "PQ REALITY Vision"),
         ("reality-xhttp", "REALITY XHTTP"), ("naive-h2", "Naive H2"), ("naive-h3", "Naive H3"), ("wg", "WireGuard"),
+        ("awg2-fast", "AWG Fast"), ("awg2-strong", "AWG Strong"),
     ]
     static func id(at index: Int) -> String? {
         choices.indices.contains(index) ? choices[index].id : nil

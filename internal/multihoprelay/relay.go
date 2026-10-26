@@ -222,7 +222,7 @@ func (m *Manager) Available() []map[string]string {
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
-	if q.ExpectedPacketPublicKey != "" && (q.ExitMode != "wg" || !canonicalPacketPublic(q.ExpectedPacketPublicKey)) {
+	if q.ExpectedPacketPublicKey != "" && (!awgpolicy.WireGuardFamily(q.ExitMode) || !canonicalPacketPublic(q.ExpectedPacketPublicKey)) {
 		return ErrOwnership
 	}
 	if err := validatePacketRequestShape(q, false); err != nil {

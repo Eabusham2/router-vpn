@@ -20,15 +20,26 @@ import (
 	"router-vpn/internal/multihoprelay"
 )
 
-func TestNativeMultihopWireGuardServerRejectsCanonicalPeerReuseBeforePUT(t *testing.T) {
+func TestNativeMultihopPacketServerRejectsCanonicalPeerReuseBeforePUT(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { nativeMultihopPacketServerPeerGuard(t, mode) })
+	}
+}
+
+func nativeMultihopPacketServerPeerGuard(t *testing.T, mode string) {
+	t.Helper()
 	root, selection := nativeMultihopCapturedFixture(t, "wg", "off")
-	selection.ExitMode = "wg"
-	first, err := captureNativeMultihopSelection(context.Background(), root, selection, []string{"wg"}, nil)
+	selection.ExitMode = mode
+	first, err := captureNativeMultihopSelection(context.Background(), root, selection, []string{mode}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	public := first.Native.localPacketPublic["wg"]
-	private, err := base64.StdEncoding.DecodeString(testWGKey('p'))
+	public := first.Native.localPacketPublic[mode]
+	seed, full, split := byte('p'), "wg.conf", "wg-socks.conf"
+	if mode != "wg" {
+		seed, full, split = 'v', "awg.conf", "awg-socks.conf"
+	}
+	private, err := base64.StdEncoding.DecodeString(testWGKey(seed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -40,13 +51,13 @@ func TestNativeMultihopWireGuardServerRejectsCanonicalPeerReuseBeforePUT(t *test
 	if originalKey.Equal(aliasKey) || !originalKey.PublicKey().Equal(aliasKey.PublicKey()) {
 		t.Fatal("fixture lost its different private encodings of one public identity")
 	}
-	for _, name := range []string{"wg.conf", "wg-socks.conf"} {
-		path := filepath.Join(root, "generated", "exit", "wg", name)
+	for _, name := range []string{full, split} {
+		path := filepath.Join(root, "generated", "exit", mode, name)
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatal(err)
 		}
-		changed := strings.ReplaceAll(string(raw), testWGKey('p'), base64.StdEncoding.EncodeToString(alias))
+		changed := strings.ReplaceAll(string(raw), testWGKey(seed), base64.StdEncoding.EncodeToString(alias))
 		if changed == string(raw) {
 			t.Fatal("fixture did not change the captured private source")
 		}
@@ -57,8 +68,8 @@ func TestNativeMultihopWireGuardServerRejectsCanonicalPeerReuseBeforePUT(t *test
 	if first.Native.validate(first) == nil {
 		t.Fatal("changed private source retained old capture ownership")
 	}
-	selection, err = captureNativeMultihopSelection(context.Background(), root, selection, []string{"wg"}, nil)
-	if err != nil || public == "" || selection.Native.localPacketPublic["wg"] != public {
+	selection, err = captureNativeMultihopSelection(context.Background(), root, selection, []string{mode}, nil)
+	if err != nil || public == "" || selection.Native.localPacketPublic[mode] != public {
 		t.Fatal("recaptured alias changed the canonical local peer identity", err)
 	}
 
@@ -107,10 +118,10 @@ func TestNativeMultihopWireGuardServerRejectsCanonicalPeerReuseBeforePUT(t *test
 		t.Run(fault, func(t *testing.T) {
 			command := &exec.Cmd{}
 			app := &app{cmd: command}
-			request := multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: selection.Entry.NodeProofID, ExitID: selection.Exit.ID, ExitMode: "wg", Port: 26241, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)}
+			request := multihoprelay.Request{SessionID: strings.Repeat("1", 32), EntryNodeID: selection.Entry.NodeProofID, ExitID: selection.Exit.ID, ExitMode: mode, Port: 26241, Username: strings.Repeat("a", 48), Password: strings.Repeat("b", 48)}
 			lease := multihoprelay.Lease{Request: request, NodeID: selection.Entry.NodeProofID, ExitNodeID: selection.Exit.NodeProofID, Host: "10.77.0.1", Port: request.Port, Username: request.Username, Password: request.Password, ExpiresAt: time.Now().Add(time.Minute)}
-			owner := &desktopRelayOwner{app: app, command: command, entry: selection.Entry, request: request, expected: lease, localPacketPublic: selection.Native.localPacketPublic["wg"]}
-			exit := multihoprelay.Capability{ID: selection.Exit.ID, Mode: "wg", NodeID: selection.Exit.NodeProofID, PublicKey: independent}
+			owner := &desktopRelayOwner{app: app, command: command, entry: selection.Entry, request: request, expected: lease, localPacketPublic: selection.Native.localPacketPublic[mode]}
+			exit := multihoprelay.Capability{ID: selection.Exit.ID, Mode: mode, NodeID: selection.Exit.NodeProofID, PublicKey: independent}
 			switch fault {
 			case "same-private":
 				exit.PublicKey = base64.StdEncoding.EncodeToString(originalKey.PublicKey().Bytes())

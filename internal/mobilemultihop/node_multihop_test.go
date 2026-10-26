@@ -10,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
 )
 
@@ -20,12 +21,16 @@ func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[stri
 	if id == "exit" {
 		profile["node_proof_id"] = strings.Repeat("f", 64)
 		profile["router_api"], profile["adguard_ipv4"] = "http://10.88.0.1:8787", "10.88.0.53"
-		if mode == "wg" {
+		if awgpolicy.WireGuardFamily(mode) {
+			asset := "wg.conf"
+			if awgpolicy.IsMode(mode) {
+				asset = "awg.conf"
+			}
 			var assets map[string]string
 			if err := json.Unmarshal([]byte(files), &assets); err != nil {
 				t.Fatal(err)
 			}
-			raw, err := base64.StdEncoding.DecodeString(assets["wg.conf"])
+			raw, err := base64.StdEncoding.DecodeString(assets[asset])
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -37,10 +42,12 @@ func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[stri
 			text := strings.ReplaceAll(string(raw), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32))), public)
 			text = strings.ReplaceAll(text, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32))), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32))))
 			text = strings.ReplaceAll(text, "10.77.0.2", "10.88.0.2")
-			assets["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(text))
+			assets[asset] = base64.StdEncoding.EncodeToString([]byte(text))
 			files = startJSON(t, assets)
 			proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
-			profile["node_proof_id"] = hex.EncodeToString(proof[:])
+			if mode == "wg" {
+				profile["node_proof_id"] = hex.EncodeToString(proof[:])
+			}
 		}
 	}
 	profile["daita_enabled"], profile["daita_rate_kbps"], profile["daita_host"] = true, float64(64), "10.77.0.1"
@@ -49,8 +56,15 @@ func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[stri
 }
 
 func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
+	return multihopNodeCapacityFixture(t, mode, layer, id, 0)
+}
+
+func multihopNodeCapacityFixture(t *testing.T, mode, layer, id string, capacity int) *NodeProfile {
 	t.Helper()
 	files, profile, start := multihopNodeSources(t, mode, layer, id)
+	if capacity != 0 {
+		profile["mtu_policy"], profile["manual_mtu"] = "manual", float64(capacity)
+	}
 	compiled, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
 	if err != nil {
 		t.Fatal(err)
@@ -64,7 +78,14 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 			for _, exitMode := range NodeMultihopExitModes() {
 				for _, exitLayer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 					t.Run(mode+"/"+entryLayer+"/"+exitMode+"/"+exitLayer, func(t *testing.T) {
-						entry, exit := multihopNodeFixture(t, mode, entryLayer, "entry"), multihopNodeFixture(t, exitMode, exitLayer, "exit")
+						capacity := 0
+						// S4=32 plus an exit Start Layer exceeds a 1420-byte
+						// entry for the minimum 1280-byte nested packet. This
+						// positive composition explicitly captures a larger bound.
+						if awgpolicy.IsMode(exitMode) && exitLayer != "" {
+							capacity = 1500
+						}
+						entry, exit := multihopNodeCapacityFixture(t, mode, entryLayer, "entry", capacity), multihopNodeFixture(t, exitMode, exitLayer, "exit")
 						entryBefore, exitBefore := entry.Config(), exit.Config()
 						compiled, err := NodeMultihopConfig(entry, exit)
 						if err != nil {
@@ -118,7 +139,7 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 								t.Fatal("captured exit credentials, TLS, Xray document or UDP framing changed")
 							}
 						}
-						if exitMode == "wg" {
+						if awgpolicy.WireGuardFamily(exitMode) {
 							prior := startObject(t, exitBefore)["endpoints"].([]any)[0].(map[string]any)
 							actual := predecessorCopy(nodes["proxy"])
 							delete(prior, "mtu")
@@ -127,7 +148,7 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 								delete(actual, "detour")
 							}
 							if !reflect.DeepEqual(prior, actual) {
-								t.Fatal("WireGuard exit keys, peer, assigned addresses or packet owner changed")
+								t.Fatal("WG/AWG exit keys, parameters, peer, assigned addresses or packet owner changed")
 							}
 						}
 						servers := graph["dns"].(map[string]any)["servers"].([]any)

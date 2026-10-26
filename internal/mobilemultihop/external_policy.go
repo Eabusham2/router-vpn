@@ -940,7 +940,7 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 }
 
 func externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile map[string]any, envelope int) (mtu, entryMTU int, policy string, err error) {
-	if envelope != 0 && (exit["type"] != "wireguard" || profile["node_kind"] != "router-vpn" || envelope < 60 || envelope > 4096) {
+	if envelope != 0 && ((exit["type"] != "wireguard" && exit["type"] != AmneziaType) || profile["node_kind"] != "router-vpn" || envelope < 60 || envelope > 4096) {
 		return 0, 0, "", errors.New("nested packet envelope is not owned by the captured Router exit")
 	}
 	mtu, err = mtuNumber(tun["mtu"])

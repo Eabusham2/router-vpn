@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"router-vpn/internal/applexray"
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -107,8 +108,8 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		exit, _, e := compile(sel.Exit, mode)
 		if e == nil {
 			public := ""
-			if mode == "wg" {
-				public, e = exit.WireGuardClientPublicKey()
+			if awgpolicy.WireGuardFamily(mode) {
+				public, e = exit.PacketClientPublicKey()
 			}
 			var config string
 			if e == nil {

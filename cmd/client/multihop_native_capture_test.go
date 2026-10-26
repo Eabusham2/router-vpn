@@ -17,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
@@ -67,6 +68,16 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 	}
 	exit.NodeProofID, _ = nodeProofIDFromWGConfig(identity["wg.conf"])
 	write(exit.ID, "wg", identity)
+	// AWG exits use their own protocol parameters and private transport key;
+	// the paired WG asset above remains the stable Router node proof identity.
+	for _, exitMode := range []string{"awg2-fast", "awg2-strong"} {
+		_, packetAssets := viaEntryBaseFixture(t, exitMode)
+		for name, raw := range packetAssets {
+			text := strings.NewReplacer(entry.Endpoint, exit.Endpoint, testWGKey('p'), testWGKey('v'), testWGKey('q'), testWGKey('w'), "10.77.", "10.88.").Replace(string(raw))
+			packetAssets[name] = []byte(strings.Replace(text, "[Interface]\n", "[Interface]\nMTU = 1420\n", 1))
+		}
+		write(exit.ID, exitMode, packetAssets)
+	}
 	for _, p := range []common.RouterProfile{entry, exit} {
 		key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
 		ss, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "route": map[string]any{"final": "proxy"}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.Endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": key}}})
@@ -122,6 +133,10 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 			t.Run(mode+"/"+layer, func(t *testing.T) {
 				root, sel := nativeMultihopCapturedFixture(t, mode, layer)
+				// Complete positive catalog includes S4=32 plus Start Layers;
+				// their separately tested 1420-byte bound cannot carry that nesting.
+				sel.Entry.MTUPolicy, sel.Entry.ManualMTU = "manual", 1500
+				sel.Control.MTUPolicy, sel.Control.ManualMTU = "manual", 1500
 				sel, err := captureNativeMultihopSelection(context.Background(), root, sel, mobilemultihop.NodeMultihopExitModes(), nil)
 				if err != nil {
 					t.Fatal(err)
@@ -190,10 +205,10 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 							t.Fatal("Server substitution changed the captured entry or policy", key)
 						}
 					}
-					if exitMode == "wg" {
+					if awgpolicy.WireGuardFamily(exitMode) {
 						serverEndpoints := server["endpoints"].([]any)
 						if len(serverEndpoints) != 1 || !reflect.DeepEqual(serverEndpoints[0], endpoint) || len(local["endpoints"].([]any)) != 2 || sel.Native.localPacketPublic[exitMode] == "" {
-							t.Fatal("Server did not remove only the captured local WireGuard exit")
+							t.Fatal("Server did not remove only the captured local WG/AWG exit")
 						}
 					} else if !reflect.DeepEqual(local["endpoints"], server["endpoints"]) {
 						t.Fatal("Server substitution changed the captured entry")
@@ -418,6 +433,10 @@ func TestNativeMultihopServerCannotChangeCapturedModeLayerOrConfig(t *testing.T)
 		for _, change := range []string{"capture", "mode", "layer", "bytes"} {
 			root, sel := nativeMultihopCapturedFixture(t, "awg2-fast", "aes-256-gcm+xor-whitening")
 			sel.ExitMode = mode
+			if awgpolicy.IsMode(mode) {
+				sel.Entry.MTUPolicy, sel.Entry.ManualMTU = "manual", 1500
+				sel.Control.MTUPolicy, sel.Control.ManualMTU = "manual", 1500
+			}
 			sel, err := captureNativeMultihopSelection(context.Background(), root, sel, []string{mode}, nil)
 			if err != nil {
 				t.Fatal(err)

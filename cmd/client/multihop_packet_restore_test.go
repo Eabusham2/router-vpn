@@ -9,10 +9,17 @@ import (
 	"time"
 )
 
-func TestNativeMultihopWireGuardRestoreRetainsProvedServerPeerAndExecution(t *testing.T) {
+func TestNativeMultihopPacketRestoreRetainsProvedServerPeerAndExecution(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { nativeMultihopPacketRestoreRetainsProvedServerPeerAndExecution(t, mode) })
+	}
+}
+
+func nativeMultihopPacketRestoreRetainsProvedServerPeerAndExecution(t *testing.T, mode string) {
+	t.Helper()
 	for _, execution := range []string{"local", "server"} {
 		t.Run(execution, func(t *testing.T) {
-			f := newRetainedMultihopModeFixture(t, execution, "wg")
+			f := newRetainedMultihopModeFixture(t, execution, mode)
 			t.Setenv("HOMEVPN_ROOT", f.launch.root)
 			manifest := filepath.Join(f.launch.root, "runtime", "native", "NATIVE-RUNTIME.json")
 			if err := os.MkdirAll(filepath.Dir(manifest), 0700); err != nil {
@@ -27,7 +34,7 @@ func TestNativeMultihopWireGuardRestoreRetainsProvedServerPeerAndExecution(t *te
 			if err != nil {
 				t.Fatal(err)
 			}
-			if plan.multihop == nil || plan.multihop.Native != f.selection.Native || plan.multihop.restoreMTU != 1280 || plan.request.Execution != execution || plan.request.Execution == "auto" || plan.multihop.Control.MultihopExecution != "auto" || plan.multihop.ExitMode != "wg" {
+			if plan.multihop == nil || plan.multihop.Native != f.selection.Native || plan.multihop.restoreMTU != 1280 || plan.request.Execution != execution || plan.request.Execution == "auto" || plan.multihop.Control.MultihopExecution != "auto" || plan.multihop.ExitMode != mode {
 				t.Fatal("restore replaced the proved packet path or repeated Compare")
 			}
 			if execution == "server" {
@@ -47,10 +54,17 @@ func TestNativeMultihopWireGuardRestoreRetainsProvedServerPeerAndExecution(t *te
 	}
 }
 
-func TestNativeMultihopWireGuardRestoreRejectsRetiredLeaseIdentity(t *testing.T) {
+func TestNativeMultihopPacketRestoreRejectsRetiredLeaseIdentity(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { nativeMultihopPacketRestoreRejectsRetiredLeaseIdentity(t, mode) })
+	}
+}
+
+func nativeMultihopPacketRestoreRejectsRetiredLeaseIdentity(t *testing.T, mode string) {
+	t.Helper()
 	for _, fault := range []string{"missing", "command", "unproved", "stale-capability", "expired", "request-pin", "receipt-pin", "entry", "exit", "local-key", "duplicate-peer"} {
 		t.Run(fault, func(t *testing.T) {
-			f := newRetainedMultihopModeFixture(t, "server", "wg")
+			f := newRetainedMultihopModeFixture(t, "server", mode)
 			raw, _ := desktopRelays.Load(f.a)
 			relay := raw.(*desktopRelayOwner)
 			switch fault {
@@ -86,20 +100,27 @@ func TestNativeMultihopWireGuardRestoreRejectsRetiredLeaseIdentity(t *testing.T)
 	}
 }
 
-func TestNativeMultihopWireGuardUsesOwnedDNSInsteadOfKernelShortcut(t *testing.T) {
+func TestNativeMultihopPacketUsesOwnedDNSInsteadOfKernelShortcut(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { nativeMultihopPacketUsesOwnedDNSInsteadOfKernelShortcut(t, mode) })
+	}
+}
+
+func nativeMultihopPacketUsesOwnedDNSInsteadOfKernelShortcut(t *testing.T, mode string) {
+	t.Helper()
 	for _, execution := range []string{"local", "server"} {
 		t.Run(execution, func(t *testing.T) {
-			f := newRetainedMultihopModeFixture(t, execution, "wg")
+			f := newRetainedMultihopModeFixture(t, execution, mode)
 			t.Setenv("HOMEVPN_ROOT", f.launch.root)
 			observation := observedConnection{Profile: f.selection.Exit, RouterID: f.selection.Exit.ID, Connected: true, Phase: "connected"}
 			calls := 0
 			lookup := func(context.Context, string) ([]string, error) { calls++; return []string{"192.0.2.1"}, nil }
-			proof := proveSelectedDNSWithLookup(context.Background(), f.a, observation, "wg", lookup)
+			proof := proveSelectedDNSWithLookup(context.Background(), f.a, observation, mode, lookup)
 			if proof.Status != "passed" || calls != 1 || proof.Host != f.selection.Exit.AdGuardIPv4 {
 				t.Fatal("owned native packet DNS fell back to a kernel or different resolver", proof, calls)
 			}
 			observation.Profile.DNSMode, observation.Profile.DNSProtocol, observation.Profile.DNSHost, observation.Profile.DNSPort = "custom", "udp", "1.1.1.1", 53
-			proof = proveSelectedDNSWithLookup(context.Background(), f.a, observation, "wg", lookup)
+			proof = proveSelectedDNSWithLookup(context.Background(), f.a, observation, mode, lookup)
 			if proof.Status != "failed" || calls != 1 {
 				t.Fatal("changed resolver reached lookup without owned policy proof", proof, calls)
 			}
@@ -107,7 +128,7 @@ func TestNativeMultihopWireGuardUsesOwnedDNSInsteadOfKernelShortcut(t *testing.T
 			if err := os.WriteFile(filepath.Join(f.launch.directory, "sing-box.json"), []byte(`{}`), 0600); err != nil {
 				t.Fatal(err)
 			}
-			proof = proveSelectedDNSWithLookup(context.Background(), f.a, observation, "wg", lookup)
+			proof = proveSelectedDNSWithLookup(context.Background(), f.a, observation, mode, lookup)
 			if proof.Status != "failed" || calls != 1 {
 				t.Fatal("replaced native packet configuration used the kernel DNS shortcut", proof, calls)
 			}

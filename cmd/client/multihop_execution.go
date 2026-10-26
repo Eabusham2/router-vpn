@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/multihoprelay"
 	"router-vpn/internal/routechoice"
@@ -308,9 +309,9 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		}
 		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: layer, Port: 26240 + int(number.Int64()), Username: user, Password: password, ExpectedPacketPublicKey: sel.serverPacketPublic}
 		localPacketPublic := ""
-		if sel.ExitMode == "wg" {
+		if awgpolicy.WireGuardFamily(sel.ExitMode) {
 			if sel.Native == nil || sel.Native.validate(sel) != nil || sel.Native.localPacketPublic[sel.ExitMode] == "" {
-				return nil, errors.New("server WireGuard requires the exact captured local client identity")
+				return nil, errors.New("server WG/AWG requires the exact captured local client identity")
 			}
 			localPacketPublic = sel.Native.localPacketPublic[sel.ExitMode]
 		}
@@ -452,7 +453,7 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	return nil
 }
 func (o *desktopRelayOwner) available(ctx context.Context) error {
-	if o.request.ExitMode == "wg" {
+	if awgpolicy.WireGuardFamily(o.request.ExitMode) {
 		o.packetCapabilityReady = false
 	}
 	var response multihoprelay.Capabilities
@@ -464,12 +465,12 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 	}
 	for _, exit := range response.Exits {
 		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == o.request.ExitStartLayer {
-			if o.request.ExitMode == "wg" {
+			if awgpolicy.WireGuardFamily(o.request.ExitMode) {
 				if o.localPacketPublic == "" || exit.PublicKey == "" || exit.PublicKey == o.localPacketPublic {
-					return errors.New("server WireGuard needs an independently paired client public identity to avoid peer roaming")
+					return errors.New("server WG/AWG needs an independently paired client public identity to avoid peer roaming")
 				}
 				if o.serverPacketPublic != "" && o.serverPacketPublic != exit.PublicKey {
-					return errors.New("server WireGuard paired identity changed after capture")
+					return errors.New("server WG/AWG paired identity changed after capture")
 				}
 				o.serverPacketPublic = exit.PublicKey
 				o.request.ExpectedPacketPublicKey = exit.PublicKey
@@ -483,9 +484,9 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 }
 
 func (o *desktopRelayOwner) put(ctx context.Context) error {
-	if o.request.ExitMode == "wg" {
+	if awgpolicy.WireGuardFamily(o.request.ExitMode) {
 		if !o.packetCapabilityReady || o.localPacketPublic == "" || o.serverPacketPublic == "" || o.serverPacketPublic == o.localPacketPublic || o.request.ExpectedPacketPublicKey != o.serverPacketPublic || o.expected.Request != o.request {
-			return errors.New("server WireGuard lease has no validated independent peer identity")
+			return errors.New("server WG/AWG lease has no validated independent peer identity")
 		}
 		if o.renewed {
 			if err := o.available(ctx); err != nil {

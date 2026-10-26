@@ -3,9 +3,12 @@ package mobilemultihop
 import (
 	"crypto/ecdh"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"strings"
+
+	"router-vpn/internal/awgpolicy"
 )
 
 // WireGuardClientPublicKey derives the canonical public identity from the
@@ -13,8 +16,17 @@ import (
 // cannot authorize a second Server peer with the same WireGuard identity.
 // Neither returned errors nor public capabilities expose the private key.
 func (p *NodeProfile) WireGuardClientPublicKey() (string, error) {
-	bad := errors.New("native WireGuard exit has no exact captured client identity")
 	if p == nil || p.mode != "wg" {
+		return "", errors.New("native WireGuard exit has no exact captured client identity")
+	}
+	return p.PacketClientPublicKey()
+}
+
+// PacketClientPublicKey preserves the exact native WG/AWG endpoint family;
+// obfuscation parameters never turn an AWG peer into a plain WireGuard path.
+func (p *NodeProfile) PacketClientPublicKey() (string, error) {
+	bad := errors.New("native WG/AWG exit has no exact captured client identity")
+	if p == nil || !awgpolicy.WireGuardFamily(p.mode) {
 		return "", bad
 	}
 	var graph map[string]any
@@ -26,8 +38,18 @@ func (p *NodeProfile) WireGuardClientPublicKey() (string, error) {
 		return "", bad
 	}
 	endpoint, ok := endpoints[0].(map[string]any)
-	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != "wireguard" {
+	wantType := "wireguard"
+	if awgpolicy.IsMode(p.mode) {
+		wantType = AmneziaType
+	}
+	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != wantType {
 		return "", bad
+	}
+	if awgpolicy.IsMode(p.mode) {
+		encoded, _ := json.Marshal(endpoint)
+		if _, err := AmneziaRuntimeConfig(string(encoded)); err != nil {
+			return "", bad
+		}
 	}
 	encoded, ok := endpoint["private_key"].(string)
 	if !ok {
@@ -50,19 +72,29 @@ func (p *NodeProfile) WireGuardClientPublicKey() (string, error) {
 // envelope and the private destination address. XOR preserves that length.
 // The public outer address determines IPv4/IPv6 overhead, not the rewritten
 // private WireGuard service address. This is a configured bound, not PMTU proof.
-func nodeWireGuardPacketEnvelope(exit *externalPredecessor, mode string) (int, error) {
-	if mode != "wg" {
+func nodePacketEnvelope(exit *externalPredecessor, mode string) (int, error) {
+	if !awgpolicy.WireGuardFamily(mode) {
 		return 0, nil
 	}
-	bad := errors.New("WireGuard exit Start Layer lost its captured packet envelope")
+	bad := errors.New("WG/AWG exit Start Layer lost its captured packet envelope")
 	if exit == nil || exit.final == nil {
 		return 0, bad
 	}
 	if exit.final["detour"] == nil {
 		return 0, nil
 	}
+	wantType, padding := "wireguard", 0
+	if awgpolicy.IsMode(mode) {
+		wantType = AmneziaType
+		encoded, _ := json.Marshal(exit.final)
+		runtime, err := AmneziaRuntimeConfig(string(encoded))
+		if err != nil {
+			return 0, bad
+		}
+		padding = runtime.TransportPadding
+	}
 	layer := exit.nodes[NativeStartLayerTag]
-	if exit.final["type"] != "wireguard" || exit.final["detour"] != NativeStartLayerTag || layer == nil ||
+	if exit.final["type"] != wantType || exit.final["detour"] != NativeStartLayerTag || layer == nil ||
 		(layer["type"] != "shadowsocks" && layer["type"] != "routervpn-aes-xor") || layer["method"] != NativeStartLayerMethod {
 		return 0, bad
 	}
@@ -105,5 +137,7 @@ func nodeWireGuardPacketEnvelope(exit *externalPredecessor, mode string) (int, e
 	if response > request {
 		request = response
 	}
-	return packet + request, nil
+	// This replaces the complete packet envelope in the nested-MTU compiler.
+	// Include AWG's captured S4 before its one final 16-byte alignment step.
+	return packet + padding + request, nil
 }

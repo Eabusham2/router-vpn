@@ -69,13 +69,13 @@ through the normal deployment procedure after successful validation.
 
 The exit ID must match the selected exit ID in each client's node list. The
 registry node proof must match the selected exit's actual identity. For mobile
-WireGuard/AmneziaWG and desktop WireGuard Local/Server comparison, provision a
+WireGuard/AmneziaWG and desktop WG/AWG Local/Server comparison, provision a
 **separate authorized client key on the exit** for the server engine. Reusing the
 device's own packet client key would make the exit peer roam between two endpoints.
 Controllers compare the canonical public identity, including private-key encodings
 that X25519 clamps to the same peer, before acquiring an independent Server lease.
 
-Desktop WireGuard requests also carry `expected_packet_public_key`, captured from
+Desktop WG/AWG requests also carry `expected_packet_public_key`, captured from
 the authenticated entry's paired-exit catalog. The updated agent checks it against
 its private registry under the lease lock before acquisition or renewal. This
 binds discovery to the actual paired key even if the entry restarts between GET
@@ -543,3 +543,53 @@ composition. A native two-hop AWG TCP/UDP IPv4/IPv6 traffic test is included in
 the pinned engine's existing test suite. Only executed tests are proof: this
 continuation still requires actual Android/native build execution and a new
 exact-SHA release run, followed by physical-device/off-LAN acceptance.
+
+
+## Desktop AWG Fast/Strong packet exits — October 26, 2026
+
+The desktop Router-node graph accepts `wg`, `awg2-fast` and `awg2-strong`
+entries with an exact AWG Fast or Strong exit in Local, Server or Compare both
+execution. This extends the existing seven proxy choices and WireGuard exit;
+the separate transport-AUTO candidate search keeps its existing contract.
+Windows, macOS and Linux controls, complete connection profiles and Speed Lab
+retain the selected runtime ID and execution choice. The pinned native lifecycle
+publishes a literal WireGuard entry only after its device has initialized under
+its lifecycle lock, so the dependent AWG bind can open during the same startup
+phase. Deferred hostname peers, failed or cancelled starts and closed owners
+remain unavailable; initialization does not replace node/DNS path proof. Broader Router entry
+families, other packet/helper/composite exits and physical acceptance remain
+separate unfinished requirements.
+
+Local retains both native packet endpoints. Server removes only the captured
+local exit endpoint and replaces it with the authenticated owned relay. Its
+registry must contain the exact AWG variant, all eleven obfuscation parameters,
+preshared key where selected, address/route data and an independent client
+identity. The updated agent must support `expected_packet_public_key` on AWG
+requests. An older agent's broader AWG transport catalog alone does not satisfy
+this new desktop pin contract. Capability renewal and temporary-test restoration
+keep the original public identity and already-proved execution; changed or
+missing pairing, a reused canonical peer, a stale owner or an expired lease
+cannot reach a new PUT or silently restore a different path.
+
+MTU accounting retains AWG S4 alongside the whole Start Layer datagram envelope,
+then aligns the remaining nested capacity down to sixteen bytes. For example,
+a captured 1420-byte entry with IPv4 peers, S4=32 and the selected AES/XOR Start
+Layer has a 1264-byte aligned nested bound, below the supported 1280 minimum,
+and is rejected. The same explicit 1500-byte entry capacity permits 1344 bytes;
+a requested fixed 1408 value is rejected for that layered path. A fixed 1280
+choice can be used within the demonstrated configuration bound. These are
+configuration limits, not fresh path-MTU measurements, and the compiler does not
+raise the entry MTU or substitute historical effective-MTU values to make a
+graph fit. Off, AES and AES+XOR retain their separate captured policies.
+
+The native bundle gate executes current compiler/lease/restore regressions and
+a separate bounded encrypted AWG graph group. Its reference peer is test-only:
+it binds loopback and allows only exact declared echo/forward sockets. The
+client graph uses the actual packaged native engine, real WG/AWG cryptography,
+separate Local/Server client identities and native relay authentication. Tests
+preserve documentation-address peers through explicit physical-socket adapters;
+they do not relax production peer validation, open a host TUN or edit routes.
+Wrong exit keys, mismatched S4 and a wrong relay password must fail, and valid
+captured bytes must work again afterward. Those loopback tests do not establish
+private deployment, end-user path proof, leak behavior or physical-device
+network-transition acceptance.

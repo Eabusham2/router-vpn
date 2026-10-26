@@ -368,6 +368,8 @@ func (a *app) nativeMultihopConnect(w http.ResponseWriter, r *http.Request) {
 	route := "client TUN -> captured exit proxy -> captured entry endpoint -> exit node -> Internet"
 	if sel.ExitMode == "wg" {
 		route = "client TUN -> captured WireGuard exit endpoint -> captured entry endpoint -> exit node -> Internet"
+	} else if sel.ExitMode == "awg2-fast" || sel.ExitMode == "awg2-strong" {
+		route = "client TUN -> captured AmneziaWG exit endpoint -> captured entry endpoint -> exit node -> Internet"
 	}
 	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "mode": "multihop", "entry_id": sel.Entry.ID, "entry_name": sel.Entry.Name, "exit_id": sel.Exit.ID, "exit_name": sel.Exit.Name, "entry_base": sel.Base, "entry_mode": sel.Native.entryMode, "exit_mode": sel.ExitMode, "exit_path_proof": "passed-through-exit-only-local-proxy", "route": route})
 }

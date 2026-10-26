@@ -15,6 +15,7 @@ import (
 	"strings"
 	"testing"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -39,6 +40,10 @@ func TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU(t *t
 					t.Run(mode+"/"+layer+"/"+exitMode+"/"+execution, func(t *testing.T) {
 						root, sel := nativeMultihopCapturedFixture(t, mode, layer)
 						sel.ExitMode = exitMode
+						if awgpolicy.IsMode(exitMode) {
+							sel.Entry.MTUPolicy, sel.Entry.ManualMTU = "manual", 1500
+							sel.Control.MTUPolicy, sel.Control.ManualMTU = "manual", 1500
+						}
 						sel, err := captureNativeMultihopSelection(context.Background(), root, sel, exitModes, nil)
 						if err != nil {
 							t.Fatal(err)

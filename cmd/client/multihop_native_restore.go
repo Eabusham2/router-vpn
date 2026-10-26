@@ -5,6 +5,7 @@ import (
 	"os/exec"
 	"time"
 
+	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 )
 
@@ -24,21 +25,21 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		return multihopSelection{}, errors.New("previous multihop profiles differ from the proved captured graph")
 	}
 	var capturedRelay *desktopRelayOwner
-	if graph.Execution == "server" && selection.ExitMode == "wg" {
+	if graph.Execution == "server" && awgpolicy.WireGuardFamily(selection.ExitMode) {
 		raw, found := desktopRelays.Load(a)
 		relay, _ := raw.(*desktopRelayOwner)
 		if !found || relay == nil {
-			return multihopSelection{}, errors.New("previous WireGuard server path has no owned lease")
+			return multihopSelection{}, errors.New("previous WG/AWG server path has no owned lease")
 		}
 		relay.mu.Lock()
 		valid := relay.command == command && relay.renewed && relay.packetCapabilityReady &&
-			relay.request.EntryNodeID == selection.Entry.NodeProofID && relay.request.ExitID == selection.Exit.ID && relay.request.ExitMode == "wg" &&
+			relay.request.EntryNodeID == selection.Entry.NodeProofID && relay.request.ExitID == selection.Exit.ID && relay.request.ExitMode == selection.ExitMode &&
 			relay.expected.Request == relay.request && relay.expected.ExitNodeID == selection.Exit.NodeProofID && relay.expected.NodeID == selection.Entry.NodeProofID && relay.expected.ExpiresAt.After(time.Now()) &&
-			relay.serverPacketPublic != "" && relay.request.ExpectedPacketPublicKey == relay.serverPacketPublic && relay.localPacketPublic == selection.Native.localPacketPublic["wg"] && relay.localPacketPublic != relay.serverPacketPublic
+			relay.serverPacketPublic != "" && relay.request.ExpectedPacketPublicKey == relay.serverPacketPublic && relay.localPacketPublic == selection.Native.localPacketPublic[selection.ExitMode] && relay.localPacketPublic != relay.serverPacketPublic
 		selection.serverPacketPublic = relay.serverPacketPublic
 		relay.mu.Unlock()
 		if !valid {
-			return multihopSelection{}, errors.New("previous WireGuard server lease identity changed")
+			return multihopSelection{}, errors.New("previous WG/AWG server lease identity changed")
 		}
 		capturedRelay = relay
 	}
@@ -56,7 +57,7 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		current := present && raw == capturedRelay && capturedRelay.packetCapabilityReady && capturedRelay.serverPacketPublic == selection.serverPacketPublic && capturedRelay.expected.ExpiresAt.After(time.Now())
 		capturedRelay.mu.Unlock()
 		if !current {
-			return multihopSelection{}, errors.New("WireGuard server owner changed while capturing live MTU restoration")
+			return multihopSelection{}, errors.New("WG/AWG server owner changed while capturing live MTU restoration")
 		}
 	}
 	selection.Control = common.CloneRouterProfile(selection.Control)

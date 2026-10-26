@@ -2,34 +2,51 @@ package multihoprelay
 
 import (
 	"context"
+	"crypto/ecdh"
 	"encoding/base64"
 	"errors"
 	"net/netip"
 	"strings"
 	"testing"
 	"time"
+
+	"router-vpn/internal/awgpolicy"
 )
 
-func packetPinConfig(seed byte) Config {
+func packetPinConfig(seed byte) Config { return packetModePinConfig("wg", seed) }
+
+func packetModePinConfig(mode string, seed byte) Config {
 	c := config()
 	key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(string(seed), 32)))
-	c.Exits[0].Mode = "wg"
-	c.Exits[0].Transport = map[string]any{"type": "wireguard", "private_key": key, "address": []string{"10.78.0.2/32"}, "peers": []any{map[string]any{"address": "192.0.2.2", "port": 51820, "public_key": base64.StdEncoding.EncodeToString(make([]byte, 32)), "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
+	peer, _ := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("b", 32)))
+	c.Exits[0].Mode = mode
+	c.Exits[0].Transport = map[string]any{"type": "wireguard", "mtu": 1280, "private_key": key, "address": []string{"10.78.0.2/32"}, "peers": []any{map[string]any{"address": "192.0.2.2", "port": 51820, "public_key": base64.StdEncoding.EncodeToString(peer.PublicKey().Bytes()), "allowed_ips": []string{"0.0.0.0/0", "::/0"}}}}
+	if awgpolicy.IsMode(mode) {
+		c.Exits[0].Transport["type"] = "routervpn-amneziawg"
+		c.Exits[0].Transport["amnezia"] = map[string]string{"jc": "3", "jmin": "40", "jmax": "900", "s1": "56", "s2": "48", "s3": "24", "s4": "32", "h1": "10000000-19999999", "h2": "20000000-29999999", "h3": "30000000-39999999", "h4": "40000000-49999999"}
+	}
 	return c
 }
 
 func TestExpectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t *testing.T) {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+		t.Run(mode, func(t *testing.T) { expectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t, mode) })
+	}
+}
+
+func expectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t *testing.T, mode string) {
+	t.Helper()
 	peer := netip.MustParseAddr("10.77.0.2")
-	c := packetPinConfig('a')
+	c := packetModePinConfig(mode, 'a')
 	public, err := clientIdentity(c.Exits[0].Transport)
 	if err != nil {
 		t.Fatal(err)
 	}
 	q := req()
-	q.ExitMode, q.ExpectedPacketPublicKey = "wg", public
+	q.ExitMode, q.ExpectedPacketPublicKey = mode, public
 	for _, scenario := range []string{"same-identity", "clamped-alias", "changed-after-discovery", "missing-exit", "wrong-layer", "malformed-pin", "proxy-pin"} {
 		t.Run(scenario, func(t *testing.T) {
-			config := packetPinConfig('a')
+			config := packetModePinConfig(mode, 'a')
 			request := q
 			switch scenario {
 			case "clamped-alias":
@@ -38,7 +55,7 @@ func TestExpectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t *testing.T) {
 				raw[31] ^= 128
 				config.Exits[0].Transport["private_key"] = base64.StdEncoding.EncodeToString(raw)
 			case "changed-after-discovery":
-				config = packetPinConfig('z')
+				config = packetModePinConfig(mode, 'z')
 			case "missing-exit":
 				config.Exits[0].ID = "replacement"
 			case "wrong-layer":
@@ -72,7 +89,7 @@ func TestExpectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t *testing.T) {
 			// Production registries are frozen; a restarted/repaired manager is
 			// covered above by changed-after-discovery with the original request.
 			m.mu.Lock()
-			m.cfg.Exits = packetPinConfig('z').Exits
+			m.cfg.Exits = packetModePinConfig(mode, 'z').Exits
 			m.mu.Unlock()
 			if _, err = m.Create(context.Background(), peer, request); !errors.Is(err, ErrOwnership) || r.starts != 1 || m.leases[PeerKey(peer)].ExpiresAt != renewed.ExpiresAt {
 				t.Fatal("changed registry renewed the old packet identity", err)
@@ -85,10 +102,10 @@ func TestExpectedPacketIdentityBindsDiscoveryToCreateAndRenewal(t *testing.T) {
 }
 
 func TestLegacyPacketAndProxyLeasesKeepOptionalPinCompatibility(t *testing.T) {
-	for _, mode := range []string{"wg", "shadowsocks"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "shadowsocks"} {
 		c := config()
-		if mode == "wg" {
-			c = packetPinConfig('a')
+		if awgpolicy.WireGuardFamily(mode) {
+			c = packetModePinConfig(mode, 'a')
 		}
 		r := &runner{}
 		m, err := New(c, req().EntryNodeID, r)

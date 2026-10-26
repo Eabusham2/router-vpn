@@ -37,7 +37,7 @@ function Api{param([string]$Path,[string]$Method='GET',$Body=$null,[int]$Timeout
 function ApiRaw{param([string]$Path,[byte[]]$Bytes,[int]$Timeout=45);return Invoke-RestMethod -Uri "$BaseUrl$Path" -Method Post -ContentType 'application/json' -Body $Bytes -TimeoutSec $Timeout}
 function Log([string]$Text){$DiagnosticsBox.AppendText("[$(Get-Date -Format 'HH:mm:ss')] $Text`r`n");$DiagnosticsBox.ScrollToEnd()}
 function BaseChoice{$Item=$BaseCombo.SelectedItem;if($Item-and$Item.Tag){return [string]$Item.Tag};return 'auto'}
-function MultihopExitModeChoice{$Item=$MultihopExitModeCombo.SelectedItem;if($Item-and([string]$Item.Tag)-cin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg')){return [string]$Item.Tag};throw 'Select a supported exit transport.'}
+function MultihopExitModeChoice{$Item=$MultihopExitModeCombo.SelectedItem;if($Item-and([string]$Item.Tag)-cin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong')){return [string]$Item.Tag};throw 'Select a supported exit transport.'}
 function ComboTag($Combo,[string]$Fallback){$Item=$Combo.SelectedItem;if($Item-and$Item.Tag){return [string]$Item.Tag};return $Fallback}
 function SetComboTag($Combo,[string]$Tag){for($i=0;$i-lt$Combo.Items.Count;$i++){if([string]$Combo.Items[$i].Tag-eq$Tag){$Combo.SelectedIndex=$i;return}}}
 function SelectedNode{if(-not$NodesGrid.SelectedItem){throw 'Highlight a node first.'};return $NodesGrid.SelectedItem}
