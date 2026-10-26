@@ -1,6 +1,7 @@
 package startwhitening
 
 import (
+	"context"
 	"errors"
 	"io"
 	"net"
@@ -120,5 +121,200 @@ func TestStreamGuardKeepsDeadlinesBytesAndAddresses(t *testing.T) {
 	}
 	if _, ok := any(g).(interface{ Upstream() any }); ok {
 		t.Fatal("unsafe cipher bypass exposed")
+	}
+}
+
+func TestStreamDialCompletesRequestBeforeConcurrentDuplexPublication(t *testing.T) {
+	raw, peer := net.Pipe()
+	defer peer.Close()
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	go func() {
+		conn, err := DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+			if owned != raw {
+				return nil, errors.New("constructor substituted the captured socket")
+			}
+			if _, err := owned.Write([]byte("request-header")); err != nil {
+				return nil, err
+			}
+			close(entered)
+			<-release
+			return owned, nil
+		})
+		done <- result{conn, err}
+	}()
+	header := make([]byte, len("request-header"))
+	if _, err := io.ReadFull(peer, header); err != nil || string(header) != "request-header" {
+		t.Fatal("initial request not written", err)
+	}
+	waitStream(t, entered)
+	select {
+	case value := <-done:
+		if value.conn != nil {
+			value.conn.Close()
+		}
+		t.Fatal("duplex stream exposed before authenticated request publication")
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	value := <-done
+	if value.err != nil || value.conn == nil {
+		t.Fatal(value.err)
+	}
+	defer value.conn.Close()
+	readDone, writeDone := make(chan error, 1), make(chan error, 1)
+	go func() {
+		var response [1]byte
+		_, err := value.conn.Read(response[:])
+		if err == nil && response[0] != 'R' {
+			err = errors.New("response changed")
+		}
+		readDone <- err
+	}()
+	go func() { _, err := value.conn.Write([]byte("data")); writeDone <- err }()
+	peerWrite := make(chan error, 1)
+	go func() { _, err := peer.Write([]byte("R")); peerWrite <- err }()
+	payload := make([]byte, 4)
+	if _, err := io.ReadFull(peer, payload); err != nil || string(payload) != "data" {
+		t.Fatal("duplex payload changed", err)
+	}
+	for _, result := range []<-chan error{readDone, writeDone, peerWrite} {
+		if err := <-result; err != nil {
+			t.Fatal(err)
+		}
+	}
+}
+
+type streamDelayedClose struct {
+	net.Conn
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (c *streamDelayedClose) Close() error {
+	var err error
+	c.once.Do(func() { err = c.Conn.Close(); close(c.entered); <-c.release })
+	return err
+}
+func TestStreamDialCancellationJoinsActualConstructionAndClose(t *testing.T) {
+	a, b := net.Pipe()
+	defer b.Close()
+	closeEntered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	raw := &streamDelayedClose{Conn: a, entered: closeEntered, release: release}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	handshakeEntered := make(chan struct{})
+	done := make(chan error, 1)
+	go func() {
+		conn, err := DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+			close(handshakeEntered)
+			_, err := owned.Write([]byte("blocked initial request"))
+			return owned, err
+		})
+		if conn != nil {
+			conn.Close()
+			done <- errors.New("cancelled constructor published a stream")
+			return
+		}
+		done <- err
+	}()
+	waitStream(t, handshakeEntered)
+	cancel()
+	waitStream(t, closeEntered)
+	select {
+	case err := <-done:
+		t.Fatal("constructor acknowledged a still-blocked captured close", err)
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-done:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatal("cancelled constructor lost its owner", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("constructor failed to join after actual close")
+	}
+}
+
+type streamDeadlineCapture struct {
+	net.Conn
+	deadlines []time.Time
+	failClear bool
+}
+
+func (c *streamDeadlineCapture) SetDeadline(value time.Time) error {
+	c.deadlines = append(c.deadlines, value)
+	if value.IsZero() && c.failClear {
+		return errors.New("deadline clear failed")
+	}
+	return c.Conn.SetDeadline(value)
+}
+func TestStreamDialRetainsBoundedDeadlineAndFailureCleanup(t *testing.T) {
+	for _, kind := range []string{"caller-deadline", "default-bound", "cancelled", "handshake-failed", "missing-stream", "clear-failed"} {
+		t.Run(kind, func(t *testing.T) {
+			a, b := net.Pipe()
+			defer b.Close()
+			raw := &streamDeadlineCapture{Conn: a, failClear: kind == "clear-failed"}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "caller-deadline" {
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(ctx, time.Second)
+				defer stop()
+			}
+			if kind == "cancelled" {
+				cancel()
+			}
+			called := false
+			before := time.Now()
+			conn, err := DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+				called = true
+				if kind == "handshake-failed" {
+					return owned, errors.New("handshake failed")
+				}
+				if kind == "missing-stream" {
+					return nil, nil
+				}
+				return owned, nil
+			})
+			valid := kind == "caller-deadline" || kind == "default-bound"
+			if !valid {
+				if err == nil || conn != nil {
+					if conn != nil {
+						conn.Close()
+					}
+					t.Fatal("failed authenticated construction published stream")
+				}
+				if kind == "cancelled" && called {
+					t.Fatal("retired context began handshake")
+				}
+				if _, err := b.Write([]byte("closed")); !errors.Is(err, io.ErrClosedPipe) {
+					t.Fatal("construction failure retained its raw socket", err)
+				}
+				return
+			}
+			if err != nil || conn == nil {
+				t.Fatal(err)
+			}
+			defer conn.Close()
+			bound := before.Add(11 * time.Second)
+			if kind == "caller-deadline" {
+				bound = before.Add(2 * time.Second)
+			}
+			if !called || len(raw.deadlines) != 2 || raw.deadlines[0].IsZero() || raw.deadlines[0].After(bound) || !raw.deadlines[1].IsZero() {
+				t.Fatal("initial request deadline was absent, widened or retained", raw.deadlines)
+			}
+		})
 	}
 }

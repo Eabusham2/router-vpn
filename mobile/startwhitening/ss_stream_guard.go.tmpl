@@ -1,10 +1,17 @@
 package shadowsocks
 
 import (
-	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	"context"
 	"net"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/startwhitening"
+	M "github.com/sagernet/sing/common/metadata"
 )
 
-func routerVPNGuardStream(raw, cipher net.Conn) net.Conn {
-	return startwhitening.GuardAuthenticatedStream(raw, cipher)
+func routerVPNDialStream(ctx context.Context, raw net.Conn, method interface {
+	DialConn(net.Conn, M.Socksaddr) (net.Conn, error)
+}, destination M.Socksaddr) (net.Conn, error) {
+	return startwhitening.DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+		return method.DialConn(owned, destination)
+	})
 }

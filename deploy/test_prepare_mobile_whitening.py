@@ -50,8 +50,10 @@ class StreamPolicy(unittest.TestCase):
         with mock.patch.object(policy,'SOURCE_SHA',policy.blobsha(fixture.encode())):
             corrected=policy.patch(fixture)
             self.assertEqual(policy.patch(corrected),corrected)
-            self.assertIn('routerVPNGuardStream(outConn, h.method.DialEarlyConn(outConn, destination))',corrected)
-            for changed in (fixture+'drift',corrected+'drift',corrected.replace('routerVPNGuardStream','wrongGuard')):
+            self.assertIn('routerVPNDialStream(ctx, outConn, h.method, destination)',corrected)
+            legacy=fixture.replace(policy.OLD,policy.LEGACY)
+            self.assertEqual(policy.patch(legacy),corrected)
+            for changed in (fixture+'drift',corrected+'drift',legacy+'drift',corrected.replace('routerVPNDialStream','wrongGuard'),legacy.replace('routerVPNGuardStream','wrongGuard')):
                 with self.assertRaises(ValueError):policy.patch(changed)
         with self.assertRaises(ValueError):policy.patch(fixture)
     def test_helper_is_installed_in_the_correct_package(self):
