@@ -1,0 +1,355 @@
+package routervpndesktoppt
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"errors"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/pion/stun/v3"
+	"github.com/pion/webrtc/v4"
+	"github.com/xtaci/kcp-go/v5"
+	"github.com/xtaci/smux"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/encapsulation"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/messages"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/turbotunnel"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/util"
+)
+
+// These loopback peers speak the pinned transport wire protocols. Only the
+// test binary trusts their generated CA; no shipping transport skips TLS
+// verification or gains a default network path from this fixture.
+var (
+	desktopPTCA     *x509.Certificate
+	desktopPTCAKey  *ecdsa.PrivateKey
+	desktopPTSerial atomic.Int64
+)
+
+// Only this test binary trusts this generated local CA. Production transports
+// retain their normal certificate verification; there is no insecure option
+// or test certificate path in the shipping adapter.
+func TestMain(m *testing.M) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		panic(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), Subject: pkix.Name{CommonName: "RouterVPN local transport fixture CA"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		panic(err)
+	}
+	desktopPTCA, err = x509.ParseCertificate(der)
+	if err != nil {
+		panic(err)
+	}
+	desktopPTCAKey = key
+	pool := x509.NewCertPool()
+	pool.AddCert(desktopPTCA)
+	os.Setenv("GODEBUG", os.Getenv("GODEBUG")+",x509usefallbackroots=1")
+	x509.SetFallbackRoots(pool)
+	os.Exit(m.Run())
+}
+
+func desktopPTCertificate(t *testing.T, names ...string) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(desktopPTSerial.Add(1) + 10), DNSNames: names,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), KeyUsage: x509.KeyUsageDigitalSignature,
+		ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	der, err := x509.CreateCertificate(rand.Reader, leaf, desktopPTCA, &key.PublicKey, desktopPTCAKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func desktopPTSTUNPeer(t *testing.T) (*net.UDPAddr, func()) {
+	t.Helper()
+	socket, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			var data [2048]byte
+			n, source, err := socket.ReadFromUDP(data[:])
+			if err != nil {
+				return
+			}
+			request := &stun.Message{Raw: append([]byte(nil), data[:n]...)}
+			if request.Decode() != nil || request.Type != stun.BindingRequest {
+				continue
+			}
+			response, err := stun.Build(stun.NewTransactionIDSetter(request.TransactionID), stun.BindingSuccess, &stun.XORMappedAddress{IP: source.IP, Port: source.Port})
+			if err == nil {
+				_, _ = socket.WriteToUDP(response.Raw, source)
+			}
+		}
+	}()
+	return socket.LocalAddr().(*net.UDPAddr), func() { socket.Close(); <-done }
+}
+
+type desktopPTSnowflakeStream struct {
+	reader  *io.PipeReader
+	writer  *io.PipeWriter
+	channel *webrtc.DataChannel
+	once    sync.Once
+}
+
+func (s *desktopPTSnowflakeStream) Read(b []byte) (int, error) { return s.reader.Read(b) }
+func (s *desktopPTSnowflakeStream) Write(b []byte) (int, error) {
+	if err := s.channel.Send(b); err != nil {
+		return 0, err
+	}
+	return len(b), nil
+}
+func (s *desktopPTSnowflakeStream) Close() error {
+	s.once.Do(func() { s.reader.Close(); s.writer.Close() })
+	return nil
+}
+
+type desktopPTSnowflakePeer struct {
+	t       *testing.T
+	ctx     context.Context
+	cancel  context.CancelFunc
+	mu      sync.Mutex
+	peers   []*webrtc.PeerConnection
+	streams []*desktopPTSnowflakeStream
+	workers sync.WaitGroup
+	ids     map[turbotunnel.ClientID]bool
+	polls   atomic.Int32
+	errors  chan error
+}
+
+func newDesktopPTSnowflakePeer(t *testing.T) *desktopPTSnowflakePeer {
+	ctx, cancel := context.WithCancel(context.Background())
+	return &desktopPTSnowflakePeer{t: t, ctx: ctx, cancel: cancel, ids: make(map[turbotunnel.ClientID]bool), errors: make(chan error, 32)}
+}
+func (f *desktopPTSnowflakePeer) report(err error) {
+	select {
+	case f.errors <- err:
+	default:
+	}
+}
+func (f *desktopPTSnowflakePeer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	if r.TLS == nil || r.TLS.ServerName != "front.example" || r.Host != "broker.example" || r.URL.RequestURI() != "/client?token=fixture" {
+		f.report(errors.New("Snowflake TLS front, Host, or broker path/query changed"))
+		w.WriteHeader(400)
+		return
+	}
+	data, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		w.WriteHeader(400)
+		return
+	}
+	poll, err := messages.DecodeClientPollRequest(data)
+	if err != nil || poll.Fingerprint != "1111111111111111111111111111111111111111" {
+		f.report(errors.New("Snowflake did not preserve its bridge fingerprint"))
+		w.WriteHeader(400)
+		return
+	}
+	offer, err := util.DeserializeSessionDescription(poll.Offer)
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(400)
+		return
+	}
+	settings := webrtc.SettingEngine{}
+	settings.SetIncludeLoopbackCandidate(true)
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	loopback := make(map[string]bool)
+	for _, iface := range interfaces {
+		if iface.Flags&net.FlagLoopback != 0 && iface.Flags&net.FlagUp != 0 {
+			loopback[iface.Name] = true
+		}
+	}
+	settings.SetInterfaceFilter(func(name string) bool { return loopback[name] })
+	settings.SetNetworkTypes([]webrtc.NetworkType{webrtc.NetworkTypeUDP4})
+	pc, err := webrtc.NewAPI(webrtc.WithSettingEngine(settings)).NewPeerConnection(webrtc.Configuration{})
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	f.mu.Lock()
+	f.peers = append(f.peers, pc)
+	f.mu.Unlock()
+	pc.OnDataChannel(func(channel *webrtc.DataChannel) {
+		read, write := io.Pipe()
+		stream := &desktopPTSnowflakeStream{reader: read, writer: write, channel: channel}
+		f.mu.Lock()
+		f.streams = append(f.streams, stream)
+		f.mu.Unlock()
+		channel.OnMessage(func(message webrtc.DataChannelMessage) { _, _ = write.Write(message.Data) })
+		channel.OnClose(func() { stream.Close() })
+		channel.OnOpen(func() { f.workers.Add(1); go func() { defer f.workers.Done(); f.serveBridge(stream) }() })
+	})
+	if err = pc.SetRemoteDescription(*offer); err != nil {
+		f.report(err)
+		w.WriteHeader(400)
+		return
+	}
+	answer, err := pc.CreateAnswer(nil)
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	gathered := webrtc.GatheringCompletePromise(pc)
+	if err = pc.SetLocalDescription(answer); err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	select {
+	case <-gathered:
+	case <-r.Context().Done():
+		return
+	case <-f.ctx.Done():
+		return
+	}
+	encoded, err := util.SerializeSessionDescription(pc.LocalDescription())
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	reply, err := (&messages.ClientPollResponse{Answer: encoded}).EncodePollResponse()
+	if err != nil {
+		f.report(err)
+		w.WriteHeader(500)
+		return
+	}
+	f.polls.Add(1)
+	w.Write(reply)
+}
+func (f *desktopPTSnowflakePeer) serveBridge(stream *desktopPTSnowflakeStream) {
+	defer stream.Close()
+	var token [len(turbotunnel.Token)]byte
+	if _, err := io.ReadFull(stream, token[:]); err != nil {
+		return
+	}
+	if !bytes.Equal(token[:], turbotunnel.Token[:]) {
+		f.report(errors.New("Snowflake TurboTunnel token is not the pinned wire token"))
+		return
+	}
+	var id turbotunnel.ClientID
+	if _, err := io.ReadFull(stream, id[:]); err != nil {
+		return
+	}
+	f.mu.Lock()
+	f.ids[id] = true
+	f.mu.Unlock()
+	packet := newDesktopPTEncapsulation(stream)
+	listener, err := kcp.ServeConn(nil, 0, 0, packet)
+	if err != nil {
+		f.report(err)
+		return
+	}
+	defer listener.Close()
+	defer packet.Close()
+	conn, err := listener.AcceptKCP()
+	if err != nil {
+		return
+	}
+	defer conn.Close()
+	conn.SetStreamMode(true)
+	conn.SetWindowSize(65535, 65535)
+	conn.SetNoDelay(0, 0, 0, 1)
+	config := smux.DefaultConfig()
+	config.Version = 2
+	config.KeepAliveTimeout = 4 * time.Minute
+	config.MaxStreamBuffer = 1048576
+	session, err := smux.Server(conn, config)
+	if err != nil {
+		f.report(err)
+		return
+	}
+	defer session.Close()
+	app, err := session.AcceptStream()
+	if err != nil {
+		return
+	}
+	defer app.Close()
+	_, _ = io.Copy(app, app)
+}
+func (f *desktopPTSnowflakePeer) Close() {
+	f.cancel()
+	f.mu.Lock()
+	peers := append([]*webrtc.PeerConnection(nil), f.peers...)
+	streams := append([]*desktopPTSnowflakeStream(nil), f.streams...)
+	f.mu.Unlock()
+	for _, stream := range streams {
+		stream.Close()
+	}
+	for _, peer := range peers {
+		peer.GracefulClose()
+	}
+	f.workers.Wait()
+}
+
+// The reference bridge uses the upstream TurboTunnel encapsulation framing,
+// real KCP and smux. It does not stand in for any client/native transport.
+type desktopPTEncapsulation struct {
+	io.ReadWriteCloser
+	writer *bufio.Writer
+}
+
+func newDesktopPTEncapsulation(stream io.ReadWriteCloser) *desktopPTEncapsulation {
+	return &desktopPTEncapsulation{ReadWriteCloser: stream, writer: bufio.NewWriter(stream)}
+}
+func (p *desktopPTEncapsulation) ReadFrom(data []byte) (int, net.Addr, error) {
+	n, err := encapsulation.ReadData(p.ReadWriteCloser, data)
+	if errors.Is(err, io.ErrShortBuffer) {
+		err = nil
+	}
+	return n, p.LocalAddr(), err
+}
+func (p *desktopPTEncapsulation) WriteTo(data []byte, _ net.Addr) (int, error) {
+	if _, err := encapsulation.WriteData(p.writer, data); err != nil {
+		return 0, err
+	}
+	if err := p.writer.Flush(); err != nil {
+		return 0, err
+	}
+	return len(data), nil
+}
+func (*desktopPTEncapsulation) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 1}
+}
+func (*desktopPTEncapsulation) SetDeadline(time.Time) error {
+	return errors.New("reference stream deadline is session-owned")
+}
+func (*desktopPTEncapsulation) SetReadDeadline(time.Time) error {
+	return errors.New("reference stream deadline is session-owned")
+}
+func (*desktopPTEncapsulation) SetWriteDeadline(time.Time) error {
+	return errors.New("reference stream deadline is session-owned")
+}

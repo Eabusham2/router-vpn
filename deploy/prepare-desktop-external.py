@@ -37,7 +37,8 @@ SHARED = tuple(dict.fromkeys((*RELAY.PACKAGES, 'dnsmeasure', 'mobilemtu', 'mtupr
 PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
-PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl')
+PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
+                'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',

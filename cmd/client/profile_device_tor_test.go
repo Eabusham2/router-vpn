@@ -152,13 +152,26 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 }
 
 func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
-	for _, option := range []string{"Router-entry", "padding"} {
+	for _, option := range []string{"Server Router-entry", "missing Router-entry", "external Router-entry", "padding"} {
 		t.Run(option, func(t *testing.T) {
-			a := deviceSettingsTestApp(t, "tor-bridge", option == "Router-entry")
+			a := deviceSettingsTestApp(t, "tor-bridge", option != "padding")
 			a.profiles.Profiles[3].DAITAEnabled = option == "padding"
+			switch option {
+			case "Server Router-entry":
+				a.profiles.Profiles[3].MultihopExecution = "server"
+			case "missing Router-entry":
+				a.profiles.Profiles[3].MultihopEntryID = "missing-router"
+			case "external Router-entry":
+				a.profiles.Profiles[1].NodeKind = "external"
+				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
+			}
 			before := cloneRouterProfileStore(a.profiles)
 			capture := getDeviceSettingsForTest(t, a)
-			if capture.DevicePolicySupported || !strings.Contains(capture.DevicePolicyReason, option) {
+			label := "Router-entry"
+			if option == "padding" {
+				label = option
+			}
+			if capture.DevicePolicySupported || !strings.Contains(capture.DevicePolicyReason, label) {
 				t.Fatal("unsupported saved Tor graph acquired common device capability")
 			}
 			q := deviceSettingsRequestForTest(t, capture, "auto")

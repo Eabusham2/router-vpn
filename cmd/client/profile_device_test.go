@@ -94,9 +94,6 @@ func postDeviceSettingsForTest(a *app, body io.Reader) *httptest.ResponseRecorde
 func TestProfileDevicePreservesExternalGraphCredentialsEntryAndMeasurements(t *testing.T) {
 	for _, protocol := range []string{"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn", "tor-bridge"} {
 		for _, viaEntry := range []bool{false, true} {
-			if protocol == "tor-bridge" && viaEntry {
-				continue // The separate Tor rejection test retains this required graph.
-			}
 			for _, policy := range []string{"auto", "default", "manual"} {
 				t.Run(protocol+"/"+policy+map[bool]string{false: "/direct", true: "/entry"}[viaEntry], func(t *testing.T) {
 					a := deviceSettingsTestApp(t, protocol, viaEntry)

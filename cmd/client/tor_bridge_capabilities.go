@@ -10,23 +10,24 @@ import (
 )
 
 type torBridgeTransportCapability struct {
-	ID               string `json:"id"`
-	Name             string `json:"name"`
-	Implemented      bool   `json:"implemented"`
-	Supported        bool   `json:"supported"`
-	StrictKillSwitch bool   `json:"strict_kill_switch"`
-	Helper           string `json:"helper,omitempty"`
-	Description      string `json:"description"`
-	Reason           string `json:"reason,omitempty"`
+	ID                          string `json:"id"`
+	Name                        string `json:"name"`
+	Implemented                 bool   `json:"implemented"`
+	Supported                   bool   `json:"supported"`
+	StrictKillSwitch            bool   `json:"strict_kill_switch"`
+	StrictRouterEntryKillSwitch bool   `json:"strict_router_entry_kill_switch"`
+	Helper                      string `json:"helper,omitempty"`
+	Description                 string `json:"description"`
+	Reason                      string `json:"reason,omitempty"`
 }
 
 func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	rows := []torBridgeTransportCapability{
-		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, Description: "Obfuscates Tor bridge traffic into random-looking traffic and resists active probing; one literal obfs4 bridge can use Router VPN's strict pre-tunnel kill switch."},
-		{ID: "meek_lite", Name: "meek", Implemented: true, Description: "Carries Tor through HTTPS/domain-fronting style infrastructure so blocking it can create collateral damage; dynamic CDN egress is not yet compatible with Router VPN's endpoint-only strict kill switch."},
-		{ID: "snowflake", Name: "Snowflake", Implemented: true, Description: "Uses a broker plus short-lived volunteer WebRTC proxies so censors cannot rely on one stable bridge address; its dynamic broker/STUN/WebRTC egress requires Kill Switch Off until process-scoped firewall ownership is implemented."},
-		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, Description: "Makes Tor bridge traffic resemble ordinary HTTPS web traffic; Router VPN keeps strict kill switch unavailable because the PT's web bootstrap can differ from one static endpoint exception."},
-		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, Description: "Accepts one or more validated Tor-issued obfs4, meek, Snowflake, or WebTunnel bridge lines and can mix recognized families; arbitrary torrc directives, executable paths, and unknown PTs are rejected."},
+		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic into random-looking traffic and resists active probing; one literal obfs4 bridge supports strict Direct protection, and a captured Local Router entry also protects multiple bridges."},
+		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection requires a captured Local Router entry; its HTTPS and DNS use that proved entry. Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection requires a captured Local Router entry for broker HTTPS, DNS, STUN and WebRTC traffic. Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Makes Tor traffic resemble ordinary HTTPS. Strict protection requires a captured Local Router entry for its HTTPS and DNS; Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Accepts validated obfs4, meek, Snowflake and WebTunnel bridge lines, including mixed families. Strict protection requires a captured Local Router entry unless the selection is one fixed obfs4 bridge; arbitrary torrc directives and executables are rejected."},
 	}
 
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
@@ -77,23 +78,24 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
-		"ok":                     true,
-		"protocol":               "tor-bridge",
-		"platform":               runtime.GOOS,
-		"helper_execution":       helperExecution,
-		"implemented":            cap.Implemented,
-		"supported":              cap.Supported,
-		"reason":                 cap.Reason,
-		"direct_full_device":     cap.Supported,
-		"upstream_hop":           cap.Supported,
-		"router_vpn_entry_hop":   cap.Supported,
-		"router_vpn_entry_modes": a.externalRouterEntryModes(),
-		"external_entry_hop":     false,
-		"local_execution":        cap.Supported,
-		"server_execution":       false,
-		"compare_execution":      false,
-		"dynamic_exit":           true,
-		"transports":             torBridgeTransportCapabilities(),
-		"truth":                  "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",
+		"ok":                              true,
+		"protocol":                        "tor-bridge",
+		"platform":                        runtime.GOOS,
+		"helper_execution":                helperExecution,
+		"implemented":                     cap.Implemented,
+		"supported":                       cap.Supported,
+		"reason":                          cap.Reason,
+		"direct_full_device":              cap.Supported,
+		"upstream_hop":                    cap.Supported,
+		"router_vpn_entry_hop":            cap.Supported,
+		"router_entry_strict_kill_switch": cap.Supported,
+		"router_vpn_entry_modes":          a.externalRouterEntryModes(),
+		"external_entry_hop":              false,
+		"local_execution":                 cap.Supported,
+		"server_execution":                false,
+		"compare_execution":               false,
+		"dynamic_exit":                    true,
+		"transports":                      torBridgeTransportCapabilities(),
+		"truth":                           "the pluggable transport evades censorship; Tor's proved ntor-v3 circuit is the encrypted final path",
 	})
 }

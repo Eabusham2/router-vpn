@@ -74,12 +74,14 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		return true, ""
 	}
 	if profile.External.Protocol == "tor-bridge" {
-		// The native Tor owner now applies these device settings. It does not
-		// yet own a Router predecessor or padding runtime.
-		// Keep those saved requests intact and expose the specific missing path.
+		// Router-entry settings belong to the same owned native Tor graph. The
+		// idle form preserves the saved choice; Connect still captures its full
+		// native predecessor and authenticates it before any PT can start.
 		switch {
-		case profile.MultihopEnabled:
-			return false, "Tor common device settings for Router-entry graphs require the captured desktop predecessor runtime, which is not yet implemented."
+		case profile.MultihopEnabled && (!validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID ||
+			profile.MultihopExitID != profile.ID || profile.MultihopExecution != "" && profile.MultihopExecution != "local" ||
+			profile.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(profile.MultihopEntryMode)):
+			return false, "Tor Router-entry device settings require the exact saved Local entry, exit and native mode."
 		case profile.DAITAEnabled:
 			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
 		default:
@@ -87,6 +89,17 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		}
 	}
 	return false, "This external protocol does not yet apply the common device settings through an owned native desktop runtime."
+}
+
+func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bool, string) {
+	if supported, reason := externalDevicePolicySupport(profile); !supported {
+		return supported, reason
+	}
+	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled &&
+		(entry.ID != profile.MultihopEntryID || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
+		return false, "Tor Router-entry device settings require the same linked Router node; reopen Settings after relinking it."
+	}
+	return true, ""
 }
 
 func profileDeviceJumboSupported(profile common.RouterProfile) bool {
@@ -99,7 +112,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 	if profile.External != nil {
 		protocol = profile.External.Protocol
 	}
-	supported, reason := externalDevicePolicySupport(profile)
+	supported, reason := externalDevicePolicySupportForPath(profile, entry)
 	kill := strings.ToLower(strings.TrimSpace(profile.KillSwitchPolicy))
 	if kill == "" {
 		kill = "off"
@@ -140,7 +153,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		DevicePolicySupported: supported, DevicePolicyReason: reason,
 		HomeLANAccess: profile.HomeLANAccess, KillSwitchPolicy: kill,
 		IPv6Mode: ipv6, MTUPolicy: mtu, ManualMTU: manual,
-		JumboTUN: profile.JumboTUN, JumboTUNSupported: profileDeviceJumboSupported(profile),
+		JumboTUN: profile.JumboTUN, JumboTUNSupported: supported && profileDeviceJumboSupported(profile),
 		EffectiveMTU: profile.EffectiveMTU, MTUSource: profile.EffectiveMTUSource,
 		StartupMode: startup, AutoConnect: profile.AutoConnect,
 		Note: note,
@@ -230,6 +243,9 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 			MTUPolicy: profile.MTUPolicy, ManualMTU: profile.ManualMTU, JumboTUN: profile.JumboTUN,
 			DNSMode: profile.DNSMode, DNSProtocol: profile.DNSProtocol, DNSHost: profile.DNSHost,
 			DNSPort: profile.DNSPort, DNSServerName: profile.DNSServerName, DNSPath: profile.DNSPath,
+			MultihopEnabled: profile.MultihopEnabled, MultihopEntryID: profile.MultihopEntryID,
+			MultihopExitID: profile.MultihopExitID, MultihopEntryMode: profile.MultihopEntryMode,
+			MultihopExecution: profile.MultihopExecution,
 		}
 		source, err := json.Marshal(wireProfile(captured))
 		if err != nil {
@@ -336,7 +352,7 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "selected node, entry or policy changed; reopen Settings", http.StatusConflict)
 		return
 	}
-	if supported, reason := externalDevicePolicySupport(profile); !supported {
+	if supported, reason := externalDevicePolicySupportForPath(profile, entry); !supported {
 		http.Error(w, reason, http.StatusUnprocessableEntity)
 		return
 	}

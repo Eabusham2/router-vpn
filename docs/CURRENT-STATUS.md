@@ -384,7 +384,20 @@ remain separate. Virtual capacity does not assert 9000-byte packets on the
 underlying network. Captured Router-entry Local Tor graphs now preserve their
 private entry, selected DNS transport and independent native ownership. Tor
 Server/Compare, ordinary external predecessors, exit-side desktop Tor padding
-and dynamic-bridge strict protection remain requirements to implement.
+and Direct dynamic-bridge strict protection remain requirements to implement.
+
+Strict protection now permits validated dynamic Tor transports behind an
+independently captured Local Router predecessor. Their TCP, UDP and DNS use
+that authenticated native entry, with the existing exact physical firewall
+tuples. Device Settings retains the linked entry and saved graph. Meek and
+WebTunnel now reject late DNS completion after the PT owner retires before
+opening any numeric entry socket. The actual generated PT adapter passes real
+meek/WebTunnel TLS and Snowflake STUN/WebRTC/KCP loopback traffic, wrong-source
+and retirement controls. All 201 generated/shared inputs match the isolated
+candidate; the production-tag native race gate passes in 3.084 seconds.
+These fixtures map the Router lower to owned test peers and do not establish
+physical firewall/leak acceptance. Import/editor retention when replacing
+bridge lines is a separate remaining gap.
 
 The ordinary-external predecessor prerequisite now captures its exact native
 transport, credentials, selected DNS/bootstrap and MTU through the shared

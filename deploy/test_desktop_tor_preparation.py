@@ -86,6 +86,13 @@ class DesktopPTPreparation(unittest.TestCase):
         for name in PREP.PT_TEMPLATES:
             self.assertEqual((self.vendor/'routervpn/desktoppt'/name.removesuffix('.tmpl')).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
+        # These real entry-routed PT exchanges belong to the same generated
+        # native package selected by the mandatory shipping build gate.
+        for name in ('tor_pt_entry_peers_test.go.tmpl', 'tor_pt_entry_traffic_test.go.tmpl'):
+            self.assertIn(name, PREP.PT_TEMPLATES)
+        traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
+        for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
+            self.assertIn('func TestRouterVPNDesktopTorPTEntryCarriesReal'+name+'(', traffic)
         for name, relative in PREP.BOX_TEMPLATES.items():
             self.assertEqual((self.vendor/relative).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())

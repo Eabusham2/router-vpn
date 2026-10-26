@@ -306,6 +306,44 @@ func (o *Owner) dial(ctx context.Context, network, address string) (net.Conn, er
 	if !destination.IsValid() || destination.Port == 0 {
 		return nil, errors.New("desktop Tor PT destination is invalid")
 	}
+	if o.entry != nil && destination.IsDomain() {
+		// The native ResolveDialer captures the right DNS transport, but its
+		// serial dial loop cannot observe this PT owner's retirement between
+		// a late lookup and entry admission. Resolve through the same owned
+		// query callback used by Snowflake, then recheck before every numeric
+		// entry dial. Never fall back to a default resolver or another owner.
+		family := "ip"
+		if network == "tcp4" || network == "udp4" {
+			family = "ip4"
+		} else if network == "tcp6" || network == "udp6" {
+			family = "ip6"
+		}
+		addresses, err := o.resolve(ctx, family, destination.Fqdn)
+		if err != nil {
+			return nil, err
+		}
+		var failures []error
+		for _, address := range addresses {
+			connection, err := o.dialAddress(ctx, network, M.SocksaddrFrom(address, destination.Port))
+			if connection != nil || err == nil {
+				// A late/error socket still belongs to the PT network and must
+				// reach its real drain; do not lose it in an address retry.
+				return connection, err
+			}
+			failures = append(failures, err)
+			if currentErr := o.operation(ctx); currentErr != nil {
+				return nil, errors.Join(append(failures, currentErr)...)
+			}
+		}
+		return nil, errors.Join(failures...)
+	}
+	return o.dialAddress(ctx, network, destination)
+}
+
+func (o *Owner) dialAddress(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if err := o.operation(ctx); err != nil {
+		return nil, err
+	}
 	connection, err := o.lower.DialContext(context.WithValue(ctx, torBootstrapDNSKey{}, true), network, destination)
 	if currentErr := o.operation(ctx); currentErr != nil {
 		// The PT network retains even a late failed socket, including its real

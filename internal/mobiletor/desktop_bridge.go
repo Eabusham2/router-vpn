@@ -168,6 +168,14 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if (profile["multihop_enabled"] == true) != (predecessor != nil) {
 		return nil, errors.New("desktop Tor graph requires the exact captured Router-entry selection")
 	}
+	// Saved entry identifiers are intent, not firewall authority. Dynamic PT
+	// protection is admitted only after the complete Router predecessor has
+	// been independently captured and validated. The native PT owner still
+	// authenticates that Router before opening any transport listener.
+	if kill, _ := desktopBridgeKillPolicy(profile, plan); kill != "off" && (predecessor != nil || !desktopBridgeDirectProtection(plan)) &&
+		!predecessor.IsRouter() {
+		return nil, errors.New("strict desktop Tor protection has no captured Router proof owner")
+	}
 	if err := validateDesktopPhysicalEgress(profile, predecessor); err != nil {
 		return nil, err
 	}
@@ -378,10 +386,24 @@ func desktopBridgeKillPolicy(profile map[string]any, plan Plan) (string, error) 
 	if value != "off" && value != "on-connect" && value != "always" {
 		return "", errors.New("invalid desktop Tor kill switch policy")
 	}
-	if value != "off" && (len(plan.Bridges) != 1 || plan.Bridges[0].Transport != "obfs4") {
-		return "", errors.New("strict desktop Tor protection requires one fixed obfs4 bridge until controlled dynamic PT egress is implemented")
+	if value != "off" && !desktopBridgeDirectProtection(plan) && !desktopBridgeSavedRouterSelection(profile) {
+		return "", errors.New("strict desktop Tor protection requires one fixed obfs4 bridge or its exact captured Local Router predecessor")
 	}
 	return value, nil
+}
+
+func desktopBridgeDirectProtection(plan Plan) bool {
+	return len(plan.Bridges) == 1 && plan.Bridges[0].Transport == "obfs4"
+}
+
+// Idle editors can retain a Local Router choice without opening a connection.
+// This shape check is never a proof: the compiler requires the actual complete
+// predecessor, and the native owner requires its authenticated entry receipt.
+func desktopBridgeSavedRouterSelection(profile map[string]any) bool {
+	entry, exit, id := profileString(profile, "multihop_entry_id"), profileString(profile, "multihop_exit_id"), profileString(profile, "id")
+	execution := profileString(profile, "multihop_execution")
+	return profile["multihop_enabled"] == true && profileIdentifier.MatchString(entry) &&
+		entry != id && exit == id && (execution == "" || execution == "local")
 }
 
 func desktopHex(value string, bytes int) bool {
