@@ -14,6 +14,8 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/mobilemultihop"
 )
 
 func retainedGraph(t *testing.T, data []byte) map[string]any {
@@ -28,12 +30,16 @@ func retainedGraph(t *testing.T, data []byte) map[string]any {
 func TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			for _, exitMode := range []string{"shadowsocks", "hysteria2"} {
+			exitModes := []string{"shadowsocks", "hysteria2"}
+			if mode == "awg2-strong" && layer == "aes-256-gcm+xor-whitening" {
+				exitModes = mobilemultihop.NodeMultihopExitModes()
+			}
+			for _, exitMode := range exitModes {
 				for _, execution := range []string{"local", "server"} {
 					t.Run(mode+"/"+layer+"/"+exitMode+"/"+execution, func(t *testing.T) {
 						root, sel := nativeMultihopCapturedFixture(t, mode, layer)
 						sel.ExitMode = exitMode
-						sel, err := captureNativeMultihopSelection(context.Background(), root, sel, []string{"shadowsocks", "hysteria2"}, nil)
+						sel, err := captureNativeMultihopSelection(context.Background(), root, sel, exitModes, nil)
 						if err != nil {
 							t.Fatal(err)
 						}

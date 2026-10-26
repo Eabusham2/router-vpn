@@ -99,6 +99,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		"logical_modes":          logicalModes,
 		"raw_modes":              rawModes,
 		"router_vpn_entry_modes": a.externalRouterEntryModes(),
+		"supported_exit_modes":   desktopMultihopExitModes(),
 		"execution_choices": []map[string]string{
 			{"id": "local", "name": "Local"}, {"id": "server", "name": "Server"}, {"id": "auto", "name": "Compare both"},
 		},

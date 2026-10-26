@@ -34,7 +34,7 @@ function ShowUnifiedSpeedLab{
    <TextBlock Grid.Row="1" Grid.Column="2" Text="Entry" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Entry" Grid.Row="1" Grid.Column="3" Margin="8,3" DisplayMemberPath="display" SelectedValuePath="id"/>
    <TextBlock Grid.Row="1" Grid.Column="4" Text="Exit" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Exit" Grid.Row="1" Grid.Column="5" Margin="8,3" DisplayMemberPath="display" SelectedValuePath="id"/>
    <TextBlock Grid.Row="2" Text="Base" VerticalAlignment="Center"/><ComboBox Name="Base" Grid.Row="2" Grid.Column="1" Margin="8,3"><ComboBoxItem Content="Auto" Tag="auto" IsSelected="True"/><ComboBoxItem Content="WireGuard" Tag="wg"/><ComboBoxItem Content="AmneziaWG" Tag="awg"/></ComboBox>
-   <TextBlock Grid.Row="2" Grid.Column="2" Text="Exit transport" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="ExitMode" Grid.Row="2" Grid.Column="3" Margin="8,3"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks" IsSelected="True"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/></ComboBox>
+   <TextBlock Grid.Row="2" Grid.Column="2" Text="Exit transport" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="ExitMode" Grid.Row="2" Grid.Column="3" Margin="8,3"><ComboBoxItem Content="Shadowsocks" Tag="shadowsocks" IsSelected="True"/><ComboBoxItem Content="Hysteria2" Tag="hysteria2"/><ComboBoxItem Content="REALITY Vision" Tag="reality-vision"/><ComboBoxItem Content="PQ REALITY Vision" Tag="reality-pq-vision"/><ComboBoxItem Content="REALITY XHTTP" Tag="reality-xhttp"/><ComboBoxItem Content="Naive H2" Tag="naive-h2"/><ComboBoxItem Content="Naive H3" Tag="naive-h3"/></ComboBox>
    <TextBlock Grid.Row="2" Grid.Column="4" Text="CUSTOM layers" VerticalAlignment="Center" Margin="12,0,0,0"/><TextBox Name="Layers" Grid.Row="2" Grid.Column="5" Margin="8,3" ToolTip="Comma-separated exact layers; used only when Mode=CUSTOM"/>
    <TextBlock Grid.Row="3" Text="Entry mode" VerticalAlignment="Center"/><ComboBox Name="EntryMode" Grid.Row="3" Grid.Column="1" Margin="8,3" DisplayMemberPath="name" SelectedValuePath="id"/>
    <TextBlock Grid.Row="3" Grid.Column="2" Text="Execution" VerticalAlignment="Center" Margin="12,0,0,0"/><ComboBox Name="Execution" Grid.Row="3" Grid.Column="3" Margin="8,3" DisplayMemberPath="name" SelectedValuePath="id" ToolTip="Server/Compare requires a Router entry, this exit's response probe, and separate packet/OpenVPN pairing. The controller proves the captured path before testing."/>
@@ -54,7 +54,7 @@ function ShowUnifiedSpeedLab{
  $Reader=New-Object System.Xml.XmlNodeReader $SX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
  $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$EntryMode=$D.FindName('EntryMode');$Execution=$D.FindName('Execution');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
  function SelectedTag($Combo){if($null-eq$Combo.SelectedItem){return''};return [string]$Combo.SelectedItem.Tag}
- $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();execution_choices=@();updating=$false}
+ $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();supported_exit_modes=@();current=$null;execution_choices=@();updating=$false}
  function SpeedLabValue($Item,[string]$Name,$Default=''){
   if($null-eq$Item){return $Default};$P=$Item.PSObject.Properties[$Name];if($null-eq$P-or$null-eq$P.Value){return $Default};return $P.Value
  }
@@ -88,6 +88,10 @@ function ShowUnifiedSpeedLab{
    }elseif($top-eq'multihop'){
     $entryValue=if($saved){[string](SpeedLabValue $n 'multihop_entry_id')}else{[string]$n.id};if(-not$entryValue){$entryValue=[string]$n.id};SelectSpeedLabChoice $Entry $entryValue
     $exitValue=[string](SpeedLabValue $n 'multihop_exit_id');if($saved-and$exitValue){SelectSpeedLabChoice $Exit $exitValue}
+    if(([string](SpeedLabValue $SpeedLabOptions.current 'entry_id'))-ceq([string]$Entry.SelectedValue)-and([string](SpeedLabValue $SpeedLabOptions.current 'exit_id'))-ceq([string]$Exit.SelectedValue)){
+     $exitModeValue=[string](SpeedLabValue $SpeedLabOptions.current 'exit_mode');$ExitMode.SelectedIndex=-1
+     for($i=0;$i-lt$ExitMode.Items.Count;$i++){if([string]$ExitMode.Items[$i].Tag-ceq$exitModeValue){$ExitMode.SelectedIndex=$i;break}}
+    }
     $executionValue=if($saved){[string](SpeedLabValue $n 'multihop_execution' 'local')}else{'local'};if(-not$executionValue){$executionValue='local'};SelectSpeedLabChoice $Execution $executionValue
    }
   }finally{$SpeedLabOptions.updating=$false}
@@ -123,6 +127,7 @@ function ShowUnifiedSpeedLab{
   }elseif($top-eq'multihop'){
    $exitValue=SpeedLabFind 'nodes' ([string]$Exit.SelectedValue)
    if($null-eq$entryValue-or$null-eq$exitValue-or(SpeedLabKind $entryValue)-ne'router-vpn'-or(SpeedLabKind $exitValue)-ne'router-vpn'-or([string]$Entry.SelectedValue)-ceq([string]$Exit.SelectedValue)){throw 'Select two different linked Router VPN nodes.'}
+   if((SelectedTag $ExitMode)-cnotin@($SpeedLabOptions.supported_exit_modes)){throw 'Select an exit transport supported by the installed runtime.'}
    $payload.entry_id=[string]$Entry.SelectedValue;$payload.exit_id=[string]$Exit.SelectedValue;$payload.base=SelectedTag $Base;$payload.exit_mode=SelectedTag $ExitMode;$payload.execution=$executionValue
   }elseif($top-eq'external'){
    if($null-eq$n-or(SpeedLabKind $n)-ne'external'){throw 'Select a linked external exit.'}
@@ -150,6 +155,7 @@ function ShowUnifiedSpeedLab{
   $Success={param($Opt)
    $SpeedLabOptions.updating=$true
    try{
+    $SpeedLabOptions.supported_exit_modes=@(SpeedLabValue $Opt 'supported_exit_modes' @());$SpeedLabOptions.current=SpeedLabValue $Opt 'current' $null
     $SpeedLabOptions.nodes=@($Opt.nodes);$SpeedLabOptions.router_vpn_entry_modes=@(SpeedLabValue $Opt 'router_vpn_entry_modes' @());$SpeedLabOptions.execution_choices=@(SpeedLabValue $Opt 'execution_choices' @())
     $Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
     $EntryMode.ItemsSource=@($SpeedLabOptions.router_vpn_entry_modes);$Execution.ItemsSource=@($SpeedLabOptions.execution_choices);SelectSpeedLabChoice $Execution 'local'

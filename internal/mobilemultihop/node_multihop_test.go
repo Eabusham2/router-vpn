@@ -4,6 +4,8 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/multihoprelay"
 )
 
 func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
@@ -26,7 +28,7 @@ func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
 func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
 		for _, entryLayer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			for _, exitMode := range []string{"shadowsocks", "hysteria2"} {
+			for _, exitMode := range NodeMultihopExitModes() {
 				for _, exitLayer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
 					t.Run(mode+"/"+entryLayer+"/"+exitMode+"/"+exitLayer, func(t *testing.T) {
 						entry, exit := multihopNodeFixture(t, mode, entryLayer, "entry"), multihopNodeFixture(t, exitMode, exitLayer, "exit")
@@ -64,7 +66,7 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 							t.Fatal("captured WG/AWG parameters changed", prior, actual)
 						}
 						outer := nodes["proxy"]
-						if exitLayer != "" && exitMode == "hysteria2" {
+						if exitLayer != "" && exitMode != "shadowsocks" {
 							if outer["detour"] != NativeStartLayerTag {
 								t.Fatal("exit Start Layer bypassed")
 							}
@@ -73,8 +75,30 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 						if outer["detour"] != "entry-wg" {
 							t.Fatal("exit did not retain the selected entry")
 						}
+						for _, raw := range startObject(t, exitBefore)["outbounds"].([]any) {
+							prior := raw.(map[string]any)
+							actual := predecessorCopy(nodes[predecessorText(prior, "tag")])
+							if prior["tag"] == outer["tag"] {
+								delete(actual, "detour")
+							}
+							if !reflect.DeepEqual(prior, actual) {
+								t.Fatal("captured exit credentials, TLS, Xray document or UDP framing changed")
+							}
+						}
 						servers := graph["dns"].(map[string]any)["servers"].([]any)
-						if len(servers) != 2 || servers[0].(map[string]any)["server"] != "10.88.0.53" || servers[0].(map[string]any)["detour"] != "proxy" || servers[1].(map[string]any)["server"] != "192.168.50.133" || servers[1].(map[string]any)["detour"] != "entry-wg" {
+						count := 2
+						if multihoprelay.NaiveMode(exitMode) {
+							count++
+							bootstrap := servers[1].(map[string]any)
+							via := "entry-wg"
+							if exitLayer != "" {
+								via = NativeStartLayerTag
+							}
+							if bootstrap["server"] != "10.88.0.53" || bootstrap["detour"] != via || nodes["proxy"]["domain_resolver"].(map[string]any)["server"] != bootstrap["tag"] {
+								t.Fatal("Naive bootstrap lost selected DNS or bypassed its lower encrypted path")
+							}
+						}
+						if len(servers) != count || servers[0].(map[string]any)["server"] != "10.88.0.53" || servers[0].(map[string]any)["detour"] != "proxy" || servers[count-1].(map[string]any)["server"] != "192.168.50.133" || servers[count-1].(map[string]any)["detour"] != "entry-wg" {
 							t.Fatal("captured per-node DNS owners were substituted")
 						}
 						services := graph["services"].([]any)
@@ -112,6 +136,41 @@ func TestNodeMultihopRejectsUnownedAndUnsupportedCaptures(t *testing.T) {
 		broken.config = startJSON(t, graph)
 		if _, err := NodeMultihopConfig(&broken, exit); err == nil {
 			t.Fatal("incomplete captured predecessor accepted")
+		}
+	}
+}
+
+func TestNodeMultihopRejectsIncompleteNativeProxyAndWrongNode(t *testing.T) {
+	for _, mode := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"} {
+		for _, fault := range []string{"same-node", "protocol", "packet-path", "foreign-detour", "DNS", "missing-cover"} {
+			t.Run(mode+"/"+fault, func(t *testing.T) {
+				entry := multihopNodeFixture(t, "awg2-strong", "aes-256-gcm", "entry")
+				exit := multihopNodeFixture(t, mode, "aes-256-gcm+xor-whitening", "exit")
+				graph := startObject(t, exit.config)
+				proxy := graph["outbounds"].([]any)[0].(map[string]any)
+				switch fault {
+				case "same-node":
+					exit.profile["node_proof_id"] = entry.profile["node_proof_id"]
+				case "protocol":
+					proxy["type"] = "socks"
+				case "packet-path":
+					if multihoprelay.NaiveMode(mode) {
+						delete(proxy, "udp_over_tcp")
+					} else {
+						proxy["config_json"] = `{"outbounds":[{"protocol":"socks"}]}`
+					}
+				case "foreign-detour":
+					proxy["detour"] = "entry-wg"
+				case "DNS":
+					graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "missing"
+				case "missing-cover":
+					delete(graph, "services")
+				}
+				exit.config = startJSON(t, graph)
+				if _, err := NodeMultihopConfig(entry, exit); err == nil {
+					t.Fatal("incomplete native exit or substituted node was accepted")
+				}
+			})
 		}
 	}
 }

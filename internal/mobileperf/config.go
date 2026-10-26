@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/netip"
 	"reflect"
 	"strings"
 	"unicode/utf8"
@@ -254,7 +255,7 @@ func Apply(config, profiles string) (string, error) {
 			return "", errors.New("cover traffic requires a paired Router VPN node")
 		}
 		proved := func(tag string) bool {
-			return encrypted(byTag, tag, map[string]bool{}, func(owner string) (string, bool) {
+			return encrypted(root, byTag, tag, map[string]bool{}, func(owner string) (string, bool) {
 				profile, via := pair.Exit, ""
 				if entryTag != "" {
 					if owner == entryTag {
@@ -362,7 +363,7 @@ func encryptedComposite(root map[string]any, tags map[string]map[string]any, tag
 	return err == nil
 }
 
-func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool, composite func(string) (string, bool)) bool {
+func encrypted(root map[string]any, tags map[string]map[string]any, tag string, seen map[string]bool, composite func(string) (string, bool)) bool {
 	if seen[tag] || len(seen) > 12 {
 		return false
 	}
@@ -375,7 +376,7 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool,
 	if raw, exists := value["detour"]; exists {
 		var ok bool
 		detour, ok = raw.(string)
-		if !ok || !tokenPattern.MatchString(detour) || !encrypted(tags, detour, seen, composite) {
+		if !ok || !tokenPattern.MatchString(detour) || !encrypted(root, tags, detour, seen, composite) {
 			return false
 		}
 	}
@@ -387,6 +388,22 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool,
 		// an unknown base protocol instead of treating any PQ label as encrypted.
 		return value["mode"] == "wg-pq" || value["mode"] == "awg2-pq"
 	case "naive":
+		// The native host freezes Naive's bootstrap reference after validating
+		// its transport. It is policy metadata, not a Naive cipher option, but
+		// it may only be excluded from that check after proving the complete
+		// resolver tree follows this same lower path without a Naive cycle.
+		if selection, exists := value["domain_resolver"]; exists {
+			if !naiveCoverResolver(root, selection, detour) {
+				return false
+			}
+			copy := make(map[string]any, len(value)-1)
+			for key, item := range value {
+				if key != "domain_resolver" {
+					copy[key] = item
+				}
+			}
+			value = copy
+		}
 		quic, ok := value["quic"].(bool)
 		if !ok {
 			return false
@@ -406,10 +423,106 @@ func encrypted(tags map[string]map[string]any, tag string, seen map[string]bool,
 			return false
 		}
 		via, valid := composite(tag)
-		return valid && (via == "" || encrypted(tags, via, seen, composite))
+		return valid && (via == "" || encrypted(root, tags, via, seen, composite))
 	case "socks":
 		return detour != ""
 	default:
 		return false
 	}
+}
+
+// A resolver reference can neither grant a plaintext alternative to a routed
+// Naive owner nor recurse through the Naive session it is needed to start.
+// The actual DNS bytes and options remain untouched in the returned graph.
+func naiveCoverResolver(root map[string]any, selection any, lower string) bool {
+	dns, ok := root["dns"].(map[string]any)
+	if !ok {
+		return false
+	}
+	rows, ok := dns["servers"].([]any)
+	if !ok || len(rows) == 0 || len(rows) > 96 {
+		return false
+	}
+	servers := map[string]map[string]any{}
+	for _, raw := range rows {
+		server, ok := raw.(map[string]any)
+		tag := text(server, "tag")
+		if !ok || !tokenPattern.MatchString(tag) || servers[tag] != nil {
+			return false
+		}
+		servers[tag] = server
+	}
+	visiting := map[string]bool{}
+	var visit func(any) bool
+	visit = func(raw any) bool {
+		tag := ""
+		switch value := raw.(type) {
+		case string:
+			tag = value
+		case map[string]any:
+			for key, item := range value {
+				switch key {
+				case "server":
+					tag, ok = item.(string)
+					if !ok {
+						return false
+					}
+				case "strategy":
+					if item != "" && item != "prefer_ipv4" && item != "prefer_ipv6" && item != "ipv4_only" && item != "ipv6_only" {
+						return false
+					}
+				case "disable_cache":
+					if _, ok := item.(bool); !ok {
+						return false
+					}
+				case "rewrite_ttl":
+					number, ok := item.(float64)
+					if !ok || number < 0 || number > 4294967295 || number != float64(uint32(number)) {
+						return false
+					}
+				case "client_subnet":
+					prefix, ok := item.(string)
+					if _, err := netip.ParsePrefix(prefix); !ok || err != nil {
+						return false
+					}
+				default:
+					return false
+				}
+			}
+		default:
+			return false
+		}
+		server := servers[tag]
+		if !tokenPattern.MatchString(tag) || server == nil || visiting[tag] || len(visiting) >= 32 {
+			return false
+		}
+		visiting[tag] = true
+		defer delete(visiting, tag)
+		if raw, exists := server["detour"]; exists {
+			if lower == "" || raw != lower {
+				return false
+			}
+		} else if lower != "" {
+			return false
+		}
+		switch server["type"] {
+		case "udp", "tcp", "tls", "https", "h3", "quic":
+		default:
+			return false
+		}
+		host := text(server, "server")
+		ip, err := netip.ParseAddr(host)
+		if err == nil {
+			if ip.Zone() != "" || ip.IsUnspecified() || ip.IsMulticast() || ip.IsLinkLocalUnicast() || ip.IsLoopback() && lower == "" {
+				return false
+			}
+		} else if host == "" || strings.EqualFold(host, "localhost") || server["domain_resolver"] == nil {
+			return false
+		}
+		if child, exists := server["domain_resolver"]; exists {
+			return visit(child)
+		}
+		return true
+	}
+	return visit(selection)
 }

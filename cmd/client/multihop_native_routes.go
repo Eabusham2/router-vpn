@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
@@ -26,6 +27,13 @@ func registerDesktopMultihopRoutes(h *http.ServeMux, a *app) {
 
 func nativeMultihopPlatformSupported() bool {
 	return retainedNativeMultihopSelected()
+}
+
+func desktopMultihopExitModes() []string {
+	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
+		return []string{"shadowsocks", "hysteria2"}
+	}
+	return mobilemultihop.NodeMultihopExitModes()
 }
 
 func resolveNativeMultihopSelection(control common.RouterProfile, profiles []common.RouterProfile, q multihopConnectRequest) (multihopSelection, error) {
@@ -78,8 +86,8 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if exitMode == "" {
 		exitMode = "shadowsocks"
 	}
-	if exitMode != "shadowsocks" && exitMode != "hysteria2" {
-		return multihopSelection{}, errors.New("native desktop multihop supports only Shadowsocks or Hysteria2 as the exit transport")
+	if !mobilemultihop.NodeMultihopExitMode(exitMode) {
+		return multihopSelection{}, errors.New("native desktop multihop requires a supported complete exit transport")
 	}
 	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, ExitMode: exitMode}, nil
 }
@@ -130,7 +138,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"execution":                  graph.Execution,
 		"supported_executions":       []string{"local", "server", "auto"},
 		"supported_entry_bases":      []string{"wg", "awg"},
-		"supported_exit_modes":       []string{"shadowsocks", "hysteria2"},
+		"supported_exit_modes":       mobilemultihop.NodeMultihopExitModes(),
 		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
 		"standard_exits":             standard,
 		"external_profiles":          external,

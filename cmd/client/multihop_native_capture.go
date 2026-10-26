@@ -97,7 +97,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	}
 	c.endpoint = endpoint
 	for _, mode := range modes {
-		if mode != "shadowsocks" && mode != "hysteria2" {
+		if !mobilemultihop.NodeMultihopExitMode(mode) {
 			return sel, errors.New("native multihop exit mode is not supported")
 		}
 		if _, exists := c.configs[mode]; exists {

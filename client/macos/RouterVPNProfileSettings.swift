@@ -269,7 +269,7 @@ private final class MacConnectionProfileControls: NSObject {
         guard entry != exit else {
             throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 5, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit nodes must be different."])
         }
-        let exitMode = owner.multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
+        let exitMode = try RouterVPNNodeExitModes.require(index: owner.multihopExitModePopup.indexOfSelectedItem)
         return (true, entry, exit, exitMode, owner.multihopExecutionChoice())
     }
 
@@ -280,10 +280,10 @@ private final class MacConnectionProfileControls: NSObject {
         if enabled {
             let entry = root["multihop_entry_id"] as? String ?? ""
             let exit = root["multihop_exit_id"] as? String ?? ""
-            let exitMode = (root["multihop_exit_mode"] as? String ?? "shadowsocks").lowercased()
+            let exitMode = root["multihop_exit_mode"] as? String ?? ""
             if let index = owner.multihopNodeIDs.firstIndex(of: entry) { owner.multihopEntryPopup.selectItem(at: index) }
             if let index = owner.multihopNodeIDs.firstIndex(of: exit) { owner.multihopExitPopup.selectItem(at: index) }
-            owner.multihopExitModePopup.selectItem(at: exitMode == "hysteria2" ? 1 : 0)
+            owner.multihopExitModePopup.selectItem(at: RouterVPNNodeExitModes.index(for: exitMode) ?? -1)
             let choice = root["multihop_execution"] as? String ?? "local"
             let execution = ["local", "server", "auto"].contains(choice) ? choice : "local"
             UserDefaults.standard.set(execution, forKey: "routervpn.multihop.execution.v1")

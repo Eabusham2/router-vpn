@@ -325,7 +325,7 @@ extension ProductWindowController {
         let kill = NSButton(checkboxWithTitle: "Kill switch", target: self, action: #selector(toggleUnifiedKillSwitch(_:))); kill.identifier = NSUserInterfaceItemIdentifier("unified-kill-switch")
         connectRow.addArrangedSubview(connect); connectRow.addArrangedSubview(kill); controls.addArrangedSubview(connectRow); connect.widthAnchor.constraint(greaterThanOrEqualToConstant: 260).isActive = true
 
-        if multihopExitModePopup.numberOfItems == 0 { multihopExitModePopup.addItems(withTitles: ["Shadowsocks", "Hysteria2"]); multihopExitModePopup.selectItem(at: 0) }
+        if multihopExitModePopup.numberOfItems == 0 { multihopExitModePopup.addItems(withTitles: RouterVPNNodeExitModes.choices.map { $0.title }); multihopExitModePopup.selectItem(at: 0) }
         let multihopRow = NSStackView(); multihopRow.orientation = .horizontal; multihopRow.spacing = 7
         let multihopToggle = NSButton(checkboxWithTitle: "Multihop", target: self, action: #selector(unifiedMultihopChanged(_:))); multihopToggle.identifier = NSUserInterfaceItemIdentifier("unified-multihop-toggle"); multihopToggle.state = UserDefaults.standard.bool(forKey: unifiedMultihopEnabledKey) ? .on : .off
         multihopRow.addArrangedSubview(multihopToggle); multihopRow.addArrangedSubview(multihopEntryPopup); multihopRow.addArrangedSubview(NSTextField(labelWithString: "→")); multihopRow.addArrangedSubview(multihopExitPopup); multihopRow.addArrangedSubview(multihopExitModePopup)

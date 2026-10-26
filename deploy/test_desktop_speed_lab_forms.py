@@ -33,7 +33,15 @@ def block(source, marker):
 def linux_form(directory):
     source = (ROOT/'client/linux/routervpn-speed-lab-v12.inc').read_text()
     struct = source[:source.index('} LinuxSpeedLabV12;')+len('} LinuxSpeedLabV12;')]
-    methods = '\n'.join(block(source, marker) for marker in (
+    choices = (ROOT/'client/linux/routervpn-multihop-choices-v22.inc').read_text()
+    methods = choices[:choices.index('static gboolean linux_multihop_exit_supported_v22(')]
+    methods += '\n'.join(block(choices, marker) for marker in (
+        'static gboolean linux_multihop_exit_supported_v22(',
+        'static gboolean linux_multihop_exit_advertised_v22(',
+        'static void linux_multihop_select_preserving_v22(',
+        'static void linux_multihop_exit_choices_v22(',
+    ))
+    methods += '\n' + '\n'.join(block(source, marker) for marker in (
         'static const char *linux_speed_lab_active_id_v12(',
         'static GtkWidget *linux_speed_lab_combo_v12(',
         'static void linux_speed_lab_append_nodes_v12(',
@@ -63,11 +71,11 @@ static unsigned checks;
 static void check(gboolean value,const char*message){checks++;if(!value){g_printerr("%s\n",message);exit(1);}}
 static GtkWidget *combo(const char*const*ids,size_t count){return linux_speed_lab_combo_v12(ids,ids,count);}
 static void choose(GtkWidget*w,const char*id){check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(w),id),"Missing fixture choice");}
-static void emit(LinuxSpeedLabV12*s,const char*directory,const char*name){g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured!=NULL,gtk_label_get_text(GTK_LABEL(s->status)));char*path=g_strdup_printf("%s/%s.json",directory,name);check(g_file_set_contents(path,captured,-1,NULL),"Cannot write captured Run payload");g_free(path);}
-static void reject(LinuxSpeedLabV12*s){g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured==NULL,"Invalid selection reached the controller");}
+static void emit(LinuxSpeedLabV12*s,const char*directory,const char*name){linux_speed_lab_refresh_controls_v12(NULL,s);check(gtk_widget_get_sensitive(s->run),gtk_label_get_text(GTK_LABEL(s->status)));g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured!=NULL,gtk_label_get_text(GTK_LABEL(s->status)));char*path=g_strdup_printf("%s/%s.json",directory,name);check(g_file_set_contents(path,captured,-1,NULL),"Cannot write captured Run payload");g_free(path);}
+static void reject(LinuxSpeedLabV12*s){linux_speed_lab_refresh_controls_v12(NULL,s);check(!gtk_widget_get_sensitive(s->run),"Invalid path left Run enabled");g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured==NULL,"Invalid selection reached the controller");}
 int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixture directory");LinuxSpeedLabV12 s={0};
- const char*scopes[]={"current","temporary"},*tops[]={"system-direct","router","multihop","external"},*bases[]={"auto","wg","awg"},*exits[]={"shadowsocks","hysteria2"},*times[]={"auto","custom"};
- s.scope=combo(scopes,2);s.topology=combo(tops,4);s.base=combo(bases,3);s.exit_mode=combo(exits,2);s.duration_mode=combo(times,2);
+ const char*scopes[]={"current","temporary"},*tops[]={"system-direct","router","multihop","external"},*bases[]={"auto","wg","awg"},*times[]={"auto","custom"};
+ s.scope=combo(scopes,2);s.topology=combo(tops,4);s.base=combo(bases,3);s.exit_mode=gtk_combo_box_text_new();linux_multihop_exit_choices_v22(s.exit_mode,"shadowsocks");s.duration_mode=combo(times,2);
  s.node=gtk_combo_box_text_new();s.entry=gtk_combo_box_text_new();s.exit=gtk_combo_box_text_new();s.mode=gtk_combo_box_text_new();s.entry_mode=gtk_combo_box_text_new();s.execution=gtk_combo_box_text_new();s.layers=gtk_entry_new();
  s.min_time=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,1,60,1);s.max_time=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,1,60,1);gtk_range_set_value(GTK_RANGE(s.min_time),4);gtk_range_set_value(GTK_RANGE(s.max_time),12);
  s.daita=gtk_check_button_new();s.jumbo=gtk_check_button_new();s.encrypted=gtk_check_button_new();s.obfuscated=gtk_check_button_new();s.status=gtk_label_new("");s.run=gtk_button_new();
@@ -88,18 +96,30 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  JsonArray*nodes=linux_speed_lab_catalog_v19(&s,"nodes");json_array_add_object_element(nodes,json_object_ref(node));reject(&s);json_array_remove_element(nodes,json_array_get_length(nodes)-1);
  json_object_set_string_member(node,"multihop_entry_id","removed-entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.entry),"removed-entry")==0,"Unavailable entry became Direct");reject(&s);json_object_set_string_member(node,"multihop_entry_id","entry");linux_speed_lab_defaults_v19(&s);
  choose(s.topology,"multihop");choose(s.entry,"entry");choose(s.exit,"exit-router");for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s",executions[j]);emit(&s,argv[1],name);g_free(name);}
+ JsonArray*exit_modes=linux_speed_lab_catalog_v19(&s,"supported_exit_modes");check(exit_modes!=NULL&&json_array_get_length(exit_modes)==7,"Reduced Router exit catalog");
+ for(guint i=0;i<json_array_get_length(exit_modes);i++){const char*mode=json_array_get_string_element(exit_modes,i);choose(s.exit_mode,mode);for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s-%s",mode,executions[j]);emit(&s,argv[1],name);g_free(name);}}
+ linux_speed_lab_select_v19(s.exit_mode,"unknown-exit");reject(&s);choose(s.exit_mode,"naive-h3");
+ json_array_add_string_element(exit_modes,"naive-h3");reject(&s);json_array_remove_element(exit_modes,json_array_get_length(exit_modes)-1);
+ JsonObject*current=json_object_get_object_member(json_node_get_object(s.options),"current");json_object_set_boolean_member(current,"connected",TRUE);json_object_set_string_member(current,"mode","multihop");json_object_set_string_member(current,"entry_id","different-entry");json_object_set_string_member(current,"exit_id","exit-router");json_object_set_string_member(current,"exit_mode","reality-xhttp");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"naive-h3")==0,"Another live graph changed the selected exit transport");
+ json_object_set_string_member(current,"entry_id","entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-xhttp")==0,"Exact live graph exit transport was not preserved");
  choose(s.exit,"entry");reject(&s);choose(s.exit,"exit-router");choose(s.topology,"system-direct");emit(&s,argv[1],"speed-lab-system-direct");
+ JsonNode*reload=parse_json(s.response.data);JsonArray*reload_nodes=json_object_get_array_member(json_node_get_object(reload),"nodes");for(guint i=0;i<json_array_get_length(reload_nodes);i++){JsonObject*n=json_array_get_object_element(reload_nodes,i);json_object_set_boolean_member(n,"selected",strcmp(obj_string(n,"id"),"entry")==0);}JsonGenerator*generator=json_generator_new();json_generator_set_root(generator,reload);g_free(s.response.data);s.response.data=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(reload);
+ s.staged_multihop=TRUE;s.staged_entry=g_strdup("entry");s.staged_exit=g_strdup("exit-router");s.staged_exit_mode=g_strdup("reality-pq-vision");s.staged_execution=g_strdup("auto");check(linux_speed_lab_apply_options_v12(&s),"Reloaded options failed");check(strcmp(linux_speed_lab_active_id_v12(s.topology),"multihop")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry),"entry")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit),"exit-router")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-pq-vision")==0&&strcmp(linux_speed_lab_active_id_v12(s.execution),"auto")==0,"Loaded whole-connection profile choices changed");
+ g_free(s.staged_exit_mode);s.staged_exit_mode=g_strdup("missing-saved-exit");check(linux_speed_lab_apply_options_v12(&s),"Unknown saved mode options failed");check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"missing-saved-exit")==0,"Unknown saved exit was replaced");reject(&s);g_free(s.staged_entry);g_free(s.staged_exit);g_free(s.staged_exit_mode);g_free(s.staged_execution);
  json_node_free(s.options);g_free(s.response.data);g_free(captured);printf("Actual GTK Speed Lab options/defaults/Run callback: %u checks PASS\n",checks);return 0;}
 '''.replace('STRUCT', struct).replace('METHODS', methods).replace('\nCALLBACK\n', '\n'+callback+'\n')
     path = directory/'speed-lab.c'; path.write_text(program)
     flags = subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'], text=True).split()
     subprocess.run(['gcc','-Wall','-Wextra','-Werror',str(path),'-o',str(directory/'speed-lab')]+flags, check=True)
     subprocess.run(['xvfb-run','-a',str(directory/'speed-lab'),str(directory)],check=True,timeout=60)
+    subprocess.run([sys.executable,str(ROOT/'client/linux/test-multihop-profiles-v22.py')],check=True,timeout=90)
 
 
 def swift_form(directory):
     source = (ROOT/'client/macos/RouterVPNMacSpeedLab.swift').read_text()
     policy = block(source, 'private enum RouterVPNMacSpeedLabPathPolicy')
+    exit_modes = block((ROOT/'client/macos/RouterVPNMacProduct.swift').read_text(), 'enum RouterVPNNodeExitModes')
+    exit_initializer = block(source, 'for choice in RouterVPNNodeExitModes.choices')
     methods = '\n'.join(block(source, marker) for marker in (
         '    private func selected(', '    private func populate(', '    private func selectPreserving(',
         '    private func applyPathDefaults(', '    private func setEntryModeDefault(',
@@ -110,6 +130,7 @@ def swift_form(directory):
     program = r'''
 import Foundation
 import CoreFoundation
+EXIT_MODES
 POLICY
 class NSControl { var isEnabled = true }
 final class Item { var title: String; var representedObject: Any?; init(_ title:String){self.title=title} }
@@ -128,12 +149,14 @@ final class Form {
  let minTime=Field(),maxTime=Field(),layers=Field(),idle=Field(),download=Field(),upload=Field(),idleDetail=Field(),downloadDetail=Field(),uploadDetail=Field(),status=Field()
  let daita=Button(),jumbo=Button(),encrypted=Button(),obfuscated=Button(),runButton=Button();let detail=TextArea()
  var nodes:[[String:Any]]=[],entryModes:[[String:Any]]=[],executions:[[String:Any]]=[]
+ var exitModes:[String]=[],currentPath:[String:Any]=[:]
  var updatingChoices=false,closed=false,optionsReady=false,cancelled=false,loadingOptions=false
  var request:Request?;var captured:[String:Any]?;var options=Data()
  func performLocalRequest(_ path:String,body:[String:Any]?,timeout:TimeInterval,completion:@escaping(Result<Data,Error>)->Void)throws{
   if path=="/api/speed-lab/options"{loadingOptions=false;completion(.success(options))}
   else {precondition(path=="/api/speed-lab/run"&&body != nil);captured=body}
  }
+ func initializeExitModes(){EXIT_INITIALIZER}
  METHODS
 }
 var checks=0
@@ -141,10 +164,11 @@ func check(_ result:Bool,_ message:String){checks+=1;precondition(result,message
 func fill(_ popup:NSPopUpButton,_ values:[String]){for v in values{popup.addItem(withTitle:v);popup.lastItem?.representedObject=v};popup.selectItem(at:0)}
 func choose(_ popup:NSPopUpButton,_ value:String){guard let index=popup.items.firstIndex(where:{$0.representedObject as? String==value})else{fatalError("Missing choice "+value)};popup.selectItem(at:index)}
 let output=URL(fileURLWithPath:CommandLine.arguments[1],isDirectory:true),f=Form()
-fill(f.scope,["current","temporary"]);fill(f.topology,["system-direct","router","multihop","external"]);fill(f.base,["auto","wg","awg"]);fill(f.exitMode,["shadowsocks","hysteria2"]);fill(f.durationMode,["auto","custom"]);f.maxTime.doubleValue=12
+fill(f.scope,["current","temporary"]);fill(f.topology,["system-direct","router","multihop","external"]);fill(f.base,["auto","wg","awg"]);f.initializeExitModes();f.exitMode.selectItem(at:0);fill(f.durationMode,["auto","custom"]);f.maxTime.doubleValue=12
 f.options=try Data(contentsOf:output.appendingPathComponent("speed-lab-options.json"));f.loadOptions()
 check(f.selected(f.node)=="exit"&&f.selected(f.entry)=="entry"&&f.selected(f.entryMode)=="awg2-strong"&&f.selected(f.execution)=="auto","Saved path defaults changed")
 check(f.entryModes.count==19,"Reduced raw entry catalog")
+check(f.exitModes==RouterVPNNodeExitModes.choices.map{$0.id},"UI and native exit catalogs differ")
 func emit(_ name:String)throws{f.captured=nil;f.runSpeedLab();check(f.captured != nil,f.detail.string);try JSONSerialization.data(withJSONObject:f.captured!,options:[.sortedKeys]).write(to:output.appendingPathComponent(name+".json"))}
 func reject(){f.captured=nil;f.runSpeedLab();check(f.captured==nil,"Invalid selection reached controller")}
 try emit("speed-lab-current");choose(f.scope,"temporary")
@@ -160,9 +184,14 @@ f.nodes.append(f.nodes[exitIndex]);reject();f.nodes.removeLast()
 f.nodes[exitIndex]["multihop_entry_id"]="removed-entry";f.applyPathDefaults();check(f.selected(f.entry)=="removed-entry","Unavailable saved entry became Direct");reject();f.nodes[exitIndex]["multihop_entry_id"]="entry";f.applyPathDefaults()
 choose(f.topology,"multihop");f.pathChanged(f.topology);choose(f.entry,"entry");choose(f.exit,"exit-router")
 for execution in ["local","server","auto"]{choose(f.execution,execution);try emit("speed-lab-multihop-"+execution)}
+for exitMode in f.exitModes{choose(f.exitMode,exitMode);for execution in ["local","server","auto"]{choose(f.execution,execution);try emit("speed-lab-multihop-"+exitMode+"-"+execution)}}
+f.selectPreserving(f.exitMode,"removed-exit-mode");reject();choose(f.exitMode,"naive-h3")
+let supportedExitModes=f.exitModes;f.exitModes.removeAll{$0=="naive-h3"};reject();f.exitModes=supportedExitModes
+f.currentPath=["entry_id":"entry","exit_id":"exit-router","exit_mode":"reality-pq-vision"];f.applyPathDefaults();check(f.selected(f.exitMode)=="reality-pq-vision","Matching current graph lost its exact exit mode")
+f.currentPath["entry_id"]="different-entry";choose(f.exitMode,"naive-h2");f.applyPathDefaults();check(f.selected(f.exitMode)=="naive-h2","Unrelated graph replaced the selected exit mode")
 choose(f.exit,"entry");reject();choose(f.exit,"exit-router");choose(f.topology,"system-direct");try emit("speed-lab-system-direct")
 print("Actual Swift Speed Lab options/defaults/Run callback: \(checks) checks PASS")
-'''.replace('POLICY', policy).replace('METHODS', methods)
+'''.replace('EXIT_MODES', exit_modes).replace('EXIT_INITIALIZER', exit_initializer).replace('POLICY', policy).replace('METHODS', methods)
     path = directory/'main.swift'; path.write_text(program)
     subprocess.run(['swiftc','-swift-version','5','-module-cache-path',str(directory/'module-cache'),str(path),'-o',str(directory/'speed-lab-swift')],check=True,timeout=120)
     subprocess.run([str(directory/'speed-lab-swift'),str(directory)],check=True,timeout=60)

@@ -81,6 +81,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		return nil, errors.New("native multihop outbounds missing")
 	}
 	found := 0
+	removedExitLayer := false
 	retained := make([]any, 0, len(outbounds))
 	for _, item := range outbounds {
 		out, ok := item.(map[string]any)
@@ -96,12 +97,36 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			if !multihoprelay.ValidLayerMode(d.Lease.ExitStartLayer) || out["detour"] != "entry-wg" {
 				return nil, errors.New("server lease does not own the captured exit Start Layer")
 			}
+			removedExitLayer = true
 			continue
 		}
 		retained = append(retained, out)
 	}
 	if found != 1 {
 		return nil, errors.New("ambiguous exit proxy")
+	}
+	if removedExitLayer {
+		// A captured Naive bootstrap can use its exact exit AES owner. That
+		// owner now lives behind the authenticated Server lease: keep the
+		// selected resolver/TLS/port and move only this owned edge to the lease.
+		// Other entry, exit and application DNS references remain unchanged.
+		dns, ok := cfg["dns"].(map[string]any)
+		if !ok {
+			return nil, errors.New("native server graph lost its captured DNS")
+		}
+		servers, ok := dns["servers"].([]any)
+		if !ok {
+			return nil, errors.New("native server graph lost its captured DNS servers")
+		}
+		for _, raw := range servers {
+			resolver, ok := raw.(map[string]any)
+			if !ok {
+				return nil, errors.New("native server graph has invalid captured DNS")
+			}
+			if resolver["detour"] == mobilemultihop.NativeStartLayerTag {
+				resolver["detour"] = "proxy"
+			}
+		}
 	}
 	rules, ok := route["rules"].([]any)
 	if !ok {

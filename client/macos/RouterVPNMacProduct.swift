@@ -5,6 +5,24 @@ import MapKit
 let routerVPNProductBaseURL = URL(string: "http://127.0.0.1:8788")!
 let routerVPNProductContractVersion = 3
 
+enum RouterVPNNodeExitModes {
+    static let choices: [(id: String, title: String)] = [
+        ("shadowsocks", "Shadowsocks"), ("hysteria2", "Hysteria2"),
+        ("reality-vision", "REALITY Vision"), ("reality-pq-vision", "PQ REALITY Vision"),
+        ("reality-xhttp", "REALITY XHTTP"), ("naive-h2", "Naive H2"), ("naive-h3", "Naive H3"),
+    ]
+    static func id(at index: Int) -> String? {
+        choices.indices.contains(index) ? choices[index].id : nil
+    }
+    static func index(for id: String) -> Int? { choices.firstIndex { $0.id == id } }
+    static func require(index: Int) throws -> String {
+        guard let value = id(at: index) else {
+            throw NSError(domain: "RouterVPN.Multihop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select a supported exit transport."])
+        }
+        return value
+    }
+}
+
 func productDNSPolicyBody(captured: [String: Any]?, displayedProfileID: String, fields: [String: Any]) throws -> [String: Any] {
     guard let captured, !displayedProfileID.isEmpty,
           let profileID = captured["profile_id"] as? String, profileID == displayedProfileID,
@@ -185,7 +203,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let selectors = NSStackView(); selectors.orientation = .horizontal; selectors.spacing = 8
         let entry = NSStackView(); entry.orientation = .vertical; entry.addArrangedSubview(label("Entry node")); entry.addArrangedSubview(multihopEntryPopup)
         let exit = NSStackView(); exit.orientation = .vertical; exit.addArrangedSubview(label("Exit node")); exit.addArrangedSubview(multihopExitPopup)
-        let mode = NSStackView(); mode.orientation = .vertical; mode.addArrangedSubview(label("Exit transport")); multihopExitModePopup.addItems(withTitles: ["Shadowsocks", "Hysteria2"]); multihopExitModePopup.selectItem(at: 0); mode.addArrangedSubview(multihopExitModePopup)
+        let mode = NSStackView(); mode.orientation = .vertical; mode.addArrangedSubview(label("Exit transport")); multihopExitModePopup.addItems(withTitles: RouterVPNNodeExitModes.choices.map { $0.title }); multihopExitModePopup.selectItem(at: 0); mode.addArrangedSubview(multihopExitModePopup)
         selectors.addArrangedSubview(entry); selectors.addArrangedSubview(exit); selectors.addArrangedSubview(mode); s.addArrangedSubview(selectors)
         configureMultihopExecution(); s.addArrangedSubview(multihopExecutionPopup); s.addArrangedSubview(multihopComparisonLabel)
         let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Connect real multihop", #selector(connectMultihop))); row.addArrangedSubview(button("Refresh multihop readiness", #selector(refreshAdvancedAction))); row.addArrangedSubview(button("Retest MTU", #selector(retestMTU))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(advancedText)); return s
@@ -284,7 +302,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         guard ei >= 0, xi >= 0, ei < multihopNodeIDs.count, xi < multihopNodeIDs.count else { appendHelp("Choose both multihop nodes."); return }
         let entryID = multihopNodeIDs[ei], exitID = multihopNodeIDs[xi]
         guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }
-        let exitMode = multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"
+        guard let exitMode = RouterVPNNodeExitModes.id(at: multihopExitModePopup.indexOfSelectedItem) else { appendHelp("Select a supported exit transport."); return }
         let execution = multihopExecutionChoice()
         let base = multihopBaseChoice()
         multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"

@@ -10,6 +10,8 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+
+	"router-vpn/internal/mobilemultihop"
 )
 
 const connectionProfileSetupMetaVersion = 1
@@ -119,12 +121,10 @@ func normalizeConnectionProfileExitMode(value string) (string, error) {
 	if value == "" {
 		return "", nil
 	}
-	switch value {
-	case "shadowsocks", "hysteria2":
+	if mobilemultihop.NodeMultihopExitMode(value) {
 		return value, nil
-	default:
-		return "", errors.New("multihop_exit_mode must be shadowsocks or hysteria2")
 	}
+	return "", errors.New("multihop_exit_mode must identify a supported complete native exit transport")
 }
 
 func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updating bool) (connectionProfileSetupRequest, error) {
@@ -170,7 +170,7 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 			return q, errors.New("multihop setup requires different valid entry and exit node ids")
 		}
 		if q.MultihopExitMode == "" {
-			q.MultihopExitMode = "shadowsocks"
+			return q, errors.New("multihop setup requires an explicit supported exit transport")
 		}
 	} else {
 		q.MultihopEntryID = ""
@@ -244,7 +244,9 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		q.Mode, q.CustomLayers = "external", nil
 		q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID = selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID
 		q.MultihopExitMode, q.MultihopExecution = "", selected.MultihopExecution
-		if q.MultihopExecution == "" { q.MultihopExecution = "local" }
+		if q.MultihopExecution == "" {
+			q.MultihopExecution = "local"
+		}
 	}
 	if err := validateConnectionProfileSetupGraphLocked(a, q); err != nil && !externalSelected {
 		a.mu.Unlock()
@@ -430,9 +432,13 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		payload["multihop_exit_id"] = external["multihop_exit_id"]
 		payload["multihop_exit_mode"] = external["protocol"]
 		payload["multihop_execution"] = "local"
-		if execution, ok := external["multihop_execution"].(string); ok && execution != "" { payload["multihop_execution"] = execution }
+		if execution, ok := external["multihop_execution"].(string); ok && execution != "" {
+			payload["multihop_execution"] = execution
+		}
 		payload["multihop_entry_mode"] = ""
-		if mode, ok := external["multihop_entry_mode"].(string); ok { payload["multihop_entry_mode"] = mode }
+		if mode, ok := external["multihop_entry_mode"].(string); ok {
+			payload["multihop_entry_mode"] = mode
+		}
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")

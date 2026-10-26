@@ -10,6 +10,7 @@ on:
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
       - 'deploy/test_desktop_protection_settings.py'
+      - 'deploy/test_desktop_connection_profile_modes.py'
       - 'deploy/test_desktop_dns_settings.py'
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_macos_device_settings.py'
@@ -30,6 +31,7 @@ on:
       - 'deploy/test_macos_via_entry_candidates.py'
       - 'deploy/test_desktop_startup_settings.py'
       - 'deploy/test_desktop_protection_settings.py'
+      - 'deploy/test_desktop_connection_profile_modes.py'
       - 'deploy/test_desktop_dns_settings.py'
       - 'deploy/test_desktop_quick_dns.py'
       - 'deploy/test_macos_device_settings.py'
@@ -80,6 +82,8 @@ jobs:
         run: python3 deploy/test_desktop_startup_settings.py --platform macos
       - name: Native protection controls preserve the captured node
         run: python3 deploy/test_desktop_protection_settings.py --platform macos
+      - name: Complete profiles preserve every exit transport and execution choice
+        run: python3 deploy/test_desktop_connection_profile_modes.py --platform macos
       - name: DNS editors preserve the captured node and selected transport
         run: python3 deploy/test_desktop_dns_settings.py --platform macos
       - name: Compact DNS preserves captured ownership and encrypted Home

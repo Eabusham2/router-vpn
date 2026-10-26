@@ -12,10 +12,9 @@ static gboolean linux_profile_selection_v11(gboolean *enabled, char **entry, cha
     char *b = g_key_file_get_string(key, "connection-profile-selection", "exit", NULL);
     char *m = g_key_file_get_string(key, "connection-profile-selection", "exit_mode", NULL);
     g_key_file_unref(key);
-    if (m == NULL || (g_strcmp0(m, "shadowsocks") != 0 && g_strcmp0(m, "hysteria2") != 0)) {
-        g_free(m);
-        m = g_strdup("shadowsocks");
-    }
+    /* A new, unstaged selection starts with SS. A missing/unknown saved mode
+     * stays unavailable until the user explicitly chooses its replacement. */
+    if (m == NULL) m = g_strdup(on ? "" : "shadowsocks");
     if (a == NULL) {
         a = g_strdup("");
     }
@@ -34,8 +33,7 @@ static void linux_profile_store_selection_v11(gboolean enabled, const char *entr
     g_key_file_set_boolean(key, "connection-profile-selection", "enabled", enabled);
     g_key_file_set_string(key, "connection-profile-selection", "entry", enabled && entry != NULL ? entry : "");
     g_key_file_set_string(key, "connection-profile-selection", "exit", enabled && exit != NULL ? exit : "");
-    const char *safe_mode = mode != NULL && g_strcmp0(mode, "hysteria2") == 0 ? "hysteria2" : "shadowsocks";
-    g_key_file_set_string(key, "connection-profile-selection", "exit_mode", enabled ? safe_mode : "shadowsocks");
+    g_key_file_set_string(key, "connection-profile-selection", "exit_mode", enabled ? (mode != NULL ? mode : "") : "shadowsocks");
     linux_unified_save_keyfile_v8(key);
     g_key_file_unref(key);
 }
@@ -75,7 +73,9 @@ static void linux_profile_apply_custom_v11(const char *mode, JsonArray *layers) 
     g_string_free(joined, TRUE);
 }
 
-static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *name, const char *id, gboolean multihop, const char *entry, const char *exit, const char *exit_mode) {
+static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *name, const char *id, gboolean multihop, const char *entry, const char *exit, const char *exit_mode, const char *execution) {
+    if (multihop && (entry == NULL || !entry[0] || exit == NULL || !exit[0] || g_strcmp0(entry, exit) == 0 ||
+        !linux_multihop_exit_supported_v22(exit_mode) || !linux_multihop_execution_supported_v22(execution))) return NULL;
     const char *selected_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
     if (selected_mode == NULL || selected_mode[0] == '\0' || g_strcmp0(selected_mode, "custom:new") == 0) selected_mode = "smart-auto";
     char *layers = linux_unified_custom_layers_for_mode_v8(selected_mode);
@@ -100,10 +100,8 @@ static char *linux_profile_setup_body_v11(LinuxUnifiedV8 *state, const char *nam
     json_builder_set_member_name(builder, "multihop_enabled"); json_builder_add_boolean_value(builder, multihop);
     json_builder_set_member_name(builder, "multihop_entry_id"); json_builder_add_string_value(builder, multihop && entry != NULL ? entry : "");
     json_builder_set_member_name(builder, "multihop_exit_id"); json_builder_add_string_value(builder, multihop && exit != NULL ? exit : "");
-    json_builder_set_member_name(builder, "multihop_exit_mode"); json_builder_add_string_value(builder, multihop && g_strcmp0(exit_mode, "hysteria2") == 0 ? "hysteria2" : (multihop ? "shadowsocks" : ""));
-    char *execution = linux_multihop_execution_choice_v1();
+    json_builder_set_member_name(builder, "multihop_exit_mode"); json_builder_add_string_value(builder, multihop ? exit_mode : "");
     json_builder_set_member_name(builder, "multihop_execution"); json_builder_add_string_value(builder, multihop ? execution : "");
-    g_free(execution);
     json_builder_end_object(builder);
     JsonNode *root = json_builder_get_root(builder);
     JsonGenerator *gen = json_generator_new();
@@ -196,6 +194,27 @@ static gboolean linux_profile_mutation_busy_v11(void) {
     return busy;
 }
 
+typedef struct {
+    GtkWidget *dialog, *name, *saved, *multi, *entry, *exit, *mode, *execution;
+    gboolean busy;
+} LinuxProfileEditorV22;
+
+static void linux_profile_editor_changed_v22(GtkWidget *widget, gpointer data) {
+    (void)widget;
+    LinuxProfileEditorV22 *editor = data;
+    const char *entry = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->entry));
+    const char *exit = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->exit));
+    const char *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->mode));
+    const char *execution = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->execution));
+    gboolean multihop = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(editor->multi));
+    gboolean valid = !editor->busy && gtk_entry_get_text(GTK_ENTRY(editor->name))[0] &&
+        (!multihop || (entry != NULL && entry[0] && exit != NULL && exit[0] && g_strcmp0(entry, exit) != 0 &&
+            linux_multihop_exit_supported_v22(mode) && linux_multihop_execution_supported_v22(execution)));
+    const char *saved = gtk_combo_box_get_active_id(GTK_COMBO_BOX(editor->saved));
+    gtk_widget_set_sensitive(gtk_dialog_get_widget_for_response(GTK_DIALOG(editor->dialog), 2), valid);
+    gtk_widget_set_sensitive(gtk_dialog_get_widget_for_response(GTK_DIALOG(editor->dialog), 3), valid && saved != NULL && saved[0]);
+}
+
 static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     (void)button;
     LinuxUnifiedV8 *state = data;
@@ -227,13 +246,16 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     GtkWidget *entry = gtk_combo_box_text_new();
     GtkWidget *exit = gtk_combo_box_text_new();
     GtkWidget *mode = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode), "shadowsocks", "Shadowsocks exit");
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(mode), "hysteria2", "Hysteria2 exit");
-    gtk_combo_box_set_active_id(GTK_COMBO_BOX(mode), g_strcmp0(staged_mode, "hysteria2") == 0 ? "hysteria2" : "shadowsocks");
+    linux_multihop_exit_choices_v22(mode, staged_mode);
+    GtkWidget *execution = gtk_combo_box_text_new();
+    char *staged_execution = linux_multihop_execution_choice_v1();
+    linux_multihop_execution_choices_v22(execution, staged_execution);
+    g_free(staged_execution);
     linux_profile_populate_nodes_v11(entry, exit, staged_entry, staged_exit);
     profile_settings_grid_row_v7(grid, 0, "Entry", entry);
     profile_settings_grid_row_v7(grid, 1, "Exit", exit);
     profile_settings_grid_row_v7(grid, 2, "Exit transport", mode);
+    profile_settings_grid_row_v7(grid, 3, "Execution", execution);
     gtk_box_pack_start(GTK_BOX(box), grid, FALSE, FALSE, 0);
     GtkWidget *status = gtk_label_new("Choose Add/Load/Update/Delete. Connect remains separate.");
     gtk_label_set_xalign(GTK_LABEL(status), 0.0f);
@@ -249,11 +271,17 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
     gtk_widget_set_sensitive(entry, !mutation_busy);
     gtk_widget_set_sensitive(exit, !mutation_busy);
     gtk_widget_set_sensitive(mode, !mutation_busy);
+    gtk_widget_set_sensitive(execution, !mutation_busy);
     for (int response_id = 1; response_id <= 4; response_id++) {
         GtkWidget *response_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), response_id);
         if (response_button != NULL) gtk_widget_set_sensitive(response_button, !mutation_busy);
     }
     if (mutation_busy) gtk_label_set_text(GTK_LABEL(status), "Disconnect Router VPN or let the active transition finish before Add / Load / Update / Delete.");
+    LinuxProfileEditorV22 editor = {dialog, name, saved, multi, entry, exit, mode, execution, mutation_busy};
+    GtkWidget *selection_controls[] = {name, saved, entry, exit, mode, execution};
+    for (guint i = 0; i < G_N_ELEMENTS(selection_controls); i++) g_signal_connect(selection_controls[i], "changed", G_CALLBACK(linux_profile_editor_changed_v22), &editor);
+    g_signal_connect(multi, "toggled", G_CALLBACK(linux_profile_editor_changed_v22), &editor);
+    linux_profile_editor_changed_v22(NULL, &editor);
 
     for (;;) {
         int response = gtk_dialog_run(GTK_DIALOG(dialog));
@@ -265,6 +293,8 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
             gtk_widget_set_sensitive(entry, FALSE);
             gtk_widget_set_sensitive(exit, FALSE);
             gtk_widget_set_sensitive(mode, FALSE);
+            gtk_widget_set_sensitive(execution, FALSE);
+            editor.busy = TRUE;
             for (int response_id = 1; response_id <= 4; response_id++) {
                 GtkWidget *response_button = gtk_dialog_get_widget_for_response(GTK_DIALOG(dialog), response_id);
                 if (response_button != NULL) gtk_widget_set_sensitive(response_button, FALSE);
@@ -278,6 +308,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
         const char *entry_id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(entry));
         const char *exit_id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(exit));
         const char *exit_mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(mode));
+        const char *execution_id = gtk_combo_box_get_active_id(GTK_COMBO_BOX(execution));
         Buffer out = {0};
         char *err = NULL;
         char *body = NULL;
@@ -293,7 +324,8 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
         } else {
             if (profile_name == NULL || profile_name[0] == '\0') { gtk_label_set_text(GTK_LABEL(status), "Enter a profile name."); continue; }
             if (response == 3 && (id == NULL || !id[0])) { gtk_label_set_text(GTK_LABEL(status), "Select a profile to update."); continue; }
-            body = linux_profile_setup_body_v11(state, profile_name, response == 3 ? id : NULL, on, entry_id, exit_id, exit_mode);
+            body = linux_profile_setup_body_v11(state, profile_name, response == 3 ? id : NULL, on, entry_id, exit_id, exit_mode, execution_id);
+            if (body == NULL) { gtk_label_set_text(GTK_LABEL(status), "Choose two different linked nodes, a supported exit transport and Local, Server or Compare both."); continue; }
             path = response == 3 ? "/api/connection-profile/setup/update" : "/api/connection-profile/setup/save";
         }
         if (api_request(path, "POST", body, 15000, &out, &err)) {
@@ -312,6 +344,10 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                     linux_profile_store_selection_v11(loaded_on, loaded_entry, loaded_exit, loaded_exit_mode);
                     linux_multihop_store_execution_v1(obj_string(obj, "multihop_execution"));
                     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->multihop), loaded_on);
+                    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(multi), loaded_on);
+                    linux_profile_populate_nodes_v11(entry, exit, loaded_entry, loaded_exit);
+                    linux_multihop_exit_choices_v22(mode, loaded_on ? loaded_exit_mode : "shadowsocks");
+                    linux_multihop_select_preserving_v22(execution, obj_string(obj, "multihop_execution"));
                     linux_unified_refresh_mode_combo_v8(state);
                     linux_unified_refresh_v8(state);
                     gtk_label_set_text(GTK_LABEL(status), "Loaded exact choices. Connect separately to establish and prove the real path.");
@@ -325,6 +361,7 @@ static void linux_profile_manager_v11(GtkButton *button, gpointer data) {
                 gtk_label_set_text(GTK_LABEL(status), "Deleted reusable profile; linked nodes were not removed.");
             } else {
                 linux_profile_store_selection_v11(on, entry_id, exit_id, exit_mode);
+                if (on) linux_multihop_store_execution_v1(execution_id);
                 gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(state->multihop), on);
                 linux_profile_populate_saved_v11(saved);
                 gtk_label_set_text(GTK_LABEL(status), response == 3 ? "Updated exact setup." : "Added exact setup.");
@@ -388,11 +425,22 @@ static void linux_profile_connect_v11(GtkButton *button, gpointer data) {
         linux_unified_connect_v8(button, data);
         return;
     }
+    char *execution = linux_multihop_execution_choice_v1();
+    if (!linux_multihop_exit_supported_v22(mode) || !linux_multihop_execution_supported_v22(execution)) {
+        append_diag(state->app, "The saved multihop exit transport or execution is unavailable. Choose supported values in Profiles before connecting.");
+        g_free(entry); g_free(exit); g_free(mode); g_free(execution);
+        return;
+    }
+    if (!routervpn_require_mutation_idle(state->app, "connecting a saved multihop profile")) {
+        g_free(entry); g_free(exit); g_free(mode); g_free(execution);
+        return;
+    }
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "entry_id"); json_builder_add_string_value(builder, entry);
     json_builder_set_member_name(builder, "exit_id"); json_builder_add_string_value(builder, exit);
-    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, g_strcmp0(mode, "hysteria2") == 0 ? "hysteria2" : "shadowsocks");
+    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode);
+    json_builder_set_member_name(builder, "execution"); json_builder_add_string_value(builder, execution);
     json_builder_end_object(builder);
     JsonNode *root = json_builder_get_root(builder);
     JsonGenerator *gen = json_generator_new();
@@ -403,7 +451,7 @@ static void linux_profile_connect_v11(GtkButton *button, gpointer data) {
     g_object_unref(gen);
     json_node_free(root);
     g_object_unref(builder);
-    g_free(entry); g_free(exit); g_free(mode);
+    g_free(entry); g_free(exit); g_free(mode); g_free(execution);
 }
 
 static void linux_install_connection_profiles_v11(App *app) {

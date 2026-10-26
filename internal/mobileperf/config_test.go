@@ -522,3 +522,65 @@ func TestNaiveCoverTraversesTheCompleteCapturedCompositeEntry(t *testing.T) {
 		}
 	}
 }
+
+func TestNaiveCoverCapturedBootstrapUsesTheSameLowerOwner(t *testing.T) {
+	for _, mode := range []string{"naive-h2", "naive-h3"} {
+		for _, layer := range []string{"", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
+			for _, fault := range []string{"none", "missing", "duplicate", "wrong-lower", "physical-bypass", "child-bypass", "self-recursion", "tree-recursion", "missing-host-bootstrap", "system-resolver", "query-dial-option", "query-strategy"} {
+				t.Run(mode+"/"+layer+"/"+fault, func(t *testing.T) {
+					root, entry, exit, _ := naiveCoverFixture(t, mode, "exit", layer, "")
+					transport := root["outbounds"].([]any)[0].(map[string]any)
+					lower := transport["detour"]
+					query := map[string]any{"server": "captured-bootstrap", "strategy": "ipv4_only", "disable_cache": true}
+					transport["domain_resolver"] = query
+					bootstrap := map[string]any{"type": "https", "tag": "captured-bootstrap", "server": "selected-resolver.example", "server_port": float64(4443), "path": "/selected-query", "tls": map[string]any{"enabled": true, "server_name": "selected-certificate.example"}, "detour": lower, "domain_resolver": map[string]any{"server": "captured-literal"}}
+					leaf := map[string]any{"type": "udp", "tag": "captured-literal", "server": "10.77.0.53", "detour": lower}
+					servers := []any{map[string]any{"type": "udp", "tag": "selected", "server": "10.88.0.53", "detour": "proxy"}, bootstrap, leaf}
+					root["dns"] = map[string]any{"servers": servers, "final": "selected"}
+					switch fault {
+					case "missing":
+						query["server"] = "absent"
+					case "duplicate":
+						root["dns"].(map[string]any)["servers"] = append(servers, bootstrap)
+					case "wrong-lower":
+						bootstrap["detour"] = "proxy"
+					case "physical-bypass":
+						delete(bootstrap, "detour")
+					case "child-bypass":
+						delete(leaf, "detour")
+					case "self-recursion":
+						bootstrap["domain_resolver"] = query
+					case "tree-recursion":
+						leaf["domain_resolver"] = query
+					case "missing-host-bootstrap":
+						delete(bootstrap, "domain_resolver")
+					case "system-resolver":
+						leaf["type"] = "local"
+					case "query-dial-option":
+						query["detour"] = "direct"
+					case "query-strategy":
+						query["strategy"] = "ordinary-network"
+					}
+					before := jsonText(root)
+					compiled, err := compilePerf(root, entry, exit)
+					if fault != "none" {
+						if err == nil {
+							t.Fatal("unowned or recursive captured DNS granted cover", fault)
+						}
+					} else {
+						if err != nil || jsonText(compiled["dns"]) != jsonText(root["dns"]) || jsonText(compiled["outbounds"]) != jsonText(root["outbounds"]) {
+							t.Fatal("captured resolver, TLS, path or UDP transport was replaced", err)
+						}
+						again, err := compilePerf(compiled, entry, exit)
+						if err != nil || jsonText(again) != jsonText(compiled) {
+							t.Fatal("captured DNS is not reusable for retained multihop", err)
+						}
+					}
+					if jsonText(root) != before {
+						t.Fatal("performance validation rewrote captured policy")
+					}
+				})
+			}
+		}
+	}
+}

@@ -1,3 +1,5 @@
+#include "routervpn-multihop-choices-v22.inc"
+
 typedef struct {
     char *id;
     char *name;
@@ -15,6 +17,9 @@ typedef struct {
     GtkWidget *exit;
     GtkWidget *mode;
     GtkWidget *summary;
+    GtkWidget *connect;
+    JsonArray *exit_modes;
+    gboolean platform_supported;
     GPtrArray *nodes;
     int pick_role;
 } LinuxMultihopDialogV7;
@@ -39,6 +44,15 @@ static LinuxMultihopNodeV7 *linux_multihop_find_v7(LinuxMultihopDialogV7 *state,
 static void linux_multihop_map_point_v7(GtkAllocation *allocation, LinuxMultihopNodeV7 *node, double *x, double *y) {
     *x = (node->longitude + 180.0) / 360.0 * allocation->width;
     *y = (90.0 - node->latitude) / 180.0 * allocation->height;
+}
+
+static gboolean linux_multihop_can_connect_v22(LinuxMultihopDialogV7 *state) {
+    const char *entry = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry));
+    const char *exit = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->exit));
+    const char *mode = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->mode));
+    return state->platform_supported && linux_multihop_find_v7(state, entry) != NULL &&
+        linux_multihop_find_v7(state, exit) != NULL && g_strcmp0(entry, exit) != 0 &&
+        linux_multihop_exit_advertised_v22(state->exit_modes, mode);
 }
 
 static gboolean linux_multihop_draw_v7(GtkWidget *widget, cairo_t *cr, gpointer data) {
@@ -122,6 +136,7 @@ static void linux_multihop_update_summary_v7(LinuxMultihopDialogV7 *state, const
         g_string_append(text, "Choose two different nodes. Map markers can assign Entry or Exit when real coordinates exist.");
     }
     gtk_label_set_text(GTK_LABEL(state->summary), text->str);
+    if (state->connect != NULL) gtk_widget_set_sensitive(state->connect, linux_multihop_can_connect_v22(state) && !linux_async_busy_v16(state->app));
     g_string_free(text, TRUE);
     gtk_widget_queue_draw(state->map);
 }
@@ -172,6 +187,8 @@ static void linux_multihop_pick_exit_v7(GtkButton *button, gpointer data) {
 static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
     Buffer out = {0};
     char *err = NULL;
+    state->platform_supported = FALSE;
+    if (state->connect != NULL) gtk_widget_set_sensitive(state->connect, FALSE);
     if (!api_request("/api/multihop/status", "GET", NULL, 5000, &out, &err)) {
         gtk_label_set_text(GTK_LABEL(state->summary), err != NULL ? err : "Multihop status unavailable.");
         g_free(err); free(out.data); return;
@@ -183,6 +200,9 @@ static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
         g_free(err); free(out.data); return;
     }
     JsonObject *obj = json_node_get_object(root);
+    g_clear_pointer(&state->exit_modes, json_array_unref);
+    JsonNode *exit_modes = json_object_get_member(obj, "supported_exit_modes");
+    if (exit_modes != NULL && JSON_NODE_HOLDS_ARRAY(exit_modes)) state->exit_modes = json_array_ref(json_node_get_array(exit_modes));
     char *old_entry = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->entry)));
     char *old_exit = g_strdup(gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->exit)));
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(state->entry));
@@ -221,6 +241,7 @@ static void linux_multihop_refresh_v7(LinuxMultihopDialogV7 *state) {
     else if (state->nodes->len > 1) gtk_combo_box_set_active(GTK_COMBO_BOX(state->exit), 1);
 
     gboolean supported = json_object_has_member(obj, "platform_supported") && json_object_get_boolean_member(obj, "platform_supported");
+    state->platform_supported = supported;
     gboolean connected = json_object_has_member(obj, "connected") && json_object_get_boolean_member(obj, "connected");
     const char *actual_exit = obj_string(obj, "actual_exit_id");
     const char *runtime_mode = obj_string(obj, "runtime_exit_mode");
@@ -250,11 +271,14 @@ static void linux_multihop_connect_v7(GtkButton *button, gpointer data) {
     if (g_strcmp0(entry, exit) == 0) {
         linux_multihop_update_summary_v7(state, "Entry and exit must be different nodes."); return;
     }
+    if (!linux_multihop_can_connect_v22(state)) {
+        linux_multihop_update_summary_v7(state, "Select a supported exit transport and two currently linked nodes; refresh if capabilities changed."); return;
+    }
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
     json_builder_set_member_name(builder, "entry_id"); json_builder_add_string_value(builder, entry);
     json_builder_set_member_name(builder, "exit_id"); json_builder_add_string_value(builder, exit);
-    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode != NULL ? mode : "shadowsocks");
+    json_builder_set_member_name(builder, "exit_mode"); json_builder_add_string_value(builder, mode);
     json_builder_end_object(builder);
     JsonNode *payload_root = json_builder_get_root(builder);
     JsonGenerator *gen = json_generator_new();
@@ -292,9 +316,7 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
 
     GtkWidget *grid = gtk_grid_new(); gtk_grid_set_row_spacing(GTK_GRID(grid), 7); gtk_grid_set_column_spacing(GTK_GRID(grid), 10);
     state.entry = gtk_combo_box_text_new(); state.exit = gtk_combo_box_text_new(); state.mode = gtk_combo_box_text_new();
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode), "shadowsocks", "Shadowsocks exit");
-    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.mode), "hysteria2", "Hysteria2 exit");
-    gtk_combo_box_set_active(GTK_COMBO_BOX(state.mode), 0);
+    linux_multihop_exit_choices_v22(state.mode, "shadowsocks");
     profile_settings_grid_row_v7(grid, 0, "Entry node", state.entry);
     profile_settings_grid_row_v7(grid, 1, "Exit node", state.exit);
     profile_settings_grid_row_v7(grid, 2, "Exit transport", state.mode);
@@ -304,7 +326,8 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(pick), make_button("Pick Entry on map", G_CALLBACK(linux_multihop_pick_entry_v7), &state), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(pick), make_button("Pick Exit on map", G_CALLBACK(linux_multihop_pick_exit_v7), &state), FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(pick), make_button("Refresh multihop", G_CALLBACK(linux_multihop_refresh_button_v7), &state), FALSE, FALSE, 0);
-    gtk_box_pack_start(GTK_BOX(pick), make_button("Connect real multihop", G_CALLBACK(linux_multihop_connect_v7), &state), FALSE, FALSE, 0);
+    state.connect = make_button("Connect real multihop", G_CALLBACK(linux_multihop_connect_v7), &state);
+    gtk_box_pack_start(GTK_BOX(pick), state.connect, FALSE, FALSE, 0);
     gtk_box_pack_start(GTK_BOX(box), pick, FALSE, FALSE, 0);
 
     state.map = gtk_drawing_area_new(); gtk_widget_set_size_request(state.map, -1, 300);
@@ -317,12 +340,14 @@ static void on_linux_multihop_v7(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(box), state.summary, FALSE, FALSE, 0);
     g_signal_connect(state.entry, "changed", G_CALLBACK(linux_multihop_combo_changed_v7), &state);
     g_signal_connect(state.exit, "changed", G_CALLBACK(linux_multihop_combo_changed_v7), &state);
+    g_signal_connect(state.mode, "changed", G_CALLBACK(linux_multihop_combo_changed_v7), &state);
     gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
     linux_multihop_refresh_v7(&state);
     gtk_widget_show_all(state.dialog);
     gtk_dialog_run(GTK_DIALOG(state.dialog));
     gtk_widget_destroy(state.dialog);
     g_ptr_array_unref(state.nodes);
+    g_clear_pointer(&state.exit_modes, json_array_unref);
 }
 
 static GtkWidget *profile_settings_combo_v7(const char *const labels[], const char *const ids[], guint count, const char *selected) {

@@ -13,6 +13,9 @@ typedef struct {
     GtkWidget *execution;
     JsonNode *options;
     gboolean updating_choices;
+    gboolean path_invalid;
+    gboolean staged_multihop;
+    char *staged_entry, *staged_exit, *staged_exit_mode, *staged_execution;
     GtkWidget *layers;
     GtkWidget *duration_mode;
     GtkWidget *min_time;
@@ -133,6 +136,8 @@ static void linux_speed_lab_destroy_v12(GtkWidget *widget, gpointer data) {
     if (s->worker != NULL) { g_thread_join(s->worker); s->worker = NULL; }
     linux_speed_lab_release_request_v12(s);
     g_clear_pointer(&s->options, json_node_free);
+    g_clear_pointer(&s->staged_entry, g_free); g_clear_pointer(&s->staged_exit, g_free);
+    g_clear_pointer(&s->staged_exit_mode, g_free); g_clear_pointer(&s->staged_execution, g_free);
 }
 
 static const char *linux_speed_lab_active_id_v12(GtkWidget *combo) {
@@ -210,6 +215,18 @@ static gboolean linux_speed_lab_apply_options_v12(LinuxSpeedLabV12 *s) {
     JsonObject *selected=linux_speed_lab_find_v19(s,"nodes",linux_speed_lab_active_id_v12(s->node));
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(s->topology),strcmp(linux_speed_lab_kind_v19(selected),"external")==0?"external":linux_speed_lab_flag_v19(selected,"multihop_enabled")?"multihop":"router");
     s->updating_choices=FALSE; linux_speed_lab_defaults_v19(s);
+    /* Capture the loaded whole-connection profile once when opening the form.
+     * Temporary edits never overwrite that durable selection or reread a newer
+     * profile while an asynchronous options request is completing. */
+    if (s->staged_multihop && strcmp(linux_speed_lab_kind_v19(selected), "router-vpn") == 0) {
+        s->updating_choices = TRUE;
+        linux_speed_lab_select_v19(s->topology, "multihop");
+        linux_speed_lab_select_v19(s->entry, s->staged_entry);
+        linux_speed_lab_select_v19(s->exit, s->staged_exit);
+        linux_speed_lab_select_v19(s->exit_mode, s->staged_exit_mode);
+        linux_speed_lab_select_v19(s->execution, s->staged_execution);
+        s->updating_choices = FALSE;
+    }
     json_node_free(root); return TRUE;
 }
 
@@ -237,6 +254,11 @@ static void linux_speed_lab_refresh_controls_v12(GtkComboBox *ignored, gpointer 
     gtk_widget_set_sensitive(s->mode,temporary&&strcmp(top,"router")==0);
     gtk_widget_set_sensitive(s->base,temporary&&(strcmp(top,"router")==0||strcmp(top,"multihop")==0));
     gboolean custom_time=strcmp(linux_speed_lab_active_id_v12(s->duration_mode),"custom")==0; gtk_widget_set_sensitive(s->min_time,custom_time); gtk_widget_set_sensitive(s->max_time,custom_time);
+    const char *error = linux_speed_lab_path_error_v19(s);
+    gtk_widget_set_sensitive(s->run, error == NULL);
+    if (error != NULL) gtk_label_set_text(GTK_LABEL(s->status), error);
+    else if (s->path_invalid) gtk_label_set_text(GTK_LABEL(s->status), "Ready. The selected path will be captured and proved before testing.");
+    s->path_invalid = error != NULL;
 }
 
 static void linux_speed_lab_time_v12(GtkRange *ignored, gpointer data) {
@@ -409,16 +431,19 @@ static void linux_speed_lab_run_v12(GtkButton *button, gpointer data) {
 static GtkWidget *linux_speed_lab_grid_label_v12(const char*text){GtkWidget*w=gtk_label_new(text);gtk_label_set_xalign(GTK_LABEL(w),0.0f);return w;}
 
 static void linux_speed_lab_open_v12(GtkButton *button,gpointer data){
-    (void)button;App*app=data;if(app==NULL)return;LinuxSpeedLabV12*s=g_new0(LinuxSpeedLabV12,1);s->app=app;s->dialog=gtk_dialog_new_with_buttons("Router VPN Speed Lab",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);gtk_window_set_default_size(GTK_WINDOW(s->dialog),900,690);
+    (void)button;App*app=data;if(app==NULL)return;LinuxSpeedLabV12*s=g_new0(LinuxSpeedLabV12,1);s->app=app;
+    linux_profile_selection_v11(&s->staged_multihop, &s->staged_entry, &s->staged_exit, &s->staged_exit_mode);
+    s->staged_execution = linux_multihop_execution_choice_v1();
+    s->dialog=gtk_dialog_new_with_buttons("Router VPN Speed Lab",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);gtk_window_set_default_size(GTK_WINDOW(s->dialog),900,690);
     GtkWidget*area=gtk_dialog_get_content_area(GTK_DIALOG(s->dialog)),*root=gtk_box_new(GTK_ORIENTATION_VERTICAL,10);gtk_container_set_border_width(GTK_CONTAINER(root),16);GtkWidget*title=gtk_label_new(NULL);gtk_label_set_markup(GTK_LABEL(title),"<span size='xx-large' weight='bold'>Router VPN Speed Lab</span>\nReal HTTPS Mbps with idle, download-loaded and upload-loaded latency. Current path is default; Temporary builds and restores a test-only graph.");gtk_label_set_line_wrap(GTK_LABEL(title),TRUE);gtk_label_set_xalign(GTK_LABEL(title),0.0f);gtk_box_pack_start(GTK_BOX(root),title,FALSE,FALSE,0);
     GtkWidget*cards=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("IDLE LATENCY",&s->idle,&s->idle_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("DOWNLOAD",&s->download,&s->download_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("UPLOAD",&s->upload,&s->upload_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(root),cards,FALSE,FALSE,0);
-    const char*scope_ids[]={"current","temporary"},*scope_labels[]={"Current path","Temporary config"};s->scope=linux_speed_lab_combo_v12(scope_ids,scope_labels,2);const char*top_ids[]={"system-direct","router","multihop","external"},*top_labels[]={"System direct","Router VPN node","Multihop","External exit / hop"};s->topology=linux_speed_lab_combo_v12(top_ids,top_labels,4);gtk_combo_box_set_active(GTK_COMBO_BOX(s->topology),1);s->node=gtk_combo_box_text_new();s->entry=gtk_combo_box_text_new();s->exit=gtk_combo_box_text_new();s->mode=gtk_combo_box_text_new();s->entry_mode=gtk_combo_box_text_new();s->execution=gtk_combo_box_text_new();const char*base_ids[]={"auto","wg","awg"},*base_labels[]={"Auto","WireGuard","AmneziaWG"};s->base=linux_speed_lab_combo_v12(base_ids,base_labels,3);const char*exit_ids[]={"shadowsocks","hysteria2"},*exit_labels[]={"Shadowsocks","Hysteria2"};s->exit_mode=linux_speed_lab_combo_v12(exit_ids,exit_labels,2);s->layers=gtk_entry_new();gtk_entry_set_placeholder_text(GTK_ENTRY(s->layers),"CUSTOM layers, comma-separated");
+    const char*scope_ids[]={"current","temporary"},*scope_labels[]={"Current path","Temporary config"};s->scope=linux_speed_lab_combo_v12(scope_ids,scope_labels,2);const char*top_ids[]={"system-direct","router","multihop","external"},*top_labels[]={"System direct","Router VPN node","Multihop","External exit / hop"};s->topology=linux_speed_lab_combo_v12(top_ids,top_labels,4);gtk_combo_box_set_active(GTK_COMBO_BOX(s->topology),1);s->node=gtk_combo_box_text_new();s->entry=gtk_combo_box_text_new();s->exit=gtk_combo_box_text_new();s->mode=gtk_combo_box_text_new();s->entry_mode=gtk_combo_box_text_new();s->execution=gtk_combo_box_text_new();const char*base_ids[]={"auto","wg","awg"},*base_labels[]={"Auto","WireGuard","AmneziaWG"};s->base=linux_speed_lab_combo_v12(base_ids,base_labels,3);s->exit_mode=gtk_combo_box_text_new();linux_multihop_exit_choices_v22(s->exit_mode,"shadowsocks");s->layers=gtk_entry_new();gtk_entry_set_placeholder_text(GTK_ENTRY(s->layers),"CUSTOM layers, comma-separated");
     GtkWidget*grid=gtk_grid_new();gtk_grid_set_row_spacing(GTK_GRID(grid),6);gtk_grid_set_column_spacing(GTK_GRID(grid),8);GtkWidget*labels[]={linux_speed_lab_grid_label_v12("Test"),linux_speed_lab_grid_label_v12("Topology"),linux_speed_lab_grid_label_v12("Mode"),linux_speed_lab_grid_label_v12("Node / exit"),linux_speed_lab_grid_label_v12("Entry"),linux_speed_lab_grid_label_v12("Exit"),linux_speed_lab_grid_label_v12("Base"),linux_speed_lab_grid_label_v12("Exit transport"),linux_speed_lab_grid_label_v12("CUSTOM layers")};GtkWidget*widgets[]={s->scope,s->topology,s->mode,s->node,s->entry,s->exit,s->base,s->exit_mode,s->layers};for(int i=0;i<9;i++){int row=i/3,col=(i%3)*2;gtk_grid_attach(GTK_GRID(grid),labels[i],col,row,1,1);gtk_grid_attach(GTK_GRID(grid),widgets[i],col+1,row,1,1);gtk_widget_set_hexpand(widgets[i],TRUE);}gtk_grid_attach(GTK_GRID(grid),linux_speed_lab_grid_label_v12("Entry mode"),0,3,1,1);gtk_grid_attach(GTK_GRID(grid),s->entry_mode,1,3,1,1);gtk_grid_attach(GTK_GRID(grid),linux_speed_lab_grid_label_v12("Execution"),2,3,1,1);gtk_grid_attach(GTK_GRID(grid),s->execution,3,3,1,1);gtk_widget_set_tooltip_text(s->execution,"Server and Compare both require a Router entry, this exit's response probe, and separate packet/OpenVPN pairing. The controller proves the exact path before testing.");gtk_box_pack_start(GTK_BOX(root),grid,FALSE,FALSE,0);
     const char*duration_ids[]={"auto","custom"},*duration_labels[]={"Auto timing","Custom timing"};s->duration_mode=linux_speed_lab_combo_v12(duration_ids,duration_labels,2);s->min_label=gtk_label_new("Min 4 s");s->max_label=gtk_label_new("Max 12 s");s->min_time=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,1,60,1);s->max_time=gtk_scale_new_with_range(GTK_ORIENTATION_HORIZONTAL,1,60,1);gtk_range_set_value(GTK_RANGE(s->min_time),4);gtk_range_set_value(GTK_RANGE(s->max_time),12);GtkWidget*time_row=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);gtk_box_pack_start(GTK_BOX(time_row),s->duration_mode,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(time_row),s->min_label,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(time_row),s->min_time,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(time_row),s->max_label,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(time_row),s->max_time,TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(root),time_row,FALSE,FALSE,0);
     GtkWidget*flags=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,10);s->daita=gtk_check_button_new_with_label("DAITA-like");s->jumbo=gtk_check_button_new_with_label("Jumbo");s->encrypted=gtk_check_button_new_with_label("Require encrypted AUTO");s->obfuscated=gtk_check_button_new_with_label("Require obfuscation AUTO");gtk_box_pack_start(GTK_BOX(flags),s->daita,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(flags),s->jumbo,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(flags),s->encrypted,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(flags),s->obfuscated,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(root),flags,FALSE,FALSE,0);
     GtkWidget*scroll=gtk_scrolled_window_new(NULL,NULL);gtk_widget_set_vexpand(scroll,TRUE);s->detail=gtk_text_view_new();gtk_text_view_set_editable(GTK_TEXT_VIEW(s->detail),FALSE);gtk_text_view_set_monospace(GTK_TEXT_VIEW(s->detail),TRUE);gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),"Ready. Temporary tests capture and restore the complete connected path, including its proved execution choice.",-1);gtk_container_add(GTK_CONTAINER(scroll),s->detail);gtk_box_pack_start(GTK_BOX(root),scroll,TRUE,TRUE,0);
     GtkWidget*actions=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);s->status=gtk_label_new("Cloudflare Speed Test edge • no Mbps derived from RTT");gtk_label_set_xalign(GTK_LABEL(s->status),0.0f);s->run=gtk_button_new_with_label("Run Speed Lab");gtk_box_pack_start(GTK_BOX(actions),s->status,TRUE,TRUE,0);gtk_box_pack_end(GTK_BOX(actions),s->run,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(root),actions,FALSE,FALSE,0);gtk_box_pack_start(GTK_BOX(area),root,TRUE,TRUE,0);
-    g_signal_connect(s->scope,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->topology,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->node,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->entry,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->duration_mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->min_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->max_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->run,"clicked",G_CALLBACK(linux_speed_lab_run_v12),s);
+    g_signal_connect(s->scope,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->topology,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->node,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->entry,"changed",G_CALLBACK(linux_speed_lab_path_changed_v19),s);g_signal_connect(s->mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->exit,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->exit_mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->entry_mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->execution,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->duration_mode,"changed",G_CALLBACK(linux_speed_lab_refresh_controls_v12),s);g_signal_connect(s->min_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->max_time,"value-changed",G_CALLBACK(linux_speed_lab_time_v12),s);g_signal_connect(s->run,"clicked",G_CALLBACK(linux_speed_lab_run_v12),s);
     g_object_set_data(G_OBJECT(s->dialog), "linux-speed-lab-v12", s);
     g_signal_connect(s->dialog, "destroy", G_CALLBACK(linux_speed_lab_destroy_v12), s);
     gtk_widget_show_all(s->dialog);

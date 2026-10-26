@@ -46,10 +46,22 @@ static gboolean linux_async_probe_v16(gpointer data) {
         GtkWidget *mtu = linux_telemetry_find_button_v9(p->base->stack, "Retest MTU");
         if (mtu == NULL) { p->failure = 7; goto finish; }
         gtk_button_clicked(GTK_BUTTON(mtu));
-        if (s->primary == NULL || s->primary->connecting) { p->failure = 8; goto finish; }
+        LinuxMTUV20 *owner = g_object_get_data(G_OBJECT(p->app->window), "router-vpn-mtu-v20");
+        if (owner == NULL || owner->dialog == NULL || s->primary != NULL ||
+            gtk_window_get_modal(GTK_WINDOW(owner->dialog))) { p->failure = 8; goto finish; }
         p->stage = 5; p->beats = 0;
-    } else if (p->stage == 5 && p->beats >= 6) {
-        printf("Linux actual map action: MTU request remained responsive before window close: PASS\n");
+    } else if (p->stage == 5) {
+        LinuxMTUV20 *owner = g_object_get_data(G_OBJECT(p->app->window), "router-vpn-mtu-v20");
+        if (owner == NULL || owner->retired) { p->failure = 8; goto finish; }
+        if (!gtk_widget_get_sensitive(owner->retest)) return G_SOURCE_CONTINUE;
+        gtk_button_clicked(GTK_BUTTON(owner->retest));
+        if (owner->jobs[LINUX_MTU_RUN_V20] == NULL || !owner->own || owner->session == NULL ||
+            owner->profile == NULL || owner->request == NULL || s->primary != NULL) { p->failure = 8; goto finish; }
+        p->stage = 6; p->beats = 0;
+    } else if (p->stage == 6 && p->beats >= 6) {
+        LinuxMTUV20 *owner = g_object_get_data(G_OBJECT(p->app->window), "router-vpn-mtu-v20");
+        if (owner == NULL || owner->jobs[LINUX_MTU_RUN_V20] == NULL || owner->run_done) { p->failure = 8; goto finish; }
+        printf("Linux actual map action: captured MTU request remained responsive before parent close: PASS\n");
         goto finish;
     }
     return G_SOURCE_CONTINUE;

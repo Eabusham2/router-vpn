@@ -81,6 +81,8 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     private let runButton = NSButton(title: "Run Speed Lab", target: nil, action: nil)
     private var nodes: [[String: Any]] = []
     private var entryModes: [[String: Any]] = []
+    private var exitModes: [String] = []
+    private var currentPath: [String: Any] = [:]
     private var executions: [[String: Any]] = []
     private var updatingChoices = false
     private var optionsReady = false
@@ -143,7 +145,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         scope.addItems(withTitles: ["Current path", "Temporary config"]); scope.item(at: 0)?.representedObject = "current"; scope.item(at: 1)?.representedObject = "temporary"
         topology.addItems(withTitles: ["System direct", "Router VPN node", "Multihop", "External exit / hop"]); for (i, value) in ["system-direct","router","multihop","external"].enumerated() { topology.item(at: i)?.representedObject = value }; topology.selectItem(at: 1)
         base.addItems(withTitles: ["Auto", "WireGuard", "AmneziaWG"]); for (i, value) in ["auto","wg","awg"].enumerated() { base.item(at: i)?.representedObject = value }
-        exitMode.addItems(withTitles: ["Shadowsocks", "Hysteria2"]); exitMode.item(at: 0)?.representedObject = "shadowsocks"; exitMode.item(at: 1)?.representedObject = "hysteria2"
+        for choice in RouterVPNNodeExitModes.choices { exitMode.addItem(withTitle: choice.title); exitMode.lastItem?.representedObject = choice.id }
         durationMode.addItems(withTitles: ["Auto timing", "Custom timing"]); durationMode.item(at: 0)?.representedObject = "auto"; durationMode.item(at: 1)?.representedObject = "custom"
         minTime.numberOfTickMarks = 60; minTime.allowsTickMarkValuesOnly = true; maxTime.numberOfTickMarks = 60; maxTime.allowsTickMarkValuesOnly = true
 
@@ -201,6 +203,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             let savedEntry = saved ? value["multihop_entry_id"] as? String ?? "" : ""
             selectPreserving(entry, savedEntry.isEmpty ? selected(node) : savedEntry)
             if saved, let id = value["multihop_exit_id"] as? String, !id.isEmpty { selectPreserving(exit, id) }
+            if currentPath["entry_id"] as? String == selected(entry), currentPath["exit_id"] as? String == selected(exit), let mode = currentPath["exit_mode"] as? String { selectPreserving(exitMode, mode) }
             let choice = saved ? value["multihop_execution"] as? String ?? "local" : "local"
             selectPreserving(execution, choice.isEmpty ? "local" : choice)
         }
@@ -261,6 +264,8 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                     self.updatingChoices = true
                     self.nodes = root["nodes"] as? [[String: Any]] ?? []
                     self.entryModes = root["router_vpn_entry_modes"] as? [[String: Any]] ?? []
+                    self.exitModes = root["supported_exit_modes"] as? [String] ?? []
+                    self.currentPath = root["current"] as? [String: Any] ?? [:]
                     self.executions = root["execution_choices"] as? [[String: Any]] ?? []
                     self.populate(self.node, values: self.nodes); self.populate(self.entry, values: self.nodes); self.populate(self.exit, values: self.nodes, kind: "router-vpn")
                     self.entry.insertItem(withTitle: "Direct / no entry", at: 0); self.entry.item(at: 0)?.representedObject = ""
@@ -319,7 +324,12 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             body["mode"] = selected(mode); body["base"] = selected(base)
             if selected(mode) == "custom" { body["custom_layers"] = layers.stringValue.split(separator: ",").map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty } }
         }
-        if top == "multihop" { body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution) }
+        if top == "multihop" {
+            guard exitModes.contains(selected(exitMode)) else {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select an exit transport supported by the installed runtime."])
+            }
+            body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution)
+        }
         if top == "external" {
             body["entry_id"] = selected(entry); body["execution"] = selected(execution)
             if RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn" { body["entry_mode"] = selected(entryMode) }

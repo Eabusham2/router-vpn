@@ -36,6 +36,7 @@ func TestSpeedLabOptionsKeepPrivatePairedPathDefaultsAndNativeEntryCatalog(t *te
 		Nodes      []map[string]any    `json:"nodes"`
 		EntryModes []map[string]string `json:"router_vpn_entry_modes"`
 		Executions []map[string]string `json:"execution_choices"`
+		ExitModes  []string            `json:"supported_exit_modes"`
 	}
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &options) != nil || len(options.Nodes) != 1 {
 		t.Fatal("Speed Lab options lost the captured node")
@@ -56,6 +57,9 @@ func TestSpeedLabOptionsKeepPrivatePairedPathDefaultsAndNativeEntryCatalog(t *te
 	}
 	if len(options.Executions) != 3 || options.Executions[0]["id"] != "local" || options.Executions[1]["id"] != "server" || options.Executions[2]["id"] != "auto" || options.Executions[2]["name"] != "Compare both" {
 		t.Fatal("Speed Lab execution choices changed")
+	}
+	if !reflect.DeepEqual(options.ExitModes, desktopMultihopExitModes()) {
+		t.Fatal("Speed Lab changed the complete native Router exit catalog")
 	}
 	for _, secret := range []string{profile.External.OpenVPN.Username, profile.External.OpenVPN.Password, profile.External.OpenVPNPairing.PrivateKey, `"config":`, `"openvpn_pairing":`, `"provider_identity":`, `"private_key":`, `"response_probe":`} {
 		if secret != "" && strings.Contains(response.Body.String(), secret) {

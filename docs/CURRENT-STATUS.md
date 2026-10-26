@@ -7,6 +7,27 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
+Desktop Router-to-Router multihop now accepts seven native proxy exit families:
+Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
+and Naive H3. Entry ownership remains WG/AWG. Local, Server and Compare retain
+the captured exit transport, independent node credentials, Start Layers,
+selected DNS and proof routes. Naive resolver bootstrap follows the captured
+entry; replacing an exit Start Layer with an authenticated Server lease moves
+only that layer's owned resolver edges. Windows, macOS and Linux controls,
+complete profiles and Speed Lab retain all seven IDs. Legacy Linux without the
+native runtime still advertises only its implemented two-exit helper path.
+Broader Router entry/packet/composite exit combinations remain a source gap;
+this extension does not establish full graph parity with the mobile hosts.
+
+Apple connection-profile schema 5 now captures Tor DNS, protection, LAN ranges,
+MTU/Jumbo, startup and Router-entry preferences. Add/Update and Load run the
+shipping native Tor validator, keep bridge credentials in the linked private
+node store, reject a changed imported identity and roll back failed durable
+writes. Old Tor selection-only records remain selection-only until explicit
+Update. Loading a node with default/empty LAN ranges now clears the previous
+node's ranges. The shipping-store/callback tests cover these paths; current
+Xcode, signing and device evidence remain separate.
+
 Desktop imported-node startup now uses the saved protocol and graph through
 the interactive connection path's owned runtime and proofs. The delayed attempt
 captures selection, credentials, policy and private entry assets; manual
@@ -149,8 +170,10 @@ Restoring an already configured Jumbo reader requires fresh Tor/DNS path proof
 without issuing a reader-change command. The actual child/controller and native
 Box tests cover these boundaries, while physical TUN and network acceptance
 remain separate. Virtual capacity does not assert 9000-byte packets on the
-underlying network. Router-entry/server/Compare Tor graphs, bounded padding and
-dynamic-bridge strict protection remain requirements to implement.
+underlying network. Captured Router-entry Local Tor graphs now preserve their
+private entry, selected DNS transport and independent native ownership. Tor
+Server/Compare, ordinary external predecessors, exit-side desktop Tor padding
+and dynamic-bridge strict protection remain requirements to implement.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
 AdGuard address, port, TLS name and HTTPS path. The address must belong to the

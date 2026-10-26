@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 func setupProfileTestApp(t *testing.T) *app {
@@ -232,5 +233,65 @@ func TestConnectionProfileExecutionRoundTripAndLegacyDefault(t *testing.T) {
 	r := postSetup(t, a, "/api/connection-profile/setup/save", map[string]any{"name": "Invalid", "mode": "base-raw", "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_execution": "fake"})
 	if r.Code != 400 {
 		t.Fatal("invalid execution persisted")
+	}
+}
+
+func TestConnectionProfileCompleteNativeExitModesKeepExactGraph(t *testing.T) {
+	for _, mode := range mobilemultihop.NodeMultihopExitModes() {
+		for _, execution := range []string{"local", "server", "auto"} {
+			t.Run(mode+"/"+execution, func(t *testing.T) {
+				a := setupProfileTestApp(t)
+				body := map[string]any{"name": "Exact native path", "mode": "smart-auto", "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit", "multihop_exit_mode": mode, "multihop_execution": execution}
+				saved := postSetup(t, a, "/api/connection-profile/setup/save", body)
+				if saved.Code != http.StatusOK {
+					t.Fatal(saved.Body.String())
+				}
+				var payload map[string]any
+				_ = json.Unmarshal(saved.Body.Bytes(), &payload)
+				id := payload["profile"].(map[string]any)["id"].(string)
+				body["id"], body["name"] = id, "Updated exact native path"
+				updated := postSetup(t, a, "/api/connection-profile/setup/update", body)
+				if updated.Code != http.StatusOK {
+					t.Fatal(updated.Body.String())
+				}
+				loaded := postSetup(t, a, "/api/connection-profile/setup/load", map[string]any{"id": id})
+				if loaded.Code != http.StatusOK {
+					t.Fatal(loaded.Body.String())
+				}
+				_ = json.Unmarshal(loaded.Body.Bytes(), &payload)
+				if payload["multihop_exit_mode"] != mode || payload["multihop_execution"] != execution || payload["multihop_entry_id"] != "entry" || payload["multihop_exit_id"] != "exit" || a.state.Connected {
+					t.Fatal("profile restore changed the selected native path or connected it")
+				}
+				for _, node := range a.profiles.Profiles {
+					if node.ID == "entry" && node.APIToken != "ENTRY-SECRET" || node.ID == "exit" && node.APIToken != "EXIT-SECRET" {
+						t.Fatal("profile restore mixed private credentials across nodes")
+					}
+				}
+			})
+		}
+	}
+	for _, mode := range []string{"http", "socks5", "naive", "reality", "split", "max", "wg", "openvpn"} {
+		if _, err := normalizeConnectionProfileExitMode(mode); err == nil {
+			t.Fatal("unsupported or ambiguous native exit was persisted", mode)
+		}
+	}
+}
+
+func TestConnectionProfileMultihopDoesNotReplaceMissingExitMode(t *testing.T) {
+	for _, value := range []any{nil, "", "   "} {
+		for _, updating := range []bool{false, true} {
+			body := map[string]any{"name": "Keep selected transport", "mode": "smart-auto", "multihop_enabled": true, "multihop_entry_id": "entry", "multihop_exit_id": "exit"}
+			if value != nil {
+				body["multihop_exit_mode"] = value
+			}
+			if updating {
+				body["id"] = "saved-profile"
+			}
+			raw, _ := json.Marshal(body)
+			request := httptest.NewRequest(http.MethodPost, "/api/connection-profile/setup/save", strings.NewReader(string(raw)))
+			if _, err := decodeConnectionProfileSetup(httptest.NewRecorder(), request, updating); err == nil {
+				t.Fatal("missing or unavailable UI choice silently became Shadowsocks", value, updating)
+			}
+		}
 	}
 }

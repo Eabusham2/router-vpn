@@ -37,7 +37,7 @@ public sealed class SpeedLabCombo {
 function Combo($Values,[string]$Path='id'){$C=[SpeedLabCombo]::new();$C.SelectionPath=$Path;$C.ItemsSource=@($Values);if($C.Items.Count){$C.SelectedIndex=0};return $C}
 function Tags($Values){return @($Values|ForEach-Object{[pscustomobject]@{Tag=$_}})}
 $Scope=Combo (Tags @('current','temporary')) 'Tag';$Topology=Combo (Tags @('system-direct','router','multihop','external')) 'Tag'
-$Base=Combo (Tags @('auto','wg','awg')) 'Tag';$ExitMode=Combo (Tags @('shadowsocks','hysteria2')) 'Tag';$DurationMode=Combo (Tags @('auto','custom')) 'Tag'
+$Base=Combo (Tags @('auto','wg','awg')) 'Tag';$ExitMode=Combo (Tags @($Xml.SelectNodes('//*[@Name="ExitMode"]/*')|ForEach-Object{[string]$_.Tag})) 'Tag';$DurationMode=Combo (Tags @('auto','custom')) 'Tag'
 $Mode=Combo @();$Node=Combo @();$Entry=Combo @();$Exit=Combo @();$EntryMode=Combo @();$Execution=Combo @()
 $Layers=[pscustomobject]@{Text='';IsEnabled=$false};$MinTime=[pscustomobject]@{Value=4;IsEnabled=$true};$MaxTime=[pscustomobject]@{Value=12;IsEnabled=$true}
 $Run=[pscustomobject]@{IsEnabled=$true};$Advanced=[pscustomobject]@{IsEnabled=$true};$Status=[pscustomobject]@{Text=''};$Detail=[pscustomobject]@{Text=''}
@@ -70,8 +70,14 @@ $ExitValue=SpeedLabFind 'nodes' 'exit';$ExitValue.has_response_probe=$false;Reje
 $ExitValue.has_openvpn_pairing=$false;Reject 'missing independent OpenVPN pairing';$ExitValue.has_openvpn_pairing=$true
 $Original=$SpeedLabOptions.nodes;$SpeedLabOptions.nodes=@($Original)+@($ExitValue);Reject 'duplicate exit identity';$SpeedLabOptions.nodes=$Original
 $ExitValue.multihop_entry_id='removed-entry';SetSpeedLabDefaults;Check ($Entry.SelectedValue-ceq'removed-entry') 'Unavailable saved entry silently became Direct.';Reject 'removed saved entry';$ExitValue.multihop_entry_id='entry';SetSpeedLabDefaults
-$Topology.SelectedValue='multihop';$Entry.SelectedValue='entry';$Exit.SelectedValue='exit-router'
+$Topology.SelectedValue='multihop';SpeedLabPathChanged 'topology';$Entry.SelectedValue='entry';$Exit.SelectedValue='exit-router'
 foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-'+$E)}
+Check ((@($ExitMode.Items|ForEach-Object{[string]$_.Tag})-join',')-ceq(@($SpeedLabOptions.supported_exit_modes)-join',')) 'UI and native exit catalogs differ.'
+foreach($M in @($SpeedLabOptions.supported_exit_modes)){$ExitMode.SelectedValue=$M;foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-'+$M+'-'+$E)}}
+$ExitMode.SelectedValue='removed-exit-mode';Reject 'unknown exit transport';$ExitMode.SelectedValue='naive-h3'
+$OriginalModes=$SpeedLabOptions.supported_exit_modes;$SpeedLabOptions.supported_exit_modes=@($OriginalModes|Where-Object{$_-cne'naive-h3'});Reject 'runtime unavailable exit';$SpeedLabOptions.supported_exit_modes=$OriginalModes
+$SpeedLabOptions.current=[pscustomobject]@{entry_id='entry';exit_id='exit-router';exit_mode='reality-pq-vision'};SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'reality-pq-vision') 'Matching current graph lost its exact exit mode.'
+$SpeedLabOptions.current.entry_id='different-entry';$ExitMode.SelectedValue='naive-h2';SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'naive-h2') 'Unrelated graph replaced selected exit mode.'
 $Exit.SelectedValue='entry';Reject 'identical multihop nodes';$Exit.SelectedValue='exit-router'
 $Topology.SelectedValue='system-direct';Emit 'speed-lab-system-direct'
 Write-Output ("Actual Windows Speed Lab options/defaults/Run callback: $Count checks PASS")

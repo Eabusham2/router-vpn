@@ -6,13 +6,11 @@ static char *linux_multihop_execution_choice_v1(void) {
     char *choice = g_key_file_get_string(key, "state", "multihop_execution", NULL);
     g_key_file_unref(key);
     if (choice == NULL) return g_strdup("auto");
-    if (g_strcmp0(choice,"local") != 0 && g_strcmp0(choice,"server") != 0 && g_strcmp0(choice,"auto") != 0) { g_free(choice); return g_strdup("local"); }
     return choice;
 }
 static void linux_multihop_store_execution_v1(const char *choice) {
-    const char *safe = g_strcmp0(choice,"server") == 0 ? "server" : (g_strcmp0(choice,"auto") == 0 ? "auto" : "local");
     GKeyFile *key = linux_unified_load_keyfile_v8();
-    g_key_file_set_string(key,"state","multihop_execution",safe);
+    g_key_file_set_string(key,"state","multihop_execution",choice != NULL ? choice : "");
     linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
 }
 

@@ -90,7 +90,7 @@ extension ProductWindowController {
         }
     }
 
-    private func connectionProfileSnapshot(name: String, id: String?) -> [String: Any] {
+    private func connectionProfileSnapshot(name: String, id: String?) throws -> [String: Any] {
         let mode = UserDefaults.standard.string(forKey: macConnectionModeKey) ?? "smart-auto"
         var layers: [String] = []
         if mode.hasPrefix("custom:"), let data = UserDefaults.standard.data(forKey: macConnectionCustomPresetsKey), let presets = try? JSONDecoder().decode([MacConnectionCustomPreset].self, from: data) {
@@ -104,7 +104,7 @@ extension ProductWindowController {
         let exitIndex = multihopExitPopup.indexOfSelectedItem
         let entry = multihop && entryIndex >= 0 && entryIndex < multihopNodeIDs.count ? multihopNodeIDs[entryIndex] : ""
         let exit = multihop && exitIndex >= 0 && exitIndex < multihopNodeIDs.count ? multihopNodeIDs[exitIndex] : ""
-        let exitMode = multihop ? (multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks") : ""
+        let exitMode = try (multihop ? RouterVPNNodeExitModes.require(index: multihopExitModePopup.indexOfSelectedItem) : "")
         var body: [String: Any] = [
             "name": name, "mode": mode, "custom_layers": layers,
             "multihop_enabled": multihop, "multihop_entry_id": entry,
@@ -145,8 +145,7 @@ extension ProductWindowController {
         refreshUnifiedModeMenu(preferred: mode)
         if let entry = payload["multihop_entry_id"] as? String, let index = multihopNodeIDs.firstIndex(of: entry) { multihopEntryPopup.selectItem(at: index) }
         if let exit = payload["multihop_exit_id"] as? String, let index = multihopNodeIDs.firstIndex(of: exit) { multihopExitPopup.selectItem(at: index) }
-        if (payload["multihop_exit_mode"] as? String) == "hysteria2", multihopExitModePopup.numberOfItems > 1 { multihopExitModePopup.selectItem(at: 1) }
-        else if multihopExitModePopup.numberOfItems > 0 { multihopExitModePopup.selectItem(at: 0) }
+        multihopExitModePopup.selectItem(at: RouterVPNNodeExitModes.index(for: payload["multihop_exit_mode"] as? String ?? "") ?? -1)
         refreshUnifiedHopOverlay()
         refreshUnifiedChrome()
     }

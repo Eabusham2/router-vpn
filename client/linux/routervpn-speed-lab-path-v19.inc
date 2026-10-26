@@ -36,6 +36,7 @@ static const char *linux_speed_lab_kind_v19(JsonObject *value) {
 static void linux_speed_lab_select_v19(GtkWidget *combo, const char *id) {
     /* Keep an unavailable saved identity visible. Run rejects it until the user
      * deliberately chooses a current node/mode; it never becomes Direct/WG. */
+    if (id == NULL) id = "";
     if (!gtk_combo_box_set_active_id(GTK_COMBO_BOX(combo), id)) {
         char *label = g_strdup_printf("Unavailable saved choice: %s", id);
         gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), id, label); g_free(label);
@@ -81,6 +82,13 @@ static void linux_speed_lab_defaults_v19(LinuxSpeedLabV12 *s) {
         if (saved && exit[0] != '\0') linux_speed_lab_select_v19(s->exit, exit);
         const char *execution = saved ? obj_string(node, "multihop_execution") : "local";
         linux_speed_lab_select_v19(s->execution, execution[0] != '\0' ? execution : "local");
+        JsonNode *current_node = json_object_get_member(json_node_get_object(s->options), "current");
+        JsonObject *current = current_node != NULL && JSON_NODE_HOLDS_OBJECT(current_node) ? json_node_get_object(current_node) : NULL;
+        if (linux_speed_lab_flag_v19(current, "connected") && g_strcmp0(obj_string(current, "mode"), "multihop") == 0 &&
+            g_strcmp0(obj_string(current, "entry_id"), linux_speed_lab_active_id_v12(s->entry)) == 0 &&
+            g_strcmp0(obj_string(current, "exit_id"), linux_speed_lab_active_id_v12(s->exit)) == 0) {
+            linux_speed_lab_select_v19(s->exit_mode, obj_string(current, "exit_mode"));
+        }
     }
     s->updating_choices = FALSE;
 }
@@ -134,6 +142,7 @@ static const char *linux_speed_lab_path_error_v19(LinuxSpeedLabV12 *s) {
     if (strcmp(top, "multihop") == 0) {
         JsonObject *exit = linux_speed_lab_find_v19(s, "nodes", linux_speed_lab_active_id_v12(s->exit));
         if (strcmp(linux_speed_lab_kind_v19(entry), "router-vpn") != 0 || strcmp(linux_speed_lab_kind_v19(exit), "router-vpn") != 0 || entry == exit) return "Select two different linked Router VPN nodes.";
+        if (!linux_multihop_exit_advertised_v22(linux_speed_lab_catalog_v19(s, "supported_exit_modes"), linux_speed_lab_active_id_v12(s->exit_mode))) return "Select an exit transport supported by this controller; an unavailable saved choice is never replaced automatically.";
     } else if (strcmp(top, "external") == 0) {
         if (strcmp(linux_speed_lab_kind_v19(node), "external") != 0) return "Select a linked external exit.";
         const char *entryID = linux_speed_lab_active_id_v12(s->entry);

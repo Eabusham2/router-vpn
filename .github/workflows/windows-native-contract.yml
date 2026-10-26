@@ -103,6 +103,13 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 protection settings regressions failed' }
           python deploy/test_desktop_protection_settings.py --platform windows --shell powershell.exe
           if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 protection settings regressions failed' }
+      - name: Complete profiles preserve every exit transport and execution choice
+        shell: pwsh
+        run: |
+          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell pwsh
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 7 connection profile mode regressions failed' }
+          python deploy/test_desktop_connection_profile_modes.py --platform windows --shell powershell.exe
+          if ($LASTEXITCODE -ne 0) { throw 'Windows PowerShell 5.1 connection profile mode regressions failed' }
       - name: DNS editors preserve the captured node and selected transport
         shell: pwsh
         run: |

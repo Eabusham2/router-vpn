@@ -19,6 +19,7 @@ import sys
 import tempfile
 import threading
 import time
+from urllib.parse import parse_qs, urlsplit
 
 
 def main() -> int:
@@ -29,7 +30,7 @@ def main() -> int:
         raise SystemExit("Speed Lab test requires the executable shipping app")
     if shutil.which("xvfb-run") is None:
         raise SystemExit("Speed Lab UI test needs xvfb and xauth")
-    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False, "custom_connects": 0}
+    state = {"get": 0, "post": 0, "cancelled": 0, "errors": [], "actions": [], "action_cancelled": 0, "extended": [], "extended_cancelled": 0, "selected": False, "custom_connects": 0, "mtu_request": ""}
     lock = threading.Lock()
 
     class Server(http.server.ThreadingHTTPServer):
@@ -77,15 +78,30 @@ def main() -> int:
                 "/api/profiles": {"profiles": [{"id": "fixture-initial", "name": "Test selected router", "node_kind": "router-vpn"}], "selected_id": "fixture-initial"},
                 "/api/logical-modes": [{"id": "smart-auto", "name": "SMART AUTO", "available": True}],
                 "/api/profile/settings": {}, "/api/home-summary": {},
+                "/api/profile/protection": {"profile_id": "fixture-fast" if state["selected"] else "fixture-initial", "profile_token": "a" * 64, "kill_switch_policy": "on-connect"},
                 "/api/session/events": {"events": [], "last_event_seq": 0},
             }
             nodes=[{"id":"fixture-entry","name":"Test entry"},{"id":"fixture-exit","name":"Test exit"}]
-            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes}
+            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3"]}
             fixtures["/api/forwarding/master"]={"enabled":False}
             fixtures["/api/connection/live-latency"]={}
             if state["selected"]:
                 fixtures["/api/profiles"]={"selected_id":"fixture-fast","profiles":[{"id":"fixture-fast","name":"Test fastest","node_kind":"router-vpn"}]}
             path = self.path.split("?", 1)[0]
+            if path == "/api/mtu/status":
+                query = parse_qs(urlsplit(self.path).query)
+                if query.get("session_id", ["fixture-session"]) != ["fixture-session"]:
+                    state["errors"].append("MTU status changed session")
+                    self.respond(409, b"wrong MTU session")
+                    return
+                request_id = state["mtu_request"]
+                self.respond(200, json.dumps({
+                    "session_id": "fixture-session", "profile_id": "fixture-initial",
+                    "waiting_commit": False, "requested": bool(request_id), "optimization_allowed": True,
+                    "status": {"request_id": request_id, "running": bool(request_id), "complete": False,
+                               "measured": False, "restored": False, "phase": "testing" if request_id else "idle"},
+                }).encode())
+                return
             if path in fixtures:
                 self.respond(200, json.dumps(fixtures[path]).encode())
                 return
@@ -140,7 +156,18 @@ def main() -> int:
                 return
             if self.path=="/api/multihop/live-latency":
                 self.respond(200,b'{"entry":{"median_ms":1},"exit":{"median_ms":2},"current_path":{"median_ms":3}}');return
-            action_paths = {"/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop", "/api/mtu/retest"}
+            if self.path == "/api/mtu/retest":
+                request_id = body.get("request_id", "")
+                if set(body) != {"request_id", "session_id", "profile_id"} or body.get("session_id") != "fixture-session" or body.get("profile_id") != "fixture-initial" or len(request_id) != 32 or any(c not in "0123456789abcdef" for c in request_id):
+                    state["errors"].append([self.path, body])
+                    self.respond(400, b"wrong captured MTU owner")
+                    return
+                state["mtu_request"] = request_id
+                state["actions"].append(self.path)
+                if self.wait_for_response(6, "action_cancelled"):
+                    self.respond(200, b'{"ok":true}')
+                return
+            action_paths = {"/api/strategy/smart-auto", "/api/disconnect", "/api/emergency-stop"}
             if self.path in action_paths and body == {}:
                 with lock:
                     state["actions"].append(self.path)

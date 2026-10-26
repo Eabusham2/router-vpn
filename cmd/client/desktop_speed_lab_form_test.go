@@ -11,10 +11,23 @@ import (
 	"testing"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 func desktopSpeedLabFormApp(t *testing.T) *app {
 	t.Helper()
+	// Select the shipped native branch for Linux callback validation too.
+	// Actual payload/receipt integrity is checked by the native bundle tests;
+	// this isolated form test never launches or blesses a runtime.
+	root := t.TempDir()
+	t.Setenv("HOMEVPN_ROOT", root)
+	manifest := filepath.Join(root, "runtime", "native", "NATIVE-RUNTIME.json")
+	if err := os.MkdirAll(filepath.Dir(manifest), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(manifest, []byte(`{}`), 0600); err != nil {
+		t.Fatal(err)
+	}
 	profile, err := externalProfileFromCreateRequest(desktopOpenVPNCreateFixture(t, common.StartLayerOff))
 	if err != nil {
 		t.Fatal(err)
@@ -139,6 +152,24 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 		parsed, err := routeExecution(multihopConnectRequest{Execution: request.Execution})
 		if err != nil || string(parsed) != execution {
 			t.Fatal("native multihop execution changed", err)
+		}
+	}
+	control, _ := profileByID(a.profiles.Profiles, "entry")
+	for _, mode := range mobilemultihop.NodeMultihopExitModes() {
+		for _, execution := range []string{"local", "server", "auto"} {
+			t.Run("router/"+mode+"/"+execution, func(t *testing.T) {
+				request, fields := read("speed-lab-multihop-" + mode + "-" + execution)
+				if request.Scope != "temporary" || request.Topology != "multihop" || request.EntryID != "entry" || request.ExitID != "exit-router" || request.ExitMode != mode || request.Execution != execution {
+					t.Fatal("native Router callback substituted its selected exit mode or execution")
+				}
+				if _, exists := fields["entry_mode"]; exists {
+					t.Fatal("external-only entry mode entered Router multihop")
+				}
+				selected, err := a.resolveSpeedLabMultihop(request, control, a.profiles.Profiles)
+				if err != nil || selected.ExitMode != mode || selected.Entry.ID != "entry" || selected.Exit.ID != "exit-router" || selected.Base != request.Base {
+					t.Fatal("shipping Speed Lab resolver changed native form graph", err)
+				}
+			})
 		}
 	}
 	for _, name := range []string{"speed-lab-current", "speed-lab-system-direct"} {

@@ -187,10 +187,10 @@ function global:Get-RouterVPNVisibleConnectionSnapshot {
             if($null -ne $entry){$result.multihop_entry_id=[string]$entry.SelectedValue}
             if($null -ne $exit){$result.multihop_exit_id=[string]$exit.SelectedValue}
             if($null -ne $exitMode -and $null -ne $exitMode.SelectedItem){$result.multihop_exit_mode=[string]$exitMode.SelectedItem.Tag}
-            if([string]::IsNullOrWhiteSpace([string]$result.multihop_exit_mode)){$result.multihop_exit_mode='shadowsocks'}
             $result.multihop_execution='local';if($null-ne$execution -and $null-ne$execution.SelectedItem){$result.multihop_execution=[string]$execution.SelectedItem.Tag}
         }
     }catch{}
+    if($result.multihop_enabled -and ([string]$result.multihop_exit_mode)-cnotin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3')){throw 'Select a supported exit transport before saving the connection profile.'}
     return $result
 }
 
@@ -205,7 +205,7 @@ function global:Apply-RouterVPNLoadedConnectionSnapshot {
         if($null -ne $entry -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_entry_id)){$entry.SelectedValue=[string]$Loaded.multihop_entry_id}
         if($null -ne $exit -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_exit_id)){$exit.SelectedValue=[string]$Loaded.multihop_exit_id}
         if($null -ne $exitMode -and $exitMode.Items.Count -gt 0){
-            $want=[string]$Loaded.multihop_exit_mode;if([string]::IsNullOrWhiteSpace($want)){$want='shadowsocks'}
+            $want=[string]$Loaded.multihop_exit_mode;$exitMode.SelectedIndex=-1
             for($i=0;$i-lt$exitMode.Items.Count;$i++){if([string]$exitMode.Items[$i].Tag -eq $want){$exitMode.SelectedIndex=$i;break}}
         }
     }catch{}
