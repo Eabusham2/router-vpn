@@ -268,7 +268,7 @@ tasks.register('assembleDelivery', Exec) {
     doFirst {
         def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
         if (!sdkRoot) throw new GradleException('Android SDK is required to verify the delivered APK')
-        commandLine 'python3', 'verify-delivery.py', '--apk', file("$buildDir/outputs/apk/$deliveryVariant/app-$deliveryVariant.apk").absolutePath,
+        commandLine 'python3', 'verify-delivery.py', '--apk', file("$buildDir/outputs/apk/${deliveryVariant}/app-${deliveryVariant}.apk").absolutePath,
             '--sdk', sdkRoot, '--sha', routerVpnAndroidPolicy.sourceSha, '--variant', deliveryVariant,
             '--version-code', routerVpnAndroidPolicy.versionCode.toString(),
             '--certificate', routerVpnAndroidPolicy.certificateSHA256,

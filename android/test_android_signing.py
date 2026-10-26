@@ -227,10 +227,125 @@ class SigningPolicy(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, 'redirected'):
             VERIFY.verify(link, sdk, self.sha, 'debug', 42)
 
-    @unittest.skipUnless(GRADLE and SDK, 'real APK fixture requires explicit Gradle and Android SDK')
+    def delivery_task(self, variant, fallback=False, failure=None):
+        """Execute the exact shipping Exec task, CLI and owned staging path.
+
+        Only Android assembly/native verification and SDK inspection are test
+        boundaries here; real APK signing retains its separate required test.
+        The real Java policy selects the variant and checks the disposable key.
+        """
+        case = Path(tempfile.mkdtemp(prefix='delivery with spaces-', dir=self.scratch.name))
+        project, app = case / 'android', case / 'android/app'
+        app.mkdir(parents=True)
+        (project / 'settings.gradle').write_text("rootProject.name = 'delivery-boundary'\ninclude ':app'\n")
+        (project / 'gradle.properties').write_text(
+            'org.gradle.daemon=false\norg.gradle.parallel=false\n'
+            'org.gradle.jvmargs=-Xmx256m -XX:MaxMetaspaceSize=256m\n')
+        shipping = (ROOT / 'android/app/build.gradle').read_text()
+        marker = 'def deliveryVariant = routerVpnAndroidPolicy.deliveryVariant()'
+        self.assertEqual(shipping.count(marker), 1)
+        start = shipping.index(marker)
+        task = shipping[start:shipping.index('\n}\n', start) + 3]
+        if failure == 'original-interpolation':
+            fixed = '$buildDir/outputs/apk/${deliveryVariant}/app-${deliveryVariant}.apk'
+            self.assertEqual(task.count(fixed), 1)
+            task = task.replace(fixed, '$buildDir/outputs/apk/$deliveryVariant/app-$deliveryVariant.apk')
+        (app / 'build.gradle').write_text('''buildscript {
+ dependencies { classpath files(System.getenv('ROUTERVPN_POLICY_CLASSES')) }
+}
+import com.eabusham.routervpn.build.AndroidBuildPolicy
+def routerVpnAndroidPolicy = AndroidBuildPolicy.resolve(new File(System.getenv('ROUTERVPN_POLICY_SOURCE')), System.getenv())
+// Boundary tasks only: the separate real APK fixture owns assembly/signatures.
+['assembleDebug','assembleRelease','verifyDebugProjectLicense','verifyReleasePackage','verifyDebugNativeTor','verifyReleaseNativeTor'].each { name ->
+ tasks.register(name) { doLast { new File(System.getenv('ROUTERVPN_DELIVERY_DEPENDENCIES')).append(name + '\\n') } }
+}
+''' + task)
+        (project / 'verify-delivery.py').write_text(
+            'import runpy\nrunpy.run_path(' + repr(str(ROOT / 'android/verify-delivery.py')) + ",run_name='__main__')\n")
+        sdk = case / 'selected sdk with spaces'
+        tools = sdk / 'build-tools/36.0.0'; tools.mkdir(parents=True)
+        tool_boundary = '''#!/usr/bin/env python3
+import hashlib,json,os,pathlib,sys,zipfile
+name=pathlib.Path(__file__).name
+assert sys.argv[1:-1] == (['dump','badging'] if name=='aapt' else ['verify','--verbose','--print-certs'])
+apk=pathlib.Path(sys.argv[-1]);assert apk.name=='captured.apk'
+with zipfile.ZipFile(apk) as archive: metadata=json.loads(archive.read('assets/ROUTER-VPN-ANDROID.json'))
+with open(os.environ['ROUTERVPN_DELIVERY_TOOLS'],'a') as output: output.write(json.dumps(dict(tool=name,sha256=hashlib.sha256(apk.read_bytes()).hexdigest()))+'\\n')
+if name=='aapt':
+ print("package: name='com.eabusham.routervpn' versionCode='%s' versionName='%s'" % (metadata['version_code'],metadata['version_name']))
+ if metadata['variant']=='debug': print('application-debuggable')
+else: print('Signer #1 certificate SHA-256 digest: '+os.environ['ROUTERVPN_FIXTURE_CERTIFICATE'])
+'''
+        for name in ('aapt', 'apksigner'):
+            tool = tools / name; tool.write_text(tool_boundary); tool.chmod(0o700)
+        apk = app / 'build/outputs/apk' / variant / ('app-' + variant + '.apk')
+        apk.parent.mkdir(parents=True)
+        metadata = dict(schema_version=1, source_sha=self.sha, application_id='com.eabusham.routervpn',
+                        version_code=2, version_name='0.1.2-' + self.sha[:12], variant=variant,
+                        signing='production-signed' if variant == 'release' else 'debug-signed',
+                        certificate_sha256=self.fingerprint if variant == 'release' else '')
+        with zipfile.ZipFile(apk, 'w') as archive:
+            archive.writestr('classes.dex', b'Disposable delivery routing fixture, not a signed APK')
+            archive.writestr('assets/LICENSE', (ROOT / 'LICENSE').read_bytes())
+            archive.writestr('assets/ROUTER-VPN-SOURCE.json', json.dumps(dict(schema_version=1,
+                             repository='Eabusham2/router-vpn', artifact_family='android-apk', source_sha=self.sha)))
+            archive.writestr('assets/ROUTER-VPN-ANDROID.json', json.dumps(metadata))
+        dependencies, tool_calls = case / 'dependencies.txt', case / 'tools.jsonl'
+        env = dict(self.signed() if variant == 'release' else self.env)
+        for key in ('GRADLE_OPTS', 'JAVA_OPTS', 'JAVA_TOOL_OPTIONS', '_JAVA_OPTIONS', 'GRADLE_RO_DEP_CACHE'):
+            env.pop(key, None)
+        env.update(GRADLE_USER_HOME=str(self.work / 'delivery-gradle-home'),
+                   ROUTERVPN_POLICY_CLASSES=str(self.classes), ROUTERVPN_POLICY_SOURCE=str(self.repo),
+                   ROUTERVPN_DELIVERY_DEPENDENCIES=str(dependencies), ROUTERVPN_DELIVERY_TOOLS=str(tool_calls),
+                   ROUTERVPN_FIXTURE_CERTIFICATE=self.fingerprint,
+                   ANDROID_HOME='' if fallback else str(sdk),
+                   ANDROID_SDK_ROOT=str(sdk if fallback else case / 'wrong ambient sdk'))
+        if failure == 'missing-sdk':
+            env.update(ANDROID_HOME='', ANDROID_SDK_ROOT='')
+        result = subprocess.run([GRADLE, '--offline', '--no-daemon', '--no-watch-fs', '--console=plain',
+                                 '--max-workers=1', ':app:assembleDelivery'], cwd=project, env=env,
+                                text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, timeout=90)
+        self.assertNotIn(self.secret, result.stdout)
+        expected = {'assemble' + variant.capitalize(), 'verifyReleasePackage' if variant == 'release' else 'verifyDebugProjectLicense',
+                    'verify' + variant.capitalize() + 'NativeTor'}
+        self.assertTrue(dependencies.is_file(), result.stdout[-8000:])
+        self.assertEqual(set(dependencies.read_text().splitlines()), expected)
+        output = app / 'build/outputs/routervpn/app-debug.apk'
+        if failure:
+            self.assertNotEqual(result.returncode, 0, result.stdout[-8000:])
+            self.assertFalse(tool_calls.exists(), 'failed delivery reached APK inspection')
+            self.assertFalse(output.exists(), 'failed delivery published a package')
+            self.assertIn('No such property: apk' if failure == 'original-interpolation' else 'Android SDK is required', result.stdout)
+        else:
+            self.assertEqual(result.returncode, 0, result.stdout[-8000:])
+            self.assertEqual(output.read_bytes(), apk.read_bytes())
+            receipt = VERIFY.load_receipt(output, self.sha)
+            self.assertEqual((receipt['variant'], receipt['version_code'], receipt['signing'], receipt['certificate_sha256']),
+                             (variant, 2, metadata['signing'], self.fingerprint))
+            calls = [json.loads(line) for line in tool_calls.read_text().splitlines()]
+            self.assertEqual([call['tool'] for call in calls], ['aapt', 'apksigner'])
+            self.assertEqual({call['sha256'] for call in calls}, {hashlib.sha256(apk.read_bytes()).hexdigest()})
+
+    def test_shipping_gradle_delivery_task_and_cli(self):
+        if not GRADLE:
+            self.skipTest('shipping delivery task fixture requires explicit Gradle')
+        for variant, fallback in [('debug', False), ('release', False), ('release', True)]:
+            with self.subTest(variant=variant, fallback=fallback):
+                self.delivery_task(variant, fallback=fallback)
+        for failure in ('missing-sdk', 'original-interpolation'):
+            with self.subTest(failure=failure):
+                self.delivery_task('release', failure=failure)
+
     def test_real_gradle_signed_debug_unsigned_apks(self):
+        if not (GRADLE and SDK):
+            self.skipTest('real APK fixture requires explicit Gradle and Android SDK')
         android = self.repo / 'android'; android.mkdir()
-        shutil.copytree(ROOT / 'android/buildSrc', android / 'buildSrc', ignore=shutil.ignore_patterns('build', '.gradle'))
+        source = ROOT / 'android/buildSrc'
+        # Only skip generated output at the buildSrc root. The shipping Java
+        # policy itself lives in com/eabusham/routervpn/build and must be copied.
+        shutil.copytree(source, android / 'buildSrc', ignore=lambda directory, names:
+                        [name for name in names if name == '.gradle' or (name == 'build' and Path(directory) == source)])
+        self.assertTrue((android / 'buildSrc/src/main/java/com/eabusham/routervpn/build/AndroidBuildPolicy.java').is_file())
         shutil.copy2(ROOT / 'android/release-build.gradle', android / 'release-build.gradle')
         shutil.copy2(ROOT / 'android/settings.gradle', android / 'settings.gradle')
         shutil.copy2(ROOT / 'android/build.gradle', android / 'build.gradle')
@@ -285,7 +400,4 @@ if __name__ == '__main__':
     parser.add_argument('--sdk', type=Path)
     args, remaining = parser.parse_known_args()
     GRADLE, SDK = args.gradle, args.sdk
-    # unittest decorators are evaluated before CLI parsing.
-    test = SigningPolicy.test_real_gradle_signed_debug_unsigned_apks
-    test.__unittest_skip__ = not (GRADLE and SDK)
     unittest.main(argv=[__file__] + remaining)
