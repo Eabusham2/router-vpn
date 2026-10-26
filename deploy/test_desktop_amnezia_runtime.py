@@ -45,6 +45,13 @@ def test(source=None):
         env = BUILD.environment(target)
         env['CGO_ENABLED'] = '1'
         env['ROUTERVPN_AWG_DESKTOP_CLI'] = str(binary)
+        # Admission ends after ten seconds; its returned native packet socket
+        # belongs to the bind until Close. Keep the real-clock lifetime proof
+        # in a separate once-only bounded phase, preserving the traffic budget.
+        subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
+                        '-count=1', '-timeout=30s', './protocol/routervpnamnezia',
+                        '-run', '^Test(Bind|LateBind)'],
+                       cwd=source, env=env, check=True, timeout=90)
         subprocess.run(['go', 'test', '-race', '-ldflags=-checklinkname=0', '-tags='+BUILD.TAGS,
                         '-count=2', '-timeout=90s', './protocol/routervpnamnezia', '-run',
                         '^Test(DesktopAmneziaCLIEncryptedTrafficAndOwnerShutdown|BindPreservesPacketFramingAndShortWriteRejection|ActualAmneziaUnconnectedUDPReply|ServerPacketConcurrentEndpoint|ServerPacketBlockedReplyDoesNotBlockReceive)$'],

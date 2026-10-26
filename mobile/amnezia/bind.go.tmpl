@@ -43,10 +43,15 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 	}
 	b.generation++
 	generation := b.generation
-	ctx, cancel := context.WithTimeout(b.ctx, 10*time.Second)
+	// Admission has a finite budget, while the returned native packet socket
+	// retains this context until the exact captured bind is closed.
+	ctx, cancel := context.WithCancel(b.ctx)
+	deadline := time.Now().Add(10 * time.Second)
+	admission := time.AfterFunc(10*time.Second, cancel)
 	b.cancel = cancel
 	b.mu.Unlock()
 	c, err := b.dialer.DialContext(ctx, N.NetworkUDP, M.SocksaddrFromNetIP(b.target))
+	admitted := admission.Stop() && time.Now().Before(deadline)
 	b.mu.Lock()
 	if b.generation != generation || b.ctx.Err() != nil {
 		b.mu.Unlock()
@@ -58,9 +63,8 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 	}
 	// A dialer may return a socket together with an error or finish after its
 	// attempt was cancelled. Never adopt it or leak its cleanup responsibility.
-	// Check the attempt context BEFORE our own successful-dial cancellation.
-	b.cancel = nil
-	if err != nil || c == nil || ctx.Err() != nil {
+	if !admitted || err != nil || c == nil || ctx.Err() != nil {
+		b.cancel = nil
 		b.mu.Unlock()
 		cancel()
 		if c != nil {
@@ -70,7 +74,6 @@ func (b *peerBind) Open(port uint16) ([]awgconn.ReceiveFunc, uint16, error) {
 	}
 	b.conn = c
 	b.mu.Unlock()
-	cancel()
 	receive := func(packets [][]byte, sizes []int, endpoints []awgconn.Endpoint) (int, error) {
 		if len(packets) != 1 || len(sizes) < 1 || len(endpoints) < 1 {
 			return 0, errors.New("invalid AWG receive batch")

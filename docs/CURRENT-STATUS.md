@@ -13,7 +13,11 @@ packet dials can retain their owner context until controller shutdown; late or
 cancelled returns still close before protocol or key adoption. Explicit
 monotonic timing protects the bound even if a timer callback is delayed. The
 existing repeated race gate, deadline enforcement, packet byte-count checks,
-and authenticated readiness are preserved. Current packaged native traffic
+and authenticated readiness are preserved. The native AWG packet bind now
+also retains a successful owner beyond its separate ten-second admission
+budget, with monotonic late-return rejection and exact generation cleanup.
+Its actual pinned package passes real I/O across that admission boundary.
+Current packaged native traffic
 and physical acceptance remain separate from these controller tests.
 
 The DNS helper reserves one shared TCP/UDP endpoint with TCP ownership first,

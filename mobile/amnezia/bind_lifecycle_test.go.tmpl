@@ -3,11 +3,14 @@ package routervpnamnezia
 import (
 	"context"
 	"errors"
+	"io"
 	"net"
 	"net/netip"
 	"sync/atomic"
 	"testing"
+	"time"
 
+	awgconn "github.com/amnezia-vpn/amneziawg-go/v3/conn"
 	M "github.com/sagernet/sing/common/metadata"
 )
 
@@ -91,9 +94,11 @@ func TestBindCancelledParentNeverDials(t *testing.T) {
 }
 func TestLateBindCannotReplaceNewGeneration(t *testing.T) {
 	entered, release := make(chan struct{}), make(chan struct{})
+	contexts := make(chan context.Context, 2)
 	old, current := new(ownedProbeConn), new(ownedProbeConn)
 	var calls atomic.Int32
-	dialer := &lifetimeDialer{connect: func(context.Context) (net.Conn, error) {
+	dialer := &lifetimeDialer{connect: func(ctx context.Context) (net.Conn, error) {
+		contexts <- ctx
 		if calls.Add(1) == 1 {
 			close(entered)
 			<-release
@@ -105,20 +110,135 @@ func TestLateBindCannotReplaceNewGeneration(t *testing.T) {
 	result := make(chan error, 1)
 	go func() { _, _, err := bind.Open(0); result <- err }()
 	<-entered
+	oldContext := <-contexts
 	if err := bind.Close(); err != nil {
 		t.Fatal(err)
 	}
 	if _, _, err := bind.Open(0); err != nil {
 		t.Fatal(err)
 	}
+	currentContext := <-contexts
+	if oldContext.Err() != context.Canceled || currentContext.Err() != nil {
+		t.Fatal("closed generation retained or replaced the wrong dial owner")
+	}
 	close(release)
 	if err := <-result; err == nil {
 		t.Fatal("obsolete open adopted its returned socket")
 	}
-	if bind.conn != current || old.closed.Load() != 1 || current.closed.Load() != 0 {
+	if bind.conn != current || old.closed.Load() != 1 || current.closed.Load() != 0 || currentContext.Err() != nil {
 		t.Fatal("old completion modified the current bind")
 	}
 	if err := bind.Close(); err != nil || current.closed.Load() != 1 {
 		t.Fatal("current bind did not close once")
+	}
+	if currentContext.Err() != context.Canceled {
+		t.Fatal("current bind did not cancel its captured native context")
+	}
+}
+
+func TestBindRetainsAdmittedNativeContextUntilExactClose(t *testing.T) {
+	t.Parallel()
+	local, wire := net.Pipe()
+	defer wire.Close()
+	released := make(chan struct{})
+	var owner context.Context
+	bind := &peerBind{ctx: context.Background(), target: netip.MustParseAddrPort("192.0.2.1:51820")}
+	bind.dialer = &lifetimeDialer{connect: func(ctx context.Context) (net.Conn, error) {
+		owner = ctx
+		context.AfterFunc(ctx, func() {
+			local.Close()
+			close(released)
+		})
+		return local, nil
+	}}
+	defer bind.Close()
+	receivers, _, err := bind.Open(0)
+	if err != nil || len(receivers) != 1 || owner == nil {
+		t.Fatal("captured native bind did not open", err)
+	}
+	if owner.Err() != nil {
+		t.Fatal("successful packet admission retired the live native context")
+	}
+	probe := func(label string) {
+		t.Helper()
+		payload := []byte(label)
+		if err := wire.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		sent := make(chan error, 1)
+		go func() { sent <- bind.Send([][]byte{payload}, peerEndpoint(bind.target)) }()
+		got := make([]byte, len(payload))
+		if _, err := io.ReadFull(wire, got); err != nil || string(got) != label {
+			t.Fatal("captured native send failed", err)
+		}
+		if err := <-sent; err != nil {
+			t.Fatal(err)
+		}
+		if err := wire.SetWriteDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		if err := local.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+		go func() {
+			_, err := wire.Write(payload)
+			sent <- err
+		}()
+		packet := make([]byte, len(payload))
+		sizes := make([]int, 1)
+		endpoints := make([]awgconn.Endpoint, 1)
+		if n, err := receivers[0]([][]byte{packet}, sizes, endpoints); err != nil || n != 1 || sizes[0] != len(payload) || string(packet) != label || endpoints[0].DstToString() != bind.target.String() {
+			t.Fatal("captured native receive failed", err)
+		}
+		if err := <-sent; err != nil {
+			t.Fatal(err)
+		}
+	}
+	probe("before-admission-deadline")
+	select {
+	case <-owner.Done():
+		t.Fatal("live native context expired at the completed admission deadline")
+	case <-time.After(10*time.Second + 100*time.Millisecond):
+	}
+	probe("after-admission-deadline")
+	if err := bind.Close(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-released:
+	case <-time.After(time.Second):
+		t.Fatal("bind close did not retire its context-owned native socket")
+	}
+	if owner.Err() != context.Canceled {
+		t.Fatal("bind close retained its captured context")
+	}
+}
+
+func TestBindAdmissionRejectsTenSecondLateSuccess(t *testing.T) {
+	t.Parallel()
+	for _, scenario := range []string{"cancelled-return", "elapsed-return"} {
+		t.Run(scenario, func(t *testing.T) {
+			t.Parallel()
+			conn := new(ownedProbeConn)
+			bind := &peerBind{ctx: context.Background(), target: netip.MustParseAddrPort("192.0.2.1:51820")}
+			bind.dialer = &lifetimeDialer{connect: func(ctx context.Context) (net.Conn, error) {
+				if scenario == "cancelled-return" {
+					<-ctx.Done()
+				} else {
+					// A native dial can return before observing its cancellation.
+					// Its elapsed admission budget still forbids adoption.
+					time.Sleep(10*time.Second + 100*time.Millisecond)
+				}
+				return conn, nil
+			}}
+			defer bind.Close()
+			started := time.Now()
+			if _, _, err := bind.Open(0); err == nil {
+				t.Fatal("expired admission adopted its late successful socket")
+			}
+			if time.Since(started) < 10*time.Second || conn.closed.Load() != 1 || bind.conn != nil || bind.cancel != nil {
+				t.Fatal("late admission changed the deadline or leaked its captured socket")
+			}
+		})
 	}
 }
