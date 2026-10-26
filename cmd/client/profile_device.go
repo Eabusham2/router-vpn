@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"runtime"
 	"strings"
 
+	"router-vpn/internal/applexray"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
@@ -29,6 +31,8 @@ type profileDeviceSettings struct {
 	IPv6Mode              string `json:"ipv6_mode"`
 	MTUPolicy             string `json:"mtu_policy"`
 	ManualMTU             int    `json:"manual_mtu"`
+	JumboTUN              bool   `json:"jumbo_tun"`
+	JumboTUNSupported     bool   `json:"jumbo_tun_supported"`
 	EffectiveMTU          int    `json:"effective_mtu"`
 	MTUSource             string `json:"mtu_source"`
 	StartupMode           string `json:"startup_mode"`
@@ -44,6 +48,7 @@ type profileDeviceRequest struct {
 	IPv6Mode         *string `json:"ipv6_mode"`
 	MTUPolicy        *string `json:"mtu_policy"`
 	ManualMTU        *int    `json:"manual_mtu"`
+	JumboTUN         *bool   `json:"jumbo_tun,omitempty"`
 	StartupMode      *string `json:"startup_mode,omitempty"`
 	AutoConnect      *bool   `json:"auto_connect,omitempty"`
 }
@@ -70,13 +75,11 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 	}
 	if profile.External.Protocol == "tor-bridge" {
 		// The native Tor owner now applies these device settings. It does not
-		// yet own a Router predecessor, Jumbo selection or padding runtime.
+		// yet own a Router predecessor or padding runtime.
 		// Keep those saved requests intact and expose the specific missing path.
 		switch {
 		case profile.MultihopEnabled:
 			return false, "Tor common device settings for Router-entry graphs require the captured desktop predecessor runtime, which is not yet implemented."
-		case profile.JumboTUN:
-			return false, "Tor common device settings cannot discard saved Jumbo mode; its desktop runtime is not yet implemented."
 		case profile.DAITAEnabled:
 			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
 		default:
@@ -84,6 +87,11 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		}
 	}
 	return false, "This external protocol does not yet apply the common device settings through an owned native desktop runtime."
+}
+
+func profileDeviceJumboSupported(profile common.RouterProfile) bool {
+	supported, _ := externalDevicePolicySupport(profile)
+	return supported && profile.External != nil && profile.External.Protocol == "tor-bridge"
 }
 
 func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.RouterProfile) {
@@ -120,6 +128,9 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 	note := "Save while disconnected. Fixed MTU is a requested interface value, not a measured path result. Effective MTU is historical; use Retest on the connected path. This edit preserves independent entry policy, DNS, credentials and graph selection."
 	if protocol == "tor-bridge" {
 		note = "Save while disconnected. Tor Auto starts with a 1280-byte virtual interface, then compares HTTPS response time and download/upload performance at tested MTUs. Retest repeats those measurements with fresh Tor and DNS proof; Cancel waits for the previous interface value to be restored. Default keeps 1280; Fixed applies your interface value. Interface readback is not a UDP path-MTU measurement. DNS, credentials and graph selection are preserved."
+		if profile.JumboTUN {
+			note = "Save while disconnected. Tor Jumbo configures a 9000-byte virtual interface; it does not force 9000-byte packets onto the underlying network. Auto and Retest do not change that interface while Jumbo is selected. Fixed MTU must also be 9000. The saved Auto or Default preference is retained for when Jumbo is turned off. DNS, credentials and graph selection are preserved."
+		}
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -129,6 +140,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		DevicePolicySupported: supported, DevicePolicyReason: reason,
 		HomeLANAccess: profile.HomeLANAccess, KillSwitchPolicy: kill,
 		IPv6Mode: ipv6, MTUPolicy: mtu, ManualMTU: manual,
+		JumboTUN: profile.JumboTUN, JumboTUNSupported: profileDeviceJumboSupported(profile),
 		EffectiveMTU: profile.EffectiveMTU, MTUSource: profile.EffectiveMTUSource,
 		StartupMode: startup, AutoConnect: profile.AutoConnect,
 		Note: note,
@@ -157,6 +169,12 @@ func applyProfileDeviceSettings(profile common.RouterProfile, request profileDev
 	}
 	updated.MTUPolicy = strings.ToLower(strings.TrimSpace(*request.MTUPolicy))
 	updated.ManualMTU = *request.ManualMTU
+	if request.JumboTUN != nil {
+		if !profileDeviceJumboSupported(profile) {
+			return profile, errors.New("this captured device editor cannot change Jumbo for the selected native path")
+		}
+		updated.JumboTUN = *request.JumboTUN
+	}
 	switch updated.MTUPolicy {
 	case "auto", "default":
 		if updated.ManualMTU != 0 {
@@ -209,7 +227,7 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 			NodeProofID: profile.NodeProofID, RouterAPI: profile.RouterAPI, APIToken: profile.APIToken,
 			StartLayer: profile.StartLayer, HomeLANAccess: profile.HomeLANAccess, HomeLANCIDRs: profile.HomeLANCIDRs,
 			KillSwitch: profile.KillSwitch, KillSwitchPolicy: profile.KillSwitchPolicy, IPv6Mode: profile.IPv6Mode,
-			MTUPolicy: profile.MTUPolicy, ManualMTU: profile.ManualMTU,
+			MTUPolicy: profile.MTUPolicy, ManualMTU: profile.ManualMTU, JumboTUN: profile.JumboTUN,
 			DNSMode: profile.DNSMode, DNSProtocol: profile.DNSProtocol, DNSHost: profile.DNSHost,
 			DNSPort: profile.DNSPort, DNSServerName: profile.DNSServerName, DNSPath: profile.DNSPath,
 		}
@@ -291,7 +309,19 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var request profileDeviceRequest
-	decoder := json.NewDecoder(http.MaxBytesReader(w, r.Body, 4096))
+	raw, err := io.ReadAll(http.MaxBytesReader(w, r.Body, 4096))
+	fields, objectErr := applexray.Object(raw)
+	if err != nil || objectErr != nil {
+		http.Error(w, "device settings require one unambiguous JSON object", http.StatusBadRequest)
+		return
+	}
+	if value, present := fields["jumbo_tun"]; present {
+		if _, valid := value.(bool); !valid {
+			http.Error(w, "jumbo_tun must be a boolean when supplied", http.StatusBadRequest)
+			return
+		}
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
 		http.Error(w, "invalid device settings", http.StatusBadRequest)
@@ -328,6 +358,7 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 	updated.KillSwitchPolicy, updated.KillSwitch = validated.KillSwitchPolicy, validated.KillSwitch
 	updated.IPv6Mode = validated.IPv6Mode
 	updated.MTUPolicy, updated.ManualMTU = validated.MTUPolicy, validated.ManualMTU
+	updated.JumboTUN = validated.JumboTUN
 	if request.StartupMode != nil {
 		updated.StartupMode, updated.AutoConnect = validated.StartupMode, validated.AutoConnect
 	}

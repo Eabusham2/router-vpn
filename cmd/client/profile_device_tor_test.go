@@ -152,10 +152,9 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 }
 
 func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
-	for _, option := range []string{"Router-entry", "Jumbo", "padding"} {
+	for _, option := range []string{"Router-entry", "padding"} {
 		t.Run(option, func(t *testing.T) {
 			a := deviceSettingsTestApp(t, "tor-bridge", option == "Router-entry")
-			a.profiles.Profiles[3].JumboTUN = option == "Jumbo"
 			a.profiles.Profiles[3].DAITAEnabled = option == "padding"
 			before := cloneRouterProfileStore(a.profiles)
 			capture := getDeviceSettingsForTest(t, a)

@@ -52,7 +52,7 @@ func getDeviceSettingsForTest(t *testing.T, a *app) profileDeviceSettings {
 	}
 	var fields map[string]any
 	_ = json.Unmarshal(w.Body.Bytes(), &fields)
-	if len(fields) != 16 || value.ProfileID != a.profiles.SelectedID || len(value.ProfileToken) != 64 {
+	if len(fields) != 18 || value.ProfileID != a.profiles.SelectedID || len(value.ProfileToken) != 64 {
 		t.Fatal("device GET leaked fields or lost selected identity")
 	}
 	for _, forbidden := range []string{"password", "private_key", "peer_public_key", "bridges", "api_token", "router_api"} {
