@@ -119,22 +119,22 @@ func TestTorBridgeLauncherRequiresNativeProofAndExactOwner(t *testing.T) {
 }
 
 func TestTorBridgeControllerRequiresDynamicTorProofBeforeConnected(t *testing.T) {
-	body, err := os.ReadFile("tor_bridge_routes.go")
+	route, err := os.ReadFile("tor_bridge_routes.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	source := string(body)
-	proof := strings.Index(source, "actualIP, proofErr := a.proveTorBridgeExit()")
-	connected := strings.Index(source, "a.state.Connected = true")
-	persist := strings.Index(source, "persistErr := a.persistProfilesLocked()")
-	if proof < 0 || connected < 0 || persist < 0 || !(proof < connected && connected < persist) {
-		t.Fatalf("Tor bridge Connected/persistence ordering is not proof -> connected -> durable adoption")
+	persistence, err := os.ReadFile("desktop_tor_persistence.go")
+	if err != nil {
+		t.Fatal(err)
 	}
+	if err := torControllerProofContract(route, persistence); err != nil {
+		t.Fatal(err)
+	}
+	source := string(route)
 	for _, marker := range []string{
 		"beginConnectionOperation()",
 		"Tor bridge public-exit proof failed",
 		"a.stopOwnedConnectionRuntime(cmd)",
-		"a.rollbackProfilesLocked(previousStore)",
 		"tor-project-is-tor-passed",
 	} {
 		if !strings.Contains(source, marker) {
