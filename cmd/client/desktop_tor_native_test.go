@@ -199,11 +199,7 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
 		raw, err := os.ReadFile(filepath.Join(directory, "stop.json"))
-		if err == nil {
-			var request desktopExternalStop
-			if json.Unmarshal(raw, &request) != nil || request.SessionID != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 {
-				os.Exit(93)
-			}
+		if err == nil && desktopTorFixtureStopRequested(raw, expected.SessionID, expected.SourceSHA256) {
 			if kind == "without-receipt" {
 				return
 			}

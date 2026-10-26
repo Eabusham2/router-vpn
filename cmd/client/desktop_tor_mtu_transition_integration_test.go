@@ -79,11 +79,7 @@ func TestDesktopTorMTUTransitionChildFixture(t *testing.T) {
 		}
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
-		if raw, err := os.ReadFile(filepath.Join(directory, "stop.json")); err == nil {
-			var request desktopExternalStop
-			if decodeRelayControlJSON(raw, &request) != nil || request.SessionID != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 {
-				os.Exit(94)
-			}
+		if raw, err := os.ReadFile(filepath.Join(directory, "stop.json")); err == nil && desktopTorFixtureStopRequested(raw, expected.SessionID, expected.SourceSHA256) {
 			write("stopped.json", desktopExternalStop{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, Closed: true})
 			return
 		}
