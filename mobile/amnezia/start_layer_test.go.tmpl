@@ -7,6 +7,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/base64"
+	"encoding/binary"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -39,12 +40,14 @@ import (
 // daemon binary. Only the authorized private destination is mapped to the
 // owned loopback WG/AWG reference; no production routing rule is changed.
 type startForward struct {
-	ctx     context.Context
-	target  string
-	mu      sync.Mutex
-	closing bool
-	workers sync.WaitGroup
-	packets atomic.Int64
+	ctx                 context.Context
+	target              string
+	mu                  sync.Mutex
+	closing             bool
+	workers             sync.WaitGroup
+	packets             atomic.Int64
+	dropFirstInitiation atomic.Bool
+	droppedInitiations  atomic.Int64
 }
 
 func (h *startForward) NewConnection(context.Context, net.Conn, M.Metadata) error {
@@ -82,7 +85,15 @@ func (h *startForward) NewPacketConnection(ctx context.Context, conn N.PacketCon
 				packet.Release()
 				return
 			}
-			_, err = peer.Write(packet.Bytes())
+			data := packet.Bytes()
+			if len(data) == 148 && binary.LittleEndian.Uint32(data[:4]) == 1 && h.dropFirstInitiation.CompareAndSwap(true, false) {
+				// Exercise the real WG retry on the same encrypted outer socket.
+				// Junk, payload packets and a second initiation are never dropped.
+				h.droppedInitiations.Add(1)
+				packet.Release()
+				continue
+			}
+			_, err = peer.Write(data)
 			packet.Release()
 			if err != nil {
 				return
@@ -120,7 +131,10 @@ func aesReference(t *testing.T, target string) (string, string, *startForward) {
 		t.Fatal(e)
 	}
 	password := base64.StdEncoding.EncodeToString(key)
-	service, e := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 2, handler, nil)
+	// Keep the encrypted UDP association alive through the pinned WG
+	// five-second handshake retry. A two-second fixture NAT expiry destroys
+	// the captured reply lane before that retry can occur.
+	service, e := shadowaead_2022.NewServiceWithPassword(startwhitening.Method, password, 10, handler, nil)
 	if e != nil {
 		cancel()
 		listener.Close()
@@ -323,6 +337,8 @@ func TestNativeBaseStartLayerRealEncryptedTraffic(t *testing.T) {
 					}
 				}, echoHandler{}, false, params)
 				address, password, reference := aesReference(t, pair.binding.address())
+				lostFirstInitiation := mode == "wg" && xor
+				reference.dropFirstInitiation.Store(lostFirstInitiation)
 				if xor {
 					address = xorReference(t, address, password)
 				}
@@ -368,6 +384,16 @@ func TestNativeBaseStartLayerRealEncryptedTraffic(t *testing.T) {
 				owned := &startDialer{method: method, address: address, xor: xor, key: key, owner: startwhitening.NewOwner(context.Background())}
 				t.Cleanup(func() { _ = owned.owner.Close() })
 				client := nativeStartClient(t, mode, options, owned)
+				// A started endpoint is not a completed native handshake. Retain
+				// one nonce/socket through the actual encrypted Start Layer and
+				// allow its bounded handshake retry before short data checks.
+				// Runtime timeouts and all subsequent traffic checks are unchanged.
+				if e = coldUDPReadyDialer(client); e != nil {
+					t.Fatal("encrypted Start Layer cold-start proof", e)
+				}
+				if lostFirstInitiation && reference.droppedInitiations.Load() != 1 {
+					t.Fatal("lost first encrypted WG initiation was not exercised")
+				}
 				for _, network := range []string{"tcp", "udp"} {
 					for _, host := range []string{"10.78.0.1", "fd78:78::1"} {
 						if e = startExchange(client, network, host, 4*time.Second); e != nil {

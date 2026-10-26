@@ -594,9 +594,13 @@ func TestAmneziaFirstReadRechecksConfiguredPadding(t *testing.T) {
 // Retain one captured native socket and nonce. This permits real startup loss,
 // not an alternate route, altered credentials, skipped proof or direct retry.
 func coldUDPReady(pair *actualPair) error {
+	return coldUDPReadyDialer(pair.client)
+}
+
+func coldUDPReadyDialer(client N.Dialer) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
 	defer cancel()
-	conn, err := pair.client.DialContext(ctx, "udp", M.ParseSocksaddr("10.78.0.1:9999"))
+	conn, err := client.DialContext(ctx, "udp", M.ParseSocksaddr("10.78.0.1:9999"))
 	if err != nil {
 		return err
 	}
