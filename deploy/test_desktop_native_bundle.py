@@ -225,6 +225,23 @@ def test(bundle, target):
                         '-run', '^TestNativePQDesktopEncryptedLoopback$'],
                        cwd=ROOT, env=env, check=True, timeout=240)
         print('Complete native runtime passed genuine PQ-keyed WG/AWG Local and Server encrypted traffic, independent identity pins and rekey checks', flush=True)
+        # The TLS reference is the same exact-pinned Xray already built above.
+        # Prove its real encrypted UDP and precise rejection witnesses before
+        # trusting it to observe the complete captured MAX chain. Each packet
+        # family/execution has a separate bounded phase; WG Local also exercises
+        # wrong outer/middle/private-route/KEM credentials and exact restore.
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=45s', './cmd/client',
+                        '-run', '^TestNativeMAXTLSReference'],
+                       cwd=ROOT, env=env, check=True, timeout=90)
+        for mode in ('max-tls-wg', 'max-tls-awg'):
+            for execution in ('local', 'server'):
+                subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
+                                '-run', '^TestNativeMAXDesktopEncryptedLoopback$/^tls$/^' + mode + '$/^' + execution + '$'],
+                               cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed genuine complete-MAX TLS Local/Server TCP/UDP, paired-key rekey and witnessed rejection/restoration', flush=True)
+        # QUIC MAX remains outside the advertised desktop catalog until its
+        # native HY2 packet session enforces write deadlines and its distinct
+        # encrypted phases pass. Never bypass the PQ deadline admission guard.
 
 
 if __name__ == '__main__':

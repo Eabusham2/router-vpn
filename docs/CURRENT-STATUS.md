@@ -52,8 +52,12 @@ identities require the whole validated chain. Inner interface capacity and
 the outer QUIC datagram envelope have separate checks. This prerequisite does
 not yet expand the desktop catalog. Desktop host Server substitution,
 independent packet/KEM pins, renewal and already-proved restoration now pass
-actual sealed-engine parsing and ownership tests. Full encrypted MAX chains
-and native controls remain before these exits are offered in the catalog.
+actual sealed-engine parsing and ownership tests. The required native bundle
+now also passes genuine complete-MAX TLS WG/AWG Local/Server TCP/UDP, real PQ
+rekey, exact wrong-layer rejection and restoration. QUIC still fails closed
+because its Hysteria2 packet transport does not enforce the PQ write deadline.
+That native repair, complete QUIC traffic and native controls remain before
+these exits are offered in the catalog.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
