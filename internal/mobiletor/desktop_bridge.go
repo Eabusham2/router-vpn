@@ -84,6 +84,7 @@ type DesktopBridgeProof struct {
 	Healthy        bool                      `json:"healthy"`
 	HeartbeatAt    int64                     `json:"heartbeat_at"`
 	MTUReadback    *DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
+	EntryProof     *DesktopBridgeEntryProof  `json:"entry_proof,omitempty"`
 }
 
 // DesktopBridgeMTUReadback is authority from the same native connection's

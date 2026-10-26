@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"testing"
+	"time"
 
 	"router-vpn/internal/mobilemultihop"
 )
@@ -287,5 +288,54 @@ func TestDesktopPredecessorSourceBindsAssetsCredentialsAndGraph(t *testing.T) {
 	copy, err := decodeDesktopPredecessor(raw)
 	if err != nil || !reflect.DeepEqual(entry, copy) {
 		t.Fatal("canonical private identity changed", err)
+	}
+}
+
+func TestDesktopPredecessorReceiptIsBoundToCapturedEntry(t *testing.T) {
+	entry, _ := desktopEntryFixture(t, "shadowsocks", "", nil)
+	policy, err := NewDesktopBridgePolicyWithPredecessor(torHostEncode(t, desktopEntryExit(entry)), desktopSession, desktopIsolation, "linux", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	meta := policy.Metadata()
+	started := time.Now().Add(-time.Minute)
+	now := time.Now()
+	exact := DesktopBridgeEntryProof{EntryID: entry.ID(), EntrySHA256: entry.Proof().Fingerprint(), CheckedAt: now}
+	if !meta.ValidEntryProof(&exact, started, now) {
+		t.Fatal("exact native entry receipt rejected")
+	}
+	for _, kind := range []string{"missing", "node", "source", "zero", "before-owner", "future"} {
+		t.Run(kind, func(t *testing.T) {
+			changed := exact
+			receipt := &changed
+			switch kind {
+			case "missing":
+				receipt = nil
+			case "node":
+				changed.EntryID = "other-router"
+			case "source":
+				changed.EntrySHA256 = strings.Repeat("f", 64)
+			case "zero":
+				changed.CheckedAt = time.Time{}
+			case "before-owner":
+				changed.CheckedAt = started.Add(-2 * time.Second)
+			case "future":
+				changed.CheckedAt = now.Add(2 * time.Second)
+			}
+			if meta.ValidEntryProof(receipt, started, now) {
+				t.Fatal("unowned native entry receipt accepted")
+			}
+		})
+	}
+	direct, err := NewDesktopBridgePolicy(torHostEncode(t, desktopProfile()), desktopSession, desktopIsolation, "linux")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !direct.Metadata().ValidEntryProof(nil, started, now) || direct.Metadata().ValidEntryProof(&exact, started, now) {
+		t.Fatal("direct Tor inherited unowned Router proof")
+	}
+	raw, _ := json.Marshal(DesktopBridgeProof{Policy: direct.Metadata()})
+	if strings.Contains(string(raw), "entry_proof") {
+		t.Fatal("direct proof binary contract gained an empty entry receipt")
 	}
 }

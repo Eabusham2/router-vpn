@@ -3,6 +3,7 @@ package mobiletor
 import (
 	"encoding/json"
 	"errors"
+	"time"
 
 	"router-vpn/internal/mobilemultihop"
 )
@@ -23,6 +24,23 @@ type DesktopBridgePredecessorCapture struct {
 type DesktopPredecessor struct {
 	mode, profile, config, assets, tag string
 	proof                              *PredecessorProof
+}
+
+// DesktopBridgeEntryProof is emitted only after the native owner authenticates
+// the captured private Router API through its retained encrypted entry. It
+// contains no credential and is separate from the Tor Project exit proof.
+type DesktopBridgeEntryProof struct {
+	EntryID     string    `json:"entry_id"`
+	EntrySHA256 string    `json:"entry_sha256"`
+	CheckedAt   time.Time `json:"checked_at"`
+}
+
+func (m DesktopBridgeMetadata) ValidEntryProof(proof *DesktopBridgeEntryProof, started, now time.Time) bool {
+	if m.EntryID == "" {
+		return proof == nil
+	}
+	return proof != nil && proof.EntryID == m.EntryID && proof.EntrySHA256 == m.EntrySHA256 &&
+		!proof.CheckedAt.IsZero() && !proof.CheckedAt.Before(started.Add(-time.Second)) && !proof.CheckedAt.After(now.Add(time.Second))
 }
 
 func NewDesktopPredecessor(mode, profileJSON, configJSON, assetsSHA256 string) (*DesktopPredecessor, error) {
@@ -53,6 +71,7 @@ func NewDesktopPredecessor(mode, profileJSON, configJSON, assetsSHA256 string) (
 }
 
 func (p *DesktopPredecessor) Mode() string             { return p.mode }
+func (p *DesktopPredecessor) ID() string               { return p.proof.id }
 func (p *DesktopPredecessor) Profile() string          { return p.profile }
 func (p *DesktopPredecessor) Config() string           { return p.config }
 func (p *DesktopPredecessor) AssetsSHA256() string     { return p.assets }

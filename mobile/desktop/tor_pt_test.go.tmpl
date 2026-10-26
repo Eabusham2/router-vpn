@@ -1,12 +1,17 @@
 package routervpndesktoppt
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
 	"net/netip"
 	"reflect"
 	"sort"
@@ -18,9 +23,11 @@ import (
 
 	mDNS "github.com/miekg/dns"
 	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/common/dialer"
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/option"
 	"github.com/sagernet/sing-box/routervpn/common"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -770,5 +777,294 @@ func TestRouterVPNDesktopTorPTCloseRetainsActualSnowflakeDNSWorker(t *testing.T)
 	// must never get far enough to attempt even that captured physical call.
 	if physicalTCP.Load() != 0 {
 		t.Fatal("retired Snowflake lookup reached the physical socket callback")
+	}
+}
+
+// The fixture replaces only the final encrypted-entry socket operation. The
+// shipping constructor still builds and retains the actual native DetourDialer,
+// explicit DNS transport and immutable complete-node predecessor.
+type desktopPTEntryOutbound struct {
+	outbound.Adapter
+	*desktopPTLower
+}
+
+type desktopPTEntryManager struct {
+	adapter.OutboundManager
+	mu    sync.Mutex
+	owner adapter.Outbound
+}
+
+func (m *desktopPTEntryManager) Outbound(tag string) (adapter.Outbound, bool) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.owner, m.owner != nil && m.owner.Tag() == tag
+}
+func (m *desktopPTEntryManager) replace(owner adapter.Outbound) {
+	m.mu.Lock()
+	m.owner = owner
+	m.mu.Unlock()
+}
+func (*desktopPTEntryManager) Default() adapter.Outbound {
+	panic("Tor predecessor used implicit default outbound")
+}
+
+func desktopPTEntry(t *testing.T) (*desktopPTFixture, *mobiletor.DesktopPredecessor, *desktopPTEntryManager) {
+	t.Helper()
+	f := newDesktopPTFixture(t)
+	profile := map[string]any{"id": "captured-router", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+		"router_api": "http://10.80.0.1:8787", "api_token": "captured-entry-token", "endpoint": "192.0.2.44",
+		"dns_mode": "home", "adguard_ipv4": "10.80.0.53", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto"}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true, "mtu": 1280}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443,
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}}}
+	raw, _ := json.Marshal(profile)
+	config, _ := json.Marshal(graph)
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(config)})
+	compiled, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), string(raw), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := mobiletor.NewDesktopPredecessor("shadowsocks", string(raw), compiled.Config(), strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	manager := &desktopPTEntryManager{owner: &desktopPTEntryOutbound{Adapter: outbound.NewAdapter("shadowsocks", entry.Tag(), []string{"tcp", "udp"}, nil), desktopPTLower: f.lower}}
+	service.MustRegister[adapter.OutboundManager](f.ctx, manager)
+	f.dns.replace("bootstrap", desktopPTRemote("bootstrap", entry.Tag(), "10.80.0.53"))
+	f.query, err = adapter.DNSQueryOptionsFrom(f.ctx, f.options.DomainResolver)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return f, entry, manager
+}
+func desktopPTEntryOwner(t *testing.T, f *desktopPTFixture, entry *mobiletor.DesktopPredecessor, plan mobiletor.Plan) *Owner {
+	t.Helper()
+	owner, err := NewWithPredecessor(f.ctx, plan, *f.options.DomainResolver, entry, f.active.Load)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { closeDesktopPT(t, owner) })
+	return owner
+}
+func desktopPTEntryReply(t *testing.T, destination M.Socksaddr, node string) net.Conn {
+	t.Helper()
+	if destination.String() != "10.80.0.1:8787" {
+		t.Fatalf("private entry proof changed destination: %s", destination)
+	}
+	client, server := net.Pipe()
+	go func() {
+		defer server.Close()
+		_ = server.SetDeadline(time.Now().Add(3 * time.Second))
+		request, err := http.ReadRequest(bufio.NewReader(server))
+		if err != nil {
+			t.Error("private entry request", err)
+			return
+		}
+		if request.Method != "GET" || request.URL.String() != "/health" || request.Host != "10.80.0.1:8787" || request.Header.Get("Authorization") != "Bearer captured-entry-token" {
+			t.Error("private entry request lost exact method, origin or credential")
+			return
+		}
+		body := fmt.Sprintf(`{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, node)
+		_, _ = fmt.Fprintf(server, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+	}()
+	return client
+}
+
+func TestRouterVPNDesktopTorPTEntryRequiresActualPrivateProof(t *testing.T) {
+	for _, kind := range []string{"unproved", "wrong-node", "foreign-dns"} {
+		t.Run(kind, func(t *testing.T) {
+			f, entry, _ := desktopPTEntry(t)
+			plan, _ := desktopPTObfs4(t)
+			if kind == "foreign-dns" {
+				f.dns.replace("bootstrap", desktopPTRemote("bootstrap", "", "192.0.2.53"))
+				if owner, err := NewWithPredecessor(f.ctx, plan, *f.options.DomainResolver, entry, f.active.Load); err == nil {
+					closeDesktopPT(t, owner)
+					t.Fatal("physical bootstrap DNS replaced captured entry DNS")
+				}
+				return
+			}
+			owner := desktopPTEntryOwner(t, f, entry, plan)
+			if kind == "wrong-node" {
+				f.lower.dial = func(_ context.Context, _ string, destination M.Socksaddr) (net.Conn, error) {
+					return desktopPTEntryReply(t, destination, strings.Repeat("f", 64)), nil
+				}
+				if receipt, err := owner.ProvePredecessor(context.Background()); err == nil || receipt != nil {
+					t.Fatal("wrong Router node minted an entry receipt")
+				}
+			}
+			if err := owner.Start(); err == nil {
+				t.Fatal("native PT started without actual private entry proof")
+			}
+			if owner.Current() {
+				t.Fatal("unproved Router entry became current")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPTEntryCarriesRealObfs4Traffic(t *testing.T) {
+	f, entry, _ := desktopPTEntry(t)
+	plan, factory := desktopPTObfs4(t)
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	done := make(chan error, 1)
+	go func() {
+		raw, err := listener.Accept()
+		if err != nil {
+			done <- err
+			return
+		}
+		_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+		remote, err := factory.WrapConn(raw)
+		if err != nil {
+			raw.Close()
+			done <- err
+			return
+		}
+		_, err = io.Copy(remote, remote)
+		remote.Close()
+		done <- err
+	}()
+	f.lower.dial = func(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+		if network != "tcp" {
+			return nil, errors.New("entry changed TCP transport")
+		}
+		if destination.String() == "10.80.0.1:8787" {
+			return desktopPTEntryReply(t, destination, strings.Repeat("a", 64)), nil
+		}
+		if destination.String() != plan.Bridges[0].Target {
+			return nil, errors.New("entry changed captured bridge")
+		}
+		return (&net.Dialer{}).DialContext(ctx, "tcp4", listener.Addr().String())
+	}
+	owner := desktopPTEntryOwner(t, f, entry, plan)
+	before := time.Now()
+	receipt, err := owner.ProvePredecessor(context.Background())
+	if err != nil || receipt == nil || receipt.EntryID != entry.ID() || receipt.EntrySHA256 != entry.Proof().Fingerprint() || receipt.CheckedAt.Before(before) {
+		t.Fatal("private entry receipt differs from captured source", receipt, err)
+	}
+	listeners := desktopPTStart(t, owner)
+	client, reply := desktopPTConnect(t, listeners["obfs4"], plan.Bridges[0])
+	if reply != 0 {
+		client.Close()
+		t.Fatal("entry-routed real obfs4 rejected", reply)
+	}
+	payload := bytes.Repeat([]byte("Router entry retains Tor PT traffic;"), 128)
+	if _, err := client.Write(payload); err != nil {
+		client.Close()
+		t.Fatal(err)
+	}
+	actual := make([]byte, len(payload))
+	_, err = io.ReadFull(client, actual)
+	client.Close()
+	if err != nil || !bytes.Equal(actual, payload) {
+		t.Fatal("entry native detour lost actual obfs4 payload", err)
+	}
+	if err := <-done; err != nil && !errors.Is(err, net.ErrClosed) {
+		t.Fatal(err)
+	}
+	if f.lower.calls.Load() != 2 || f.router.calls.Load() != 0 {
+		t.Fatal("entry proof or bridge bypassed exact native detour")
+	}
+}
+
+func TestRouterVPNDesktopTorPTEntryReplacementCannotRevive(t *testing.T) {
+	f, entry, manager := desktopPTEntry(t)
+	plan, _ := desktopPTObfs4(t)
+	f.lower.dial = func(_ context.Context, _ string, destination M.Socksaddr) (net.Conn, error) {
+		return desktopPTEntryReply(t, destination, strings.Repeat("a", 64)), nil
+	}
+	owner := desktopPTEntryOwner(t, f, entry, plan)
+	if _, err := owner.ProvePredecessor(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	desktopPTStart(t, owner)
+	original, _ := manager.Outbound(entry.Tag())
+	manager.replace(&desktopPTEntryOutbound{Adapter: outbound.NewAdapter("shadowsocks", entry.Tag(), []string{"tcp"}, nil), desktopPTLower: &desktopPTLower{}})
+	if owner.Current() {
+		t.Fatal("same-label replacement entry retained PT authority")
+	}
+	manager.replace(original)
+	if owner.Current() {
+		t.Fatal("restoring old label revived retired entry")
+	}
+	if receipt, err := owner.ProvePredecessor(context.Background()); err == nil || receipt != nil {
+		t.Fatal("retired entry minted a fresh private proof")
+	}
+}
+
+func TestRouterVPNDesktopTorPTEntryRejectsLazyForeignDetour(t *testing.T) {
+	f, entry, manager := desktopPTEntry(t)
+	plan, _ := desktopPTObfs4(t)
+	original, _ := manager.Outbound(entry.Tag())
+	manager.replace(&desktopPTEntryOutbound{Adapter: outbound.NewAdapter("shadowsocks", entry.Tag(), []string{"tcp"}, nil), desktopPTLower: &desktopPTLower{}})
+	detour := dialer.NewDetour(manager, entry.Tag(), false)
+	if err := dialer.InitializeDetour(detour); err != nil {
+		t.Fatal(err)
+	}
+	manager.replace(original)
+	options := f.options
+	options.Detour = entry.Tag()
+	lower := dialer.NewResolveDialer(f.ctx, detour, false, "bootstrap", f.query, 0)
+	if owner, err := newCapturedOwner(f.ctx, plan, options, f.active.Load, lower, entry); err == nil {
+		closeDesktopPT(t, owner)
+		t.Fatal("native detour retained a foreign object under a restored entry label")
+	}
+}
+
+func TestRouterVPNDesktopTorPTEntryCloseWaitsForPrivateProofDrain(t *testing.T) {
+	f, entry, _ := desktopPTEntry(t)
+	plan, _ := desktopPTObfs4(t)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	late, peer := net.Pipe()
+	defer peer.Close()
+	f.lower.dial = func(context.Context, string, M.Socksaddr) (net.Conn, error) {
+		close(entered)
+		<-release
+		return late, nil
+	}
+	owner := desktopPTEntryOwner(t, f, entry, plan)
+	proved := make(chan error, 1)
+	go func() {
+		receipt, err := owner.ProvePredecessor(context.Background())
+		if receipt != nil {
+			proved <- errors.New("late entry proof published receipt")
+			return
+		}
+		proved <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("private entry dial never began")
+	}
+	wait, cancel := context.WithTimeout(context.Background(), 25*time.Millisecond)
+	err := owner.Close(wait)
+	cancel()
+	if !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatal("pending private proof falsely acknowledged drained", err)
+	}
+	releaseOnce.Do(func() { close(release) })
+	select {
+	case err := <-proved:
+		if err == nil || strings.Contains(err.Error(), "published receipt") {
+			t.Fatal("stale private proof adopted", err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("late private proof did not drain")
+	}
+	closeDesktopPT(t, owner)
+	if err := peer.SetReadDeadline(time.Now().Add(time.Second)); err != nil && !errors.Is(err, io.ErrClosedPipe) {
+		t.Fatal(err)
+	}
+	var one [1]byte
+	if _, err := peer.Read(one[:]); !errors.Is(err, io.EOF) {
+		t.Fatal("late private proof socket remained open", err)
 	}
 }

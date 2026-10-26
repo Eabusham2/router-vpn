@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/common/dialer"
@@ -14,6 +15,7 @@ import (
 	"github.com/sagernet/sing-box/routervpn/common"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing-box/routervpn/torpt"
+	S "github.com/sagernet/sing/common"
 	M "github.com/sagernet/sing/common/metadata"
 	N "github.com/sagernet/sing/common/network"
 	"github.com/sagernet/sing/service"
@@ -28,20 +30,28 @@ const Type = "routervpn-tor"
 // the exact Box/network-generation witness and must retain this owner after any
 // Start attempt until Close succeeds.
 type Owner struct {
-	ctx       context.Context
-	cancel    context.CancelFunc
-	plan      mobiletor.Plan
-	lower     N.Dialer
-	network   *torNetworkCapture
-	options   torpt.NetworkOptions
-	physical  func() bool
-	retired   atomic.Bool
-	ready     atomic.Bool
-	mu        sync.Mutex
-	started   bool
-	bridges   *torpt.Bridges
-	startDone chan struct{}
-	watchDone chan struct{}
+	ctx           context.Context
+	cancel        context.CancelFunc
+	plan          mobiletor.Plan
+	lower         N.Dialer
+	network       *torNetworkCapture
+	upstream      *torUpstreamCapture
+	entry         *mobiletor.DesktopPredecessor
+	entryNetwork  *mobiletor.Network
+	entryProved   atomic.Bool
+	entryWorkers  sync.WaitGroup
+	entryJoinOnce sync.Once
+	entryJoined   chan struct{}
+	options       torpt.NetworkOptions
+	physical      func() bool
+	retired       atomic.Bool
+	ready         atomic.Bool
+	mu            sync.Mutex
+	started       bool
+	closing       bool
+	bridges       *torpt.Bridges
+	startDone     chan struct{}
+	watchDone     chan struct{}
 }
 
 // New opens no socket. Its direct dialer is the pinned native core's actual
@@ -49,6 +59,20 @@ type Owner struct {
 // would route back into the TUN. The explicit resolver is captured with all
 // native query options and checked for Tor cycles before PT admission.
 func New(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, current func() bool) (*Owner, error) {
+	return newNativeOwner(ctx, plan, resolver, nil, current)
+}
+
+// NewWithPredecessor captures the same complete Router entry already matched
+// to the started Box. It cannot substitute the default outbound or physical
+// route for the saved entry, and ProvePredecessor must succeed before Start.
+func NewWithPredecessor(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool) (*Owner, error) {
+	if predecessor == nil || predecessor.Tag() == "" || predecessor.Tag() == mobiletor.ProfileOutboundTag {
+		return nil, errors.New("desktop Tor PT requires its exact captured Router predecessor")
+	}
+	return newNativeOwner(ctx, plan, resolver, predecessor, current)
+}
+
+func newNativeOwner(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool) (*Owner, error) {
 	if ctx == nil || ctx.Err() != nil || current == nil || !current() || resolver.Server == "" {
 		return nil, errors.New("desktop Tor PT requires the exact live native physical owner and explicit bootstrap DNS")
 	}
@@ -66,17 +90,25 @@ func New(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolve
 	}
 	options := option.DialerOptions{}
 	options.DomainResolver = &resolver
+	if predecessor != nil {
+		options.Detour = predecessor.Tag()
+	}
 	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options, RemoteIsDomain: true, NewDialer: true})
 	if err != nil {
 		return nil, errors.New("desktop Tor physical native dialer could not be captured")
 	}
-	return newOwner(ctx, plan, options, current, lower)
+	return newCapturedOwner(ctx, plan, options, current, lower, predecessor)
 }
 
 // This internal constructor shares the shipping capture/ownership path with
 // tests whose final native socket operation is a local fixture.
 func newOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer) (*Owner, error) {
-	if ctx == nil || ctx.Err() != nil || current == nil || !current() || lower == nil || options.Detour != "" || options.DomainResolver == nil || options.DomainResolver.Server == "" {
+	return newCapturedOwner(ctx, plan, options, current, lower, nil)
+}
+
+func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer, predecessor *mobiletor.DesktopPredecessor) (*Owner, error) {
+	if ctx == nil || ctx.Err() != nil || current == nil || !current() || lower == nil || options.DomainResolver == nil || options.DomainResolver.Server == "" ||
+		(predecessor == nil && options.Detour != "") || (predecessor != nil && options.Detour != predecessor.Tag()) {
 		return nil, errors.New("desktop Tor PT physical capture is missing or retired")
 	}
 	lines := make([]string, len(plan.Bridges))
@@ -88,6 +120,26 @@ func newOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOpt
 		return nil, err
 	}
 	owned, cancel := context.WithCancel(ctx)
+	upstream, err := captureTorUpstream(owned, mobiletor.ProfileOutboundTag, options.Detour)
+	if err != nil {
+		cancel()
+		return nil, err
+	}
+	if predecessor != nil {
+		// Force the native detour to retain its actual object now. Matching the
+		// manager again is insufficient if its first lazy lookup acquired a
+		// replacement owner under the same label before admission.
+		detour, ok := S.Cast[*dialer.DetourDialer](lower)
+		if !ok || upstream == nil {
+			cancel()
+			return nil, errors.New("desktop Tor predecessor dialer is not the native captured detour")
+		}
+		selected, err := detour.Dialer()
+		if err != nil || selected != upstream.owners[options.Detour].owner || upstream.current() != nil {
+			cancel()
+			return nil, errors.New("desktop Tor predecessor changed during native dialer capture")
+		}
+	}
 	capture, err := captureTorNetwork(owned, mobiletor.ProfileOutboundTag, options, lower)
 	if err != nil {
 		cancel()
@@ -98,17 +150,59 @@ func newOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOpt
 		cancel()
 		return nil, err
 	}
-	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, lower: lower, network: capture, options: network, physical: current,
-		startDone: make(chan struct{}), watchDone: make(chan struct{})}
+	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, lower: lower, network: capture, upstream: upstream, entry: predecessor, options: network, physical: current,
+		startDone: make(chan struct{}), watchDone: make(chan struct{}), entryJoined: make(chan struct{})}
 	owner.options.Resolve = owner.resolve
+	if predecessor != nil {
+		owner.entryNetwork, err = mobiletor.NewNetwork(owned, owner.dial, nil)
+		if err != nil {
+			cancel()
+			return nil, err
+		}
+	}
 	if err := owner.current(); err != nil {
 		cancel()
+		if owner.entryNetwork != nil {
+			_ = owner.entryNetwork.Close(context.Background())
+		}
 		return nil, err
 	}
 	return owner, nil
 }
 
 func (o *Owner) Context() context.Context { return o.ctx }
+
+// ProvePredecessor authenticates only the immutable private Router origin.
+// The proof worker and all late sockets remain owned until actual Close drain.
+func (o *Owner) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeEntryProof, error) {
+	if o == nil || ctx == nil || o.entry == nil || o.entryNetwork == nil {
+		return nil, errors.New("desktop Tor has no captured private predecessor proof")
+	}
+	o.mu.Lock()
+	if o.closing || o.retired.Load() || o.ctx.Err() != nil || ctx.Err() != nil {
+		o.mu.Unlock()
+		return nil, errors.New("desktop Tor predecessor proof belongs to a retired owner")
+	}
+	o.entryWorkers.Add(1)
+	o.mu.Unlock()
+	defer o.entryWorkers.Done()
+	if err := o.current(); err != nil {
+		return nil, err
+	}
+	if err := o.entry.Proof().Prove(ctx, o.entryNetwork.DialContext); err != nil {
+		return nil, err
+	}
+	if ctx.Err() != nil || o.current() != nil {
+		return nil, errors.New("desktop Tor predecessor proof completed after retirement")
+	}
+	o.entryProved.Store(true)
+	if o.current() != nil {
+		return nil, errors.New("desktop Tor predecessor proof lost its native owner")
+	}
+	// Identity was already validated by the immutable source compiler. The
+	// receipt uses its non-secret profile identity, never a mutable UI label.
+	return &mobiletor.DesktopBridgeEntryProof{EntryID: o.entry.ID(), EntrySHA256: o.entry.Proof().Fingerprint(), CheckedAt: time.Now()}, nil
+}
 
 func (o *Owner) Start() error {
 	o.mu.Lock()
@@ -122,6 +216,11 @@ func (o *Owner) Start() error {
 	if err := o.current(); err != nil {
 		close(o.watchDone)
 		return err
+	}
+	if o.entry != nil && !o.entryProved.Load() {
+		o.retire()
+		close(o.watchDone)
+		return errors.New("desktop Tor PT cannot start before its private Router entry is proved")
 	}
 	bridges, err := torpt.StartWithNetwork(o.ctx, o.plan, o.dial, o.packets, o.options)
 	if err != nil {
@@ -175,7 +274,7 @@ func (o *Owner) current() error {
 	if o == nil {
 		return net.ErrClosed
 	}
-	if o.retired.Load() || o.ctx.Err() != nil || !o.physical() || o.network.current() != nil {
+	if o.retired.Load() || o.ctx.Err() != nil || !o.physical() || o.network.current() != nil || o.upstream.current() != nil {
 		o.retire()
 		return errors.New("desktop Tor PT physical network, resolver or native owner retired")
 	}
@@ -185,6 +284,7 @@ func (o *Owner) current() error {
 func (o *Owner) retire() {
 	o.retired.Store(true)
 	o.ready.Store(false)
+	o.entryProved.Store(false)
 	o.cancel()
 }
 
@@ -257,12 +357,24 @@ func (o *Owner) Close(ctx context.Context) error {
 	}
 	o.retire()
 	o.mu.Lock()
+	o.closing = true
 	if !o.started {
 		o.started = true
 		close(o.startDone)
 		close(o.watchDone)
 	}
 	o.mu.Unlock()
+	o.entryJoinOnce.Do(func() { go func() { o.entryWorkers.Wait(); close(o.entryJoined) }() })
+	select {
+	case <-o.entryJoined:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	if o.entryNetwork != nil {
+		if err := o.entryNetwork.Close(ctx); err != nil {
+			return err
+		}
+	}
 	select {
 	case <-o.startDone:
 	case <-ctx.Done():
