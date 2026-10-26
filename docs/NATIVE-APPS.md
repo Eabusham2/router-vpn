@@ -2,7 +2,7 @@
 
 Router VPN client packages are **generic application/runtime packages**. Installing an app and linking a home router are separate operations. The app is installed once; private router/node data can then be added, replaced, revoked or expanded without reinstalling.
 
-A source/build claim is not a physical-device release claim. Real VPN permission, route/DNS/IPv4/IPv6 behavior, reconnect/network-change handling, leak-negative behavior and exact selected-node/exit proof remain live gates where applicable.
+A source/build claim is not a physical-device release claim. Real VPN permission, route/DNS/IPv4/IPv6 behavior, reconnect/network-change handling, leak-negative behavior and exact selected-node/exit proof remain live gates where applicable. The current source contract is below; use the exact commit's native/package results for build evidence and [LIVE-RELEASE-EVIDENCE.md](LIVE-RELEASE-EVIDENCE.md) for device and deployment evidence. An older green release does not certify newer source.
 
 ## Windows
 
@@ -10,17 +10,17 @@ The Windows daily-use application is native WPF (`PresentationFramework`) and ta
 
 Windows source includes native raw WireGuard, full-device layered TUN/DNS paths, a Windows firewall kill-switch helper and real multihop where supported. WSL is not counted as the native Windows VPN implementation.
 
-Validated Windows custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. OpenVPN 2.7 profile import and native helper/adapter source remain implemented because Windows OpenVPN is still a target, but current product capability reports it unavailable until strict Windows lifecycle cleanup passes native leak tests. Unsupported graphs fail closed; every supported custom exit withholds Connected until its expected public exit is proven.
+The current native external-node path supports validated WireGuard, AmneziaWG, SOCKS5, HTTP CONNECT, HTTPS CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN profiles. OpenVPN readiness checks the packaged native engine; it is not unconditionally disabled on Windows. The older standard-exit/helper API has a separate, narrower contract. Every ordinary external connection requires selected DNS and expected-public-exit proof. See the graph boundaries below and [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md) for the shared native OpenVPN profile contract.
 
-Windows x64 also owns the pinned native Tor Expert Bundle/Lyrebird censorship-circumvention runtime for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets. Windows ARM64 reports Tor unavailable until Tor Project provides a pinned native Expert Bundle for that architecture.
+Windows owns a pinned standalone Tor process and Router VPN's native Go pluggable transports for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets. The active connection does not launch Lyrebird. Windows ARM64 uses the verified x64 Tor process under Windows 11 userspace compatibility; the app, Go transports, packet engine and driver remain ARM64. Hosts without the required execution support remain unavailable. See [WINDOWS-TOR-ARM64.md](WINDOWS-TOR-ARM64.md).
 
 ## macOS
 
 The macOS package contains a native AppKit/MapKit `RouterVPN.app` for amd64 and arm64 with its Router VPN application icon and native menu-bar status item. The menu-bar item provides **Open Router VPN**, **Emergency Stop** and **Quit Router VPN** while the app is running. The app owns a sibling Router VPN controller only when it starts that controller itself. Closing the app performs Router VPN emergency cleanup and stops only the owned process. The app contains no WebKit view.
 
-Native routing, PF kill-switch handling and real multihop are source-implemented. Standard custom exits support WireGuard, SOCKS5, Shadowsocks and Hysteria2. Native OpenVPN 2.7 supports direct and the safe TCP-over-entry case; unsupported OpenVPN/DNS/hop combinations fail closed.
+Native routing, PF kill-switch handling and real multihop are source-implemented. The current native external-node path supports the same eight ordinary protocol families listed for Windows, including OpenVPN inside its owned packet runtime. The legacy OpenVPN 2.7 helper's direct/TCP-over-entry restrictions do not describe the broader current native path. The selected graph, transport, DNS and credentials must pass their actual compiler and proof contracts.
 
-macOS also ships the native Tor bridge builder/runtime around Router VPN-owned pinned Lyrebird/Tor components. The UI exposes obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets while keeping private bridge lines out of public profile/status output.
+macOS also ships the native Tor bridge builder with an owned standalone Tor process and native Go pluggable transports. The UI exposes obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets while keeping private bridge lines out of public profile/status output.
 
 Unsigned/local builds use the targeted System Settings → Privacy & Security → Open Anyway flow only after verifying the artifact. Do not globally disable Gatekeeper. Signed/notarized distribution plus physical macOS visual/network validation remain release gates.
 
@@ -28,35 +28,43 @@ Unsigned/local builds use the targeted System Settings → Privacy & Security �
 
 Linux packages contain a native GTK3 application for amd64 and arm64, built on matching native GitHub runners. It uses libcurl/json-glib for the loopback controller API and does not launch or embed a browser. The package remains generic and requires GTK3/libcurl/json-glib desktop runtime libraries.
 
-Linux has broad native runtime coverage, nftables kill-switch handling and real multihop. Validated custom exits support WireGuard, SOCKS5, Shadowsocks, Hysteria2 and a native OpenVPN 2.7 direct/safe TCP-over-entry path. Expected-public-exit proof is required before Connected.
+Linux has native routing, nftables kill-switch handling and real multihop. Its current native external-node path supports WireGuard, AmneziaWG, SOCKS5, HTTP CONNECT, HTTPS CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN. Direct and composed paths retain the selected DNS, device policy and expected-public-exit proof inside one owned packet runtime; the legacy helper API remains a separate, narrower path.
 
-Linux also ships the native Tor censorship-bridge panel and Router VPN-owned pinned Lyrebird/Tor runtime for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets.
+Linux also ships the native Tor censorship-bridge panel, owned standalone Tor process and native Go pluggable transports for obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets.
 
 ## Android
 
 Android is a native `VpnService` application. It has real WireGuard and native AmneziaWG paths plus the pinned combined libbox/Xray runtime for supported layered modes. AUTO/SMART/CUSTOM require exact selected-node private path proof. Strict embedded sessions require the platform lockdown contract; unsupported strict paths fail closed.
 
-The first real Android multihop subset is standard-WireGuard entry → supported Shadowsocks/Hysteria2 exit with exit proof. AWG-entry and incompatible mixed-engine multihop remain unavailable rather than simulated.
+Android multihop now composes supported WG/AWG, PQ, proxy, native Xray, helper/composite and complete MAX families inside one owned system VPN. Entry and exit retain separate identities, credentials, Start Layers and proofs. Local, Server and Compare both use the implemented graph and pairing contracts; family support does not establish every possible combination.
 
-Android also has an app-private typed custom-exit store and native Custom Exits UI. WireGuard, SOCKS5, Shadowsocks and Hysteria2 exits are supported through one full-device path with expected-public-exit proof. OpenVPN remains unavailable because this project does not ship a pinned native Android OpenVPN dataplane.
+The app-private custom-node store and native controls support WireGuard, AmneziaWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN through the shared external-policy compiler. OpenVPN runs as a userspace endpoint in the existing Libbox VPN owner; it does not start a second system VPN. Selected DNS, expected public exit and any required entry proof precede Connected. Paired OpenVPN Server/Compare requires independently provisioned Local and Server credentials; see [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md).
 
-Tor bridges remain unavailable on Android until Router VPN owns a real native Tor + pluggable-transport `VpnService` dataplane. They are not approximated as a SOCKS5-only path.
+Plain Tor and supported Tor bridges use the packaged native Tor and Go pluggable transports inside the existing VPN lifecycle. Direct and captured Router-entry Local paths require live circuit, DNS and entry proofs as applicable. Tor Server/Compare remains unimplemented; an ordinary external execution receipt cannot authorize a Tor session.
 
-Physical VPN permission, lockdown, reconnect/network change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative validation remain release gates.
+Physical VPN permission, lockdown, reconnect/network change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative validation remain release gates. Current workflows assemble debug APKs. Persistent production signing and real-device upgrade acceptance remain open and are not proved by an APK build or provenance check.
 
 ## iOS / iPadOS
 
-The SwiftUI app uses a real pinned WireGuardKit PacketTunnel for raw WireGuard and the pinned Libbox Apple bridge for supported Router VPN layered profiles. The tunnel verifies the exact selected node before reporting success.
+The SwiftUI app uses the pinned WireGuardKit/AmneziaWG owner for applicable raw WG/AWG paths and the pinned Libbox Apple bridge for layered, adaptive-MTU, multihop, Tor and external paths. One owned PacketTunnel retains the selected graph and verifies the exact node, DNS and required exit before reporting success.
 
 Strict mode uses NetworkExtension route lockdown (`includeAllNetworks` + `enforceRoutes`), aligns local-network exclusion with imported LAN policy and enables on-demand reconnect; strict startup fails closed when those platform controls are not active.
 
-Per-node private bundle storage and validated external-node selection are implemented. External WireGuard, SOCKS5, Shadowsocks and Hysteria2 use the Libbox PacketTunnel path and require the exact expected public exit before Connected.
+Per-node private bundle storage and validated external-node selection are implemented. External WireGuard, AmneziaWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN use the Libbox PacketTunnel path and require selected-DNS and expected-public-exit proof. The original OpenVPN profile, TLS material, ordered remotes and supported fallback transports remain captured; arbitrary provider profiles are not promised.
 
-External OpenVPN, AmneziaWG-only paths and full desktop-equivalent multihop remain unavailable until a real pinned Apple dataplane exists for them. Unsupported MAX/ALL combinations remain unavailable rather than being inferred from labels.
+The native graph includes supported WG/AWG, PQ, proxy/Xray, helper/composite and complete MAX families, with separately captured entry and exit Start Layers. AUTO, SMART AUTO, CUSTOM and ALL preserve their owned trial, proof and restoration rules; ALL selects validated complete MAX branches. This source support does not establish unrestricted graph parity or physical acceptance.
 
-Tor bridges likewise remain unavailable until Router VPN ships a real native Tor + pluggable-transport PacketTunnel dataplane; the app does not fake them with plain SOCKS5.
+Plain Tor and supported Tor bridges use the native Tor and pluggable-transport PacketTunnel implementation. Direct and captured Router-entry Local paths preserve their own circuit, selected-DNS and entry proofs. Tor Server/Compare remains unimplemented.
 
 Physical iPhone/iPad permission, route-lockdown, reconnect/network change, DNS/IPv4/IPv6, Libbox/custom-exit traffic, leak-negative behavior and signing validation remain release gates.
+
+## Graph boundaries
+
+The desktop Router VPN node-to-node API currently composes a WG/AWG entry with a Shadowsocks or Hysteria2 exit. It captures both nodes, their Start Layers, policy and the proved Local/Server execution. The desktop external-node API separately supports the broader captured Router-entry mode set and ordinary imported entry/exit protocols. Mobile node-to-node graphs also have broader supported families. A graph accepted by one API is not evidence that another API or platform supports it. Broader requested desktop node-to-node composition remains unfinished.
+
+Ordinary external Server/Compare paths require a paired Router entry with an authenticated isolated execution owner and the exit's required independent credentials and response probes. An unmanaged external provider import cannot authorize server administration. OpenVPN remotes, TLS/authentication options, transport nesting, MTU and Start Layer maps must satisfy the bounded native contract; unsupported directives and incompatible graphs are rejected without dropping policy. See [MULTIHOP-EXECUTION.md](MULTIHOP-EXECUTION.md) and [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md).
+
+Desktop Tor supports direct bridges and captured Router-entry Local graphs. Tor Server/Compare, ordinary external predecessors, exit-side desktop Tor padding and strict protection for dynamic desktop PT egress remain unfinished. Existing predecessor padding and virtual Jumbo capacity do not close those separate requirements. Applicable native compilation, current-SHA package verification and physical acceptance remain required for every implemented path.
 
 ## Native Speed Lab
 
@@ -66,13 +74,13 @@ Speed Lab measures real Internet download/upload throughput, idle latency distri
 
 The default test follows the exact current path. Temporary tests are transactional: they may construct only a platform-real configuration, must not overwrite the saved profile, and restore the prior runtime/state after the test. Results are rejected if the measured session/graph changes before adoption.
 
-Where real multihop exists, per-hop latency and throughput are measured independently and bound to the exact launched graph. Desktop/Android use distinct private proof lanes for entry and exit so identical private service addresses cannot be mislabeled. iOS does not pretend desktop-equivalent temporary multihop exists. See `docs/SPEED-LAB.md`.
+Supported multihop measurements keep entry and exit identity separate even when the nodes reuse private addresses. Android and iPhone/iPad also expose an owned native routed-hop measurement action, and iPhone/iPad temporary tests can use the saved supported multihop graph. Results describe the cumulative device-to-entry and device-through-entry-to-exit paths; they do not invent segment bandwidth or extend the supported graph family. See `docs/SPEED-LAB.md`.
 
 ## Tor censorship-circumvention policy
 
 The Tor bridge family uses vetted Tor circuit cryptography plus real pluggable transports: **obfs4, meek/meek_lite, Snowflake, WebTunnel and validated Auto/Custom bridge sets**. Imported profile data cannot inject executable paths or raw `ClientTransportPlugin` commands; the trusted runtime owns PT registration and Tor bootstrap.
 
-A single literal obfs4 bridge can use the stricter endpoint-owned pre-tunnel policy. Dynamic/CDN/WebRTC bootstrap used by Snowflake, meek and WebTunnel is not falsely treated as covered by an endpoint-only strict kill switch; incompatible strict combinations fail closed. Tor remains the proved encrypted final path rather than a cosmetic upstream hop, and earlier homemade XOR/custom-cipher ideas are not part of the product.
+On desktop, strict protection currently requires one fixed literal obfs4 bridge. Dynamic/CDN/WebRTC bootstrap used by Snowflake, meek and WebTunnel requires additional owned egress enforcement; incompatible strict combinations fail closed. Mobile uses its own system VPN/route-lockdown contract and does not inherit that desktop firewall claim. Tor remains the proved encrypted final path. Compatible Router entry Start Layers may use AES-256-GCM with optional XOR whitening; whitening is obfuscation alongside authenticated encryption, never a substitute cipher.
 
 ## Native application updates
 
@@ -96,4 +104,4 @@ Daily client forwarding is explicit and owned by the authenticated requesting tu
 
 ## Truth boundary
 
-Unsupported platform capabilities remain unavailable with a real reason. CI/source readiness does not replace physical full-device validation, and UI/CSS must never force a mode or platform feature Ready/Connected.
+Unsupported platform capabilities remain unavailable with a real reason and remain unfinished requirements until implemented and verified. CI/source readiness does not replace physical full-device validation, and UI/CSS must never force a mode or platform feature Ready/Connected.

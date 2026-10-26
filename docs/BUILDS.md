@@ -18,7 +18,7 @@ A release candidate is valid only for its exact source SHA. Do not deploy an old
 
 ## Desktop / Unix artifacts
 
-Generic checked packages are produced for supported targets including:
+The native desktop release package matrix contains:
 
 - Windows x64
 - Windows ARM64
@@ -28,8 +28,8 @@ Generic checked packages are produced for supported targets including:
 - macOS Apple Silicon
 - Linux x64
 - Linux ARM64
-- Linux ARMv7 controller/package target
-- supported FreeBSD/OpenBSD/NetBSD/DragonFly BSD/illumos controller/package targets
+
+`deploy/build-client.sh` also retains Linux ARMv7 and FreeBSD/OpenBSD/NetBSD/DragonFly BSD/illumos controller/helper targets where supported. Those targets are not evidence of an equivalent native daily-use application or of inclusion in the published ten-package native release. Their feasibility-qualified requirements remain accounted for separately.
 
 **PortableApps.com / PAF is not produced.** Use the normal Router VPN Portable ZIP.
 
@@ -43,13 +43,13 @@ CI execution still does not replace physical Windows full-device routing, DNS/IP
 
 ## Android
 
-The APK is a real native `VpnService` application. Build/runtime-contract CI covers the current native WireGuard/AmneziaWG and supported embedded libbox/Xray implementation. Android OpenVPN and unsupported multihop graphs remain unavailable rather than simulated.
+The APK is a real native `VpnService` application. Build/runtime-contract CI compiles WireGuard/AmneziaWG and the combined pinned Libbox/Xray runtime, including supported PQ, helper/composite and complete MAX graphs. It also packages native Tor/pluggable transports and the bounded userspace OpenVPN endpoint. Native constructor/configuration gates exercise supported captured graphs and missing-engine rejection; they do not prove all requested compositions or physical networking. See [NATIVE-APPS.md](NATIVE-APPS.md) and [MOBILE-OPENVPN.md](MOBILE-OPENVPN.md) for current boundaries.
 
-Physical Android VPN permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests remain release gates.
+Current Android workflows assemble debug APKs. Persistent production signing, signing-key continuity and real-device upgrade acceptance remain open. Physical VPN permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit traffic and leak-negative tests also remain release gates; native-library/provenance verification does not close them.
 
 ## iOS / iPadOS
 
-CI builds the SwiftUI app plus PacketTunnel with the pinned WireGuardKit and Libbox Apple bridge, then packages an unsigned re-signable IPA. This is no longer the retired UI-only preview/fail-closed-stub target.
+CI builds the SwiftUI app plus PacketTunnel with the pinned WireGuardKit/AmneziaWG and Libbox Apple bridge, including supported layered/multihop, Tor and bounded inline OpenVPN paths, then packages an unsigned re-signable IPA. Source and constructor gates remain separate from the actual Xcode app/extension build and package verification.
 
 A green unsigned build does not provide Apple signing/provisioning or physical-device proof. Legitimate signing plus real iPhone/iPad VPN permission, route-lockdown, reconnect, DNS/IPv4/IPv6, supported Libbox/custom-exit traffic and leak-negative validation remain release gates.
 
@@ -66,20 +66,24 @@ Physical macOS/Linux networking, custom-exit and leak-negative validation remain
 Generic platform packages are on demand:
 
 ```text
-matching same-SHA GitHub native/package artifact
+matching exact-SHA published GitHub Release asset
 ↓ if unavailable/unusable
-assemble only the requested complete package from same-image components where feasible
-↓ supported Windows/Portable only: bounded Go build for a missing required Go component
+matching same-SHA GitHub Actions native/package artifact
+↓ if unavailable/unusable
+Windows/Portable only: assemble the requested complete package from same-image components
+↓ if needed: bounded Go build of a missing approved Windows component
 ↓ if a true native platform component cannot be produced on the AI Board: fail closed with exact reason
 ↓
 validate/package the generic secret-free application
 ↓
-stream
+READY: retain the package and owned workspace for 30 minutes
 ↓
-cleanup temporary build/output
+download/retry without extending that deadline
+↓
+cleanup on expiry; Cancel/Delete now/shutdown clean immediately
 ```
 
-Private node data is **not injected into the public generic package**. Link/import/pair private nodes separately after installation. The GitHub artifact retention window may be short; the AI Board does not keep every platform archive permanently and does not fabricate missing native AppKit/GTK products.
+Private node data is **not injected into the public generic package**. Link/import/pair private nodes separately after installation. Cleanup failure remains visible and is retried. The GitHub artifact retention window may be short; the AI Board does not keep every platform archive permanently and does not fabricate missing native AppKit/GTK products. Android and iOS are exact-SHA artifact-only and never use this local fallback.
 
 ## Server images
 
@@ -89,4 +93,6 @@ Production custom server services are built/published by GitHub Actions for ARM6
 
 Current workflows can prove source/security contracts, package integrity, logical/raw mode contracts, native compilation, Windows normal/Portable execution and relocation, ARM64 server preflight, userspace WireGuard fallback, auxiliary proxy/runtime startup, generated mode validation, exact-SHA image publication and production-compose invariants.
 
-CI cannot prove a specific physical device, ISP/firewall/WAN path, OS permission flow, DNS/IPv4/IPv6 leak-negative behavior, third-party client interoperability, Apple distribution credentials, rendered visual quality or the live production deployment. Those remain separate manual/live release gates.
+CI results apply only to the exact commit and jobs that actually passed. A successful build or published package does not complete an unsupported requested feature, and an older green release cannot certify later source changes.
+
+CI cannot prove a specific physical device, ISP/firewall/WAN path, OS permission flow, DNS/IPv4/IPv6 leak-negative behavior, third-party client interoperability, Android production-signing/upgrade acceptance, Apple distribution credentials, rendered visual quality or the live production deployment. Those remain separate manual/live release gates.
