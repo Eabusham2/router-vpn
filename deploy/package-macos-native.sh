@@ -51,7 +51,7 @@ for arch in amd64 arm64; do
   copy_runtime "$dir"
 
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
-  CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
+  python3 "$ROOT/deploy/build-dnsproxy.py" build "darwin/$goarch" "$dir/router-vpn-dns"
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-start-layer-relay" ./cmd/start-layer-relay
   CGO_ENABLED=0 GOOS=darwin GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update
   chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/router-vpn-update" "$dir/modes/"*.sh

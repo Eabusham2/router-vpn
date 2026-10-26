@@ -105,6 +105,8 @@ def fake_source(root: Path) -> None:
     write(root / "docs" / "CLIENT.md")
     write(root / "SECURITY.md")
     write(root / "LICENSE", "MIT\n")
+    for relative in ("deploy/build-dnsproxy.py", "cmd/dnsproxy/go.mod", "cmd/dnsproxy/go.sum", "cmd/dnsproxy/THIRD-PARTY-NOTICES.json"):
+        write(root / relative, (ROOT / relative).read_text(encoding="utf-8"))
     icon = root / "deploy" / "materialize-desktop-icons.py"
     write(
         icon,
@@ -135,6 +137,9 @@ def fake_source(root: Path) -> None:
 
 
 def require(root: Path, *names: str) -> None:
+    app = root / "App/RouterVPN" if (root / "App/RouterVPN").is_dir() else root
+    require_notice = app / "DNS-PROXY-NOTICES.json"
+    assert require_notice.read_bytes() == (ROOT / "cmd/dnsproxy/THIRD-PARTY-NOTICES.json").read_bytes(), "fallback package lost the exact DNS proxy notices"
     for name in names:
         path = root / name
         assert path.is_file(), f"missing complete fallback component: {path}"
@@ -304,6 +309,32 @@ def main_with_metadata_fixture() -> int:
         base = td / "base"
         base.mkdir()
         fake_source(src)
+        # The optional missing Windows DNS component must enter its pinned
+        # nested-module builder with the same bounded workspace/toolchain.
+        # Intercept only the actual subprocess boundary, not dispatch logic.
+        with mock.patch.object(builder.subprocess, "run") as execute:
+            execute.return_value.returncode = 0
+            execute.return_value.stdout = ""
+            builder._go_build("/installed/go", src, td / "dns-dist", td / "dns-work",
+                              "windows", "arm64", "./cmd/dnsproxy", "router-vpn-dns.exe")
+            arguments = execute.call_args.args[0]
+            assert arguments == [builder.sys.executable, str(src / "deploy/build-dnsproxy.py"),
+                                 "build", "windows/arm64", str(td / "dns-dist/router-vpn-dns.exe"), "--go", "/installed/go"], arguments
+            assert execute.call_args.kwargs["cwd"] == src
+            assert execute.call_args.kwargs["timeout"] == builder.LOCAL_BUILD_TIMEOUT
+            assert execute.call_args.kwargs["env"]["GOMODCACHE"] == str(td / "dns-work/go-mod-cache")
+
+        notice_path = src / "cmd/dnsproxy/THIRD-PARTY-NOTICES.json"
+        valid_notice = notice_path.read_bytes()
+        notice_path.write_bytes(valid_notice + b"\n")
+        try:
+            builder.copy_generic_runtime(src, td / "corrupt-dns-notice")
+        except RuntimeError as exc:
+            assert "pinned input changed" in str(exc), exc
+        else:
+            raise AssertionError("generic fallback copied an unverified DNS notice")
+        finally:
+            notice_path.write_bytes(valid_notice)
 
         # Same-image prebuilt components must be preferred over a router-local
         # compile when the requested complete Windows/Portable set already exists.

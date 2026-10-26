@@ -18,9 +18,9 @@ func normalizeDNSUpstream(u upstream) (upstream, error) {
 		u.Protocol = "https"
 	case "dot":
 		u.Protocol = "tls"
-	case "h3", "doh3":
-		return upstream{}, errors.New("DoH3 is unavailable in the raw-tunnel DNS proxy; refusing to silently downgrade to HTTPS or UDP")
-	case "udp", "tcp", "tls", "https", "rescue":
+	case "doh3":
+		u.Protocol = "h3"
+	case "udp", "tcp", "tls", "https", "h3", "rescue":
 	default:
 		return upstream{}, fmt.Errorf("unsupported DNS protocol %q", u.Protocol)
 	}
@@ -28,12 +28,13 @@ func normalizeDNSUpstream(u upstream) (upstream, error) {
 	if net.ParseIP(u.Server) == nil {
 		return upstream{}, errors.New("raw-tunnel DNS requires a literal upstream IP; recursive OS bootstrap is not allowed")
 	}
+	u.Server = net.ParseIP(u.Server).String()
 	if u.Port == 0 {
 		u.Port = 53
 		if u.Protocol == "tls" {
 			u.Port = 853
 		}
-		if u.Protocol == "https" || u.Protocol == "rescue" {
+		if u.Protocol == "https" || u.Protocol == "h3" || u.Protocol == "rescue" {
 			u.Port = 443
 		}
 	}
@@ -41,14 +42,14 @@ func normalizeDNSUpstream(u upstream) (upstream, error) {
 		return upstream{}, errors.New("invalid DNS upstream port")
 	}
 	u.ServerName = strings.TrimSpace(u.ServerName)
-	if strings.ContainsAny(u.ServerName, " /\\\t\r\n?#@") {
+	if strings.ContainsAny(u.ServerName, " /\\\t\r\n?#@") || strings.IndexFunc(u.ServerName, func(r rune) bool { return r < 0x21 || r > 0x7e }) >= 0 {
 		return upstream{}, errors.New("invalid DNS TLS server name")
 	}
 	if u.Path == "" {
 		u.Path = "/dns-query"
 	}
 	path, err := url.ParseRequestURI(u.Path)
-	if err != nil || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") || path.IsAbs() || path.Host != "" || path.Fragment != "" || strings.ContainsAny(u.Path, "\r\n#") {
+	if err != nil || !strings.HasPrefix(u.Path, "/") || strings.HasPrefix(u.Path, "//") || path.IsAbs() || path.Host != "" || path.Fragment != "" || strings.ContainsAny(u.Path, "\\#") || strings.IndexFunc(u.Path, func(r rune) bool { return r <= 0x20 || r == 0x7f }) >= 0 {
 		return upstream{}, errors.New("DNS HTTPS path must be a local absolute path, not another URL")
 	}
 	return u, nil

@@ -5,7 +5,6 @@ RUN mkdir -p dist \
  && for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; ext=''; [ "$GOOS" = windows ] && ext='.exe'; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-client-${GOOS}-${GOARCH}${ext}" ./cmd/client; \
-      CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-dns-${GOOS}-${GOARCH}${ext}" ./cmd/dnsproxy; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-start-layer-relay-${GOOS}-${GOARCH}${ext}" ./cmd/start-layer-relay; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-update-${GOOS}-${GOARCH}${ext}" ./cmd/app-update; \
     done \
@@ -18,6 +17,17 @@ RUN mkdir -p dist \
  && for target in linux/amd64 linux/arm64; do \
       GOOS=${target%/*}; GOARCH=${target#*/}; \
       CGO_ENABLED=0 GOOS=$GOOS GOARCH=$GOARCH go build -trimpath -ldflags='-s -w' -o "dist/router-vpn-agent-${GOOS}-${GOARCH}" ./cmd/router-agent; \
+    done
+
+# The HTTP/3 DNS helper has a separately pinned module/toolchain. This remains
+# an image-build step in CI; the production host pulls the finished image.
+FROM --platform=$BUILDPLATFORM golang:1.26.3-alpine AS dnsproxy
+RUN apk add --no-cache git python3
+WORKDIR /src
+COPY . /src
+RUN set -eu; for target in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64 windows/arm64; do \
+      system=${target%/*}; arch=${target#*/}; ext=''; [ "$system" != windows ] || ext='.exe'; \
+      python3 /src/deploy/build-dnsproxy.py build "$target" "/dns-dist/router-vpn-dns-${system}-${arch}${ext}"; \
     done
 
 # Runtime Go exists only for the bounded requested-package fallback. The normal
@@ -61,6 +71,7 @@ COPY --from=rosenpass /usr/local/bin/rosenpass /usr/local/bin/rosenpass
 WORKDIR /src
 COPY . /src
 COPY --from=binaries /src/dist /src/dist
+COPY --from=dnsproxy /dns-dist /src/dist
 COPY --from=xray /xray /src/dist/xray
 COPY --from=amnezia /amnezia /src/dist/amnezia
 # Explicit inputs make an unstaged/partial native artifact a Docker build

@@ -32,7 +32,7 @@ cp "$ROOT/SECURITY.md" "$dir/SECURITY.md"
 cp "$ROOT/LICENSE" "$dir/LICENSE"
 
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-client" ./cmd/client
-CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-dns" ./cmd/dnsproxy
+python3 "$ROOT/deploy/build-dnsproxy.py" build "linux/$goarch" "$dir/router-vpn-dns"
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-start-layer-relay" ./cmd/start-layer-relay
 CGO_ENABLED=0 GOOS=linux GOARCH="$goarch" go build -trimpath -ldflags='-s -w' -o "$dir/router-vpn-update" ./cmd/app-update
 chmod 755 "$dir/router-vpn-client" "$dir/router-vpn-dns" "$dir/router-vpn-start-layer-relay" "$dir/router-vpn-update" "$dir/modes/"*.sh
@@ -96,7 +96,7 @@ for path in modes client; do
   cp -a "$SRC/$path" "$ROOT/$path"
 done
 bash "$SRC/client/install-bundled-desktop-runtime.sh" "$SRC" "$ROOT"
-for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE ROUTER-VPN-SOURCE.json; do
+for file in client.json modes.json logical-modes.json router-vpn-client router-vpn-dns router-vpn-start-layer-relay router-vpn-update router-vpn-app RouterVPN.ico router-vpn.png MODES.md CLIENT.md SECURITY.md LICENSE DNS-PROXY-NOTICES.json ROUTER-VPN-SOURCE.json; do
   [[ -e "$SRC/$file" ]] && cp -a "$SRC/$file" "$ROOT/$file"
 done
 chmod 755 "$ROOT/router-vpn-client" "$ROOT/router-vpn-dns" "$ROOT/router-vpn-start-layer-relay" "$ROOT/router-vpn-update" "$ROOT/router-vpn-app" "$ROOT/modes/"*.sh

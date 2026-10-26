@@ -5,7 +5,7 @@ write_blank_routers(){ cat >"$1" <<'JSON'
 {"schema_version":4,"selected_id":"","profiles":[]}
 JSON
 }
-copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";}
+copy_runtime(){ local dir=$1;mkdir -p "$dir/modes" "$dir/generated";cp "$ROOT/configs/client/client.json.example" "$dir/client.json";cp "$ROOT/configs/client/modes.json" "$dir/modes.json";cp "$ROOT/configs/client/logical-modes.json" "$dir/logical-modes.json";cp -a "$ROOT/modes/." "$dir/modes/";write_blank_routers "$dir/routers.json";cp "$ROOT/docs/MODES.md" "$dir/MODES.md";cp "$ROOT/docs/CLIENT.md" "$dir/CLIENT.md";cp "$ROOT/SECURITY.md" "$dir/SECURITY.md";cp "$ROOT/LICENSE" "$dir/LICENSE";python3 "$ROOT/deploy/build-dnsproxy.py" notices "$dir/DNS-PROXY-NOTICES.json";}
 materialize_icons(){ python3 "$ROOT/deploy/materialize-desktop-icons.py" --png "$1/RouterVPN.png" --ico "$1/RouterVPN.ico"; }
 # Every native package carries exact-source metadata in ROUTER-VPN-SOURCE.json.
 write_provenance(){ python3 "$ROOT/server/scripts/source_provenance.py" "$1" --family "$2"; }

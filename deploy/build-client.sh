@@ -30,9 +30,9 @@ for target in "${client_targets[@]}"; do
 
   echo "building DNS helper $GOOS/$GOARCH"
   dns_output="dist/dnsproxy/router-vpn-dns-${suffix}${ext}"
-  env GOOS="$GOOS" GOARCH="$GOARCH" GOARM=7 CGO_ENABLED=0 \
-    go build -trimpath -ldflags='-s -w' -o "$dns_output" ./cmd/dnsproxy
+  python3 deploy/build-dnsproxy.py build "$target" "$dns_output"
   cp "$dns_output" "dist/$(basename "$dns_output")"
+  cp dist/dnsproxy/DNS-PROXY-NOTICES.json dist/DNS-PROXY-NOTICES.json
 
   echo "building start-layer relay $GOOS/$GOARCH"
   relay_output="dist/start-layer/router-vpn-start-layer-relay-${suffix}${ext}"

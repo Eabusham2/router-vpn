@@ -29,6 +29,7 @@ from pathlib import Path, PurePosixPath
 import shutil
 import stat
 import subprocess
+import sys
 import tarfile
 import tempfile
 import urllib.parse
@@ -396,6 +397,16 @@ def copy_generic_runtime(src_root: Path, root: Path) -> None:
     copy_file(src_root / "docs" / "CLIENT.md", root / "CLIENT.md", required=False)
     copy_file(src_root / "SECURITY.md", root / "SECURITY.md", required=False)
     copy_file(src_root / "LICENSE", root / "LICENSE")
+    # The helper also embeds these notices, so installed copies retain them.
+    # Validate the exact pinned source payload before adding it to the generic
+    # package and its existing source-SHA/checksum manifest.
+    helper_path = src_root / "deploy" / "build-dnsproxy.py"
+    helper_spec = __import__("importlib.util").util.spec_from_file_location("routervpn_dns_package", helper_path)
+    if helper_spec is None or helper_spec.loader is None:
+        raise RuntimeError("pinned DNS proxy package helper is unavailable")
+    helper = __import__("importlib.util").util.module_from_spec(helper_spec)
+    helper_spec.loader.exec_module(helper)
+    helper.stage_notices(root / "DNS-PROXY-NOTICES.json")
     write_blank_routers(root / "routers.json")
     (root / "generated").mkdir(parents=True, exist_ok=True)
 
@@ -617,8 +628,14 @@ def _go_build(go: str, src_root: Path, dist: Path, work: Path, goos: str, goarch
         "GOMODCACHE": str(work / "go-mod-cache"),
     })
     ldflags = "-s -w" + (" -H=windowsgui" if windows_gui else "")
+    command = [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package]
+    if package == "./cmd/dnsproxy":
+        if windows_gui:
+            raise ValueError("the DNS proxy is a captured console helper")
+        command = [sys.executable, str(src_root / "deploy" / "build-dnsproxy.py"),
+                   "build", f"{goos}/{goarch}", str(dist / output_name), "--go", go]
     proc = subprocess.run(
-        [go, "build", "-trimpath", "-ldflags", ldflags, "-o", str(dist / output_name), package],
+        command,
         cwd=src_root,
         env=env,
         stdout=subprocess.PIPE,
