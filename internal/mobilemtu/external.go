@@ -18,6 +18,15 @@ type ExternalOwner interface {
 	VerifyExternal(context.Context, State) error
 }
 
+// ExternalMeasurementOwner optionally retains native measurement ownership
+// across both fresh proofs and the entire candidate transfer. Release occurs
+// before the winner waits for durable cache adoption, allowing that commit to
+// request a separate fresh path proof without overlapping the measured work.
+// Cancellation alone must not release sockets or native activity still in use.
+type ExternalMeasurementOwner interface {
+	BeginExternalMeasurement(context.Context, State) (context.Context, context.CancelFunc, error)
+}
+
 type externalProfile struct {
 	Schema           int    `json:"schema"`
 	SourceKind       string `json:"source_kind,omitempty"`
@@ -117,6 +126,23 @@ func (c *Controller) measurementBudgets() (operation, candidate, reserve time.Du
 
 func (c *Controller) measureExternal(ctx context.Context, engine *probeEngine, mtu int) Candidate {
 	result := Candidate{MTU: mtu, LatencyKind: "https-response"}
+	if owner, ok := c.external.owner.(ExternalMeasurementOwner); ok {
+		parent := ctx
+		captured, release, err := owner.BeginExternalMeasurement(ctx, engine.state)
+		if release != nil {
+			defer release()
+		}
+		if err != nil || captured == nil || release == nil || parent.Err() != nil || captured.Err() != nil || !c.live(captured, engine.state) {
+			result.Failure = "captured external measurement activity is unavailable"
+			return result
+		}
+		// A native owner can narrow the lifetime but cannot detach a candidate
+		// from its controller's cancellation or bounded operation deadline.
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithCancel(captured)
+		stop := context.AfterFunc(parent, cancel)
+		defer func() { stop(); cancel() }()
+	}
 	if c.external.owner.VerifyExternal(ctx, engine.state) != nil || !c.live(ctx, engine.state) {
 		result.Failure = "captured external public exit or DNS proof failed"
 		return result
