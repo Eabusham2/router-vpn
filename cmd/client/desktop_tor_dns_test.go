@@ -177,6 +177,13 @@ func TestDesktopTorDNSRetestAfterMeasuredMTURetainsTheSameNativeOwner(t *testing
 	if after.EffectiveMTU != 1380 || desktopTorSourceIdentityToken(after) != launch.tor.profileToken {
 		t.Fatal("MTU persistence replaced the captured Tor policy identity")
 	}
+	owner := desktopMeasurementMTUSession(launch)
+	owner.mu.Lock()
+	satisfied := owner.automatic
+	owner.mu.Unlock()
+	if !satisfied {
+		t.Fatal("successful Retest left Auto pending for the same captured native reader")
+	}
 	operation, request := desktopDNSStartForTest(t, a, "https")
 	view := desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Complete && v.Status.Drained })
 	<-operation.done
@@ -186,7 +193,7 @@ func TestDesktopTorDNSRetestAfterMeasuredMTURetainsTheSameNativeOwner(t *testing
 	}
 	proof, err := a.readDesktopTorProof(launch)
 	if err != nil || proof.MTUReadback == nil || *proof.MTUReadback != *measured.MTUReadback || proof.EffectiveMTU != 1380 {
-		t.Fatal("DNS Retest replaced the committed Tor reader", err)
+		t.Fatalf("DNS Retest replaced the committed Tor reader: err=%v committed=%+v current=%+v mtu=%d", err, measured.MTUReadback, proof.MTUReadback, proof.EffectiveMTU)
 	}
 	if !reflect.DeepEqual(after, desktopTorSavedMTU(t, a)) {
 		t.Fatal("DNS Retest changed saved credentials, resolver or MTU metadata")

@@ -189,7 +189,9 @@ func TestSpeedLabTorMTUMeasuredReaderRestoresAcrossCancelledTest(t *testing.T) {
 			a, previous, measured := speedLabTorMeasuredMTUFixture(t, automatic)
 			fixture := newSpeedLabTorMTURestoreFixture(t, a)
 			saved := fixture.snapshot.Plan.tor
-			if saved == nil || saved.mtu != 1380 || saved.automaticMTU != automatic || fixture.snapshot.Plan.request.Execution != "local" || fixture.snapshot.Plan.external != nil || fixture.snapshot.Plan.request.EntryID != "" {
+			// Both a completed initial Auto and a proved explicit Retest satisfy
+			// this connection's Auto work. Restoration must retain that fact.
+			if saved == nil || saved.mtu != 1380 || !saved.automaticMTU || fixture.snapshot.Plan.request.Execution != "local" || fixture.snapshot.Plan.external != nil || fixture.snapshot.Plan.request.EntryID != "" {
 				t.Fatal("restore snapshot lost its measured Tor reader or selected local execution")
 			}
 			capturedRaw, err := readDesktopRuntimeFile(previous, "tor-profile.json", 4<<20)
@@ -217,7 +219,7 @@ func TestSpeedLabTorMTUMeasuredReaderRestoresAcrossCancelledTest(t *testing.T) {
 			owner.mu.Lock()
 			retainedAutomatic, pendingRestore := owner.automatic, owner.restoreMTU
 			owner.mu.Unlock()
-			if retainedAutomatic != automatic || pendingRestore != 0 || restored.tor.expected.ConfiguredMTU != 1280 || !reflect.DeepEqual(a.profiles, fixture.snapshot.Profiles) {
+			if !retainedAutomatic || pendingRestore != 0 || restored.tor.expected.ConfiguredMTU != 1280 || !reflect.DeepEqual(a.profiles, fixture.snapshot.Profiles) {
 				t.Fatal("restoration changed saved Auto, completed automatic work or the complete profile")
 			}
 			body, err := os.ReadFile(a.cfg.ProfilesFile)

@@ -474,9 +474,21 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 					return result, err
 				}
+				snapshot.session.mu.Lock()
 				if err := ctx.Err(); err != nil {
+					snapshot.session.mu.Unlock()
 					return result, err
 				}
+				if snapshot.session.active != identifier || snapshot.session.generation != generation {
+					snapshot.session.mu.Unlock()
+					return result, errors.New("native MTU completion lost its captured operation")
+				}
+				// A successful explicit Retest has also satisfied this connection's
+				// initial Auto comparison. DNS/Speed Lab hold release must retain
+				// its proved reader instead of launching a second Auto operation.
+				// Failed or cancelled attempts never reach this adoption boundary.
+				snapshot.session.automatic = true
+				snapshot.session.mu.Unlock()
 				adopted = true
 				return result, nil
 			}
