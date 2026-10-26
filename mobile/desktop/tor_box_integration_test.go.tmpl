@@ -54,6 +54,15 @@ type desktopTorBoxSOCKS struct {
 	proofOnce    sync.Once
 }
 
+func desktopTorBoxWriteDNSReply(peer *mDNS.Conn, answer *mDNS.Msg) error {
+	// A same-process reply can complete within one Windows monotonic-clock
+	// tick. Give the protocol fixture real response latency so a successful
+	// routed exchange also has a measurable duration. The production sampler
+	// must still reject zero/backward intervals; never clamp or invent an RTT.
+	time.Sleep(20 * time.Millisecond)
+	return peer.WriteMsg(answer)
+}
+
 func newDesktopTorBoxSOCKS(t *testing.T) *desktopTorBoxSOCKS {
 	t.Helper()
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -220,7 +229,7 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 		} else {
 			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
 		}
-		if err := peer.WriteMsg(answer); err != nil {
+		if err := desktopTorBoxWriteDNSReply(peer, answer); err != nil {
 			return err
 		}
 	}
@@ -503,7 +512,7 @@ func (s *desktopTorBoxEntryServer) NewConnection(_ context.Context, conn net.Con
 			} else {
 				answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
 			}
-			if err := peer.WriteMsg(answer); err != nil {
+			if err := desktopTorBoxWriteDNSReply(peer, answer); err != nil {
 				return err
 			}
 		}
