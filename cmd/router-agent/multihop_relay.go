@@ -99,7 +99,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 			continue
 		}
 		switch name {
-		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password", "expected_packet_public_key", "external_fingerprint", "external_authentication", "external_epoch", "external_peer", "external_attempt":
+		case "session_id", "entry_node_id", "exit_id", "exit_mode", "exit_start_layer", "listener_username", "listener_password", "expected_packet_public_key", "expected_pq_client_identity", "external_fingerprint", "external_authentication", "external_epoch", "external_peer", "external_attempt":
 		default:
 			return q, bad
 		}
@@ -157,8 +157,9 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 	q = multihoprelay.Request{
 		Port: port, Username: fields["listener_username"], Password: fields["listener_password"],
 		SessionID: fields["session_id"], EntryNodeID: fields["entry_node_id"], ExitID: fields["exit_id"], ExitMode: fields["exit_mode"], ExitStartLayer: fields["exit_start_layer"],
-		ExpectedPacketPublicKey: fields["expected_packet_public_key"],
-		ExternalFingerprint:     fields["external_fingerprint"], ExternalAuthentication: fields["external_authentication"],
+		ExpectedPacketPublicKey:  fields["expected_packet_public_key"],
+		ExpectedPQClientIdentity: fields["expected_pq_client_identity"],
+		ExternalFingerprint:      fields["external_fingerprint"], ExternalAuthentication: fields["external_authentication"],
 		ExternalEpoch: fields["external_epoch"], ExternalPeer: fields["external_peer"], ExternalExpiresAt: expires, ExternalAttempt: fields["external_attempt"],
 	}
 	return q, nil

@@ -18,6 +18,9 @@ func NewWithStartLayers(config, metadata, entrySource, exitSource string) (*Cont
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid captured two-layer metadata")
 	}
+	if err := validateMetadataIdentityPins(metadata, meta); err != nil {
+		return nil, err
+	}
 	if MAXMode(meta.ExitMode) || CompositeMode(meta.ExitMode) {
 		return nil, errors.New("complete exit graph already owns its captured Start Layer")
 	}

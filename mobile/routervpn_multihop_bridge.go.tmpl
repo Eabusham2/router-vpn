@@ -85,9 +85,15 @@ func NewRouterMultihop(config, metadata string) (*RouterMultihop, error) {
 }
 func (m *RouterMultihop) Config() string       { return m.controller.Config() }
 func (m *RouterMultihop) ProgressJSON() string { return m.controller.ProgressJSON() }
-func (m *RouterMultihop) NetworkChanged()      { m.controller.NetworkChanged() }
-func (m *RouterMultihop) Healthy() bool        { return m.controller.Healthy() }
-func (m *RouterMultihop) Close() error         { return m.controller.Close() }
+
+// Only public identities from the same healthy selected native owner cross
+// this runtime-only restoration boundary. No private key or lease secret does.
+func (m *RouterMultihop) ServerIdentityPinsJSON() (string, error) {
+	return m.controller.ServerIdentityPinsJSON()
+}
+func (m *RouterMultihop) NetworkChanged() { m.controller.NetworkChanged() }
+func (m *RouterMultihop) Healthy() bool   { return m.controller.Healthy() }
+func (m *RouterMultihop) Close() error    { return m.controller.Close() }
 func (m *RouterMultihop) Run(server *CommandServer) error {
 	if server == nil || server.StartedService == nil || server.StartedService.Instance() == nil || server.StartedService.Instance().Box() == nil {
 		return errors.New("native multihop engine is not running")

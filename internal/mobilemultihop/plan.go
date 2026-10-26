@@ -58,6 +58,10 @@ type Metadata struct {
 	ExitMode        string `json:"exit_mode"`
 	ExitStartLayer  string `json:"exit_start_layer,omitempty"`
 	Execution       string `json:"execution"`
+	// Runtime-only restore pins from a previously proved server owner. An
+	// initial connection may omit them; discovery cannot replace captured pins.
+	ExpectedPacketPublicKey  string `json:"expected_packet_public_key,omitempty"`
+	ExpectedPQClientIdentity string `json:"expected_pq_client_identity,omitempty"`
 }
 
 // Engine must dial the named outbound on the same retained native instance.
@@ -196,6 +200,9 @@ func New(config, metadata string) (*Controller, error) {
 	var meta Metadata
 	if exactJSON([]byte(metadata), &meta, 16384) != nil {
 		return nil, errors.New("invalid frozen multihop metadata")
+	}
+	if err := validateMetadataIdentityPins(metadata, meta); err != nil {
+		return nil, err
 	}
 	if meta.EntryStartLayer != "" && !MAXMode(meta.EntryMode) && !CompositeMode(meta.EntryMode) || meta.ExitStartLayer != "" && !MAXMode(meta.ExitMode) && !CompositeMode(meta.ExitMode) {
 		return nil, errors.New("captured entry or exit layer requires its authenticated native source")
@@ -393,6 +400,8 @@ func New(config, metadata string) (*Controller, error) {
 		return nil, e
 	}
 	c.proposal = multihoprelay.Request{SessionID: nonce, EntryNodeID: meta.EntryNodeID, ExitID: meta.ExitID, ExitMode: meta.ExitMode, Port: 26240 + int(seed[0]%32), Username: user, Password: password}
+	c.proposal.ExpectedPacketPublicKey = meta.ExpectedPacketPublicKey
+	c.proposal.ExpectedPQClientIdentity = meta.ExpectedPQClientIdentity
 	if MAXMode(meta.ExitMode) || CompositeMode(meta.ExitMode) {
 		c.proposal.ExitStartLayer = meta.ExitStartLayer
 	}
@@ -423,6 +432,9 @@ func New(config, metadata string) (*Controller, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	if err := c.validateServerIdentityPins(false); err != nil {
+		return nil, err
 	}
 	local["tag"] = LocalTag
 	outbounds, _ := root["outbounds"].([]any)

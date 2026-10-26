@@ -110,6 +110,7 @@ func (c *Controller) acquire(ctx context.Context) error {
 		return errors.New("unproved entry relay capabilities")
 	}
 	found := false
+	packetPublic, pqClientIdentity := "", ""
 	for _, exit := range caps.Exits {
 		if exit.ID == c.meta.ExitID && exit.Mode == c.meta.ExitMode && exit.NodeID == c.meta.ExitNodeID && exit.Layer == c.meta.ExitStartLayer && exit.ExternalFingerprint == c.proposal.ExternalFingerprint {
 			if c.openvpnResponses != nil && exit.OpenVPNRemote != "fresh-connected-transport-v1" {
@@ -137,11 +138,23 @@ func (c *Controller) acquire(ctx context.Context) error {
 			if (IsPQMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) && (!proofID.MatchString(exit.PQIdentity) || exit.PQIdentity == c.localPQIdentity) {
 				return errors.New("server PQ needs independently paired KEM credentials to avoid cross-session rekeying")
 			}
+			if c.external == nil && (multihoprelay.PacketMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode)) {
+				packetPublic = exit.PublicKey
+				if IsPQMode(c.meta.ExitMode) || MAXMode(c.meta.ExitMode) {
+					pqClientIdentity = exit.PQIdentity
+				}
+			}
 			found = true
 		}
 	}
 	if !found {
 		return errors.New("the selected exit is not paired on the entry server")
+	}
+	// A comparison trial or restored owner may already have pinned this exact
+	// server peer. A fresh catalog must confirm it, never replace it in place.
+	if (c.proposal.ExpectedPacketPublicKey != "" || c.proposal.ExpectedPQClientIdentity != "") &&
+		(c.proposal.ExpectedPacketPublicKey != packetPublic || c.proposal.ExpectedPQClientIdentity != pqClientIdentity) {
+		return errors.New("paired server packet or PQ identity changed after capture")
 	}
 	// Discovery can finish after a network switch without cancelling its HTTP
 	// response. Never use that stale catalog to authorize a new mutation.
@@ -166,6 +179,10 @@ func (c *Controller) acquire(ctx context.Context) error {
 		// Only the request authenticator changes. The immutable final graph,
 		// session/listener credentials and captured comparison paths stay owned.
 		c.proposal, c.expected.Request = proposal, proposal
+	} else {
+		c.proposal.ExpectedPacketPublicKey = packetPublic
+		c.proposal.ExpectedPQClientIdentity = pqClientIdentity
+		c.expected.Request = c.proposal
 	}
 	c.ownsLease = true // An expired HTTP request may nevertheless have created it.
 	if e = c.renewLocked(ctx); e != nil {
@@ -181,6 +198,9 @@ func (c *Controller) renewLocked(ctx context.Context) error {
 		return err
 	}
 	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if err := c.validateServerIdentityPins(true); err != nil {
 		return err
 	}
 	body, _ := json.Marshal(c.proposal)

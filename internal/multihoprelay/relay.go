@@ -61,16 +61,19 @@ type Request struct {
 	ExitID         string `json:"exit_id"`
 	ExitMode       string `json:"exit_mode"`
 	ExitStartLayer string `json:"exit_start_layer,omitempty"`
-	// Optional public identity pinned by a client after authenticated discovery.
-	// Enforced under the lease lock, including renewals, so a server restart or
-	// registry replacement cannot substitute a different WireGuard client peer.
-	ExpectedPacketPublicKey string `json:"expected_packet_public_key,omitempty"`
-	ExternalFingerprint     string `json:"external_fingerprint,omitempty"`
-	ExternalAuthentication  string `json:"external_authentication,omitempty"`
-	ExternalEpoch           string `json:"external_epoch,omitempty"`
-	ExternalPeer            string `json:"external_peer,omitempty"`
-	ExternalExpiresAt       int64  `json:"external_expires_at,omitempty"`
-	ExternalAttempt         string `json:"external_attempt,omitempty"`
+	// Public identities pinned by a client after authenticated discovery.
+	// PQ and complete MAX bind both independent identities together. Legacy
+	// requests may omit both; a pinned request may never partially drop them.
+	// Enforced under the lease lock, including renewals, so registry replacement
+	// cannot substitute a different packet peer or KEM rekey owner.
+	ExpectedPacketPublicKey  string `json:"expected_packet_public_key,omitempty"`
+	ExpectedPQClientIdentity string `json:"expected_pq_client_identity,omitempty"`
+	ExternalFingerprint      string `json:"external_fingerprint,omitempty"`
+	ExternalAuthentication   string `json:"external_authentication,omitempty"`
+	ExternalEpoch            string `json:"external_epoch,omitempty"`
+	ExternalPeer             string `json:"external_peer,omitempty"`
+	ExternalExpiresAt        int64  `json:"external_expires_at,omitempty"`
+	ExternalAttempt          string `json:"external_attempt,omitempty"`
 	// Optional client-generated listener proposal allows the client to prepare
 	// its final graph before acquiring a lease, without restarting its TUN.
 	Port     int    `json:"listen_port,omitempty"`
@@ -221,8 +224,31 @@ func (m *Manager) Available() []map[string]string {
 	}
 	return out
 }
+
+// ValidateIdentityPins validates only the public Router-node pin contract.
+// Possession, authenticated discovery and independence from the local owner
+// are separate checks. External nodes keep their own challenged credential
+// ownership and cannot use these fields to claim a Router packet/PQ identity.
+func ValidateIdentityPins(mode, packetPublic, pqClientIdentity string) error {
+	pq := mobilepq.IsMode(mode) || CompleteMAXMode(mode)
+	if packetPublic != "" && ((!awgpolicy.WireGuardFamily(mode) && !pq) || !canonicalPacketPublic(packetPublic)) {
+		return ErrOwnership
+	}
+	if pq {
+		if (packetPublic == "") != (pqClientIdentity == "") || pqClientIdentity != "" && !proofID.MatchString(pqClientIdentity) {
+			return ErrOwnership
+		}
+	} else if pqClientIdentity != "" {
+		return ErrOwnership
+	}
+	return nil
+}
+
 func (m *Manager) validate(peer netip.Addr, q Request) error {
-	if q.ExpectedPacketPublicKey != "" && (!awgpolicy.WireGuardFamily(q.ExitMode) || !canonicalPacketPublic(q.ExpectedPacketPublicKey)) {
+	if err := ValidateIdentityPins(q.ExitMode, q.ExpectedPacketPublicKey, q.ExpectedPQClientIdentity); err != nil {
+		return err
+	}
+	if q.ExternalFingerprint != "" && (q.ExpectedPacketPublicKey != "" || q.ExpectedPQClientIdentity != "") {
 		return ErrOwnership
 	}
 	if err := validatePacketRequestShape(q, false); err != nil {
@@ -252,25 +278,28 @@ func (m *Manager) validate(peer netip.Addr, q Request) error {
 // Acquisition and renewal bind to the registry under the same lock. DELETE
 // still accepts the exact old owned request if a registry identity changed;
 // otherwise a failed renewal could prevent cleanup of its existing engine.
-func (m *Manager) validateExpectedPacketIdentityLocked(q Request) error {
-	if q.ExpectedPacketPublicKey != "" {
-		matched := false
-		for _, exit := range m.cfg.Exits {
-			if exit.ID != q.ExitID || exit.Mode != q.ExitMode || ExitLayerMode(exit) != q.ExitStartLayer || exit.External != nil {
-				continue
-			}
-			identity, err := clientIdentity(relayPacketTransport(exit))
-			if err != nil || identity != q.ExpectedPacketPublicKey {
-				return ErrOwnership
-			}
-			matched = true
-			break
+func (m *Manager) validateExpectedIdentitiesLocked(q Request) error {
+	if q.ExpectedPacketPublicKey == "" && q.ExpectedPQClientIdentity == "" {
+		return nil
+	}
+	for _, exit := range m.cfg.Exits {
+		if exit.ID != q.ExitID || exit.Mode != q.ExitMode || ExitLayerMode(exit) != q.ExitStartLayer || exit.External != nil {
+			continue
 		}
-		if !matched {
+		transport := relayPacketTransport(exit)
+		identity, err := clientIdentity(transport)
+		if err != nil || identity != q.ExpectedPacketPublicKey {
 			return ErrOwnership
 		}
+		if q.ExpectedPQClientIdentity != "" {
+			identity, err := pqIdentity(transport)
+			if err != nil || identity != q.ExpectedPQClientIdentity {
+				return ErrOwnership
+			}
+		}
+		return nil
 	}
-	return nil
+	return ErrOwnership
 }
 func secret() (string, error) {
 	b := make([]byte, 24)
@@ -294,7 +323,7 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 	if err := m.validate(peer, q); err != nil {
 		return Lease{}, err
 	}
-	if err := m.validateExpectedPacketIdentityLocked(q); err != nil {
+	if err := m.validateExpectedIdentitiesLocked(q); err != nil {
 		return Lease{}, err
 	}
 	if err := m.reapLocked(ctx); err != nil {
