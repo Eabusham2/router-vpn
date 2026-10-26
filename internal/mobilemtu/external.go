@@ -35,6 +35,7 @@ type externalProfile struct {
 	ExpectedPublicIP string `json:"expected_public_ip"`
 	MTUPolicy        string `json:"mtu_policy"`
 	Jumbo            bool   `json:"jumbo_tun"`
+	EntryFixedMTU    int    `json:"entry_fixed_mtu,omitempty"`
 }
 
 type externalMeasurement struct {
@@ -71,19 +72,25 @@ func newPublic(owner ExternalOwner, config, authority string, cache Cache, tor b
 		if profile.SourceKind != "tor" || profile.ExpectedPublicIP != "" {
 			return nil, errors.New("Tor MTU requires captured dynamic Tor proof authority")
 		}
+		if profile.EntryFixedMTU != 0 && (profile.EntryFixedMTU < MinMTU || profile.EntryFixedMTU > MaxMTU) {
+			return nil, errors.New("Tor MTU entry authority requires its captured fixed interface MTU")
+		}
 	} else {
 		ip, err := netip.ParseAddr(profile.ExpectedPublicIP)
-		if (profile.SourceKind != "" && profile.SourceKind != "external") || err != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.Is4In6() || ip.Zone() != "" {
+		if profile.EntryFixedMTU != 0 || (profile.SourceKind != "" && profile.SourceKind != "external") || err != nil || !ip.IsGlobalUnicast() || ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.Is4In6() || ip.Zone() != "" {
 			return nil, errors.New("external MTU public identity is invalid")
 		}
 	}
 	if profile.MTUPolicy != "auto" && profile.MTUPolicy != "fixed" && profile.MTUPolicy != "manual" && profile.MTUPolicy != "default" {
 		return nil, errors.New("external MTU policy is invalid")
 	}
-	policy := Profile{ID: profile.ID, Proof: profile.SourceSHA256, Automatic: profile.MTUPolicy == "auto", Jumbo: profile.Jumbo}
+	policy := Profile{ID: profile.ID, Proof: profile.SourceSHA256, Automatic: profile.MTUPolicy == "auto" && profile.EntryFixedMTU == 0, Jumbo: profile.Jumbo}
 	controller, err := newController(owner, config, policy, cache)
 	if err != nil {
 		return nil, err
+	}
+	if tor && (profile.Jumbo && controller.status.EffectiveMTU != 9000 || profile.EntryFixedMTU != 0 && controller.status.EffectiveMTU != profile.EntryFixedMTU) {
+		return nil, errors.New("Tor MTU readback differs from captured Jumbo or entry Fixed policy")
 	}
 	var graph map[string]any
 	if strictJSON(config, &graph, 4<<20) != nil {
@@ -96,6 +103,18 @@ func newPublic(owner ExternalOwner, config, authority string, cache Cache, tor b
 	}
 	if !ok || route["final"] != final {
 		return nil, errors.New("external MTU must retain the captured external exit route")
+	}
+	if tor {
+		inbounds, ok := graph["inbounds"].([]any)
+		if !ok || len(inbounds) != 1 {
+			return nil, errors.New("Tor MTU must retain its single captured VPN interface")
+		}
+		tun, ok := inbounds[0].(map[string]any)
+		configured, err := intField(tun, "mtu", 0)
+		tag, tagErr := stringField(tun, "tag", "")
+		if !ok || tun["type"] != "tun" || tun["auto_route"] != true || tun["strict_route"] != true || tagErr != nil || !idPattern.MatchString(tag) || err != nil || configured != controller.status.EffectiveMTU {
+			return nil, errors.New("Tor MTU configuration differs from its actual captured interface")
+		}
 	}
 	controller.external = &externalMeasurement{owner: owner, profile: profile, measure: hopmeasure.MeasurePath}
 	return controller, nil

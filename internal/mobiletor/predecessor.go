@@ -31,6 +31,7 @@ type PredecessorProof struct {
 	token       string
 	node        string
 	fingerprint string
+	mtu         torMTUPreferences
 }
 
 func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
@@ -58,12 +59,16 @@ func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
 		}
 	}
 	api.Path = "/health"
+	mtu, err := capturedTorMTUPreferences(profile)
+	if err != nil {
+		return nil, err
+	}
 	canonical, err := json.Marshal(profile)
 	if err != nil {
 		return nil, failure
 	}
 	digest := sha256.Sum256(append([]byte("routervpn-tor-entry-v1\x00"), canonical...))
-	return &PredecessorProof{id: profileString(profile, "id"), address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id"), fingerprint: hex.EncodeToString(digest[:])}, nil
+	return &PredecessorProof{id: profileString(profile, "id"), address: api.Host, target: api.String(), token: token, node: profileString(profile, "node_proof_id"), fingerprint: hex.EncodeToString(digest[:]), mtu: mtu}, nil
 }
 
 // Fingerprint binds the complete captured entry, including transport credentials

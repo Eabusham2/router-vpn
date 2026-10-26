@@ -167,6 +167,22 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 	if err != nil {
 		return "", err
 	}
+	if entryProof != nil {
+		exitMTU, err := capturedTorMTUPreferences(profile)
+		if err != nil {
+			return "", err
+		}
+		if err := compatibleTorMTUPreferences(exitMTU, entryProof.mtu); err != nil {
+			return "", err
+		}
+		_, _, entryMTU, err := torMTUInterface(root)
+		if err != nil || entryProof.mtu.jumbo && entryMTU != 9000 || entryProof.mtu.fixed != 0 && entryMTU != entryProof.mtu.fixed {
+			return "", errors.New("Tor predecessor interface differs from the captured entry MTU policy")
+		}
+		if entryMTU > 1500 && !entryProof.mtu.jumbo && entryProof.mtu.fixed == 0 {
+			return "", errors.New("Tor predecessor large interface lacks a captured Jumbo or Fixed policy")
+		}
+	}
 	if err := torFreezeNaiveDNS(root); err != nil {
 		return "", err
 	}
@@ -754,18 +770,19 @@ func applyTorDevicePolicy(root, tun, profile map[string]any) error {
 	}
 	old, _ := route["rules"].([]any)
 	route["rules"] = append(rules, old...)
-	switch profileString(profile, "mtu_policy") {
-	case "", "auto", "default":
-		// A saved effective MTU is history. The current interface owner may
-		// optimize it only with current-path measurements after connection.
-	case "manual", "fixed":
-		mtu, err := profileInteger(profile, "manual_mtu", 0)
-		if err != nil || mtu < 1280 || mtu > 9000 {
-			return errors.New("Native Tor interface MTU must be 1280..9000")
-		}
-		tun["mtu"] = mtu
-	default:
-		return errors.New("Invalid captured Tor interface MTU policy")
+	mtu, err := capturedTorMTUPreferences(profile)
+	if err != nil {
+		return err
+	}
+	// Auto/Default retain the compiled baseline, including a captured entry's
+	// single interface. Historical effective_mtu is never current evidence.
+	if mtu.fixed != 0 {
+		tun["mtu"] = mtu.fixed
+	}
+	if mtu.jumbo {
+		// TCP is segmented by the native stack and each encrypted underlay.
+		// This virtual capacity is not a 9000-byte packet-path measurement.
+		tun["mtu"] = 9000
 	}
 	return nil
 }

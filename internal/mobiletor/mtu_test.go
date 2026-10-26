@@ -76,3 +76,32 @@ func TestTorMTURejectsChangedSessionAndRoutingOwner(t *testing.T) {
 		t.Fatal("untyped Jumbo policy accepted")
 	}
 }
+
+func TestTorJumboAuthorityRequiresConfiguredCapacityAndExactTUN(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]any){
+		"downsized":        func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1280 },
+		"oversized":        func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 9001 },
+		"untyped":          func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["mtu"] = "9000" },
+		"no-auto-route":    func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["auto_route"] = false },
+		"no-strict-route":  func(g map[string]any) { g["inbounds"].([]any)[0].(map[string]any)["strict_route"] = false },
+		"no-tag":           func(g map[string]any) { delete(g["inbounds"].([]any)[0].(map[string]any), "tag") },
+		"second-interface": func(g map[string]any) { g["inbounds"] = append(g["inbounds"].([]any), g["inbounds"].([]any)[0]) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			profile := torHostProfile()
+			profile["mtu_policy"], profile["jumbo_tun"] = "auto", true
+			graph := torHostCompile(t, profile, "")
+			mutate(graph)
+			if _, err := MTUAuthorityWithPredecessor(torHostEncode(t, graph), torHostEncode(t, profile), "frozen-session-1", nil); err == nil {
+				t.Fatal("CONTROL: Jumbo authority ignored its exact configured interface")
+			}
+		})
+	}
+	profile := torHostProfile()
+	profile["mtu_policy"] = "auto"
+	graph := torHostCompile(t, profile, "")
+	graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 9000
+	if _, err := MTUAuthorityWithPredecessor(torHostEncode(t, graph), torHostEncode(t, profile), "frozen-session-1", nil); err == nil {
+		t.Fatal("CONTROL: an arbitrary 9000 literal minted Jumbo authority")
+	}
+}

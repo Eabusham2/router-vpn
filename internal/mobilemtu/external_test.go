@@ -269,3 +269,95 @@ func TestExternalMTUAuthorityAndPolicy(t *testing.T) {
 		t.Fatal("public optimization authority became a private packet proof")
 	}
 }
+
+func TestTorJumboAndInheritedFixedRemainVisibleWithoutOptimization(t *testing.T) {
+	for _, mode := range []string{"jumbo", "entry-fixed", "entry-fixed-and-jumbo", "exit-fixed", "exit-default"} {
+		t.Run(mode, func(t *testing.T) {
+			owner := &externalTestOwner{testOwner: &testOwner{state: State{Session: "captured-tor", Path: "WiFi-one", Interface: "owned-reader", MTU: 9000}}}
+			graph := fixtureGraph()
+			graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 9000
+			graph["route"].(map[string]any)["final"] = "routervpn-tor-exit"
+			graph["outbounds"] = []any{map[string]any{"type": "routervpn-tor", "tag": "routervpn-tor-exit", "session_id": "captured-tor"}}
+			graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "routervpn-tor-exit"
+			authority := externalFixtureAuthority()
+			delete(authority, "expected_public_ip")
+			authority["source_kind"] = "tor"
+			authority["jumbo_tun"] = mode == "jumbo" || mode == "entry-fixed-and-jumbo"
+			if strings.HasPrefix(mode, "entry-fixed") {
+				authority["entry_fixed_mtu"] = 9000
+			}
+			if mode == "exit-fixed" {
+				authority["mtu_policy"] = "fixed"
+			}
+			if mode == "exit-default" {
+				authority["mtu_policy"] = "default"
+			}
+			preferences := &testPreferences{}
+			controller, err := NewTor(owner, encoded(graph), encoded(authority), NewCache(preferences))
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer controller.Close()
+			status := readStatus(t, controller)
+			if controller.Requested() || controller.Start(strings.Repeat("a", 32), true) == nil || controller.Run(strings.Repeat("b", 32), true) == nil {
+				t.Fatal("CONTROL: captured Jumbo/Fixed interface entered automatic optimization")
+			}
+			if status.EffectiveMTU != 9000 || status.Source != "configured-unmeasured" || status.Measured || len(owner.applied) != 0 || len(owner.dials) != 0 || preferences.data != "" {
+				t.Fatal("Tor virtual interface was changed or mislabeled as measured", status)
+			}
+			if mode == "entry-fixed" && (controller.profile.Jumbo || controller.external.profile.MTUPolicy != "auto" || controller.external.profile.EntryFixedMTU != 9000) {
+				t.Fatal("inherited Fixed9000 relabeled the original exit preference")
+			}
+			if _, err := NewPlan(encoded(graph), 9000); err == nil {
+				t.Fatal("CONTROL: Jumbo increased the optimizer packet envelope")
+			}
+		})
+	}
+}
+
+func TestTorJumboAndInheritedFixedRejectWrongActualReadback(t *testing.T) {
+	for name, mutate := range map[string]func(map[string]any, map[string]any, *externalTestOwner){
+		"wrong-jumbo-readback": func(a, g map[string]any, o *externalTestOwner) { o.state.MTU = 1380 },
+		"downsized-jumbo-and-config": func(a, g map[string]any, o *externalTestOwner) {
+			o.state.MTU = 1380
+			g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1380
+		},
+		"wrong-compiled-mtu": func(a, g map[string]any, o *externalTestOwner) {
+			g["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1380
+		},
+		"wrong-fixed-readback": func(a, g map[string]any, o *externalTestOwner) { a["jumbo_tun"], a["entry_fixed_mtu"] = false, 1380 },
+		"small-fixed":          func(a, g map[string]any, o *externalTestOwner) { a["entry_fixed_mtu"] = 1279 },
+		"large-fixed":          func(a, g map[string]any, o *externalTestOwner) { a["entry_fixed_mtu"] = 9001 },
+		"untyped-fixed":        func(a, g map[string]any, o *externalTestOwner) { a["entry_fixed_mtu"] = "9000" },
+		"second-tun": func(a, g map[string]any, o *externalTestOwner) {
+			g["inbounds"] = append(g["inbounds"].([]any), g["inbounds"].([]any)[0])
+		},
+		"lost-strict-route": func(a, g map[string]any, o *externalTestOwner) {
+			g["inbounds"].([]any)[0].(map[string]any)["strict_route"] = false
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			owner := &externalTestOwner{testOwner: &testOwner{state: State{Session: "captured-tor", Path: "WiFi-one", Interface: "owned-reader", MTU: 9000}}}
+			graph := fixtureGraph()
+			graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 9000
+			graph["route"].(map[string]any)["final"] = "routervpn-tor-exit"
+			graph["outbounds"] = []any{map[string]any{"type": "routervpn-tor", "tag": "routervpn-tor-exit", "session_id": "captured-tor"}}
+			graph["dns"].(map[string]any)["servers"].([]any)[0].(map[string]any)["detour"] = "routervpn-tor-exit"
+			authority := externalFixtureAuthority()
+			delete(authority, "expected_public_ip")
+			authority["source_kind"], authority["jumbo_tun"] = "tor", true
+			mutate(authority, graph, owner)
+			if c, err := NewTor(owner, encoded(graph), encoded(authority), nil); err == nil {
+				c.Close()
+				t.Fatal("CONTROL: native Tor authority ignored actual interface mismatch")
+			}
+		})
+	}
+	authority := externalFixtureAuthority()
+	authority["entry_fixed_mtu"] = 1380
+	owner := &externalTestOwner{testOwner: &testOwner{state: State{Session: "external", Path: "WiFi-one", Interface: "owned-reader", MTU: 1380}}}
+	if c, err := NewExternal(owner, externalFixtureGraph(), encoded(authority), nil); err == nil {
+		c.Close()
+		t.Fatal("ordinary external authority accepted Tor predecessor policy")
+	}
+}
