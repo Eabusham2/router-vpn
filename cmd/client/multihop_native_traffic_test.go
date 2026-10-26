@@ -316,12 +316,16 @@ func nativeMultihopTrafficEcho(t *testing.T) (int, int) {
 }
 
 func nativeMultihopTrafficExchange(proxy, target int, network string) error {
+	return nativeMultihopTrafficExchangeTo(proxy, target, network, [4]byte{127, 0, 0, 1}, 4*time.Second)
+}
+
+func nativeMultihopTrafficExchangeTo(proxy, target int, network string, destination [4]byte, timeout time.Duration) error {
 	control, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy)), 3*time.Second)
 	if err != nil {
 		return err
 	}
 	defer control.Close()
-	_ = control.SetDeadline(time.Now().Add(4 * time.Second))
+	_ = control.SetDeadline(time.Now().Add(timeout))
 	if _, err := control.Write([]byte{5, 1, 0}); err != nil {
 		return err
 	}
@@ -332,7 +336,7 @@ func nativeMultihopTrafficExchange(proxy, target int, network string) error {
 	if !bytes.Equal(hello, []byte{5, 0}) {
 		return errors.New("native fixture SOCKS authentication rejected")
 	}
-	request := []byte{5, 1, 0, 1, 127, 0, 0, 1, byte(target >> 8), byte(target)}
+	request := []byte{5, 1, 0, 1, destination[0], destination[1], destination[2], destination[3], byte(target >> 8), byte(target)}
 	if network == "udp" {
 		request = []byte{5, 3, 0, 1, 0, 0, 0, 0, 0, 0}
 	}
@@ -358,13 +362,13 @@ func nativeMultihopTrafficExchange(proxy, target int, network string) error {
 			return err
 		}
 		defer traffic.Close()
-		_ = traffic.SetDeadline(time.Now().Add(4 * time.Second))
+		_ = traffic.SetDeadline(time.Now().Add(timeout))
 	}
 	for _, size := range []int{64, 1200, 2000} {
 		payload := bytes.Repeat([]byte{byte(size)}, size)
 		packet := payload
 		if network == "udp" {
-			packet = append([]byte{0, 0, 0, 1, 127, 0, 0, 1, byte(target >> 8), byte(target)}, payload...)
+			packet = append([]byte{0, 0, 0, 1, destination[0], destination[1], destination[2], destination[3], byte(target >> 8), byte(target)}, payload...)
 		}
 		if _, err := traffic.Write(packet); err != nil {
 			return err

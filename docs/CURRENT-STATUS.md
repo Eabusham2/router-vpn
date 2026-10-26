@@ -9,14 +9,21 @@ completion of the current commit's packages, physical devices or deployment.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
-and Naive H3. Entry ownership remains WG/AWG. Local, Server and Compare retain
+and Naive H3, plus a WireGuard packet exit. Entry ownership remains WG/AWG.
+Local, Server and Compare retain
 the captured exit transport, independent node credentials, Start Layers,
 selected DNS and proof routes. Naive resolver bootstrap follows the captured
 entry; replacing an exit Start Layer with an authenticated Server lease moves
 only that layer's owned resolver edges. Windows, macOS and Linux controls,
-complete profiles and Speed Lab retain all seven IDs. Legacy Linux without the
+complete profiles and Speed Lab retain all eight IDs. WireGuard Server execution
+requires an updated agent and a separately paired server client identity. The
+canonical public key is checked against the local client, pinned during
+authenticated discovery, enforced under the server lease lock, and retained
+for renewal and restoration. A changed registry cannot silently replace it.
+Local execution keeps the captured packet endpoint; Server execution removes
+only that exit and its Start Layer from the client graph. Legacy Linux without the
 native runtime still advertises only its implemented two-exit helper path.
-Broader Router entry/packet/composite exit combinations remain a source gap;
+AWG packet exits and broader Router entry/packet/composite combinations remain a source gap;
 this extension does not establish full graph parity with the mobile hosts.
 
 Apple connection-profile schema 5 now captures Tor DNS, protection, LAN ranges,

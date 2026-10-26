@@ -190,7 +190,7 @@ function global:Get-RouterVPNVisibleConnectionSnapshot {
             $result.multihop_execution='local';if($null-ne$execution -and $null-ne$execution.SelectedItem){$result.multihop_execution=[string]$execution.SelectedItem.Tag}
         }
     }catch{}
-    if($result.multihop_enabled -and ([string]$result.multihop_exit_mode)-cnotin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3')){throw 'Select a supported exit transport before saving the connection profile.'}
+    if($result.multihop_enabled -and ([string]$result.multihop_exit_mode)-cnotin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg')){throw 'Select a supported exit transport before saving the connection profile.'}
     return $result
 }
 

@@ -26,15 +26,20 @@ type retainedMultihopFixture struct {
 }
 
 func newRetainedMultihopFixture(t *testing.T, execution string) *retainedMultihopFixture {
+	return newRetainedMultihopModeFixture(t, execution, "shadowsocks")
+}
+
+func newRetainedMultihopModeFixture(t *testing.T, execution, exitMode string) *retainedMultihopFixture {
 	t.Helper()
 	root, sel := nativeMultihopCapturedFixture(t, "awg2-strong", "aes-256-gcm+xor-whitening")
+	sel.ExitMode = exitMode
 	sel.Control.ID, sel.Control.StartLayer = "control", "off"
 	sel.Control.MTUPolicy, sel.Control.ManualMTU, sel.Control.EffectiveMTU = "manual", 1500, 1500
 	sel.Entry.MTUPolicy, sel.Entry.ManualMTU, sel.Entry.EffectiveMTU = "manual", 1500, 1500
 	sel.Exit.MTUPolicy, sel.Exit.ManualMTU, sel.Exit.EffectiveMTU, sel.Exit.EffectiveUnderlayPMTU = "auto", 0, 1300, 1400
 	sel.Control.MultihopEnabled, sel.Control.MultihopEntryID, sel.Control.MultihopExitID, sel.Control.MultihopExecution = true, sel.Entry.ID, sel.Exit.ID, "auto"
 	var err error
-	sel, err = captureNativeMultihopSelection(context.Background(), root, sel, []string{"shadowsocks", "hysteria2"}, nil)
+	sel, err = captureNativeMultihopSelection(context.Background(), root, sel, []string{exitMode, "hysteria2"}, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -71,10 +76,19 @@ func newRetainedMultihopFixture(t *testing.T, execution string) *retainedMultiho
 	sessionTrackers.Store(a, &sessionTracker{a: a, session: &connectionSession{ID: "retained-multihop-session", RouterID: sel.Exit.ID, ActualMode: sel.ExitMode, ActualBase: sel.Base, Phase: "connected", Connected: true, PathProof: "passed", DNSProof: dnsProofState{Status: "passed"}}})
 	if execution == "server" {
 		request := multihoprelay.Request{SessionID: strings.Repeat("c", 32), EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: sel.Exit.StartLayer}
-		desktopRelays.Store(a, &desktopRelayOwner{app: a, command: launch.command, entry: sel.Entry, request: request, renewed: true, expected: multihoprelay.Lease{Request: request, NodeID: sel.Entry.NodeProofID, ExitNodeID: sel.Exit.NodeProofID, ExpiresAt: time.Now().Add(time.Minute)}})
+		relay := &desktopRelayOwner{app: a, command: launch.command, entry: sel.Entry, request: request, renewed: true, expected: multihoprelay.Lease{Request: request, NodeID: sel.Entry.NodeProofID, ExitNodeID: sel.Exit.NodeProofID, ExpiresAt: time.Now().Add(time.Minute)}}
+		if exitMode == "wg" {
+			relay.localPacketPublic, relay.serverPacketPublic = sel.Native.localPacketPublic["wg"], testWGKey('z')
+			relay.request.ExpectedPacketPublicKey, relay.packetCapabilityReady = relay.serverPacketPublic, true
+			relay.expected.Request = relay.request
+		}
+		desktopRelays.Store(a, relay)
 	}
 	f := &retainedMultihopFixture{a: a, selection: sel, launch: launch, graph: graph, native: owner,
 		readback: desktopNodeMTURecord{Schema: 1, Session: launch.mtuSession, Config: launch.configSHA256, Path: strings.Repeat("d", 64), Reader: 2, Interface: "router-vpn", Index: 7, MTU: 1360}}
+	if exitMode == "wg" {
+		f.readback.MTU = 1280
+	}
 	f.publish(t, f.readback)
 	t.Cleanup(func() {
 		sessionTrackers.Delete(a)

@@ -363,6 +363,12 @@ func (p *externalPredecessor) captureRules(route map[string]any) error {
 }
 
 func (p *externalPredecessor) applyMTU(tun, exit map[string]any, selection externalPolicyCapture) (int, int, string, error) {
+	return p.applyMTUWithPacketEnvelope(tun, exit, selection, 0)
+}
+
+// A nonzero envelope comes only from a validated Router packet exit and its
+// captured native Start Layer. Ordinary imported paths use their own policy.
+func (p *externalPredecessor) applyMTUWithPacketEnvelope(tun, exit map[string]any, selection externalPolicyCapture, envelope int) (int, int, string, error) {
 	entry := predecessorCopy(p.final)
 	switch entry["type"] {
 	case AmneziaType, PQType:
@@ -373,7 +379,7 @@ func (p *externalPredecessor) applyMTU(tun, exit map[string]any, selection exter
 		// baseline (including compatible Jumbo), never historical measurement.
 		tun["mtu"] = p.tun["mtu"]
 	}
-	mtu, entryMTU, policy, err := externalMTUPolicy(tun, exit, entry, selection.Profile, selection.Entry)
+	mtu, entryMTU, policy, err := externalMTUPolicyWithPacketEnvelope(tun, exit, entry, selection.Profile, selection.Entry, envelope)
 	if err != nil {
 		return 0, 0, "", err
 	}

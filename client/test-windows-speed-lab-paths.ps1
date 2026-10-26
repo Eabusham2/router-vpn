@@ -104,7 +104,8 @@ $readyMode=[string](SelectedTag $MultihopExitModeCombo);$MultihopExitModeCombo.S
 $RouterCombo.SelectedValue='exit-router';Reject 'main node changed after Ready';$RouterCombo.SelectedValue='entry'
 $readyNode=$RouterCombo.SelectedItem;$readyToken=[string]$readyNode.profile_token;$readyNode.profile_token='b'*64;Reject 'same-ID main relink after Ready';$readyNode.profile_token=$readyToken
 $readyExit=SpeedLabFind 'nodes' 'exit-router';$readyExitToken=[string]$readyExit.profile_token;$readyExit.profile_token='';Reject 'missing requested-hop revision';$readyExit.profile_token=$readyExitToken
-Emit 'speed-lab-multihop-naive-h3-auto'
+Check ((SelectedTag $ExitMode)-ceq$readyMode) 'Restored readiness controls changed the captured exit.'
+Emit ('speed-lab-multihop-'+$readyMode+'-'+[string]$Execution.SelectedValue)
 $MultihopExitModeCombo.SelectedValue='naive-h2';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$before=[string](SelectedTag $ExitMode)
 $MultihopExitModeCombo.SelectedValue='reality-xhttp';$D.Tag='owned-options';&$Initializer $RouterOpt
 Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled-and(SelectedTag $ExitMode)-ceq$before) 'Replacement profile was installed by stale options.';Reject 'stale options owner'

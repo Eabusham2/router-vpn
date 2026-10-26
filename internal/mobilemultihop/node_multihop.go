@@ -7,12 +7,11 @@ import (
 	"router-vpn/internal/mobileperf"
 )
 
-// NodeMultihopExitModes lists the complete, single-owner native proxy graphs
-// accepted by both Local and Server node-to-node execution. Packet and
-// multi-leg composites need their own exit ownership merger and are not
-// represented by a proxy label here.
+// NodeMultihopExitModes lists the complete native exit graphs accepted by both
+// Local and Server node-to-node execution. WireGuard retains its packet
+// endpoint; it is never represented as a proxy in the Local graph.
 func NodeMultihopExitModes() []string {
-	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"}
+	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg"}
 }
 
 func NodeMultihopExitMode(mode string) bool {
@@ -29,7 +28,7 @@ func NodeMultihopExitMode(mode string) bool {
 // itself retains its exact WireGuard or AmneziaWG type and captured parameters.
 // It performs no I/O and does not establish either node's live proof.
 func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
-	bad := errors.New("native node multihop requires a captured WG/AWG entry and a complete supported native proxy exit")
+	bad := errors.New("native node multihop requires a captured WG/AWG entry and a complete supported native exit")
 	if entry == nil || exit == nil || entry.profile == nil || exit.profile == nil ||
 		(entry.mode != "wg" && entry.mode != "awg2-fast" && entry.mode != "awg2-strong") ||
 		!NodeMultihopExitMode(exit.mode) ||
@@ -64,7 +63,11 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 		}
 	}
 	selection := externalPolicyCapture{Profile: predecessorCopy(exit.profile), Entry: predecessorCopy(entry.profile)}
-	if _, _, _, err := predecessor.applyMTU(last.tun, last.final, selection); err != nil {
+	envelope, err := nodeWireGuardPacketEnvelope(last, exit.mode)
+	if err != nil {
+		return "", err
+	}
+	if _, _, _, err := predecessor.applyMTUWithPacketEnvelope(last.tun, last.final, selection, envelope); err != nil {
 		return "", err
 	}
 	// The merger moves the entry's checked cover owner to the entry role. The

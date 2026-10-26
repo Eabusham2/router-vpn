@@ -1,6 +1,11 @@
 package mobilemultihop
 
 import (
+	"crypto/ecdh"
+	"crypto/sha256"
+	"encoding/base64"
+	"encoding/hex"
+	"encoding/json"
 	"reflect"
 	"strings"
 	"testing"
@@ -8,16 +13,44 @@ import (
 	"router-vpn/internal/multihoprelay"
 )
 
-func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
+func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[string]any, string) {
 	t.Helper()
 	files, profile, start := nodeProfileFixture(t, mode, layer)
 	profile["id"] = id
 	if id == "exit" {
 		profile["node_proof_id"] = strings.Repeat("f", 64)
 		profile["router_api"], profile["adguard_ipv4"] = "http://10.88.0.1:8787", "10.88.0.53"
+		if mode == "wg" {
+			var assets map[string]string
+			if err := json.Unmarshal([]byte(files), &assets); err != nil {
+				t.Fatal(err)
+			}
+			raw, err := base64.StdEncoding.DecodeString(assets["wg.conf"])
+			if err != nil {
+				t.Fatal(err)
+			}
+			server, err := ecdh.X25519().NewPrivateKey([]byte(strings.Repeat("z", 32)))
+			if err != nil {
+				t.Fatal(err)
+			}
+			public := base64.StdEncoding.EncodeToString(server.PublicKey().Bytes())
+			text := strings.ReplaceAll(string(raw), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32))), public)
+			text = strings.ReplaceAll(text, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32))), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32))))
+			text = strings.ReplaceAll(text, "10.77.0.2", "10.88.0.2")
+			assets["wg.conf"] = base64.StdEncoding.EncodeToString([]byte(text))
+			files = startJSON(t, assets)
+			proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
+			profile["node_proof_id"] = hex.EncodeToString(proof[:])
+		}
 	}
 	profile["daita_enabled"], profile["daita_rate_kbps"], profile["daita_host"] = true, float64(64), "10.77.0.1"
 	profile["ipv6_mode"], profile["home_lan_access"] = "off", false
+	return files, profile, start
+}
+
+func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
+	t.Helper()
+	files, profile, start := multihopNodeSources(t, mode, layer, id)
 	compiled, err := NewNodeProfile(mode, files, startJSON(t, profile), start, "")
 	if err != nil {
 		t.Fatal(err)
@@ -83,6 +116,18 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 							}
 							if !reflect.DeepEqual(prior, actual) {
 								t.Fatal("captured exit credentials, TLS, Xray document or UDP framing changed")
+							}
+						}
+						if exitMode == "wg" {
+							prior := startObject(t, exitBefore)["endpoints"].([]any)[0].(map[string]any)
+							actual := predecessorCopy(nodes["proxy"])
+							delete(prior, "mtu")
+							delete(actual, "mtu")
+							if exitLayer == "" {
+								delete(actual, "detour")
+							}
+							if !reflect.DeepEqual(prior, actual) {
+								t.Fatal("WireGuard exit keys, peer, assigned addresses or packet owner changed")
 							}
 						}
 						servers := graph["dns"].(map[string]any)["servers"].([]any)

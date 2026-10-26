@@ -63,12 +63,33 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		return nil, errors.New("unowned native multihop final route")
 	}
 	endpoints, ok := cfg["endpoints"].([]any)
-	if !ok || len(endpoints) != 1 {
-		return nil, errors.New("native server path requires one owned entry endpoint")
+	if !ok {
+		return nil, errors.New("native server path requires its owned endpoints")
 	}
-	entry, ok := endpoints[0].(map[string]any)
-	if !ok || entry["tag"] != "entry-wg" || entry["type"] != "wireguard" && entry["type"] != mobilemultihop.AmneziaType {
-		return nil, errors.New("native entry endpoint identity changed")
+	var entry map[string]any
+	packetExits := 0
+	for _, raw := range endpoints {
+		endpoint, valid := raw.(map[string]any)
+		if !valid {
+			return nil, errors.New("invalid native endpoint")
+		}
+		switch endpoint["tag"] {
+		case "entry-wg":
+			if entry != nil || endpoint["type"] != "wireguard" && endpoint["type"] != mobilemultihop.AmneziaType {
+				return nil, errors.New("native entry endpoint identity changed")
+			}
+			entry = endpoint
+		case "proxy":
+			if sel.ExitMode != "wg" || endpoint["type"] != "wireguard" || packetExits != 0 {
+				return nil, errors.New("native server path has an unowned packet exit")
+			}
+			packetExits++
+		default:
+			return nil, errors.New("native server path contains an unrelated endpoint")
+		}
+	}
+	if entry == nil || (sel.ExitMode == "wg") != (packetExits == 1) {
+		return nil, errors.New("native server path lost its captured entry or packet exit")
 	}
 	if entry["type"] == mobilemultihop.AmneziaType {
 		encoded, _ := json.Marshal(entry)
@@ -83,14 +104,24 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 	found := 0
 	removedExitLayer := false
 	retained := make([]any, 0, len(outbounds))
+	serverExit := map[string]any{"type": "socks", "tag": "proxy", "version": "5", "server": d.Lease.Host, "server_port": d.Lease.Port, "username": d.Lease.Username, "password": d.Lease.Password, "detour": "entry-wg"}
+	if packetExits == 1 {
+		// The independent lease now owns the packet exit. Remove its local
+		// endpoint entirely so a dormant local peer cannot roam the server key.
+		cfg["endpoints"] = []any{entry}
+		retained = append(retained, serverExit)
+	}
 	for _, item := range outbounds {
 		out, ok := item.(map[string]any)
 		if !ok {
 			return nil, errors.New("invalid native outbound")
 		}
 		if out["tag"] == "proxy" {
+			if packetExits != 0 {
+				return nil, errors.New("native packet exit also contains an ambiguous proxy")
+			}
 			found++
-			out = map[string]any{"type": "socks", "tag": "proxy", "version": "5", "server": d.Lease.Host, "server_port": d.Lease.Port, "username": d.Lease.Username, "password": d.Lease.Password, "detour": "entry-wg"}
+			out = serverExit
 		} else if out["tag"] == mobilemultihop.NativeStartLayerTag {
 			// The authenticated lease owns this exact exit layer on the entry
 			// server. The namespaced entry layer stays in the local graph.
@@ -102,7 +133,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		}
 		retained = append(retained, out)
 	}
-	if found != 1 {
+	if found+packetExits != 1 || packetExits == 1 && (layer != "") != removedExitLayer {
 		return nil, errors.New("ambiguous exit proxy")
 	}
 	if removedExitLayer {

@@ -91,7 +91,7 @@ public sealed class ProfileModeOwner {
         $Owner.Controls.Add($Control,$Combo)
     }
     $MultihopExitModeCombo=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
-    $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3')
+    $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg')
     $ExpectedExecutions=@('local','server','auto')
     Check ((@($MultihopExitModeCombo.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedModes-join',')) 'Generated exit choices changed or disappeared'
     Check ((@($execution.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedExecutions-join',')) 'Generated execution choices changed or disappeared'
@@ -131,7 +131,7 @@ public sealed class ProfileModeOwner {
             $script:Loaded|Add-Member -NotePropertyName profile -NotePropertyValue ([pscustomobject]@{name='Loaded profile'})
             $script:Loaded|Add-Member -NotePropertyName selected_node_id -NotePropertyValue 'private-node'
             $script:Loaded|Add-Member -NotePropertyName private_key -NotePropertyValue 'must-not-copy'
-            $toggle.IsChecked=$false;$entry.SelectedValue='replacement-entry';$exit.SelectedValue='replacement-exit';$MultihopExitModeCombo.SelectedIndex=($m+1)%7;$execution.SelectedIndex=($e+1)%3
+            $toggle.IsChecked=$false;$entry.SelectedValue='replacement-entry';$exit.SelectedValue='replacement-exit';$MultihopExitModeCombo.SelectedIndex=($m+1)%$ExpectedModes.Count;$execution.SelectedIndex=($e+1)%3
             Set-RouterVPNLoadedModeSnapshot ([pscustomobject]@{mode='auto';custom_layers=@()})
             $Before=$script:Requests.Count;$Callbacks=$script:LoadedCallbacks;& $LoadCallback
             Check ($script:Requests.Count-eq$Before+1-and$script:LoadedCallbacks-eq$Callbacks+1-and$profileStatus.Text.StartsWith('Loaded ')) 'Actual Load callback failed or connected'
@@ -141,6 +141,14 @@ public sealed class ProfileModeOwner {
             Check ($script:Requests.Count-eq$Before+1-and$profileStatus.Text.StartsWith('Updated ')) 'Actual Update callback failed'
             VerifyBody $script:Requests[-1].Body $ExpectedModes[$m] $ExpectedExecutions[$e] $true
         }
+    }
+    foreach($InvalidIndex in @(-1,$ExpectedModes.Count,100)){
+        $MultihopExitModeCombo.SelectedIndex=$InvalidIndex
+        $Rejected=$false;try{[void](MultihopExitModeChoice)}catch{$Rejected=$true}
+        Check $Rejected 'Out-of-range exit index accepted by the shipping Connect selector'
+        $Rejected=$false;try{[void](Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner)}catch{$Rejected=$true}
+        Check $Rejected 'Out-of-range exit index was captured as a usable profile'
+        foreach($Callback in @($AddCallback,$UpdateCallback)){$Before=$script:Requests.Count;&$Callback;Check ($script:Requests.Count-eq$Before) 'Out-of-range exit index reached the controller'}
     }
     foreach($Invalid in @('stale-mode','',$null)){
         $MultihopExitModeCombo.SelectedIndex=0;$script:Loaded.multihop_exit_mode=$Invalid

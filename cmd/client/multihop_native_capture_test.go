@@ -26,6 +26,12 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 	t.Helper()
 	root := desktopAWGPrivateTestRoot(t)
 	entry, files := viaEntryBaseFixture(t, mode)
+	// The generated entry explicitly permits a nested dual-stack packet.
+	// A missing MTU deliberately compiles to 1280 and cannot carry another
+	// 1280-byte WG packet plus its authenticated transport envelope.
+	for name, raw := range files {
+		files[name] = []byte(strings.Replace(string(raw), "[Interface]\n", "[Interface]\nMTU = 1420\n", 1))
+	}
 	entry.ID, entry.StartLayer, entry.BaseTunnel = "entry", layer, "wg"
 	if mode != "wg" {
 		entry.BaseTunnel = "awg"
@@ -47,6 +53,9 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 		}
 	}
 	_, identity := viaEntryBaseFixture(t, "wg")
+	for name, raw := range identity {
+		identity[name] = []byte(strings.Replace(string(raw), "[Interface]\n", "[Interface]\nMTU = 1420\n", 1))
+	}
 	write(entry.ID, "wg", identity)
 	write(entry.ID, mode, files)
 	exit := cloneRouterProfile(entry)
@@ -117,8 +126,8 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 				if err != nil {
 					t.Fatal(err)
 				}
-				if sel.Native.entryMode != mode || sel.Native.base != sel.Base || len(sel.Native.configs) != 7 {
-					t.Fatal("actual saved base or complete Compare capture was lost")
+				if sel.Native.entryMode != mode || sel.Native.base != sel.Base || len(sel.Native.configs) != len(mobilemultihop.NodeMultihopExitModes()) {
+					t.Fatal("actual saved base or complete Compare capture was lost", sel.Native.failures)
 				}
 				for _, exitMode := range mobilemultihop.NodeMultihopExitModes() {
 					sel.ExitMode = exitMode
@@ -143,7 +152,13 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 						return graph
 					}
 					local := read()
-					endpoint := local["endpoints"].([]any)[0].(map[string]any)
+					var endpoint map[string]any
+					for _, raw := range local["endpoints"].([]any) {
+						value := raw.(map[string]any)
+						if value["tag"] == "entry-wg" {
+							endpoint = value
+						}
+					}
 					want := "wireguard"
 					if mode != "wg" {
 						want = mobilemultihop.AmneziaType
@@ -170,10 +185,18 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 						t.Fatal(err)
 					}
 					server := read()
-					for _, key := range []string{"endpoints", "services", "inbounds"} {
+					for _, key := range []string{"services", "inbounds"} {
 						if !reflect.DeepEqual(local[key], server[key]) {
 							t.Fatal("Server substitution changed the captured entry or policy", key)
 						}
+					}
+					if exitMode == "wg" {
+						serverEndpoints := server["endpoints"].([]any)
+						if len(serverEndpoints) != 1 || !reflect.DeepEqual(serverEndpoints[0], endpoint) || len(local["endpoints"].([]any)) != 2 || sel.Native.localPacketPublic[exitMode] == "" {
+							t.Fatal("Server did not remove only the captured local WireGuard exit")
+						}
+					} else if !reflect.DeepEqual(local["endpoints"], server["endpoints"]) {
+						t.Fatal("Server substitution changed the captured entry")
 					}
 					dnsSource, err := json.Marshal(local["dns"])
 					if err != nil {

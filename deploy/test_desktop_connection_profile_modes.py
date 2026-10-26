@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute desktop profile callbacks with all seven exit modes and three owners.
+"""Execute desktop profile callbacks with all eight exit modes and three owners.
 
 Uses the shipping WPF composition and both AppKit profile entry points. Widgets
 are value-only doubles; HTTP is a recording local boundary and UserDefaults uses
@@ -163,7 +163,7 @@ SWIFT_PRODUCT = r'''
 '''
 
 SWIFT_TEST = r'''
-let expectedModes = ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"]
+let expectedModes = ["shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg"]
 let executions = ["local", "server", "auto"]
 check(RouterVPNNodeExitModes.choices.map { $0.id } == expectedModes, "shipping exit catalog changed or disappeared")
 let owner = ProductWindowController(), settings = Settings()
@@ -216,7 +216,7 @@ for (m, mode) in expectedModes.enumerated() {
         _ = try owner.connectionProfilePOST("/api/connection-profile/setup/save", body: add)
         verify(owner.api.calls.last!.body, mode, execution, updating: false)
         let payload = loaded(add)
-        choose((m + 1) % 7, (e + 1) % 3)
+        choose((m + 1) % expectedModes.count, (e + 1) % 3)
         owner.multihopEntryPopup.selectItem(at: 1); owner.multihopExitPopup.selectItem(at: 0)
         let before = owner.api.calls.count
         try owner.applyLoadedConnectionProfile(payload)
@@ -234,7 +234,7 @@ for (m, mode) in expectedModes.enumerated() {
         check(settings.api.calls.count == count + 1 && settings.status.stringValue.hasPrefix("Added "), "actual Settings Add callback failed")
         verify(settings.api.calls.last!.body, mode, execution, updating: false)
         settings.api.loaded = loaded(settings.api.calls.last!.body)
-        choose((m + 1) % 7, (e + 1) % 3)
+        choose((m + 1) % expectedModes.count, (e + 1) % 3)
         owner.multihopEntryPopup.selectItem(at: 1); owner.multihopExitPopup.selectItem(at: 0)
         count = settings.api.calls.count
         settings.loadProfile()
@@ -258,7 +258,7 @@ for invalid: String? in ["stale-mode", "", nil, "SHADOWSOCKS"] {
     settings.loadProfile()
     check(settings.status.stringValue.hasPrefix("Load failed:") && owner.captureConnectionProfileSelection() == settingsPrevious, "Settings Load accepted an unsupported exit")
 }
-for invalidIndex in [-1, 7, 100] {
+for invalidIndex in [-1, expectedModes.count, 100] {
     choose(0, 0); owner.multihopExitModePopup.selectItem(at: invalidIndex)
     rejects({ _ = try owner.connectionProfileSnapshot(name: "bad", id: nil) }, "out-of-range main exit index was accepted")
     rejects({ _ = try settings.currentMultihopSnapshot() }, "out-of-range Settings exit index was accepted")

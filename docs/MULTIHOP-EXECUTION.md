@@ -42,7 +42,7 @@ never relay passwords or node tokens.
 ## Provisioning a server-owned exit
 
 Server execution requires an operator-paired exit registry on the entry node.
-The registry source supports WireGuard, AmneziaWG Fast/Strong, Shadowsocks and Hysteria2. A client
+The registry source includes WireGuard, AmneziaWG Fast/Strong, Shadowsocks and Hysteria2. A client
 cannot submit arbitrary executable paths, shell commands or entire server engine
 configurations through the lease API.
 
@@ -69,10 +69,21 @@ through the normal deployment procedure after successful validation.
 
 The exit ID must match the selected exit ID in each client's node list. The
 registry node proof must match the selected exit's actual identity. For mobile
-WireGuard or AmneziaWG local/server comparison, provision a **separate authorized client key
-on the exit** for the server engine. Reusing the mobile's own WG/AWG client key would
-make the exit peer roam between two endpoints. The mobile controller rejects that
-unsafe pairing rather than falsely reporting two independent paths.
+WireGuard/AmneziaWG and desktop WireGuard Local/Server comparison, provision a
+**separate authorized client key on the exit** for the server engine. Reusing the
+device's own packet client key would make the exit peer roam between two endpoints.
+Controllers compare the canonical public identity, including private-key encodings
+that X25519 clamps to the same peer, before acquiring an independent Server lease.
+
+Desktop WireGuard requests also carry `expected_packet_public_key`, captured from
+the authenticated entry's paired-exit catalog. The updated agent checks it against
+its private registry under the lease lock before acquisition or renewal. This
+binds discovery to the actual paired key even if the entry restarts between GET
+and PUT. An older agent that rejects the field or does not return the exact bound
+request cannot satisfy this desktop Server contract. No fallback drops the pin.
+Every renewal rechecks fresh capabilities against the original identity. Temporary
+Speed Lab restoration retains the proved Local/Server choice and, for Server,
+the captured peer pin; changed pairing requires a new user connection.
 
 Leases bind the authenticated tunnel source, entry identity, exit and random
 session. Listener ports 26240–26271 stay private and reserved from broad port

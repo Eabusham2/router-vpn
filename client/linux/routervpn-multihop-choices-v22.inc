@@ -8,6 +8,7 @@ static const struct { const char *id; const char *label; } linux_multihop_exits_
     {"reality-xhttp", "REALITY / XHTTP exit"},
     {"naive-h2", "Naive H2 exit"},
     {"naive-h3", "Naive H3 exit"},
+    {"wg", "WireGuard exit"},
 };
 
 static gboolean linux_multihop_exit_supported_v22(const char *mode) {

@@ -936,6 +936,13 @@ func externalDevicePolicy(profiles ...map[string]any) (string, []string, error) 
 }
 
 func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (mtu, entryMTU int, policy string, err error) {
+	return externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile, 0)
+}
+
+func externalMTUPolicyWithPacketEnvelope(tun, exit, entry, profile, entryProfile map[string]any, envelope int) (mtu, entryMTU int, policy string, err error) {
+	if envelope != 0 && (exit["type"] != "wireguard" || profile["node_kind"] != "router-vpn" || envelope < 60 || envelope > 4096) {
+		return 0, 0, "", errors.New("nested packet envelope is not owned by the captured Router exit")
+	}
 	mtu, err = mtuNumber(tun["mtu"])
 	if err != nil {
 		return
@@ -1015,6 +1022,9 @@ func externalMTUPolicy(tun, exit, entry, profile, entryProfile map[string]any) (
 				return 0, 0, "", failure
 			}
 			overhead += layerOverhead
+			if envelope != 0 {
+				overhead = envelope
+			}
 			limit := (entryMTU - overhead) / 16 * 16
 			if limit < 1280 {
 				return 0, 0, "", errors.New("entry MTU cannot carry the dual-stack nested WireGuard packet")

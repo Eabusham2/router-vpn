@@ -56,17 +56,21 @@ type Config struct {
 	Exits      []Exit `json:"exits"`
 }
 type Request struct {
-	SessionID              string `json:"session_id"`
-	EntryNodeID            string `json:"entry_node_id"`
-	ExitID                 string `json:"exit_id"`
-	ExitMode               string `json:"exit_mode"`
-	ExitStartLayer         string `json:"exit_start_layer,omitempty"`
-	ExternalFingerprint    string `json:"external_fingerprint,omitempty"`
-	ExternalAuthentication string `json:"external_authentication,omitempty"`
-	ExternalEpoch          string `json:"external_epoch,omitempty"`
-	ExternalPeer           string `json:"external_peer,omitempty"`
-	ExternalExpiresAt      int64  `json:"external_expires_at,omitempty"`
-	ExternalAttempt        string `json:"external_attempt,omitempty"`
+	SessionID      string `json:"session_id"`
+	EntryNodeID    string `json:"entry_node_id"`
+	ExitID         string `json:"exit_id"`
+	ExitMode       string `json:"exit_mode"`
+	ExitStartLayer string `json:"exit_start_layer,omitempty"`
+	// Optional public identity pinned by a client after authenticated discovery.
+	// Enforced under the lease lock, including renewals, so a server restart or
+	// registry replacement cannot substitute a different WireGuard client peer.
+	ExpectedPacketPublicKey string `json:"expected_packet_public_key,omitempty"`
+	ExternalFingerprint     string `json:"external_fingerprint,omitempty"`
+	ExternalAuthentication  string `json:"external_authentication,omitempty"`
+	ExternalEpoch           string `json:"external_epoch,omitempty"`
+	ExternalPeer            string `json:"external_peer,omitempty"`
+	ExternalExpiresAt       int64  `json:"external_expires_at,omitempty"`
+	ExternalAttempt         string `json:"external_attempt,omitempty"`
 	// Optional client-generated listener proposal allows the client to prepare
 	// its final graph before acquiring a lease, without restarting its TUN.
 	Port     int    `json:"listen_port,omitempty"`
@@ -191,7 +195,9 @@ func (m *Manager) Available() []map[string]string {
 		if OpenVPNRemoteRequired(e) {
 			item["openvpn_remote"] = "fresh-connected-transport-v1"
 		}
-		if OpenVPNLayersRequired(e) { item["openvpn_layers"] = "captured-per-remote-v1" }
+		if OpenVPNLayersRequired(e) {
+			item["openvpn_layers"] = "captured-per-remote-v1"
+		}
 		if layer := ExitLayerMode(e); layer != "" {
 			item["exit_start_layer"] = layer
 		}
@@ -216,6 +222,9 @@ func (m *Manager) Available() []map[string]string {
 	return out
 }
 func (m *Manager) validate(peer netip.Addr, q Request) error {
+	if q.ExpectedPacketPublicKey != "" && (q.ExitMode != "wg" || !canonicalPacketPublic(q.ExpectedPacketPublicKey)) {
+		return ErrOwnership
+	}
 	if err := validatePacketRequestShape(q, false); err != nil {
 		return err
 	}
@@ -234,6 +243,30 @@ func (m *Manager) validate(peer netip.Addr, q Request) error {
 	if q.Port != 0 || q.Username != "" || q.Password != "" {
 		if q.Port < m.cfg.FirstPort || q.Port > m.cfg.LastPort ||
 			!listenerSecret.MatchString(q.Username) || !listenerSecret.MatchString(q.Password) || q.Username == q.Password {
+			return ErrOwnership
+		}
+	}
+	return nil
+}
+
+// Acquisition and renewal bind to the registry under the same lock. DELETE
+// still accepts the exact old owned request if a registry identity changed;
+// otherwise a failed renewal could prevent cleanup of its existing engine.
+func (m *Manager) validateExpectedPacketIdentityLocked(q Request) error {
+	if q.ExpectedPacketPublicKey != "" {
+		matched := false
+		for _, exit := range m.cfg.Exits {
+			if exit.ID != q.ExitID || exit.Mode != q.ExitMode || ExitLayerMode(exit) != q.ExitStartLayer || exit.External != nil {
+				continue
+			}
+			identity, err := clientIdentity(relayPacketTransport(exit))
+			if err != nil || identity != q.ExpectedPacketPublicKey {
+				return ErrOwnership
+			}
+			matched = true
+			break
+		}
+		if !matched {
 			return ErrOwnership
 		}
 	}
@@ -259,6 +292,9 @@ func (m *Manager) Create(ctx context.Context, peer netip.Addr, q Request) (Lease
 		return Lease{}, ErrUnavailable
 	}
 	if err := m.validate(peer, q); err != nil {
+		return Lease{}, err
+	}
+	if err := m.validateExpectedPacketIdentityLocked(q); err != nil {
 		return Lease{}, err
 	}
 	if err := m.reapLocked(ctx); err != nil {
@@ -786,7 +822,9 @@ func Build(exit Exit, peer netip.Addr, lease Lease) ([]byte, error) {
 	}
 	if OpenVPNLayersRequired(exit) {
 		inner, mapping, err := WrapOpenVPNStartLayers(transport, exit.External.OpenVPNResponseProbes, exit.External.OpenVPNStartLayers, ExitLayerMode(exit), OpenVPNStartLayerMapTag, "")
-		if err != nil { return nil, err }
+		if err != nil {
+			return nil, err
+		}
 		config["endpoints"] = []any{inner}
 		config["outbounds"] = []any{mapping}
 	}

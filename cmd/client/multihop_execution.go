@@ -134,6 +134,11 @@ type desktopRelayOwner struct {
 	cancel   context.CancelFunc
 	done     chan struct{}
 	renewed  bool
+	// The private local peer stays in the immutable native capture. Only its
+	// canonical public identity is compared with the independently paired
+	// server peer, before acquisition and every owned lease renewal.
+	localPacketPublic, serverPacketPublic string
+	packetCapabilityReady                 bool
 }
 
 var desktopRelays sync.Map
@@ -301,10 +306,17 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		if layer == "off" {
 			layer = ""
 		}
-		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: layer, Port: 26240 + int(number.Int64()), Username: user, Password: password}
+		q := multihoprelay.Request{SessionID: s.generation, EntryNodeID: sel.Entry.NodeProofID, ExitID: sel.Exit.ID, ExitMode: sel.ExitMode, ExitStartLayer: layer, Port: 26240 + int(number.Int64()), Username: user, Password: password, ExpectedPacketPublicKey: sel.serverPacketPublic}
+		localPacketPublic := ""
+		if sel.ExitMode == "wg" {
+			if sel.Native == nil || sel.Native.validate(sel) != nil || sel.Native.localPacketPublic[sel.ExitMode] == "" {
+				return nil, errors.New("server WireGuard requires the exact captured local client identity")
+			}
+			localPacketPublic = sel.Native.localPacketPublic[sel.ExitMode]
+		}
 		lease := multihoprelay.Lease{Request: q, NodeID: sel.Entry.NodeProofID, ExitNodeID: sel.Exit.NodeProofID, Host: host.Unmap().String(), Port: q.Port, Username: user, Password: password}
 		descriptor = &desktopExecutionDescriptor{Execution: "server", Lease: lease}
-		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q}
+		s.relay = &desktopRelayOwner{app: d.a, entry: sel.Entry, expected: lease, request: q, localPacketPublic: localPacketPublic, serverPacketPublic: sel.serverPacketPublic}
 	}
 	s.command, s.descriptorDir, s.native, err = desktopExecutionCommand(d.a, sel, descriptor)
 	if err != nil {
@@ -359,6 +371,10 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 		if err = s.relay.available(ctx); err != nil {
 			return s, err
 		}
+		// Native staging already captured the listener host/port/credentials.
+		// Discovery adds only the lease identity receipt, never rewrites that
+		// running graph or its source digest. The same receipt owns PUT/restore.
+		descriptor.Lease = s.relay.expected
 		// Persist ownership before PUT; a timeout may follow successful creation.
 		desktopRelays.Store(d.a, s.relay)
 		s.relay.mu.Lock()
@@ -371,6 +387,7 @@ func (d *desktopExecutionDriver) Open(ctx context.Context, c routechoice.Candida
 			}
 			return s, err
 		}
+		descriptor.Lease = s.relay.expected
 		s.relay.startRenewal()
 	}
 	for {
@@ -435,6 +452,9 @@ func (o *desktopRelayOwner) requestControl(ctx context.Context, method string, o
 	return nil
 }
 func (o *desktopRelayOwner) available(ctx context.Context) error {
+	if o.request.ExitMode == "wg" {
+		o.packetCapabilityReady = false
+	}
 	var response multihoprelay.Capabilities
 	if err := o.requestControl(ctx, http.MethodGet, &response); err != nil {
 		return err
@@ -444,6 +464,18 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 	}
 	for _, exit := range response.Exits {
 		if exit.ID == o.request.ExitID && exit.Mode == o.request.ExitMode && exit.NodeID == o.expected.ExitNodeID && exit.Layer == o.request.ExitStartLayer {
+			if o.request.ExitMode == "wg" {
+				if o.localPacketPublic == "" || exit.PublicKey == "" || exit.PublicKey == o.localPacketPublic {
+					return errors.New("server WireGuard needs an independently paired client public identity to avoid peer roaming")
+				}
+				if o.serverPacketPublic != "" && o.serverPacketPublic != exit.PublicKey {
+					return errors.New("server WireGuard paired identity changed after capture")
+				}
+				o.serverPacketPublic = exit.PublicKey
+				o.request.ExpectedPacketPublicKey = exit.PublicKey
+				o.expected.Request = o.request
+				o.packetCapabilityReady = true
+			}
 			return nil
 		}
 	}
@@ -451,6 +483,16 @@ func (o *desktopRelayOwner) available(ctx context.Context) error {
 }
 
 func (o *desktopRelayOwner) put(ctx context.Context) error {
+	if o.request.ExitMode == "wg" {
+		if !o.packetCapabilityReady || o.localPacketPublic == "" || o.serverPacketPublic == "" || o.serverPacketPublic == o.localPacketPublic || o.request.ExpectedPacketPublicKey != o.serverPacketPublic || o.expected.Request != o.request {
+			return errors.New("server WireGuard lease has no validated independent peer identity")
+		}
+		if o.renewed {
+			if err := o.available(ctx); err != nil {
+				return err
+			}
+		}
+	}
 	var lease multihoprelay.Lease
 	if err := o.requestControl(ctx, http.MethodPut, &lease); err != nil {
 		return err
