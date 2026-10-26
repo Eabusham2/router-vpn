@@ -10,12 +10,18 @@ import (
 // DesktopBridgeCapture contains private launch parameters, not proof of a
 // running engine. IsolationSecret must remain in the owned private workspace.
 type DesktopBridgeCapture struct {
-	Schema          int    `json:"schema"`
-	SessionID       string `json:"session_id"`
-	IsolationSecret string `json:"isolation_secret"`
-	TargetOS        string `json:"target_os"`
-	TorBinary       string `json:"tor_binary"`
+	Schema          int                              `json:"schema"`
+	SessionID       string                           `json:"session_id"`
+	IsolationSecret string                           `json:"isolation_secret"`
+	TargetOS        string                           `json:"target_os"`
+	TorBinary       string                           `json:"tor_binary"`
+	Predecessor     *DesktopBridgePredecessorCapture `json:"predecessor,omitempty"`
 }
+
+// Only a complete predecessor capture may use the larger bound. Direct Tor
+// keeps the original small launch record; other private inputs are unchanged.
+const DesktopBridgeCaptureLimit = 8 << 20
+const desktopDirectCaptureLimit = 16 << 10
 
 type DesktopBridgeInputDigests struct {
 	SourceSHA256   string `json:"source_sha256"`
@@ -39,7 +45,16 @@ type DesktopBridgeInputs struct {
 	digests DesktopBridgeInputDigests
 }
 
-func (i *DesktopBridgeInputs) Capture() DesktopBridgeCapture      { return i.capture }
+func (i *DesktopBridgeInputs) Capture() DesktopBridgeCapture {
+	capture := i.capture
+	if capture.Predecessor != nil {
+		copy := *capture.Predecessor
+		copy.Profile = append(json.RawMessage(nil), copy.Profile...)
+		copy.Config = append(json.RawMessage(nil), copy.Config...)
+		capture.Predecessor = &copy
+	}
+	return capture
+}
 func (i *DesktopBridgeInputs) Policy() *DesktopBridgePolicy       { return i.policy }
 func (i *DesktopBridgeInputs) JSON() string                       { return i.json }
 func (i *DesktopBridgeInputs) Torrc() string                      { return i.torrc }
@@ -48,7 +63,22 @@ func (i *DesktopBridgeInputs) RuntimeDir() string                 { return i.dir
 func (i *DesktopBridgeInputs) Digests() DesktopBridgeInputDigests { return i.digests }
 
 func NewDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir string) (*DesktopBridgeInputs, error) {
+	return newDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir, nil)
+}
+
+func NewDesktopBridgeCaptureWithPredecessor(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir string, predecessor *DesktopPredecessor) (*DesktopBridgeInputs, error) {
+	if predecessor == nil {
+		return nil, errors.New("desktop Tor launch requires its captured Router entry")
+	}
+	return newDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir, predecessor)
+}
+
+func newDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir string, predecessor *DesktopPredecessor) (*DesktopBridgeInputs, error) {
 	capture := DesktopBridgeCapture{Schema: 1, SessionID: sessionID, IsolationSecret: isolationSecret, TargetOS: targetOS, TorBinary: torBinary}
+	if predecessor != nil {
+		entry := predecessor.Capture()
+		capture.Predecessor = &entry
+	}
 	raw, err := json.Marshal(capture)
 	if err != nil {
 		return nil, err
@@ -57,12 +87,25 @@ func NewDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torB
 }
 
 func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*DesktopBridgeInputs, error) {
-	object, err := profileObject(rawCapture, 16<<10)
+	object, err := profileObject(rawCapture, DesktopBridgeCaptureLimit)
 	if err != nil {
 		return nil, errors.New("desktop Tor launch requires one exact bounded capture")
 	}
 	required := []string{"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
-	if len(object) != len(required) {
+	var predecessor *DesktopPredecessor
+	if entry, exists := object["predecessor"]; exists {
+		if len(object) != len(required)+1 || entry == nil {
+			return nil, errors.New("desktop Tor capture contains missing or unowned fields")
+		}
+		raw, err := json.Marshal(entry)
+		if err != nil {
+			return nil, err
+		}
+		predecessor, err = decodeDesktopPredecessor(raw)
+		if err != nil {
+			return nil, err
+		}
+	} else if len(object) != len(required) || len(rawCapture) > desktopDirectCaptureLimit {
 		return nil, errors.New("desktop Tor capture contains missing or unowned fields")
 	}
 	for _, name := range required {
@@ -83,7 +126,7 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 	if capture.TorBinary == runtimeDir {
 		return nil, errors.New("desktop Tor executable cannot be its runtime directory")
 	}
-	policy, err := NewDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS)
+	policy, err := newDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
 	if err != nil {
 		return nil, err
 	}

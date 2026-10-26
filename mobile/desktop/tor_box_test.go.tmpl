@@ -2,6 +2,7 @@ package box
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"net"
@@ -23,8 +24,10 @@ import (
 	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/dns"
 	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/log"
 	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/protocol/socks"
 	"github.com/sagernet/sing-box/routervpn/desktoppt"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
@@ -147,6 +150,10 @@ type desktopTorBoxFixture struct {
 }
 
 func newDesktopTorBoxFixture(t *testing.T, edit func(map[string]any)) *desktopTorBoxFixture {
+	return newDesktopTorBoxCapturedFixture(t, edit, nil)
+}
+
+func newDesktopTorBoxCapturedFixture(t *testing.T, edit func(map[string]any), predecessor *mobiletor.DesktopPredecessor) *desktopTorBoxFixture {
 	t.Helper()
 	server := newDesktopTorBoxSOCKS(t)
 	_, portText, _ := net.SplitHostPort(server.listener.Addr().String())
@@ -160,7 +167,12 @@ func newDesktopTorBoxFixture(t *testing.T, edit func(map[string]any)) *desktopTo
 	if err != nil {
 		t.Fatal(err)
 	}
-	policy, err := mobiletor.NewDesktopBridgePolicy(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS)
+	var policy *mobiletor.DesktopBridgePolicy
+	if predecessor == nil {
+		policy, err = mobiletor.NewDesktopBridgePolicy(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS)
+	} else {
+		policy, err = mobiletor.NewDesktopBridgePolicyWithPredecessor(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS, predecessor)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -175,6 +187,7 @@ func newDesktopTorBoxFixture(t *testing.T, edit func(map[string]any)) *desktopTo
 	})
 	outbounds := outbound.NewRegistry()
 	socks.RegisterOutbound(outbounds)
+	shadowsocks.RegisterOutbound(outbounds)
 	dnsRegistry := dns.NewTransportRegistry()
 	DNST.RegisterTCP(dnsRegistry)
 	DNST.RegisterUDP(dnsRegistry)
@@ -201,6 +214,50 @@ func newDesktopTorBoxFixture(t *testing.T, edit func(map[string]any)) *desktopTo
 		}
 	})
 	return f
+}
+
+func desktopTorBoxEntryFixture(t *testing.T) *mobiletor.DesktopPredecessor {
+	t.Helper()
+	profile := map[string]any{"id": "entry-fixture", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+		"router_api": "http://10.80.0.1:8787", "api_token": "private-entry-token", "endpoint": "192.0.2.44",
+		"dns_mode": "home", "adguard_ipv4": "10.80.0.53", "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto"}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "auto_route": true, "strict_route": true, "mtu": 1280}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443,
+			"method": "2022-blake3-aes-256-gcm", "password": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))}},
+		"route": map[string]any{"final": "proxy", "rules": []any{}}}
+	raw, _ := json.Marshal(profile)
+	config, _ := json.Marshal(graph)
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(config)})
+	compiled, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), string(raw), "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := mobiletor.NewDesktopPredecessor("shadowsocks", string(raw), compiled.Config(), strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func TestRouterVPNDesktopTorRejectsUnimplementedCapturedEntry(t *testing.T) {
+	entry := desktopTorBoxEntryFixture(t)
+	f := newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
+		profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"] = true, "entry-fixture", profile["id"]
+		profile["multihop_entry_mode"], profile["multihop_exit_mode"], profile["multihop_execution"] = "shadowsocks", "tor-bridge", "local"
+	}, entry)
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	owner, err := f.box.RouterVPNDesktopTorCreate(f.policy)
+	if err == nil || owner != nil {
+		if owner != nil {
+			closeDesktopTorBox(t, owner)
+		}
+		t.Fatal("captured Router entry was admitted as a direct physical Tor path")
+	}
+	if f.tun.claimed || f.child.configured.Load() != 0 || f.socks.proofCalls.Load() != 0 {
+		t.Fatal("unimplemented entry reached TUN ownership, Tor control or traffic proof")
+	}
 }
 func (f *desktopTorBoxFixture) capture(t *testing.T) *RouterVPNDesktopTor {
 	t.Helper()

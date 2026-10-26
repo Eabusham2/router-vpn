@@ -44,6 +44,8 @@ def main():
     environment = os.environ.copy()
     run([sys.executable, str(ROOT/'deploy/test_mobile_tor_dns_bootstrap.py'), '--vendor', str(vendor)],
         vendor, environment, args.output, 'native-dns-source-guard')
+    run([sys.executable, str(ROOT/'deploy/test_mobile_tor_source_closure.py'), '--go', args.go],
+        vendor, environment, args.output, 'shared-policy-source-closure')
     PREP.prepare(vendor, args.go)
     first = (vendor/PREP.OWNER).read_bytes()
     PREP.prepare(vendor, args.go)
@@ -82,6 +84,7 @@ def main():
                                 stable_private_state_across_runtime_roots=True, captured_cancelable_proof_requests=True,
                                 actual_pt_workers=True, local_pt_application_traffic=True, captured_snowflake_dns_and_io=True,
                                 bootstrap_source_guard=True,
+                                shared_policy_source_closure=True,
                                 libbox_host_api_linked=True, public_tor_traffic=False,
                                 mobile_tor_capability_enabled=False))
     (args.output/'tor-outbound-evidence.json').write_text(json.dumps(record, indent=2, sort_keys=True)+'\n')

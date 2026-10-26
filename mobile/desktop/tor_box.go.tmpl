@@ -77,6 +77,12 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		return nil, errors.New("desktop Tor source does not match the running native graph")
 	}
 	meta := policy.Metadata()
+	// The pure source compiler can retain a Router entry before the native
+	// lower-dialer/proof owner has been installed. Never admit that capture as
+	// a direct physical Tor path while its runtime integration is pending.
+	if meta.EntryID != "" {
+		return nil, errors.New("desktop Tor captured predecessor has no native runtime owner")
+	}
 	if meta.TargetOS != runtime.GOOS {
 		return nil, errors.New("desktop Tor policy belongs to another native operating system")
 	}

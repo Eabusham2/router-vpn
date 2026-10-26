@@ -17,6 +17,7 @@ type DesktopBridgePolicy struct {
 	config, source string
 	metadata       DesktopBridgeMetadata
 	bridges        []string
+	predecessor    *DesktopPredecessor
 }
 
 type DesktopBridgeDNS struct {
@@ -31,24 +32,40 @@ type DesktopBridgeDNS struct {
 // Metadata records requested policy, never a measured path MTU or successful
 // DNS/Tor proof. Secrets remain exclusively in the private source/configuration.
 type DesktopBridgeMetadata struct {
-	Schema           int              `json:"schema"`
-	NodeID           string           `json:"node_id"`
-	SessionID        string           `json:"session_id"`
-	SourceSHA256     string           `json:"source_sha256"`
-	ConfigSHA256     string           `json:"config_sha256"`
-	TargetOS         string           `json:"target_os"`
-	FinalTag         string           `json:"final_tag"`
-	TUNTag           string           `json:"tun_tag"`
-	InterfaceName    string           `json:"interface_name,omitempty"`
-	SocksPort        int              `json:"socks_port"`
-	DNS              DesktopBridgeDNS `json:"dns"`
-	BootstrapDNSTag  string           `json:"bootstrap_dns_tag"`
-	IPv6Mode         string           `json:"ipv6_mode"`
-	HomeLANAccess    bool             `json:"home_lan_access"`
-	KillSwitchPolicy string           `json:"kill_switch_policy"`
-	MTUPolicy        string           `json:"mtu_policy"`
-	ConfiguredMTU    int              `json:"configured_mtu"`
-	JumboTUN         bool             `json:"jumbo_tun"`
+	Schema            int              `json:"schema"`
+	NodeID            string           `json:"node_id"`
+	SessionID         string           `json:"session_id"`
+	SourceSHA256      string           `json:"source_sha256"`
+	ConfigSHA256      string           `json:"config_sha256"`
+	TargetOS          string           `json:"target_os"`
+	FinalTag          string           `json:"final_tag"`
+	TUNTag            string           `json:"tun_tag"`
+	InterfaceName     string           `json:"interface_name,omitempty"`
+	SocksPort         int              `json:"socks_port"`
+	DNS               DesktopBridgeDNS `json:"dns"`
+	BootstrapDNSTag   string           `json:"bootstrap_dns_tag"`
+	IPv6Mode          string           `json:"ipv6_mode"`
+	HomeLANAccess     bool             `json:"home_lan_access"`
+	KillSwitchPolicy  string           `json:"kill_switch_policy"`
+	MTUPolicy         string           `json:"mtu_policy"`
+	ConfiguredMTU     int              `json:"configured_mtu"`
+	JumboTUN          bool             `json:"jumbo_tun"`
+	EntryID           string           `json:"entry_id,omitempty"`
+	EntryMode         string           `json:"entry_mode,omitempty"`
+	EntryTag          string           `json:"entry_tag,omitempty"`
+	EntrySHA256       string           `json:"entry_sha256,omitempty"`
+	EntryAssetsSHA256 string           `json:"entry_assets_sha256,omitempty"`
+	EntryMTUPolicy    string           `json:"entry_mtu_policy,omitempty"`
+	EntryFixedMTU     int              `json:"entry_fixed_mtu,omitempty"`
+	EntryJumboTUN     bool             `json:"entry_jumbo_tun,omitempty"`
+	DNSDetour         string           `json:"dns_detour,omitempty"`
+}
+
+// AllowMTUOptimization describes authority over the single interface, not a
+// measurement result. Entry Fixed/Jumbo choices cannot be overwritten by an
+// exit whose separately retained saved preference is Auto.
+func (m DesktopBridgeMetadata) AllowMTUOptimization() bool {
+	return m.MTUPolicy == "auto" && !m.JumboTUN && !m.EntryJumboTUN && m.EntryFixedMTU == 0
 }
 
 // DesktopBridgeProof is the native child receipt. A control bootstrap status
@@ -82,10 +99,11 @@ type DesktopBridgeMTUReadback struct {
 	EffectiveMTU   int    `json:"effective_mtu"`
 }
 
-func (p *DesktopBridgePolicy) Config() string                  { return p.config }
-func (p *DesktopBridgePolicy) SourceSHA256() string            { return p.metadata.SourceSHA256 }
-func (p *DesktopBridgePolicy) Metadata() DesktopBridgeMetadata { return p.metadata }
-func (p *DesktopBridgePolicy) Profile() string                 { return p.source }
+func (p *DesktopBridgePolicy) Config() string                   { return p.config }
+func (p *DesktopBridgePolicy) SourceSHA256() string             { return p.metadata.SourceSHA256 }
+func (p *DesktopBridgePolicy) Metadata() DesktopBridgeMetadata  { return p.metadata }
+func (p *DesktopBridgePolicy) Profile() string                  { return p.source }
+func (p *DesktopBridgePolicy) Predecessor() *DesktopPredecessor { return p.predecessor }
 func (p *DesktopBridgePolicy) Plan() (Plan, error) {
 	return NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), p.bridges...)})
 }
@@ -131,8 +149,11 @@ func applyDesktopTorJumboPolicy(tun, profile map[string]any) error {
 // NewDesktopBridgePolicy compiles the exact saved direct bridge selection. The
 // same resolver is separately captured for PT bootstrap on the native physical
 // underlay and for application DNS through Tor. Neither uses host-default DNS.
-// Router-entry composition needs its own captured predecessor implementation.
 func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string) (*DesktopBridgePolicy, error) {
+	return newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS, nil)
+}
+
+func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string, predecessor *DesktopPredecessor) (*DesktopBridgePolicy, error) {
 	if !desktopHex(sessionID, 16) || !desktopHex(isolationSecret, 32) {
 		return nil, errors.New("desktop Tor requires fresh captured session and SOCKS isolation identities")
 	}
@@ -143,44 +164,76 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	if err != nil {
 		return nil, err
 	}
-	if profile["multihop_enabled"] == true {
-		return nil, errors.New("desktop Tor requires its captured Router-entry runtime before multihop can run")
+	if (profile["multihop_enabled"] == true) != (predecessor != nil) {
+		return nil, errors.New("desktop Tor graph requires the exact captured Router-entry selection")
 	}
 	if profile["daita_enabled"] == true {
 		return nil, errors.New("desktop Tor cannot discard a requested padding policy; its authenticated native implementation is still required")
 	}
-	selected, _, err := torSelectedDNS(profile, nil, false)
-	if err != nil {
-		return nil, err
+	var root, tun, selected map[string]any
+	if predecessor == nil {
+		selected, _, err = torSelectedDNS(profile, nil, false)
+		if err != nil {
+			return nil, err
+		}
+		root, tun, _, _ = torPredecessor("")
+		selected["tag"], selected["detour"] = profileDNS, ProfileOutboundTag
+		bootstrap := make(map[string]any, len(selected))
+		for key, value := range selected {
+			bootstrap[key] = value
+		}
+		bootstrap["tag"] = bootstrapDNS
+		delete(bootstrap, "detour")
+		root["dns"] = map[string]any{"servers": []any{selected, bootstrap}, "final": profileDNS, "independent_cache": true}
+	} else {
+		root, tun, selected, err = desktopPredecessorGraph(profile, sessionID, predecessor)
+		if err != nil {
+			return nil, err
+		}
 	}
-	root, tun, _, _ := torPredecessor("")
 	if targetOS == "linux" {
 		// The strict desktop forwarding helper already owns this exact native
 		// alias. Do not widen its egress exception for a new Tor-only name.
 		tun["interface_name"] = "router-vpn"
 	} else if targetOS == "windows" {
 		tun["interface_name"] = "router-vpn-tor"
+	} else {
+		delete(tun, "interface_name")
 	}
-	selected["tag"], selected["detour"] = profileDNS, ProfileOutboundTag
-	bootstrap := make(map[string]any, len(selected))
-	for key, value := range selected {
-		bootstrap[key] = value
-	}
-	bootstrap["tag"] = bootstrapDNS
-	delete(bootstrap, "detour")
-	root["dns"] = map[string]any{"servers": []any{selected, bootstrap}, "final": profileDNS, "independent_cache": true}
-	root["outbounds"] = []any{map[string]any{
+	socks := map[string]any{
 		"type": "socks", "tag": ProfileOutboundTag, "server": "127.0.0.1", "server_port": socksPort,
 		"version": "5", "username": sessionID, "password": isolationSecret,
-	}}
+	}
+	if predecessor == nil {
+		root["outbounds"] = []any{socks}
+	} else {
+		rows := root["outbounds"].([]any)
+		replaced := 0
+		for i, row := range rows {
+			outbound := row.(map[string]any)
+			if outbound["tag"] == ProfileOutboundTag {
+				if outbound["type"] != "routervpn-tor" || outbound["detour"] != predecessor.tag || outbound["entry_sha256"] != predecessor.proof.Fingerprint() {
+					return nil, errors.New("desktop Tor Local compiler lost the exact predecessor")
+				}
+				rows[i] = socks
+				replaced++
+			}
+		}
+		if replaced != 1 {
+			return nil, errors.New("desktop Tor Local graph requires exactly one isolated standalone owner")
+		}
+		root["outbounds"] = rows
+	}
 	route := root["route"].(map[string]any)
 	route["final"] = ProfileOutboundTag
-	route["default_domain_resolver"] = map[string]any{"server": bootstrapDNS}
-	if err := applyTorDevicePolicy(root, tun, profile); err != nil {
-		return nil, err
-	}
-	if err := applyDesktopTorJumboPolicy(tun, profile); err != nil {
-		return nil, err
+	if predecessor == nil {
+		route["default_domain_resolver"] = map[string]any{"server": bootstrapDNS}
+		if err := applyTorDevicePolicy(root, tun, profile); err != nil {
+			return nil, err
+		}
+		if err := applyDesktopTorJumboPolicy(tun, profile); err != nil {
+			return nil, err
+		}
 	}
 	// Capture classic DNS before its first packet has been protocol-classified;
 	// the UDP rejection must not turn selected DNS into a host-network fallback.
@@ -194,25 +247,42 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	}
 	route["rules"] = rules
 	sourceBytes, _ := json.Marshal([]string{"routervpn-desktop-tor-policy-v1", source, sessionID, isolationSecret, targetOS})
+	if predecessor != nil {
+		sourceBytes, _ = json.Marshal([]string{"routervpn-desktop-tor-predecessor-v1", source, sessionID, isolationSecret, targetOS,
+			predecessor.mode, predecessor.profile, predecessor.config, predecessor.assets})
+	}
 	sourceSHA := desktopDigest(sourceBytes)
 	// This exact Box service retires the native physical/PT generation on
 	// every network reset, including resets whose addresses are unchanged.
-	root["services"] = []any{map[string]any{
+	services, _ := root["services"].([]any)
+	root["services"] = append(services, map[string]any{
 		"type": "routervpn-desktop-tor-network", "tag": "routervpn-tor-physical",
 		"session_id": sessionID, "source_sha256": sourceSHA,
-	}}
+	})
 	encoded, err := json.Marshal(root)
 	if err != nil || len(encoded) > 4<<20 {
 		return nil, errors.New("desktop Tor configuration exceeds its bound")
 	}
-	dnsPort := selected["server_port"].(int)
+	// Read the encoded graph's exact integers for both the direct compiler and
+	// a parsed complete predecessor; neither historical MTU nor defaults can
+	// stand in for the actual single configured interface.
+	encodedGraph, err := profileObject(string(encoded), 4<<20)
+	if err != nil {
+		return nil, err
+	}
+	_, _, mtu, err := torMTUInterface(encodedGraph)
+	if err != nil {
+		return nil, err
+	}
+	selectedBytes, _ := json.Marshal(selected)
+	selectedNumbers, _ := profileObject(string(selectedBytes), 16<<10)
+	dnsPort, err := profileInteger(selectedNumbers, "server_port", 0)
+	if err != nil || dnsPort < 1 || dnsPort > 65535 {
+		return nil, errors.New("desktop Tor selected resolver lost its exact port")
+	}
 	dns := DesktopBridgeDNS{Mode: profileString(profile, "dns_mode"), Transport: profileString(selected, "type"), Address: profileString(selected, "server"), Port: dnsPort, Path: profileString(selected, "path")}
 	if tls, ok := selected["tls"].(map[string]any); ok {
 		dns.ServerName = profileString(tls, "server_name")
-	}
-	mtu := 1280
-	if fixed, ok := tun["mtu"].(int); ok {
-		mtu = fixed
 	}
 	mtuPolicy := profileString(profile, "mtu_policy")
 	if mtuPolicy == "" {
@@ -229,11 +299,17 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
 		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true,
 	}
+	if predecessor != nil {
+		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.proof.id, predecessor.mode, predecessor.tag
+		metadata.EntrySHA256, metadata.EntryAssetsSHA256 = predecessor.proof.Fingerprint(), predecessor.assets
+		metadata.EntryMTUPolicy, metadata.EntryFixedMTU, metadata.EntryJumboTUN = predecessor.proof.mtu.policy, predecessor.proof.mtu.fixed, predecessor.proof.mtu.jumbo
+		metadata.DNSDetour = profileString(selected, "detour")
+	}
 	bridges := make([]string, len(plan.Bridges))
 	for i, bridge := range plan.Bridges {
 		bridges[i] = bridge.Line
 	}
-	return &DesktopBridgePolicy{source: source, config: string(encoded), metadata: metadata, bridges: bridges}, nil
+	return &DesktopBridgePolicy{source: source, config: string(encoded), metadata: metadata, bridges: bridges, predecessor: predecessor}, nil
 }
 
 func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {

@@ -17,12 +17,20 @@ TORPACK = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(TORPACK)
 
 
+def mobile_policy_sources():
+    # Desktop launch/control owners are compiled by prepare-desktop-external.
+    # Their complete Router predecessor requires the desktop multihop closure;
+    # the mobile Tor package retains only its actual shared policy and tests.
+    return [path for path in (ROOT/'internal/mobiletor').glob('*.go')
+            if not path.name.startswith('desktop_')]
+
+
 def inputs():
     return sorted(set([Path(__file__).resolve(), ROOT/'deploy/test-mobile-tor-outbound.py', ROOT/'deploy/test_mobile_tor_dns_bootstrap.py', ROOT/'deploy/test_mobile_tor_thread_signals.py', ROOT/'deploy/test_mobile_tor_package_runtime.py', ROOT/'mobile/toroutbound/README.md', *TORPACK.inputs(),
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')],
-        *(ROOT/'internal/mobiletor').glob('*.go'),
+        *mobile_policy_sources(), ROOT/'deploy/test_mobile_tor_source_closure.py',
         ROOT/'internal/dnsmeasure/catalog.go',
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
@@ -68,6 +76,8 @@ def copies():
     result['routervpn/dnsmeasure/catalog.go'] = (ROOT/'internal/dnsmeasure/catalog.go').read_bytes()
     for name in ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn'):
         for path in sorted((ROOT/'internal'/name).glob('*.go')):
+            if name == 'mobiletor' and path.name.startswith('desktop_'):
+                continue
             if name != 'mobiletor' and path.name.endswith('_test.go'):
                 continue
             result['routervpn/'+name+'/'+path.name] = rewrite(path.read_bytes())
