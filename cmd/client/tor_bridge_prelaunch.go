@@ -118,6 +118,13 @@ func (owner *torBridgePrelaunch) start(check func() error) error {
 			desktopNodeOwners.CompareAndDelete(owner.app, launch)
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
+		// Preparation is read-only with respect to the current connection. Its
+		// DNS registration transfers only after the prior owner has stopped and
+		// this exact native session has passed final admission checks.
+		if err := registerActiveDNSRuntimeConfig(owner.app, owner.dns.ProfileID, owner.dns.RuntimeID, owner.dns.Config); err != nil {
+			desktopNodeOwners.CompareAndDelete(owner.app, launch)
+			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+		}
 	}
 	if err := owner.command.Start(); err != nil {
 		if owner.workspace.tor != nil {

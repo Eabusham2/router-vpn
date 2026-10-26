@@ -18,9 +18,7 @@ func (a *app) torBridgeStopFailure(cmd *exec.Cmd, cause string) (string, bool) {
 	return cause, false
 }
 
-type torBridgeConnectRequest struct {
-	ProfileID string `json:"profile_id"`
-}
+type torBridgeConnectRequest = externalProfileConnectRequest
 
 func registerTorBridgeRoutes(h *http.ServeMux, a *app) {
 	h.HandleFunc("/api/tor-bridge/capabilities", a.torBridgeCapabilities)
@@ -30,6 +28,10 @@ func registerTorBridgeRoutes(h *http.ServeMux, a *app) {
 }
 
 func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
+	a.torBridgeConnectWithRuntime(w, r, desktopTorConnectRuntime{})
+}
+
+func (a *app) torBridgeConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver desktopTorConnectRuntime) {
 	_, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
@@ -40,8 +42,8 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var q torBridgeConnectRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 16<<10)).Decode(&q); err != nil {
+	q, err := decodeExternalProfileConnectRequest(http.MaxBytesReader(w, r.Body, 16<<10))
+	if err != nil {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
@@ -52,12 +54,18 @@ func (a *app) torBridgeConnect(w http.ResponseWriter, r *http.Request) {
 	}
 	a.mu.Lock()
 	profile, ok := a.profileByIDLocked(profileID)
+	profile = cloneRouterProfile(profile)
+	expectationErr := a.validateExternalProfileExpectedProfilesLocked(q, profile)
 	a.mu.Unlock()
+	if expectationErr != nil {
+		http.Error(w, expectationErr.Error(), http.StatusConflict)
+		return
+	}
 	if !ok {
 		http.Error(w, "Tor bridge profile not found", http.StatusNotFound)
 		return
 	}
-	a.torBridgeConnectOwned(w, profile)
+	a.torBridgeConnectSelectionOwned(w, profile, q, nil, driver)
 }
 
 // torBridgeConnectOwned assumes the caller already owns beginConnectionOperation.
@@ -67,54 +75,69 @@ func (a *app) torBridgeConnectOwned(w http.ResponseWriter, profile common.Router
 }
 
 func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile common.RouterProfile, startup *startupPolicyCapture) {
+	a.torBridgeConnectSelectionOwned(w, profile, externalProfileConnectRequest{ProfileID: profile.ID}, startup, desktopTorConnectRuntime{})
+}
+
+func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile common.RouterProfile, q externalProfileConnectRequest, startup *startupPolicyCapture, driver desktopTorConnectRuntime) {
 	if startup != nil {
 		if err := startup.current(a); err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
 	}
-	_, torCfg, _, _, profileErr := torBridgeProfile(profile)
-	if profileErr != nil {
-		http.Error(w, profileErr.Error(), http.StatusBadRequest)
+	selection, err := captureDesktopTorSelection(a, profile, q, nil)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	cap := torBridgeRuntimeCapability()
+	if driver.capability == nil {
+		driver.capability = torBridgeRuntimeCapability
+	}
+	cap := driver.capability()
 	if !cap.Supported {
 		http.Error(w, cap.Reason, http.StatusNotImplemented)
 		return
 	}
-	policy, err := externalRuntimePolicy(profile)
+	policy := selection.policy
+	cmd, prelaunch, err := prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	policy, err = externalDNSPolicyForPath(policy, common.RouterProfile{}, true)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-
-	sessionTrackerFor(a).declareRequest("external-node", "tor")
-	if err = a.stopMode(); err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusInternalServerError)
-		return
-	}
-	cmd, prelaunch, err := prepareTorBridgeCommand(a, policy, profile)
-	if err != nil {
-		sessionTrackerFor(a).markRequestFailure(err.Error())
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	err = prelaunch.start(func() error {
+	check := func() error {
 		if err := a.checkConnectionOperation(); err != nil {
+			return err
+		}
+		if err := selection.current(a); err != nil {
+			return err
+		}
+		if err := a.validateExternalProfileExpectedProfiles(q, profile); err != nil {
 			return err
 		}
 		if startup != nil {
 			return startup.current(a)
 		}
 		return nil
-	})
+	}
+	if err := check(); err != nil {
+		failure := errors.Join(err, prelaunch.cleanup())
+		prelaunch.close()
+		http.Error(w, failure.Error(), http.StatusConflict)
+		return
+	}
+	sessionBase := "tor"
+	if selection.predecessor != nil {
+		sessionBase = desktopExternalEntryBase(selection.predecessor.mode)
+	}
+	sessionTrackerFor(a).declareRequest("external-node", sessionBase)
+	if err = a.stopModeWithIntent(true); err != nil {
+		failure := errors.Join(err, prelaunch.cleanup())
+		prelaunch.close()
+		sessionTrackerFor(a).markRequestFailure(failure.Error())
+		http.Error(w, failure.Error(), http.StatusInternalServerError)
+		return
+	}
+	err = prelaunch.start(check)
 	if err != nil {
 		sessionTrackerFor(a).markRequestFailure(err.Error())
 		status := http.StatusInternalServerError
@@ -129,13 +152,13 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	a.state.Mode = "external-node"
 	a.state.LogicalMode = "external-node"
 	a.state.RuntimeMode = "external-tor-bridge"
-	a.state.Base = "tor"
+	a.state.Base = sessionBase
 	a.state.RouterID = profile.ID
 	a.state.Connected = false
 	a.state.Phase = "tor-bridge:bootstrapping"
 	a.state.LastError = ""
 	a.mu.Unlock()
-	if err = a.checkConnectionOperation(); err != nil {
+	if err = check(); err != nil {
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, err.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
@@ -152,7 +175,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	}
 	a.mu.Unlock()
 	actualIP, proofErr := a.proveTorBridgeExit()
-	if cancelErr := a.checkConnectionOperation(); cancelErr != nil {
+	if cancelErr := check(); cancelErr != nil {
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, cancelErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
@@ -168,7 +191,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		a.state.Mode = "external-node"
 		a.state.LogicalMode = "external-node"
 		a.state.RuntimeMode = "external-tor-bridge"
-		a.state.Base = "tor"
+		a.state.Base = sessionBase
 		a.state.RouterID = profile.ID
 		a.state.Connected = false
 		a.state.Phase = "failed"
@@ -184,6 +207,9 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	}
 
 	retainedProof, retainedErr := a.readDesktopTorProof(prelaunch.workspace)
+	if retainedErr == nil {
+		retainedErr = check()
+	}
 	if retainedErr != nil {
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor native path retired before result adoption: "+retainedErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -197,7 +223,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
 	capturedProfile, capturedFound := a.profileByIDLocked(profile.ID)
-	if a.cmd != cmd || !capturedFound || desktopTorSourceIdentityToken(capturedProfile) != prelaunch.workspace.tor.profileToken || startup != nil && startup.currentLocked(a) != nil {
+	if a.cmd != cmd || !capturedFound || desktopTorSourceIdentityToken(capturedProfile) != prelaunch.workspace.tor.profileToken || selection.currentLocked(a) != nil || a.validateExternalProfileExpectedProfilesLocked(q, profile) != nil || startup != nil && startup.currentLocked(a) != nil {
 		a.mu.Unlock()
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime or captured startup selection changed before dynamic exit proof could be adopted")
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -215,9 +241,8 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 			a.profiles.Profiles[i].UseCount++
 			a.profiles.Profiles[i].LastUsedAt = now
 			a.profiles.Profiles[i].PublicIP = actualIP
-			// Preserve every captured policy field. A proved direct Tor policy
-			// already has multihop disabled; stale saved entry/exit selections
-			// must not invalidate this session when usage metadata is saved.
+			// Usage never changes the reusable node's saved graph. Explicit
+			// Direct/entry requests belong to this captured session only.
 			found = true
 			break
 		}
@@ -255,7 +280,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		http.Error(w, message, http.StatusInternalServerError)
 		return
 	}
-	if err := a.checkConnectionOperation(); err != nil {
+	if err := check(); err != nil {
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, err.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
@@ -269,9 +294,15 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	a.monitorDesktopTorRuntime(prelaunch.workspace)
 	a.startDesktopExternalAutomaticMTU(prelaunch.workspace)
 
-	transport := strings.TrimSpace(torCfg.Transport)
+	transport := strings.TrimSpace(policy.External.TorBridge.Transport)
 	if transport == "" {
 		transport = "custom"
+	}
+	entryID, entryMode := "", ""
+	route := "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
+	if selection.predecessor != nil {
+		entryID, entryMode = selection.predecessor.entry.ID, selection.predecessor.mode
+		route = "client full-device TUN -> captured Router " + entryMode + " entry -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -282,7 +313,10 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		"profile_name":      profile.Name,
 		"protocol":          "tor-bridge",
 		"tor_transport":     transport,
-		"direct":            true,
+		"direct":            selection.predecessor == nil,
+		"entry_id":          entryID,
+		"entry_mode":        entryMode,
+		"execution":         "local",
 		"actual_public_ip":  actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
 		"dns_mode":          policy.DNSMode,
@@ -290,6 +324,6 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		"interface_index":   retainedProof.InterfaceIndex,
 		"interface_mtu":     retainedProof.EffectiveMTU,
 		"mtu_source":        "native-interface-readback",
-		"route":             "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet",
+		"route":             route,
 	})
 }

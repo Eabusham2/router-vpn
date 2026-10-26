@@ -8,7 +8,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	"os"
 	"os/exec"
@@ -24,6 +23,16 @@ import (
 )
 
 var desktopTorInputNames = []string{"torrc", "tor-defaults", "tor-profile.json", "tor-capture.json", "sing-box.json"}
+
+// The zero value is the complete shipping adapter. Isolated controller tests
+// may supply process/binary boundaries while exercising the same capture,
+// staging, native preflight order, owned prelaunch, proof and cleanup logic.
+type desktopTorConnectRuntime struct {
+	capability func() standardExitCapability
+	runtime    func(string, common.RouterProfile, common.RouterProfile, *desktopTorPredecessorCapture) (torBridgeRuntime, error)
+	preflight  desktopExternalPreflightCommand
+	command    func(*app, torBridgeRuntime, []string) (*exec.Cmd, error)
+}
 
 func captureDesktopTorExecutable(path string) (string, error) {
 	info, err := os.Lstat(path)
@@ -53,6 +62,10 @@ func captureDesktopTorExecutable(path string) (string, error) {
 }
 
 func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) (torBridgeRuntime, error) {
+	return prepareTorBridgeRuntimeWithPredecessor(root, policy, profile, nil)
+}
+
+func prepareTorBridgeRuntimeWithPredecessor(root string, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture) (torBridgeRuntime, error) {
 	tor, err := desktopTorExecutable(root)
 	if err != nil {
 		return torBridgeRuntime{}, err
@@ -61,7 +74,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 	if err != nil {
 		return torBridgeRuntime{}, err
 	}
-	return stageDesktopTorInputs(root, policy, profile, tor, native)
+	return stageDesktopTorInputsWithPredecessor(root, policy, profile, tor, native, predecessor)
 }
 
 // Separate binary verification from immutable staging so isolated tests can
@@ -98,14 +111,14 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 			policyCopy.MultihopEntryMode = predecessor.mode
 		}
 	}
-	profileRaw, err := json.Marshal(policyCopy)
+	profileRaw, err := desktopTorRuntimePolicyJSON(policyCopy)
 	if err != nil {
 		return result, err
 	}
 	if predecessor != nil {
 		// RouterProfile stores the exit protocol once. Add the compiler's
 		// explicit graph identity only to the runtime copy, preserving the
-		// profile marshaler's explicit defaults such as disabled LAN access.
+		// captured effective policy and explicit disabled LAN access.
 		var fields map[string]json.RawMessage
 		if err = json.Unmarshal(profileRaw, &fields); err != nil {
 			return result, err
@@ -196,6 +209,23 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	return result, nil
 }
 
+func desktopTorRuntimePolicyJSON(policy common.RouterProfile) ([]byte, error) {
+	// Runtime Home resolution and explicit graph choices have already been
+	// validated together. Durable normalization would erase derived private
+	// addresses or reinterpret those choices without the captured entry.
+	type runtimeWire common.RouterProfile
+	raw, err := json.Marshal(runtimeWire(policy))
+	if err != nil {
+		return nil, err
+	}
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &fields); err != nil {
+		return nil, err
+	}
+	fields["home_lan_access"], _ = json.Marshal(policy.HomeLANAccess)
+	return json.Marshal(fields)
+}
+
 // Capture the inode before writing, including a partial failed write. Cleanup
 // may retire only the exact bytes this writer supplied to that owned inode.
 func writeDesktopTorInput(launch *desktopNodeLaunch, name string, raw []byte) (failure error) {
@@ -253,6 +283,69 @@ func desktopTorEnvironment(base []string, root, profile, endpoint string, inputs
 }
 
 func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
+	return prepareTorBridgeCommandWithRuntime(a, policy, profile, nil, desktopTorConnectRuntime{})
+}
+
+func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeRuntime) ([]string, error) {
+	launch := prepared.Launch
+	if launch == nil || launch.tor == nil || launch.tor.expected.NodeID != launch.profileID {
+		return nil, errors.New("Tor launch environment has no captured node")
+	}
+	owner := launch.tor
+	profileID, endpoint := launch.profileID, prepared.BridgeEndpoint
+	if owner.predecessor != nil {
+		profileID, endpoint = owner.predecessor.entry.ID, owner.predecessor.endpoint
+	}
+	environment := desktopTorEnvironment(base, root, profileID, endpoint, owner.digests, owner.expected.SessionID, prepared.TorSHA256)
+	environment = envWithValue(environment, "HOMEVPN_POLICY_PROFILE_ID", launch.profileID)
+	if owner.predecessor == nil {
+		if owner.expected.EntryID != "" {
+			return nil, errors.New("Tor launch lost its captured Router entry")
+		}
+		return environment, nil
+	}
+	entry := owner.predecessor
+	if entry.native == nil || owner.expected.EntryID != profileID || owner.expected.EntryMode != entry.mode || owner.expected.EntryAssetsSHA256 != entry.assetsSHA256 {
+		return nil, errors.New("Tor launch environment differs from its captured Router entry")
+	}
+	egress, err := mobilemultihop.NodePhysicalEgress(entry.mode, entry.native.Profile(), entry.native.Config())
+	if err != nil {
+		return nil, err
+	}
+	hosts, seen, found := []string{endpoint}, map[string]bool{endpoint: true}, false
+	for _, tuple := range egress {
+		if tuple.Host == endpoint {
+			found = true
+		}
+		if !seen[tuple.Host] {
+			hosts = append(hosts, tuple.Host)
+			seen[tuple.Host] = true
+		}
+	}
+	if !found {
+		return nil, errors.New("Tor physical endpoint does not belong to its captured Router graph")
+	}
+	hostJSON, err := json.Marshal(hosts)
+	if err != nil {
+		return nil, err
+	}
+	egressJSON, err := json.Marshal(egress)
+	if err != nil {
+		return nil, err
+	}
+	return append(environment, "HOMEVPN_EXTERNAL_SESSION="+owner.expected.SessionID, "HOMEVPN_NATIVE_ENDPOINTS_JSON="+string(hostJSON), "HOMEVPN_NATIVE_EGRESS_JSON="+string(egressJSON)), nil
+}
+
+func prepareTorBridgeCommandWithRuntime(a *app, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture, driver desktopTorConnectRuntime) (command *exec.Cmd, staged *torBridgePrelaunch, failure error) {
+	if driver.runtime == nil {
+		driver.runtime = prepareTorBridgeRuntimeWithPredecessor
+	}
+	if driver.preflight == nil {
+		driver.preflight = runDesktopExternalPreflightCommand
+	}
+	if driver.command == nil {
+		driver.command = desktopTorRuntimeCommand
+	}
 	root, err := filepath.Abs(clientRoot(a))
 	if err != nil {
 		return nil, nil, err
@@ -261,11 +354,14 @@ func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (comm
 	if network == "" {
 		return nil, nil, errors.New("Tor preparation could not capture its physical network")
 	}
-	prepared, err := prepareTorBridgeRuntime(root, policy, profile)
+	prepared, err := driver.runtime(root, policy, profile, predecessor)
 	if err != nil {
 		return nil, nil, err
 	}
 	launch := prepared.Launch
+	if launch == nil || launch.tor == nil || launch.directoryRoot == nil || launch.directory != prepared.RuntimeDir || launch.profileID != profile.ID || launch.tor.predecessor != predecessor {
+		return nil, nil, errors.New("Tor preparation did not retain the exact captured runtime owner")
+	}
 	launch.tor.network = network
 	owner, err := captureTorBridgePrelaunch(a, profile.ID, prepared.RuntimeDir, launch)
 	if err != nil {
@@ -279,37 +375,45 @@ func prepareTorBridgeCommand(a *app, policy, profile common.RouterProfile) (comm
 			owner.close()
 		}
 	}()
-	environment := desktopTorEnvironment(os.Environ(), root, profile.ID, prepared.BridgeEndpoint, launch.tor.digests, launch.tor.expected.SessionID, prepared.TorSHA256)
-	if err = preflightDesktopTorLaunch(a.connectionOperationContextOrBackground(), prepared.NativeBinary, launch, environment, runDesktopExternalPreflightCommand); err != nil {
+	environment, err := desktopTorLaunchEnvironment(os.Environ(), root, prepared)
+	if err != nil {
 		return nil, nil, err
 	}
-	if err = registerActiveDNSRuntimeConfig(a, profile.ID, "external-tor-bridge", filepath.Join(prepared.RuntimeDir, "sing-box.json")); err != nil {
-		return nil, nil, fmt.Errorf("register captured Tor DNS policy: %w", err)
+	if err = preflightDesktopTorLaunch(a.connectionOperationContextOrBackground(), prepared.NativeBinary, launch, environment, driver.preflight); err != nil {
+		return nil, nil, err
 	}
+	cmd, err := driver.command(a, prepared, environment)
+	if err != nil {
+		return nil, nil, err
+	}
+	owner.command, launch.command = cmd, cmd
+	return cmd, owner, nil
+}
+
+func desktopTorRuntimeCommand(a *app, prepared torBridgeRuntime, environment []string) (*exec.Cmd, error) {
 	var cmd *exec.Cmd
 	if runtime.GOOS == "windows" {
 		helper := filepath.Join(filepath.Dir(a.cfg.ScriptsDir), "client", "native-tor-bridge-windows.ps1")
 		if info, err := os.Lstat(helper); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, nil, errors.New("native Windows Tor helper is missing or unsafe")
+			return nil, errors.New("native Windows Tor helper is missing or unsafe")
 		}
 		powershell, err := safeExecutable("powershell.exe")
 		if err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		cmd = exec.Command(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", prepared.RuntimeDir, "-BridgeEndpoint", prepared.BridgeEndpoint, "-SocksPort", strconv.Itoa(prepared.SocksPort), "-TorBinary", prepared.TorBinary, "-NativeBinary", prepared.NativeBinary, "-TunnelAlias", "router-vpn-tor")
 	} else {
 		helper := filepath.Join(a.cfg.ScriptsDir, "native-tor-bridge.sh")
 		if info, err := os.Lstat(helper); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {
-			return nil, nil, errors.New("native Tor helper is missing or unsafe")
+			return nil, errors.New("native Tor helper is missing or unsafe")
 		}
 		cmd = exec.Command("bash", helper, "up", prepared.RuntimeDir, prepared.BridgeEndpoint, strconv.Itoa(prepared.SocksPort), prepared.TorBinary, prepared.NativeBinary)
 	}
-	cmd.Dir = root
+	cmd.Dir = prepared.Launch.root
 	cmd.Env = environment
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-	owner.command, launch.command = cmd, cmd
-	return cmd, owner, nil
+	return cmd, nil
 }
 
 func preflightDesktopTorLaunch(ctx context.Context, binary string, launch *desktopNodeLaunch, environment []string, run desktopExternalPreflightCommand) error {

@@ -38,6 +38,7 @@ type externalProfileConnectRequest struct {
 type externalConnectRuntime struct {
 	prepare func(*app, common.RouterProfile, common.RouterProfile, standardExit, bool, string) (*desktopNodeLaunch, error)
 	stage   func(*app, *desktopNodeLaunch) error
+	tor     desktopTorConnectRuntime
 }
 
 func registerExternalProfileRoutes(h *http.ServeMux, a *app) {
@@ -123,6 +124,10 @@ func externalDNSPolicyForPath(policy, entry common.RouterProfile, direct bool) (
 }
 
 func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
+	a.externalProfileConnectWithRuntime(w, r, externalConnectRuntime{})
+}
+
+func (a *app) externalProfileConnectWithRuntime(w http.ResponseWriter, r *http.Request, driver externalConnectRuntime) {
 	_, finish, guardErr := a.beginConnectionOperation()
 	if guardErr != nil {
 		http.Error(w, guardErr.Error(), http.StatusConflict)
@@ -139,7 +144,7 @@ func (a *app) externalProfileConnect(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "bad json", http.StatusBadRequest)
 		return
 	}
-	a.externalProfileConnectOwned(w, q, "", nil, externalConnectRuntime{})
+	a.externalProfileConnectOwned(w, q, "", nil, driver)
 }
 
 // Both interactive Connect and startup already hold one connection transaction.
@@ -197,11 +202,14 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 
 	if externalProfile.External.Protocol == "tor-bridge" {
-		if strings.TrimSpace(q.EntryID) != "" || (q.Direct != nil && !*q.Direct) {
-			http.Error(w, "Tor bridge is currently a direct full-device external path only; Tor-as-entry hopping remains unavailable until that graph is implemented and proved", http.StatusNotImplemented)
+		if retained != "" && retained != "local" {
+			http.Error(w, "retained Tor execution does not belong to the implemented Local path", http.StatusConflict)
 			return
 		}
-		a.torBridgeConnectCapturedOwned(w, externalProfile, startup)
+		// Keep the exact request through Tor capture and native preflight. Its
+		// entry, Direct choice and source revisions must not be replaced by a
+		// profile-only dispatch that loses the user's visible path selection.
+		a.torBridgeConnectSelectionOwned(w, externalProfile, q, startup, driver.tor)
 		return
 	}
 
