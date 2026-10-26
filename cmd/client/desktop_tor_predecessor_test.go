@@ -218,9 +218,13 @@ func TestDesktopTorPredecessorStagingAndProofRetainBothIdentities(t *testing.T) 
 
 // This child exercises the controller's private protocol and owner checks.
 // The separately prepared native suite exercises actual entry encryption/PT.
-func desktopTorRunningEntryFixture(t *testing.T, kind string) (*app, *desktopNodeLaunch) {
+func desktopTorRunningEntryFixture(t *testing.T, kind string, changes ...func(*common.RouterProfile, *common.RouterProfile)) (*app, *desktopNodeLaunch) {
 	t.Helper()
 	a, profile, _ := desktopTorEntryFixture(t, "198.51.100.8")
+	for _, change := range changes {
+		change(&profile, &a.profiles.Profiles[1])
+	}
+	a.profiles.Profiles[0] = profile
 	captured, err := captureDesktopTorPredecessor(a, profile, nil)
 	if err != nil {
 		t.Fatal(err)

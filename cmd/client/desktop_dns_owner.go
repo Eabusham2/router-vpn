@@ -90,8 +90,15 @@ func desktopDNSExpectedEndpoints(launch *desktopNodeLaunch) (dnsmeasure.Endpoint
 		if metadata.SourceSHA256 != launch.tor.digests.SourceSHA256 || metadata.ConfigSHA256 != launch.tor.digests.ConfigSHA256 || metadata.NodeID != launch.profileID {
 			return dnsmeasure.Endpoint{}, "", "", bad
 		}
+		route, label := metadata.FinalTag, "Selected DNS via captured Tor exit"
+		if metadata.DNSDetour != "" && metadata.DNSDetour != metadata.FinalTag {
+			if metadata.EntryID == "" || metadata.EntryTag == "" || metadata.DNSDetour != metadata.EntryTag {
+				return dnsmeasure.Endpoint{}, "", "", bad
+			}
+			route, label = metadata.EntryTag, "Selected DNS via captured Router entry"
+		}
 		selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: metadata.DNS.Address, Port: metadata.DNS.Port, Transport: metadata.DNS.Transport,
-			ServerName: metadata.DNS.ServerName, Path: metadata.DNS.Path, Route: metadata.FinalTag, RouteLabel: "Selected DNS via captured Tor exit"}
+			ServerName: metadata.DNS.ServerName, Path: metadata.DNS.Path, Route: route, RouteLabel: label}
 		return selected, "Current Tor connection", metadata.IPv6Mode, nil
 	}
 	policy, err := mobilemultihop.NewExternalPolicy(string(launch.external.source), string(launch.external.capture))

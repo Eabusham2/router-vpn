@@ -28,7 +28,7 @@ func capturedDesktopMeasurementRuntime(launch *desktopNodeLaunch) (desktopMeasur
 	}
 	if owner := launch.tor; owner != nil {
 		metadata := owner.expected
-		identity = desktopMeasurementRuntime{session: metadata.SessionID, source: metadata.SourceSHA256, config: metadata.ConfigSHA256, node: metadata.NodeID,
+		identity = desktopMeasurementRuntime{session: metadata.SessionID, source: metadata.SourceSHA256, config: metadata.ConfigSHA256, node: metadata.NodeID, entry: metadata.EntryID,
 			network: owner.network, measuredSource: "measured-tor-system-tun-transfer", mu: &owner.mu, mtu: &owner.mtu,
 			pathMu: &owner.pathMu, pathGeneration: &owner.pathGeneration, pathFailed: &owner.pathFailed}
 	} else if owner := launch.external; owner != nil {

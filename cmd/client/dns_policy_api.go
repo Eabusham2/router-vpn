@@ -192,7 +192,7 @@ func writeDNSPolicy(w http.ResponseWriter, profile, entry common.RouterProfile) 
 			response.ServerName, response.Path = "cloudflare-dns.com", "/dns-query"
 		}
 		if (response.Mode == "home" || response.Mode == "") && profile.External != nil && profile.External.Protocol == "tor-bridge" {
-			response.Note += " Tor bridge DNS needs Custom TCP, DoT, DoH or explicit Rescue through its circuit."
+			response.Note += " Home AdGuard uses the paired Router VPN entry. Direct Tor requires an explicit TCP, DoT or DoH resolver through its circuit."
 		} else if (response.Mode == "home" || response.Mode == "") && entry.ID == "" {
 			response.Note += " Home AdGuard needs a paired Router VPN entry before this path can connect; choose an explicit resolver for a direct external connection."
 		}

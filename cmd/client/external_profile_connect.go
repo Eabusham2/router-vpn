@@ -106,7 +106,10 @@ func externalDNSPolicyForPath(policy, entry common.RouterProfile, direct bool) (
 	var err error
 	switch policy.External.Protocol {
 	case "tor-bridge":
-		_, err = selectedTorBridgeDNS(policy)
+		if direct && entry.ID != "" || !direct && entry.ID == "" {
+			return common.RouterProfile{}, errors.New("Tor DNS entry differs from the requested path")
+		}
+		_, err = capturedTorBridgeDNS(policy, entry, false)
 	default:
 		_, err = selectedStandardExitDNS(policy, !routerEntry)
 	}

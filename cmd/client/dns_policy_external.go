@@ -7,11 +7,11 @@ import (
 	"errors"
 	"math"
 	"net/netip"
-	"net/url"
 	"strings"
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 func externalDNSProfile(p common.RouterProfile) bool {
@@ -151,26 +151,10 @@ func validateDesktopExternalDNSPolicy(profile, entry common.RouterProfile) error
 		return errors.New("external DNS has no captured private protocol")
 	}
 	if profile.External.Protocol == "tor-bridge" {
-		// Tor has its own dynamic exit proof adapter. Use its real transport
-		// parser, never pretend this node is an ordinary fixed-public-IP exit.
-		if profile.MultihopEnabled || entry.ID != "" {
-			return errors.New("Tor bridge DNS requires its supported direct path")
-		}
-		if _, err := selectedTorBridgeDNS(profile); err != nil {
-			return err
-		}
-		address, err := netip.ParseAddr(profile.DNSHost)
-		if err != nil || address.Is4In6() || address.Zone() != "" || !address.IsGlobalUnicast() || address.IsLoopback() || address.String() != profile.DNSHost {
-			return errors.New("Tor DNS requires an explicit literal resolver address through its circuit")
-		}
-		if profile.DNSProtocol == "https" {
-			path, err := url.ParseRequestURI(profile.DNSPath)
-			if err != nil || len(profile.DNSPath) > 2048 || strings.ContainsAny(profile.DNSPath, "\x00\r\n\\") || !strings.HasPrefix(profile.DNSPath, "/") || strings.HasPrefix(profile.DNSPath, "//") || path.IsAbs() || path.Host != "" || path.Fragment != "" || path.RawQuery != "" || path.ForceQuery {
-				return errors.New("Tor DoH requires its exact resolver path without a host, query or fragment")
-			}
-		}
-		return nil
+		_, err := capturedTorBridgeDNS(profile, entry, true)
+		return err
 	}
+
 	// Match entry selection in the genuine desktop launch path, but keep these
 	// derived runtime fields out of the saved external node and its credentials.
 	if profile.MultihopEnabled {
@@ -215,4 +199,31 @@ func validateDesktopExternalDNSPolicy(profile, entry common.RouterProfile) error
 		entryJSON = string(encoded)
 	}
 	return mobilemultihop.ValidateExternalDNS(string(raw), entryJSON)
+}
+
+// Capture only runtime-derived entry mode in a private copy. Saved Tor nodes
+// retain their own credentials and selected DNS; the shared native compiler
+// validates Home against the paired Router's exact private AdGuard addresses.
+func capturedTorBridgeDNS(profile, entry common.RouterProfile, idle bool) (mobiletor.DesktopBridgeDNS, error) {
+	profile = cloneRouterProfile(profile)
+	if profile.MultihopEnabled && entry.ID != "" {
+		mode, err := desktopExternalEntryMode(profile, entry, "", "")
+		if err != nil {
+			return mobiletor.DesktopBridgeDNS{}, err
+		}
+		profile.MultihopEntryMode = mode
+	}
+	raw, err := json.Marshal(profile)
+	if err != nil {
+		return mobiletor.DesktopBridgeDNS{}, errors.New("Tor DNS profile contains invalid saved values")
+	}
+	entryJSON := ""
+	if entry.ID != "" {
+		encoded, err := json.Marshal(entry)
+		if err != nil {
+			return mobiletor.DesktopBridgeDNS{}, errors.New("Tor DNS entry contains invalid saved values")
+		}
+		entryJSON = string(encoded)
+	}
+	return mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)
 }

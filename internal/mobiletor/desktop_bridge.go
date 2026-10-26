@@ -275,15 +275,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if err != nil {
 		return nil, err
 	}
-	selectedBytes, _ := json.Marshal(selected)
-	selectedNumbers, _ := profileObject(string(selectedBytes), 16<<10)
-	dnsPort, err := profileInteger(selectedNumbers, "server_port", 0)
-	if err != nil || dnsPort < 1 || dnsPort > 65535 {
-		return nil, errors.New("desktop Tor selected resolver lost its exact port")
-	}
-	dns := DesktopBridgeDNS{Mode: profileString(profile, "dns_mode"), Transport: profileString(selected, "type"), Address: profileString(selected, "server"), Port: dnsPort, Path: profileString(selected, "path")}
-	if tls, ok := selected["tls"].(map[string]any); ok {
-		dns.ServerName = profileString(tls, "server_name")
+	dns, err := desktopBridgeDNSMetadata(profile, selected)
+	if err != nil {
+		return nil, err
 	}
 	mtuPolicy := profileString(profile, "mtu_policy")
 	if mtuPolicy == "" {

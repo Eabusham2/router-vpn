@@ -53,6 +53,9 @@ func desktopTorDNSChildFixture(kind, directory string, expected mobiletor.Deskto
 		} else if !record.Status.Complete && kind != "tor-dns-hold" && kind != "tor-dns-cancel-delay" && kind != "tor-dns-read-fail" {
 			selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: expected.DNS.Address, Port: expected.DNS.Port, Transport: expected.DNS.Transport,
 				ServerName: expected.DNS.ServerName, Path: expected.DNS.Path, Route: expected.FinalTag, RouteLabel: "Selected DNS via captured Tor exit"}
+			if expected.EntryTag != "" && expected.DNSDetour == expected.EntryTag {
+				selected.Route, selected.RouteLabel = expected.EntryTag, "Selected DNS via captured Router entry"
+			}
 			for i, endpoint := range append([]dnsmeasure.Endpoint{selected}, dnsmeasure.PublicEndpoints(record.Transport, "Current Tor connection")...) {
 				median := float64(i + 1)
 				row := dnsmeasure.Result{Endpoint: endpoint, Samples: 3, Ready: true, Median: &median}
