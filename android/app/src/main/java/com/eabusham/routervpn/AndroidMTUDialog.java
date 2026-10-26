@@ -86,6 +86,7 @@ final class AndroidMTUDialog {
         int effective = result.optInt("effective_mtu", 0), original = result.optInt("original_mtu", 0);
         String source = result.optString("source", "");
         boolean torTransfer = "measured-tor-system-tun-transfer".equals(source);
+        boolean torConnection = torTransfer || result.optBoolean("tor_connection", false);
         boolean publicTransfer = torTransfer || "measured-public-system-tun-transfer".equals(source);
         JSONArray rows = result.optJSONArray("candidates");
         if (rows != null && rows.length() > 5) { disable("Oversized MTU sample set was discarded."); return; }
@@ -100,6 +101,8 @@ final class AndroidMTUDialog {
                 && effective >= 1280 && effective <= 1500)
             message.append("\nVerified current MTU: ").append(effective).append(torTransfer ? " (Tor HTTPS transfer test)" : publicTransfer ? " (public HTTPS transfer test)" : " (authenticated packet test)");
         else message.append("\nNo current verified measurement is claimed.");
+        if (effective >= 1280 && effective <= 9000 && "configured-unmeasured".equals(source))
+            message.append("\nCurrent interface MTU: ").append(effective).append(" (configured, unmeasured)");
         if (original >= 1280 && original <= 9000) message.append("\nPre-test MTU: ").append(original);
 
         if (rows != null) for (int i = 0; i < rows.length(); i++) {
@@ -113,12 +116,13 @@ final class AndroidMTUDialog {
             else message.append("rejected — ").append(row.optString("failure", "no valid sample"));
         }
         String failure = result.optString("failure", ""); if (!failure.isEmpty()) message.append("\n").append(failure);
-        message.append(torTransfer ? "\n\nTor HTTPS response and transfer measurements use this circuit and OS VPN; they do not establish an unfragmented UDP packet limit." : publicTransfer ? "\n\nPublic HTTPS response and transfer measurements use this OS VPN; they do not establish an unfragmented UDP packet limit."
+        String policyNote = result.optString("policy_note", ""); if (!policyNote.isEmpty()) message.append("\n").append(policyNote);
+        message.append(torConnection ? "\n\nTor uses TCP streams through this OS VPN. Interface capacity does not establish an unfragmented UDP packet limit." : publicTransfer ? "\n\nPublic HTTPS response and transfer measurements use this OS VPN; they do not establish an unfragmented UDP packet limit."
                 : "\n\nAuthenticated packets and private transfers use this OS VPN.");
         message.append(" Retest can interrupt existing connections while replacing its TUN reader. Cancel restores the pre-test MTU only while the same session and physical path remain valid. Cached sizes must be measured again.");
         text.setText(message.toString());
         boolean available = !"unavailable".equals(phase) && !"invalidated".equals(phase) && !"stopped".equals(phase);
-        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(!running && available && !result.optBoolean("measurement_hold", false));
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE).setEnabled(!running && available && result.optBoolean("optimization_allowed", true) && !result.optBoolean("measurement_hold", false));
         dialog.getButton(AlertDialog.BUTTON_NEUTRAL).setEnabled(running);
     }
 }

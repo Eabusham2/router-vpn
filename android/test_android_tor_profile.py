@@ -49,8 +49,7 @@ HARNESS = prefix + r'''
    config(assets,graph);b.getJSONObject("profiles").put(mode,assets);
    b.getJSONArray("modes").put(new JSONObject().put("id",mode).put("name",mode));
   }
-  boolean packet=NativeSingBoxController.nativeWireGuardFamily(mode)||NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode);
-  profile(b).put("mtu_policy","fixed").put("manual_mtu",packet?1500:1280)
+  profile(b).put("mtu_policy","fixed").put("manual_mtu",1360)
    .put("daita_enabled",true).put("dns_mode","doh").put("dns_host","9.9.9.9")
    .put("dns_port",443).put("dns_server_name","entry-dns.example.test").put("dns_path","/entry-query");
   return b;
@@ -276,6 +275,7 @@ HARNESS = prefix + r'''
   changes.put("bad-TLS",e->e.torPolicy.put("dns_mode","dot").put("dns_server_name","bad/name"));
   changes.put("bad-port",e->e.torPolicy.put("dns_port","5353"));changes.put("bad-mode",e->e.torPolicy.put("dns_mode",true));
   changes.put("low-MTU",e->e.torPolicy.put("manual_mtu",1279));changes.put("MTU-type",e->e.torPolicy.put("manual_mtu","1360"));
+  changes.put("Jumbo-type",e->e.torPolicy.put("jumbo_tun","true"));changes.put("Jumbo-Fixed-conflict",e->e.torPolicy.put("jumbo_tun",true));
   changes.put("LAN-type",e->e.torPolicy.put("home_lan_access","false"));changes.put("public-LAN",e->e.torPolicy.put("home_lan_cidrs",new JSONArray().put("8.0.0.0/8")));
   changes.put("foreign-policy",e->e.torPolicy.put("node_proof_id","a".repeat(64)));changes.put("disabled-start",e->e.torPolicy.put("start_layer","aes-256-gcm"));
   changes.put("wrong-transport",e->e.torTransport="exec");changes.put("injection",e->e.torBridges.set(0,OBFS+"\nSocksPort 0.0.0.0:9050"));
@@ -284,6 +284,31 @@ HARNESS = prefix + r'''
    AndroidStandardExitStore.Entry e=tor(kind,"tcp");
    if(kind.equals("tor")){e.torTransport="obfs4";e.torBridges.add(OBFS);}else e.torBridges.clear();
    reject(dir,"bridge settings must not disappear",e,null,"direct");
+  }
+ }
+ static void jumboPaths(Path dir,String certificate)throws Exception{
+  for(String kind:new String[]{"direct-jumbo","default-jumbo","exit-fixed","entry-jumbo","entry-fixed"})for(String mode:new String[]{"shadowsocks","wg"}){
+   boolean inherited=kind.startsWith("entry-");JSONObject source=inherited?entry(mode,"off",certificate):null;
+   if(source!=null){JSONObject p=profile(source);p.put("mtu_policy",kind.equals("entry-fixed")?"fixed":"auto").put("manual_mtu",9000).put("jumbo_tun",kind.equals("entry-jumbo"));}
+   AndroidStandardExitStore.Entry selected=tor("obfs4","doh");String exitMode=kind.equals("default-jumbo")?"default":kind.equals("exit-fixed")?"fixed":"auto";
+   selected.torPolicy.put("mtu_policy",exitMode).put("manual_mtu",kind.equals("exit-fixed")?9000:8192).put("jumbo_tun",!inherited&&!kind.equals("exit-fixed"));
+   // The predecessor's existing Jumbo capability remains authoritative. A
+   // raw packet-entry Jumbo request must not be silently converted to Fixed.
+   if(kind.equals("entry-jumbo")&&mode.equals("wg")){reject(dir,"raw WireGuard entry Jumbo remains incompatible",selected,source,mode);continue;}
+   Path app=Files.createTempDirectory(dir,"jumbo-");File file=source==null?null:save(dir,source);byte[] before=file==null?null:Files.readAllBytes(file.toPath());String saved=AndroidStandardExitStore.snapshot(selected);
+   NativeSingBoxController.SessionInfo prepared=AndroidTorProfile.prepare(new Context(app.toFile()),file,selected,source==null?"direct":mode);Path staged=app.resolve("layered-sessions").resolve(prepared.sessionId);
+   JSONObject graph=load(staged.resolve("sing-box.json")),metadata=load(staged.resolve(AndroidTorProfile.SESSION_FILE));JSONArray inbounds=graph.getJSONArray("inbounds");
+   check(inbounds.length()==1&&inbounds.getJSONObject(0).getInt("mtu")==9000,"Jumbo path replaced or downsized its single OS interface: "+kind+"/"+mode);
+   JSONObject exit=metadata.getJSONObject("tor_profile");check(exit.getString("mtu_policy").equals(exitMode)&&exit.getBoolean("jumbo_tun")==selected.torPolicy.getBoolean("jumbo_tun"),"effective inherited capacity relabelled saved exit policy");
+   if(inherited){check(same(metadata.getJSONObject("predecessor_profile"),profile(source)),"Jumbo inherited another entry policy");JSONObject previous=new JSONObject(io.nekohasekai.libbox.Libbox.lastTorPredecessor);check(previous.getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==9000,"inherited Jumbo fixture never built the captured predecessor TUN");if(mode.equals("wg"))check(byTag(graph,"proxy").getInt("mtu")<=1500,"virtual Jumbo became a WireGuard wire MTU");}
+   check(saved.equals(AndroidStandardExitStore.snapshot(selected))&&(file==null||Arrays.equals(before,Files.readAllBytes(file.toPath()))),"Jumbo compilation rewrote a saved private profile");
+  }
+  for(String mismatch:new String[]{"fixed-entry","jumbo-entry","fixed-exit"}){
+   JSONObject source=entry("shadowsocks","off",certificate);AndroidStandardExitStore.Entry selected=tor("obfs4","tcp");
+   if(mismatch.equals("fixed-entry"))selected.torPolicy.put("jumbo_tun",true).put("mtu_policy","auto");
+   else if(mismatch.equals("jumbo-entry"))profile(source).put("mtu_policy","auto").put("jumbo_tun",true);
+   else selected.torPolicy.put("manual_mtu",1400);
+   reject(dir,"captured Jumbo/Fixed conflict "+mismatch,selected,source,"shadowsocks");
   }
  }
  static void entryNegatives(Path dir,String certificate)throws Exception{
@@ -362,12 +387,13 @@ HARNESS = prefix + r'''
   Path dir=Path.of(args[0]);fixtures=load(Path.of(System.getenv("ROUTERVPN_MAX_MULTIHOP_FIXTURES")));
   compositeEntry=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_ENTRY")));compositeExit=load(Path.of(System.getenv("ROUTERVPN_COMPOSITE_EXIT")));
   String certificate=io.nekohasekai.libbox.Libbox.testCertificate("entry.example.test");
+  if(args.length>1&&args[1].equals("capacity-only")){jumboPaths(dir,certificate);return;}
   for(String kind:KINDS){
    verify(dir,"direct","off",kind,"tcp",certificate);
    for(String mode:ALL){check(NativeSingBoxController.nativeMultihopEntry(mode),"captured Tor entry absent from native catalog");for(int i=0;i<LAYERS.length;i++)verify(dir,mode,LAYERS[i],kind,new String[]{"tcp","dot","doh"}[i],certificate);}
   }
   check(graphs==348,"Tor entry/Start Layer/bridge matrix incomplete");
-  homePaths(dir,certificate);policyNegatives(dir);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);capturedProtection(dir);
+  homePaths(dir,certificate);policyNegatives(dir);jumboPaths(dir,certificate);entryNegatives(dir,certificate);staleAndSessionNegatives(dir,certificate);capturedProtection(dir);
   System.out.println("Android Tor: PASS ("+graphs+" shipping Java/Go graphs; "+checks+" checks; OS/startup doubled, native Tor traffic separate)");
  }
 }
@@ -454,7 +480,25 @@ def run():
         subprocess.run(["javac", "--release", "17", "-encoding", "UTF-8", "-proc:none", "-cp", str(jar), "-d", str(work / "classes"), *map(str, src.rglob("*.java"))], check=True, timeout=60)
         data = work / "data"
         data.mkdir()
-        subprocess.run(["java", "-cp", str(work / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.PQSelectionHarness", str(data)], env=dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native)), check=True, timeout=180)
+        run_args=["java", "-cp", str(work / "classes") + os.pathsep + str(jar), "com.eabusham.routervpn.PQSelectionHarness", str(data)]
+        environment=dict(os.environ, ROUTERVPN_GO_POLICY_TEST=str(native))
+        subprocess.run(run_args, env=environment, check=True, timeout=180)
+        # The capacity checks exercise the shipping preparation and real Go
+        # compiler, including a real Fixed predecessor and explicit Jumbo.
+        if 'if(args.length>1&&args[1].equals("capacity-only"))' in HARNESS:
+            target=app/"AndroidTorProfile.java";original=target.read_text()
+            for before,after,label in (
+                ("applyCapturedEntryMTU(predecessorProfile, graph);", "", "captured entry Fixed application"),
+                ("result.put(key, policy.get(key));", 'if(!key.equals("jumbo_tun"))result.put(key, policy.get(key));', "explicit saved Jumbo retention"),
+            ):
+                if original.count(before)!=1:raise AssertionError("Missing native capacity mutation: "+label)
+                target.write_text(original.replace(before,after))
+                subprocess.run(["javac","--release","17","-encoding","UTF-8","-proc:none","-cp",str(work/"classes")+os.pathsep+str(jar),"-d",str(work/"classes"),str(target)],check=True,timeout=45)
+                result=subprocess.run(run_args+["capacity-only"],env=environment,text=True,capture_output=True,timeout=45)
+                if result.returncode==0 or not any(marker in result.stderr for marker in ("AssertionError", "captured entry MTU policy")):
+                    raise AssertionError("Capacity mutation was not rejected: "+label+"\n"+result.stderr)
+                target.write_text(original)
+            print("Android Tor capacity negative controls: 2 rejected by real compiler/host preparation")
 
 
 def main():

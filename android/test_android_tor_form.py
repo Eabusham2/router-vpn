@@ -211,6 +211,7 @@ public final class TorFormHarness {
  static EditText field(AlertDialog dialog,String hint){for(View view:views(dialog.view))if(view instanceof EditText&&hint.equals(((EditText)view).getHint().toString()))return (EditText)view;throw new AssertionError("Missing form field: "+hint);}
  static Spinner spinner(AlertDialog dialog,String first){for(View view:views(dialog.view))if(view instanceof Spinner&&first.equals(((Spinner)view).getAdapter().getItem(0)))return (Spinner)view;throw new AssertionError("Missing choice: "+first);}
  static CheckBox lan(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox)return (CheckBox)view;throw new AssertionError("Missing LAN policy");}
+ static CheckBox jumbo(AlertDialog dialog){for(View view:views(dialog.view))if(view instanceof CheckBox&&((CheckBox)view).getText().toString().equals("Jumbo virtual interface (9000)"))return (CheckBox)view;throw new AssertionError("Missing Tor Jumbo policy");}
  static String displayed(View root){StringBuilder result=new StringBuilder();for(View view:views(root))if(view instanceof TextView)result.append(((TextView)view).getText()).append('\n');return result.toString();}
  static StandardExitActivity activity(Path directory,Bundle state)throws Exception{Context.nextFiles=directory.toFile();Files.createDirectories(directory);StandardExitActivity result=new StandardExitActivity();result.onCreate(state);return result;}
  static AndroidStandardExitStore store(StandardExitActivity activity)throws Exception{return (AndroidStandardExitStore)get(activity,"exitStore");}
@@ -278,9 +279,26 @@ public final class TorFormHarness {
    check(!dialog.showing&&store(activity).get(selected.id).torPolicy.getString("mtu_policy").equals("auto")&&!store(activity).get(selected.id).torPolicy.has("manual_mtu"),"clearing fixed MTU failed to select Auto");
   }
  }
+ static void jumboPolicyEdits()throws Exception{
+  for(String initial:new String[]{"default","auto","fixed"}){
+   StandardExitActivity activity=activity(Files.createTempDirectory(root,"jumbo-form-"),null);AndroidStandardExitStore.Entry selected=tor("obfs4","doh");
+   selected.torPolicy=policy("doh","doh").put("mtu_policy",initial).put("manual_mtu",initial.equals("fixed")?9000:8192);store(activity).save(selected);String original=AndroidStandardExitStore.snapshot(selected);
+   AlertDialog dialog=form(activity,selected);check(!jumbo(dialog).isChecked(),"Jumbo became an import default");jumbo(dialog).setChecked(true);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing,"valid Tor Jumbo edit rejected");AndroidStandardExitStore.Entry enabled=store(activity).get(selected.id);JSONObject expected=new JSONObject(selected.torPolicy.toString()).put("jumbo_tun",true);
+   check(same(expected.toString(),enabled.torPolicy.toString())&&enabled.torPolicy.getString("mtu_policy").equals(initial),"Jumbo edit replaced saved Auto/Default or unrelated DNS/protection policy");
+   check(new JSONObject(compiled(enabled)).getJSONArray("inbounds").getJSONObject(0).getInt("mtu")==9000,"saved Tor Jumbo did not reach real compiler");
+   check(original.equals(AndroidStandardExitStore.snapshot(selected)),"Jumbo editor mutated its input source");
+   dialog=form(activity,enabled);check(jumbo(dialog).isChecked(),"saved Tor Jumbo was not displayed");field(dialog,"Display name").setText("Renamed Jumbo");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   AndroidStandardExitStore.Entry renamed=store(activity).get(selected.id);check(same(enabled.torPolicy.toString(),renamed.torPolicy.toString()),"name-only edit erased Jumbo capacity");
+   dialog=form(activity,renamed);String before=AndroidStandardExitStore.snapshot(renamed);field(dialog,"Manual interface MTU, 1280–9000 (blank uses automatic)").setText("1420");dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(dialog.showing&&before.equals(AndroidStandardExitStore.snapshot(store(activity).get(selected.id))),"conflicting Jumbo and Fixed MTU overwrote the saved profile");dialog.dismiss();
+   dialog=form(activity,renamed);jumbo(dialog).setChecked(false);dialog.getButton(AlertDialog.BUTTON_POSITIVE).performClick();
+   check(!dialog.showing,"valid Tor Jumbo disable rejected");AndroidStandardExitStore.Entry disabled=store(activity).get(selected.id);expected.put("jumbo_tun",false);check(same(expected.toString(),disabled.torPolicy.toString()),"disabling Jumbo changed its captured MTU preference");compiled(disabled);
+  }
+ }
  static void newFormAndRejections()throws Exception{
   StandardExitActivity activity=activity(Files.createTempDirectory(root,"create-"),null);AlertDialog dialog=form(activity,null);
-  check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0&&spinner(dialog,"IPv6 off").getSelectedItemPosition()==2&&!lan(dialog).isChecked(),"new Tor defaults changed");
+  check(spinner(dialog,"Home AdGuard through captured Router VPN entry").getSelectedItemPosition()==0&&spinner(dialog,"IPv6 off").getSelectedItemPosition()==2&&!lan(dialog).isChecked()&&!jumbo(dialog).isChecked(),"new Tor defaults changed");
   EditText host=field(dialog,"Custom DNS literal IP"),port=field(dialog,"Custom DNS port (blank uses protocol default)"),name=field(dialog,"DoT / DoH certificate server name"),path=field(dialog,"DoH path (default /dns-query)");
   check(host.isEnabled()&&port.isEnabled()&&!name.isEnabled()&&!path.isEnabled(),"Home UDP editor cannot retain its captured endpoint");
   Spinner dns=spinner(dialog,"Home AdGuard through captured Router VPN entry"),home=spinner(dialog,"Home UDP");home.setSelection(4);check(name.isEnabled()&&path.isEnabled(),"Home DoH3 endpoint cannot be edited");
@@ -668,7 +686,7 @@ public final class TorFormHarness {
    if(isTor)invoke(a,"showTorForm",kind,saved);else invoke(a,"showExternalPolicyForm",saved);
    AlertDialog form=AlertDialog.last;Spinner control=spinner(form,"Keep saved protection default");check(control.getSelectedItemPosition()==0,"external form replaced the legacy protection default");control.setSelection(2);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"external protection form did not save On");
    AndroidStandardExitStore.Entry current=store(a).get(saved.id);JSONObject p=isTor?current.torPolicy:current.policy;check(p.has("kill_switch")&&p.has("kill_switch_policy")&&p.getBoolean("kill_switch")&&p.getString("kill_switch_policy").equals("always"),"external form lost explicit protection");
-   AndroidStandardExitStore.Entry untouched=AndroidStandardExitStore.copy(current);JSONObject unchanged=isTor?untouched.torPolicy:untouched.policy;unchanged.remove("kill_switch");unchanged.remove("kill_switch_policy");check(original.equals(AndroidStandardExitStore.snapshot(untouched)),"external protection form rewrote credentials or saved DNS/device policy");
+   AndroidStandardExitStore.Entry untouched=AndroidStandardExitStore.copy(current);JSONObject unchanged=isTor?untouched.torPolicy:untouched.policy;unchanged.remove("kill_switch");unchanged.remove("kill_switch_policy");check(same(original,AndroidStandardExitStore.snapshot(untouched)),"external protection form rewrote credentials or saved DNS/device policy");
    if(isTor)invoke(a,"showTorForm",kind,current);else invoke(a,"showExternalPolicyForm",current);form=AlertDialog.last;control=spinner(form,"Keep saved protection default");check(control.getSelectedItemPosition()==2,"external form failed to restore explicit On");control.setSelection(1);form.getButton(AlertDialog.BUTTON_POSITIVE).performClick();check(!form.showing,"external protection form did not save Off");current=store(a).get(saved.id);p=isTor?current.torPolicy:current.policy;check(!p.getBoolean("kill_switch")&&p.getString("kill_switch_policy").equals("off"),"external form did not save explicit Off");
    for(String fault:new String[]{"replaced","removed"}){
     store(a).save(current);if(isTor)invoke(a,"showTorForm",kind,current);else invoke(a,"showExternalPolicyForm",current);AlertDialog stale=AlertDialog.last;
@@ -677,7 +695,7 @@ public final class TorFormHarness {
    }
   }
  }
- public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
+ public static void main(String[] args)throws Exception{root=Path.of(args[0]);roundtrips();independentPolicyEdits();jumboPolicyEdits();newFormAndRejections();dialogAndPermission();ordinaryPolicies();ordinaryHomeDrafts();externalExecutionForm();packetExecutionForms();openVPNExecutionForms();openVPNResponseMaps();openVPNLayerMaps();openVPNForm();amneziaForm();dnsDrafts();dnsDialog();dnsLinkedEntries();startupSettings();protectionSettings();System.out.println("Android Tor form: PASS ("+roundtrips+" real compiler roundtrips, all 19 mode choices, "+checks+" checks; full shipping Activity, Android widgets/permission doubled)");}
 }
 '''
 

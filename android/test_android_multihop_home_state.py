@@ -158,6 +158,33 @@ public final class MultihopHomeHarness {
   check(!AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"Tor accepted stale "+key);
   check(before.equals(context.store.values)&&writes==context.store.writes,"stale Tor completion overwrote Home state: "+key);
  }
+ static void torFailureBoundary(){
+  for(boolean connected:new boolean[]{false,true})for(boolean emergency:new boolean[]{false,true}){
+   Context context=new Context();AndroidHomeStateStore.beginTorExternal(context,"tor-node","Tor","tor",ENTRY,"naive-h3");AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+   if(connected)check(AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"Tor failure fixture did not connect");
+   String warning="Emergency Disconnect requested; awaiting exact Tor drain";
+   if(emergency){AndroidHomeStateStore.warning(context,warning);captured=AndroidHomeStateStore.snapshot(context);}
+   check(AndroidHomeStateStore.failedTorExternal(context,captured,"Captured Tor capacity was not verified",false),"captured Tor failure was rejected");
+   AndroidHomeStateStore.Snapshot failed=AndroidHomeStateStore.snapshot(context);
+   check(!failed.connected&&failed.phase.equals("failed")&&failed.pathProof.equals("failed"),"failed Tor capacity retained Connected");
+   check(failed.sessionId.equals(captured.sessionId)&&failed.pathGeneration==captured.pathGeneration&&failed.activeExternalId.equals(captured.activeExternalId)&&failed.activeEntryId.equals(captured.activeEntryId),"pending Tor drain discarded captured ownership");
+   check(AndroidHomeStateStore.actualExitForCurrentSession(context).isEmpty()&&!context.store.values.containsKey("actual_exit_session"),"failed Tor capacity retained actual exit proof");
+   check(failed.warning.equals(emergency?warning:"Captured Tor capacity was not verified"),"Tor failure overwrote emergency reason");
+   check(!AndroidHomeStateStore.connectedTorExternal(context,captured,"9.9.9.9"),"late Tor proof resurrected failed capacity");
+   check(AndroidHomeStateStore.failedTorExternal(context,captured,"Captured Tor drain completed",true),"confirmed Tor drain lost its retained owner");
+   AndroidHomeStateStore.Snapshot closed=AndroidHomeStateStore.snapshot(context);
+   check(closed.activeExternalId.isEmpty()&&closed.activeExternalProtocol.isEmpty()&&closed.activeEntryId.isEmpty()&&closed.activeNodeId.isEmpty()&&closed.activeExitId.isEmpty(),"confirmed Tor drain retained stale identity");
+   if(emergency)check(closed.warning.equals(warning),"confirmed Tor drain erased emergency warning");
+   int writes=context.store.writes;check(!AndroidHomeStateStore.failedTorExternal(context,captured,"duplicate",false)&&writes==context.store.writes,"released Tor owner rewrote current Home");
+  }
+  for(String key:new String[]{"session_id","active_external_id","active_external_protocol","expected_external_ip","logical_mode","runtime_mode","active_entry_id","active_entry_mode","active_node_id","active_exit_id","path_generation"})for(boolean released:new boolean[]{false,true}){
+   Context context=new Context();AndroidHomeStateStore.beginTorExternal(context,"tor-node","Tor","tor",ENTRY,"naive-h3");AndroidHomeStateStore.Snapshot captured=AndroidHomeStateStore.snapshot(context);
+   check(AndroidHomeStateStore.connectedTorExternal(context,captured,"8.8.4.4"),"stale Tor failure fixture did not connect");
+   context.store.values.put(key,key.equals("path_generation")?99L:"replacement");Map<String,Object> before=new HashMap<>(context.store.values);int writes=context.store.writes;
+   check(!AndroidHomeStateStore.failedTorExternal(context,captured,"old failure",released),"Tor failure adopted replacement "+key);
+   check(before.equals(context.store.values)&&writes==context.store.writes,"Tor failure changed replacement "+key);
+  }
+ }
  static void externalPolicy(String mode){
   Context context=externalOwner();String entry=mode.equals("direct")?"":ENTRY;
   String session=AndroidHomeStateStore.beginPolicyExternal(context,"ordinary-node","Selected exit","socks5","8.8.4.4",entry,entry.isEmpty()?"external":mode);
@@ -305,7 +332,7 @@ public final class MultihopHomeHarness {
   externalPolicy("direct");for(String entry:supported)externalPolicy(entry);
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","http"},{"expected_external_ip","9.9.9.9"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})externalStale(change[0],change[1]);
   externalStale("path_generation",99L);
-  externalFailureBoundary();atomicAdoptions();idleRestorationEpochs();
+  externalFailureBoundary();torFailureBoundary();atomicAdoptions();idleRestorationEpochs();
   for(String[] change:new String[][]{{"session_id","new"},{"active_external_id","other"},{"active_external_protocol","socks5"},{"logical_mode","manual"},{"runtime_mode","wg"},{"active_entry_id","other"},{"active_entry_mode","wg"},{"phase","off"},{"path_proof","failed"},{"warning","Emergency Disconnect requested; awaiting drain"}})torStale(change[0],change[1]);
   torStale("path_generation",99L);
   unsupported.addAll(Arrays.asList(null,"","WG"," wg","wg ","unknown","naive","naive-h2;exec","max-tls-other"));

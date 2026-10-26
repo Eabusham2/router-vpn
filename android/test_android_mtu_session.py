@@ -32,14 +32,16 @@ stub(P,'RouterMTUState','''{private String session,path,iface;private int mtu;pu
 stub(P,'RouterMTUPlatform','''{RouterMTUState captureMTU();void beginMTUChange(RouterMTUState s)throws Exception;void endMTUChange()throws Exception;void bindMTUSocket(RouterMTUState s,long fd)throws Exception;String readMTUCache();boolean compareAndSwapMTUCache(String a,String b);void abortMTU(String reason);}''','interface')
 stub(P,'RouterMTU',r'''{
  public interface Action { void run() throws Exception; }
- public int starts,cancels,closes,closeFailures;
- public volatile boolean active,invalid,restored;
+ public int starts,attempts,cancels,closes,closeFailures;
+ public volatile boolean active,invalid,restored;public boolean automatic=true;public int effectiveMTU=1280;
  public String id="",override;public Action closeHook;
  public void start(String request,boolean force)throws Exception {
-  if(active||invalid)throw new IllegalStateException();
+  attempts++;
+  if(active||invalid||!automatic)throw new IllegalStateException();
   id=request;starts++;active=true;restored=false;
  }
  public boolean running(){return active;}
+ public boolean autoRequested(){return automatic;}
  public void cancel(String request){if(id.equals(request)){cancels++;active=false;restored=true;}}
  public void networkChanged(){invalid=true;active=false;}
  public void close()throws Exception {
@@ -53,7 +55,7 @@ stub(P,'RouterMTU',r'''{
   return "{\"request_id\":\""+id+"\",\"phase\":\""+(invalid?"invalidated":active?"measuring":idle?"idle":"restored")
    +"\",\"source\":\""+(idle?"configured-unmeasured":"restored-unmeasured")
    +"\",\"running\":"+active+",\"complete\":"+(!active)+",\"restored\":"+restored
-   +",\"measured\":false,\"original_mtu\":"+(idle?0:1280)+",\"effective_mtu\":"+(invalid?0:1280)+"}";
+   +",\"measured\":false,\"original_mtu\":"+(idle?0:effectiveMTU)+",\"effective_mtu\":"+(invalid?0:effectiveMTU)+"}";
  }
 }''')
 stub(P,'Libbox','''{
@@ -62,7 +64,7 @@ stub(P,'Libbox','''{
  public static int created;
  public static RouterMTU newRouterMTU(CommandServer core,RouterMTUPlatform owner,String config,String profile)throws Exception {
   if(owner.captureMTU()==null)throw new IllegalStateException("no capture");
-  created++;RouterMTU value=new RouterMTU();latest=value;
+  created++;RouterMTU value=new RouterMTU();value.effectiveMTU=owner.captureMTU().getMTU();latest=value;
   Hook hook=afterCreate;if(hook!=null)hook.run(value);
   return value;
  }
@@ -91,7 +93,8 @@ public class Main {
   Network physical=new Network(1),vpn=new Network(2);Store store=new Store();int mtu=1280;int aborts;
   AndroidMTUSession owner;
   Fixture()throws Exception{physical.links.name="wlan0";physical.links.addresses.add("192.0.2.2/24");vpn.caps.vpn=true;cm.networks=new Network[]{physical,vpn};cm.active=vpn;context.service=cm;context.preferences=store;owner=new AndroidMTUSession(context,o->aborts++,name->mtu);}
-  RouterMTUState establish()throws Exception{owner.beforeOpen();owner.established(1280);owner.registered("tun0");return owner.captureMTU();}
+  RouterMTUState establish()throws Exception{return establish(1280);}
+  RouterMTUState establish(int requested)throws Exception{mtu=requested;owner.beforeOpen();owner.established(requested);owner.registered("tun0");return owner.captureMTU();}
  }
 
  static void await(CountDownLatch latch,String message)throws Exception {

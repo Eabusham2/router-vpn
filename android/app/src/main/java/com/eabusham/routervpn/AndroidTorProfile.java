@@ -22,7 +22,7 @@ final class AndroidTorProfile {
     static final String[] TRANSPORTS = {"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"};
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
-            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu", "kill_switch", "kill_switch_policy"));
+            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu", "jumbo_tun", "kill_switch", "kill_switch_policy"));
 
     static boolean isTor(String protocol) { return "tor".equals(protocol) || "tor-bridge".equals(protocol); }
 
@@ -69,7 +69,7 @@ final class AndroidTorProfile {
         JSONObject result = saved.torPolicy == null ? new JSONObject() : new JSONObject(saved.torPolicy.toString());
         for (String[] group : new String[][] {
                 {"dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path"},
-                {"ipv6_mode"}, {"home_lan_access", "home_lan_cidrs"}, {"mtu_policy", "manual_mtu"}}) {
+                {"ipv6_mode"}, {"home_lan_access", "home_lan_cidrs"}, {"mtu_policy", "manual_mtu"}, {"jumbo_tun"}}) {
             boolean changed = false;
             for (String key : group) {
                 if (initial.has(key) != edited.has(key) || !String.valueOf(initial.opt(key)).equals(String.valueOf(edited.opt(key)))) changed = true;
@@ -172,6 +172,11 @@ final class AndroidTorProfile {
                 NativeSingBoxController.applySelectedDns(entry, graph);
                 if (AndroidStartLayer.nativeXray(entryMode) && !AndroidNativeCompositeProfile.isMode(entryMode)) AndroidXrayLibboxPolicy.normalizeDnsRoutes(graph);
                 if (!AndroidNativeMAXProfile.isMode(entryMode) && !AndroidNativeCompositeProfile.isMode(entryMode)) relay = AndroidStartLayer.apply(entry, graph, entryMode);
+                // The entry and Tor exit share this one OS TUN. Raw protocol
+                // assets may contain a different transport MTU; apply only
+                // the captured entry's interface preference, leaving those
+                // endpoint parameters unchanged for native validation.
+                applyCapturedEntryMTU(predecessorProfile, graph);
                 graph = NativeSingBoxController.applyPerformance(entry, graph);
                 predecessor = graph.toString();
             }
@@ -225,6 +230,21 @@ final class AndroidTorProfile {
             if (relay != null) relay.clear();
             if (maxPreparation != null && !maxStaged) maxPreparation.close();
         }
+    }
+
+    private static void applyCapturedEntryMTU(JSONObject entry, JSONObject graph) throws Exception {
+        Object policy = entry.opt("mtu_policy");
+        if (policy != null && !(policy instanceof String)) throw new IllegalArgumentException("The captured entry MTU policy must be text.");
+        if (!"fixed".equals(policy) && !"manual".equals(policy)) return;
+        Object value = entry.get("manual_mtu");
+        if (!(value instanceof Number)) throw new IllegalArgumentException("The captured entry Fixed MTU must be an integer.");
+        double mtu = ((Number) value).doubleValue();
+        if (!Double.isFinite(mtu) || mtu != Math.floor(mtu) || mtu < 1280 || mtu > 9000)
+            throw new IllegalArgumentException("The captured entry Fixed MTU must be between 1280 and 9000.");
+        JSONArray inbounds = graph.getJSONArray("inbounds");
+        if (inbounds.length() != 1 || !"tun".equals(inbounds.getJSONObject(0).optString("type")))
+            throw new IllegalArgumentException("Tor requires one captured entry VPN interface.");
+        inbounds.getJSONObject(0).put("mtu", (int) mtu);
     }
 
     static JSONObject session(String config, String metadataText, String sessionId, String mode) throws Exception {

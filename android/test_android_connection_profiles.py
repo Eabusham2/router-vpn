@@ -153,6 +153,15 @@ public final class ConnectionProfilesHarness {
  static String text(File file)throws Exception{return Files.readString(file.toPath());}
  static JSONObject bundle(AndroidNodeStore.Node node)throws Exception{return new JSONObject(text(node.file));}
  static JSONObject profile(AndroidNodeStore.Node node)throws Exception{return AndroidProfileSelection.selectedRouterProfile(bundle(node));}
+ // Android JSON object iteration order is not a persisted policy contract.
+ // Compare every typed field and ordered array; file rollback tests still
+ // require exact bytes.
+ static boolean sameJSONValue(Object a,Object b)throws Exception{
+  if(a instanceof JSONObject&&b instanceof JSONObject){JSONObject left=(JSONObject)a,right=(JSONObject)b;if(left.length()!=right.length())return false;for(Iterator<String> keys=left.keys();keys.hasNext();){String key=keys.next();if(!right.has(key)||!sameJSONValue(left.get(key),right.get(key)))return false;}return true;}
+  if(a instanceof JSONArray&&b instanceof JSONArray){JSONArray left=(JSONArray)a,right=(JSONArray)b;if(left.length()!=right.length())return false;for(int i=0;i<left.length();i++)if(!sameJSONValue(left.get(i),right.get(i)))return false;return true;}
+  return Objects.equals(a,b);
+ }
+ static boolean sameJSON(String a,String b)throws Exception{return sameJSONValue(new JSONObject(a),new JSONObject(b));}
  static JSONObject policy(String dns)throws Exception{return new JSONObject().put("dns_mode",dns).put("dns_protocol","doh").put("dns_host","149.112.112.112").put("dns_port",8443).put("dns_server_name","resolver.example").put("dns_path","/private-query").put("ipv6_mode","off").put("home_lan_access",false).put("home_lan_cidrs",new JSONArray().put("192.168.50.0/24")).put("mtu_policy","fixed").put("manual_mtu",1360);}
  static JSONObject node(String name,int key)throws Exception{
   byte[] publicKey=new byte[32];Arrays.fill(publicKey,(byte)key);String peer=Base64.getEncoder().encodeToString(publicKey);
@@ -243,6 +252,18 @@ public final class ConnectionProfilesHarness {
    JSONObject bad=f.row();bad.getJSONObject("external_startup").put("auto_connect","true");f.row(bad);State before=new State(f);rejected(()->f.store.load(r.id),"typed external startup");before.same(f,"invalid external startup did not mutate selection or credentials");
   }
  }
+ static void torJumboProfiles(Path root)throws Exception{
+  for(String mode:new String[]{"default","auto","fixed","manual"}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-b");exit.torPolicy.put("mtu_policy",mode).put("jumbo_tun",true).put("manual_mtu",9000);f.exits.save(exit);f.store.selectExternalPath(exit,f.first,"hysteria2");
+   String exact=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));var saved=f.store.add("Tor Jumbo "+mode);JSONObject captured=f.row().getJSONObject("external_policy");
+   check(captured.getBoolean("jumbo_tun")&&captured.getString("mtu_policy").equals(mode)&&captured.getInt("manual_mtu")==9000,"connection profile omitted Tor Jumbo or its saved MTU choice");
+   AndroidStandardExitStore.Entry changed=f.exits.get(exit.id);changed.torPolicy.put("jumbo_tun",false).put("mtu_policy","auto");f.exits.save(changed);f.otherSelection();f.store.load(saved.id);
+   check(exact.equals(AndroidStandardExitStore.snapshot(f.exits.get(exit.id))),"connection profile restored capacity with different credentials or DNS");
+   JSONObject invalid=f.row();invalid.getJSONObject("external_policy").put("mtu_policy","fixed").put("manual_mtu",1420);f.row(invalid);State before=new State(f);
+   rejected(()->f.store.load(saved.id),"Tor Jumbo and Fixed conflict");before.same(f,"Tor Jumbo conflict must reject transaction before mutation");
+   invalid.getJSONObject("external_policy").put("manual_mtu",9000).put("jumbo_tun","true");f.row(invalid);before=new State(f);rejected(()->f.store.load(saved.id),"typed Tor Jumbo choice");before.same(f,"wrong Jumbo type must preserve private nodes");
+  }
+ }
  static void routerRoundtrip(Path root)throws Exception{
   Fixture f=new Fixture(root);f.prefs.edit().putString("mode","custom:captured").putString("custom_presets","[{\"name\":\"captured\",\"layers\":[\"hysteria2\",\"shadowsocks\"]}]").putBoolean("multihop_on",true).putString("multihop_entry",f.first.id).putString("multihop_exit",f.second.id).putString("multihop_exit_mode","hysteria2").putString("multihop_execution","auto").putString("multihop_entry_mode","wg").commit();
   var r=f.store.add("Router graph");f.changeNode(f.first);f.changeNode(f.second);f.otherSelection();f.store.load(r.id);
@@ -328,7 +349,8 @@ public final class ConnectionProfilesHarness {
    check(!via||ui.autoRequirementsHint.text.contains("Captured entry also requires lockdown"),"quick external protection hid its independent strict entry");
    check(entryBytes.equals(text(f.first.file)),"quick external protection changed the independent entry");
    AndroidStandardExitStore.Entry retained=AndroidStandardExitStore.copy(saved);JSONObject retainedPolicy=tor?retained.torPolicy:retained.policy;retainedPolicy.remove("kill_switch");retainedPolicy.remove("kill_switch_policy");
-   check(original.equals(AndroidStandardExitStore.snapshot(retained)),"quick external protection changed credentials DNS MTU or graph");
+   check(sameJSON(original,AndroidStandardExitStore.snapshot(retained)),"quick external protection changed credentials DNS MTU or graph");
+   for(String key:new String[]{"password","protocol","expected_public_ip"}){JSONObject wrong=new JSONObject(AndroidStandardExitStore.snapshot(retained));wrong.put(key,"different captured field");check(!sameJSON(original,wrong.toString()),"structural protection comparison ignored "+key);}
    AndroidConnectionProfileStore.Record record=f.store.add("Protection "+enabled);ui.pressProtection(!enabled);f.store.load(record.id);JSONObject restored=tor?f.exits.get(id).torPolicy:f.exits.get(id).policy;
    check(restored.getBoolean("kill_switch")==enabled&&restored.getString("kill_switch_policy").equals(enabled?"always":"off"),"connection profile did not restore exact external protection");
   }
@@ -346,7 +368,7 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

@@ -8,20 +8,21 @@ import java.util.Iterator;
 /** Bounded, non-secret choices saved by connection profiles, never runtime proof. */
 final class AndroidConnectionProfilePolicy {
     private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","start_layer","kill_switch","kill_switch_policy"};
-    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","kill_switch","kill_switch_policy"};
+    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","jumbo_tun","kill_switch","kill_switch_policy"};
 
-    static JSONObject router(JSONObject source,String[] keys)throws Exception{return checked(source,keys,false);}
+    static JSONObject router(JSONObject source,String[] keys)throws Exception{return checked(source,keys,false,false);}
     static JSONObject external(JSONObject source,String protocol)throws Exception{
         if(!AndroidTorProfile.isTor(protocol)&&!AndroidExternalPolicy.supports(protocol))throw new IllegalArgumentException("Unsupported saved external protocol.");
         JSONObject copy=source==null?new JSONObject():new JSONObject(source.toString());
         // A prior path's effective MTU is not a preference or proof for this path.
         copy.remove("effective_mtu");
-        JSONObject result=checked(copy,AndroidTorProfile.isTor(protocol)?TOR:EXTERNAL,true);
+        boolean tor=AndroidTorProfile.isTor(protocol);
+        JSONObject result=checked(copy,tor?TOR:EXTERNAL,true,tor);
         if(!AndroidTorProfile.isTor(protocol))AndroidExternalPolicy.checkPolicy(result);
         return result;
     }
 
-    private static JSONObject checked(JSONObject source,String[] allowed,boolean external)throws Exception{
+    private static JSONObject checked(JSONObject source,String[] allowed,boolean external,boolean tor)throws Exception{
         if(source==null||source.toString().getBytes(java.nio.charset.StandardCharsets.UTF_8).length>64*1024)throw new IllegalArgumentException("Connection policy is missing or oversized.");
         only(source,allowed);
         for(Iterator<String> keys=source.keys();keys.hasNext();){
@@ -43,10 +44,11 @@ final class AndroidConnectionProfilePolicy {
         else choice(source,"kill_switch_policy","","off","on-connect","always");
         choice(source,"base_tunnel","","auto","wg","awg");
         choice(source,"start_layer","","off","aes-256-gcm","aes-256-gcm+xor-whitening");
-        if(external)choice(source,"mtu_policy","auto","fixed","manual");
+        if(external&&!tor)choice(source,"mtu_policy","auto","fixed","manual");
         else choice(source,"mtu_policy","","auto","fixed","manual","default");
         String mtu=source.optString("mtu_policy","auto");
         if("fixed".equals(mtu)||"manual".equals(mtu))integer(source.get("manual_mtu"),external?1280:576,9000,"manual_mtu");
+        if(tor&&source.optBoolean("jumbo_tun",false)&&("fixed".equals(mtu)||"manual".equals(mtu))&&source.getInt("manual_mtu")!=9000)throw new IllegalArgumentException("Tor Jumbo conflicts with the saved Fixed MTU.");
         return new JSONObject(source.toString());
     }
 

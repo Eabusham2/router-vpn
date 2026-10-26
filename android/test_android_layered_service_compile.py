@@ -94,6 +94,7 @@ stub(APP,'AndroidHomeStateStore','''{public static final class Snapshot{public b
  public static Snapshot snapshot(android.content.Context c){return value;}public static boolean emergencyDisconnectPending(android.content.Context c){return emergency;}
  public static boolean ownsPolicyExternal(android.content.Context c,Snapshot s){return s!=null&&s==value&&!emergency;}
  public static boolean failedPolicyExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
+ public static boolean failedTorExternal(android.content.Context c,Snapshot s,String message,boolean released){if(s==null||s!=value)return false;s.connected=false;s.phase="failed";s.pathProof="failed";if(released)s.activeExternalId="";return true;}
 }''')
 stub(APP,'RouterPQNative','{public static void install()throws Exception{} }')
 stub(APP,'AndroidTorProfile','{public static final String SESSION_FILE="routervpn-tor.json";public static final int MAX_METADATA=262144;public static boolean isTor(String p){return "tor".equals(p)||"tor-bridge".equals(p);}public static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return null;}public static String strictText(byte[] data)throws Exception{return "";} }')

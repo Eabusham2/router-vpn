@@ -50,7 +50,11 @@ SOURCES["io/nekohasekai/libbox/Libbox.java"] = SOURCES["io/nekohasekai/libbox/Li
  public static RouterMTU newRouterTorMTU(CommandServer core,RouterMTUPlatform platform,RouterTorProofRequest proof,String source,String capture)throws Exception{
   if(proof==null||!proof.healthy()||proof.server!=core)throw new IllegalStateException("wrong retained Tor proof/config");
   passedServer=core;passedProof=proof;passedSource=source;passedCapture=capture;externalCalls++;
-  return newRouterMTU(core,platform,source,capture);
+  RouterMTU value=newRouterMTU(core,platform,source,capture);
+  org.json.JSONObject exit=new org.json.JSONObject(capture),entry=proof.predecessor.isEmpty()?new org.json.JSONObject():new org.json.JSONObject(proof.predecessor);
+  String exitMode=exit.optString("mtu_policy","default"),entryMode=entry.optString("mtu_policy","default");
+  value.automatic="auto".equals(exitMode)&&!exit.optBoolean("jumbo_tun",false)&&!entry.optBoolean("jumbo_tun",false)&&!"fixed".equals(entryMode)&&!"manual".equals(entryMode);
+  return value;
  }
 }'''
 SOURCES["com/eabusham/routervpn/LayeredVpnService.java"] = r'''package com.eabusham.routervpn;
@@ -65,10 +69,12 @@ public final class TorMTUTest {
  static final class Fixture implements AndroidTorSession.Owner {
   final Main.Fixture mtu=new Main.Fixture();final CommandServer server=new CommandServer();volatile CommandServer currentServer=server;
   volatile String network="physical-owned";AndroidTorSession external;final String source="exact-complete-config",capture;
-  Fixture(String policy,boolean entry)throws Exception{
-   mtu.establish();JSONObject p=new JSONObject().put("id","exit-owned").put("mtu_policy",policy).put("dns_mode","custom").put("dns_protocol","doh").put("dns_host","resolver.example");
+  Fixture(String policy,boolean entry)throws Exception{this(policy,entry,false,"auto",false,1280);}
+  Fixture(String policy,boolean entry,boolean jumbo,String entryPolicy,boolean entryJumbo,int capacity)throws Exception{
+   mtu.establish(capacity);JSONObject p=new JSONObject().put("id","exit-owned").put("mtu_policy",policy).put("dns_mode","custom").put("dns_protocol","doh").put("dns_host","resolver.example").put("jumbo_tun",jumbo);
+   if("fixed".equals(policy)||"manual".equals(policy))p.put("manual_mtu",capacity);
    capture=p.toString();JSONObject metadata=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("tor_profile",p);
-   if(entry)metadata.put("predecessor_profile",new JSONObject().put("id","entry-owned").put("api_token","captured-entry-token"));
+   if(entry){JSONObject predecessor=new JSONObject().put("id","entry-owned").put("api_token","captured-entry-token").put("mtu_policy",entryPolicy).put("jumbo_tun",entryJumbo);if("fixed".equals(entryPolicy)||"manual".equals(entryPolicy))predecessor.put("manual_mtu",capacity);metadata.put("predecessor_profile",predecessor);}
    external=new AndroidTorSession(metadata,source,server,this);
   }
   public boolean current(AndroidTorSession value,CommandServer core){return value==external&&core==currentServer;}
@@ -92,10 +98,28 @@ public final class TorMTUTest {
   }
  }
  static void restrictions()throws Exception{
-  for(String mode:new String[]{"fixed","manual","default"}){Fixture f=new Fixture(mode,false);f.prove();int calls=Libbox.externalCalls;f.mtu.owner.activateTor(f.external);check(Libbox.externalCalls==calls,"configured external policy started Auto-MTU: "+mode);f.mtu.owner.close();}
+  for(String mode:new String[]{"fixed","manual","default"}){Fixture f=new Fixture(mode,false);f.prove();int calls=Libbox.externalCalls;f.mtu.owner.activateTor(f.external);check(Libbox.externalCalls==calls+1&&Libbox.latest.starts==0&&!Libbox.latest.autoRequested(),"configured external policy lost native readback or started Auto-MTU: "+mode);f.mtu.owner.close();}
   Fixture held=new Fixture("auto",false);held.prove();Object lease=AndroidMTUMeasurementGate.acquire();held.mtu.owner.activateTor(held.external);check(Libbox.latest.starts==0,"external automatic MTU ignored startup measurement hold");held.mtu.owner.drainForMeasurement();AndroidMTUMeasurementGate.release(lease);held.mtu.owner.activateTor(held.external);check(Libbox.latest.starts==1,"restored automatic MTU did not resume after measurement drain");held.mtu.owner.activateTor(held.external);check(Libbox.latest.starts==1,"restored automatic MTU restarted twice");held.mtu.owner.close();
   Fixture unreadable=new Fixture("auto",false);unreadable.prove();unreadable.mtu.mtu=1400;RouterMTU previous=Libbox.latest;int calls=Libbox.externalCalls;unreadable.mtu.owner.activateTor(unreadable.external);check(Libbox.externalCalls==calls+1&&Libbox.latest==previous,"failed OS readback created an unverified owner");unreadable.mtu.owner.close();
   for(String stale:new String[]{"cancel","server","network"}){Fixture f=new Fixture("auto",true);f.prove();calls=Libbox.externalCalls;if(stale.equals("cancel"))f.external.cancel();if(stale.equals("server"))f.currentServer=new CommandServer();if(stale.equals("network"))f.network="new-network";f.mtu.owner.activateTor(f.external);check(Libbox.externalCalls==calls,"stale external proof reached native constructor: "+stale);f.mtu.owner.close();}
+ }
+ static void configuredCapacity()throws Exception{
+  for(String kind:new String[]{"direct-jumbo","default-jumbo","exit-fixed","entry-jumbo","entry-fixed"}){
+   boolean inherited=kind.startsWith("entry-");String mode=kind.equals("default-jumbo")?"default":kind.equals("exit-fixed")?"fixed":"auto";
+   Fixture f=new Fixture(mode,inherited,!inherited&&!kind.equals("exit-fixed"),kind.equals("entry-fixed")?"fixed":"auto",kind.equals("entry-jumbo"),9000);f.prove();f.mtu.owner.activateTor(f.external);RouterMTU nativeOwner=Libbox.latest;
+   check(nativeOwner.starts==0&&nativeOwner.attempts==0&&!nativeOwner.autoRequested()&&nativeOwner.effectiveMTU==9000,"configured capacity became an optimizer candidate: "+kind);
+   check(f.capture.equals(Libbox.passedCapture)&&new JSONObject(Libbox.passedCapture).getString("mtu_policy").equals(mode),"inherited capacity rewrote saved exit choice: "+kind);
+   JSONObject status=new JSONObject(f.mtu.owner.request("status",f.mtu.owner.identity,""));
+   check(!status.getBoolean("optimization_allowed")&&status.getBoolean("tor_connection")&&status.getInt("effective_mtu")==9000&&!status.getBoolean("measured")&&status.getString("source").equals("configured-unmeasured"),"configured capacity was labelled as a measured path: "+kind);
+   reject(()->f.mtu.owner.request("start",f.mtu.owner.identity,"d".repeat(32)),"configured capacity admitted Retest: "+kind);
+   f.mtu.owner.activateTor(f.external);check(nativeOwner.starts==0,"repeat activation forgot inherited authority: "+kind);
+   f.mtu.owner.networkChanged();check(f.mtu.owner.captureMTU()==null,"retired capacity retained readback: "+kind);f.mtu.owner.close();check(nativeOwner.closes==1,"configured capacity lost native drain ownership: "+kind);
+  }
+  for(boolean inherited:new boolean[]{false,true}){
+   Fixture f=new Fixture("auto",inherited,!inherited,"fixed",false,9000);f.prove();f.mtu.mtu=1500;RouterMTU prior=Libbox.latest;f.mtu.owner.activateTor(f.external);
+   check(f.mtu.aborts==1&&f.mtu.owner.captureMTU()==null&&Libbox.latest==prior,"wrong large-capacity readback retained a connected owner");
+   check(new JSONObject(f.mtu.owner.request("status",f.mtu.owner.identity,"")).getBoolean("optimization_allowed")==false,"failed capacity exposed Retest");f.mtu.owner.close();
+  }
  }
  static void constructorOwnership()throws Exception{
   for(String stale:new String[]{"cancel","stop","server","network"}){
@@ -117,23 +141,26 @@ public final class TorMTUTest {
   if(publicPath)row.put("latency_kind","https-response").put("packets_sent",0).put("packets_received",0).put("datagram_bytes",0);else row.put("packets_sent",6).put("packets_received",6).put("datagram_bytes",1392);
   return new JSONObject().put("request_id","a".repeat(32)).put("phase","complete").put("running",false).put("complete",true).put("measured",true).put("effective_mtu",1420).put("original_mtu",1280).put("source",publicPath?"measured-tor-system-tun-transfer":"measured-private-system-tun").put("candidates",new JSONArray().put(row));
  }
+ static AlertDialog renderedDialog;
  static String render(JSONObject value)throws Exception{
   Constructor<AndroidMTUDialog> create=AndroidMTUDialog.class.getDeclaredConstructor(Activity.class);create.setAccessible(true);AndroidMTUDialog d=create.newInstance(new Activity());
   Field dialog=AndroidMTUDialog.class.getDeclaredField("dialog"),text=AndroidMTUDialog.class.getDeclaredField("text");dialog.setAccessible(true);text.setAccessible(true);
-  dialog.set(d,new AlertDialog.Builder(new Activity()).setPositiveButton("Retest",null).setNeutralButton("Cancel test",null).create());TextView output=new TextView(new Activity());text.set(d,output);Method render=AndroidMTUDialog.class.getDeclaredMethod("render",JSONObject.class);render.setAccessible(true);render.invoke(d,value);return output.getText().toString();
+  renderedDialog=new AlertDialog.Builder(new Activity()).setPositiveButton("Retest",null).setNeutralButton("Cancel test",null).create();dialog.set(d,renderedDialog);TextView output=new TextView(new Activity());text.set(d,output);Method render=AndroidMTUDialog.class.getDeclaredMethod("render",JSONObject.class);render.setAccessible(true);render.invoke(d,value);return output.getText().toString();
  }
  static void display()throws Exception{
   for(boolean publicPath:new boolean[]{false,true}){
    String valid=render(status(publicPath));check(valid.contains("Verified current MTU: 1420")&&valid.contains("8.4↓ / 8.4↑ Mbps"),"valid MTU evidence not displayed");
-   check(publicPath?valid.contains("Tor HTTPS transfer test")&&valid.contains("do not establish an unfragmented UDP packet limit")&&!valid.contains("Authenticated packets"):valid.contains("authenticated packet test"),"MTU evidence changed its measurement kind");
+   check(publicPath?valid.contains("Tor HTTPS transfer test")&&valid.contains("does not establish an unfragmented UDP packet limit")&&!valid.contains("Authenticated packets"):valid.contains("authenticated packet test"),"MTU evidence changed its measurement kind");
    for(String field:new String[]{"source","measured","complete","running","effective_mtu","working","bytes","seconds","mbps","median_rtt_ms","kind","packets","datagram","oversized"}){
     JSONObject invalid=status(publicPath),row=invalid.getJSONArray("candidates").getJSONObject(0);
     switch(field){case "source":invalid.put("source",publicPath?"measured-private-system-tun":"measured-tor-system-tun-transfer");break;case "measured":case "complete":invalid.put(field,false);break;case "running":invalid.put(field,true);break;case "effective_mtu":invalid.put(field,1280);break;case "working":row.put(field,false);break;case "bytes":row.getJSONObject("download").put(field,262143);break;case "seconds":row.getJSONObject("upload").put(field,0);break;case "mbps":row.getJSONObject("upload").put(field,99);break;case "median_rtt_ms":row.put(field,publicPath?0:-1);break;case "kind":row.put("latency_kind",publicPath?"icmp":"https-response");break;case "packets":row.put("packets_received",publicPath?6:5);break;case "datagram":row.put("datagram_bytes",publicPath?1392:0);break;case "oversized":for(int i=0;i<5;i++)invalid.getJSONArray("candidates").put(row);break;}
     check(!render(invalid).contains("Verified current MTU:"),"invalid/stale evidence advertised current: "+publicPath+" "+field);
    }
   }
+  JSONObject jumbo=new JSONObject().put("phase","idle").put("source","configured-unmeasured").put("effective_mtu",9000).put("tor_connection",true).put("optimization_allowed",false).put("policy_note","Configured capacity; Auto MTU and Retest are disabled.");
+  String configured=render(jumbo);check(configured.contains("9000 (configured, unmeasured)")&&!configured.contains("Verified current MTU:")&&configured.contains("Tor uses TCP streams")&&configured.contains("Auto MTU and Retest are disabled"),"Jumbo capacity was hidden or mislabelled");check(!renderedDialog.getButton(AlertDialog.BUTTON_POSITIVE).isEnabled(),"configured capacity enabled Retest");
  }
- public static void main(String[] args)throws Exception{successful();restrictions();constructorOwnership();display();System.out.println("Android Tor MTU: "+checks+" shipping-Java proof, readback, lifecycle, Retest/Cancel and renderer checks");}
+ public static void main(String[] args)throws Exception{successful();restrictions();configuredCapacity();constructorOwnership();display();System.out.println("Android Tor MTU: "+checks+" shipping-Java proof, readback, lifecycle, Retest/Cancel and renderer checks");}
 }'''
 
 
@@ -159,6 +186,8 @@ def main():
         for name, before, after, label in (
             ("AndroidMTUSession.java", "if (closed || invalid || !tor.healthy()) { closeController(); return; }", "", "external constructor completion ownership"),
             ("AndroidMTUSession.java", "controller = created;\n                if (closed || invalid || !tor.healthy())", "if (closed || invalid || !tor.healthy())", "sole native owner adoption"),
+            ("AndroidMTUSession.java", "if (!created.autoRequested())", "if (false)", "retained inherited capacity authority"),
+            ("AndroidMTUSession.java", "if (large && !closed && !invalid) abortMTU", "if (false) abortMTU", "failed configured capacity abort"),
             ("AndroidTorSession.java", "Libbox.newRouterTorMTU(server, platform, proof, config, profile)", 'Libbox.newRouterTorMTU(server, platform, proof, config, "{}")', "immutable captured DNS/profile"),
             ("AndroidMTUDialog.java", '&& "https-response".equals(row.optString("latency_kind", ""))\n                && row.optInt', "&& true\n                && row.optInt", "public measurement kind"),
         ):
@@ -172,7 +201,7 @@ def main():
             if result.returncode == 0 or "AssertionError" not in result.stderr:
                 raise AssertionError("Negative control escaped: " + label + "\n" + result.stderr)
             path.write_text(original)
-        print("Android Tor MTU negative controls: 4 rejected")
+        print("Android Tor MTU negative controls: 6 rejected")
 
 
 if __name__ == "__main__":

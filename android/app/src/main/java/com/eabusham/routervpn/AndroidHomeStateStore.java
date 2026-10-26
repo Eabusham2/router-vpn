@@ -85,15 +85,37 @@ final class AndroidHomeStateStore {
 
     static synchronized boolean connectedTorExternal(Context context, Snapshot captured, String observedIp) {
         Snapshot now = snapshot(context);
-        if (captured == null || !AndroidTorProfile.isTor(captured.activeExternalProtocol)
-                || !captured.sessionId.equals(now.sessionId) || captured.pathGeneration != now.pathGeneration
-                || !"external".equals(now.logicalMode) || !captured.activeExternalProtocol.equals(now.activeExternalProtocol) || !captured.runtimeMode.equals(now.runtimeMode)
-                || !captured.activeExternalId.equals(now.activeExternalId) || !captured.activeEntryId.equals(now.activeEntryId)
-                || !captured.activeEntryMode.equals(now.activeEntryMode) || !"connecting".equals(now.phase)
+        if (!sameTorExternalOwner(captured, now) || !"connecting".equals(now.phase)
                 || !"pending".equals(now.pathProof) || emergencyDisconnectPending(context)) return false;
         prefs(context).edit().putString("phase", "connected").putString("path_proof", "passed").putString("warning", "")
                 .putBoolean("connected", true).putString("actual_exit_session", captured.sessionId).putString("actual_exit_ip", clean(observedIp)).apply();
         return true;
+    }
+
+    /** Retire only the captured Tor path; a failed drain retains its identity. */
+    static synchronized boolean failedTorExternal(Context context, Snapshot captured, String warning, boolean released) {
+        Snapshot now = snapshot(context);
+        if (!sameTorExternalOwner(captured, now)) return false;
+        SharedPreferences.Editor e = prefs(context).edit()
+                .putString("phase", "failed")
+                .putString("warning", emergencyDisconnectPending(context) ? now.warning : clean(warning))
+                .putString("path_proof", "failed")
+                .putBoolean("connected", false)
+                .remove("actual_exit_ip")
+                .remove("actual_exit_session");
+        if (released) clearAllIdentity(e);
+        e.apply();
+        return true;
+    }
+
+    private static boolean sameTorExternalOwner(Snapshot captured, Snapshot now) {
+        return captured != null && !captured.sessionId.isEmpty() && AndroidTorProfile.isTor(captured.activeExternalProtocol)
+                && "external".equals(captured.logicalMode) && captured.logicalMode.equals(now.logicalMode)
+                && captured.sessionId.equals(now.sessionId) && captured.pathGeneration == now.pathGeneration
+                && captured.runtimeMode.equals(now.runtimeMode) && captured.activeExternalProtocol.equals(now.activeExternalProtocol)
+                && captured.activeExternalId.equals(now.activeExternalId) && captured.activeEntryId.equals(now.activeEntryId)
+                && captured.activeEntryMode.equals(now.activeEntryMode) && captured.expectedExternalIp.equals(now.expectedExternalIp)
+                && captured.activeNodeId.equals(now.activeNodeId) && captured.activeExitId.equals(now.activeExitId);
     }
 
     static synchronized String beginPolicyExternal(Context context, String externalId, String name, String protocol, String expectedIp, String entryId, String entryMode) {

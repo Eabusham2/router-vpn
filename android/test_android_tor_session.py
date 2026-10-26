@@ -19,6 +19,8 @@ SOURCES = dict(B.STUBS)
 SOURCES.pop('org/json/JSONObject.java')
 SOURCES.pop('com/eabusham/routervpn/AndroidTorSession.java')
 SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void activateTor(AndroidTorSession tor){}', 'public int torStarts;public AndroidTorSession activatedTor;public void activateTor(AndroidTorSession tor){torStarts++;activatedTor=tor;}')
+SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void established(int mtu)throws Exception{}', 'public int establishedMTU;public void established(int mtu)throws Exception{establishedMTU=mtu;}')
+SOURCES['android/net/VpnService.java'] = SOURCES['android/net/VpnService.java'].replace('public class Builder {', 'public static int requestedMTU,establishments;public class Builder {').replace('setMtu(int n){return this;}', 'setMtu(int n){requestedMTU=n;return this;}').replace('public android.os.ParcelFileDescriptor establish(){return null;}', 'public android.os.ParcelFileDescriptor establish(){establishments++;return new android.os.ParcelFileDescriptor();}')
 SOURCES['io/nekohasekai/libbox/RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU {}'
 SOURCES['io/nekohasekai/libbox/RouterMTUPlatform.java'] = 'package io.nekohasekai.libbox;public interface RouterMTUPlatform {}'
 SOURCES['com/eabusham/routervpn/AndroidTorProfile.java'] = '''package com.eabusham.routervpn;
@@ -142,6 +144,33 @@ public final class TorSessionHarness {
   rejected(()->close(service));check(Libbox.checkedCloses==0&&server.closes==0,"native owner was released before its Java lower worker joined");check(field("torOwner").getBoolean(service)&&field("startLayerRelay").get(service)==relay&&!tun.closed,"unconfirmed relay close released its graph or TUN");
   check(field("state").get(service).equals("STOPPING"),"unfinished Java lower reported terminal state");relay.pending=false;close(service);check(relay.closes==2&&Libbox.checkedCloses==1&&tun.closed,"retry did not drain the retained relay before its exact native Box");check(field("startLayerRelay").get(service)==null,"proved relay drain retained a stale owner");service.onDestroy();
  }
+ static void failedCapacityTeardown()throws Exception{
+  for(boolean destroy:new boolean[]{false,true})for(boolean replacement:new boolean[]{false,true}){
+   Libbox.reset();LayeredVpnService service=new LayeredVpnService();service.files=Files.createTempDirectory("tor-capacity-failure-").toFile();service.onCreate();
+   CommandServer core=new CommandServer(service,service);android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();
+   AndroidHomeStateStore.Snapshot home=new AndroidHomeStateStore.Snapshot();home.connected=true;home.phase="connected";home.pathProof="passed";home.sessionId="captured-home";home.activeExternalId="captured-tor";home.activeExternalProtocol="tor";
+   AndroidHomeStateStore.Snapshot current=home;if(replacement){current=new AndroidHomeStateStore.Snapshot();current.connected=true;current.phase="connected";current.pathProof="passed";current.sessionId="replacement-home";current.activeExternalId="replacement-tor";}
+   AndroidHomeStateStore.value=current;field("torHomeOwner").set(service,home);field("torOwner").setBoolean(service,true);field("commandServer").set(service,core);field("tunDescriptor").set(service,tun);field("state").set(service,"UP");
+   Method shutdown=LayeredVpnService.class.getDeclaredMethod("shutdown",String.class,String.class);shutdown.setAccessible(true);Libbox.failClose=true;
+   if(destroy)service.onDestroy();else rejected(()->shutdown.invoke(service,"FAILED","Captured 9000-byte interface readback failed"));
+   check(field("commandServer").get(service)==core&&field("torHomeOwner").get(service)==home&&!tun.closed,"failed capacity drain released captured native ownership");
+   check(replacement?current.connected&&current.sessionId.equals("replacement-home")&&!current.activeExternalId.isEmpty():!current.connected&&current.pathProof.equals("failed")&&!current.activeExternalId.isEmpty(),"unconfirmed Tor drain retained Connected or changed a replacement");
+   Libbox.failClose=false;if(destroy)service.onDestroy();else shutdown.invoke(service,"FAILED","Captured native drain completed");
+   check(core.closes==1&&tun.closed&&field("commandServer").get(service)==null,"confirmed capacity drain did not join its captured native owner");
+   check(replacement?current.connected&&current.activeExternalId.equals("replacement-tor"):!current.connected&&current.activeExternalId.isEmpty(),"confirmed Tor drain cleared a replacement or retained its old identity");
+   service.onDestroy();Files.delete(service.files.toPath());
+  }
+ }
+ static void configuredOSInterface()throws Exception{
+  for(int capacity:new int[]{1280,1500,9000}){
+   Libbox.reset();LayeredVpnService service=new LayeredVpnService();service.files=Files.createTempDirectory("tor-builder-mtu-").toFile();service.onCreate();AndroidMTUSession mtu=new AndroidMTUSession(service,owner->{});field("mtuSession").set(service,mtu);
+   RoutePrefixIterator empty=new RoutePrefixIterator(){public boolean hasNext(){return false;}public RoutePrefix next(){throw new AssertionError("empty route fixture");}};
+   TunOptions options=new TunOptions(){public int getMTU(){return capacity;}public RoutePrefixIterator getInet4Address(){return empty;}public RoutePrefixIterator getInet6Address(){return empty;}public RoutePrefixIterator getInet4RouteAddress(){return empty;}public RoutePrefixIterator getInet6RouteAddress(){return empty;}public RoutePrefixIterator getInet4RouteExcludeAddress(){return empty;}public RoutePrefixIterator getInet6RouteExcludeAddress(){return empty;}public StringIterator getIncludePackage(){return new StringIterator(){public int len(){return 0;}public boolean hasNext(){return false;}public String next(){throw new AssertionError("empty package fixture");}};}public StringIterator getExcludePackage(){return getIncludePackage();}public StringIterator getDNSServerAddress(){return new StringIterator(){boolean sent;public int len(){return 1;}public boolean hasNext(){return !sent;}public String next(){sent=true;return "172.19.0.2";}};}};
+   int before=android.net.VpnService.establishments;service.openTun(options);android.os.ParcelFileDescriptor descriptor=(android.os.ParcelFileDescriptor)field("tunDescriptor").get(service);
+   check(android.net.VpnService.establishments==before+1&&android.net.VpnService.requestedMTU==capacity&&mtu.establishedMTU==capacity,"compiled capacity did not reach the one captured OS VPN reader");
+   check(descriptor!=null&&!descriptor.closed,"OS TUN was not retained by its exact service");service.onDestroy();check(descriptor.closed,"configured capacity leaked the OS TUN on shutdown");Files.delete(service.files.toPath());
+  }
+ }
  static void automaticMTU()throws Exception{
   for(String changed:new String[]{"live","pending","session","exit","home","proof","generation","replaced","home-generation","home-replaced","emergency"}){
    Libbox.reset();Fixture f=new Fixture(false);f.session.prove();LayeredVpnService service=new LayeredVpnService();service.files=Files.createTempDirectory("tor-mtu-adoption-").toFile();service.onCreate();
@@ -157,7 +186,7 @@ public final class TorSessionHarness {
    if(changed.equals("live"))check(mtu.activatedTor==f.session,"MTU borrowed another circuit proof");service.onDestroy();AndroidHomeStateStore.emergency=false;
   }
  }
- public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();physicalNetwork();retainedRelayClose();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
+ public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();physicalNetwork();retainedRelayClose();failedCapacityTeardown();configuredOSInterface();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -179,13 +208,16 @@ def main():
             result = response;''','''            result = response;''','DNS completion owner check'),
                   ('LayeredVpnService.java','Libbox.routerStrategyCloseService(commandServer);','commandServer.closeService();','checked native close'),
                   ('LayeredVpnService.java','captured.bindSocket(borrowed.getFileDescriptor());','','captured physical network binding'),
-                  ('LayeredVpnService.java','||!service.ownsTorMTUHome()','','Tor MTU Home generation ownership')]
+                  ('LayeredVpnService.java','||!service.ownsTorMTUHome()','','Tor MTU Home generation ownership'),
+                  ('LayeredVpnService.java','AndroidHomeStateStore.failedTorExternal(this,torHome,error.isEmpty()?"The captured Tor VPN is stopping; its path proof is no longer valid.":error,false);','','Tor failed-capacity pre-drain invalidation'),
+                  ('LayeredVpnService.java','AndroidHomeStateStore.failedTorExternal(this,torHome,"The captured Tor VPN service stopped; its path proof is no longer valid.",false);','','Tor destroy pre-drain invalidation'),
+                  ('LayeredVpnService.java','.setMtu(options.getMTU())','.setMtu(1280)','captured OS interface capacity')]
         for name,old,new,label in controls:
             path=folder/'com/eabusham/routervpn'/name;original=path.read_text();assert original.count(old)==1,label
             path.write_text(original.replace(old,new));subprocess.run(compile_args,check=True,timeout=45)
             result=subprocess.run(run_args,capture_output=True,text=True,timeout=20);assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' control escaped'
             path.write_text(original)
-        print('Android Tor lifecycle negative controls: PASS (late DNS adoption, unchecked close, lost network binding and stale Tor MTU activation rejected)')
+        print('Android Tor lifecycle negative controls: PASS (7 broken proof, close, network, MTU, OS capacity and failed-capacity guards rejected)')
 
 
 if __name__=='__main__':main()

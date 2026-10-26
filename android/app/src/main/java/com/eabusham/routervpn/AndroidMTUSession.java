@@ -42,6 +42,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
     private int requestedMTU;
     private volatile boolean invalid, closed;
     private boolean changing, activated, automaticDeferred;
+    private boolean torController;
     private volatile RouterMTU controller;
     private volatile String notice = "Connect a proved Auto-MTU Router VPN path first.";
 
@@ -254,12 +255,8 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             if (closed || invalid) return;
             if (activated) { if(tor.healthy())resumeDeferredAutomatic(); return; }
             activated = true;
+            torController = true;
             try {
-                JSONObject profile = tor.mtuProfile();
-                String policy = profile.optString("mtu_policy", "").trim().toLowerCase(java.util.Locale.ROOT);
-                if (!"auto".equals(policy) || profile.optBoolean("jumbo_tun", false)) {
-                    notice = "Fixed, runtime-default and Jumbo modes do not enter Auto-MTU."; return;
-                }
                 long end = android.os.SystemClock.elapsedRealtime() + 2500;
                 while (!closed && !invalid && captureMTU() == null && android.os.SystemClock.elapsedRealtime() < end) Thread.sleep(20);
                 if (closed || invalid || !tor.healthy()) return;
@@ -267,9 +264,20 @@ final class AndroidMTUSession implements RouterMTUPlatform {
                 if (created == null) throw new IllegalStateException("Native Tor MTU owner was not created.");
                 controller = created;
                 if (closed || invalid || !tor.healthy()) { closeController(); return; }
+                if (!created.autoRequested()) {
+                    automaticDeferred = false;
+                    notice = "Configured interface capacity is retained without Auto MTU or Retest. This is not a measured packet-path limit.";
+                    return;
+                }
                 automaticDeferred = true; resumeDeferredAutomatic();
                 notice = "";
             } catch (Exception error) {
+                // A large compiled capacity must have exact OS/native
+                // readback. This is the captured interface request, not an
+                // inference that the user enabled Jumbo or a PMTU result.
+                boolean large;
+                synchronized (this) { large = requestedMTU > 1500; }
+                if (large && !closed && !invalid) abortMTU("The captured Tor interface capacity could not be verified.");
                 notice = closed || invalid ? "MTU session is stopped or stale."
                         : "Auto-MTU has no verified Tor-path measurement; configured MTU is retained.";
             }
@@ -327,7 +335,7 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             RouterMTU owned = controller;
             if (!"status".equals(operation)) {
                 if (closed || invalid || !identity.equals(session) || owned == null || request == null || !request.matches("[0-9a-f]{32}")) throw new IllegalStateException("MTU request is stale or unavailable.");
-                if ("start".equals(operation)) { AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true)); automaticDeferred=false; }
+                if ("start".equals(operation)) { if(!owned.autoRequested())throw new IllegalStateException("The captured interface policy does not allow Auto MTU or Retest.");AndroidMTUMeasurementGate.startMTU(() -> owned.start(request, true)); automaticDeferred=false; }
                 else if ("cancel".equals(operation)) owned.cancel(request);
                 else throw new IllegalArgumentException("Unknown MTU request.");
             }
@@ -335,6 +343,9 @@ final class AndroidMTUSession implements RouterMTUPlatform {
             if (owned == null) result.put("phase", "unavailable").put("failure", notice);
             result.put("session_id", identity);
             result.put("measurement_hold", AndroidMTUMeasurementGate.held());
+            result.put("optimization_allowed", owned != null && owned.autoRequested() && !closed && !invalid);
+            result.put("tor_connection", torController);
+            if (owned != null && !notice.isEmpty()) result.put("policy_note", notice);
             return result.toString();
         }
     }

@@ -752,7 +752,9 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         String mode = activeMode;
         File session;
         AndroidHomeStateStore.Snapshot home = externalHomeOwner;
+        AndroidHomeStateStore.Snapshot torHome = torHomeOwner;
         AndroidHomeStateStore.failedPolicyExternal(this,home,"The captured external VPN service stopped; its path proof is no longer valid.",false);
+        AndroidHomeStateStore.failedTorExternal(this,torHome,"The captured Tor VPN service stopped; its path proof is no longer valid.",false);
         synchronized (lock) {
             session = activeSession;
             try { closeCoreLocked(); }
@@ -767,6 +769,7 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         }
         if(currentService.get()==this)currentService.clear();
         AndroidHomeStateStore.failedPolicyExternal(this,home,"The captured external VPN service stopped; reconnect to prove the path.",true);
+        AndroidHomeStateStore.failedTorExternal(this,torHome,"The captured Tor VPN service stopped; reconnect to prove the path.",true);
         if (!explicitStop && ("UP".equals(terminal) || "STARTING".equals(terminal))) {
             publish("FAILED", mode, "Layered VPN service stopped unexpectedly.");
         }
@@ -779,19 +782,23 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         String mode;
         File session;
         AndroidHomeStateStore.Snapshot home;
+        AndroidHomeStateStore.Snapshot torHome;
         synchronized (lock) {
             if (!"DOWN".equals(terminalState) && !"FAILED".equals(terminalState) && !"REVOKED".equals(terminalState)) terminalState = "FAILED";
             if ("DOWN".equals(terminalState)) publish("STOPPING", activeMode, "");
             mode = activeMode;
             session = activeSession;
             home = externalHomeOwner;
+            torHome = torHomeOwner;
             AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?"The captured external VPN is stopping; its path proof is no longer valid.":error,false);
+            AndroidHomeStateStore.failedTorExternal(this,torHome,error.isEmpty()?"The captured Tor VPN is stopping; its path proof is no longer valid.":error,false);
             closeCoreLocked();
             activeSession = null;
             activeMode = "";
             activeConfig = "";
             publish(terminalState, "DOWN".equals(terminalState) ? "" : mode, error);
             AndroidHomeStateStore.failedPolicyExternal(this,home,error.isEmpty()?"The captured external VPN stopped.":error,true);
+            AndroidHomeStateStore.failedTorExternal(this,torHome,error.isEmpty()?"The captured Tor VPN stopped.":error,true);
         }
         if (session != null) deleteTree(session);
         stopForeground(STOP_FOREGROUND_REMOVE);
