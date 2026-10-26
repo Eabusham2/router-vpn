@@ -36,8 +36,25 @@ func TestSpeedLabTransferUploadRequiresConsumedRequestBytes(t *testing.T) {
 		{name: "rejected", consumed: 1024, status: 403, wantErr: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+			defer cancel()
+			var transportElapsed time.Duration
 			client := &http.Client{Transport: speedLabTestTransport(func(req *http.Request) (*http.Response, error) {
 				defer req.Body.Close()
+				// An in-memory response can complete within one clock tick on
+				// Windows. Cross a real, cancellable transport interval before
+				// returning; production must measure that elapsed time itself.
+				started := time.Now()
+				tick := time.NewTicker(time.Millisecond)
+				defer tick.Stop()
+				for transportElapsed <= 0 {
+					select {
+					case <-tick.C:
+						transportElapsed = time.Since(started)
+					case <-req.Context().Done():
+						return nil, req.Context().Err()
+					}
+				}
 				if req.ContentLength != 1024 {
 					t.Fatalf("request length = %d", req.ContentLength)
 				}
@@ -53,15 +70,15 @@ func TestSpeedLabTransferUploadRequiresConsumedRequestBytes(t *testing.T) {
 				}
 				return &http.Response{StatusCode: tc.status, Body: body, Header: make(http.Header), Request: req}, nil
 			})}
-			got, elapsed, err := speedLabUploadRound(context.Background(), client, 1024, []byte("payload"))
+			got, elapsed, err := speedLabUploadRound(ctx, client, 1024, []byte("payload"))
 			if (err != nil) != tc.wantErr {
 				t.Fatalf("bytes=%d err=%v; want error=%t", got, err, tc.wantErr)
 			}
 			if got != tc.consumed {
 				t.Fatalf("reported %d bytes; transport consumed %d", got, tc.consumed)
 			}
-			if elapsed <= 0 {
-				t.Fatal("missing elapsed measurement")
+			if transportElapsed <= 0 || elapsed < transportElapsed {
+				t.Fatalf("elapsed measurement %s did not include the actual transport interval %s", elapsed, transportElapsed)
 			}
 			if tc.broken && !errors.Is(err, io.ErrUnexpectedEOF) {
 				t.Fatalf("response failure was hidden: %v", err)
