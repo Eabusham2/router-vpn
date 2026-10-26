@@ -56,6 +56,7 @@ function Assert-ShippingKillSwitchDispatch([string]$RepositoryRoot,[string]$Rela
     $Calls=@($Tree.FindAll({param($Node)$Node-is[System.Management.Automation.Language.CommandAst]-and$Node.GetCommandName()-eq$Helper},$true))
     Assert-Wrapper ($Calls.Count-eq$ExpectedActions.Count) ('Shipping kill-switch call sites changed: '+$Relative)
     $Root=$TaskRoot;$Endpoint='203.0.113.20';$BridgeEndpoint=$Endpoint;$TunnelAlias='captured-tunnel';$alias='verified-openvpn-tunnel'
+    $PhysicalCapture=[pscustomobject]@{endpoint=$Endpoint}
     $KillSwitch=Join-Path $TaskRoot ('dispatch-'+$Helper+'.ps1')
     $env:WRAPPER_DISPATCH_LOG=Join-Path $TaskRoot ('dispatch-'+$Helper+'.jsonl')
     $Policy=@'
