@@ -114,16 +114,30 @@ uses a distinct no-native-process witness, accepted only after actual wrapper
 exit and validation of the unused private workspace. Native crashes or ambiguous
 shutdown do not acquire that exception.
 
-Speed Lab now captures this distinct Tor owner and restores the complete saved
-policy through a fresh Tor session, isolation secret and proof. It does not
-reinterpret Tor as an ordinary external graph or reuse a previous session's
-proof. Executable native-command, actual child-process, wrapper, DNS and Speed
-Lab race tests cover these source paths; physical Tor circuits, kernel TUN
-acceptance and current release packages remain separate evidence. Auto currently
-uses a conservative 1280-byte configured TUN MTU with actual interface readback;
-that value is not a fresh path-MTU measurement. Tor MTU Retest/optimization,
-Router-entry/server/Compare graphs, compatible Jumbo/padding and dynamic-bridge
-strict protection remain requirements to implement.
+Speed Lab captures this distinct Tor owner and restores the complete saved
+policy through a fresh Tor session, isolation secret and proof. Its restoration
+snapshot retains the actual measured interface value and completed Auto state;
+saved historical MTU cannot substitute for that reader. The restored session
+must pass fresh path proof and matching interface readback before restoration
+succeeds. Failed fresh proof waits for the exact native rollback, and an old
+transaction cannot send controls to a replacement connection. Executable
+native-command, actual child-process, wrapper, DNS and Speed Lab race tests
+cover these source paths; physical Tor circuits, kernel TUN acceptance and
+current release packages remain separate evidence.
+
+Desktop Tor Auto now starts with a conservative 1280-byte configured TUN and
+measures HTTPS response time and transferred-byte download/upload throughput
+at candidate interface MTUs. Retest and Cancel use the same captured native
+lease, with fresh Tor/selected-DNS checks and monotonically bound interface
+readbacks. A native interface change has a fixed, request-bound 15-second
+transition window; its old proof cannot authorize a measured result or renew
+that window. Normal heartbeat publication waits for the actual native reader
+and authenticated control check. Cancellation retains the worker through exact
+rollback, and persistence preserves the requested Auto policy and private node
+identity. The reported interface value is not an authenticated UDP path-MTU or
+ICMP measurement. Fixed and Default remain unmeasured interface choices.
+Router-entry/server/Compare Tor graphs, compatible Jumbo/padding and
+dynamic-bridge strict protection remain requirements to implement.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
 AdGuard address, port, TLS name and HTTPS path. The address must belong to the

@@ -1,0 +1,373 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopTorTransitionReceipt(proof mobiletor.DesktopBridgeProof, now time.Time) mobiletor.DesktopBridgeMTUTransition {
+	return mobiletor.DesktopBridgeMTUTransition{Schema: 1, SessionID: proof.SessionID, SourceSHA256: proof.SourceSHA256, ConfigSHA256: proof.ConfigSHA256,
+		Generation: 1, RequestID: strings.Repeat("a", 32), TransitionID: 1, TargetMTU: 1400, StartedAt: now.UnixMilli(), ExpiresAt: now.Add(mobiletor.DesktopBridgeMTUTransitionLimit).UnixMilli(),
+		From: mobiletor.DesktopBridgeMTUReadback{Generation: 1, RequestID: strings.Repeat("a", 32), InterfaceName: proof.InterfaceName, InterfaceIndex: proof.InterfaceIndex, EffectiveMTU: proof.EffectiveMTU}}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionPublishesBaseBeforeAdmission(t *testing.T) {
+	f := desktopTorAutoFiles(t)
+	files := f.open(t)
+	owner := routerVPNNewTorCommandFixture(t, f, false)
+	now := time.UnixMilli(owner.proof.HeartbeatAt + 1)
+	request := routerVPNTorMTUTransitionRequest{context: context.Background(), receipt: desktopTorTransitionReceipt(owner.proof, now), result: make(chan error, 1), finished: make(chan struct{})}
+	proof, transition, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var recorded mobiletor.DesktopBridgeMTUTransition
+	raw, err := files.read("mtu-transition.json", 8192)
+	if err != nil || json.Unmarshal(raw, &recorded) != nil || recorded != transition || transition.FromHeartbeatAt != proof.HeartbeatAt ||
+		proof.MTUReadback == nil || *proof.MTUReadback != transition.From || proof.Proof != owner.proof.Proof || proof.Policy != owner.proof.Policy {
+		t.Fatal("transition changed proof or omitted exact base", recorded, err)
+	}
+	var base mobiletor.DesktopBridgeProof
+	raw, err = files.read("proof.json", 64<<10)
+	if err != nil || json.Unmarshal(raw, &base) != nil || base.MTUReadback == nil || *base.MTUReadback != transition.From || base.HeartbeatAt != transition.FromHeartbeatAt {
+		t.Fatal("mutation admission preceded its exact base proof", base, err)
+	}
+	if !routerVPNTorTransitionKeepsAlive(&transition, proof, now.Add(4*time.Second)) || routerVPNTorTransitionKeepsAlive(&transition, proof, time.UnixMilli(transition.ExpiresAt)) {
+		t.Fatal("transition deadline was extended or treated as ordinary heartbeat")
+	}
+	newer := proof
+	newer.HeartbeatAt++
+	if routerVPNTorTransitionKeepsAlive(&transition, newer, now.Add(4*time.Second)) {
+		t.Fatal("old transition survived a later strict heartbeat")
+	}
+	if _, _, err := routerVPNTorAdmitTransition(files, request, proof, transition.TransitionID, now); err == nil {
+		t.Fatal("transition identity replayed")
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmission(t *testing.T) {
+	mutations := []func(*mobiletor.DesktopBridgeMTUTransition){
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.Schema = 2 }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.SessionID = strings.Repeat("f", 32) },
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.SourceSHA256 = strings.Repeat("f", 64) }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.ConfigSHA256 = strings.Repeat("f", 64) },
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.Generation = 0 }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.RequestID = strings.Repeat("b", 32) },
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.TransitionID = 0 }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.TargetMTU = 9001 },
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.From.InterfaceIndex++ }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.From.InterfaceName = "wrong-reader" },
+		func(v *mobiletor.DesktopBridgeMTUTransition) {
+			v.StartedAt -= mobiletor.DesktopBridgeHeartbeatMaxAge.Milliseconds() + 1000
+		}, func(v *mobiletor.DesktopBridgeMTUTransition) { v.ExpiresAt = v.StartedAt },
+		func(v *mobiletor.DesktopBridgeMTUTransition) { v.ExpiresAt++ }, func(v *mobiletor.DesktopBridgeMTUTransition) { v.FromHeartbeatAt = 1 },
+	}
+	for i, mutate := range mutations {
+		f := desktopTorAutoFiles(t)
+		files := f.open(t)
+		owner := routerVPNNewTorCommandFixture(t, f, false)
+		now := time.UnixMilli(owner.proof.HeartbeatAt + 1)
+		request := routerVPNTorMTUTransitionRequest{context: context.Background(), receipt: desktopTorTransitionReceipt(owner.proof, now), result: make(chan error, 1), finished: make(chan struct{})}
+		mutate(&request.receipt)
+		if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now); err == nil {
+			t.Fatal("malformed transition admitted", i)
+		}
+		if _, err := os.Stat(filepath.Join(f.directory, "mtu-transition.json")); !os.IsNotExist(err) {
+			t.Fatal("rejected transition wrote admission", i, err)
+		}
+	}
+	f := desktopTorAutoFiles(t)
+	files := f.open(t)
+	owner := routerVPNNewTorCommandFixture(t, f, false)
+	now := time.UnixMilli(owner.proof.HeartbeatAt + 1)
+	request := routerVPNTorMTUTransitionRequest{context: context.Background(), receipt: desktopTorTransitionReceipt(owner.proof, now), result: make(chan error, 1), finished: make(chan struct{})}
+	if err := os.WriteFile(filepath.Join(f.directory, "mtu-transition.json"), []byte(`{"replacement":true}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := routerVPNTorAdmitTransition(files, request, owner.proof, 0, now); err == nil {
+		t.Fatal("transition overwrote an unowned receipt")
+	}
+}
+
+type desktopTorTransitionCommandFixture struct {
+	*desktopTorMeasuredCommandFixture
+	transitions      chan routerVPNTorMTUTransitionRequest
+	entered, release chan struct{}
+	once             sync.Once
+}
+
+func (f *desktopTorTransitionCommandFixture) MTUTransitions() <-chan routerVPNTorMTUTransitionRequest {
+	return f.transitions
+}
+func (f *desktopTorTransitionCommandFixture) LifetimeCurrent() bool { return f.base.Healthy() }
+func (f *desktopTorTransitionCommandFixture) VerifyCurrentPath(ctx context.Context) error {
+	if f.entered != nil {
+		f.once.Do(func() { close(f.entered) })
+	}
+	if f.release != nil {
+		<-f.release // Even cancellation cannot claim a deliberately retained native callback.
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return nil
+}
+
+func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReader(t *testing.T) {
+	for _, expires := range []bool{false, true} {
+		t.Run(map[bool]string{false: "stop", true: "deadline"}[expires], func(t *testing.T) {
+			files := desktopTorAutoFiles(t)
+			base, _ := desktopTorMeasuredCommand(t, files)
+			owner := &desktopTorTransitionCommandFixture{desktopTorMeasuredCommandFixture: base, transitions: make(chan routerVPNTorMTUTransitionRequest), entered: make(chan struct{}), release: make(chan struct{})}
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			var releaseOnce sync.Once
+			release := func() { releaseOnce.Do(func() { close(owner.release) }) }
+			defer release()
+			done := make(chan error, 1)
+			go func() {
+				done <- routerVPNRunTor(parent, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(_ context.Context, owned *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
+					owner.current = owned.current
+					return owner, nil
+				})
+			}()
+			initial := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.Healthy })
+			select {
+			case <-owner.entered:
+			case <-time.After(3 * time.Second):
+				t.Fatal("maintenance never entered captured reader verification")
+			}
+			now := time.Now()
+			receipt := desktopTorTransitionReceipt(initial, now)
+			if expires {
+				receipt.ExpiresAt = now.Add(200 * time.Millisecond).UnixMilli()
+			}
+			request := routerVPNTorMTUTransitionRequest{context: parent, receipt: receipt, result: make(chan error, 1), finished: make(chan struct{})}
+			select {
+			case owner.transitions <- request:
+			case <-time.After(time.Second):
+				t.Fatal("slow reader blocked transition admission")
+			}
+			select {
+			case err := <-request.result:
+				if err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("transition was not acknowledged")
+			}
+			published := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.MTUReadback != nil })
+			if !expires {
+				wait := time.NewTimer(3200 * time.Millisecond)
+				select {
+				case err := <-done:
+					wait.Stop()
+					t.Fatal("bounded transition falsely disconnected", err)
+				case <-wait.C:
+				}
+				var retained mobiletor.DesktopBridgeProof
+				raw, err := os.ReadFile(filepath.Join(files.directory, "proof.json"))
+				if err != nil || json.Unmarshal(raw, &retained) != nil || retained.HeartbeatAt != published.HeartbeatAt {
+					t.Fatal("slow native reader fabricated a fresh heartbeat", retained, err)
+				}
+				cancel()
+			}
+			select {
+			case <-owner.base.cancel:
+			case <-time.After(time.Second):
+				t.Fatal("Stop/deadline was blocked by native reader verification")
+			}
+			if _, err := os.Stat(filepath.Join(files.directory, "stopped.json")); !os.IsNotExist(err) {
+				t.Fatal("undrained reader was acknowledged as stopped", err)
+			}
+			select {
+			case <-done:
+				t.Fatal("command returned while native verification remained retained")
+			default:
+			}
+			release()
+			select {
+			case err := <-done:
+				if expires && !errors.Is(err, routerVPNTorFailure) {
+					t.Fatal("expired transition succeeded", err)
+				}
+				if !expires && err != nil {
+					t.Fatal(err)
+				}
+			case <-time.After(3 * time.Second):
+				t.Fatal("released native verification was not joined")
+			}
+			routerVPNTorCheckStoppedFixture(t, files)
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat(t *testing.T) {
+	files := desktopTorAutoFiles(t)
+	base, _ := desktopTorMeasuredCommand(t, files)
+	var captured atomic.Pointer[mobiletor.DesktopBridgeMTUReadback]
+	base.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) {
+		if value := captured.Load(); value != nil {
+			copy := *value
+			return &copy, nil
+		}
+		return base.mtu.readback()
+	}
+	owner := &desktopTorTransitionCommandFixture{desktopTorMeasuredCommandFixture: base, transitions: make(chan routerVPNTorMTUTransitionRequest)}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunTor(ctx, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(_ context.Context, owned *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			owner.current = owned.current
+			return owner, nil
+		})
+	}()
+	initial := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.Healthy })
+	receipt := desktopTorTransitionReceipt(initial, time.Now())
+	captured.Store(&receipt.From)
+	completed := make(chan struct{})
+	request := routerVPNTorMTUTransitionRequest{context: ctx, receipt: receipt, result: make(chan error, 1), finished: completed}
+	select {
+	case owner.transitions <- request:
+	case <-time.After(time.Second):
+		t.Fatal("unblocked command did not receive transition")
+	}
+	select {
+	case err := <-request.result:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("transition publication was not acknowledged")
+	}
+	admitted := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.MTUReadback != nil })
+	timer := time.NewTimer(1100 * time.Millisecond)
+	select {
+	case err := <-done:
+		timer.Stop()
+		t.Fatal("admitted transition unexpectedly stopped", err)
+	case <-timer.C:
+	}
+	var held mobiletor.DesktopBridgeProof
+	raw, err := os.ReadFile(filepath.Join(files.directory, "proof.json"))
+	if err != nil || json.Unmarshal(raw, &held) != nil || held.HeartbeatAt != admitted.HeartbeatAt {
+		t.Fatal("admitted but unfinished native transaction fabricated heartbeat", held, err)
+	}
+	close(completed)
+	finished := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.HeartbeatAt > admitted.HeartbeatAt })
+	if finished.Proof != initial.Proof || finished.Policy != initial.Policy || finished.MTUReadback == nil || *finished.MTUReadback != receipt.From {
+		t.Fatal("completion changed immutable proof or lost actual reader", finished)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("completed transition did not drain")
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionHeartbeatUsesDistinctRealMilliseconds(t *testing.T) {
+	previous := time.Now().Add(3 * time.Millisecond).UnixMilli()
+	value, err := routerVPNTorNextHeartbeat(context.Background(), context.Background(), previous)
+	if err != nil || value.UnixMilli() <= previous || value.After(time.Now()) {
+		t.Fatal("next transition fabricated or reused its clock millisecond", value, err)
+	}
+	canceled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := routerVPNTorNextHeartbeat(context.Background(), canceled, time.Now().UnixMilli()); err == nil {
+		t.Fatal("cancelled transition waited for or minted another heartbeat")
+	}
+	if _, err := routerVPNTorNextHeartbeat(context.Background(), context.Background(), time.Now().Add(2*time.Second).UnixMilli()); err == nil {
+		t.Fatal("a large clock regression extended transition liveness")
+	}
+}
+
+type desktopTorSlowControlFixture struct {
+	*routerVPNTorCommandFixture
+	entered  chan context.Context
+	finished chan struct{}
+	once     sync.Once
+}
+
+func (f *desktopTorSlowControlFixture) VerifyCurrentPath(ctx context.Context) error {
+	first := false
+	f.once.Do(func() { first = true; f.entered <- ctx })
+	if !first {
+		return f.routerVPNTorCommandFixture.VerifyCurrentPath(ctx)
+	}
+	timer := time.NewTimer(4 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		close(f.finished)
+		return ctx.Err()
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+}
+
+func TestRouterVPNDesktopTorHeartbeatAllowsOwnedSlowControlWithoutInventingFreshness(t *testing.T) {
+	files := routerVPNNewTorFileFixture(t)
+	owner := &desktopTorSlowControlFixture{routerVPNTorCommandFixture: routerVPNNewTorCommandFixture(t, files, false), entered: make(chan context.Context, 1), finished: make(chan struct{})}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	done := make(chan error, 1)
+	go func() {
+		done <- routerVPNRunTor(ctx, files.directory, routerVPNTorTestSession, files.binary, files.getenv, func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			return owner, nil
+		})
+	}()
+	initial := routerVPNTorReadProofFixture(t, files)
+	var control context.Context
+	select {
+	case control = <-owner.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("heartbeat did not begin its control inventory")
+	}
+	deadline, ok := control.Deadline()
+	if remaining := time.Until(deadline); !ok || remaining > mobiletor.DesktopBridgeHeartbeatMaxAge || remaining < 5*time.Second {
+		t.Fatal("heartbeat deadline expires before the owned five-second inventory", remaining)
+	}
+	timer := time.NewTimer(3200 * time.Millisecond)
+	select {
+	case err := <-done:
+		timer.Stop()
+		t.Fatal("healthy control inventory was retired before its permitted deadline", err)
+	case <-timer.C:
+	}
+	var held mobiletor.DesktopBridgeProof
+	raw, err := os.ReadFile(filepath.Join(files.directory, "proof.json"))
+	if err != nil || json.Unmarshal(raw, &held) != nil || held.HeartbeatAt != initial.HeartbeatAt {
+		t.Fatal("waiting control inventory fabricated a fresh heartbeat", held, err)
+	}
+	select {
+	case <-owner.finished:
+	case err := <-done:
+		t.Fatal("healthy inventory was stopped", err)
+	case <-time.After(2 * time.Second):
+		t.Fatal("bounded healthy inventory did not finish")
+	}
+	current := desktopTorWaitMTUProof(t, files, func(p mobiletor.DesktopBridgeProof) bool { return p.HeartbeatAt > initial.HeartbeatAt })
+	if current.Proof != initial.Proof || current.Policy != initial.Policy {
+		t.Fatal("control heartbeat changed captured proof identity", current)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("slow control fixture did not drain on Stop")
+	}
+	routerVPNTorCheckStoppedFixture(t, files)
+}

@@ -48,14 +48,15 @@ func routerVPNTorValidProof(proof mobiletor.DesktopBridgeProof, metadata mobilet
 	if err != nil || !address.IsGlobalUnicast() || address.IsPrivate() || address.IsLoopback() || address.IsLinkLocalUnicast() || address.String() != proof.Proof.IP {
 		return false
 	}
-	return proof.Schema == 1 && proof.SessionID == metadata.SessionID && proof.SourceSHA256 == metadata.SourceSHA256 && proof.ConfigSHA256 == metadata.ConfigSHA256 && proof.Policy == metadata && proof.Healthy && proof.Proof.SessionID == metadata.SessionID && proof.Proof.IsTor && proof.Proof.DNSProven &&
-		!proof.Proof.CheckedAt.IsZero() && !proof.Proof.CheckedAt.Before(started.Add(-time.Second)) && !proof.Proof.CheckedAt.After(timeNow.Add(time.Second)) && proof.HeartbeatAt >= proof.Proof.CheckedAt.UnixMilli() && proof.HeartbeatAt >= timeNow.Add(-3*time.Second).UnixMilli() && proof.HeartbeatAt <= timeNow.Add(time.Second).UnixMilli() &&
+	return proof.Schema == 1 && proof.SessionID == metadata.SessionID && proof.SourceSHA256 == metadata.SourceSHA256 && proof.ConfigSHA256 == metadata.ConfigSHA256 && proof.Policy == metadata && proof.Healthy && proof.MTUReadback == nil && proof.Proof.SessionID == metadata.SessionID && proof.Proof.IsTor && proof.Proof.DNSProven &&
+		!proof.Proof.CheckedAt.IsZero() && !proof.Proof.CheckedAt.Before(started.Add(-time.Second)) && !proof.Proof.CheckedAt.After(timeNow.Add(time.Second)) && proof.HeartbeatAt >= proof.Proof.CheckedAt.UnixMilli() && proof.HeartbeatAt >= timeNow.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() && proof.HeartbeatAt <= timeNow.Add(time.Second).UnixMilli() &&
 		proof.InterfaceName != "" && len(proof.InterfaceName) <= 64 && strings.IndexFunc(proof.InterfaceName, func(r rune) bool { return r <= 0x20 || r == 0x7f }) < 0 && proof.InterfaceIndex > 0 && proof.EffectiveMTU == metadata.ConfiguredMTU && proof.EffectiveMTU >= 1280 && proof.EffectiveMTU <= 9000 && (metadata.InterfaceName == "" || proof.InterfaceName == metadata.InterfaceName)
 }
 
 // The create-only first progress publication is admission for this runtime.
 // Even a second process with identical source cannot mint a no-work receipt for
-// an already-running owner. Only this loop writes proof/DNS/progress receipts.
+// an already-running owner. This loop owns proof/progress/transition output;
+// one retained maintenance worker owns disjoint measurement status files.
 func routerVPNRunTor(parent context.Context, directory, session, binaryPath string, getenv func(string) string, factory routerVPNTorFactory) (failure error) {
 	if parent == nil || getenv == nil || factory == nil {
 		return routerVPNTorFailure
@@ -131,8 +132,86 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	var receipt mobiletor.DesktopBridgeProof
 	var heartbeat time.Time
 	var dnsFiles *routerVPNDesktopDNSFiles
+	var mtuFiles *routerVPNDesktopMTUFiles
+	var pathFiles *routerVPNDesktopPathFiles
+	var transitions <-chan routerVPNTorMTUTransitionRequest
+	if native, ok := owner.(routerVPNTorTransitionOwner); ok {
+		transitions = native.MTUTransitions()
+	}
+	var transition *mobiletor.DesktopBridgeMTUTransition
+	var transitionDone <-chan struct{}
+	var transitionID, proofVersion uint64
+	var maintenance <-chan routerVPNTorMaintenance
+	var cancelMaintenance context.CancelFunc
 	for !stopping {
 		select {
+		case <-transitionDone:
+			transitionDone = nil
+		case request := <-transitions:
+			if transitionDone != nil {
+				select {
+				case <-transitionDone:
+					transitionDone = nil
+				default:
+					request.respond(routerVPNTorFailure)
+					failure, stopping = routerVPNTorFailure, true
+					continue
+				}
+			}
+			if !connected || mtuFiles == nil || parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) || !routerVPNTorLifetimeCurrent(owner) {
+				request.respond(routerVPNTorFailure)
+				stopping = true
+				break
+			}
+			now, clockErr := routerVPNTorNextHeartbeat(parent, request.context, receipt.HeartbeatAt)
+			if clockErr != nil {
+				request.respond(routerVPNTorFailure)
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			next, admitted, err := routerVPNTorAdmitTransition(files, request, receipt, transitionID, now)
+			if err != nil {
+				request.respond(routerVPNTorFailure)
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			receipt, heartbeat, transition, transitionID = next, now, &admitted, admitted.TransitionID
+			transitionDone = request.finished
+			proofVersion++
+			request.respond(nil)
+		case result := <-maintenance:
+			maintenance = nil
+			cancelMaintenance()
+			cancelMaintenance = nil
+			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
+				stopping = true
+				break
+			}
+			if !routerVPNTorLifetimeCurrent(owner) || files.current() != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			// A synchronous transition may have advanced the base proof while
+			// this older read was waiting for the native reader. Recheck afresh;
+			// never overwrite that newer admission with a late snapshot/error.
+			if result.version != proofVersion {
+				break
+			}
+			if result.err != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			if result.heartbeat {
+				receipt = result.proof
+				heartbeat = time.Now()
+				receipt.HeartbeatAt = heartbeat.UnixMilli()
+				if files.publish("proof.json", receipt) != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+				proofVersion++
+				transition = nil
+			}
 		case result := <-done:
 			finished = true
 			if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
@@ -149,8 +228,22 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
-			dnsFiles, err = routerVPNOpenDesktopDNSService(files.routerVPNExternalFiles, service, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+			dnsFiles, err = routerVPNOpenDesktopDNSService(routerVPNTorOutputFiles(files), service, session, metadata.SourceSHA256, metadata.ConfigSHA256)
 			if err != nil {
+				failure, stopping = routerVPNTorFailure, true
+				break
+			}
+			if measured, ok := owner.(routerVPNTorMeasurementOwner); ok {
+				mtuFiles, err = routerVPNOpenDesktopMTUProvider(routerVPNTorOutputFiles(files), measured, session, metadata.SourceSHA256, metadata.ConfigSHA256)
+				if err == nil {
+					pathFiles, err = routerVPNOpenDesktopPath(routerVPNTorOutputFiles(files), measured.FreshPathOwner(), session, metadata.SourceSHA256, metadata.ConfigSHA256)
+				}
+				if err != nil {
+					failure, stopping = routerVPNTorFailure, true
+					break
+				}
+			}
+			if routerVPNTorRefreshReadback(owner, &receipt) != nil || receipt.MTUReadback != nil {
 				failure, stopping = routerVPNTorFailure, true
 				break
 			}
@@ -173,32 +266,24 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 				break
 			}
 			if connected {
-				if !owner.Healthy() {
+				pathFiles.signalCancellation()
+				if !routerVPNTorLifetimeCurrent(owner) {
 					failure, stopping = routerVPNTorFailure, true
 					break
 				}
-				if dnsFiles.tick() != nil {
+				now := time.Now()
+				if transition != nil && receipt.HeartbeatAt == transition.FromHeartbeatAt && now.UnixMilli() >= transition.ExpiresAt ||
+					time.Since(heartbeat) >= mobiletor.DesktopBridgeHeartbeatMaxAge && !routerVPNTorTransitionKeepsAlive(transition, receipt, now) {
 					failure, stopping = routerVPNTorFailure, true
 					break
 				}
-				if time.Since(heartbeat) >= 500*time.Millisecond {
-					verify, stop := context.WithTimeout(parent, 2*time.Second)
-					err := owner.VerifyCurrentPath(verify)
-					stop()
-					if parent.Err() != nil {
-						stopping = true
-						break
-					}
-					if err != nil || !owner.Healthy() || files.current() != nil {
-						failure, stopping = routerVPNTorFailure, true
-						break
-					}
-					heartbeat = time.Now()
-					receipt.HeartbeatAt = heartbeat.UnixMilli()
-					if files.publish("proof.json", receipt) != nil {
-						failure, stopping = routerVPNTorFailure, true
-						break
-					}
+				if maintenance == nil {
+					ctx, cancel := context.WithCancel(parent)
+					cancelMaintenance = cancel
+					completed := make(chan routerVPNTorMaintenance, 1)
+					maintenance = completed
+					captured := routerVPNTorMaintenance{version: proofVersion, proof: receipt, heartbeat: transitionDone == nil && time.Since(heartbeat) >= 500*time.Millisecond}
+					go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured) }()
 				}
 			} else {
 				progress.Stage = owner.Stage()
@@ -217,9 +302,18 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 			}
 		}
 	}
+	if cancelMaintenance != nil {
+		cancelMaintenance()
+	}
 	owner.Cancel()
+	if maintenance != nil {
+		<-maintenance
+	}
 	if dnsFiles != nil {
 		dnsFiles.service.Invalidate()
+	}
+	if mtuFiles != nil {
+		mtuFiles.owner.invalidate()
 	}
 	proofRemoved := files.remove("proof.json") == nil
 	if !proofRemoved {
@@ -244,6 +338,21 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 		<-tick.C
 	}
 	for dnsFiles != nil && dnsFiles.service.Close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for mtuFiles != nil && mtuFiles.owner.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for pathFiles.close() != nil {
+		progress.Stage = "cleanup-pending"
+		_ = files.publish("progress.json", progress)
+		<-tick.C
+	}
+	for mtuFiles != nil && mtuFiles.retire() != nil {
 		progress.Stage = "cleanup-pending"
 		_ = files.publish("progress.json", progress)
 		<-tick.C

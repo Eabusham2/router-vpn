@@ -28,11 +28,11 @@ type desktopPathRecord struct {
 func decodeDesktopPathRecord(launch *desktopNodeLaunch, raw []byte) (desktopPathRecord, error) {
 	var record desktopPathRecord
 	bad := errors.New("native fresh-path receipt differs from its captured request or graph")
-	if launch == nil || launch.external == nil || len(raw) == 0 || len(raw) > 4096 || decodeRelayControlJSON(raw, &record) != nil {
+	identity, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil || len(raw) == 0 || len(raw) > 4096 || decodeRelayControlJSON(raw, &record) != nil {
 		return record, bad
 	}
-	owner := launch.external
-	if record.Schema != 1 || record.Session != owner.session || record.SourceSHA256 != owner.expected.SourceSHA256 || record.ConfigSHA256 != owner.expected.ConfigSHA256 {
+	if record.Schema != 1 || record.Session != identity.session || record.SourceSHA256 != identity.source || record.ConfigSHA256 != identity.config {
 		return record, bad
 	}
 	if record.Generation == 0 {
@@ -128,12 +128,16 @@ func writeDesktopPathRequest(launch *desktopNodeLaunch, name string, request des
 // A fresh nonce forces one synchronous check in the captured native process;
 // cached proof.json health alone cannot authorize a measurement phase or save.
 func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *desktopNodeLaunch) (failure error) {
-	if parent == nil || launch == nil || launch.external == nil {
+	owner, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil || parent == nil {
 		return errors.New("fresh path verification has no captured native owner")
 	}
-	ctx, cancel := context.WithTimeout(parent, 8*time.Second)
+	budget := 8 * time.Second
+	if launch.tor != nil {
+		budget = 35 * time.Second // Native Tor fresh proof is bounded to 30s.
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
-	owner := launch.external
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
 	for !owner.pathMu.TryLock() {
@@ -144,19 +148,19 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 		}
 	}
 	defer owner.pathMu.Unlock()
-	if owner.pathFailed {
+	if *owner.pathFailed {
 		return errors.New("native fresh-path control is retired; reconnect before measuring")
 	}
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := a.readDesktopExternalProof(launch); err != nil {
+		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
 		record, err := readDesktopPathRecord(launch)
 		if err == nil {
-			if !record.Complete || record.Generation != owner.pathGeneration || owner.pathGeneration == ^uint64(0) {
+			if !record.Complete || record.Generation != *owner.pathGeneration || *owner.pathGeneration == ^uint64(0) {
 				return errors.New("native fresh-path generation has another owner")
 			}
 			break
@@ -174,8 +178,8 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 	if err != nil {
 		return err
 	}
-	owner.pathGeneration++
-	request := desktopPathRequest{Schema: 1, Session: owner.session, SourceSHA256: owner.expected.SourceSHA256, ConfigSHA256: owner.expected.ConfigSHA256, Generation: owner.pathGeneration, Request: identifier}
+	*owner.pathGeneration++
+	request := desktopPathRequest{Schema: 1, Session: owner.session, SourceSHA256: owner.source, ConfigSHA256: owner.config, Generation: *owner.pathGeneration, Request: identifier}
 	drained := false
 	issuedAt := time.Now()
 	defer func() {
@@ -183,7 +187,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 			return
 		}
 		if err := a.drainDesktopPathRequest(launch, request); err != nil {
-			owner.pathFailed = true
+			*owner.pathFailed = true
 			failure = errors.Join(failure, err)
 		}
 	}()
@@ -194,7 +198,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 		if err := ctx.Err(); err != nil {
 			return err
 		}
-		if _, err := a.readDesktopExternalProof(launch); err != nil {
+		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
 		record, err := readDesktopPathRecord(launch)
@@ -211,7 +215,7 @@ func (a *app) verifyDesktopExternalCurrentPath(parent context.Context, launch *d
 				if !record.Verified || record.Cancelled || record.CheckedAt < issuedAt.UnixMilli() || record.CheckedAt > now.Add(time.Second).UnixMilli() || record.CheckedAt < now.Add(-2*time.Second).UnixMilli() {
 					return errors.New("captured native path failed its fresh verification")
 				}
-				if _, err := a.readDesktopExternalProof(launch); err != nil {
+				if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 					return err
 				}
 				return ctx.Err()
@@ -234,7 +238,13 @@ func (a *app) drainDesktopPathRequest(launch *desktopNodeLaunch, request desktop
 		return nil
 	}
 	_ = writeDesktopPathRequest(launch, "path-cancel.json", request)
-	deadline := time.NewTimer(4 * time.Second)
+	drainBudget := 4 * time.Second
+	if launch != nil && launch.tor != nil {
+		// Cancellation joins the connection-owned Tor control inventory (5s)
+		// before the native worker can publish its terminal acknowledgement.
+		drainBudget = 8 * time.Second
+	}
+	deadline := time.NewTimer(drainBudget)
 	defer deadline.Stop()
 	tick := time.NewTicker(20 * time.Millisecond)
 	defer tick.Stop()
@@ -243,7 +253,7 @@ func (a *app) drainDesktopPathRequest(launch *desktopNodeLaunch, request desktop
 		if err == nil && record.desktopPathRequest == request && record.Complete {
 			return nil
 		}
-		if desktopPathNativeClosed(launch) {
+		if desktopMeasurementNativeClosed(launch) {
 			return nil // Exact native close is published only after worker drain.
 		}
 		select {
@@ -257,14 +267,14 @@ func (a *app) drainDesktopPathRequest(launch *desktopNodeLaunch, request desktop
 func (a *app) retireDesktopPathOwner(launch *desktopNodeLaunch) error {
 	// Never substitute whichever process is selected after this request. The
 	// existing stop handshake checks the captured command and private lease owner.
-	if err := prepareDesktopExternalStop(a, launch.command); err != nil {
+	if err := a.prepareDesktopMeasurementStop(launch); err != nil {
 		return errors.Join(errors.New("fresh path cancellation is still draining; captured protection and cleanup ownership retained"), err)
 	}
 	deadline := time.NewTimer(3 * time.Second)
 	defer deadline.Stop()
 	select {
-	case <-desktopExternalProcessDone(launch):
-		if !desktopPathNativeClosed(launch) {
+	case <-desktopMeasurementProcessDone(launch):
+		if !desktopMeasurementNativeClosed(launch) {
 			return errors.New("native wrapper exited without proof-worker drain acknowledgement; captured protection and cleanup ownership retained")
 		}
 		a.mu.Lock()
@@ -297,11 +307,11 @@ func verifySpeedLabPath(ctx context.Context, a *app, identity speedLabPathIdenti
 }
 
 func (s desktopMTUSnapshot) verifyCurrentPath(ctx context.Context, a *app) error {
-	if err := s.current(a); err != nil {
+	if err := s.currentContext(ctx, a); err != nil {
 		return err
 	}
 	if err := a.verifyDesktopExternalCurrentPath(ctx, s.launch); err != nil {
 		return err
 	}
-	return s.current(a)
+	return s.currentContext(ctx, a)
 }

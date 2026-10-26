@@ -1,0 +1,228 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func desktopTorAutoFiles(t *testing.T) *routerVPNTorFileFixture {
+	t.Helper()
+	f := routerVPNNewTorFileFixture(t)
+	raw, err := os.ReadFile(filepath.Join(f.directory, "tor-profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := strings.Replace(string(raw), `"mtu_policy":"manual","manual_mtu":1392`, `"mtu_policy":"auto","manual_mtu":0`, 1)
+	f.inputs, err = mobiletor.NewDesktopBridgeCapture(source, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, f.binary, f.directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, value := range map[string]string{"tor-profile.json": source, "tor-capture.json": f.inputs.JSON(), "torrc": f.inputs.Torrc(), "tor-defaults": f.inputs.Defaults(), "sing-box.json": f.inputs.Policy().Config()} {
+		if err := os.WriteFile(filepath.Join(f.directory, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	digests := f.inputs.Digests()
+	for name, value := range map[string]string{"SOURCE_SHA256": digests.SourceSHA256, "PROFILE_SHA256": digests.ProfileSHA256, "CAPTURE_SHA256": digests.CaptureSHA256,
+		"TORRC_SHA256": digests.TorrcSHA256, "DEFAULTS_SHA256": digests.DefaultsSHA256, "CONFIG_SHA256": digests.ConfigSHA256} {
+		f.environment["HOMEVPN_TOR_"+name] = value
+	}
+	return f
+}
+
+type desktopTorMeasuredCommandFixture struct {
+	*routerVPNTorCommandFixture
+	mtu      *routerVPNDesktopMTU
+	ctx      context.Context
+	cancel   context.CancelFunc
+	current  func() error
+	readback func() (*mobiletor.DesktopBridgeMTUReadback, error)
+}
+
+func (f *desktopTorMeasuredCommandFixture) DesktopMTU() (*routerVPNDesktopMTU, error) {
+	return f.mtu, nil
+}
+func (f *desktopTorMeasuredCommandFixture) FreshPathOwner() routerVPNDesktopPathOwner {
+	return &routerVPNTorFreshPath{owner: f, ctx: f.ctx, current: f.current}
+}
+func (f *desktopTorMeasuredCommandFixture) MTUReadback() (*mobiletor.DesktopBridgeMTUReadback, error) {
+	if f.readback != nil {
+		return f.readback()
+	}
+	return f.mtu.readback()
+}
+func (f *desktopTorMeasuredCommandFixture) Cancel() {
+	f.cancel()
+	f.mtu.invalidate()
+	f.routerVPNTorCommandFixture.Cancel()
+}
+func (f *desktopTorMeasuredCommandFixture) Close(ctx context.Context) error {
+	if err := f.mtu.close(); err != nil {
+		return err
+	}
+	return f.routerVPNTorCommandFixture.Close(ctx)
+}
+
+func desktopTorMeasuredCommand(t *testing.T, files *routerVPNTorFileFixture) (*desktopTorMeasuredCommandFixture, *desktopTorMTULeaseFixture) {
+	t.Helper()
+	mtu, lease, _ := desktopTorMTUFixtureForPolicy(t, files.inputs.Policy())
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	return &desktopTorMeasuredCommandFixture{routerVPNTorCommandFixture: routerVPNNewTorCommandFixture(t, files, false), mtu: mtu, ctx: ctx, cancel: cancel, current: func() error { return nil }}, lease
+}
+
+func desktopTorWaitMTUProof(t *testing.T, files *routerVPNTorFileFixture, matches func(mobiletor.DesktopBridgeProof) bool) mobiletor.DesktopBridgeProof {
+	t.Helper()
+	deadline := time.NewTimer(3 * time.Second)
+	defer deadline.Stop()
+	tick := time.NewTicker(10 * time.Millisecond)
+	defer tick.Stop()
+	for {
+		var proof mobiletor.DesktopBridgeProof
+		raw, err := os.ReadFile(filepath.Join(files.directory, "proof.json"))
+		if err == nil && json.Unmarshal(raw, &proof) == nil && matches(proof) {
+			return proof
+		}
+		select {
+		case <-deadline.C:
+			t.Fatal("Tor command did not publish its exact interface receipt", proof, err)
+		case <-tick.C:
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorMTUCommandPublishesExactRollbackAndFreshPath(t *testing.T) {
+	f := desktopTorAutoFiles(t)
+	owner, lease := desktopTorMeasuredCommand(t, f)
+	lease.blocked = make(chan struct{})
+	parent, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		done <- routerVPNRunTor(parent, f.directory, routerVPNTorTestSession, f.binary, f.getenv, func(_ context.Context, files *routerVPNTorFiles, _ *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			owner.current = files.current
+			return owner, nil
+		})
+	}()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(3 * time.Second):
+			t.Error("Tor MTU command did not drain")
+		}
+	})
+	initial := desktopTorWaitMTUProof(t, f, func(p mobiletor.DesktopBridgeProof) bool { return p.Healthy })
+	if initial.MTUReadback != nil {
+		t.Fatal("new connection adopted an old MTU request")
+	}
+	var idle routerVPNDesktopMTURecord
+	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "mtu-status.json"), &idle) != nil || idle.Generation != 0 || !idle.Requested || idle.MTUReadback != nil {
+		t.Fatal("native Tor command did not expose its actual unmeasured Auto state", idle)
+	}
+	request := routerVPNDesktopMTURequest{Schema: 1, Session: initial.SessionID, SourceSHA256: initial.SourceSHA256, ConfigSHA256: initial.ConfigSHA256,
+		Generation: 1, Request: strings.Repeat("d", 32), Force: true}
+	write := func(name string, value any) {
+		t.Helper()
+		raw, err := json.Marshal(value)
+		if err != nil || os.WriteFile(filepath.Join(f.directory, name), raw, 0600) != nil {
+			t.Fatal("failed to write captured MTU fixture request", err)
+		}
+	}
+	write("mtu-request.json", request)
+	select {
+	case <-lease.blocked:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Tor command did not dispatch its actual MTU controller")
+	}
+	working := desktopTorWaitMTUProof(t, f, func(p mobiletor.DesktopBridgeProof) bool {
+		return p.MTUReadback != nil && p.MTUReadback.Generation == 1 && p.MTUReadback.Revision == 1
+	})
+	if working.MTUReadback.RequestID != request.Request || working.InterfaceIndex != working.MTUReadback.InterfaceIndex || working.EffectiveMTU != working.MTUReadback.EffectiveMTU ||
+		working.Policy != initial.Policy || working.Proof != initial.Proof || working.SourceSHA256 != initial.SourceSHA256 || working.ConfigSHA256 != initial.ConfigSHA256 {
+		t.Fatal("Tor heartbeat changed immutable identity or mixed interface receipts", working)
+	}
+	write("mtu-cancel.json", routerVPNDesktopMTUControl{Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: 1, Request: request.Request})
+	restored := desktopTorWaitMTUProof(t, f, func(p mobiletor.DesktopBridgeProof) bool {
+		return p.MTUReadback != nil && p.MTUReadback.Revision == 2
+	})
+	var terminal routerVPNDesktopMTURecord
+	if json.Unmarshal(desktopExternalWaitFile(t, f.directory, "mtu-status.json"), &terminal) != nil || terminal.MTUReadback == nil ||
+		*terminal.MTUReadback != *restored.MTUReadback || !terminal.Status.Complete || terminal.Status.Running || terminal.Status.Measured || !terminal.Status.Restored {
+		t.Fatal("Tor rollback status and heartbeat did not agree", terminal, restored)
+	}
+	before := lease.proofs.Load()
+	path := routerVPNDesktopPathRequest{Schema: 1, Session: request.Session, SourceSHA256: request.SourceSHA256, ConfigSHA256: request.ConfigSHA256, Generation: 1, Request: strings.Repeat("e", 32)}
+	write("path-request.json", path)
+	verified := desktopPathRecord(t, f.directory, func(r routerVPNDesktopPathRecord) bool { return r.Generation == 1 && r.Complete })
+	if !verified.Verified || verified.Cancelled || verified.CheckedAt == 0 || lease.proofs.Load() <= before {
+		t.Fatal("Tor durable-save path reused a cached heartbeat", verified)
+	}
+	cancel()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("Tor measurement services did not join before stop acknowledgement")
+	}
+	routerVPNTorCheckStoppedFixture(t, f)
+}
+
+func TestRouterVPNDesktopTorMTUHeartbeatRejectsRegressedOrUnregisteredReadback(t *testing.T) {
+	f := desktopTorAutoFiles(t)
+	owner, _ := desktopTorMeasuredCommand(t, f)
+	initial := owner.proof
+	valid := mobiletor.DesktopBridgeMTUReadback{Generation: 1, RequestID: strings.Repeat("a", 32), Revision: 1,
+		InterfaceName: initial.InterfaceName, InterfaceIndex: initial.InterfaceIndex + 1, EffectiveMTU: 1400}
+	for _, mutate := range []func(*mobiletor.DesktopBridgeMTUReadback){
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.Generation = 0 },
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.RequestID = "wrong" },
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.InterfaceName = "another-tun" },
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.InterfaceIndex = 0 },
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.EffectiveMTU = 9001 },
+		func(r *mobiletor.DesktopBridgeMTUReadback) { r.Revision = 0 },
+	} {
+		bad := valid
+		mutate(&bad)
+		owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) { return &bad, nil }
+		receipt := initial
+		if routerVPNTorRefreshReadback(owner, &receipt) == nil || receipt.MTUReadback != nil || receipt != initial {
+			t.Fatal("malformed native interface receipt was adopted", bad, receipt)
+		}
+	}
+	owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) { return &valid, nil }
+	receipt := initial
+	if err := routerVPNTorRefreshReadback(owner, &receipt); err != nil {
+		t.Fatal(err)
+	}
+	retained := *receipt.MTUReadback
+	valid.InterfaceIndex++
+	if *receipt.MTUReadback != retained {
+		t.Fatal("published receipt retained a mutable caller pointer")
+	}
+	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+		t.Fatal("same interface revision authorized another native reader")
+	}
+	valid = retained
+	valid.Revision--
+	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+		t.Fatal("native interface revision regressed")
+	}
+	owner.readback = func() (*mobiletor.DesktopBridgeMTUReadback, error) {
+		return nil, errors.New("native readback unavailable")
+	}
+	if routerVPNTorRefreshReadback(owner, &receipt) == nil {
+		t.Fatal("missing native readback was fabricated as unchanged")
+	}
+}

@@ -14,10 +14,15 @@ import (
 	"github.com/sagernet/sing-box/adapter"
 	"github.com/sagernet/sing-box/adapter/inbound"
 	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 func desktopTorMTULeaseFixture(t *testing.T) (*desktopTorBoxFixture, *RouterVPNDesktopTor, *RouterVPNDesktopTorMTULease) {
+	return desktopTorMTULeaseFixtureWithTransition(t, func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error) { return func() {}, nil })
+}
+
+func desktopTorMTULeaseFixtureWithTransition(t *testing.T, handler func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)) (*desktopTorBoxFixture, *RouterVPNDesktopTor, *RouterVPNDesktopTorMTULease) {
 	t.Helper()
 	f := newDesktopTorBoxFixture(t, func(profile map[string]any) {
 		profile["mtu_policy"] = "auto"
@@ -36,6 +41,11 @@ func desktopTorMTULeaseFixture(t *testing.T) (*desktopTorBoxFixture, *RouterVPND
 	lease, err := owner.ClaimMTU()
 	if err != nil {
 		t.Fatal(err)
+	}
+	if handler != nil {
+		if err := lease.SetTransitionHandler(handler); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return f, owner, lease
 }
@@ -335,5 +345,332 @@ func TestRouterVPNDesktopTorMTUFixedPolicyAndForeignOwnerCannotChange(t *testing
 	}
 	if lease.Healthy() || owner.Healthy() {
 		t.Fatal("retired native outbound left the MTU lease usable")
+	}
+}
+
+func TestRouterVPNDesktopTorMTUCandidateActivityRetainsBothProofsAndSelectedResolver(t *testing.T) {
+	f, owner, lease := desktopTorMTULeaseFixture(t)
+	before := f.socks.dnsCalls.Load()
+	if _, err := lease.Resolve(context.Background(), hopmeasure.PublicHost); err == nil || f.socks.dnsCalls.Load() != before {
+		t.Fatal("MTU lookup escaped its native candidate activity")
+	}
+	ctx, release, err := lease.BeginMeasurement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	dns := &routerVPNDesktopTorDNS{owner: owner}
+	if _, end, err := dns.BeginMeasurement(context.Background()); err == nil {
+		end()
+		t.Fatal("DNS Retest overlapped a native MTU candidate")
+	}
+	dial := func(call context.Context, tag, address string) (net.Conn, error) {
+		if tag != mobiletor.ProfileOutboundTag || address != "check.torproject.org:443" {
+			return nil, errors.New("uncaptured proof destination")
+		}
+		return owner.proofDial(call, "tcp", address)
+	}
+	for i := 0; i < 2; i++ {
+		if err := lease.verify(ctx, dial, f.prover(t)); err != nil {
+			t.Fatal("nested fresh proof lost the candidate's native activity", err)
+		}
+		addresses, err := lease.Resolve(ctx, hopmeasure.PublicHost)
+		if err != nil || len(addresses) != 1 || addresses[0].String() != "93.184.216.34" {
+			t.Fatal("candidate DNS did not use its captured native selected resolver", addresses, err)
+		}
+	}
+	if f.socks.dnsCalls.Load() <= before+2 {
+		t.Fatal("candidate reused its old selected-DNS proof")
+	}
+	release()
+	_, end, err := dns.BeginMeasurement(context.Background())
+	if err != nil {
+		t.Fatal("completed candidate retained native activity during durable commit", err)
+	}
+	end()
+}
+
+func TestRouterVPNDesktopTorMTUCandidateReleaseWaitsForActualDescendantLifetime(t *testing.T) {
+	_, owner, lease := desktopTorMTULeaseFixture(t)
+	ctx, release, err := lease.BeginMeasurement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	child, releaseChild, err := lease.Lifetime(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer releaseChild()
+	release()
+	if child.Err() == nil {
+		t.Fatal("outer candidate cancellation did not reach its retained child")
+	}
+	dns := &routerVPNDesktopTorDNS{owner: owner}
+	if _, end, err := dns.BeginMeasurement(context.Background()); err == nil {
+		end()
+		t.Fatal("native activity was released while a late candidate socket still retained it")
+	}
+	if lease.RegisterOperation(1, strings.Repeat("a", 32)) == nil {
+		t.Fatal("a later MTU request replaced an undrained candidate lifetime")
+	}
+	releaseChild()
+	_, end, err := dns.BeginMeasurement(context.Background())
+	if err != nil || !owner.Healthy() {
+		t.Fatal("actual child drain did not release the retained activity", err)
+	}
+	end()
+	if err := lease.RegisterOperation(1, strings.Repeat("a", 32)); err != nil {
+		t.Fatal("drained candidate prevented a fresh request", err)
+	}
+}
+
+func TestRouterVPNDesktopTorMTUCandidateContextCannotCrossNativeOwners(t *testing.T) {
+	_, _, first := desktopTorMTULeaseFixture(t)
+	_, secondOwner, second := desktopTorMTULeaseFixture(t)
+	ctx, end, err := first.BeginMeasurement(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer end()
+	if _, release, err := second.BeginMeasurement(ctx); err == nil {
+		release()
+		t.Fatal("one Tor node's candidate authorized another node's native activity")
+	}
+	dns := &routerVPNDesktopTorDNS{owner: secondOwner}
+	_, release, err := dns.BeginMeasurement(context.Background())
+	if err != nil {
+		t.Fatal("foreign activity rejection damaged the replacement owner", err)
+	}
+	release()
+	end()
+	if _, release, err := first.BeginMeasurement(ctx); err == nil {
+		release()
+		t.Fatal("closed candidate activity was revived")
+	}
+}
+
+func TestRouterVPNDesktopTorMTUCancelCannotRetireConnectionControlExchange(t *testing.T) {
+	for _, stopOwner := range []bool{false, true} {
+		t.Run(map[bool]string{false: "cancel-operation", true: "stop-connection"}[stopOwner], func(t *testing.T) {
+			f, owner, lease := desktopTorMTULeaseFixture(t)
+			entered, release := make(chan context.Context, 1), make(chan struct{})
+			var once sync.Once
+			defer once.Do(func() { close(release) })
+			f.child.verify = func(ctx context.Context) (mobiletor.Bootstrap, error) {
+				entered <- ctx
+				<-release
+				return mobiletor.Bootstrap{Progress: 100, CircuitEstablished: true}, ctx.Err()
+			}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			var proved atomic.Int32
+			done := make(chan error, 1)
+			go func() {
+				done <- lease.verify(ctx, owner.proofDial, func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error) {
+					proved.Add(1)
+					return mobiletor.Proof{}, errors.New("canceled caller reached public proof")
+				})
+			}()
+			var control context.Context
+			select {
+			case control = <-entered:
+			case <-time.After(time.Second):
+				t.Fatal("native owning control verification did not begin")
+			}
+			if deadline, ok := control.Deadline(); !ok || time.Until(deadline) > 5*time.Second {
+				t.Fatal("connection-owned control verification lost its bounded deadline")
+			}
+			if stopOwner {
+				owner.Cancel()
+				if control.Err() == nil {
+					t.Fatal("connection shutdown did not cancel its own control exchange")
+				}
+				closing, stop := context.WithTimeout(context.Background(), 20*time.Millisecond)
+				err := owner.Close(closing)
+				stop()
+				if !errors.Is(err, context.DeadlineExceeded) {
+					t.Fatal("connection close skipped its retained control proof worker", err)
+				}
+			} else {
+				cancel()
+				if control.Err() != nil || !owner.Healthy() {
+					t.Fatal("canceling a measurement interrupted the connection-owned Tor control stream")
+				}
+			}
+			select {
+			case <-done:
+				t.Fatal("canceled path acknowledged an unjoined control exchange")
+			default:
+			}
+			once.Do(func() { close(release) })
+			select {
+			case err := <-done:
+				if err == nil || proved.Load() != 0 || !stopOwner && !owner.Healthy() {
+					t.Fatal("canceled path published proof or retired the healthy connection", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("control exchange did not drain after its real completion")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionPrecedesMutationAndCannotBeRebound(t *testing.T) {
+	entered := make(chan mobiletor.DesktopBridgeMTUTransition, 1)
+	admit := make(chan struct{})
+	var admitOnce sync.Once
+	releaseAdmission := func() { admitOnce.Do(func() { close(admit) }) }
+	defer releaseAdmission()
+	var first atomic.Bool
+	f, owner, lease := desktopTorMTULeaseFixtureWithTransition(t, func(ctx context.Context, value mobiletor.DesktopBridgeMTUTransition) (func(), error) {
+		if first.CompareAndSwap(false, true) {
+			entered <- value
+			select {
+			case <-admit:
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			}
+		}
+		return func() {}, nil
+	})
+	if lease.SetTransitionHandler(func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error) { return func() {}, nil }) == nil {
+		t.Fatal("another command replaced the captured transition writer")
+	}
+	if err := lease.RegisterOperation(1, strings.Repeat("c", 32)); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := lease.MTUReadback()
+	reader, _ := lease.Inbound()
+	var mutated atomic.Bool
+	done := make(chan error, 1)
+	go func() {
+		_, err := lease.changeMTU(context.Background(), reader, 1400, func(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+			mutated.Store(true)
+			return desktopTorMTUReplacement(f, owner, nil)(ctx, expected, mtu)
+		})
+		done <- err
+	}()
+	var admission mobiletor.DesktopBridgeMTUTransition
+	select {
+	case admission = <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("reader transition was not admitted")
+	}
+	meta := f.policy.Metadata()
+	if mutated.Load() || admission.Schema != 1 || admission.SessionID != meta.SessionID || admission.SourceSHA256 != meta.SourceSHA256 ||
+		admission.ConfigSHA256 != meta.ConfigSHA256 || admission.Generation != 1 || admission.RequestID != strings.Repeat("c", 32) ||
+		admission.TransitionID != 1 || admission.From != before || admission.TargetMTU != 1400 || admission.FromHeartbeatAt != 0 ||
+		admission.ExpiresAt-admission.StartedAt != mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds() {
+		releaseAdmission()
+		t.Fatal("native mutation preceded its exact bounded receipt", admission)
+	}
+	current := make(chan bool, 1)
+	go func() { current <- owner.LifetimeCurrent() }()
+	select {
+	case valid := <-current:
+		if !valid {
+			t.Fatal("healthy owned transition lost its lifetime")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("lifetime read blocked on native reader transition")
+	}
+	releaseAdmission()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("admitted native reader did not return")
+	}
+	after, err := lease.MTUReadback()
+	if err != nil || !mutated.Load() || after.Revision != 1 || after.EffectiveMTU != 1400 {
+		t.Fatal("admitted reader lacked its actual result", after, err)
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionRejectsMissingOrFailedPublication(t *testing.T) {
+	for _, missing := range []bool{true, false} {
+		t.Run(map[bool]string{true: "missing", false: "failed"}[missing], func(t *testing.T) {
+			var handler func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)
+			if !missing {
+				handler = func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error) {
+					return nil, errors.New("captured proof/receipt publication failed")
+				}
+			}
+			_, owner, lease := desktopTorMTULeaseFixtureWithTransition(t, handler)
+			if err := lease.RegisterOperation(1, strings.Repeat("d", 32)); err != nil {
+				t.Fatal(err)
+			}
+			reader, _ := lease.Inbound()
+			called := false
+			if _, err := lease.changeMTU(context.Background(), reader, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+				called = true
+				return reader, nil
+			}); err == nil || called || !owner.Healthy() {
+				t.Fatal("unpublished transition mutated the live reader or retired a preserved path")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorMTUTransitionDeadlineRetiresButJoinsNativeWorker(t *testing.T) {
+	entered, retained := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	release := func() { releaseOnce.Do(func() { close(retained) }) }
+	defer release()
+	_, owner, lease := desktopTorMTULeaseFixture(t)
+	if err := lease.RegisterOperation(1, strings.Repeat("e", 32)); err != nil {
+		t.Fatal(err)
+	}
+	reader, _ := lease.Inbound()
+	done := make(chan error, 1)
+	go func() {
+		_, err := lease.changeMTUBounded(context.Background(), reader, 1400, func(ctx context.Context, expected adapter.Inbound, _ int) (adapter.Inbound, error) {
+			close(entered)
+			<-ctx.Done()
+			<-retained // A deadline cannot manufacture an OS worker join.
+			return expected, ctx.Err()
+		}, 100*time.Millisecond)
+		done <- err
+	}()
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("native transaction did not enter")
+	}
+	select {
+	case <-owner.ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("expired transition did not retire the captured connection")
+	}
+	if owner.LifetimeCurrent() {
+		t.Fatal("expired transition kept a usable lifetime")
+	}
+	closing, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	if err := owner.Close(closing); err == nil {
+		cancel()
+		t.Fatal("transition expiry acknowledged an undrained native worker")
+	}
+	cancel()
+	select {
+	case <-done:
+		t.Fatal("native transaction released its retained worker early")
+	default:
+	}
+	release()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("expired transition returned success")
+		}
+	case <-time.After(time.Second):
+		t.Fatal("released native worker was not joined")
+	}
+	closing, cancel = context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	if err := owner.Close(closing); err != nil {
+		t.Fatal("drained native transition did not close", err)
 	}
 }

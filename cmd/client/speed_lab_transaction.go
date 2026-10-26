@@ -50,6 +50,8 @@ type speedLabTorRestore struct {
 	profileToken string
 	policyToken  string
 	network      string
+	mtu          int
+	automaticMTU bool
 }
 
 func speedLabTorPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
@@ -72,6 +74,16 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 	if err != nil {
 		return nil, err
 	}
+	mtu, err := captureDesktopMTURestore(launch)
+	if err != nil {
+		return nil, err
+	}
+	automatic := false
+	if owner := desktopMeasurementMTUSession(launch); owner != nil {
+		owner.mu.Lock()
+		automatic = owner.automatic
+		owner.mu.Unlock()
+	}
 	launch.workspaceMu.Lock()
 	defer launch.workspaceMu.Unlock()
 	if err := desktopExternalDirectoryCurrent(launch); err != nil {
@@ -93,10 +105,10 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 		return nil, errors.New("previous Tor private source differs from its captured bytes")
 	}
 	var captured common.RouterProfile
-	if json.Unmarshal(raw, &captured) != nil || liveMeasurementProfileToken(captured) != liveMeasurementProfileToken(policy) {
+	if json.Unmarshal(raw, &captured) != nil || desktopTorSourceIdentityToken(captured) != desktopTorSourceIdentityToken(policy) {
 		return nil, errors.New("previous Tor policy differs from the saved restore profile")
 	}
-	return &speedLabTorRestore{profileToken: identity.ProfileToken, policyToken: liveMeasurementProfileToken(captured), network: identity.Network}, nil
+	return &speedLabTorRestore{profileToken: identity.ProfileToken, policyToken: desktopTorSourceIdentityToken(captured), network: identity.Network, mtu: mtu, automaticMTU: automatic}, nil
 }
 
 func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.RouterProfile, error) {
@@ -119,10 +131,30 @@ func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.Router
 	if err != nil {
 		return common.RouterProfile{}, err
 	}
-	if saved.policyToken == "" || liveMeasurementProfileToken(policy) != saved.policyToken {
+	if saved.policyToken == "" || desktopTorSourceIdentityToken(policy) != saved.policyToken {
 		return common.RouterProfile{}, errors.New("previous Tor restore would substitute its proved device or DNS policy")
 	}
 	return profile, nil
+}
+
+func (a *app) restoreSpeedLabTorMTU(plan speedLabRestorePlan) error {
+	saved := plan.tor
+	raw, exists := desktopNodeOwners.Load(a)
+	launch, ok := raw.(*desktopNodeLaunch)
+	if saved == nil || saved.mtu < 1280 || saved.mtu > 9000 || !exists || !ok || launch == nil || launch.tor == nil || launch.profileID != plan.profile.ID || launch.tor.network != saved.network {
+		return errors.New("restored Tor MTU lost its captured node or physical path")
+	}
+	if err := a.desktopTorCurrent(launch); err != nil {
+		return err
+	}
+	owner := desktopMeasurementMTUSession(launch)
+	if owner == nil {
+		return errors.New("restored Tor connection has no captured MTU owner")
+	}
+	owner.mu.Lock()
+	owner.restoreMTU, owner.automatic = saved.mtu, saved.automaticMTU
+	owner.mu.Unlock()
+	return a.restoreDesktopCapturedMTU(a.connectionOperationContextOrBackground(), launch)
 }
 
 type speedLabExternalRestore struct {
@@ -622,6 +654,9 @@ func (a *app) speedLabRestartPlan(plan speedLabRestorePlan) error {
 		profile, err = a.speedLabTorRestoreProfile(plan)
 		if err == nil {
 			_, err = a.startSpeedLabTorPath(plan.request, profile)
+		}
+		if err == nil {
+			err = a.restoreSpeedLabTorMTU(plan)
 		}
 	case plan.external != nil:
 		_, err = a.startSpeedLabExternalPathCaptured(plan.request, plan.external)

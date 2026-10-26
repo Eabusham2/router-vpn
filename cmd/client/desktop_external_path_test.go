@@ -131,7 +131,7 @@ func TestDesktopExternalFreshPathDrainUsesOnlyCapturedDirectoryAndCloseAck(t *te
 	if err := os.Chmod(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	owner := &desktopExternalRuntime{session: strings.Repeat("a", 32), expected: mobilemultihop.ExternalProofResult{SourceSHA256: strings.Repeat("b", 64), ConfigSHA256: strings.Repeat("c", 64)}}
+	owner := &desktopExternalRuntime{session: strings.Repeat("a", 32), expected: mobilemultihop.ExternalProofResult{ExitID: "captured-native-exit", SourceSHA256: strings.Repeat("b", 64), ConfigSHA256: strings.Repeat("c", 64)}}
 	launch := &desktopNodeLaunch{external: owner}
 	if err := captureDesktopRuntimeDirectory(launch, directory); err != nil {
 		t.Fatal(err)

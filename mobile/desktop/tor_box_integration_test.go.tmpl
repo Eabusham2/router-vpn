@@ -197,10 +197,11 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 		s.dnsCalls.Add(1)
 		answer := new(mDNS.Msg)
 		answer.SetReply(query)
-		if s.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA {
+		if s.badDNS.Load() || len(query.Question) != 1 ||
+			query.Question[0].Name != "example.com." && query.Question[0].Name != "check.torproject.org." && query.Question[0].Name != "speed.cloudflare.com." || query.Question[0].Qtype != mDNS.TypeA {
 			answer.Rcode = mDNS.RcodeServerFailure
 		} else {
-			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: query.Question[0].Name, Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
 		}
 		if err := peer.WriteMsg(answer); err != nil {
 			return err

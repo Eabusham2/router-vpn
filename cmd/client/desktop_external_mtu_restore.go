@@ -15,6 +15,9 @@ func captureDesktopMTURestore(launch *desktopNodeLaunch) (int, error) {
 	if record.Status.Running || record.WaitingCommit || record.Status.EffectiveMTU < 1280 || record.Status.EffectiveMTU > 9000 {
 		return 0, errors.New("native MTU must finish its exact rollback before a restoration snapshot")
 	}
+	if !desktopTorMTUCaptureCurrent(launch, record) {
+		return 0, errors.New("Tor MTU restoration snapshot differs from its retained native reader")
+	}
 	return record.Status.EffectiveMTU, nil
 }
 
@@ -22,7 +25,7 @@ func (a *app) waitDesktopMTUIdle(ctx context.Context, launch *desktopNodeLaunch)
 	ticker := time.NewTicker(25 * time.Millisecond)
 	defer ticker.Stop()
 	for {
-		if _, err := a.readDesktopExternalProof(launch); err != nil {
+		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return desktopMTURecord{}, err
 		}
 		record, err := readDesktopMTURecord(launch)
@@ -47,13 +50,21 @@ func (a *app) waitDesktopMTUIdle(ctx context.Context, launch *desktopNodeLaunch)
 // and MTU measurement hold. The original saved Auto policy remains untouched;
 // one captured value is re-proved through the restored winner, never Compare.
 func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopNodeLaunch) error {
-	launch.external.mu.Lock()
-	owner := launch.external.mtu
-	launch.external.mu.Unlock()
+	identity, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil {
+		return err
+	}
+	owner := desktopMeasurementMTUSession(launch)
 	if owner == nil || owner.restoreMTU == 0 {
 		return nil
 	}
-	ctx, cancel := context.WithTimeout(parent, 40*time.Second)
+	restoreBudget := 40 * time.Second
+	if launch.tor != nil {
+		// The native Tor operation permits 60s for its fresh-path restore and
+		// up to 30s for rollback. Ordinary external timings remain unchanged.
+		restoreBudget = 90 * time.Second
+	}
+	ctx, cancel := context.WithTimeout(parent, restoreBudget)
 	defer cancel()
 	identifier, err := randomHex(16)
 	if err != nil {
@@ -67,7 +78,7 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 	owner.generation = initial.Generation + 1
 	generation, target := owner.generation, owner.restoreMTU
 	owner.mu.Unlock()
-	request := desktopMTURequest{Schema: 1, Session: launch.external.session, SourceSHA256: launch.external.expected.SourceSHA256, ConfigSHA256: launch.external.expected.ConfigSHA256, Generation: generation, Request: identifier, Force: true, RestoreMTU: target}
+	request := desktopMTURequest{Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: true, RestoreMTU: target}
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	issued, completed := false, false
@@ -80,7 +91,7 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		if _, err := a.readDesktopExternalProof(launch); err != nil {
+		if err := a.waitDesktopMeasurementProof(ctx, launch); err != nil {
 			return err
 		}
 		record, err := readDesktopMTURecord(launch)
@@ -93,6 +104,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 			}
 			if record.Status.EffectiveMTU == target {
 				if err := a.verifyDesktopExternalCurrentPath(ctx, launch); err != nil {
+					return err
+				}
+				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 					return err
 				}
 				owner.mu.Lock()
@@ -114,6 +128,9 @@ func (a *app) restoreDesktopCapturedMTU(parent context.Context, launch *desktopN
 				return errors.New("captured live MTU failed its fresh restored-path verification")
 			}
 			if err := a.verifyDesktopExternalCurrentPath(ctx, launch); err != nil {
+				return err
+			}
+			if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 				return err
 			}
 			if ctx.Err() != nil {

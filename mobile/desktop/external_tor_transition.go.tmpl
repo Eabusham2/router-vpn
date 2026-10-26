@@ -1,0 +1,184 @@
+package main
+
+import (
+	"context"
+	"os"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Each service has one writer and disjoint fixed output basenames. Share the
+// captured root handle, but never share a mutable output-identity map with the
+// command's proof/progress writer. All workers join before that handle closes.
+func routerVPNTorOutputFiles(files *routerVPNTorFiles) *routerVPNExternalFiles {
+	return &routerVPNExternalFiles{root: files.root, owned: map[string]os.FileInfo{}}
+}
+
+type routerVPNTorMTUTransitionRequest struct {
+	context  context.Context
+	receipt  mobiletor.DesktopBridgeMTUTransition
+	result   chan error
+	finished <-chan struct{}
+}
+
+func (r routerVPNTorMTUTransitionRequest) respond(err error) {
+	if r.result != nil {
+		select {
+		case r.result <- err:
+		default:
+		}
+	}
+}
+
+type routerVPNTorTransitionOwner interface {
+	MTUTransitions() <-chan routerVPNTorMTUTransitionRequest
+	LifetimeCurrent() bool
+}
+
+func (n *routerVPNTorNative) MTUTransitions() <-chan routerVPNTorMTUTransitionRequest {
+	return n.transitions
+}
+
+func (n *routerVPNTorNative) LifetimeCurrent() bool {
+	if n == nil || n.ctx.Err() != nil || n.process.exited() {
+		return false
+	}
+	n.mu.Lock()
+	tor, closed := n.tor, n.boxClosed
+	n.mu.Unlock()
+	return !closed && tor != nil && tor.LifetimeCurrent()
+}
+
+func (n *routerVPNTorNative) admitMTUTransition(ctx context.Context, receipt mobiletor.DesktopBridgeMTUTransition) (finish func(), failure error) {
+	if ctx == nil || ctx.Err() != nil || n == nil || n.ctx.Err() != nil || n.transitions == nil {
+		return nil, routerVPNTorFailure
+	}
+	completed := make(chan struct{})
+	var once sync.Once
+	finish = func() { once.Do(func() { close(completed) }) }
+	defer func() {
+		if failure != nil {
+			finish()
+		}
+	}()
+	request := routerVPNTorMTUTransitionRequest{context: ctx, receipt: receipt, result: make(chan error, 1), finished: completed}
+	select {
+	case n.transitions <- request:
+	case <-ctx.Done():
+		return finish, routerVPNTorFailure
+	case <-n.ctx.Done():
+		return finish, routerVPNTorFailure
+	}
+	select {
+	case err := <-request.result:
+		if err != nil || ctx.Err() != nil || n.ctx.Err() != nil {
+			return finish, routerVPNTorFailure
+		}
+		return finish, nil
+	case <-ctx.Done():
+		return finish, routerVPNTorFailure
+	case <-n.ctx.Done():
+		return finish, routerVPNTorFailure
+	}
+}
+
+// Consecutive admissions use distinct real clock milliseconds. Repeated
+// receipts cannot extend an old base proof by changing only transition_id.
+func routerVPNTorNextHeartbeat(parent, operation context.Context, previous int64) (time.Time, error) {
+	if parent == nil || operation == nil || parent.Err() != nil || operation.Err() != nil {
+		return time.Time{}, routerVPNTorFailure
+	}
+	now := time.Now()
+	if now.UnixMilli() > previous {
+		return now, nil
+	}
+	if previous > now.Add(time.Second).UnixMilli() {
+		return time.Time{}, routerVPNTorFailure
+	}
+	timer := time.NewTimer(time.Until(time.UnixMilli(previous + 1)))
+	defer timer.Stop()
+	select {
+	case <-timer.C:
+		now = time.Now()
+		if now.UnixMilli() <= previous || parent.Err() != nil || operation.Err() != nil {
+			return time.Time{}, routerVPNTorFailure
+		}
+		return now, nil
+	case <-parent.Done():
+		return time.Time{}, routerVPNTorFailure
+	case <-operation.Done():
+		return time.Time{}, routerVPNTorFailure
+	}
+}
+
+func routerVPNTorLifetimeCurrent(owner routerVPNTorOwner) bool {
+	if native, ok := owner.(routerVPNTorTransitionOwner); ok {
+		return native.LifetimeCurrent()
+	}
+	return owner.Healthy() // Bounded fixture owners have no native reader lock.
+}
+
+// This callback comes only from the exact captured native lease after fresh
+// control and reader verification, while it still holds that unchanged reader.
+// Publish the actual base receipt first; successful acknowledgement is the only
+// permission for the worker to begin replacement. The main loop is the sole
+// writer of these outputs, including during slow native reader construction.
+func routerVPNTorAdmitTransition(files *routerVPNTorFiles, request routerVPNTorMTUTransitionRequest,
+	proof mobiletor.DesktopBridgeProof, previousID uint64, now time.Time) (mobiletor.DesktopBridgeProof, mobiletor.DesktopBridgeMTUTransition, error) {
+	value := request.receipt
+	meta := files.inputs.Policy().Metadata()
+	if request.context == nil || request.context.Err() != nil || request.result == nil || request.finished == nil || files.current() != nil ||
+		meta.MTUPolicy != "auto" || value.Schema != 1 || value.SessionID != meta.SessionID || value.SourceSHA256 != meta.SourceSHA256 || value.ConfigSHA256 != meta.ConfigSHA256 ||
+		value.Generation == 0 || !routerVPNExternalSession.MatchString(value.RequestID) || value.TransitionID <= previousID ||
+		value.From.Generation != value.Generation || value.From.RequestID != value.RequestID || value.TargetMTU < 1280 || value.TargetMTU > 9000 ||
+		value.StartedAt < now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() || value.StartedAt > now.Add(time.Second).UnixMilli() ||
+		value.ExpiresAt <= now.UnixMilli() || value.ExpiresAt <= value.StartedAt || value.ExpiresAt-value.StartedAt > mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds() ||
+		value.FromHeartbeatAt != 0 || now.UnixMilli() <= proof.HeartbeatAt || routerVPNTorAdoptReadback(&proof, &value.From) != nil {
+		return proof, value, routerVPNTorFailure
+	}
+	proof.HeartbeatAt = now.UnixMilli()
+	value.FromHeartbeatAt = proof.HeartbeatAt
+	if request.context.Err() != nil || files.publish("proof.json", proof) != nil ||
+		files.publish("mtu-transition.json", value) != nil || request.context.Err() != nil || files.current() != nil {
+		return proof, value, routerVPNTorFailure
+	}
+	return proof, value, nil
+}
+
+func routerVPNTorTransitionKeepsAlive(value *mobiletor.DesktopBridgeMTUTransition, proof mobiletor.DesktopBridgeProof, now time.Time) bool {
+	return value != nil && value.ExpiresAt > now.UnixMilli() && value.ExpiresAt-value.StartedAt > 0 &&
+		value.ExpiresAt-value.StartedAt <= mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds() &&
+		proof.HeartbeatAt == value.FromHeartbeatAt && proof.MTUReadback != nil && *proof.MTUReadback == value.From
+}
+
+type routerVPNTorMaintenance struct {
+	version   uint64
+	proof     mobiletor.DesktopBridgeProof
+	heartbeat bool
+	err       error
+}
+
+// Exactly one retained worker advances the measurement mailboxes and checks
+// the live reader. Stop, transition admission, progress and proof publication
+// stay in the command loop. Teardown joins this worker before any service or
+// private output ownership is released.
+func routerVPNTorMaintain(ctx context.Context, owner routerVPNTorOwner, files *routerVPNTorFiles,
+	dns *routerVPNDesktopDNSFiles, mtu *routerVPNDesktopMTUFiles, path *routerVPNDesktopPathFiles,
+	result routerVPNTorMaintenance) routerVPNTorMaintenance {
+	if ctx.Err() != nil || !owner.Healthy() || files.current() != nil ||
+		mtu != nil && mtu.tick() != nil || path != nil && path.tick() != nil || dns.tick() != nil {
+		result.err = routerVPNTorFailure
+		return result
+	}
+	if result.heartbeat {
+		verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)
+		err := owner.VerifyCurrentPath(verify)
+		cancel()
+		if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil {
+			result.err = routerVPNTorFailure
+		}
+	}
+	return result
+}

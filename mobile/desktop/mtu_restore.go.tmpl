@@ -24,7 +24,8 @@ func (e *routerVPNDesktopMTUEngine) Identity() string {
 	return fmt.Sprintf("%s:%s:%s:%d", current.Session, current.Path, current.Interface, current.MTU)
 }
 func (e *routerVPNDesktopMTUEngine) Dial(ctx context.Context, tag, address string) (net.Conn, error) {
-	if tag != "custom-exit" || e.Identity() == "" {
+	expectedTag, _, err := e.owner.verificationTarget()
+	if err != nil || tag != expectedTag || e.Identity() == "" {
 		return nil, routerVPNExternalFailure
 	}
 	return e.owner.DialThroughTunnel(ctx, e.state, "tcp", address)
@@ -41,30 +42,20 @@ func (m *routerVPNDesktopMTU) restoreCaptured(ctx context.Context, request route
 	current, err := m.owner.ChangeMTU(ctx, before, request.RestoreMTU)
 	status := mobilemtu.Status{Request: request.Request, Complete: true, OriginalMTU: before.MTU, EffectiveMTU: before.MTU, Phase: "failed", Source: "unmeasured", Candidates: []mobilemtu.Candidate{}}
 	if err == nil {
-		err = m.owner.VerifyExternal(ctx, current)
-	}
-	if err == nil {
-		var authority struct {
-			ID string `json:"id"`
+		var result hopmeasure.Result
+		result, err = m.measureCaptured(ctx, current)
+		if err == nil {
+			status.Candidates = []mobilemtu.Candidate{{MTU: request.RestoreMTU, Working: true, LatencyKind: "https-response", MedianRTT: result.Idle.Median, Download: result.Download, Upload: result.Upload}}
 		}
-		if json.Unmarshal([]byte(m.owner.lease.Authority()), &authority) != nil || authority.ID == "" {
-			err = routerVPNExternalFailure
-		} else {
-			result, measureErr := hopmeasure.MeasurePath(ctx, &routerVPNDesktopMTUEngine{owner: m.owner, state: current}, hopmeasure.Hop{ID: authority.ID, Role: "exit", Tag: "custom-exit", Kind: "public-path", Label: "Restored captured system TUN MTU"}, 256<<10)
-			if measureErr != nil || !result.Ready || result.Idle == nil || result.Download == nil || result.Upload == nil {
-				err = routerVPNExternalFailure
-			} else {
-				status.Candidates = []mobilemtu.Candidate{{MTU: request.RestoreMTU, Working: true, LatencyKind: "https-response", MedianRTT: result.Idle.Median, Download: result.Download, Upload: result.Upload}}
-			}
-		}
-	}
-	if err == nil {
-		err = m.owner.VerifyExternal(ctx, current)
 	}
 	if err == nil && ctx.Err() == nil {
 		status.Phase, status.Source, status.EffectiveMTU, status.Restored = "restored-captured-mtu", "restored-captured-system-tun", request.RestoreMTU, true
 	} else {
-		rollback, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+		rollbackBudget := 8 * time.Second
+		if m.tor {
+			rollbackBudget = 30 * time.Second
+		}
+		rollback, cancel := context.WithTimeout(context.Background(), rollbackBudget)
 		actual, captureErr := m.owner.Capture()
 		if captureErr == nil && actual.Session == before.Session && actual.Path == before.Path {
 			state, changeErr := m.owner.ChangeMTU(rollback, actual, before.MTU)
@@ -97,6 +88,30 @@ func (m *routerVPNDesktopMTU) restoreCaptured(ctx context.Context, request route
 		}
 	}
 	m.restored = &status
+}
+
+func (m *routerVPNDesktopMTU) measureCaptured(parent context.Context, current mobilemtu.State) (hopmeasure.Result, error) {
+	ctx, release, err := m.owner.BeginExternalMeasurement(parent, current)
+	if err != nil {
+		return hopmeasure.Result{}, err
+	}
+	defer release()
+	if m.owner.VerifyExternal(ctx, current) != nil {
+		return hopmeasure.Result{}, routerVPNExternalFailure
+	}
+	var authority struct {
+		ID string `json:"id"`
+	}
+	tag, _, err := m.owner.verificationTarget()
+	if err != nil || json.Unmarshal([]byte(m.owner.lease.Authority()), &authority) != nil || authority.ID == "" {
+		return hopmeasure.Result{}, routerVPNExternalFailure
+	}
+	result, err := hopmeasure.MeasurePath(ctx, &routerVPNDesktopMTUEngine{owner: m.owner, state: current}, hopmeasure.Hop{ID: authority.ID, Role: "exit", Tag: tag, Kind: "public-path", Label: "Restored captured system TUN MTU"}, 256<<10)
+	if err != nil || !result.Ready || result.Idle == nil || result.Download == nil || result.Upload == nil ||
+		m.owner.VerifyExternal(ctx, current) != nil || ctx.Err() != nil {
+		return hopmeasure.Result{}, routerVPNExternalFailure
+	}
+	return result, nil
 }
 
 // Recreate only the optimizer's current readback config. The original source,
@@ -132,6 +147,9 @@ func (m *routerVPNDesktopMTU) recapture() (*mobilemtu.Controller, error) {
 	config, err := plan.Config(state.MTU)
 	if err != nil {
 		return nil, err
+	}
+	if m.tor {
+		return mobilemtu.NewTor(m.owner, config, m.owner.lease.Authority(), m.cache)
 	}
 	return mobilemtu.NewExternal(m.owner, config, m.owner.lease.Authority(), m.cache)
 }

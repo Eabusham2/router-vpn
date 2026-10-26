@@ -79,10 +79,10 @@ func readMTUViewRequest(w http.ResponseWriter, r *http.Request) (mtuViewRequest,
 
 func currentMTUViewIdentity(a *app) (mtuViewIdentity, error) {
 	if launch := desktopExternalMTULaunch(a); launch != nil {
-		if _, err := a.readDesktopExternalProof(launch); err != nil {
+		if err := a.desktopMeasurementCurrentProof(launch); err != nil && !errors.Is(err, errDesktopTorMTUTransitionPending) {
 			return mtuViewIdentity{}, err
 		}
-		return mtuViewIdentity{Session: launch.external.session, Profile: launch.external.expected.ExitID, Native: true}, nil
+		return desktopMeasurementViewIdentity(launch)
 	}
 	snapshot, err := captureMTURetestSnapshot(a)
 	if err != nil {
@@ -293,10 +293,8 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		// A later automatic measurement can start without creating a manual
 		// view record. A retained completed view must not conceal that owner.
 		if !running {
-			if launch := desktopExternalMTULaunch(a); launch != nil && launch.external.session == identity.Session {
-				launch.external.mu.Lock()
-				owner := launch.external.mtu
-				launch.external.mu.Unlock()
+			if launch := desktopExternalMTULaunch(a); launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
+				owner := desktopMeasurementMTUSession(launch)
 				if owner != nil {
 					owner.mu.Lock()
 					active := owner.active
@@ -319,7 +317,7 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		operation.mu.Unlock()
 		waiting := false
 		if status.Running && identity.Native {
-			if launch := desktopExternalMTULaunch(a); launch != nil && launch.external.session == identity.Session {
+			if launch := desktopExternalMTULaunch(a); launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
 				if record, err := readDesktopMTURecord(launch); err == nil && record.Status.Request == operation.request {
 					pendingPhase := status.Phase
 					status, waiting = record.Status, record.WaitingCommit
@@ -333,15 +331,13 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		writeMTUViewStatus(w, identity, true, waiting, status)
 		return
 	}
-	if launch := desktopExternalMTULaunch(a); identity.Native && launch != nil && launch.external.session == identity.Session {
+	if launch := desktopExternalMTULaunch(a); identity.Native && launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
 		record, err := readDesktopMTURecord(launch)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)
 			return
 		}
-		launch.external.mu.Lock()
-		owner := launch.external.mtu
-		launch.external.mu.Unlock()
+		owner := desktopMeasurementMTUSession(launch)
 		if owner != nil {
 			owner.mu.Lock()
 			active := owner.active

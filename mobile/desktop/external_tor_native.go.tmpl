@@ -34,10 +34,12 @@ type routerVPNTorNative struct {
 	process         *routerVPNTorProcess
 	box             *box.Box
 	tor             *box.RouterVPNDesktopTor
+	mtu             *routerVPNDesktopMTU
 	partial         []io.Closer
 	boxClosed       bool
 	boxCloseFailure error
 	stage           atomic.Value
+	transitions     chan routerVPNTorMTUTransitionRequest
 }
 
 func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary *routerVPNTorBinary) (routerVPNTorOwner, error) {
@@ -61,7 +63,7 @@ func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary
 		cancel()
 		return nil, routerVPNTorFailure
 	}
-	n := &routerVPNTorNative{ctx: owned, cancel: cancel, files: files, process: process}
+	n := &routerVPNTorNative{ctx: owned, cancel: cancel, files: files, process: process, transitions: make(chan routerVPNTorMTUTransitionRequest)}
 	n.stage.Store("starting")
 	n.box, err = box.New(box.Options{Context: owned, Options: options})
 	if err != nil {
@@ -134,8 +136,11 @@ func (n *routerVPNTorNative) Cancel() {
 	}
 	n.cancel()
 	n.mu.Lock()
-	tor := n.tor
+	tor, mtu := n.tor, n.mtu
 	n.mu.Unlock()
+	if mtu != nil {
+		mtu.invalidate()
+	}
 	if tor != nil {
 		tor.Cancel()
 	}
@@ -195,6 +200,11 @@ func (n *routerVPNTorNative) Close(ctx context.Context) error {
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
+	if n.mtu != nil {
+		if err := n.mtu.close(); err != nil {
+			return routerVPNTorFailure
+		}
+	}
 	if n.tor != nil {
 		if err := n.tor.Close(ctx); err != nil {
 			return routerVPNTorFailure

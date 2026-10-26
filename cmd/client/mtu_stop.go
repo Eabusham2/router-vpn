@@ -41,15 +41,15 @@ func (a *app) holdMTUForStopWith(hold func(context.Context) (func(), error)) (fu
 	}
 	raw, exists := desktopNodeOwners.Load(a)
 	launch, native := raw.(*desktopNodeLaunch)
-	if !exists || !native || launch == nil || launch.command != command || launch.command.Process == nil || launch.external == nil && launch.mtuSession == "" {
+	if !exists || !native || launch == nil || launch.command != command || launch.command.Process == nil || launch.external == nil && launch.tor == nil && launch.mtuSession == "" {
 		return nil, command, holdErr
 	}
 	// An unconfirmed commit can outlive its revert deadline. Stop this exact
 	// child, with protection retained, so its checked TUN retirement can close
 	// the MTU owner. Process death alone cannot satisfy either stop helper.
 	var retireErr error
-	if launch.external != nil {
-		retireErr = prepareDesktopExternalStop(a, command)
+	if launch.external != nil || launch.tor != nil {
+		retireErr = a.prepareDesktopMeasurementStop(launch)
 	} else {
 		retireErr = prepareDesktopNodeStop(a, command)
 	}

@@ -106,7 +106,7 @@ func TestDesktopTorStagingCapturesAllTransportFamiliesAndDisabledInputs(t *testi
 			if launch.tor.expected.DNS.Address != "9.9.9.9" || launch.tor.expected.DNS.Port != 5353 || launch.tor.expected.DNS.Transport != "tcp" {
 				t.Fatal("staging substituted the selected DNS")
 			}
-			if launch.tor.profileToken != asyncMeasurementProfileToken(a.profiles.Profiles[0]) {
+			if launch.tor.profileToken != desktopTorSourceIdentityToken(a.profiles.Profiles[0]) {
 				t.Fatal("staging changed the stored private profile identity")
 			}
 			if err := desktopTorPreparedOwner(t, a, prepared).cleanup(); err != nil {

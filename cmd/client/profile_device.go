@@ -119,7 +119,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 	}
 	note := "Save while disconnected. Fixed MTU is a requested interface value, not a measured path result. Effective MTU is historical; use Retest on the connected path. This edit preserves independent entry policy, DNS, credentials and graph selection."
 	if protocol == "tor-bridge" {
-		note = "Save while disconnected. Tor Auto and Default currently use a 1280-byte virtual interface; Fixed changes the interface value only. Interface readback and historical MTU are not fresh path measurements. Tor MTU optimization and Retest are not yet implemented. DNS, credentials and graph selection are preserved."
+		note = "Save while disconnected. Tor Auto starts with a 1280-byte virtual interface, then compares HTTPS response time and download/upload performance at tested MTUs. Retest repeats those measurements with fresh Tor and DNS proof; Cancel waits for the previous interface value to be restored. Default keeps 1280; Fixed applies your interface value. Interface readback is not a UDP path-MTU measurement. DNS, credentials and graph selection are preserved."
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")

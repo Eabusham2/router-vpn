@@ -57,9 +57,7 @@ func cancelCapturedMTU(a *app) {
 		}
 	}
 	if launch := desktopExternalMTULaunch(a); launch != nil {
-		launch.external.mu.Lock()
-		owner := launch.external.mtu
-		launch.external.mu.Unlock()
+		owner := desktopMeasurementMTUSession(launch)
 		if owner != nil {
 			owner.mu.Lock()
 			if owner.cancel != nil {
@@ -114,7 +112,11 @@ func (a *app) holdCapturedMTU(ctx context.Context) (func(), error) {
 	}
 	if first {
 		lock := mtuRetestLockFor(a)
-		deadline := time.NewTimer(15 * time.Second)
+		drainBudget := 15 * time.Second
+		if launch := desktopExternalMTULaunch(a); launch != nil && launch.tor != nil {
+			drainBudget = 45 * time.Second // Tor's checked late-cancel rollback is bounded to 30s.
+		}
+		deadline := time.NewTimer(drainBudget)
 		defer deadline.Stop()
 		ticker := time.NewTicker(25 * time.Millisecond)
 		defer ticker.Stop()

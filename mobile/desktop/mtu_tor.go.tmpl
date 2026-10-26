@@ -1,0 +1,211 @@
+package main
+
+import (
+	"context"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type routerVPNDesktopTorMTULease interface {
+	routerVPNDesktopMTULease
+	routerVPNDesktopMTUReadbackLease
+	routerVPNDesktopMTUMeasurementLease
+	RegisterOperation(uint64, string) error
+	VerificationTarget() (string, string)
+}
+
+var _ routerVPNDesktopTorMTULease = (*box.RouterVPNDesktopTorMTULease)(nil)
+
+type routerVPNTorMeasurementOwner interface {
+	routerVPNExternalMTUProvider
+	MTUReadback() (*mobiletor.DesktopBridgeMTUReadback, error)
+	FreshPathOwner() routerVPNDesktopPathOwner
+}
+
+var _ routerVPNTorMeasurementOwner = (*routerVPNTorNative)(nil)
+
+func routerVPNTorRefreshReadback(owner routerVPNTorOwner, receipt *mobiletor.DesktopBridgeProof) error {
+	captured, ok := owner.(routerVPNTorMeasurementOwner)
+	if !ok {
+		if receipt.MTUReadback != nil {
+			return routerVPNTorFailure
+		}
+		return nil // Fixture owners do not claim a real OS TUN.
+	}
+	readback, err := captured.MTUReadback()
+	if err != nil {
+		return routerVPNTorFailure
+	}
+	return routerVPNTorAdoptReadback(receipt, readback)
+}
+
+func routerVPNTorAdoptReadback(receipt *mobiletor.DesktopBridgeProof, readback *mobiletor.DesktopBridgeMTUReadback) error {
+	if readback == nil {
+		if receipt.MTUReadback != nil {
+			return routerVPNTorFailure
+		}
+		return nil
+	}
+	if readback.Generation == 0 || !routerVPNExternalSession.MatchString(readback.RequestID) || readback.InterfaceName != receipt.InterfaceName ||
+		readback.InterfaceIndex < 1 || readback.EffectiveMTU < 1280 || readback.EffectiveMTU > 9000 {
+		return routerVPNTorFailure
+	}
+	if previous := receipt.MTUReadback; previous != nil {
+		if readback.Revision < previous.Revision || readback.Generation < previous.Generation ||
+			readback.Generation == previous.Generation && readback.RequestID != previous.RequestID ||
+			readback.Revision == previous.Revision && (readback.InterfaceIndex != previous.InterfaceIndex || readback.EffectiveMTU != previous.EffectiveMTU) {
+			return routerVPNTorFailure
+		}
+	} else if readback.Revision == 0 && (readback.InterfaceIndex != receipt.InterfaceIndex || readback.EffectiveMTU != receipt.EffectiveMTU) {
+		return routerVPNTorFailure
+	}
+	copy := *readback
+	receipt.MTUReadback = &copy
+	receipt.InterfaceName, receipt.InterfaceIndex, receipt.EffectiveMTU = copy.InterfaceName, copy.InterfaceIndex, copy.EffectiveMTU
+	return nil
+}
+
+func newRouterVPNDesktopTorMTU(lease routerVPNDesktopMTULease, session string, physical func() string) (*routerVPNDesktopMTU, error) {
+	if _, ok := lease.(routerVPNDesktopTorMTULease); !ok {
+		return nil, routerVPNExternalFailure
+	}
+	owner, err := newRouterVPNDesktopMTUOwner(lease, session, physical)
+	if err != nil {
+		return nil, err
+	}
+	cache := &routerVPNDesktopMTUCache{}
+	controller, err := mobilemtu.NewTor(owner, lease.Config(), lease.Authority(), cache)
+	if err != nil {
+		owner.invalid.Store(true)
+		return nil, routerVPNExternalFailure
+	}
+	return &routerVPNDesktopMTU{owner: owner, controller: controller, cache: cache, tor: true}, nil
+}
+
+func (n *routerVPNTorNative) DesktopMTU() (*routerVPNDesktopMTU, error) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.mtu != nil {
+		return n.mtu, nil
+	}
+	if n.ctx.Err() != nil || n.process.exited() || n.tor == nil || !n.tor.Healthy() || n.box == nil || n.boxClosed {
+		return nil, routerVPNTorFailure
+	}
+	lease, err := n.tor.ClaimMTU()
+	if err != nil {
+		return nil, routerVPNTorFailure
+	}
+	if err := lease.SetTransitionHandler(n.admitMTUTransition); err != nil {
+		lease.Close()
+		return nil, err
+	}
+	mtu, err := newRouterVPNDesktopTorMTU(lease, n.files.inputs.Capture().SessionID, func() string { return routerVPNDesktopPhysicalPath(n.box) })
+	if err != nil {
+		lease.Close()
+		return nil, err
+	}
+	n.mtu = mtu
+	return mtu, nil
+}
+
+// Only Tor has a mutable native-reader receipt. Registering the exact request
+// precedes Start's worker and any restore; ordinary external leases keep their
+// existing controller ownership contract.
+func (m *routerVPNDesktopMTU) register(request routerVPNDesktopMTURequest) error {
+	if !m.tor {
+		return nil
+	}
+	lease, ok := m.owner.lease.(routerVPNDesktopTorMTULease)
+	if !ok {
+		return routerVPNExternalFailure
+	}
+	return lease.RegisterOperation(request.Generation, request.Request)
+}
+
+// Caller holds m.mu, so a new request cannot be joined to the old status or
+// vice versa while the native interface reader is captured. Running candidates
+// may advance the revision; terminal/waiting-commit adoption still requires the
+// controller's matching atomically published live proof receipt.
+func (m *routerVPNDesktopMTU) readbackLocked() (*mobiletor.DesktopBridgeMTUReadback, error) {
+	if !m.tor {
+		return nil, nil
+	}
+	lease, ok := m.owner.lease.(routerVPNDesktopTorMTULease)
+	if !ok || m.closed || m.owner.invalid.Load() {
+		return nil, routerVPNExternalFailure
+	}
+	readback, err := lease.MTUReadback()
+	if err != nil || readback.Generation != m.request.Generation || readback.RequestID != m.request.Request ||
+		readback.InterfaceName == "" || readback.InterfaceIndex < 1 || readback.EffectiveMTU < 1280 || readback.EffectiveMTU > 9000 {
+		return nil, routerVPNExternalFailure
+	}
+	if readback.Generation == 0 {
+		if readback.Revision != 0 || readback.RequestID != "" {
+			return nil, routerVPNExternalFailure
+		}
+		return nil, nil
+	}
+	return &readback, nil
+}
+
+func (m *routerVPNDesktopMTU) readback() (*mobiletor.DesktopBridgeMTUReadback, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.readbackLocked()
+}
+
+func (n *routerVPNTorNative) MTUReadback() (*mobiletor.DesktopBridgeMTUReadback, error) {
+	if !n.Healthy() || n.files.current() != nil {
+		return nil, routerVPNTorFailure
+	}
+	n.mu.Lock()
+	mtu := n.mtu
+	n.mu.Unlock()
+	if mtu == nil {
+		return nil, nil
+	}
+	return mtu.readback()
+}
+
+type routerVPNTorPathRuntime interface {
+	Healthy() bool
+	DesktopMTU() (*routerVPNDesktopMTU, error)
+}
+
+type routerVPNTorFreshPath struct {
+	owner   routerVPNTorPathRuntime
+	ctx     context.Context
+	current func() error
+}
+
+func (p *routerVPNTorFreshPath) Healthy() bool {
+	return p != nil && p.owner != nil && p.ctx != nil && p.ctx.Err() == nil && p.current != nil && p.current() == nil && p.owner.Healthy()
+}
+func (p *routerVPNTorFreshPath) VerifyCurrentPath() error {
+	return p.VerifyCurrentPathContext(context.Background())
+}
+func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(parent context.Context) error {
+	if parent == nil || parent.Err() != nil || !p.Healthy() {
+		return routerVPNTorFailure
+	}
+	mtu, err := p.owner.DesktopMTU()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := context.WithTimeout(parent, 30*time.Second)
+	defer cancel()
+	stop := context.AfterFunc(p.ctx, cancel)
+	defer stop()
+	state, err := mtu.owner.Capture()
+	if err != nil || mtu.owner.VerifyExternal(ctx, state) != nil || !p.Healthy() || ctx.Err() != nil {
+		return routerVPNTorFailure
+	}
+	return nil
+}
+
+func (n *routerVPNTorNative) FreshPathOwner() routerVPNDesktopPathOwner {
+	return &routerVPNTorFreshPath{owner: n, ctx: n.ctx, current: n.files.current}
+}

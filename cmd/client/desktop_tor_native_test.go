@@ -19,10 +19,13 @@ import (
 	"router-vpn/internal/mobiletor"
 )
 
-func desktopTorPolicyFixture(t *testing.T) (common.RouterProfile, *mobiletor.DesktopBridgeInputs) {
+func desktopTorPolicyFixture(t *testing.T, changes ...func(*common.RouterProfile)) (common.RouterProfile, *mobiletor.DesktopBridgeInputs) {
 	t.Helper()
 	profile := existingTorImportProfile("captured-tor")
 	profile.DNSMode, profile.DNSProtocol, profile.DNSHost, profile.DNSPort = "custom", "tcp", "9.9.9.9", 5353
+	for _, change := range changes {
+		change(&profile)
+	}
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		t.Fatal(err)
 	}
@@ -108,7 +111,7 @@ func TestDesktopTorProofBindsPolicyDNSReadbackAndEverySession(t *testing.T) {
 			case "checked-future":
 				proof.Proof.CheckedAt = now.Add(3 * time.Second)
 			case "heartbeat-past":
-				proof.HeartbeatAt = now.Add(-5 * time.Second).UnixMilli()
+				proof.HeartbeatAt = now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge - time.Second).UnixMilli()
 			case "heartbeat-future":
 				proof.HeartbeatAt = now.Add(5 * time.Second).UnixMilli()
 			case "heartbeat-before-proof":
@@ -181,9 +184,13 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	proof := desktopTorFixtureProof(expected, checked)
 	write("progress.json", desktopTorProgress{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Stage: "proving"})
 	dnsTick := desktopTorDNSChildFixture(kind, directory, expected, write)
+	mtuTick := desktopTorMTUChildFixture(kind, directory, expected, &proof, write)
+	pathTick := desktopTorPathChildFixture(kind, directory, expected, write)
 	for {
 		desktopTorFixturePublicationBarrier(kind, expected)
 		dnsTick()
+		mtuTick()
+		pathTick()
 		proof.HeartbeatAt = time.Now().UnixMilli()
 		write("proof.json", proof)
 		raw, err := os.ReadFile(filepath.Join(directory, "stop.json"))
@@ -213,14 +220,14 @@ func TestDesktopTorProcessFixture(t *testing.T) {
 	}
 }
 
-func desktopTorRunningFixture(t *testing.T, kind string) (*app, *desktopNodeLaunch, string) {
+func desktopTorRunningFixture(t *testing.T, kind string, changes ...func(*common.RouterProfile)) (*app, *desktopNodeLaunch, string) {
 	t.Helper()
-	profile, inputs := desktopTorPolicyFixture(t)
+	profile, inputs := desktopTorPolicyFixture(t, changes...)
 	directory := inputs.RuntimeDir()
 	if err := os.Mkdir(directory, 0700); err != nil {
 		t.Fatal(err)
 	}
-	launch := &desktopNodeLaunch{profileID: profile.ID, mode: "external-tor-bridge", tor: &desktopTorRuntime{expected: inputs.Policy().Metadata(), digests: inputs.Digests(), profileToken: asyncMeasurementProfileToken(profile), network: "fixture-network", networkIdentity: func() string { return "fixture-network" }, inputs: map[string]desktopTorInput{}}}
+	launch := &desktopNodeLaunch{profileID: profile.ID, mode: "external-tor-bridge", tor: &desktopTorRuntime{expected: inputs.Policy().Metadata(), digests: inputs.Digests(), profileToken: desktopTorSourceIdentityToken(profile), network: "fixture-network", networkIdentity: func() string { return "fixture-network" }, inputs: map[string]desktopTorInput{}}}
 	if err := captureDesktopRuntimeDirectory(launch, directory); err != nil {
 		t.Fatal(err)
 	}

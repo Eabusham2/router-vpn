@@ -18,6 +18,7 @@ import (
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/hopmeasure"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
 	ntun "github.com/sagernet/sing-box/protocol/tun"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 	"github.com/sagernet/sing/common/control"
 )
 
@@ -31,6 +32,14 @@ type routerVPNDesktopMTULease interface {
 	Lifetime(context.Context) (context.Context, context.CancelFunc, error)
 	Verify(context.Context, func(context.Context, string, string) (net.Conn, error)) error
 	Resolve(context.Context, string) ([]netip.Addr, error)
+}
+
+type routerVPNDesktopMTUReadbackLease interface {
+	MTUReadback() (mobiletor.DesktopBridgeMTUReadback, error)
+}
+
+type routerVPNDesktopMTUMeasurementLease interface {
+	BeginMeasurement(context.Context) (context.Context, context.CancelFunc, error)
 }
 
 // This adapter reads the interface actually owned by the Box. It never picks
@@ -96,8 +105,18 @@ func newRouterVPNDesktopMTUOwner(lease routerVPNDesktopMTULease, session string,
 		return nil, routerVPNExternalFailure
 	}
 	owner := &routerVPNDesktopMTUOwner{lease: lease, inbound: inbound, session: session, path: path, physical: physical}
-	if _, _, _, err = inbound.RouterVPNDesktopMTU(owner.pathCurrent); err != nil {
-		return nil, routerVPNExternalFailure
+	if retained, ok := lease.(routerVPNDesktopMTUReadbackLease); ok {
+		// Tor claimed this reader before its first proof. Preserve that exact
+		// permanent network-generation guard instead of claiming it again.
+		readback, readErr := retained.MTUReadback()
+		name, index, mtu, nativeErr := inbound.RouterVPNDesktopMTUInterface()
+		if readErr != nil || nativeErr != nil || readback.InterfaceName != name || readback.InterfaceIndex != index || readback.EffectiveMTU != mtu {
+			return nil, routerVPNExternalFailure
+		}
+	} else {
+		if _, _, _, err = inbound.RouterVPNDesktopMTU(owner.pathCurrent); err != nil {
+			return nil, routerVPNExternalFailure
+		}
 	}
 	if _, err = owner.Capture(); err != nil {
 		return nil, err
@@ -161,8 +180,12 @@ func (o *routerVPNDesktopMTUOwner) VerifyExternal(ctx context.Context, expected 
 	if err != nil || state != expected || ctx.Err() != nil {
 		return routerVPNExternalFailure
 	}
+	proofTag, proofAddress, err := o.verificationTarget()
+	if err != nil {
+		return err
+	}
 	err = o.lease.Verify(ctx, func(call context.Context, tag, address string) (net.Conn, error) {
-		if tag != "custom-exit" || address != "1.1.1.1:443" {
+		if tag != proofTag || address != proofAddress {
 			return nil, routerVPNExternalFailure
 		}
 		return o.DialThroughTunnel(call, expected, "tcp", address)
@@ -174,8 +197,42 @@ func (o *routerVPNDesktopMTUOwner) VerifyExternal(ctx context.Context, expected 
 	return nil
 }
 
+func (o *routerVPNDesktopMTUOwner) verificationTarget() (string, string, error) {
+	if captured, ok := o.lease.(interface{ VerificationTarget() (string, string) }); ok {
+		tag, address := captured.VerificationTarget()
+		if tag != mobiletor.ProfileOutboundTag || address != "check.torproject.org:443" {
+			return "", "", routerVPNExternalFailure
+		}
+		return tag, address, nil
+	}
+	return "custom-exit", "1.1.1.1:443", nil
+}
+
+func (o *routerVPNDesktopMTUOwner) BeginExternalMeasurement(parent context.Context, expected mobilemtu.State) (context.Context, context.CancelFunc, error) {
+	state, err := o.Capture()
+	if err != nil || state != expected || parent == nil || parent.Err() != nil {
+		return nil, nil, routerVPNExternalFailure
+	}
+	var ctx context.Context
+	var release context.CancelFunc
+	if captured, ok := o.lease.(routerVPNDesktopMTUMeasurementLease); ok {
+		ctx, release, err = captured.BeginMeasurement(parent)
+	} else {
+		ctx, release = context.WithCancel(parent)
+	}
+	after, captureErr := o.Capture()
+	if err != nil || captureErr != nil || ctx == nil || release == nil || ctx.Err() != nil || after != expected {
+		if release != nil {
+			release()
+		}
+		return nil, nil, routerVPNExternalFailure
+	}
+	return ctx, release, nil
+}
+
 func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, expected mobilemtu.State, network, address string) (net.Conn, error) {
-	if network != "tcp" || address != hopmeasure.PublicAddress && address != "1.1.1.1:443" {
+	_, proofAddress, proofErr := o.verificationTarget()
+	if proofErr != nil || network != "tcp" || address != hopmeasure.PublicAddress && address != proofAddress {
 		return nil, routerVPNExternalFailure
 	}
 	ctx, release, err := o.lease.Lifetime(parent)
@@ -189,8 +246,12 @@ func (o *routerVPNDesktopMTUOwner) DialThroughTunnel(parent context.Context, exp
 		}
 	}()
 	targets := []string{address}
-	if address == hopmeasure.PublicAddress {
-		addresses, err := o.lease.Resolve(ctx, hopmeasure.PublicHost)
+	host, port, splitErr := net.SplitHostPort(address)
+	if splitErr != nil || port != "443" {
+		return nil, routerVPNExternalFailure
+	}
+	if _, parseErr := netip.ParseAddr(host); parseErr != nil {
+		addresses, err := o.lease.Resolve(ctx, host)
 		if err != nil {
 			return nil, routerVPNExternalFailure
 		}

@@ -197,7 +197,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	now := time.Now().UTC().Format(time.RFC3339)
 	a.mu.Lock()
 	capturedProfile, capturedFound := a.profileByIDLocked(profile.ID)
-	if a.cmd != cmd || !capturedFound || asyncMeasurementProfileToken(capturedProfile) != prelaunch.workspace.tor.profileToken || startup != nil && startup.currentLocked(a) != nil {
+	if a.cmd != cmd || !capturedFound || desktopTorSourceIdentityToken(capturedProfile) != prelaunch.workspace.tor.profileToken || startup != nil && startup.currentLocked(a) != nil {
 		a.mu.Unlock()
 		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime or captured startup selection changed before dynamic exit proof could be adopted")
 		sessionTrackerFor(a).markRequestFailure(message)
@@ -242,6 +242,8 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 		a.state.Connected = false
 		a.state.Phase = "failed"
 		a.state.LastError = persistErr.Error()
+	} else {
+		captureDesktopMTUBaselineLocked(a, prelaunch.workspace)
 	}
 	a.mu.Unlock()
 	if persistErr != nil {
@@ -265,6 +267,7 @@ func (a *app) torBridgeConnectCapturedOwned(w http.ResponseWriter, profile commo
 	}
 
 	a.monitorDesktopTorRuntime(prelaunch.workspace)
+	a.startDesktopExternalAutomaticMTU(prelaunch.workspace)
 
 	transport := strings.TrimSpace(torCfg.Transport)
 	if transport == "" {

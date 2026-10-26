@@ -111,6 +111,9 @@ func (f *routerVPNDesktopMTUFiles) tick() error {
 		_ = f.owner.commit(commit)
 	}
 	record := f.owner.record()
+	if f.owner.owner.invalid.Load() {
+		return routerVPNExternalFailure
+	}
 	record.Schema, record.Session, record.SourceSHA256, record.ConfigSHA256 = 1, f.session, f.source, f.config
 	if record.Status.Complete && !record.Status.Running {
 		if !record.Status.Measured && !record.Status.Restored && record.Generation > 0 {
@@ -135,6 +138,13 @@ func routerVPNOpenDesktopMTU(files *routerVPNExternalFiles, owner routerVPNExter
 	if !ok {
 		return nil, nil
 	} // Fixture owners do not pretend to own an OS TUN.
+	return routerVPNOpenDesktopMTUProvider(files, provider, session, source, config)
+}
+
+func routerVPNOpenDesktopMTUProvider(files *routerVPNExternalFiles, provider routerVPNExternalMTUProvider, session, source, config string) (*routerVPNDesktopMTUFiles, error) {
+	if files == nil || provider == nil {
+		return nil, routerVPNExternalFailure
+	}
 	mtu, err := provider.DesktopMTU()
 	if err != nil {
 		_ = files.publish("mtu-status.json", routerVPNDesktopMTURecord{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config, Status: mobilemtu.Status{Phase: "unavailable", Complete: true, Source: "unavailable-native-interface", Failure: "The captured native interface could not be granted MTU measurement ownership", Candidates: []mobilemtu.Candidate{}}})

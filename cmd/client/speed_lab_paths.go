@@ -894,11 +894,12 @@ func (a *app) startSpeedLabTorPath(q speedLabRequest, profile common.RouterProfi
 	}
 	a.mu.Lock()
 	currentProfile, present := a.profileByIDLocked(profile.ID)
-	if a.cmd != command || !present || asyncMeasurementProfileToken(currentProfile) != prelaunch.workspace.tor.profileToken {
+	if a.cmd != command || !present || desktopTorSourceIdentityToken(currentProfile) != prelaunch.workspace.tor.profileToken {
 		a.mu.Unlock()
 		return speedLabPath{}, errors.New("Tor Speed Lab adoption belongs to a retired node or command")
 	}
 	a.state.Connected, a.state.Phase = true, "connected"
+	captureDesktopMTUBaselineLocked(a, prelaunch.workspace)
 	a.mu.Unlock()
 	a.monitorDesktopTorRuntime(prelaunch.workspace)
 	if _, err := waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond); err != nil {

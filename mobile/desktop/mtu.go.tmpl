@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
 type routerVPNDesktopMTURequest struct {
@@ -36,17 +37,18 @@ type routerVPNDesktopMTUControl struct {
 	MTU          int    `json:"mtu,omitempty"`
 }
 type routerVPNDesktopMTURecord struct {
-	Schema          int              `json:"schema"`
-	Session         string           `json:"session_id"`
-	SourceSHA256    string           `json:"source_sha256"`
-	ConfigSHA256    string           `json:"config_sha256"`
-	Generation      uint64           `json:"generation"`
-	Requested       bool             `json:"requested"`
-	WaitingCommit   bool             `json:"waiting_commit"`
-	PreparedMTU     int              `json:"prepared_mtu,omitempty"`
-	PreparedPathKey string           `json:"prepared_path_key,omitempty"`
-	RestoredMTU     int              `json:"restored_mtu,omitempty"`
-	Status          mobilemtu.Status `json:"status"`
+	Schema          int                                 `json:"schema"`
+	Session         string                              `json:"session_id"`
+	SourceSHA256    string                              `json:"source_sha256"`
+	ConfigSHA256    string                              `json:"config_sha256"`
+	Generation      uint64                              `json:"generation"`
+	Requested       bool                                `json:"requested"`
+	WaitingCommit   bool                                `json:"waiting_commit"`
+	PreparedMTU     int                                 `json:"prepared_mtu,omitempty"`
+	PreparedPathKey string                              `json:"prepared_path_key,omitempty"`
+	RestoredMTU     int                                 `json:"restored_mtu,omitempty"`
+	Status          mobilemtu.Status                    `json:"status"`
+	MTUReadback     *mobiletor.DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
 }
 
 // A freshly verified winner remains provisional until the captured parent has
@@ -154,6 +156,7 @@ type routerVPNDesktopMTU struct {
 	restoring     bool
 	restoreTarget int
 	restoreCancel context.CancelFunc
+	tor           bool
 }
 
 type routerVPNExternalMTUProvider interface {
@@ -207,11 +210,21 @@ func (m *routerVPNDesktopMTU) start(request routerVPNDesktopMTURequest) error {
 		if err != nil || !m.controller.Requested() || request.RestoreMTU < 1280 || request.RestoreMTU > plan.Ceiling || request.Cache != nil {
 			return routerVPNExternalFailure
 		}
-		ctx, cancel := context.WithTimeout(context.Background(), 25*time.Second)
+		if err := m.register(request); err != nil {
+			return err
+		}
+		restoreBudget := 25 * time.Second
+		if m.tor {
+			restoreBudget = 60 * time.Second
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), restoreBudget)
 		m.request, m.original, m.restored = request, before, nil
 		m.rolling, m.restoring, m.restoreTarget, m.restoreCancel = true, true, request.RestoreMTU, cancel
 		go m.restoreCaptured(ctx, request, before)
 		return nil
+	}
+	if err := m.register(request); err != nil {
+		return err
 	}
 	m.cache.mu.Lock()
 	if request.Cache != nil {
@@ -272,7 +285,11 @@ func (m *routerVPNDesktopMTU) cancel(control routerVPNDesktopMTUControl) error {
 	return nil
 }
 func (m *routerVPNDesktopMTU) rollback(control routerVPNDesktopMTUControl, previous mobilemtu.Status) {
-	ctx, stop := context.WithTimeout(context.Background(), 8*time.Second)
+	budget := 8 * time.Second
+	if m.tor {
+		budget = 30 * time.Second
+	}
+	ctx, stop := context.WithTimeout(context.Background(), budget)
 	defer stop()
 	current, err := m.owner.Capture()
 	m.mu.Lock()
@@ -340,6 +357,12 @@ func (m *routerVPNDesktopMTU) record() routerVPNDesktopMTURecord {
 		}
 	}
 	result := routerVPNDesktopMTURecord{Generation: m.request.Generation, Requested: m.controller.Requested(), RestoredMTU: m.restoreTarget, Status: status}
+	readback, err := m.readbackLocked()
+	if err != nil {
+		m.owner.invalid.Store(true)
+	} else {
+		result.MTUReadback = readback
+	}
 	if prepared := m.cache.prepare(); prepared != nil {
 		result.WaitingCommit, result.PreparedMTU, result.PreparedPathKey = true, prepared.MTU, prepared.PathKey
 	}

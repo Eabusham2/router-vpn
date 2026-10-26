@@ -112,7 +112,11 @@ func (a *app) retestMTU(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if launch := desktopExternalMTULaunch(a); launch != nil {
-		identity := mtuViewIdentity{Session: launch.external.session, Profile: launch.external.expected.ExitID, Native: true}
+		identity, err := desktopMeasurementViewIdentity(launch)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
 		ctx, operation, err := beginMTUViewOperation(a, r.Context(), request, identity)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusConflict)

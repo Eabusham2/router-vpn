@@ -31,7 +31,8 @@ func TestProfileDeviceTorSavedPolicyReachesActualDesktopPreparation(t *testing.T
 				capture := getDeviceSettingsForTest(t, a)
 				if !capture.DevicePolicySupported || capture.DevicePolicyReason != "" ||
 					!strings.Contains(capture.Note, "1280-byte virtual interface") ||
-					!strings.Contains(capture.Note, "Retest are not yet implemented") {
+					!strings.Contains(capture.Note, "Retest repeats those measurements with fresh Tor and DNS proof") ||
+					!strings.Contains(capture.Note, "not a UDP path-MTU measurement") {
 					t.Fatal("Tor device capability or interface/measurement boundary is inaccurate")
 				}
 				q := deviceSettingsRequestForTest(t, capture, mtu)

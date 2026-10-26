@@ -29,6 +29,72 @@ type RouterVPNDesktopTorMTULease struct {
 	generation uint64 // below are protected by owner.mu
 	request    string
 	active     int
+	transition func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)
+}
+
+type routerVPNDesktopTorMTUActivityKey struct{}
+
+// Each inherited socket/proof lifetime keeps this activity until its actual
+// close. Closing the outer candidate stops admission and cancels descendants;
+// it cannot make a late descendant disappear from the native activity owner.
+type routerVPNDesktopTorMTUActivity struct {
+	mu      sync.Mutex
+	lease   *RouterVPNDesktopTorMTULease
+	refs    int
+	closing bool
+	end     func()
+}
+
+func (a *routerVPNDesktopTorMTUActivity) retain(lease *RouterVPNDesktopTorMTULease) (func(), error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.lease != lease || a.closing || a.refs < 1 {
+		return nil, errors.New("desktop Tor measurement activity retired")
+	}
+	a.refs++
+	var once sync.Once
+	return func() { once.Do(func() { a.release(false) }) }, nil
+}
+func (a *routerVPNDesktopTorMTUActivity) release(outer bool) {
+	a.mu.Lock()
+	if outer {
+		a.closing = true
+	}
+	a.refs--
+	end := a.refs == 0
+	a.mu.Unlock()
+	if end {
+		a.end()
+	}
+}
+func (a *routerVPNDesktopTorMTUActivity) current(lease *RouterVPNDesktopTorMTULease) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return a.lease == lease && !a.closing && a.refs > 0
+}
+
+func (l *RouterVPNDesktopTorMTULease) BeginMeasurement(parent context.Context) (context.Context, context.CancelFunc, error) {
+	ctx, release, err := l.Lifetime(parent)
+	if err != nil {
+		return nil, nil, err
+	}
+	if parent.Value(routerVPNDesktopTorMTUActivityKey{}) != nil {
+		return ctx, release, nil // Lifetime retained the exact inherited claim.
+	}
+	end, err := l.owner.activity.beginMeasurement()
+	if err != nil {
+		release()
+		return nil, nil, err
+	}
+	activity := &routerVPNDesktopTorMTUActivity{lease: l, refs: 1, end: end}
+	ctx = context.WithValue(ctx, routerVPNDesktopTorMTUActivityKey{}, activity)
+	var once sync.Once
+	finish := func() { once.Do(func() { activity.release(true); release() }) }
+	if ctx.Err() != nil || !l.Healthy() {
+		finish()
+		return nil, nil, errors.New("desktop Tor candidate activity changed during admission")
+	}
+	return ctx, finish, nil
 }
 
 func (r *RouterVPNDesktopTor) ClaimMTU() (*RouterVPNDesktopTorMTULease, error) {
@@ -87,6 +153,23 @@ func (l *RouterVPNDesktopTorMTULease) Authority() string {
 	return l.authority
 }
 
+// One captured command installs the admission callback before registering any
+// request. A reader cannot change until that command durably publishes both
+// the actual pre-change proof/readback and its bounded transition receipt.
+func (l *RouterVPNDesktopTorMTULease) SetTransitionHandler(handler func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error)) error {
+	if l == nil || l.owner == nil || handler == nil {
+		return errors.New("desktop Tor MTU transition requires its command owner")
+	}
+	r := l.owner
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if l.transition != nil || l.generation != 0 || l.active != 0 || r.closing || !l.currentLifetime() {
+		return errors.New("desktop Tor MTU transition admission is already captured or retired")
+	}
+	l.transition = handler
+	return nil
+}
+
 // RegisterOperation precedes controller.Start and every candidate mutation.
 // The host may not relabel still-running work with a newer generation/nonce.
 func (l *RouterVPNDesktopTorMTULease) RegisterOperation(generation uint64, request string) error {
@@ -113,10 +196,25 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 	if parent == nil || parent.Err() != nil || !l.Healthy() {
 		return nil, nil, errors.New("desktop Tor MTU operation has no current lifetime")
 	}
+	var releaseActivity func()
+	if captured := parent.Value(routerVPNDesktopTorMTUActivityKey{}); captured != nil {
+		activity, ok := captured.(*routerVPNDesktopTorMTUActivity)
+		if !ok || activity == nil {
+			return nil, nil, errors.New("desktop Tor measurement context has no owner")
+		}
+		var err error
+		releaseActivity, err = activity.retain(l)
+		if err != nil {
+			return nil, nil, err
+		}
+	}
 	r := l.owner
 	r.mu.Lock()
 	if r.closing || !l.currentLifetime() {
 		r.mu.Unlock()
+		if releaseActivity != nil {
+			releaseActivity()
+		}
 		return nil, nil, errors.New("desktop Tor MTU owner is closing")
 	}
 	r.workers.Add(1)
@@ -132,6 +230,9 @@ func (l *RouterVPNDesktopTorMTULease) Lifetime(parent context.Context) (context.
 			r.mu.Lock()
 			l.active--
 			r.mu.Unlock()
+			if releaseActivity != nil {
+				releaseActivity()
+			}
 			r.workers.Done()
 		})
 	}
@@ -189,25 +290,38 @@ func (l *RouterVPNDesktopTorMTULease) ChangeMTU(parent context.Context, expected
 // manager, ownership locks, lifecycle, returned reader and rollback adoption.
 func (l *RouterVPNDesktopTorMTULease) changeMTU(parent context.Context, expected adapter.Inbound, mtu int,
 	change func(context.Context, adapter.Inbound, int) (adapter.Inbound, error)) (adapter.Inbound, error) {
+	return l.changeMTUBounded(parent, expected, mtu, change, mobiletor.DesktopBridgeMTUTransitionLimit)
+}
+
+func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, expected adapter.Inbound, mtu int,
+	change func(context.Context, adapter.Inbound, int) (adapter.Inbound, error), budget time.Duration) (adapter.Inbound, error) {
 	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
 		return expected, err
 	}
 	defer release()
+	var finished func()
+	defer func() {
+		if finished != nil {
+			finished()
+		}
+	}()
 	r := l.owner
 	end, err := r.activity.beginMTU()
 	if err != nil {
 		return expected, err
 	}
 	defer end()
-	if mtu < 1280 || mtu > 9000 || change == nil {
+	if mtu < 1280 || mtu > 9000 || change == nil || budget <= 0 || budget > mobiletor.DesktopBridgeMTUTransitionLimit {
 		return expected, errors.New("desktop Tor MTU candidate is invalid")
 	}
 	if err := r.VerifyCurrentPath(ctx); err != nil {
 		return expected, err
 	}
+	verifiedAt := time.Now()
 	r.mu.Lock()
 	registered := l.generation != 0 && l.request != "" && !r.closing && r.policy.Metadata().MTUPolicy == "auto"
+	generation, request, transition := l.generation, l.request, l.transition
 	r.mu.Unlock()
 	r.interfaceMu.Lock()
 	defer r.interfaceMu.Unlock()
@@ -215,16 +329,50 @@ func (l *RouterVPNDesktopTorMTULease) changeMTU(parent context.Context, expected
 	e.mu.Lock()
 	defer e.mu.Unlock()
 	if ctx.Err() != nil || !l.currentLifetime() || !registered ||
-		r.mtuRevision == ^uint64(0) || e.identityLocked() == "" || e.tun != expected || !r.readerLifetimeCurrent() {
+		r.mtuRevision == ^uint64(0) || r.mtuTransition == ^uint64(0) || e.identityLocked() == "" || e.tun != expected || !r.readerLifetimeCurrent() {
 		return expected, errors.New("desktop Tor MTU candidate lacks its exact registered reader")
 	}
-	current, changeErr := change(ctx, expected, mtu)
+	if transition == nil || time.Since(verifiedAt) >= 3*time.Second {
+		return expected, errors.New("desktop Tor MTU reader has no fresh captured transition admission")
+	}
+	name, index, actual, readErr := r.tun.RouterVPNDesktopMTUInterface()
+	if readErr != nil || name != r.name || index != r.index || actual != r.mtu || !r.readerLifetimeCurrent() {
+		r.Cancel()
+		return expected, errors.New("desktop Tor MTU pre-change reader no longer matches its proof")
+	}
+	meta := r.policy.Metadata()
+	r.mtuTransition++
+	admission := mobiletor.DesktopBridgeMTUTransition{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256,
+		ConfigSHA256: meta.ConfigSHA256, Generation: generation, RequestID: request, TransitionID: r.mtuTransition,
+		From: mobiletor.DesktopBridgeMTUReadback{Generation: generation, RequestID: request, Revision: r.mtuRevision,
+			InterfaceName: r.name, InterfaceIndex: r.index, EffectiveMTU: r.mtu}, TargetMTU: mtu,
+		StartedAt: verifiedAt.UnixMilli(), ExpiresAt: verifiedAt.Add(budget).UnixMilli()}
+	bounded, cancelBounded := context.WithDeadline(r.ctx, verifiedAt.Add(budget))
+	defer cancelBounded()
+	stopExpiry := context.AfterFunc(bounded, func() {
+		if errors.Is(bounded.Err(), context.DeadlineExceeded) {
+			r.Cancel()
+		}
+	})
+	defer stopExpiry()
+	operation, cancelOperation := context.WithCancel(ctx)
+	defer cancelOperation()
+	stopBounded := context.AfterFunc(bounded, cancelOperation)
+	defer stopBounded()
+	finished, err = transition(operation, admission)
+	if err != nil || finished == nil || operation.Err() != nil || !r.readerLifetimeCurrent() {
+		return expected, errors.New("desktop Tor MTU transition was not published by its captured command")
+	}
+	current, changeErr := change(operation, expected, mtu)
+	if errors.Is(bounded.Err(), context.DeadlineExceeded) {
+		r.Cancel()
+	}
 	reader, ok := current.(routerVPNDesktopTorTUN)
 	if !ok || current.Tag() != e.tunTag || current.Type() != C.TypeTun || !r.readerLifetimeCurrent() {
 		r.Cancel()
 		return nil, errors.New("desktop Tor MTU transaction lost its native reader")
 	}
-	name, index, actual, readErr := reader.RouterVPNDesktopMTUInterface()
+	name, index, actual, readErr = reader.RouterVPNDesktopMTUInterface()
 	if readErr != nil || name != r.name || index < 1 || actual < 1280 || actual > 9000 {
 		r.Cancel()
 		return nil, errors.New("desktop Tor MTU transaction has no valid native readback")
@@ -262,16 +410,11 @@ func (l *RouterVPNDesktopTorMTULease) Verify(parent context.Context, dial func(c
 
 func (l *RouterVPNDesktopTorMTULease) verify(parent context.Context, dial func(context.Context, string, string) (net.Conn, error),
 	prove func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error)) error {
-	ctx, release, err := l.Lifetime(parent)
+	ctx, release, err := l.BeginMeasurement(parent)
 	if err != nil {
 		return err
 	}
 	defer release()
-	end, err := l.owner.activity.beginMeasurement()
-	if err != nil {
-		return err
-	}
-	defer end()
 	before, err := l.MTUReadback()
 	if err != nil || dial == nil || prove == nil {
 		return errors.New("desktop Tor MTU proof has no captured TUN dialer")
@@ -311,12 +454,16 @@ func (l *RouterVPNDesktopTorMTULease) Resolve(parent context.Context, host strin
 		return nil, err
 	}
 	defer release()
+	activity, ok := owned.Value(routerVPNDesktopTorMTUActivityKey{}).(*routerVPNDesktopTorMTUActivity)
+	if !ok || activity == nil || !activity.current(l) {
+		return nil, errors.New("desktop Tor MTU lookup has no retained candidate activity")
+	}
 	ctx, cancel := context.WithTimeout(owned, 5*time.Second)
 	defer cancel()
 	e := l.owner.engine
 	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: e.tunTag, InboundType: C.TypeTun, Network: "udp", Protocol: "dns"})
 	addresses, err := e.box.dnsRouter.Lookup(ctx, host, adapter.DNSQueryOptions{})
-	if err != nil || ctx.Err() != nil || !l.Healthy() {
+	if err != nil || ctx.Err() != nil || !l.Healthy() || !activity.current(l) {
 		return nil, errors.New("desktop Tor MTU selected DNS lookup failed")
 	}
 	result := make([]netip.Addr, 0, len(addresses))

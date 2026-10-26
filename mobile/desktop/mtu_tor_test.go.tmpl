@@ -1,0 +1,303 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+type desktopTorMTUActivityKey struct{}
+
+type desktopTorMTULeaseFixture struct {
+	*desktopMTULeaseFixture
+	policy               *mobiletor.DesktopBridgePolicy
+	generation, revision uint64
+	request              string
+	active               bool
+	verify               func(context.Context, func(context.Context, string, string) (net.Conn, error)) error
+}
+
+func (l *desktopTorMTULeaseFixture) Authority() string {
+	meta := l.policy.Metadata()
+	raw, _ := json.Marshal(map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID, "source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": false})
+	return string(raw)
+}
+func (*desktopTorMTULeaseFixture) VerificationTarget() (string, string) {
+	return mobiletor.ProfileOutboundTag, "check.torproject.org:443"
+}
+func (l *desktopTorMTULeaseFixture) RegisterOperation(generation uint64, request string) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if generation != l.generation+1 || !routerVPNExternalSession.MatchString(request) || l.active || l.closed.Load() || l.policy.Metadata().MTUPolicy != "auto" {
+		return errors.New("unowned Tor request")
+	}
+	l.generation, l.request = generation, request
+	return nil
+}
+func (l *desktopTorMTULeaseFixture) MTUReadback() (mobiletor.DesktopBridgeMTUReadback, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	name, index, mtu, err := l.current.RouterVPNDesktopMTUInterface()
+	return mobiletor.DesktopBridgeMTUReadback{Generation: l.generation, RequestID: l.request, Revision: l.revision,
+		InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu}, err
+}
+func (l *desktopTorMTULeaseFixture) ChangeMTU(ctx context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if l.generation == 0 || l.request == "" || expected != l.current || ctx.Err() != nil || l.closed.Load() || l.active {
+		return l.current, errors.New("Tor TUN mutated without its registered request")
+	}
+	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard}
+	l.revision++
+	l.changes = append(l.changes, mtu)
+	return l.current, nil
+}
+func (l *desktopTorMTULeaseFixture) BeginMeasurement(parent context.Context) (context.Context, context.CancelFunc, error) {
+	if parent.Value(desktopTorMTUActivityKey{}) == l {
+		return l.Lifetime(parent)
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if parent.Err() != nil || l.active || l.closed.Load() {
+		return nil, nil, errors.New("Tor activity unavailable")
+	}
+	l.active = true
+	ctx, cancel := context.WithCancel(context.WithValue(parent, desktopTorMTUActivityKey{}, l))
+	var once sync.Once
+	return ctx, func() {
+		once.Do(func() {
+			cancel()
+			l.mu.Lock()
+			l.active = false
+			l.mu.Unlock()
+		})
+	}, nil
+}
+func (l *desktopTorMTULeaseFixture) Verify(parent context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
+	ctx, release, err := l.BeginMeasurement(parent)
+	if err != nil {
+		return err
+	}
+	defer release()
+	if l.verify != nil {
+		return l.verify(ctx, dial)
+	}
+	return l.desktopMTULeaseFixture.Verify(ctx, dial)
+}
+
+func desktopTorMTUFixture(t *testing.T) (*routerVPNDesktopMTU, *desktopTorMTULeaseFixture, *atomic.Value) {
+	t.Helper()
+	files := routerVPNNewTorFileFixture(t)
+	raw, err := os.ReadFile(filepath.Join(files.directory, "tor-profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := strings.Replace(string(raw), `"mtu_policy":"manual","manual_mtu":1392`, `"mtu_policy":"auto","manual_mtu":0`, 1)
+	policy, err := mobiletor.NewDesktopBridgePolicy(source, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return desktopTorMTUFixtureForPolicy(t, policy)
+}
+
+func desktopTorMTUFixtureForPolicy(t *testing.T, policy *mobiletor.DesktopBridgePolicy) (*routerVPNDesktopMTU, *desktopTorMTULeaseFixture, *atomic.Value) {
+	t.Helper()
+	meta := policy.Metadata()
+	name := meta.InterfaceName
+	if name == "" {
+		name = "utun902"
+	}
+	base := &desktopMTULeaseFixture{config: policy.Config(), blockAt: 2}
+	base.current = &desktopMTUTUNFixture{index: 710, mtu: meta.ConfiguredMTU, name: name, tag: meta.TUNTag, guard: base.Healthy}
+	lease := &desktopTorMTULeaseFixture{desktopMTULeaseFixture: base, policy: policy}
+	physical := &atomic.Value{}
+	physical.Store(strings.Repeat("c", 64))
+	mtu, err := newRouterVPNDesktopTorMTU(lease, meta.SessionID, func() string { return physical.Load().(string) })
+	if err != nil {
+		t.Fatal("Tor adapter tried to reclaim the already-proved reader", err)
+	}
+	t.Cleanup(func() { lease.Close(); _ = mtu.close() })
+	return mtu, lease, physical
+}
+
+func TestRouterVPNDesktopMTUTorRequestAndRevisionRemainBoundThroughCancel(t *testing.T) {
+	mtu, lease, _ := desktopTorMTUFixture(t)
+	if record := mtu.record(); !record.Requested || record.Generation != 0 || record.MTUReadback != nil || record.Status.Measured {
+		t.Fatal("initial Tor interface became a measured request", record)
+	}
+	var previous mobiletor.DesktopBridgeMTUReadback
+	for generation, nonce := range []string{strings.Repeat("a", 32), strings.Repeat("b", 32)} {
+		lease.blocked = make(chan struct{})
+		lease.blockOnce = sync.Once{}
+		lease.blockAt = lease.proofs.Load() + 2
+		request := routerVPNDesktopMTURequest{Generation: uint64(generation + 1), Request: nonce, Force: true}
+		if err := mtu.start(request); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-lease.blocked:
+		case <-time.After(time.Second):
+			t.Fatal("Tor candidate never reached its registered native proof")
+		}
+		record := mtu.record()
+		if record.MTUReadback == nil || record.Generation != request.Generation || record.Status.Request != nonce ||
+			record.MTUReadback.Generation != request.Generation || record.MTUReadback.RequestID != nonce || record.MTUReadback.Revision <= previous.Revision || !record.Status.Running {
+			t.Fatal("native Tor status mixed its request or interface receipt", record)
+		}
+		if err := mtu.cancel(routerVPNDesktopMTUControl{Generation: request.Generation, Request: nonce}); err != nil {
+			t.Fatal(err)
+		}
+		terminal := desktopMTUAwait(t, mtu, func(r routerVPNDesktopMTURecord) bool { return r.Status.Complete && !r.Status.Running })
+		if terminal.MTUReadback == nil || !terminal.Status.Restored || terminal.Status.Measured ||
+			terminal.MTUReadback.Generation != request.Generation || terminal.MTUReadback.RequestID != nonce ||
+			terminal.MTUReadback.EffectiveMTU != 1280 || terminal.MTUReadback.Revision <= record.MTUReadback.Revision {
+			t.Fatal("cancel did not retain the exact rollback readback", terminal)
+		}
+		previous = *terminal.MTUReadback
+	}
+	if lease.Config() != lease.policy.Config() || lease.policy.Metadata().ConfiguredMTU != 1280 {
+		t.Fatal("Tor optimization changed its immutable saved policy")
+	}
+}
+
+func TestRouterVPNDesktopMTUTorReceiptRejectsRelabeledRequest(t *testing.T) {
+	mtu, lease, _ := desktopTorMTUFixture(t)
+	lease.mu.Lock()
+	lease.generation, lease.request = 1, strings.Repeat("a", 32)
+	lease.mu.Unlock()
+	if record := mtu.record(); record.MTUReadback != nil || !mtu.owner.invalid.Load() {
+		t.Fatal("unregistered native receipt was attached to another status", record)
+	}
+}
+
+func TestRouterVPNDesktopMTUTorRecaptureRetainsDynamicAuthorityAndDNS(t *testing.T) {
+	mtu, lease, _ := desktopTorMTUFixture(t)
+	request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("a", 32)}
+	if err := mtu.register(request); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := mtu.owner.Capture()
+	if _, err := mtu.owner.ChangeMTU(context.Background(), before, 1400); err != nil {
+		t.Fatal(err)
+	}
+	fresh, err := mtu.recapture()
+	if err != nil {
+		t.Fatal("Tor restore was reconstructed as ordinary fixed-exit authority", err)
+	}
+	defer fresh.Close()
+	var original, updated map[string]any
+	if json.Unmarshal([]byte(lease.Config()), &original) != nil || json.Unmarshal([]byte(fresh.Config()), &updated) != nil {
+		t.Fatal("unreadable captured graph")
+	}
+	original["inbounds"].([]any)[0].(map[string]any)["mtu"] = float64(1400)
+	one, _ := json.Marshal(original)
+	two, _ := json.Marshal(updated)
+	if string(one) != string(two) || !fresh.Requested() {
+		t.Fatal("Tor restore changed its selected DNS, device policy or transport")
+	}
+	state, _ := mtu.owner.Capture()
+	lease.verify = func(ctx context.Context, dial func(context.Context, string, string) (net.Conn, error)) error {
+		conn, err := dial(ctx, "custom-exit", "1.1.1.1:443")
+		if conn != nil {
+			conn.Close()
+		}
+		return err
+	}
+	if mtu.owner.VerifyExternal(context.Background(), state) == nil {
+		t.Fatal("ordinary exit proof replaced the captured Tor path")
+	}
+}
+
+type desktopTorPathRuntimeFixture struct{ mtu *routerVPNDesktopMTU }
+
+func (f *desktopTorPathRuntimeFixture) Healthy() bool {
+	return !f.mtu.owner.invalid.Load() && f.mtu.owner.lease.Healthy()
+}
+func (f *desktopTorPathRuntimeFixture) DesktopMTU() (*routerVPNDesktopMTU, error) { return f.mtu, nil }
+
+func TestRouterVPNDesktopMTUTorFreshPathCancelRetainsWorkerAndHealthyConnection(t *testing.T) {
+	mtu, lease, _ := desktopTorMTUFixture(t)
+	entered, canceled, release := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	defer once.Do(func() { close(release) })
+	lease.verify = func(ctx context.Context, _ func(context.Context, string, string) (net.Conn, error)) error {
+		close(entered)
+		<-ctx.Done()
+		close(canceled)
+		<-release
+		return ctx.Err()
+	}
+	path := &routerVPNTorFreshPath{owner: &desktopTorPathRuntimeFixture{mtu: mtu}, ctx: context.Background(), current: func() error { return nil }}
+	directory := t.TempDir()
+	if err := os.Chmod(directory, 0700); err != nil {
+		t.Fatal(err)
+	}
+	files, err := routerVPNOpenExternalFiles(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer files.root.Close()
+	mailbox, err := routerVPNOpenDesktopPath(files, path, routerVPNTorTestSession, lease.policy.SourceSHA256(), lease.policy.Metadata().ConfigSHA256)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		once.Do(func() { close(release) })
+		_ = mailbox.close()
+	}()
+	request := mailbox.record.routerVPNDesktopPathRequest
+	request.Generation, request.Request = 1, strings.Repeat("e", 32)
+	desktopPathInput(t, directory, "path-request.json", request)
+	if err := mailbox.tick(); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-entered:
+	case <-time.After(time.Second):
+		t.Fatal("fresh Tor path reused a heartbeat instead of starting verification")
+	}
+	foreign := request
+	foreign.Request = strings.Repeat("f", 32)
+	desktopPathInput(t, directory, "path-cancel.json", foreign)
+	mailbox.signalCancellation()
+	select {
+	case <-canceled:
+		t.Fatal("another path nonce canceled the captured worker")
+	default:
+	}
+	desktopPathInput(t, directory, "path-cancel.json", request)
+	mailbox.signalCancellation() // The heartbeat publisher may still be busy.
+	select {
+	case <-canceled:
+	case <-time.After(time.Second):
+		t.Fatal("path cancellation did not reach its captured Tor proof")
+	}
+	if mailbox.record.Complete || mailbox.record.Cancelled || mailbox.record.Verified {
+		t.Fatal("cancellation signal pretended to publish or drain its worker", mailbox.record)
+	}
+	if err := mailbox.tick(); err != nil {
+		t.Fatal(err)
+	}
+	if mailbox.record.Complete || mailbox.record.Verified || !mailbox.record.Cancelled || !path.Healthy() {
+		t.Fatal("cancellation acknowledged a late proof or disconnected its healthy Tor owner", mailbox.record)
+	}
+	once.Do(func() { close(release) })
+	if err := mailbox.close(); err != nil {
+		t.Fatal(err)
+	}
+	if !mailbox.record.Complete || !mailbox.record.Cancelled || mailbox.record.Verified || !path.Healthy() {
+		t.Fatal("fresh path did not acknowledge actual drain", mailbox.record)
+	}
+}

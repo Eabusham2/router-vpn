@@ -22,11 +22,17 @@ import (
 type desktopMTUTUNFixture struct {
 	adapter.Inbound
 	index, mtu int
+	name, tag  string
 	guard      func() bool
 }
 
 func (*desktopMTUTUNFixture) Type() string { return "tun" }
-func (*desktopMTUTUNFixture) Tag() string  { return "tun-in" }
+func (t *desktopMTUTUNFixture) Tag() string {
+	if t.tag != "" {
+		return t.tag
+	}
+	return "tun-in"
+}
 func (t *desktopMTUTUNFixture) RouterVPNDesktopMTU(guard func() bool) (string, int, int, error) {
 	if t.guard != nil || !guard() {
 		return "", 0, 0, errors.New("unowned")
@@ -38,7 +44,11 @@ func (t *desktopMTUTUNFixture) RouterVPNDesktopMTUInterface() (string, int, int,
 	if t.guard == nil || !t.guard() {
 		return "", 0, 0, errors.New("retired")
 	}
-	return "router-vpn", t.index, t.mtu, nil
+	name := t.name
+	if name == "" {
+		name = "router-vpn"
+	}
+	return name, t.index, t.mtu, nil
 }
 
 type desktopMTULeaseFixture struct {
@@ -53,8 +63,8 @@ type desktopMTULeaseFixture struct {
 	blockOnce sync.Once
 }
 
-func (l *desktopMTULeaseFixture) Healthy() bool { return !l.closed.Load() }
-func (l *desktopMTULeaseFixture) Close()        { l.closed.Store(true) }
+func (l *desktopMTULeaseFixture) Healthy() bool  { return !l.closed.Load() }
+func (l *desktopMTULeaseFixture) Close()         { l.closed.Store(true) }
 func (l *desktopMTULeaseFixture) Config() string { return l.config }
 func (*desktopMTULeaseFixture) Authority() string {
 	return `{"schema":1,"id":"selected-exit","source_sha256":"` + strings.Repeat("a", 64) + `","expected_public_ip":"203.0.113.88","mtu_policy":"auto","jumbo_tun":false}`
@@ -73,7 +83,7 @@ func (l *desktopMTULeaseFixture) ChangeMTU(ctx context.Context, expected adapter
 	if expected != l.current || ctx.Err() != nil || l.closed.Load() {
 		return l.current, errors.New("stale")
 	}
-	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, guard: l.current.guard}
+	l.current = &desktopMTUTUNFixture{index: l.current.index + 1, mtu: mtu, name: l.current.name, tag: l.current.tag, guard: l.current.guard}
 	l.changes = append(l.changes, mtu)
 	return l.current, nil
 }
@@ -364,44 +374,76 @@ func TestRouterVPNDesktopMTURecapturePreservesEveryTransportField(t *testing.T) 
 func TestRouterVPNDesktopMTUCapturedRestoreCancelReprovesOriginal(t *testing.T) {
 	m, lease, _ := desktopMTUNativeFixtureAt(t, 1400)
 	lease.blocked, lease.blockAt = make(chan struct{}), 1
-	request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("e",32), RestoreMTU: 1380, Force: true}
-	if err := m.start(request); err != nil { t.Fatal(err) }
+	request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("e", 32), RestoreMTU: 1380, Force: true}
+	if err := m.start(request); err != nil {
+		t.Fatal(err)
+	}
 	select {
 	case <-lease.blocked:
-	case <-time.After(time.Second): t.Fatal("captured restoration never reached proof")
+	case <-time.After(time.Second):
+		t.Fatal("captured restoration never reached proof")
 	}
-	if err := m.cancel(routerVPNDesktopMTUControl{Generation:1,Request:request.Request}); err != nil { t.Fatal(err) }
-	result := desktopMTUAwait(t,m,func(r routerVPNDesktopMTURecord) bool { return r.Status.Complete && !r.Status.Running })
-	if result.Status.Measured || !result.Status.Restored || result.Status.EffectiveMTU != 1400 || result.Status.Source != "restored-unmeasured" || result.Status.Failure == "" { t.Fatal("canceled restoration claimed success", result) }
-	lease.mu.Lock(); defer lease.mu.Unlock()
-	if len(lease.changes) != 2 || lease.changes[0] != 1380 || lease.changes[1] != 1400 || lease.proofs.Load() != 2 { t.Fatal("canceled restoration did not re-prove exact rollback",lease.changes,lease.proofs.Load()) }
+	if err := m.cancel(routerVPNDesktopMTUControl{Generation: 1, Request: request.Request}); err != nil {
+		t.Fatal(err)
+	}
+	result := desktopMTUAwait(t, m, func(r routerVPNDesktopMTURecord) bool { return r.Status.Complete && !r.Status.Running })
+	if result.Status.Measured || !result.Status.Restored || result.Status.EffectiveMTU != 1400 || result.Status.Source != "restored-unmeasured" || result.Status.Failure == "" {
+		t.Fatal("canceled restoration claimed success", result)
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if len(lease.changes) != 2 || lease.changes[0] != 1380 || lease.changes[1] != 1400 || lease.proofs.Load() != 2 {
+		t.Fatal("canceled restoration did not re-prove exact rollback", lease.changes, lease.proofs.Load())
+	}
 }
 
 func TestRouterVPNDesktopMTULateRestoreCancelRetainsPretestReadback(t *testing.T) {
 	m, lease, _ := desktopMTUNativeFixtureAt(t, 1400)
-	before, err := m.owner.Capture(); if err != nil { t.Fatal(err) }
-	if _, err := m.owner.ChangeMTU(context.Background(),before,1380); err != nil { t.Fatal(err) }
+	before, err := m.owner.Capture()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.owner.ChangeMTU(context.Background(), before, 1380); err != nil {
+		t.Fatal(err)
+	}
 	// Exercise the exact acknowledgement race after a completed restore. The
 	// operation still owns its original state until the next generation starts.
-	m.request = routerVPNDesktopMTURequest{Generation:1, Request:strings.Repeat("e",32),RestoreMTU:1380}
+	m.request = routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("e", 32), RestoreMTU: 1380}
 	m.original = before
-	m.restored = &mobilemtu.Status{Request:m.request.Request,Complete:true,Restored:true,OriginalMTU:1400,EffectiveMTU:1380,Source:"restored-captured-system-tun"}
-	if err := m.cancel(routerVPNDesktopMTUControl{Generation:2,Request:m.request.Request}); err == nil { t.Fatal("replacement generation rolled back") }
-	if err := m.cancel(routerVPNDesktopMTUControl{Generation:1,Request:m.request.Request}); err != nil { t.Fatal(err) }
-	result := desktopMTUAwait(t,m,func(r routerVPNDesktopMTURecord) bool { return !r.Status.Running && r.Status.Source == "restored-unmeasured" })
-	if result.Status.EffectiveMTU != 1400 || result.Status.Measured || !result.Status.Restored { t.Fatal("late cancel kept the canceled restoration",result) }
-	lease.mu.Lock(); defer lease.mu.Unlock()
-	if len(lease.changes) != 2 || lease.changes[1] != 1400 { t.Fatal("late cancel did not restore captured readback",lease.changes) }
+	m.restored = &mobilemtu.Status{Request: m.request.Request, Complete: true, Restored: true, OriginalMTU: 1400, EffectiveMTU: 1380, Source: "restored-captured-system-tun"}
+	if err := m.cancel(routerVPNDesktopMTUControl{Generation: 2, Request: m.request.Request}); err == nil {
+		t.Fatal("replacement generation rolled back")
+	}
+	if err := m.cancel(routerVPNDesktopMTUControl{Generation: 1, Request: m.request.Request}); err != nil {
+		t.Fatal(err)
+	}
+	result := desktopMTUAwait(t, m, func(r routerVPNDesktopMTURecord) bool {
+		return !r.Status.Running && r.Status.Source == "restored-unmeasured"
+	})
+	if result.Status.EffectiveMTU != 1400 || result.Status.Measured || !result.Status.Restored {
+		t.Fatal("late cancel kept the canceled restoration", result)
+	}
+	lease.mu.Lock()
+	defer lease.mu.Unlock()
+	if len(lease.changes) != 2 || lease.changes[1] != 1400 {
+		t.Fatal("late cancel did not restore captured readback", lease.changes)
+	}
 }
 
 func TestRouterVPNDesktopMTUImmediateCancellationRetainsActualReadback(t *testing.T) {
-	for attempt:=0; attempt<10; attempt++ {
-		m, lease, _ := desktopMTUNativeFixtureAt(t,1400)
+	for attempt := 0; attempt < 10; attempt++ {
+		m, lease, _ := desktopMTUNativeFixtureAt(t, 1400)
 		lease.blocked = make(chan struct{})
-		request := routerVPNDesktopMTURequest{Generation:1,Request:strings.Repeat("f",32),Force:true}
-		if err := m.start(request); err != nil { t.Fatal(err) }
-		if err := m.cancel(routerVPNDesktopMTUControl{Generation:1,Request:request.Request}); err != nil { t.Fatal(err) }
-		result := desktopMTUAwait(t,m,func(r routerVPNDesktopMTURecord) bool { return r.Status.Complete && !r.Status.Running })
-		if result.Status.Measured || result.Status.EffectiveMTU != 1400 || result.Status.OriginalMTU != 1400 { t.Fatal("immediate cancellation lost the captured readback",result) }
+		request := routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("f", 32), Force: true}
+		if err := m.start(request); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.cancel(routerVPNDesktopMTUControl{Generation: 1, Request: request.Request}); err != nil {
+			t.Fatal(err)
+		}
+		result := desktopMTUAwait(t, m, func(r routerVPNDesktopMTURecord) bool { return r.Status.Complete && !r.Status.Running })
+		if result.Status.Measured || result.Status.EffectiveMTU != 1400 || result.Status.OriginalMTU != 1400 {
+			t.Fatal("immediate cancellation lost the captured readback", result)
+		}
 	}
 }

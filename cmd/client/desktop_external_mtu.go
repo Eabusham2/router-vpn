@@ -17,6 +17,7 @@ import (
 	"router-vpn/internal/common"
 	"router-vpn/internal/hopmeasure"
 	"router-vpn/internal/mobilemtu"
+	"router-vpn/internal/mobiletor"
 )
 
 // The controller and child use a bounded, single-operation mailbox. Every
@@ -50,17 +51,18 @@ type desktopMTUControl struct {
 	MTU          int    `json:"mtu,omitempty"`
 }
 type desktopMTURecord struct {
-	Schema          int              `json:"schema"`
-	Session         string           `json:"session_id"`
-	SourceSHA256    string           `json:"source_sha256"`
-	ConfigSHA256    string           `json:"config_sha256"`
-	Generation      uint64           `json:"generation"`
-	Requested       bool             `json:"requested"`
-	WaitingCommit   bool             `json:"waiting_commit"`
-	PreparedMTU     int              `json:"prepared_mtu,omitempty"`
-	PreparedPathKey string           `json:"prepared_path_key,omitempty"`
-	RestoredMTU     int              `json:"restored_mtu,omitempty"`
-	Status          mobilemtu.Status `json:"status"`
+	Schema          int                                 `json:"schema"`
+	Session         string                              `json:"session_id"`
+	SourceSHA256    string                              `json:"source_sha256"`
+	ConfigSHA256    string                              `json:"config_sha256"`
+	Generation      uint64                              `json:"generation"`
+	Requested       bool                                `json:"requested"`
+	WaitingCommit   bool                                `json:"waiting_commit"`
+	PreparedMTU     int                                 `json:"prepared_mtu,omitempty"`
+	PreparedPathKey string                              `json:"prepared_path_key,omitempty"`
+	RestoredMTU     int                                 `json:"restored_mtu,omitempty"`
+	Status          mobilemtu.Status                    `json:"status"`
+	MTUReadback     *mobiletor.DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
 }
 type desktopMTUSession struct {
 	restoreMTU                                   int
@@ -87,15 +89,15 @@ var desktopMTUPathPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 // Measured fields are excluded, but credentials, entry mode, resolver, layers,
 // protection and every saved path choice are captured before any later edit.
 func captureDesktopMTUBaselineLocked(a *app, launch *desktopNodeLaunch) {
-	if launch == nil || launch.external == nil || a.cmd != launch.command {
+	identity, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil || a.cmd != launch.command {
 		return
 	}
-	owner := launch.external
-	profile, ok := a.profileByIDLocked(owner.expected.ExitID)
+	profile, ok := a.profileByIDLocked(identity.node)
 	if !ok {
 		return
 	}
-	baseline := &desktopMTUSession{profileID: profile.ID, profileToken: mtuProfileSnapshotToken(profile), entryID: owner.expected.EntryID}
+	baseline := &desktopMTUSession{profileID: profile.ID, profileToken: mtuProfileSnapshotToken(profile), entryID: identity.entry}
 	if baseline.entryID != "" {
 		entry, found := a.profileByIDLocked(baseline.entryID)
 		if !found {
@@ -103,15 +105,15 @@ func captureDesktopMTUBaselineLocked(a *app, launch *desktopNodeLaunch) {
 		}
 		baseline.entryToken = mtuProfileSnapshotToken(entry)
 	}
-	owner.mu.Lock()
-	if owner.mtu != nil && owner.mtu.profileID == "" {
-		baseline.restoreMTU, baseline.generation = owner.mtu.restoreMTU, owner.mtu.generation
-		owner.mtu = nil
+	identity.mu.Lock()
+	if prior := *identity.mtu; prior != nil && prior.profileID == "" {
+		baseline.restoreMTU, baseline.generation = prior.restoreMTU, prior.generation
+		*identity.mtu = nil
 	}
-	if owner.mtu == nil {
-		owner.mtu = baseline
+	if *identity.mtu == nil {
+		*identity.mtu = baseline
 	}
-	owner.mu.Unlock()
+	identity.mu.Unlock()
 }
 
 func desktopExternalMTULaunch(a *app) *desktopNodeLaunch {
@@ -120,7 +122,10 @@ func desktopExternalMTULaunch(a *app) *desktopNodeLaunch {
 		return nil
 	}
 	launch, ok := value.(*desktopNodeLaunch)
-	if !ok || launch == nil || launch.external == nil || !a.ownsConnectionRuntime(launch.command) {
+	if !ok || launch == nil || !a.ownsConnectionRuntime(launch.command) {
+		return nil
+	}
+	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return nil
 	}
 	return launch
@@ -133,15 +138,13 @@ func captureDesktopMTUSnapshot(a *app, launch *desktopNodeLaunch) (desktopMTUSna
 	if _, busy := speedLabTemporaryOwners.Load(a); busy {
 		return desktopMTUSnapshot{}, errors.New("temporary Speed Lab owns the current native path")
 	}
-	if launch == nil || launch.external == nil {
+	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return desktopMTUSnapshot{}, errors.New("active path has no native MTU owner")
 	}
-	if _, err := a.readDesktopExternalProof(launch); err != nil {
+	if err := a.desktopMeasurementCurrentProof(launch); err != nil {
 		return desktopMTUSnapshot{}, err
 	}
-	launch.external.mu.Lock()
-	owner := launch.external.mtu
-	launch.external.mu.Unlock()
+	owner := desktopMeasurementMTUSession(launch)
 	if owner == nil {
 		return desktopMTUSnapshot{}, errors.New("native MTU has no captured saved profile identity")
 	}
@@ -163,7 +166,16 @@ func captureDesktopMTUSnapshot(a *app, launch *desktopNodeLaunch) (desktopMTUSna
 	return desktopMTUSnapshot{launch: launch, session: owner, profile: common.CloneRouterProfile(profile), selected: a.profiles.SelectedID, stateToken: mtuStateSnapshotToken(a.state)}, nil
 }
 func (s desktopMTUSnapshot) current(a *app) error {
-	if _, err := a.readDesktopExternalProof(s.launch); err != nil {
+	if err := a.desktopMeasurementCurrentProof(s.launch); err != nil {
+		return err
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	return s.currentLocked(a)
+}
+
+func (s desktopMTUSnapshot) currentContext(ctx context.Context, a *app) error {
+	if err := a.waitDesktopMeasurementProof(ctx, s.launch); err != nil {
 		return err
 	}
 	a.mu.Lock()
@@ -204,11 +216,14 @@ func readDesktopMTURecord(launch *desktopNodeLaunch) (desktopMTURecord, error) {
 	if decoder.Decode(&record) != nil {
 		return record, errors.New("native MTU record has unrecognized fields")
 	}
-	owner := launch.external
-	if owner == nil || record.Schema != 1 || record.Session != owner.session || record.SourceSHA256 != owner.expected.SourceSHA256 || record.ConfigSHA256 != owner.expected.ConfigSHA256 {
+	identity, identityErr := capturedDesktopMeasurementRuntime(launch)
+	if identityErr != nil || record.Schema != 1 || record.Session != identity.session || record.SourceSHA256 != identity.source || record.ConfigSHA256 != identity.config {
 		return record, errors.New("native MTU record belongs to another session or graph")
 	}
-	if err := validateDesktopMTURecord(record); err != nil {
+	if err := validateDesktopMTURecordForSource(record, identity.measuredSource); err != nil {
+		return record, err
+	}
+	if err := validateDesktopTorMTURecord(launch, record); err != nil {
 		return record, err
 	}
 	return record, nil
@@ -225,6 +240,10 @@ func desktopMTUTransfer(value *hopmeasure.Transfer) bool {
 	return math.Abs(expected-value.Mbps) <= math.Max(1e-6, expected*1e-6)
 }
 func validateDesktopMTURecord(record desktopMTURecord) error {
+	return validateDesktopMTURecordForSource(record, "measured-public-system-tun-transfer")
+}
+
+func validateDesktopMTURecordForSource(record desktopMTURecord, measuredSource string) error {
 	status := record.Status
 	bad := errors.New("native MTU status has invalid or mislabeled measurement evidence")
 	if len(status.Candidates) > 32 || status.Running && status.Complete || len(status.Request) != 0 && !desktopMTURequestPattern.MatchString(status.Request) {
@@ -251,7 +270,7 @@ func validateDesktopMTURecord(record desktopMTURecord) error {
 	if !record.WaitingCommit && (record.PreparedMTU != 0 || record.PreparedPathKey != "") {
 		return bad
 	}
-	if status.Measured && (!status.Complete || status.Running || status.Restored || status.Source != "measured-public-system-tun-transfer" || !eligible[status.EffectiveMTU] || !desktopMTUPathPattern.MatchString(status.PathKey) || status.Failure != "") {
+	if status.Measured && (!status.Complete || status.Running || status.Restored || status.Source != measuredSource || !eligible[status.EffectiveMTU] || !desktopMTUPathPattern.MatchString(status.PathKey) || status.Failure != "") {
 		return bad
 	}
 	if status.Restored {
@@ -273,6 +292,15 @@ func writeDesktopMTUControl(launch *desktopNodeLaunch, name string, value any) e
 	encoded, err := json.Marshal(value)
 	if err != nil || len(encoded) > 4096 {
 		return errors.New("invalid native MTU command")
+	}
+	if name == "mtu-request.json" && launch != nil && launch.tor != nil {
+		request, ok := value.(desktopMTURequest)
+		if !ok {
+			return errors.New("Tor MTU request has no typed captured identity")
+		}
+		if err := authorizeDesktopTorMTURequest(launch, request); err != nil {
+			return err
+		}
 	}
 	writeErr := writeDesktopRuntimeFile(launch, name, encoded, true)
 	if writeErr == nil {
@@ -325,7 +353,11 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 	if err != nil {
 		return result, err
 	}
-	ctx, cancel := context.WithTimeout(parent, mtuRetestTimeout)
+	budget := mtuRetestTimeout
+	if launch.tor != nil {
+		budget = 5 * time.Minute // Shared Tor optimizer is bounded to four minutes.
+	}
+	ctx, cancel := context.WithTimeout(parent, budget)
 	defer cancel()
 	identifier, err := randomHex(16)
 	if err != nil {
@@ -357,12 +389,15 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 		}
 		snapshot.session.mu.Unlock()
 	}()
-	owner := launch.external
-	request := desktopMTURequest{Schema: 1, Session: owner.session, SourceSHA256: owner.expected.SourceSHA256, ConfigSHA256: owner.expected.ConfigSHA256, Generation: generation, Request: identifier, Force: force}
+	identity, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil {
+		return result, err
+	}
+	request := desktopMTURequest{Schema: 1, Session: identity.session, SourceSHA256: identity.source, ConfigSHA256: identity.config, Generation: generation, Request: identifier, Force: force}
 	if tested, e := time.Parse(time.RFC3339Nano, snapshot.profile.EffectiveMTUTestedAt); e == nil && len(snapshot.profile.EffectiveMTUPathKey) == 64 && snapshot.profile.EffectiveMTU >= 1280 && snapshot.profile.EffectiveMTU <= 9000 {
 		request.Cache = &desktopMTUCached{PathKey: snapshot.profile.EffectiveMTUPathKey, MTU: snapshot.profile.EffectiveMTU, TestedAt: tested.Unix()}
 	}
-	if err := snapshot.current(a); err != nil {
+	if err := snapshot.currentContext(ctx, a); err != nil {
 		return result, err
 	}
 	if err := writeDesktopMTUControl(launch, "mtu-request.json", request); err != nil {
@@ -389,7 +424,7 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 		if err := ctx.Err(); err != nil {
 			return result, err
 		}
-		if err := snapshot.current(a); err != nil {
+		if err := snapshot.currentContext(ctx, a); err != nil {
 			return result, err
 		}
 		record, err := readDesktopMTURecord(launch)
@@ -404,6 +439,10 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 					return result, errors.New("connection transition started before MTU adoption")
 				}
 				if err := snapshot.verifyCurrentPath(ctx, a); err != nil {
+					a.operationMu.Unlock()
+					return result, err
+				}
+				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 					a.operationMu.Unlock()
 					return result, err
 				}
@@ -432,6 +471,9 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if err := snapshot.verifyCurrentPath(ctx, a); err != nil {
 					return result, err
 				}
+				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
+					return result, err
+				}
 				if err := ctx.Err(); err != nil {
 					return result, err
 				}
@@ -451,22 +493,26 @@ func (a *app) cancelDesktopMTU(launch *desktopNodeLaunch, control desktopMTUCont
 	if err := writeDesktopMTUControl(launch, "mtu-cancel.json", control); err != nil {
 		return err
 	}
-	deadline := time.NewTimer(12 * time.Second)
+	drainBudget := 12 * time.Second
+	if launch != nil && launch.tor != nil {
+		drainBudget = 40 * time.Second // Native Tor rollback owns up to 30s.
+	}
+	deadline := time.NewTimer(drainBudget)
 	defer deadline.Stop()
 	ticker := time.NewTicker(50 * time.Millisecond)
 	defer ticker.Stop()
 	for {
 		record, err := readDesktopMTURecord(launch)
-		if err == nil && record.Generation == control.Generation && record.Status.Request == control.Request && record.Status.Complete && !record.Status.Running && !record.Status.Measured {
-			if record.Status.Restored || record.Status.OriginalMTU == record.Status.EffectiveMTU {
-				return nil
+		if err == nil && record.Generation == control.Generation && record.Status.Request == control.Request && record.Status.Complete && !record.Status.Running && !record.Status.Measured && record.Status.Source != "restored-captured-system-tun" {
+			if record.Status.EffectiveMTU > 0 && record.Status.OriginalMTU == record.Status.EffectiveMTU {
+				return a.waitDesktopTorMTUReadback(context.Background(), launch, record)
 			}
 			return errors.New("native MTU canceled, but exact interface rollback could not be verified")
 		}
 		if !a.ownsConnectionRuntime(launch.command) {
 			return errors.New("MTU session retired; no replacement interface was touched")
 		}
-		if desktopExternalProcessExited(launch) {
+		if desktopMeasurementProcessExited(launch) {
 			return errors.New("native MTU process exited before rollback acknowledgement")
 		}
 		select {
@@ -478,7 +524,8 @@ func (a *app) cancelDesktopMTU(launch *desktopNodeLaunch, control desktopMTUCont
 }
 
 func persistDesktopMTU(a *app, snapshot desktopMTUSnapshot, record desktopMTURecord) (common.RouterProfile, error) {
-	if !record.WaitingCommit || validateDesktopMTURecord(record) != nil {
+	identity, err := capturedDesktopMeasurementRuntime(snapshot.launch)
+	if err != nil || !record.WaitingCommit || validateDesktopMTURecordForSource(record, identity.measuredSource) != nil {
 		return common.RouterProfile{}, errors.New("MTU winner has no fresh transfer evidence")
 	}
 	a.mu.Lock()
@@ -492,8 +539,8 @@ func persistDesktopMTU(a *app, snapshot desktopMTUSnapshot, record desktopMTURec
 			continue
 		}
 		before := common.CloneRouterProfile(*current)
-		current.EffectiveMTU, current.EffectiveMTUSource = record.PreparedMTU, "measured-public-system-tun-transfer"
-		current.EffectiveMTUPathKey, current.EffectiveMTUNetworkFingerprint, current.EffectiveMTUProfileFingerprint = record.PreparedPathKey, snapshot.launch.external.network, snapshot.session.profileToken
+		current.EffectiveMTU, current.EffectiveMTUSource = record.PreparedMTU, identity.measuredSource
+		current.EffectiveMTUPathKey, current.EffectiveMTUNetworkFingerprint, current.EffectiveMTUProfileFingerprint = record.PreparedPathKey, identity.network, snapshot.session.profileToken
 		current.EffectiveMTUTestedAt = time.Now().UTC().Format(time.RFC3339Nano)
 		current.EffectiveUnderlayPMTU, current.EffectiveMTUSuccessRatio = 0, 0 // No authenticated UDP PMTU/loss claim for a public transfer.
 		for _, candidate := range record.Status.Candidates {
@@ -531,15 +578,16 @@ func restoreDesktopMTUDurable(a *app, snapshot desktopMTUSnapshot, written commo
 }
 
 func (a *app) startDesktopExternalAutomaticMTU(launch *desktopNodeLaunch) {
-	if launch == nil || launch.external == nil {
+	if _, err := capturedDesktopMeasurementRuntime(launch); err != nil {
 		return
+	}
+	if launch.tor != nil && desktopMeasurementMTUSession(launch) == nil {
+		return // The successful Tor connection transaction installs its baseline.
 	}
 	a.mu.Lock()
 	captureDesktopMTUBaselineLocked(a, launch)
 	a.mu.Unlock()
-	launch.external.mu.Lock()
-	owner := launch.external.mtu
-	launch.external.mu.Unlock()
+	owner := desktopMeasurementMTUSession(launch)
 	if owner == nil {
 		return
 	}
@@ -604,7 +652,11 @@ func (a *app) retestDesktopExternalMTU(w http.ResponseWriter, r *http.Request, l
 		return
 	}
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "effective_mtu": result.Status.EffectiveMTU, "effective_mtu_source": result.Status.Source, "result": result.Status, "note": "Selected-path HTTPS response and transferred-byte throughput through the owned system TUN; interface MTU readback is separate from an authenticated UDP path-MTU measurement."})
+	note := "Selected-path HTTPS response and transferred-byte throughput through the owned system TUN; interface MTU readback is separate from an authenticated UDP path-MTU measurement."
+	if launch.tor != nil {
+		note = "Tor HTTPS response time and transferred-byte download/upload throughput through the captured Tor path, with fresh Tor and selected-DNS proof. The reported MTU is the verified virtual-interface value, not an authenticated UDP path-MTU measurement."
+	}
+	_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "effective_mtu": result.Status.EffectiveMTU, "effective_mtu_source": result.Status.Source, "result": result.Status, "note": note})
 }
 func (a *app) desktopMTUStatus(w http.ResponseWriter, r *http.Request) {
 	a.writeDesktopMTUViewStatus(w, r)
@@ -627,13 +679,12 @@ func (a *app) cancelDesktopMTURoute(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "native MTU session retired", http.StatusConflict)
 		return
 	}
-	if request.Session != "" && request.Session != launch.external.session || request.Profile != "" && request.Profile != launch.external.expected.ExitID {
+	identity, err := capturedDesktopMeasurementRuntime(launch)
+	if err != nil || request.Session != "" && request.Session != identity.session || request.Profile != "" && request.Profile != identity.node {
 		http.Error(w, "MTU cancellation belongs to another connection", http.StatusConflict)
 		return
 	}
-	launch.external.mu.Lock()
-	owner := launch.external.mtu
-	launch.external.mu.Unlock()
+	owner := desktopMeasurementMTUSession(launch)
 	if owner == nil {
 		http.Error(w, "native MTU owner is missing", http.StatusConflict)
 		return

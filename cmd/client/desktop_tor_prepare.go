@@ -67,7 +67,7 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 // exercise exact input ownership without installing a TUN or private server.
 // Shipping preparation above always verifies the complete packaged engine.
 func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, tor, native string) (result torBridgeRuntime, failure error) {
-	capturedToken := asyncMeasurementProfileToken(profile)
+	capturedToken := desktopTorSourceIdentityToken(profile)
 	profile, cfg, transports, endpoint, err := torBridgeProfile(cloneRouterProfile(profile))
 	if err != nil {
 		return result, err

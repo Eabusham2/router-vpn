@@ -22,9 +22,20 @@ import (
 // cannot release private inputs or the client's protection policy.
 type desktopTorRuntime struct {
 	mu                    sync.Mutex
+	proofMu               sync.Mutex
 	dnsMu                 sync.Mutex
 	dnsGeneration         uint64
 	dnsFailed             bool
+	pathMu                sync.Mutex
+	pathGeneration        uint64
+	pathFailed            bool
+	mtu                   *desktopMTUSession
+	mtuAuthority          desktopTorMTUAuthority
+	mtuReadback           *mobiletor.DesktopBridgeMTUReadback
+	mtuPriorReadback      *mobiletor.DesktopBridgeMTUReadback
+	mtuTransition         *mobiletor.DesktopBridgeMTUTransition
+	mtuRetiredTransition  uint64
+	lastProofHeartbeat    int64
 	expected              mobiletor.DesktopBridgeMetadata
 	digests               mobiletor.DesktopBridgeInputDigests
 	profileToken          string
@@ -45,17 +56,18 @@ type desktopTorInput struct {
 }
 
 type desktopTorProof struct {
-	Schema         int                             `json:"schema"`
-	SessionID      string                          `json:"session_id"`
-	SourceSHA256   string                          `json:"source_sha256"`
-	ConfigSHA256   string                          `json:"config_sha256"`
-	Policy         mobiletor.DesktopBridgeMetadata `json:"policy"`
-	Proof          mobiletor.Proof                 `json:"proof"`
-	InterfaceName  string                          `json:"interface_name"`
-	InterfaceIndex int                             `json:"interface_index"`
-	EffectiveMTU   int                             `json:"effective_mtu"`
-	Healthy        bool                            `json:"healthy"`
-	HeartbeatAt    int64                           `json:"heartbeat_at"`
+	Schema         int                                 `json:"schema"`
+	SessionID      string                              `json:"session_id"`
+	SourceSHA256   string                              `json:"source_sha256"`
+	ConfigSHA256   string                              `json:"config_sha256"`
+	Policy         mobiletor.DesktopBridgeMetadata     `json:"policy"`
+	Proof          mobiletor.Proof                     `json:"proof"`
+	InterfaceName  string                              `json:"interface_name"`
+	InterfaceIndex int                                 `json:"interface_index"`
+	EffectiveMTU   int                                 `json:"effective_mtu"`
+	Healthy        bool                                `json:"healthy"`
+	HeartbeatAt    int64                               `json:"heartbeat_at"`
+	MTUReadback    *mobiletor.DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
 }
 
 type desktopTorProgress struct {
@@ -97,13 +109,13 @@ func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	expected := owner.expected
-	if proof.Schema != 1 || !proof.Healthy || proof.Policy != expected || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.Proof.SessionID != expected.SessionID || !proof.Proof.IsTor || !proof.Proof.DNSProven || owner.started.IsZero() || proof.Proof.CheckedAt.Before(owner.started.Add(-time.Second)) || proof.Proof.CheckedAt.After(now.Add(time.Second)) || proof.HeartbeatAt < now.Add(-3*time.Second).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.Proof.CheckedAt.UnixMilli() {
+	if proof.Schema != 1 || !proof.Healthy || proof.Policy != expected || proof.SessionID != expected.SessionID || proof.SourceSHA256 != expected.SourceSHA256 || proof.ConfigSHA256 != expected.ConfigSHA256 || proof.Proof.SessionID != expected.SessionID || !proof.Proof.IsTor || !proof.Proof.DNSProven || owner.started.IsZero() || proof.Proof.CheckedAt.Before(owner.started.Add(-time.Second)) || proof.Proof.CheckedAt.After(now.Add(time.Second)) || proof.HeartbeatAt < now.Add(-mobiletor.DesktopBridgeHeartbeatMaxAge).UnixMilli() || proof.HeartbeatAt > now.Add(time.Second).UnixMilli() || proof.HeartbeatAt < proof.Proof.CheckedAt.UnixMilli() {
 		return proof, bad
 	}
 	if ip, err := publicTorExit(proof.Proof.IP); err != nil || ip != proof.Proof.IP {
 		return proof, bad
 	}
-	if proof.InterfaceIndex <= 0 || proof.InterfaceName == "" || len(proof.InterfaceName) > 64 || proof.EffectiveMTU < 1280 || proof.EffectiveMTU > 9000 || proof.EffectiveMTU != expected.ConfiguredMTU || expected.InterfaceName != "" && proof.InterfaceName != expected.InterfaceName {
+	if proof.InterfaceIndex <= 0 || proof.InterfaceName == "" || len(proof.InterfaceName) > 64 || proof.EffectiveMTU < 1280 || proof.EffectiveMTU > 9000 || expected.InterfaceName != "" && proof.InterfaceName != expected.InterfaceName {
 		return proof, bad
 	}
 	for _, r := range proof.InterfaceName {
@@ -111,7 +123,10 @@ func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time
 			return proof, bad
 		}
 	}
-	if adopted := owner.adopted; adopted != nil && (proof.Proof.SessionID != adopted.Proof.SessionID || proof.Proof.IP != adopted.Proof.IP || !proof.Proof.CheckedAt.Equal(adopted.Proof.CheckedAt) || proof.InterfaceName != adopted.InterfaceName || proof.InterfaceIndex != adopted.InterfaceIndex || proof.EffectiveMTU != adopted.EffectiveMTU) {
+	if adopted := owner.adopted; adopted != nil && (proof.Proof.SessionID != adopted.Proof.SessionID || proof.Proof.IP != adopted.Proof.IP || !proof.Proof.CheckedAt.Equal(adopted.Proof.CheckedAt)) {
+		return proof, bad
+	}
+	if !desktopTorProofReadbackLocked(owner, proof) {
 		return proof, bad
 	}
 	return proof, nil
@@ -130,7 +145,7 @@ func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 	}
 	a.mu.Lock()
 	current, found := a.profileByIDLocked(launch.profileID)
-	valid := a.cmd == launch.command && found && owner.profileToken != "" && asyncMeasurementProfileToken(current) == owner.profileToken
+	valid := a.cmd == launch.command && found && owner.profileToken != "" && desktopTorSourceIdentityToken(current) == owner.profileToken
 	a.mu.Unlock()
 	if !valid {
 		return errors.New("Tor native session or captured private node changed")
@@ -142,6 +157,13 @@ func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 }
 
 func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, error) {
+	if launch == nil || launch.tor == nil {
+		return desktopTorProof{}, errors.New("Tor proof has no captured owner")
+	}
+	// Serialize file read and receipt adoption so an older concurrent reader
+	// cannot regress the retained native interface revision.
+	launch.tor.proofMu.Lock()
+	defer launch.tor.proofMu.Unlock()
 	if err := a.desktopTorCurrent(launch); err != nil {
 		return desktopTorProof{}, err
 	}
@@ -155,6 +177,9 @@ func (a *app) readDesktopTorProof(launch *desktopNodeLaunch) (desktopTorProof, e
 	proof, err := validateDesktopTorProof(raw, launch.tor, time.Now())
 	if err == nil {
 		err = a.desktopTorCurrent(launch)
+	}
+	if err == nil {
+		noteDesktopTorStrictHeartbeat(launch.tor, proof)
 	}
 	return proof, err
 }
@@ -484,7 +509,10 @@ func stopDesktopTorRuntime(a *app, launch *desktopNodeLaunch, command *exec.Cmd)
 func desktopTorMailbox(name string) bool {
 	switch name {
 	case "proof.json", "progress.json", "stop.json", "stopped.json", "prelaunch-failed.json", ".proof.json.pending", ".progress.json.pending", ".stopped.json.pending",
-		"dns-status.json", "dns-request.json", "dns-cancel.json", ".dns-status.json.pending":
+		"dns-status.json", "dns-request.json", "dns-cancel.json", ".dns-status.json.pending",
+		"mtu-status.json", "mtu-request.json", "mtu-commit.json", "mtu-cancel.json", ".mtu-status.json.pending",
+		"path-status.json", "path-request.json", "path-cancel.json", ".path-status.json.pending",
+		"mtu-transition.json", ".mtu-transition.json.pending":
 		return true
 	}
 	return false
@@ -592,7 +620,7 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 			if !a.ownsConnectionRuntime(launch.command) {
 				return
 			}
-			if _, err := a.readDesktopTorProof(launch); err == nil {
+			if a.desktopTorMonitorCurrent(launch) {
 				continue
 			}
 			if !a.operationMu.TryLock() {
@@ -602,7 +630,7 @@ func (a *app) monitorDesktopTorRuntime(launch *desktopNodeLaunch) {
 				a.operationMu.Unlock()
 				return
 			}
-			if _, err := a.readDesktopTorProof(launch); err == nil {
+			if a.desktopTorMonitorCurrent(launch) {
 				a.operationMu.Unlock()
 				continue
 			}

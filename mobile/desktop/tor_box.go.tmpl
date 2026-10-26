@@ -62,6 +62,7 @@ type RouterVPNDesktopTor struct {
 	activity                    routerVPNExternalActivity
 	mtuLease                    atomic.Pointer[RouterVPNDesktopTorMTULease]
 	mtuRevision                 uint64
+	mtuTransition               uint64
 }
 
 // RouterVPNDesktopTorCreate is single-use for this exact service generation.
@@ -314,6 +315,15 @@ func (r *RouterVPNDesktopTor) readbackLocked() (string, int, int, error) {
 
 func (r *RouterVPNDesktopTor) Healthy() bool { return r != nil && r.proved.Load() && r.live() }
 
+// LifetimeCurrent is a bounded cancellation/liveness check, never a graph or
+// interface proof. The command can observe Stop/reset while a real native TUN
+// transaction holds the reader and engine locks. A full heartbeat still uses
+// VerifyCurrentPath and the actual interface readback.
+func (r *RouterVPNDesktopTor) LifetimeCurrent() bool {
+	return r != nil && r.proved.Load() && r.readerLifetimeCurrent() && r.started.Load() &&
+		r.session != nil && r.session.Current()
+}
+
 func (r *RouterVPNDesktopTor) VerifyCurrentPath(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil || !r.Healthy() {
 		return errors.New("desktop Tor proof is retired")
@@ -321,13 +331,27 @@ func (r *RouterVPNDesktopTor) VerifyCurrentPath(ctx context.Context) error {
 	r.mu.Lock()
 	session := r.session
 	r.mu.Unlock()
-	if _, err := session.Verify(ctx); err != nil {
+	// Tor's authenticated control stream retires after an interrupted command
+	// because an unread reply must never become another command's authority.
+	// Keep that bounded exchange owned by the connection, not by a temporary
+	// DNS/MTU/path caller. The caller still joins it and cannot adopt a result
+	// after cancellation; stopping the connection cancels it immediately.
+	control, cancel := context.WithTimeout(r.ctx, 5*time.Second)
+	_, err := session.Verify(control)
+	cancel()
+	if err != nil {
 		r.Cancel()
 		return err
 	}
-	if _, _, _, err := r.readback(); err != nil || ctx.Err() != nil || !r.Healthy() {
+	if ctx.Err() != nil {
+		return ctx.Err()
+	}
+	if _, _, _, err := r.readback(); err != nil || !r.Healthy() {
 		r.Cancel()
 		return errors.New("desktop Tor path changed during verification")
+	}
+	if ctx.Err() != nil {
+		return ctx.Err()
 	}
 	return nil
 }

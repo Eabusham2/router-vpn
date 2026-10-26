@@ -2,10 +2,12 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"os"
+	"sync/atomic"
 	"time"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/applexray"
@@ -41,18 +43,65 @@ type routerVPNDesktopPathOutcome struct {
 	checkedAt int64
 }
 
-// Only the command loop mutates this mailbox or its files. The worker owns a
-// bounded proof call and sends one outcome; it never writes an asynchronous
-// completion to a pathname that could now belong to another request.
-type routerVPNDesktopPathFiles struct {
-	files  *routerVPNExternalFiles
-	owner  routerVPNExternalOwner
-	record routerVPNDesktopPathRecord
-	done   chan routerVPNDesktopPathOutcome
-	inputs map[string]routerVPNDesktopPathInput
+type routerVPNDesktopPathOwner interface {
+	Healthy() bool
+	VerifyCurrentPath() error
 }
 
-func routerVPNOpenDesktopPath(files *routerVPNExternalFiles, owner routerVPNExternalOwner, session, source, config string) (*routerVPNDesktopPathFiles, error) {
+type routerVPNDesktopContextPathOwner interface {
+	VerifyCurrentPathContext(context.Context) error
+}
+
+type routerVPNDesktopPathCancellation struct {
+	request routerVPNDesktopPathRequest
+	cancel  context.CancelFunc
+}
+
+// One serialized publisher mutates this mailbox or its files. The proof worker
+// owns a bounded call and sends one outcome; it never writes an asynchronous
+// completion to a pathname that could now belong to another request.
+type routerVPNDesktopPathFiles struct {
+	files        *routerVPNExternalFiles
+	owner        routerVPNDesktopPathOwner
+	record       routerVPNDesktopPathRecord
+	done         chan routerVPNDesktopPathOutcome
+	cancel       context.CancelFunc
+	inputs       map[string]routerVPNDesktopPathInput
+	cancellation atomic.Pointer[routerVPNDesktopPathCancellation]
+}
+
+// A slow authenticated heartbeat must not postpone delivery of an already
+// captured path cancellation. This signal only revokes the exact worker's
+// context. The serialized mailbox still owns all status, input retirement and
+// actual completion; neither a file read nor context cancellation acknowledges
+// drain or touches a newer request.
+func (f *routerVPNDesktopPathFiles) signalCancellation() {
+	if f == nil {
+		return
+	}
+	captured := f.cancellation.Load()
+	if captured == nil {
+		return
+	}
+	raw, err := f.files.read("path-cancel.json", 2048)
+	if err != nil {
+		return
+	}
+	if _, err := applexray.Object(raw); err != nil {
+		return
+	}
+	var request routerVPNDesktopPathRequest
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&request) == nil && request == captured.request && f.cancellation.Load() == captured {
+		captured.cancel()
+	}
+}
+
+func routerVPNOpenDesktopPath(files *routerVPNExternalFiles, owner routerVPNDesktopPathOwner, session, source, config string) (*routerVPNDesktopPathFiles, error) {
+	if files == nil || owner == nil || !owner.Healthy() {
+		return nil, routerVPNExternalFailure
+	}
 	f := &routerVPNDesktopPathFiles{files: files, owner: owner, inputs: map[string]routerVPNDesktopPathInput{}, record: routerVPNDesktopPathRecord{
 		routerVPNDesktopPathRequest: routerVPNDesktopPathRequest{Schema: 1, Session: session, SourceSHA256: source, ConfigSHA256: config}, Complete: true,
 	}}
@@ -131,6 +180,9 @@ func (f *routerVPNDesktopPathFiles) tick() error {
 		return request == f.record.routerVPNDesktopPathRequest
 	}); cancel {
 		f.record.Cancelled, f.record.Verified, f.record.CheckedAt = true, false, 0
+		if f.cancel != nil {
+			f.cancel()
+		}
 	}
 	if !f.record.Complete && f.done == nil {
 		if f.record.Cancelled {
@@ -138,8 +190,16 @@ func (f *routerVPNDesktopPathFiles) tick() error {
 		} else {
 			done := make(chan routerVPNDesktopPathOutcome, 1)
 			f.done = done
+			ctx, cancel := context.WithCancel(context.Background())
+			f.cancel = cancel
+			f.cancellation.Store(&routerVPNDesktopPathCancellation{request: f.record.routerVPNDesktopPathRequest, cancel: cancel})
 			go func() {
-				err := f.owner.VerifyCurrentPath()
+				var err error
+				if captured, ok := f.owner.(routerVPNDesktopContextPathOwner); ok {
+					err = captured.VerifyCurrentPathContext(ctx)
+				} else {
+					err = f.owner.VerifyCurrentPath()
+				}
 				done <- routerVPNDesktopPathOutcome{err: err, checkedAt: time.Now().UnixMilli()}
 			}()
 		}
@@ -148,6 +208,9 @@ func (f *routerVPNDesktopPathFiles) tick() error {
 		select {
 		case outcome := <-f.done:
 			f.done = nil
+			f.cancellation.Store(nil)
+			f.cancel()
+			f.cancel = nil
 			f.record.Complete = true
 			if outcome.err == nil && !f.record.Cancelled && f.owner.Healthy() {
 				f.record.Verified, f.record.CheckedAt = true, outcome.checkedAt
@@ -171,8 +234,13 @@ func (f *routerVPNDesktopPathFiles) close() error {
 		return nil
 	}
 	if f.done != nil {
+		if f.cancel != nil {
+			f.cancel()
+		}
 		<-f.done
 		f.done = nil
+		f.cancellation.Store(nil)
+		f.cancel = nil
 	}
 	f.record.Complete, f.record.Cancelled, f.record.Verified, f.record.CheckedAt = true, true, false, 0
 	return errors.Join(f.retire(), f.publish())
