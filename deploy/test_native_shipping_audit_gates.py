@@ -261,5 +261,56 @@ class WindowsProfileControlsAuditTests(unittest.TestCase):
                 self.assertTrue(errors, "Broken shipping control passed its actual product audit")
 
 
+class CapturedTorDNSAuditTests(unittest.TestCase):
+    def test_actual_product_audit_requires_captured_idle_and_connection_dns_paths(self):
+        path = ROOT / "deploy/product-parity-audit.py"
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        functions = [node for node in tree.body if isinstance(node, ast.FunctionDef)
+                     and node.name == "captured_tor_dns_policy"]
+        self.assertEqual(len(functions), 1)
+        self.assertTrue(any(isinstance(node, ast.Expr) and isinstance(node.value, ast.Call)
+                            and isinstance(node.value.func, ast.Name) and node.value.func.id == "captured_tor_dns_policy"
+                            for node in tree.body), "Product audit stopped invoking captured Tor DNS validation")
+        changes, errors = {}, []
+
+        def require(relative, *markers):
+            body = changes[relative] if relative in changes else (ROOT / relative).read_text(encoding="utf-8")
+            errors.extend(relative + ": missing " + marker for marker in markers if marker not in body)
+            return body
+
+        scope = {"require": require, "errors": errors, "re": re}
+        exec(compile(ast.Module(body=functions, type_ignores=[]), str(path), "exec"), scope)
+        scope["captured_tor_dns_policy"]()
+        self.assertEqual(errors, [])
+        mutations = (
+            ("cmd/client/dns_policy_external.go", "_, err := capturedTorBridgeDNS(profile, entry, true)", "_, err := selectedTorBridgeDNS(profile)"),
+            ("cmd/client/dns_policy_external.go", "profile = cloneRouterProfile(profile)", "profile = common.RouterProfile{}"),
+            ("cmd/client/dns_policy_external.go", "profile.MultihopEntryMode = mode", "profile.MultihopEntryMode = unrelatedMode"),
+            ("cmd/client/dns_policy_external.go", "mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)", 'mobiletor.SelectDesktopBridgeDNS(string(raw), "", idle)'),
+            ("cmd/client/external_profile_connect.go", "_, err = capturedTorBridgeDNS(policy, entry, false)", "_, err = capturedTorBridgeDNS(policy, entry, true)"),
+            ("cmd/client/tor_bridge_routes.go", "policy, err = externalDNSPolicyForPath(policy, common.RouterProfile{}, true)", "err = nil"),
+            ("internal/mobiletor/desktop_dns.go", '(profile["multihop_enabled"] == true) != (entryJSON != "")', "false"),
+            ("internal/mobiletor/desktop_dns.go", "NewPredecessorProof(entryJSON)", "unprovedEntry(entryJSON)"),
+            ("internal/mobiletor/desktop_dns.go", 'profile["multihop_entry_id"] != entry["id"]', "false"),
+            ("internal/mobiletor/desktop_dns.go", 'profile["multihop_exit_id"] != profile["id"]', "false"),
+            ("internal/mobiletor/desktop_dns.go", 'profileString(profile, "multihop_execution") != "local"', "false"),
+            ("internal/mobiletor/desktop_dns.go", "torSelectedDNS(profile, entry, idle)", "torSelectedDNS(profile, nil, true)"),
+            ("internal/mobiletor/profile.go", "if entry == nil && !idle", "if false"),
+            ("internal/mobiletor/profile.go", "if host == address", "if true"),
+            ("internal/mobiletor/profile.go", "address.IsPrivate() != home", "false"),
+            ("internal/mobiletor/profile.go", 'protocol != "tcp" && protocol != "tls" && protocol != "https" && !(home && (protocol == "udp" || protocol == "h3"))', "false"),
+        )
+        for relative, before, after in mutations:
+            with self.subTest(path=relative, removed=before):
+                original = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertIn(before, original)
+                changes.clear(); errors.clear()
+                # A stale helper name or an unattached marker cannot satisfy
+                # the required call/guard inside the shipping function.
+                changes[relative] = original.replace(before, after) + "\n// " + before + "\n"
+                scope["captured_tor_dns_policy"]()
+                self.assertTrue(errors, "Broken captured Tor DNS path passed the real product audit")
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -105,8 +105,55 @@ def windows_profile_controls() -> None:
             "test_desktop_protection_settings.py --platform windows --shell powershell.exe")
 
 
+def captured_tor_dns_policy() -> None:
+    """Trace idle DNS edits and connection validation to the captured Tor path."""
+    def function(path: str, name: str, *markers: str) -> None:
+        body = require(path)
+        match = re.search(r"(?ms)^func (?:\([^\n]+\) )?" + re.escape(name) + r"\([^\n]*\{.*?^\}", body)
+        for marker in markers:
+            if match is None or marker not in match.group():
+                errors.append(f"{path}: captured Tor DNS function {name} lost: {marker}")
+
+    function("cmd/client/dns_policy_external.go", "validateDesktopExternalDNSPolicy",
+             'if profile.External.Protocol == "tor-bridge"',
+             "_, err := capturedTorBridgeDNS(profile, entry, true)", "return err",
+             "mobilemultihop.ValidateExternalDNS(string(raw), entryJSON)")
+    function("cmd/client/dns_policy_external.go", "capturedTorBridgeDNS",
+             "profile = cloneRouterProfile(profile)",
+             "desktopExternalEntryMode(profile, entry,", "profile.MultihopEntryMode = mode",
+             "json.Marshal(profile)", "json.Marshal(entry)",
+             "return mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)")
+    function("cmd/client/external_profile_connect.go", "externalDNSPolicyForPath",
+             'case "tor-bridge":', "direct && entry.ID !=", '!direct && entry.ID == ""',
+             "_, err = capturedTorBridgeDNS(policy, entry, false)",
+             "if err != nil", "return common.RouterProfile{}, err")
+    function("cmd/client/tor_bridge_routes.go", "torBridgeConnectCapturedOwned",
+             "policy, err = externalDNSPolicyForPath(policy, common.RouterProfile{}, true)",
+             "http.Error(w, err.Error(), http.StatusBadRequest)",
+             "prepareTorBridgeCommand(a, policy, profile)")
+    function("internal/mobiletor/desktop_dns.go", "SelectDesktopBridgeDNS",
+             "desktopBridgeProfile(source)", '(profile["multihop_enabled"] == true) != (entryJSON != "")',
+             "NewPredecessorProof(entryJSON)", 'profile["multihop_entry_id"] != entry["id"]',
+             'profile["multihop_exit_id"] != profile["id"]', 'entry["id"] == profile["id"]',
+             'profileString(profile, "multihop_execution") != "local"',
+             "torSelectedDNS(profile, entry, idle)")
+    function("internal/mobiletor/profile.go", "torSelectedDNS",
+             'mode = "home"', 'if raw := profile["dns_bootstrap"]; raw != nil',
+             "if entry == nil && !idle", '[]string{"adguard_ipv4", "adguard_ipv6"}',
+             "if host == address", "if !matched", "address.IsPrivate() != home",
+             'protocol != "tcp" && protocol != "tls" && protocol != "https" && !(home && (protocol == "udp" || protocol == "h3"))')
+    require("cmd/client/desktop_tor_entry_dns_test.go",
+            "TestDesktopTorEntryDNSSettingsPreserveExactPrivateNodeAndTransport",
+            "TestDesktopTorEntryDNSSettingsRejectStalePrivateSelection",
+            "TestDesktopTorEntryDNSRetestKeepsPrivateRouteAndRejectsChangedSource")
+    require("internal/mobiletor/desktop_dns_test.go",
+            "TestDesktopBridgeDNSSelectionMatchesTheNativeCapturedGraph",
+            "TestDesktopBridgeDNSRejectsAnotherPrivateEntryAndKeepsIdleHomeUnresolved")
+
+
 windows_profile_controls()
 linux_dns_measurement_controls()
+captured_tor_dns_policy()
 
 
 dns_api = require(
@@ -122,7 +169,7 @@ for forbidden in ("APIToken =", "NodeProofID =", "PrivateKey ="):
     if forbidden in dns_api:
         errors.append(f"cmd/client/dns_policy_api.go: DNS mutation unexpectedly writes secret/identity field: {forbidden}")
 require("cmd/client/dns_policy_api_test.go", "TestDNSPolicyOnlyMutatesDNSFields", "TestApplyDNSPolicyEncryptedInference", "TestApplyDNSPolicyRejectsUnsafeOrUnsupported")
-require("cmd/client/dns_policy_external.go", "mobilemultihop.ValidateExternalDNS", "selectedTorBridgeDNS", "dnsPolicySelectionToken", "copyDNSPolicy")
+require("cmd/client/dns_policy_external.go", "mobilemultihop.ValidateExternalDNS", "dnsPolicySelectionToken", "copyDNSPolicy")
 require("cmd/client/dns_policy_external_test.go", "TestExternalDNSPolicySavePreservesAllNinePrivateProtocolsAndOtherSettings", "TestExternalDNSPolicyRejectsStaleNodeEntryAndBenchmarkInputs", "TestExternalDNSPolicyRejectsMalformedUnownedAndFailedSaves", "TestExternalDNSPolicyRescueIsExplicitCanonicalPresetAndFastestRejectsLegacyEvidence")
 require("cmd/client/logical_modes.go", "ping_min_ms", "ping_max_ms", "traffic_min_pct", "traffic_max_pct", "speed_loss_min_pct", "speed_loss_max_pct", "ready_bases", "reason")
 
