@@ -21,6 +21,30 @@ function Reject([scriptblock]$Action,[string]$Message) {
     try { $null=& $Action } catch { $failed=$true }
     Check $failed $Message
 }
+function Invoke-FixtureCleanup([scriptblock]$Action,[string]$Label,[Collections.Generic.List[string]]$Failures) {
+    try { $null=& $Action }
+    catch {
+        $detail=$Label+': '+$_.Exception.ToString()
+        $Failures.Add($detail)
+        [Console]::Error.WriteLine('WFP fixture cleanup failure: '+$detail)
+    }
+}
+# A native startup failure must remain visible even if checked cleanup also
+# rejects a missing/retired owner. Every subsequent owned cleanup still runs;
+# a cleanup failure is independently fatal when the kernel assertions passed.
+$cleanupControl=New-Object 'Collections.Generic.List[string]'
+$cleanupProgress=New-Object 'Collections.Generic.List[string]'
+$savedError=[Console]::Error
+$capturedError=New-Object IO.StringWriter
+try {
+    [Console]::SetError($capturedError)
+    Invoke-FixtureCleanup { throw 'CONTROL primary cleanup failure' } 'first' $cleanupControl
+    Invoke-FixtureCleanup { $cleanupProgress.Add('continued') } 'second' $cleanupControl
+} finally { [Console]::SetError($savedError) }
+Check ($cleanupControl.Count -eq 1 -and $cleanupControl[0].Contains('CONTROL primary cleanup failure')) 'The fixture suppressed a cleanup failure.'
+Check ($cleanupProgress.Count -eq 1 -and $cleanupProgress[0] -ceq 'continued') 'A cleanup exception prevented later owned cleanup.'
+Check ($capturedError.ToString().Contains('WFP fixture cleanup failure: first:')) 'The fixture lost the actual failing cleanup operation.'
+$capturedError.Dispose()
 function Private-Value($Value,[string]$Name) {
     $field=$Value.GetType().GetField($Name,[Reflection.BindingFlags]'Instance,NonPublic')
     Check ($null -ne $field) ('Missing compiled field '+$Name)
@@ -436,6 +460,8 @@ try {
 $foreignName='RouterVPN-WFP-fixture-foreign-'+[Guid]::NewGuid().ToString('N')
 $scope=App-Scope $child
 $servers=@();$datagrams=@();$streams=@();$active=$null;$lease=$null;$staticPlan=$null;$staticLease=$null;$leaseProcess=$null
+$kernelFailure=$null
+$cleanupFailures=New-Object 'Collections.Generic.List[string]'
 try {
     # This rule intentionally grants the fixture executable outbound access.
     # Product WFP operations must neither delete it nor let it bypass the deny.
@@ -526,15 +552,21 @@ try {
     Reject { $staticLease.CloseChecked() } 'The fixture accepted a static exception as a drained dynamic lease.'
     Check ((Probe $child '127.0.0.1' $servers[0].Port) -eq 0) 'The static-lease defect did not leave the expected stale exception.'
     Exact-MutantCleanup $staticPlan;$staticPlan=$null;$staticLease=$null
-    Write-Output ("Windows WFP scoped kernel enforcement: PASS ({0} checks; IPv4/IPv6, existing flows, exact interface, stale owner, retained denial and 2 real kernel defect controls)." -f $script:Checks)
+} catch {
+    $kernelFailure=$_
+    [Console]::Error.WriteLine('WFP kernel primary failure: '+$_.Exception.ToString())
+    [Console]::Error.WriteLine($_.ScriptStackTrace)
 } finally {
-    if($null -ne $leaseProcess) { if(-not $leaseProcess.HasExited) { $leaseProcess.Kill();[void]$leaseProcess.WaitForExit(3000) };$leaseProcess.Dispose() }
-    if($null -ne $lease) { $lease.CloseChecked() }
-    if($null -ne $active) { $active.RemoveChecked() }
-    if($null -ne $staticPlan) { Exact-MutantCleanup $staticPlan }
-    foreach($process in $streams) { Stop-Fixture $process }
-    foreach($server in $servers) { $server.Dispose() }
-    foreach($server in $datagrams) { $server.Dispose() }
-    if(Get-NetFirewallRule -Name $foreignName -ErrorAction SilentlyContinue) { Remove-NetFirewallRule -Name $foreignName -ErrorAction Stop }
-    [IO.Directory]::Delete($work,$true)
+    if($null -ne $leaseProcess) { Invoke-FixtureCleanup { if(-not $leaseProcess.HasExited) { $leaseProcess.Kill();Check $leaseProcess.WaitForExit(3000) 'The fixture lease owner did not exit during cleanup.' };$leaseProcess.Dispose() } 'lease process' $cleanupFailures }
+    if($null -ne $lease) { Invoke-FixtureCleanup { $lease.CloseChecked() } 'exception lease' $cleanupFailures }
+    if($null -ne $active) { Invoke-FixtureCleanup { $active.RemoveChecked() } 'persistent baseline' $cleanupFailures }
+    if($null -ne $staticPlan) { Invoke-FixtureCleanup { Exact-MutantCleanup $staticPlan } 'static defect baseline' $cleanupFailures }
+    foreach($process in $streams) { Invoke-FixtureCleanup { Stop-Fixture $process } 'fixture stream' $cleanupFailures }
+    foreach($server in $servers) { Invoke-FixtureCleanup { $server.Dispose() } 'TCP listener' $cleanupFailures }
+    foreach($server in $datagrams) { Invoke-FixtureCleanup { $server.Dispose() } 'UDP listener' $cleanupFailures }
+    Invoke-FixtureCleanup { if(Get-NetFirewallRule -Name $foreignName -ErrorAction SilentlyContinue) { Remove-NetFirewallRule -Name $foreignName -ErrorAction Stop } } 'fixture foreign Allow rule' $cleanupFailures
+    Invoke-FixtureCleanup { [IO.Directory]::Delete($work,$true) } 'fixture workspace' $cleanupFailures
 }
+if($null -ne $kernelFailure) { throw $kernelFailure }
+if($cleanupFailures.Count -ne 0) { throw ('The WFP fixture could not prove owned cleanup: '+($cleanupFailures -join '; ')) }
+Write-Output ("Windows WFP scoped kernel enforcement: PASS ({0} checks; IPv4/IPv6, existing flows, exact interface, stale owner, retained denial and 2 real kernel defect controls)." -f $script:Checks)
