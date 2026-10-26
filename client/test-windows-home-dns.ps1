@@ -63,10 +63,6 @@ function Invoke-HomeDNSCases([string]$Kind,[string]$SourceFile){
       foreach($port in @(0,5443)){
         $node=New-Node;$node.dns_protocol=$protocol;$node.dns_host=$node.('adguard_'+$family);$node.dns_port=$port
         Save-Node $node
-        if($Kind -eq 'wireguard' -and $canonical -eq 'h3'){
-          Reject-DNS {Get-DnsSelection} 'raw WireGuard accepted H3 downgrade' 'DoH3 is unavailable on raw Windows WireGuard'
-          continue
-        }
         $selected=Get-DnsSelection
         $expectedPort=if($port -ne 0){$port}elseif($canonical -eq 'tls'){853}elseif($canonical -in @('https','h3')){443}else{53}
         $expectedName=if($canonical -in @('tls','https','h3')){$node.dns_server_name}else{''}
@@ -91,6 +87,17 @@ function Invoke-HomeDNSCases([string]$Kind,[string]$SourceFile){
   $node=New-Node;$node.dns_mode='fastest';Save-Node $node
   try{$selected=Get-DnsSelection}catch{throw ('CONTROL explicit fastest DNS execution failed: '+$_.Exception.Message)}
   Assert-DNS ($selected.mode -ceq 'fastest' -and $selected.protocol -ceq 'udp' -and (Result-Host $selected) -ceq '1.1.1.1' -and $selected.port -eq 53) 'explicit fastest DNS regressed'
+  if($Kind -eq 'wireguard'){
+    foreach($mode in @('custom','doh3')){
+      $node=New-Node;$node.dns_mode=$mode;$node.dns_protocol='h3';$node.dns_host='8.8.4.4';$node.dns_port=5443;$node.dns_server_name='dns.google';$node.dns_path='/private-h3';Save-Node $node
+      $selected=Get-DnsSelection
+      Assert-DNS ($selected.mode -ceq $mode -and $selected.protocol -ceq 'h3' -and (Result-Host $selected) -ceq '8.8.4.4' -and $selected.port -eq 5443 -and $selected.server_name -ceq 'dns.google' -and $selected.path -ceq '/private-h3') 'raw custom H3 changed captured policy'
+    }
+    $node=New-Node;$node.dns_mode='custom';$node.dns_protocol='h3';$node.dns_host='198.51.100.53';$node.dns_server_name='';Save-Node $node
+    Reject-DNS {Get-DnsSelection} 'raw H3 accepted missing TLS identity' 'requires a TLS server name'
+    $node.dns_host='resolver.example.invalid';$node.dns_server_name='resolver.example.invalid';Save-Node $node
+    Reject-DNS {Get-DnsSelection} 'raw H3 allowed bootstrap outside captured literal address' 'requires a literal DNS upstream IP'
+  }
 
   $invalid=@(
     @('missing-address',@{adguard_ipv4='';adguard_ipv6=''}),
@@ -203,14 +210,14 @@ function Invoke-HomeDNSCases([string]$Kind,[string]$SourceFile){
     function Start-Sleep{param($Milliseconds)}
     $runDir=Join-Path $root 'run';[void][IO.Directory]::CreateDirectory($runDir)
     $dnsOwnerFile=Join-Path $runDir 'dns.owner';$dnsProcessFile=Join-Path $runDir 'dns.process.json';$dnsHint=Join-Path $runDir 'dns.txt'
-    foreach($protocol in @('udp','tcp','tls','https')){
+    foreach($protocol in @('udp','tcp','tls','https','h3')){
       $node=New-Node;$node.dns_protocol=$protocol;$node.dns_port=5443;$node.dns_host='fd77::1';Save-Node $node
       $dns=Get-DnsSelection;Start-DnsProxy $dns
       $args=$script:ProxyCall.arguments
       Assert-DNS ($script:ProxyCall.file -ceq 'owned-dns-proxy.exe' -and $script:ProxyCall.directory -ceq $runDir -and $script:ProxyRecord -ceq $dnsProcessFile) 'raw DNS proxy lost captured process boundary'
       Assert-DNS ($args[3] -ceq $protocol -and $args[5] -ceq 'fd77::1' -and $args[7] -ceq '5443') 'raw proxy arguments changed Home transport'
-      if($protocol -in @('tls','https')){Assert-DNS ($args[8] -ceq '-server-name' -and $args[9] -ceq $node.dns_server_name) 'raw proxy arguments lost Home TLS identity'}
-      if($protocol -eq 'https'){Assert-DNS ($args[10] -ceq '-path' -and $args[11] -ceq '/private-dns') 'raw proxy arguments lost Home HTTPS path'}
+      if($protocol -in @('tls','https','h3')){Assert-DNS ($args[8] -ceq '-server-name' -and $args[9] -ceq $node.dns_server_name) 'raw proxy arguments lost Home TLS identity'}
+      if($protocol -in @('https','h3')){Assert-DNS ($args[10] -ceq '-path' -and $args[11] -ceq '/private-dns') 'raw proxy arguments lost Home HTTPS path'}
       $hint=@{};foreach($line in [IO.File]::ReadAllLines($dnsHint)){$separator=$line.IndexOf('=');if($separator -ge 0){$hint[$line.Substring(0,$separator)]=$line.Substring($separator+1)}}
       Assert-DNS ($hint.owner -ceq $script:dnsOwnerToken -and $hint.owner -ceq ([IO.File]::ReadAllText($dnsOwnerFile)).Trim()) 'raw DNS hint lost captured owner'
       Assert-DNS ($hint.mode -ceq 'home' -and $hint.protocol -ceq $protocol -and $hint.server -ceq '[fd77::1]:5443') 'raw DNS hint changed Home transport'

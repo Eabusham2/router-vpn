@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import argparse
 import importlib
+import os
 from pathlib import Path
 import re
 import sys
 import tempfile
+import textwrap
 from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 REPOSITORY = Path(__file__).resolve().parents[1]
 HARNESSES = (
@@ -132,6 +135,35 @@ def check_owned_process_gate(job: str, packaged: bool, tor_wrapper: bool = False
         raise AssertionError("Windows Job gate omitted real kernel execution or became nonblocking")
 
 
+def native_dns_test_script(workflow: str, candidate: str) -> str:
+    dependency = workflow_job(candidate, "native-runtimes")
+    if "uses: ./.github/workflows/desktop-native-runtime.yml" not in dependency or "platform: all" not in dependency:
+        raise AssertionError("authoritative release bypasses the complete native DNS test matrix")
+    job = workflow_job(workflow, "runtime")
+    marker = "      - name: Native DNS proxy H3 exchanges and kernel proof\n"
+    if job.count(marker) != 1:
+        raise AssertionError("native nested-module DNS test gate is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    required = (
+        "shell: bash", "ROUTER_VPN_DNS_TARGET: '${{ matrix.target }}'", "set -euo pipefail",
+        "python3 deploy/test_dnsproxy_build.py", "selector['GOTOOLCHAIN'] = 'go1.26.3'",
+        "['go', 'env', 'GOROOT', 'GOHOSTOS', 'GOHOSTARCH'], env=selector",
+        "'/'.join(identity[1:]) != target", "'deploy/build-dnsproxy.py', 'test', '--go', str(go)",
+        "if target == 'windows/arm64':\n              command.append('--without-race')",
+        "subprocess.run(command, check=True)",
+    )
+    if any(value not in gate for value in required) or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
+        raise AssertionError("native DNS gate lost exact host, pinned toolchain, full tests or blocking failure")
+    if job.index(marker) > job.index("uses: actions/cache/restore@v4"):
+        raise AssertionError("native DNS tests must execute before runtime artifact reuse")
+    for system, arch, runner in (("linux", "amd64", "ubuntu-24.04"), ("linux", "arm64", "ubuntu-24.04-arm"),
+                                ("darwin", "amd64", "macos-15-intel"), ("darwin", "arm64", "macos-15"),
+                                ("windows", "amd64", "windows-latest"), ("windows", "arm64", "windows-11-arm")):
+        if f"('{system}', '{arch}', '{runner}')" not in workflow_job(workflow, "targets"):
+            raise AssertionError("native DNS test matrix lost " + system + "/" + arch)
+    return textwrap.dedent(gate.split("python3 - <<'PY'\n", 1)[1].split("\n          PY", 1)[0])
+
+
 def check_workflow(candidate: str, build_all: str) -> None:
     windows = workflow_job(candidate, "windows-native-smoke")
     check_workspace_gate(windows)
@@ -177,6 +209,63 @@ def check_workflow(candidate: str, build_all: str) -> None:
 
 
 class WindowsReleaseGateTests(unittest.TestCase):
+    def native_dns_sources(self):
+        return ((REPOSITORY / ".github/workflows/desktop-native-runtime.yml").read_text(encoding="utf-8"),
+                (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8"))
+
+    def test_native_dns_gate_executes_full_module_on_each_exact_host(self):
+        workflow, candidate = self.native_dns_sources()
+        script = native_dns_test_script(workflow, candidate)
+        for target in ("linux/amd64", "linux/arm64", "darwin/amd64", "darwin/arm64", "windows/amd64", "windows/arm64"):
+            with self.subTest(target=target), tempfile.TemporaryDirectory(prefix="pinned DNS Go ") as directory:
+                root = Path(directory)
+                calls = []
+                def identity(command, **kwargs):
+                    self.assertEqual(command, ['go', 'env', 'GOROOT', 'GOHOSTOS', 'GOHOSTARCH'])
+                    self.assertEqual(kwargs['env']['GOTOOLCHAIN'], 'go1.26.3')
+                    return str(root) + '\n' + target.replace('/', '\n') + '\n'
+                def run(command, **kwargs):
+                    calls.append(command)
+                    self.assertIs(kwargs['check'], True)
+                with patch.dict(os.environ, {'ROUTER_VPN_DNS_TARGET': target, 'GOTOOLCHAIN': 'foreign'}), \
+                     patch('subprocess.check_output', side_effect=identity), patch('subprocess.run', side_effect=run):
+                    exec(compile(script, '<shipping native DNS gate>', 'exec'), {})
+                go = root / 'bin' / ('go.exe' if target.startswith('windows/') else 'go')
+                self.assertEqual(calls, [[sys.executable, 'deploy/build-dnsproxy.py', 'test', '--go', str(go)] +
+                                        (['--without-race'] if target == 'windows/arm64' else [])])
+
+    def test_native_dns_gate_rejects_wrong_host_and_propagates_failed_tests(self):
+        script = native_dns_test_script(*self.native_dns_sources())
+        with patch.dict(os.environ, {'ROUTER_VPN_DNS_TARGET': 'windows/arm64'}), \
+             patch('subprocess.check_output', return_value='/pinned/go\nwindows\namd64\n'), \
+             patch('subprocess.run') as run:
+            with self.assertRaisesRegex(RuntimeError, 'actual target architecture'):
+                exec(compile(script, '<shipping native DNS gate>', 'exec'), {})
+            run.assert_not_called()
+        with patch.dict(os.environ, {'ROUTER_VPN_DNS_TARGET': 'linux/amd64'}), \
+             patch('subprocess.check_output', return_value='/pinned/go\nlinux\namd64\n'), \
+             patch('subprocess.run', side_effect=RuntimeError('captured H3 test failure')):
+            with self.assertRaisesRegex(RuntimeError, 'captured H3 test failure'):
+                exec(compile(script, '<shipping native DNS gate>', 'exec'), {})
+
+    def test_native_dns_gate_rejects_omission_wrong_selector_and_disabled_race(self):
+        workflow, candidate = self.native_dns_sources()
+        variants = (
+            ("Native DNS proxy H3 exchanges and kernel proof", "Omitted nested module"),
+            ("python3 deploy/test_dnsproxy_build.py", "true # omitted dependency guard"),
+            ("'deploy/build-dnsproxy.py', 'test', '--go'", "'deploy/build-dnsproxy.py', 'notices', '--go'"),
+            ("env=selector, text=True", "text=True"),
+            ("if target == 'windows/arm64':", "if target.startswith('windows/'):"),
+            ("subprocess.run(command, check=True)", "subprocess.run(command, check=False)"),
+            ("      - name: Native DNS proxy H3 exchanges and kernel proof\n", "      - name: Native DNS proxy H3 exchanges and kernel proof\n        continue-on-error: true\n"),
+            ("('windows', 'arm64', 'windows-11-arm')", "('windows', 'arm64', 'windows-latest')"),
+        )
+        for old, new in variants:
+            with self.subTest(mutation=new), self.assertRaises(AssertionError):
+                native_dns_test_script(workflow.replace(old, new, 1), candidate)
+        with self.assertRaises(AssertionError):
+            native_dns_test_script(workflow, candidate.replace('platform: all', 'platform: windows', 1))
+
     def test_current_workflow_requires_both_architectures_shells_and_publication_edge(self):
         check_workflow((REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8"), (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8"))
 

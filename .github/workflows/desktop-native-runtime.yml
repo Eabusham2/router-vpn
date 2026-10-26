@@ -109,6 +109,30 @@ jobs:
       - name: Prepare exact Rust and native C toolchains
         shell: bash
         run: python3 deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' "$RUNNER_TEMP/native-toolchain"
+      - name: Native DNS proxy H3 exchanges and kernel proof
+        shell: bash
+        env:
+          ROUTER_VPN_DNS_TARGET: '${{ matrix.target }}'
+        run: |
+          set -euo pipefail
+          python3 deploy/test_dnsproxy_build.py
+          python3 - <<'PY'
+          import os, subprocess, sys
+          from pathlib import Path
+          target = os.environ['ROUTER_VPN_DNS_TARGET']
+          if target not in {'linux/amd64', 'linux/arm64', 'darwin/amd64', 'darwin/arm64', 'windows/amd64', 'windows/arm64'}:
+              raise RuntimeError('Unknown native DNS test target')
+          selector = os.environ.copy()
+          selector['GOTOOLCHAIN'] = 'go1.26.3'
+          identity = subprocess.check_output(['go', 'env', 'GOROOT', 'GOHOSTOS', 'GOHOSTARCH'], env=selector, text=True).splitlines()
+          if len(identity) != 3 or '/'.join(identity[1:]) != target:
+              raise RuntimeError('DNS tests must execute on the actual target architecture')
+          go = Path(identity[0])/'bin'/('go.exe' if target.startswith('windows/') else 'go')
+          command = [sys.executable, 'deploy/build-dnsproxy.py', 'test', '--go', str(go)]
+          if target == 'windows/arm64':
+              command.append('--without-race')
+          subprocess.run(command, check=True)
+          PY
       - name: Compute complete source identity
         id: policy
         shell: bash

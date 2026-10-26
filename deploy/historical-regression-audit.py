@@ -70,9 +70,15 @@ require(
     "$dnsOwnerFile = Join-Path $runDir 'dns.owner'",
     "owner=$($script:dnsOwnerToken)",
     "if (-not (Test-RuntimeOwner)) { return }",
-    "DoH3 is unavailable on raw Windows WireGuard",
+    "$protocol -notin @('udp','tcp','tls','https','h3','rescue')",
+    "$protocol -in @('tls','https','h3')",
+    "'-protocol',[string]$Dns.protocol",
+    "server_name=$($Dns.server_name)`npath=$($Dns.path)",
     "requires a literal DNS upstream IP",
 )
+require("cmd/dnsproxy/resolver.go", 'if u.Protocol == "h3"', "newDNSHTTP3Client(u, roots)", "r.h3.resolve(request, query)")
+require("cmd/dnsproxy/http3.go", "&http3.Transport{", "MinVersion: tls.VersionTLS13", "tlsConfig.InsecureSkipVerify", "client.quic.Dial(ctx, remote, tlsConfig, config)")
+require("cmd/dnsproxy/server_test.go", "TestDNSProxyCLIKernelProbeThroughActualHTTP3", "common.ProbeDNSUDP", "wrong TLS identity produced a successful kernel DNS proof")
 windows_raw = read("client/native-wireguard-windows.ps1")
 assert "$Host" not in windows_raw, "Windows raw-WG helper revived the read-only $Host variable collision"
 

@@ -133,7 +133,6 @@ function Get-DnsSelection {
   $mode = (Profile-String $p 'dns_mode' 'home').Trim().ToLowerInvariant()
   if ($mode -eq 'home') {
     $homeDNS = Get-RouterVPNHomeDnsSelection $p
-    if ($homeDNS.protocol -eq 'h3') { throw 'DoH3 is unavailable on raw Windows WireGuard because the bounded kernel-mode DNS proxy has no QUIC engine. Choose DoH/DoT or a native sing-box mode; Router VPN will not silently downgrade DoH3.' }
     return [pscustomobject]@{mode=$homeDNS.mode;protocol=$homeDNS.protocol;dns_host=$homeDNS.host;port=$homeDNS.port;server_name=$homeDNS.server_name;path=$homeDNS.path}
   }
   $fastest = Profile-String $p 'fastest_dns_host' '1.1.1.1'
@@ -155,14 +154,13 @@ function Get-DnsSelection {
   }
   $dnsHost = $dnsHost.Trim('[]')
   if ([string]::IsNullOrWhiteSpace($dnsHost)) { throw 'Selected DNS policy has no upstream host.' }
-  if ($protocol -eq 'h3') { throw 'DoH3 is unavailable on raw Windows WireGuard because the bounded kernel-mode DNS proxy has no QUIC engine. Choose DoH/DoT or a native sing-box mode; Router VPN will not silently downgrade DoH3.' }
-  if ($protocol -notin @('udp','tcp','tls','https','rescue')) { throw "Unsupported DNS protocol for raw Windows WireGuard: $protocol" }
+  if ($protocol -notin @('udp','tcp','tls','https','h3','rescue')) { throw "Unsupported DNS protocol for raw Windows WireGuard: $protocol" }
   $parsedIp = $null
   if (-not [Net.IPAddress]::TryParse($dnsHost,[ref]$parsedIp)) {
     throw 'Raw Windows WireGuard requires a literal DNS upstream IP so bootstrap resolution cannot leak or loop. Use a resolver IP or a native sing-box mode for hostname-based DNS.'
   }
   $serverName = Infer-DnsServerName $dnsHost $serverName
-  if ($protocol -in @('tls','https') -and [string]::IsNullOrWhiteSpace($serverName)) { throw 'Encrypted DNS on raw Windows WireGuard requires a TLS server name.' }
+  if ($protocol -in @('tls','https','h3') -and [string]::IsNullOrWhiteSpace($serverName)) { throw 'Encrypted DNS on raw Windows WireGuard requires a TLS server name.' }
   if ([string]::IsNullOrWhiteSpace($path)) { $path='/dns-query' }
   return [pscustomobject]@{mode=$mode;protocol=$protocol;dns_host=$dnsHost;port=$port;server_name=$serverName;path=$path}
 }
