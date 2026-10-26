@@ -12,7 +12,13 @@ import (
 
 func registeredDNSRuntimeSnapshotFixture(t *testing.T) (*app, string, observedConnection) {
 	t.Helper()
-	root := t.TempDir()
+	// macOS can expose the system temporary directory through /var -> /private/var.
+	// Canonicalize only our fixture-owned root; runtime paths still must reject
+	// redirected files and ancestors under the active private root.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
 	t.Setenv("HOMEVPN_ROOT", root)
 	path := filepath.Join(root, "run", "owned", "sing-box.json")
 	writeDNSRuntimeTestConfig(t, path, "custom", "9.9.9.9", 53)
