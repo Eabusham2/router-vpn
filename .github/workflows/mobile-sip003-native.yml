@@ -3,7 +3,11 @@ on:
   push:
     paths:
       - 'internal/nativesip003/**'
+      - 'internal/startwhitening/**'
       - 'mobile/sip003/**'
+      - 'mobile/startwhitening/**'
+      - 'deploy/mobile_shadowsocks_stream_policy.py'
+      - 'deploy/prepare-mobile-whitening.py'
       - 'mobile/composite/**'
       - 'mobile/applexray/**'
       - 'mobile/routervpn_sip003_bridge.go.tmpl'

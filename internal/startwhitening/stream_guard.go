@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -35,28 +36,36 @@ func DialAuthenticatedStream(ctx context.Context, raw net.Conn, handshake func(n
 	if err := ctx.Err(); err != nil {
 		return fail(nil, err)
 	}
-	deadline := time.Now().Add(10 * time.Second)
-	if requested, ok := ctx.Deadline(); ok && requested.Before(deadline) {
-		deadline = requested
-	}
+	// The pinned WebSocket transport deliberately does not expose deadlines.
+	// Keep the construction bound independent of that optional capability:
+	// expiry closes this captured socket and construction still joins the close.
+	bounded, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	deadline, _ := bounded.Deadline()
+	deadlineSupported := true
 	if err := raw.SetDeadline(deadline); err != nil {
-		return fail(nil, err)
+		if !errors.Is(err, os.ErrInvalid) {
+			return fail(nil, err)
+		}
+		deadlineSupported = false
 	}
-	stop := context.AfterFunc(ctx, closeRaw)
+	stop := context.AfterFunc(bounded, closeRaw)
 	cipher, err := handshake(raw)
 	if !stop() {
 		<-closed
 	}
-	if err != nil || ctx.Err() != nil {
-		return fail(cipher, errors.Join(err, ctx.Err()))
+	if err != nil || bounded.Err() != nil {
+		return fail(cipher, errors.Join(err, bounded.Err()))
 	}
 	if cipher == nil {
 		return fail(nil, errors.New("authenticated handshake returned no captured stream"))
 	}
-	if err := raw.SetDeadline(time.Time{}); err != nil {
-		return fail(cipher, err)
+	if deadlineSupported {
+		if err := raw.SetDeadline(time.Time{}); err != nil {
+			return fail(cipher, err)
+		}
 	}
-	if err := ctx.Err(); err != nil {
+	if err := bounded.Err(); err != nil {
 		return fail(cipher, err)
 	}
 	return GuardAuthenticatedStream(raw, cipher), nil

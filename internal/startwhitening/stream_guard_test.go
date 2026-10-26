@@ -5,6 +5,7 @@ import (
 	"errors"
 	"io"
 	"net"
+	"os"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -251,21 +252,28 @@ type streamDeadlineCapture struct {
 	net.Conn
 	deadlines []time.Time
 	failClear bool
+	setError  error
 }
 
 func (c *streamDeadlineCapture) SetDeadline(value time.Time) error {
 	c.deadlines = append(c.deadlines, value)
+	if c.setError != nil {
+		return c.setError
+	}
 	if value.IsZero() && c.failClear {
 		return errors.New("deadline clear failed")
 	}
 	return c.Conn.SetDeadline(value)
 }
 func TestStreamDialRetainsBoundedDeadlineAndFailureCleanup(t *testing.T) {
-	for _, kind := range []string{"caller-deadline", "default-bound", "cancelled", "handshake-failed", "missing-stream", "clear-failed"} {
+	for _, kind := range []string{"caller-deadline", "default-bound", "cancelled", "handshake-failed", "missing-stream", "set-failed", "clear-failed"} {
 		t.Run(kind, func(t *testing.T) {
 			a, b := net.Pipe()
 			defer b.Close()
 			raw := &streamDeadlineCapture{Conn: a, failClear: kind == "clear-failed"}
+			if kind == "set-failed" {
+				raw.setError = errors.New("physical deadline failed")
+			}
 			ctx, cancel := context.WithCancel(context.Background())
 			defer cancel()
 			if kind == "caller-deadline" {
@@ -296,8 +304,8 @@ func TestStreamDialRetainsBoundedDeadlineAndFailureCleanup(t *testing.T) {
 					}
 					t.Fatal("failed authenticated construction published stream")
 				}
-				if kind == "cancelled" && called {
-					t.Fatal("retired context began handshake")
+				if (kind == "cancelled" || kind == "set-failed") && called {
+					t.Fatal("retired context or failed physical deadline began handshake")
 				}
 				if _, err := b.Write([]byte("closed")); !errors.Is(err, io.ErrClosedPipe) {
 					t.Fatal("construction failure retained its raw socket", err)
@@ -314,6 +322,143 @@ func TestStreamDialRetainsBoundedDeadlineAndFailureCleanup(t *testing.T) {
 			}
 			if !called || len(raw.deadlines) != 2 || raw.deadlines[0].IsZero() || raw.deadlines[0].After(bound) || !raw.deadlines[1].IsZero() {
 				t.Fatal("initial request deadline was absent, widened or retained", raw.deadlines)
+			}
+		})
+	}
+}
+
+func TestStreamDialUnsupportedDeadlinePublishesOnlyCompletedRequest(t *testing.T) {
+	a, peer := net.Pipe()
+	defer peer.Close()
+	raw := &streamDeadlineCapture{Conn: a, setError: os.ErrInvalid}
+	type result struct {
+		conn net.Conn
+		err  error
+	}
+	done := make(chan result, 1)
+	entered, release := make(chan struct{}), make(chan struct{})
+	var releaseOnce sync.Once
+	defer releaseOnce.Do(func() { close(release) })
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		conn, err := DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+			if owned != raw {
+				return nil, errors.New("deadline fallback replaced the captured stream")
+			}
+			if _, err := owned.Write([]byte("authenticated request")); err != nil {
+				return nil, err
+			}
+			close(entered)
+			<-release
+			return owned, nil
+		})
+		done <- result{conn, err}
+	}()
+	header := make([]byte, len("authenticated request"))
+	if _, err := io.ReadFull(peer, header); err != nil || string(header) != "authenticated request" {
+		t.Fatal("deadline fallback lost the real request", err)
+	}
+	waitStream(t, entered)
+	select {
+	case value := <-done:
+		if value.conn != nil {
+			value.conn.Close()
+		}
+		t.Fatal("unsupported deadline bypassed synchronous request publication")
+	default:
+	}
+	releaseOnce.Do(func() { close(release) })
+	value := <-done
+	if value.err != nil || value.conn == nil {
+		t.Fatal("captured stream rejected an unsupported deadline", value.err)
+	}
+	defer value.conn.Close()
+	if len(raw.deadlines) != 1 || raw.deadlines[0].IsZero() {
+		t.Fatal("unsupported deadline was cleared or no deadline was attempted", raw.deadlines)
+	}
+	// The bounded construction owner retires after publication. A later caller
+	// cancellation must not close the successfully handed-off stream.
+	cancel()
+	written := make(chan error, 1)
+	go func() { _, err := value.conn.Write([]byte("duplex")); written <- err }()
+	payload := make([]byte, len("duplex"))
+	if _, err := io.ReadFull(peer, payload); err != nil || string(payload) != "duplex" {
+		t.Fatal("retired constructor closed its published stream", err)
+	}
+	if err := <-written; err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestStreamDialUnsupportedDeadlineStillExpiresAndJoinsCipherConstruction(t *testing.T) {
+	for _, kind := range []string{"cancel", "caller-timeout", "default-timeout"} {
+		t.Run(kind, func(t *testing.T) {
+			a, peer := net.Pipe()
+			defer peer.Close()
+			closeEntered, release := make(chan struct{}), make(chan struct{})
+			var releaseOnce sync.Once
+			defer releaseOnce.Do(func() { close(release) })
+			delayed := &streamDelayedClose{Conn: a, entered: closeEntered, release: release}
+			raw := &streamDeadlineCapture{Conn: delayed, setError: os.ErrInvalid}
+			cipher := &lazyStream{Conn: raw, reading: make(chan struct{}), writing: make(chan struct{})}
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			if kind == "caller-timeout" {
+				var stop context.CancelFunc
+				ctx, stop = context.WithTimeout(ctx, 100*time.Millisecond)
+				defer stop()
+			}
+			done := make(chan error, 1)
+			started := time.Now()
+			go func() {
+				conn, err := DialAuthenticatedStream(ctx, raw, func(owned net.Conn) (net.Conn, error) {
+					if owned != raw {
+						return nil, errors.New("constructor replaced the private socket")
+					}
+					_, err := cipher.Write([]byte("blocked authenticated request"))
+					return cipher, err
+				})
+				if conn != nil {
+					conn.Close()
+					done <- errors.New("expired request published a duplex stream")
+					return
+				}
+				done <- err
+			}()
+			waitStream(t, cipher.writing)
+			if kind == "cancel" {
+				cancel()
+			}
+			bound := 2 * time.Second
+			if kind == "default-timeout" {
+				bound = 12 * time.Second
+			}
+			select {
+			case <-closeEntered:
+			case <-time.After(bound):
+				t.Fatal("unsupported socket deadlines removed the construction bound")
+			}
+			if kind == "default-timeout" && time.Since(started) < 9*time.Second {
+				t.Fatal("default construction bound was silently shortened")
+			}
+			select {
+			case err := <-done:
+				t.Fatal("construction completed before its exact socket close joined", err)
+			default:
+			}
+			releaseOnce.Do(func() { close(release) })
+			want := error(context.DeadlineExceeded)
+			if kind == "cancel" {
+				want = context.Canceled
+			}
+			select {
+			case err := <-done:
+				if !errors.Is(err, want) || cipher.closes.Load() != 1 || cipher.closedSawWrite != 1 {
+					t.Fatal("expired constructor lost cancellation or released cipher state before I/O drained", err)
+				}
+			case <-time.After(2 * time.Second):
+				t.Fatal("constructor did not join after captured close completed")
 			}
 		})
 	}
