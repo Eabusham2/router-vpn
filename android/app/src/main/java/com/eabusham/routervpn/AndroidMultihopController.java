@@ -40,8 +40,40 @@ final class AndroidMultihopController {
         final NativeSingBoxController.SessionInfo session;
         final File exitBundle;
         final String exitMode;
-        Prepared(NativeSingBoxController.SessionInfo session, File exitBundle, String exitMode) {
+        final Source entrySource, exitSource;
+        Prepared(NativeSingBoxController.SessionInfo session, File exitBundle, String exitMode, Source entrySource, Source exitSource) {
             this.session = session; this.exitBundle = exitBundle; this.exitMode = exitMode;
+            this.entrySource = entrySource; this.exitSource = exitSource;
+        }
+    }
+
+    /** Public digest and location of the exact private bytes used for this graph. */
+    static final class Source {
+        final File file;
+        final String digest;
+        private Source(File file, byte[] bytes) throws Exception {
+            this.file = file.getCanonicalFile(); this.digest = sourceDigest(bytes);
+        }
+        void require(File candidate) throws Exception {
+            if (candidate == null || !file.equals(candidate.getCanonicalFile())
+                    || !digest.equals(sourceDigest(readBundleBytes(candidate)))) {
+                throw new IllegalStateException("The captured multihop node source changed.");
+            }
+        }
+        boolean same(Source other) { return other != null && file.equals(other.file) && digest.equals(other.digest); }
+    }
+
+    private static final class LoadedBundle {
+        final JSONObject bundle;
+        final Source source;
+        LoadedBundle(File file) throws Exception {
+            byte[] raw = readBundleBytes(file);
+            source = new Source(file, raw);
+            bundle = new JSONObject(StandardCharsets.UTF_8.newDecoder()
+                    .onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
+                    .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT)
+                    .decode(java.nio.ByteBuffer.wrap(raw)).toString());
+            AndroidNodeStore.validateBundle(bundle);
         }
     }
 
@@ -170,15 +202,24 @@ final class AndroidMultihopController {
         return prepare(entryBundle, exitBundle, exitMode, execution, "wg");
     }
     Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution, String entryMode) throws Exception {
+        return prepare(entryBundle, exitBundle, exitMode, execution, entryMode, null, null, null);
+    }
+    Prepared prepare(File entryBundle, File exitBundle, String exitMode, String execution, String entryMode,
+                     Source expectedEntry, Source expectedExit, String serverIdentityPins) throws Exception {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) throw new IllegalArgumentException("Choose the exact native entry transport.");
         if(!java.util.Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Invalid multihop execution.");
         if (entryBundle == null || exitBundle == null) throw new IllegalArgumentException("Choose both an entry and an exit node.");
         if (entryBundle.getCanonicalFile().equals(exitBundle.getCanonicalFile())) throw new IllegalArgumentException("Entry and exit must be different stored nodes.");
         if (!(AndroidNativeCompositeProfile.isMode(exitMode) || AndroidNativeMAXProfile.isMode(exitMode) || NativeSingBoxController.nativeWireGuardFamily(exitMode) || NativeSingBoxController.nativePQFamily(exitMode) || "shadowsocks".equals(exitMode) || "hysteria2".equals(exitMode) || NativeSingBoxController.nativeNaiveFamily(exitMode) || nativeXrayExit(exitMode))) throw new IllegalArgumentException("Choose an implemented native packet, proxy or Xray exit transport.");
 
-        JSONObject entry = loadBundle(entryBundle);
-        JSONObject exit = loadBundle(exitBundle);
-        String entrySnapshot = entry.toString(), exitSnapshot = exit.toString();
+        LoadedBundle capturedEntry = new LoadedBundle(entryBundle), capturedExit = new LoadedBundle(exitBundle);
+        JSONObject entry = capturedEntry.bundle, exit = capturedExit.bundle;
+        if (expectedEntry != null || expectedExit != null || serverIdentityPins != null) {
+            if (expectedEntry == null || expectedExit == null || serverIdentityPins == null
+                    || !expectedEntry.same(capturedEntry.source) || !expectedExit.same(capturedExit.source)) {
+                throw new IllegalStateException("Restoration lost its exact captured multihop sources.");
+            }
+        }
         String entryIdentity = AndroidNodeStore.stableNodeIdentity(entry);
         String exitIdentity = AndroidNodeStore.stableNodeIdentity(exit);
         if (!entryIdentity.isEmpty() && entryIdentity.equals(exitIdentity)) throw new IllegalArgumentException("Entry and exit resolve to the same Router VPN node identity.");
@@ -290,6 +331,7 @@ final class AndroidMultihopController {
             .put("entry_api",a.getString("router_api")).put("exit_api",b.getString("router_api"))
             .put("entry_token",a.getString("api_token")).put("exit_token",b.getString("api_token"))
             .put("entry_tag","entry-wg").put("exit_mode",exitMode).put("execution",execution);
+        if (serverIdentityPins != null) applyServerIdentityPins(metadata, execution, exitMode, serverIdentityPins);
         if (!AndroidStartLayer.OFF.equals(entryLayerMode)) metadata.put("entry_start_layer",entryLayerMode);
         if (!AndroidStartLayer.OFF.equals(exitLayerMode)) metadata.put("exit_start_layer",exitLayerMode);
         if (maxEntry || maxExit) {
@@ -325,11 +367,10 @@ final class AndroidMultihopController {
         if(privateMetadata.length>16384)throw new IllegalArgumentException("Multihop metadata exceeds the safety bound.");
         AndroidMultihopStartLayer.preflight(config.toString(),metadata.toString(),entryStartLayer,exitStartLayer);
 
-        if (Thread.currentThread().isInterrupted()
-                || !entrySnapshot.equals(loadBundle(entryBundle).toString())
-                || !exitSnapshot.equals(loadBundle(exitBundle).toString())) {
+        if (Thread.currentThread().isInterrupted()) {
             throw new IllegalStateException("Multihop preparation was cancelled or a captured node changed; no session was staged.");
         }
+        capturedEntry.source.require(entryBundle); capturedExit.source.require(exitBundle);
         if (maxPreparation != null) maxPreparation.verify();
         File root = new File(context.getFilesDir(), "layered-sessions");
         if (!root.isDirectory() && !root.mkdirs()) throw new IllegalStateException("Cannot create layered session directory.");
@@ -385,7 +426,7 @@ final class AndroidMultihopController {
             if (!configFile.isFile() || configFile.length() == 0) throw new IllegalStateException("Multihop session is missing sing-box.json.");
             if (maxPreparation != null) maxPreparation.stage(session, sessionId, "multihop-" + exitMode, new String(patched, StandardCharsets.UTF_8));
             maxStaged = true;
-            return new Prepared(new NativeSingBoxController.SessionInfo(sessionId, "multihop-" + exitMode, maxPreparation), exitBundle, exitMode);
+            return new Prepared(new NativeSingBoxController.SessionInfo(sessionId, "multihop-" + exitMode, maxPreparation), exitBundle, exitMode, capturedEntry.source, capturedExit.source);
         } catch (Throwable error) {
             deleteTree(session);
             throw error;
@@ -563,11 +604,47 @@ final class AndroidMultihopController {
         return StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT)
             .onUnmappableCharacter(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(value)).toString();
     }
-    private static JSONObject loadBundle(File file) throws Exception {
+    static String validatedServerIdentityPins(String execution, String exitMode, String raw) throws Exception {
+        if (raw == null || raw.length() > 1024) throw new IllegalArgumentException("Captured Server identity pins are missing or oversized.");
+        JSONObject pins = new JSONObject(raw), normalized = new JSONObject();
+        boolean server = "server".equals(execution);
+        if (!server && !"local".equals(execution)) throw new IllegalArgumentException("A retained Local or Server winner is required.");
+        boolean pq = NativeSingBoxController.nativePQFamily(exitMode) || AndroidNativeMAXProfile.isMode(exitMode);
+        boolean packet = NativeSingBoxController.nativeWireGuardFamily(exitMode) || pq;
+        int expected = server && packet ? pq ? 2 : 1 : 0;
+        if (pins.length() != expected) throw new IllegalArgumentException("Captured Server identities do not match the exact exit transport.");
+        if (expected > 0) {
+            Object key = pins.get("expected_packet_public_key");
+            if (!(key instanceof String)) throw new IllegalArgumentException("Captured packet identity is not a public key.");
+            byte[] decoded = Base64.decode((String)key, Base64.DEFAULT);
+            boolean nonzero = false; for (byte value : decoded) nonzero |= value != 0;
+            if (decoded.length != 32 || !nonzero || !Base64.encodeToString(decoded, Base64.NO_WRAP).equals(key)) throw new IllegalArgumentException("Captured packet public identity is not canonical.");
+            normalized.put("expected_packet_public_key", key);
+        }
+        if (expected == 2) {
+            Object identity = pins.get("expected_pq_client_identity");
+            if (!(identity instanceof String) || !((String)identity).matches("(?!0{64})[0-9a-f]{64}")) throw new IllegalArgumentException("Captured PQ public identity is invalid.");
+            normalized.put("expected_pq_client_identity", identity);
+        }
+        return normalized.toString();
+    }
+    private static void applyServerIdentityPins(JSONObject metadata, String execution, String exitMode, String raw) throws Exception {
+        JSONObject pins = new JSONObject(validatedServerIdentityPins(execution, exitMode, raw));
+        java.util.Iterator<String> keys = pins.keys();
+        while (keys.hasNext()) { String key = keys.next(); metadata.put(key, pins.getString(key)); }
+    }
+    private static String sourceDigest(byte[] bytes) throws Exception {
+        byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(bytes);
+        StringBuilder hex = new StringBuilder(64);
+        for (byte value : digest) hex.append(String.format(java.util.Locale.ROOT, "%02x", value & 255));
+        return hex.toString();
+    }
+    private static JSONObject loadBundle(File file) throws Exception { return new LoadedBundle(file).bundle; }
+    private static byte[] readBundleBytes(File file) throws Exception {
         if (file == null || !file.isFile() || file.length() <= 0 || file.length() > MAX_BUNDLE) throw new IllegalStateException("Private node bundle is missing or invalid.");
         try (FileInputStream in = new FileInputStream(file); ByteArrayOutputStream out = new ByteArrayOutputStream()) {
             byte[] b = new byte[8192]; int total = 0, n; while ((n = in.read(b)) != -1) { total += n; if (total > MAX_BUNDLE) throw new IllegalStateException("Private node bundle exceeds safety limit."); out.write(b, 0, n); }
-            JSONObject root = new JSONObject(new String(out.toByteArray(), StandardCharsets.UTF_8)); AndroidNodeStore.validateBundle(root); return root;
+            return out.toByteArray();
         }
     }
     private static void writeFile(File file, byte[] data) throws Exception { try (FileOutputStream out = new FileOutputStream(file, false)) { out.write(data); out.flush(); out.getFD().sync(); } }

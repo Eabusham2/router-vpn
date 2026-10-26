@@ -131,6 +131,18 @@ P.HARNESS=P.HARNESS[:P.HARNESS.index(' interface Change {')]+r'''
     JSONArray dns=finalGraph.getJSONObject("dns").getJSONArray("servers");JSONObject selected=dns.getJSONObject(dns.length()-1);
     check(selected.getString("server").equals("192.168.50.133")&&selected.getString("type").equals("h3")&&selected.getString("detour").equals("proxy"),"MAX replaced AdGuard or its exit route");
     runtime.close();
+    if(em.equals("max-tls-wg")&&execution.equals("server")&&layer[0].equals("off")
+            &&(NativeSingBoxController.nativeWireGuardFamily(xm)||NativeSingBoxController.nativePQFamily(xm)||AndroidNativeMAXProfile.isMode(xm))){
+     JSONObject pins=new JSONObject().put("expected_packet_public_key",key('s'));
+     boolean pq=NativeSingBoxController.nativePQFamily(xm)||AndroidNativeMAXProfile.isMode(xm);if(pq)pins.put("expected_pq_client_identity","ef".repeat(32));
+     AndroidMultihopController.Prepared restored=owner.prepare(af,bf,xm,"server",em,prepared.entrySource,prepared.exitSource,pins.toString());
+     Path rs=app.resolve("layered-sessions").resolve(restored.session.sessionId);JSONObject rm=load(rs.resolve("routervpn-multihop.json"));
+     check(rm.getString("expected_packet_public_key").equals(key('s'))&&rm.getString("execution").equals("server"),"complete restoration lost packet Server identity or reran Compare");
+     check(pq?rm.getString("expected_pq_client_identity").equals("ef".repeat(32)):!rm.has("expected_pq_client_identity"),"complete restoration lost exact PQ identity shape");
+     String re=layerFile(rs.resolve(AndroidMultihopStartLayer.SESSION_FILE)),rx=layerFile(rs.resolve(AndroidMultihopStartLayer.EXIT_SESSION_FILE));
+     io.nekohasekai.libbox.RouterMultihop restoredOwner=AndroidMultihopStartLayer.prepareExecution(Files.readString(rs.resolve("sing-box.json")),rm.toString(),re,rx);
+     check(restoredOwner!=null,"captured complete Server graph lost its native owner");restoredOwner.close();
+    }
     check(Arrays.equals(sa,Files.readAllBytes(af.toPath()))&&Arrays.equals(sb,Files.readAllBytes(bf.toPath())),"MAX assembly changed stored node credentials");graphs++;
    }
   }

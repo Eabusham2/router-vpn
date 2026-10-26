@@ -28,7 +28,7 @@ final class AndroidHomeStateStore {
 final class RuntimeBoundary {
  static volatile boolean holdConnect,holdRestore,holdStop,stopEntered,stopping;
  static volatile Runnable pendingConnect,pendingRestore,afterRestoredProof;static volatile java.util.concurrent.CountDownLatch stopRelease;
- static int starts,stops,restores,proofs;static String restoredRaw="",restoredLogical="",restoredExecution="",restoredEntry="",restoredExternal="";
+ static int starts,stops,restores,proofs;static String restoredPins="",restoredRaw="",restoredLogical="",restoredExecution="",restoredEntry="",restoredExternal="";
  static void reset(){holdConnect=false;holdRestore=false;holdStop=false;stopEntered=false;stopping=false;pendingConnect=null;pendingRestore=null;afterRestoredProof=null;stopRelease=new java.util.concurrent.CountDownLatch(1);starts=stops=restores=proofs=0;restoredRaw=restoredLogical=restoredExecution=restoredEntry=restoredExternal="";}
  static void ready(Runnable r){if(holdConnect)pendingConnect=r;else r.run();}
  static boolean stop(String id)throws Exception{if(!id.equals(AndroidHomeStateStore.current.sessionId))return false;stops++;stopping=true;AndroidHomeStateStore.Snapshot s=AndroidHomeStateStore.copy();if(s.connected)s.pathGeneration++;s.connected=false;s.phase="connecting";s.pathProof="pending";AndroidHomeStateStore.current=s;stopEntered=true;if(holdStop)stopRelease.await();boolean owned=id.equals(AndroidHomeStateStore.current.sessionId);if(owned)AndroidHomeStateStore.off();stopping=false;return owned;}
@@ -46,13 +46,17 @@ final class AndroidModeOrchestrator {
  void auto(File f,boolean smart,Callback cb){start(f,smart?"SMART AUTO":"AUTO","wg-pq",cb);}void all(File f,Callback cb){start(f,"ALL","max-quic-awg",cb);}void custom(File f,List<String> layers,Callback cb){start(f,"CUSTOM","reality-vision",cb);}void logical(File f,String mode,Callback cb){start(f,mode,mode,cb);}
 }
 final class AndroidMultihopRuntime {
+ // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- String execution="local",selected="local";
+ String execution="local",selected="local",serverPins="original-public-pins";
+ RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{return new RestoreCapture(execution,selected,home,a,b,serverPins);}
+ boolean captureCurrent(RestoreCapture capture){return capture!=null&&capture.owner.matchesHome(AndroidHomeStateStore.current)&&capture.owner.pins.equals(serverPins)&&capture.policy.equals(execution)&&capture.selected.equals(selected);}
+ boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){try{capture.require(a,b);return capture.policy.equals(execution)&&capture.selected.equals(selected)&&capture.owner.pins.equals(serverPins)&&capture.owner.entryMode.equals(home.activeEntryMode)&&capture.owner.exitMode.equals(home.runtimeMode);}catch(Exception changed){return false;}}
  boolean isConnected(){return AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.logicalMode.equals("multihop");}boolean isActiveOrTransitioning(){return isConnected();}
  String activeEntryId(){return AndroidHomeStateStore.current.activeEntryId;}String activeExitId(){return AndroidHomeStateStore.current.activeExitId;}String activeEntryMode(){return AndroidHomeStateStore.current.activeEntryMode;}String activeExitMode(){return AndroidHomeStateStore.current.runtimeMode;}String activeExecution(){return execution;}String activeSelectedExecution(){return selected;}
  boolean disconnectAndDrainCaptured(String id)throws Exception{return RuntimeBoundary.stop(id);}void disconnect(){}
  void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String exec,String entry,Callback cb){RuntimeBoundary.starts++;execution=exec;selected=exec.equals("auto")?"server":exec;AndroidHomeStateStore.begin("multihop",mode,a.id,b.id,entry,"");cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();cb.finished(true,"proved graph");});}
- void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String policy,String winner,String entry,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;execution=policy;selected=winner;AndroidHomeStateStore.begin("multihop",mode,a.id,b.id,entry,"");cb.owned(AndroidHomeStateStore.current.sessionId);Runnable finish=()->{AndroidHomeStateStore.proved();if(RuntimeBoundary.afterRestoredProof!=null)RuntimeBoundary.afterRestoredProof.run();cb.finished(true,"fresh exact winner proof");};if(RuntimeBoundary.holdRestore)RuntimeBoundary.pendingRestore=finish;else finish.run();}
+ void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){try{capture.require(a,b);}catch(Exception changed){cb.finished(false,changed.toString());return;}String mode=capture.owner.exitMode,policy=capture.policy,winner=capture.selected,entry=capture.owner.entryMode;RuntimeBoundary.restoredPins=capture.owner.pins;RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;execution=policy;selected=winner;AndroidHomeStateStore.begin("multihop",mode,a.id,b.id,entry,"");cb.owned(AndroidHomeStateStore.current.sessionId);Runnable finish=()->{AndroidHomeStateStore.proved();if(RuntimeBoundary.afterRestoredProof!=null)RuntimeBoundary.afterRestoredProof.run();cb.finished(true,"fresh exact winner proof");};if(RuntimeBoundary.holdRestore)RuntimeBoundary.pendingRestore=finish;else finish.run();}
  List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 final class AndroidStandardExitRuntime {
@@ -67,6 +71,8 @@ final class AndroidStandardExitRuntime {
  void connectDirect(AndroidStandardExitStore.Entry e,Callback cb){connect(null,e,"",cb);}void connect(File f,AndroidStandardExitStore.Entry e,String mode,Callback cb){RuntimeBoundary.starts++;AndroidHomeStateStore.begin("external",e.protocol,f==null?"":AndroidModeOrchestrator.node(f),"",mode,e.id);cb.owned(AndroidHomeStateStore.current.sessionId);RuntimeBoundary.ready(()->{AndroidHomeStateStore.proved();cb.finished(true,"proved external");});}
 }
 '''
+OWNERS = OWNERS.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES)
+
 METERS = r'''
 // Saved preference/private-store boundary; the real profile store has its own
 // executable transactional tests. The actual dialog consumes this exact tuple.
@@ -160,9 +166,9 @@ public final class SpeedLabRestoreTest {
   }
  }
  static void stale(Path root)throws Exception{
-  for(String mutation:new String[]{"node","external-profile","external-map","newer-connected","manual-off","during-stop","restored-proof"}){
-   Fixture f=new Fixture(root,(mutation.equals("external-profile")||mutation.equals("external-map"))?"external-openvpn":mutation.equals("node")?"multihop":"router","external");f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"stale fixture not measured");
-   if(mutation.equals("node"))Files.writeString(f.original.file.toPath(),"changed original DNS");
+  for(String mutation:new String[]{"node","multihop-node","external-profile","external-map","newer-connected","manual-off","during-stop","restored-proof"}){
+   Fixture f=new Fixture(root,(mutation.equals("node")||mutation.equals("external-profile")||mutation.equals("external-map"))?"external-openvpn":mutation.equals("multihop-node")?"multihop":"router","external");f.start();f.quiesce();waitFor(()->AndroidSpeedLab.pending!=null,"stale fixture not measured");
+   if(mutation.equals("node")||mutation.equals("multihop-node"))Files.writeString(f.original.file.toPath(),"changed original DNS");
    if(mutation.equals("external-profile")){AndroidStandardExitStore.Entry e=AndroidStandardExitStore.copy(f.external);e.secret="replacement key";AndroidStandardExitStore.saved.put(e.id,e);}
    if(mutation.equals("external-map")){AndroidStandardExitStore.Entry e=AndroidStandardExitStore.copy(f.external);e.responseMap="replacement-owner-map";AndroidStandardExitStore.saved.put(e.id,e);}
    if(mutation.equals("newer-connected")){AndroidHomeStateStore.begin("new-user","wg","","new-node","","");AndroidHomeStateStore.proved();}
@@ -175,6 +181,22 @@ public final class SpeedLabRestoreTest {
   }
  }
 
+
+ static void multihopPins(Path root)throws Exception{
+  for(String phase:new String[]{"before-stop","after-restore"}){
+   Fixture f=new Fixture(root,"multihop","external");f.start();
+   if(phase.equals("before-stop"))AndroidRuntimeRegistry.instance.multihop.serverPins="replacement-public-pins";
+   f.quiesce();
+   if(phase.equals("after-restore")){
+    waitFor(()->AndroidSpeedLab.pending!=null,"pin fixture did not measure temporary path");
+    RuntimeBoundary.afterRestoredProof=()->AndroidRuntimeRegistry.instance.multihop.serverPins="replacement-public-pins";
+    AndroidSpeedLab.drained(false);
+   }
+   f.complete();check(f.result.error!=null&&f.result.result==null,"changed Server identities retained a temporary result: "+phase);
+   if(phase.equals("before-stop"))check(RuntimeBoundary.stops==0&&RuntimeBoundary.restores==0&&AndroidHomeStateStore.current.sessionId.equals(f.originalSession),"changed original Server owner was stopped or restored");
+   else check(RuntimeBoundary.restores==1&&RuntimeBoundary.restoredPins.equals("original-public-pins"),"restoration did not forward original public identities");
+  }
+ }
 
  static void permissionCapture(Path root)throws Exception{
   for(String topology:new String[]{"router","multihop","external"}){
@@ -216,7 +238,7 @@ public final class SpeedLabRestoreTest {
   }
   Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Unsupported Tor comparison stopped the original path");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,24 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,24 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
 }
 '''
 
@@ -277,7 +299,9 @@ def main():
             ('AndroidUnifiedConnectionController.java','point.home.runtimeMode,point.home.logicalMode,point.home.fallback','"wg",point.home.logicalMode,point.home.fallback','exact original transport'),
             ('AndroidUnifiedConnectionController.java','if(!file.getValue().equals(', 'if(false&&!file.getValue().equals(', 'changed original node'),
             ('AndroidSpeedLabController.java','if(!ok||!connection.restoredCurrent(original,restoredOwner[0]))','if(!ok)','fresh restoration owner'),
-            ('AndroidUnifiedConnectionController.java','point.execution,point.selectedExecution,point.home.activeEntryMode','point.execution,"local",point.home.activeEntryMode','captured original winner'),
+            ('AndroidUnifiedConnectionController.java','multihop.restoreCaptured(point.entry,point.exit,point.multihopCapture,idle,','multihop.connect(point.entry,point.exit,point.home.runtimeMode,point.execution,point.home.activeEntryMode,','captured original winner'),
+            ('AndroidUnifiedConnectionController.java','multihop.captureCurrent(point.multihopCapture)','true','original Server pin owner'),
+            ('AndroidUnifiedConnectionController.java','multihop.restoredMatches(point.multihopCapture,point.entry,point.exit,now)','true','restored Server pin owner'),
         )
         for filename,old,new,label in cases:
             path=app/filename;source=path.read_text();assert source.count(old)==1,label
@@ -285,6 +309,6 @@ def main():
             result=subprocess.run(run,capture_output=True,text=True,timeout=35)
             assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' negative control escaped'
             path.write_text(source)
-        print('Android connected Speed Lab negative controls: 9 rejected')
+        print('Android connected Speed Lab negative controls: 11 rejected')
 
 if __name__=='__main__':main()

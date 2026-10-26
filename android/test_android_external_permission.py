@@ -14,6 +14,12 @@ spec = importlib.util.spec_from_file_location("external_permission_widgets", ROO
 T = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(T)
 
+MULTIHOP_CAPTURE_TYPES = r'''
+ static final class CapturedSource {final File file;final String digest;CapturedSource(File file)throws Exception{this.file=file.getCanonicalFile();digest=AndroidTorProfile.digest(AndroidPrivateFileStore.read(file,AndroidNodeStore.MAX_BUNDLE));}void require(File other)throws Exception{if(!file.equals(other.getCanonicalFile())||!digest.equals(AndroidTorProfile.digest(AndroidPrivateFileStore.read(other,AndroidNodeStore.MAX_BUNDLE))))throw new IllegalStateException("changed captured source");}}
+ static final class CapturedOwner {final String homeSession,entryId,exitId,entryMode,exitMode,pins;final long generation;CapturedOwner(AndroidHomeStateStore.Snapshot home,String pins){homeSession=home.sessionId;generation=home.pathGeneration;entryId=home.activeEntryId;exitId=home.activeExitId;entryMode=home.activeEntryMode;exitMode=home.runtimeMode;this.pins=pins;}boolean matchesHome(AndroidHomeStateStore.Snapshot home){return home.connected&&homeSession.equals(home.sessionId)&&generation==home.pathGeneration&&entryId.equals(home.activeEntryId)&&exitId.equals(home.activeExitId)&&entryMode.equals(home.activeEntryMode)&&exitMode.equals(home.runtimeMode);}}
+ static final class RestoreCapture {final String policy,selected;final CapturedOwner owner;final CapturedSource entrySource,exitSource;RestoreCapture(String policy,String selected,AndroidHomeStateStore.Snapshot home,AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String pins)throws Exception{this.policy=policy;this.selected=selected;owner=new CapturedOwner(home,pins);entrySource=new CapturedSource(entry.file);exitSource=new CapturedSource(exit.file);}void require(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit)throws Exception{if(!owner.entryId.equals(entry.id)||!owner.exitId.equals(exit.id))throw new IllegalStateException("wrong captured nodes");entrySource.require(entry.file);exitSource.require(exit.file);}}
+'''
+
 BOUNDARIES = r'''package com.eabusham.routervpn;
 import android.content.Context;import java.io.*;import java.util.*;import java.nio.file.*;import java.nio.charset.*;import org.json.*;
 final class AndroidPrivateFileStore {static byte[] read(File f,int max)throws Exception{byte[] b=Files.readAllBytes(f.toPath());if(b.length==0||b.length>max)throw new IllegalArgumentException("bounded private input required");return b;}}
@@ -50,8 +56,10 @@ final class AndroidModeOrchestrator {
  void disconnect(Callback cb){cb.finished(true,"","stopped");}void auto(File f,boolean smart,Callback cb){}void all(File f,Callback cb){}void custom(File f,List<String> l,Callback cb){}void logical(File f,String m,Callback cb){}
 }
 final class AndroidMultihopRuntime {
+ // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
- String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String policy,String selected,String entry,Callback cb){}boolean disconnectAndDrainCaptured(String session){return true;}
+ String activeExecution(){return "local";}String activeSelectedExecution(){return "local";}void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
+ RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{throw new IllegalStateException("multihop not owned by this external fixture");}boolean captureCurrent(RestoreCapture capture){return false;}boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){return false;}boolean disconnectAndDrainCaptured(String session){return true;}
  boolean isConnected(){return false;}boolean isActiveOrTransitioning(){return false;}String activeEntryId(){return "";}String activeExitId(){return "";}String activeEntryMode(){return "";}String activeExitMode(){return "";}
  void disconnect(){}void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
@@ -78,6 +86,8 @@ final class AndroidStartupPolicy {
  static Attempt restore(String nonce){return null;}static void cancelPending(){}static boolean recordProven(Context c,AndroidNodeStore n,File f,String session,String raw,String source){return false;}
 }
 '''
+BOUNDARIES = BOUNDARIES.replace('// MULTIHOP_CAPTURE_TYPES', MULTIHOP_CAPTURE_TYPES)
+
 
 HARNESS = r'''package com.eabusham.routervpn;
 import android.app.*;import android.os.*;import java.nio.file.*;import java.nio.charset.*;import java.util.*;import org.json.*;

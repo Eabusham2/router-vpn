@@ -206,12 +206,48 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile String multihopMetadata;
     private volatile AndroidHomeStateStore.Snapshot multihopHomeOwner;
     static String multihopProgressJSON(){LayeredVpnService service=currentService.get();io.nekohasekai.libbox.RouterMultihop plan=service==null?null:service.executionController;return plan==null?"":plan.progressJSON();}
+    /** A runtime-only receipt. Public pins remain bound to this exact proved owner. */
+    static final class CapturedMultihop {
+        final String homeSession, entryId, exitId, entryMode, exitMode, execution, serverIdentityPins;
+        final long pathGeneration;
+        private final LayeredVpnService service;
+        private final CommandServer server;
+        private final io.nekohasekai.libbox.RouterMultihop plan;
+        private final File session;
+        private final long generation;
+        private final String config, metadata;
+        private CapturedMultihop(LayeredVpnService service, AndroidHomeStateStore.Snapshot home, CommandServer server,
+                                 io.nekohasekai.libbox.RouterMultihop plan, File session, long generation,
+                                 String config, String metadata, String execution, String serverIdentityPins) {
+            this.service=service;this.server=server;this.plan=plan;this.session=session;this.generation=generation;
+            this.config=config;this.metadata=metadata;this.execution=execution;this.serverIdentityPins=serverIdentityPins;
+            homeSession=home.sessionId;pathGeneration=home.pathGeneration;entryId=home.activeEntryId;exitId=home.activeExitId;
+            entryMode=home.activeEntryMode;exitMode=home.runtimeMode;
+        }
+        boolean matchesHome(AndroidHomeStateStore.Snapshot home) {
+            return home!=null&&home.connected&&"connected".equals(home.phase)&&"passed".equals(home.pathProof)
+                    &&"multihop".equals(home.logicalMode)&&homeSession.equals(home.sessionId)&&pathGeneration==home.pathGeneration
+                    &&entryId.equals(home.activeEntryId)&&exitId.equals(home.activeExitId)
+                    &&entryMode.equals(home.activeEntryMode)&&exitMode.equals(home.runtimeMode);
+        }
+        boolean sameOwner(CapturedMultihop other) {
+            return other!=null&&service==other.service&&server==other.server&&plan==other.plan&&session==other.session
+                    &&generation==other.generation&&config.equals(other.config)&&metadata.equals(other.metadata)
+                    &&homeSession.equals(other.homeSession)&&pathGeneration==other.pathGeneration
+                    &&entryId.equals(other.entryId)&&exitId.equals(other.exitId)&&entryMode.equals(other.entryMode)&&exitMode.equals(other.exitMode)
+                    &&execution.equals(other.execution)&&serverIdentityPins.equals(other.serverIdentityPins);
+        }
+    }
     /** A previous score is never reused; this only freezes the live route choice. */
     static String capturedMultihopExecution(String homeSession) throws Exception {
+        return capturedMultihop(homeSession).execution;
+    }
+    static CapturedMultihop capturedMultihop(String homeSession) throws Exception {
         LayeredVpnService service=currentService.get();
         if(service==null||homeSession==null||homeSession.isEmpty())throw new IllegalStateException("The original multihop service is unavailable.");
         synchronized(service.lock){
             long generation=service.lifecycle.get();CommandServer server=service.commandServer;
+            File nativeSession=service.activeSession;String config=service.activeConfig,metadataSource=service.multihopMetadata;
             AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(service),owner=service.multihopHomeOwner;
             if(owner==null||!homeSession.equals(home.sessionId)||!homeSession.equals(owner.sessionId)||owner.pathGeneration!=home.pathGeneration
                     ||!owner.activeEntryId.equals(home.activeEntryId)||!owner.activeExitId.equals(home.activeExitId)
@@ -220,25 +256,31 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
                     ||AndroidHomeStateStore.emergencyDisconnectPending(service)||service.explicitStop||!"UP".equals(service.state)
                     ||!service.executionProved||service.commandServer==null||service.activeSession==null||service.hopMeasurement==null
                     ||service.executionNetwork.isEmpty()||"[]".equals(service.executionNetwork)||!service.executionNetwork.equals(service.executionNetworkIdentity())
-                    ||service.multihopMetadata==null||service.multihopMetadata.length()>16384)throw new IllegalStateException("The original multihop path is no longer proved and owned.");
-            JSONObject metadata=new JSONObject(service.multihopMetadata);
+                    ||config==null||config.isEmpty()||metadataSource==null||metadataSource.length()>16384)throw new IllegalStateException("The original multihop path is no longer proved and owned.");
+            JSONObject metadata=new JSONObject(metadataSource);
             String requested=metadata.optString("execution","local");
             if(!home.runtimeMode.equals(metadata.getString("exit_mode"))||!home.activeEntryMode.equals(metadata.optString("entry_mode","wg")))throw new IllegalStateException("The original multihop transport changed.");
             io.nekohasekai.libbox.RouterMultihop plan=service.executionController;
-            String selected="local";
+            String selected="local",pins="{}";
             if(plan==null){if(!"local".equals(requested))throw new IllegalStateException("The multihop comparison owner is missing.");}
             else{
                 String raw=plan.progressJSON();if(raw==null||raw.length()>65536||!plan.healthy())throw new IllegalStateException("The selected multihop lease or native owner changed.");
                 JSONObject progress=new JSONObject(raw);selected=progress.getString("execution");
                 if(!progress.optBoolean("complete",false)||!"selected".equals(progress.optString("stage",""))||!progress.optString("failure","").isEmpty()
                         ||!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(requested)&&!requested.equals(selected))throw new IllegalStateException("Multihop has no retained valid Local or Server selection.");
+                pins=plan.serverIdentityPinsJSON();
             }
+            pins=AndroidMultihopController.validatedServerIdentityPins(selected,home.runtimeMode,pins);
             AndroidHomeStateStore.Snapshot after=AndroidHomeStateStore.snapshot(service);
             if(currentService.get()!=service||service.explicitStop||!"UP".equals(service.state)||!service.executionProved||generation!=service.lifecycle.get()
                     ||server!=service.commandServer||owner!=service.multihopHomeOwner||plan!=service.executionController
+                    ||nativeSession!=service.activeSession||!config.equals(service.activeConfig)||!metadataSource.equals(service.multihopMetadata)
                     ||!after.connected||!home.sessionId.equals(after.sessionId)||home.pathGeneration!=after.pathGeneration
+                    ||!home.activeEntryId.equals(after.activeEntryId)||!home.activeExitId.equals(after.activeExitId)
+                    ||!home.activeEntryMode.equals(after.activeEntryMode)||!home.runtimeMode.equals(after.runtimeMode)
+                    ||!"connected".equals(after.phase)||!"passed".equals(after.pathProof)||!"multihop".equals(after.logicalMode)
                     ||!service.executionNetwork.equals(service.executionNetworkIdentity())||plan!=null&&!plan.healthy())throw new IllegalStateException("Multihop changed during route capture.");
-            return selected;
+            return new CapturedMultihop(service,home,server,plan,nativeSession,generation,config,metadataSource,selected,pins);
         }
     }
     static String hopMeasurementRequest(String operation,String id) throws Exception {

@@ -36,6 +36,27 @@ final class AndroidMultihopRuntime implements AutoCloseable {
     private String activeExitId = "";
     private String activeExitMode = "";
     private String activeExecution = "";
+    private String activeHomeSession = "";
+    private AndroidMultihopController.Source activeEntrySource, activeExitSource;
+
+    /** Never persisted or rebuilt from selected labels: one proved owner plus its exact sources. */
+    static final class RestoreCapture {
+        final String policy, selected;
+        final LayeredVpnService.CapturedMultihop owner;
+        final AndroidMultihopController.Source entrySource, exitSource;
+        private RestoreCapture(String policy, LayeredVpnService.CapturedMultihop owner,
+                               AndroidMultihopController.Source entrySource, AndroidMultihopController.Source exitSource) {
+            this.policy=policy;this.selected=owner.execution;this.owner=owner;this.entrySource=entrySource;this.exitSource=exitSource;
+        }
+        void require(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit) throws Exception {
+            if (entry==null||exit==null||entry.id.equals(exit.id)||!owner.entryId.equals(entry.id)||!owner.exitId.equals(exit.id)
+                    ||!java.util.Arrays.asList("local","server","auto").contains(policy)
+                    ||!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(policy)&&!policy.equals(selected)
+                    ||entrySource==null||exitSource==null) throw new IllegalStateException("The original multihop capture lost its bound nodes or winner.");
+            entrySource.require(entry.file);exitSource.require(exit.file);
+            AndroidMultihopController.validatedServerIdentityPins(selected,owner.exitMode,owner.serverIdentityPins);
+        }
+    }
 
     AndroidMultihopRuntime(Context context, NativeSingBoxController singBox) {
         this.context = context.getApplicationContext();
@@ -67,6 +88,40 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         return LayeredVpnService.capturedMultihopExecution(AndroidHomeStateStore.snapshot(context).sessionId);
     }
 
+    synchronized RestoreCapture captureRestore(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, AndroidHomeStateStore.Snapshot home) throws Exception {
+        reconcileRuntimeLocked();
+        if(!connected||disconnectRequested||closed.get()||home==null||!activeHomeSession.equals(home.sessionId)
+                ||!activeEntryId.equals(home.activeEntryId)||!activeExitId.equals(home.activeExitId)
+                ||!activeEntryMode.equals(home.activeEntryMode)||!activeExitMode.equals(home.runtimeMode)) throw new IllegalStateException("The original multihop source owner is unavailable.");
+        LayeredVpnService.CapturedMultihop owner=LayeredVpnService.capturedMultihop(home.sessionId);
+        if(!owner.matchesHome(home))throw new IllegalStateException("The original multihop home session changed during capture.");
+        RestoreCapture result=new RestoreCapture(activeExecution,owner,activeEntrySource,activeExitSource);
+        result.require(entry,exit);
+        if(!captureCurrent(result))throw new IllegalStateException("The original multihop owner changed during source capture.");
+        return result;
+    }
+
+    synchronized boolean captureCurrent(RestoreCapture capture) {
+        try {
+            reconcileRuntimeLocked();
+            if(capture==null||!connected||disconnectRequested||closed.get()||!activeHomeSession.equals(capture.owner.homeSession)
+                    ||!activeExecution.equals(capture.policy)||!capture.entrySource.same(activeEntrySource)||!capture.exitSource.same(activeExitSource))return false;
+            capture.entrySource.require(capture.entrySource.file);capture.exitSource.require(capture.exitSource.file);
+            return capture.owner.sameOwner(LayeredVpnService.capturedMultihop(activeHomeSession));
+        } catch(Exception changed) { return false; }
+    }
+
+    synchronized boolean restoredMatches(RestoreCapture original, AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, AndroidHomeStateStore.Snapshot home) {
+        try {
+            RestoreCapture actual=captureRestore(entry,exit,home);
+            return original!=null&&original.policy.equals(actual.policy)&&original.selected.equals(actual.selected)
+                    &&original.owner.entryId.equals(actual.owner.entryId)&&original.owner.exitId.equals(actual.owner.exitId)
+                    &&original.owner.entryMode.equals(actual.owner.entryMode)&&original.owner.exitMode.equals(actual.owner.exitMode)
+                    &&original.entrySource.same(actual.entrySource)&&original.exitSource.same(actual.exitSource)
+                    &&original.owner.serverIdentityPins.equals(actual.owner.serverIdentityPins);
+        } catch(Exception changed) { return false; }
+    }
+
     synchronized String activeEntryMode() { reconcileRuntimeLocked(); return connected ? activeEntryMode : ""; }
 
     synchronized String activeEntryId() {
@@ -91,15 +146,15 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         connect(entry,exit,exitMode,execution,"wg",callback);
     }
     synchronized void connect(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String entryMode, Callback callback) {
-        connectCaptured(entry,exit,exitMode,execution,execution,entryMode,callback);
+        connectCaptured(entry,exit,exitMode,execution,execution,entryMode,null,null,callback);
     }
     /** Runtime-only winner override; the saved Compare preference remains unchanged. */
-    synchronized void restoreCaptured(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,String exitMode,String policy,String selected,String entryMode,Callback callback){
-        if(!java.util.Arrays.asList("local","server").contains(selected)||!java.util.Arrays.asList("local","server","auto").contains(policy)
-                ||!"auto".equals(policy)&&!policy.equals(selected)){callback.finished(false,"The captured multihop winner does not match its original preference.");return;}
-        connectCaptured(entry,exit,exitMode,selected,policy,entryMode,callback);
+    synchronized void restoreCaptured(AndroidNodeStore.Node entry,AndroidNodeStore.Node exit,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback callback){
+        try{if(capture==null||idle==null)throw new IllegalStateException("The original multihop capture or idle owner is missing.");capture.require(entry,exit);}
+        catch(Exception changed){callback.finished(false,nonEmpty(changed.getMessage(),"The original multihop capture changed."));return;}
+        connectCaptured(entry,exit,capture.owner.exitMode,capture.selected,capture.policy,capture.owner.entryMode,capture,idle,callback);
     }
-    private synchronized void connectCaptured(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, Callback callback) {
+    private synchronized void connectCaptured(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, RestoreCapture capture, AndroidHomeStateStore.Snapshot expectedIdle, Callback callback) {
         if (!NativeSingBoxController.nativeMultihopEntry(entryMode)) { callback.finished(false,"Choose an exact native entry transport.");return; }
         if(!java.util.Arrays.asList("local","server","auto").contains(execution)){callback.finished(false,"Invalid multihop execution.");return;}
         if (closed.get()) { callback.finished(false, "Android multihop runtime is closed."); return; }
@@ -108,13 +163,23 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         if (entry == null || exit == null || entry.id.equals(exit.id)) { callback.finished(false, "Multihop requires two different stored nodes."); return; }
         if (exitMode == null || exitMode.trim().isEmpty()) { callback.finished(false, "Choose a supported multihop exit transport."); return; }
         if (runtimeBusy(singBox.getState())) { callback.finished(false, "The embedded VPN must prove a terminal state before multihop can start."); return; }
-        transitioning = true;
-        disconnectRequested = false;
-        revalidationTeardown = false;
-        clearActiveGraphLocked();
-        String homeSession=AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
+        final String homeSession;
+        synchronized(AndroidHomeStateStore.class) {
+            AndroidHomeStateStore.Snapshot home=AndroidHomeStateStore.snapshot(context);
+            if(expectedIdle!=null&&(expectedIdle.connected||home.connected||!expectedIdle.sessionId.equals(home.sessionId)
+                    ||expectedIdle.pathGeneration!=home.pathGeneration||!expectedIdle.phase.equals(home.phase)
+                    ||!java.util.Arrays.asList("off","disconnected","failed").contains(home.phase)
+                    ||AndroidHomeStateStore.emergencyDisconnectPending(context))) {
+                callback.finished(false,"A newer Home decision prevents automatic multihop restoration.");return;
+            }
+            transitioning = true;
+            disconnectRequested = false;
+            revalidationTeardown = false;
+            clearActiveGraphLocked();
+            homeSession=AndroidHomeStateStore.beginMultihop(context, entry.id, exit.id, exitMode.trim(), entryMode);
+        }
         try {
-            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, policy, entryMode, homeSession, callback));
+            active = executor.submit(() -> run(entry, exit, exitMode.trim(), execution, policy, entryMode, homeSession, capture, callback));
         } catch (RuntimeException error) {
             transitioning = false;
             AndroidHomeStateStore.failed(context, nonEmpty(error.getMessage(), "Could not start Android multihop worker."));
@@ -122,7 +187,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         }
     }
 
-    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, String homeSession, Callback callback) {
+    private void run(AndroidNodeStore.Node entry, AndroidNodeStore.Node exit, String exitMode, String execution, String policy, String entryMode, String homeSession, RestoreCapture capture, Callback callback) {
         boolean started = false;
         synchronized (this) { workerThread = Thread.currentThread(); }
         try {
@@ -133,7 +198,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             String before = singBox.getState();
             if (!terminal(before)) throw new IllegalStateException("Disconnect the current embedded VPN before starting multihop.");
             callback.progress("Preparing " + entryMode + " entry → " + exitMode + " exit…");
-            AndroidMultihopController.Prepared prepared = builder.prepare(entry.file, exit.file, exitMode, execution, entryMode);
+            AndroidMultihopController.Prepared prepared = capture==null ? builder.prepare(entry.file, exit.file, exitMode, execution, entryMode)
+                    : builder.prepare(entry.file, exit.file, exitMode, execution, entryMode,capture.entrySource,capture.exitSource,capture.owner.serverIdentityPins);
             if (Thread.currentThread().isInterrupted() || closed.get()) throw new InterruptedException("Multihop start cancelled.");
             callback.progress("Starting one Android VpnService multihop graph…");
             synchronized (this) {
@@ -156,6 +222,7 @@ final class AndroidMultihopRuntime implements AutoCloseable {
             if (!"UP".equals(singBox.getState())) throw new IllegalStateException("Embedded multihop engine did not reach UP before timeout.");
             callback.progress("Tunnel is UP; proving the selected exit node before Connected…");
             if (!AndroidPathProbe.prove(prepared.exitBundle, PROBE_TIMEOUT_MS)) throw new IllegalStateException("Exit-node private path proof failed; multihop was disconnected.");
+            prepared.entrySource.require(entry.file);prepared.exitSource.require(exit.file);
             synchronized (this) {
                 if (disconnectRequested || closed.get() || Thread.currentThread().isInterrupted() || !homeSession.equals(AndroidHomeStateStore.snapshot(context).sessionId)) throw new InterruptedException("Multihop start cancelled.");
                 transitioning = false;
@@ -165,6 +232,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
                 activeExitId = exit.id;
                 activeExitMode = prepared.exitMode;
                 activeExecution = policy;
+                activeHomeSession = homeSession;
+                activeEntrySource = prepared.entrySource; activeExitSource = prepared.exitSource;
                 AndroidHomeStateStore.connectedMultihop(context, entry.id, exit.id, prepared.exitMode, entryMode);
                 // The captured graph's post-proof activation and completion are
                 // part of the same adoption as its state. Disconnect must not
@@ -366,6 +435,8 @@ final class AndroidMultihopRuntime implements AutoCloseable {
         activeExitId = "";
         activeExitMode = "";
         activeExecution = "";
+        activeHomeSession = "";
+        activeEntrySource = null; activeExitSource = null;
     }
 
     private static String nonEmpty(String value, String fallback) { return value == null || value.trim().isEmpty() ? fallback : value.trim(); }

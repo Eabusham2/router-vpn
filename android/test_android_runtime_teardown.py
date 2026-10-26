@@ -54,7 +54,15 @@ final class NativeSingBoxController {
     }
 }
 final class LayeredVpnService {
-    static String capturedMultihopExecution(String session){if(!session.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("stale native graph");return AndroidMultihopController.lastExecution.equals("auto")?"server":AndroidMultihopController.lastExecution;}
+    static String selectedOverride="",serverPins="{}";static boolean staleCapture;
+    static final class CapturedMultihop {
+        final String homeSession,entryId,exitId,entryMode,exitMode,execution,serverIdentityPins;final long generation;
+        CapturedMultihop(String session){AndroidHomeStateStore.Snapshot h=AndroidHomeStateStore.current;homeSession=session;entryId=h.activeEntryId;exitId=h.activeExitId;entryMode=h.activeEntryMode;exitMode=h.runtimeMode;generation=h.pathGeneration;execution=capturedMultihopExecution(session);serverIdentityPins=serverPins;}
+        boolean matchesHome(AndroidHomeStateStore.Snapshot h){return !staleCapture&&h.connected&&homeSession.equals(h.sessionId)&&generation==h.pathGeneration&&entryId.equals(h.activeEntryId)&&exitId.equals(h.activeExitId)&&entryMode.equals(h.activeEntryMode)&&exitMode.equals(h.runtimeMode);}
+        boolean sameOwner(CapturedMultihop other){return other!=null&&!staleCapture&&homeSession.equals(other.homeSession)&&generation==other.generation&&execution.equals(other.execution)&&serverIdentityPins.equals(other.serverIdentityPins);}
+    }
+    static CapturedMultihop capturedMultihop(String session){return new CapturedMultihop(session);}
+    static String capturedMultihopExecution(String session){if(!session.equals(AndroidHomeStateStore.current.sessionId))throw new IllegalStateException("stale native graph");return selectedOverride.isEmpty()?(AndroidMultihopController.lastExecution.equals("auto")?"server":AndroidMultihopController.lastExecution):selectedOverride;}
     static final AtomicInteger discarded=new AtomicInteger();
     static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
@@ -88,17 +96,22 @@ final class AndroidNodeStore {
     }
 }
 final class AndroidMultihopController {
+    static java.util.Set<String> changedSources=new java.util.HashSet<>();static String lastPins="";
+    static String validatedServerIdentityPins(String execution,String mode,String pins){if(pins==null)throw new IllegalStateException("pins absent");return pins;}
+    static final class Source {final File file;final String digest;Source(File file){this.file=file;digest=file.getPath();}void require(File candidate){if(!file.equals(candidate)||changedSources.contains(file.getPath()))throw new IllegalStateException("changed captured node");}boolean same(Source other){return other!=null&&file.equals(other.file)&&digest.equals(other.digest);}}
     static final class Prepared {
         final NativeSingBoxController.SessionInfo session = new NativeSingBoxController.SessionInfo();
         final File exitBundle; final String exitMode;
-        Prepared(File exit, String mode) { exitBundle=exit; exitMode=mode; }
+        final Source entrySource,exitSource;
+        Prepared(File entry,File exit, String mode) { exitBundle=exit; exitMode=mode;entrySource=new Source(entry);exitSource=new Source(exit); }
     }
+    Prepared prepare(File entry,File exit,String mode,String execution,String entryMode,Source a,Source b,String pins){a.require(entry);b.require(exit);lastPins=pins;return prepare(entry,exit,mode,execution,entryMode);}
     AndroidMultihopController(Context c, NativeSingBoxController s) {}
     List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f) { return Collections.emptyList(); }
     static volatile String lastExecution = "", lastEntryMode = "";
     Prepared prepare(File entry, File exit, String mode) { return prepare(entry,exit,mode,"local","wg"); }
     Prepared prepare(File entry, File exit, String mode, String execution, String entryMode) {
-        lastExecution=execution; lastEntryMode=entryMode; return new Prepared(exit,mode);
+        lastExecution=execution; lastEntryMode=entryMode; return new Prepared(entry,exit,mode);
     }
 }
 final class AndroidStandardExitStore {
@@ -225,7 +238,7 @@ public final class RuntimeTeardownHarness {
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         final String kind;
         Owner(String kind) {
-            this.kind=kind;LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            this.kind=kind;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
             LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
@@ -299,14 +312,34 @@ public final class RuntimeTeardownHarness {
         }
         if ("multihop".equals(kind)) {
             for(String selected:new String[]{"local","server"})test("multihop restore keeps Compare preference and exact "+selected+" winner",()->{
-                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.multihop.restoreCaptured(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","auto",selected,"wg-pq",cb);cb.awaitDone();
+                try(Owner owner=new Owner(kind)){AndroidNodeStore.Node entry=new AndroidNodeStore.Node("entry"),exit=new AndroidNodeStore.Node("exit");LayeredVpnService.selectedOverride=selected;
+                    Callback first=new Callback(0);owner.multihop.connect(entry,exit,"shadowsocks","auto","wg-pq",first);first.awaitDone();check(first.ok,"original graph did not prove");
+                    AndroidMultihopRuntime.RestoreCapture captured=owner.multihop.captureRestore(entry,exit,AndroidHomeStateStore.current);
+                    owner.disconnect();awaitIdle(owner);LayeredVpnService.selectedOverride="";
+                    Callback cb=new Callback(0);owner.multihop.restoreCaptured(entry,exit,captured,AndroidHomeStateStore.current,cb);cb.awaitDone();
                     check(cb.ok&&selected.equals(AndroidMultihopController.lastExecution),"restoration reran the chooser or changed the original path");
                     check(owner.multihop.activeExecution().equals("auto")&&owner.multihop.activeSelectedExecution().equals(selected),"runtime override overwrote Compare or lost actual native winner");
                     owner.disconnect();awaitIdle(owner);
                 }
             });
             test("multihop restore rejects contradictory winner before launch",()->{
-                try(Owner owner=new Owner(kind)){Callback cb=new Callback(0);owner.multihop.restoreCaptured(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","local","server","wg",cb);cb.awaitDone();check(!cb.ok&&owner.engine.starts.get()==0,"incompatible restoration was launched");}
+                try(Owner owner=new Owner(kind)){Callback first=new Callback(0);owner.multihop.connect(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),"shadowsocks","local","wg",first);first.awaitDone();LayeredVpnService.selectedOverride="server";boolean refused=false;try{owner.multihop.captureRestore(new AndroidNodeStore.Node("entry"),new AndroidNodeStore.Node("exit"),AndroidHomeStateStore.current);}catch(Exception expected){refused=true;}check(refused&&owner.engine.starts.get()==1,"incompatible native winner was captured");}
+            });
+            for(String fault:new String[]{"changed-entry","changed-exit","wrong-entry","wrong-exit","stale-home","changed-pins","stale-idle"})test("multihop runtime-only capture rejects "+fault,()->{
+                try(Owner owner=new Owner(kind)){
+                    AndroidNodeStore.Node entry=new AndroidNodeStore.Node("entry"),exit=new AndroidNodeStore.Node("exit");Callback first=new Callback(0);
+                    LayeredVpnService.serverPins="public-server-identity-original";
+                    owner.multihop.connect(entry,exit,"wg-pq","auto","wg",first);first.awaitDone();check(first.ok,"original packet graph not proved");
+                    AndroidMultihopRuntime.RestoreCapture captured=owner.multihop.captureRestore(entry,exit,AndroidHomeStateStore.current);
+                    if(fault.equals("stale-home")){LayeredVpnService.staleCapture=true;check(!owner.multihop.captureCurrent(captured),"stale home owner authorized temporary stop");return;}
+                    if(fault.equals("changed-pins")){LayeredVpnService.serverPins="public-server-identity-replaced";check(!owner.multihop.captureCurrent(captured),"new paired key authorized temporary stop");LayeredVpnService.serverPins="public-server-identity-original";}
+                    owner.disconnect();awaitIdle(owner);AndroidHomeStateStore.Snapshot idle=AndroidHomeStateStore.current;
+                    if(fault.equals("stale-idle")){AndroidHomeStateStore.Snapshot changed=new AndroidHomeStateStore.Snapshot();changed.sessionId="new-user-decision";AndroidHomeStateStore.current=changed;}
+                    if(fault.startsWith("changed-")&&!fault.equals("changed-pins"))AndroidMultihopController.changedSources.add(fault.endsWith("entry")?"entry":"exit");
+                    Callback restored=new Callback(0);owner.multihop.restoreCaptured(fault.equals("wrong-entry")?new AndroidNodeStore.Node("different"):entry,fault.equals("wrong-exit")?new AndroidNodeStore.Node("different"):exit,captured,idle,restored);restored.awaitDone();
+                    if(fault.equals("changed-pins")){check(restored.ok&&AndroidMultihopController.lastPins.equals("public-server-identity-original"),"restore failed to forward captured pins");LayeredVpnService.serverPins="public-server-identity-replaced";check(!owner.multihop.restoredMatches(captured,entry,exit,AndroidHomeStateStore.current),"replacement pins were accepted after restore");}
+                    else check(!restored.ok&&owner.engine.starts.get()==1,"changed source or node launched restoration");
+                }
             });
             for(String entryMode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2"}) {
                 test("multihop restore exact entry "+entryMode,()->{

@@ -72,6 +72,19 @@ receipt and guard-removal negatives, and the actual Go MAX launch compiler
 passed. The native handle and OS boundaries are doubled in those tests; current
 Xcode-generated binding/package and physical-device evidence remain separate.
 
+Android temporary multihop tests now use an immutable runtime receipt for the
+exact original source bytes, service/native owners, selected execution and
+public Server identity pins. The service checks the captured path before and
+after native readback. Restoration forwards the pins into the real preparation
+metadata, requires the matching idle Home owner atomically at admission, and
+checks the exact sources and pins again after fresh proof. A newer connection,
+Disconnect or source replacement prevents stale restoration. Ordinary external
+pairing retains its separate contract. Shipping Java service/callback and
+Java-to-Go graph tests, including all nine packet/PQ/MAX pin paths and deliberate
+owner/pin guard removals, passed. Android framework/native handles are doubled
+in these tests; the full current APK and physical VPN behavior still require
+independent evidence.
+
 Windows private runtime handling now validates the actual opened file's ACL
 instead of applying POSIX mode bits to Windows. Runtime directories receive
 private ACLs before secret staging. DNS proof uses the same validated bytes,

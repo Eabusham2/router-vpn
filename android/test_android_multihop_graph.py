@@ -103,7 +103,7 @@ func main(){
 }
 '''
 STUBS={
-'io/nekohasekai/libbox/RouterMultihop.java':r'''package io.nekohasekai.libbox; public final class RouterMultihop {private final String graph;public RouterMultihop(String g){graph=g;}public String config(){return graph;}public void close(){}}''',
+'io/nekohasekai/libbox/RouterMultihop.java':r'''package io.nekohasekai.libbox; public final class RouterMultihop {private final String graph;public RouterMultihop(String g){graph=g;}public String config(){return graph;}public String serverIdentityPinsJSON()throws Exception{throw new IllegalStateException("compiler fixture has no proved native owner");}public void close(){}}''',
 'android/content/Context.java':r'''package android.content;
 public class Context {
  private final java.io.File root;
@@ -768,6 +768,46 @@ public final class MultihopGraphHarness {
    check(failed&&sessions(app)==0,"changed captured entry staged a session");
   }
  }
+ static void restoreIdentityChecks(Path directory)throws Exception {
+  Path app=Files.createTempDirectory(directory,"restore-identity-");Context context=new Context(app.toFile());AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
+  File entry=save(directory,bundle('a')),exit=save(directory,bundle('b'));byte[] originalEntry=Files.readAllBytes(entry.toPath()),originalExit=Files.readAllBytes(exit.toPath());
+  AndroidMultihopController.Prepared proved=builder.prepare(entry,exit,"wg","auto","wg");
+  String pins=new JSONObject().put("expected_packet_public_key",key('s')).toString();
+  check(proved.entrySource.digest.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(originalEntry))),"entry snapshot did not capture exact input bytes");
+  check(proved.exitSource.digest.equals(HexFormat.of().formatHex(MessageDigest.getInstance("SHA-256").digest(originalExit))),"exit snapshot did not capture exact input bytes");
+  for(String selected:new String[]{"local","server"}){
+   AndroidMultihopController.Prepared restored=builder.prepare(entry,exit,"wg",selected,"wg",proved.entrySource,proved.exitSource,selected.equals("server")?pins:"{}");
+   JSONObject metadata=new JSONObject(Files.readString(app.resolve("layered-sessions").resolve(restored.session.sessionId).resolve("routervpn-multihop.json")));
+   check(metadata.getString("execution").equals(selected),"restoration reran Compare");
+   check(selected.equals("server")?metadata.getString("expected_packet_public_key").equals(key('s')):!metadata.has("expected_packet_public_key"),"runtime pins lost exact selected execution");
+   check(!metadata.has("expected_pq_client_identity"),"plain WG received another PQ identity");
+  }
+  for(String mode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-quic-wg","max-tls-awg","max-quic-awg"}){
+   boolean pq=NativeSingBoxController.nativePQFamily(mode)||AndroidNativeMAXProfile.isMode(mode);
+   JSONObject exact=new JSONObject(pins);if(pq)exact.put("expected_pq_client_identity","ab".repeat(32));
+   check(AndroidMultihopController.validatedServerIdentityPins("server",mode,exact.toString()).equals(exact.toString()),"required public identities lost: "+mode);
+   check(AndroidMultihopController.validatedServerIdentityPins("local",mode,"{}").equals("{}"),"Local adopted server-only identities");
+   for(String invalid:new String[]{"{}",exact.toString().replace(key('s'),"bad"),new JSONObject(exact.toString()).put("unexpected",true).toString(),new JSONObject(exact.toString()).put("expected_packet_public_key",JSONObject.NULL).toString(),new JSONObject(exact.toString()).put("expected_packet_public_key",Base64.getEncoder().encodeToString(new byte[32])).toString(),pq?new JSONObject(exact.toString()).put("expected_pq_client_identity","0".repeat(64)).toString():new JSONObject(exact.toString()).put("expected_pq_client_identity","ab".repeat(32)).toString()}){
+    boolean refused=false;try{AndroidMultihopController.validatedServerIdentityPins("server",mode,invalid);}catch(Exception expected){refused=true;}check(refused,"malformed/missing public identity accepted: "+mode);
+   }
+  }
+  for(String fault:new String[]{"missing-pins","wrong-type","local-pins","wrong-entry-source","wrong-exit-source","missing-entry-source","same-bytes-other-file","changed-entry","changed-exit"}){
+   int before=sessions(app);boolean refused=false;File candidate=entry;AndroidMultihopController.Source a=proved.entrySource,b=proved.exitSource;String value=pins,selection="server";
+   if(fault.equals("missing-pins"))value="{}";
+   if(fault.equals("wrong-type"))value=new JSONObject().put("expected_packet_public_key",3).toString();
+   if(fault.equals("local-pins"))selection="local";
+   if(fault.equals("wrong-entry-source"))a=proved.exitSource;
+   if(fault.equals("wrong-exit-source"))b=proved.entrySource;
+   if(fault.equals("missing-entry-source"))a=null;
+   if(fault.equals("same-bytes-other-file"))candidate=Files.write(Files.createTempFile(directory,"different-entry-",".json"),originalEntry).toFile();
+   if(fault.equals("changed-entry"))Files.writeString(entry.toPath(),new String(originalEntry,StandardCharsets.UTF_8)+" ");
+   if(fault.equals("changed-exit"))Files.writeString(exit.toPath(),new String(originalExit,StandardCharsets.UTF_8)+" ");
+   try{builder.prepare(candidate,exit,"wg",selection,"wg",a,b,value);}catch(Exception expected){refused=true;}
+   finally{Files.write(entry.toPath(),originalEntry);Files.write(exit.toPath(),originalExit);}
+   check(refused&&sessions(app)==before,"invalid restoration staged or changed its source owner: "+fault);
+  }
+  check(Arrays.equals(originalEntry,Files.readAllBytes(entry.toPath()))&&Arrays.equals(originalExit,Files.readAllBytes(exit.toPath())),"runtime public pins were persisted into private node sources");
+ }
  public static void main(String[] args)throws Exception {
   Path dir=Path.of(args[0]);Path app=Files.createDirectory(dir.resolve("app"));Context context=new Context(app.toFile());
   AndroidMultihopController builder=new AndroidMultihopController(context,new NativeSingBoxController(context));
@@ -813,6 +853,7 @@ public final class MultihopGraphHarness {
   awgExitChecks(dir);
   proxyEntryChecks(dir);
   nativeEntryRejections(dir);
+  restoreIdentityChecks(dir);
   System.out.println("Android shipping native/proxy multihop compiler: PASS ("+checks+" checks; real Go policy, Android handles doubled)");
  }
 }

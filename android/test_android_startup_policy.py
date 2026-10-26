@@ -78,16 +78,20 @@ ORCHESTRATOR=r'''final class AndroidModeOrchestrator {
 }
 '''
 MULTIHOP=r'''final class AndroidMultihopRuntime {
+ // MULTIHOP_CAPTURE_TYPES
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  int starts;String entryID="",exitID="",entryMode="",exitMode="",execution="";
  void connect(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String execution,String entry,Callback cb){starts++;entryID=a.id;exitID=b.id;entryMode=entry;exitMode=mode;this.execution=execution;cb.owned(AndroidHomeStateStore.beginMultihop(new Context(),a.id,b.id,mode,entry));AndroidHomeStateStore.connectedMultihop(new Context(),a.id,b.id,mode,entry);cb.finished(true,"proved captured graph");}
  String activeExecution(){return execution;}String activeSelectedExecution(){return execution.equals("auto")?"server":execution;}
- void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,String mode,String policy,String selected,String entry,Callback cb){}
+ void restoreCaptured(AndroidNodeStore.Node a,AndroidNodeStore.Node b,RestoreCapture capture,AndroidHomeStateStore.Snapshot idle,Callback cb){}
+ RestoreCapture captureRestore(AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home)throws Exception{throw new IllegalStateException("startup fixture cannot capture an old native graph");}boolean captureCurrent(RestoreCapture capture){return false;}boolean restoredMatches(RestoreCapture capture,AndroidNodeStore.Node a,AndroidNodeStore.Node b,AndroidHomeStateStore.Snapshot home){return false;}
  boolean disconnectAndDrainCaptured(String s){return true;}boolean isConnected(){return starts>0;}boolean isActiveOrTransitioning(){return false;}
  String activeEntryId(){return entryID;}String activeExitId(){return exitID;}String activeEntryMode(){return entryMode;}String activeExitMode(){return exitMode;}
  void disconnect(){}List<NativeSingBoxController.ModeInfo> listSupportedExitModes(File f){return Collections.emptyList();}
 }
 '''
+MULTIHOP=MULTIHOP.replace('// MULTIHOP_CAPTURE_TYPES',P.MULTIHOP_CAPTURE_TYPES)
+
 EXTRA=r'''
 final class AndroidExternalPolicy {static boolean supports(String s){return true;}}
 final class AndroidStartLayer {static final String OFF="off",AES="aes-256-gcm",AES_XOR="aes-256-gcm+xor-whitening";}

@@ -19,23 +19,25 @@ public final class MultihopRestoreTest {
  static void set(LayeredVpnService service,String name,Object value)throws Exception{field(name).set(service,value);}
  static Object get(LayeredVpnService service,String name)throws Exception{return field(name).get(service);}
  static AndroidHomeStateStore.Snapshot home(){AndroidHomeStateStore.Snapshot s=new AndroidHomeStateStore.Snapshot();s.connected=true;s.pathGeneration=17;s.phase="connected";s.pathProof="passed";s.sessionId="captured-home";s.logicalMode="multihop";s.runtimeMode="max-quic-awg";s.activeEntryMode="reality-xhttp";s.activeEntryId="entry";s.activeExitId="exit";return s;}
+ static String pins()throws Exception{return new JSONObject().put("expected_packet_public_key",java.util.Base64.getEncoder().encodeToString(new byte[]{1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27,28,29,30,31,32})).put("expected_pq_client_identity","ab".repeat(32)).toString();}
  static JSONObject progress(String selected)throws Exception{return new JSONObject().put("stage","selected").put("complete",true).put("execution",selected).put("measurements",new JSONArray());}
  static final class Fixture {
   final LayeredVpnService service=new LayeredVpnService();final RouterMultihop plan=new RouterMultihop();final android.net.ConnectivityManager connectivity=new android.net.ConnectivityManager();final JSONObject metadata;
   Fixture(String requested,String selected,boolean nativeOwner)throws Exception{
    AndroidHomeStateStore.value=home();AndroidHomeStateStore.emergency=false;set(service,"multihopHomeOwner",home());set(service,"currentService",new java.lang.ref.WeakReference<>(service));
-   set(service,"state","UP");set(service,"activeSession",new File("captured-native-session"));set(service,"commandServer",new CommandServer(service,service));set(service,"executionProved",true);set(service,"hopMeasurement",new RouterHopMeasurement());set(service,"connectivity",connectivity);
+   set(service,"state","UP");set(service,"activeConfig","captured-config");set(service,"activeSession",new File("captured-native-session"));set(service,"commandServer",new CommandServer(service,service));set(service,"executionProved",true);set(service,"hopMeasurement",new RouterHopMeasurement());set(service,"connectivity",connectivity);
    Method network=LayeredVpnService.class.getDeclaredMethod("executionNetworkIdentity");network.setAccessible(true);set(service,"executionNetwork",network.invoke(service));
-   metadata=new JSONObject().put("execution",requested).put("entry_mode","reality-xhttp").put("exit_mode","max-quic-awg");metadata();plan.progress=progress(selected).toString();set(service,"executionController",nativeOwner?plan:null);
+   metadata=new JSONObject().put("execution",requested).put("entry_mode","reality-xhttp").put("exit_mode","max-quic-awg");metadata();plan.progress=progress(selected).toString();plan.pins=selected.equals("server")?pins():"{}";set(service,"executionController",nativeOwner?plan:null);
   }
   void metadata()throws Exception{set(service,"multihopMetadata",metadata.toString());}
-  String capture()throws Exception{return LayeredVpnService.capturedMultihopExecution("captured-home");}
+  LayeredVpnService.CapturedMultihop receipt()throws Exception{return LayeredVpnService.capturedMultihop("captured-home");}
+  String capture()throws Exception{return receipt().execution;}
  }
  interface Mutation{void change(Fixture fixture)throws Exception;}
  static void reject(String name,Mutation mutation)throws Exception{Fixture f=new Fixture("auto","server",true);mutation.change(f);boolean rejected=false;try{f.capture();}catch(Exception expected){rejected=true;}check(rejected,"stale or invalid native winner accepted: "+name);}
  public static void main(String[] args)throws Exception{
   for(String policy:new String[]{"local","server","auto"})for(String selected:new String[]{"local","server"}){
-   if(!policy.equals("auto")&&!policy.equals(selected))continue;Fixture f=new Fixture(policy,selected,true);check(f.capture().equals(selected),"valid selected route changed");check(f.metadata.getString("execution").equals(policy),"capture changed saved requested choice");check(f.plan.runs==0,"capture reran comparison or fabricated a fresh proof");
+   if(!policy.equals("auto")&&!policy.equals(selected))continue;Fixture f=new Fixture(policy,selected,true);check(f.capture().equals(selected),"valid selected route changed");check(f.metadata.getString("execution").equals(policy),"capture changed saved requested choice");check(f.plan.runs==0,"capture reran comparison or fabricated a fresh proof");check(f.receipt().serverIdentityPins.equals(f.plan.pins),"captured pins lost their exact winner");check(f.receipt().matchesHome(AndroidHomeStateStore.value),"receipt lost home identity");check(f.receipt().sameOwner(f.receipt()),"same owned capture changed");
   }
   Fixture local=new Fixture("local","local",false);check(local.capture().equals("local"),"proved direct local graph lost restoration");
   Map<String,Mutation> mutations=new LinkedHashMap<>();
@@ -51,6 +53,12 @@ public final class MultihopRestoreTest {
   mutations.put("stop-after-native-read",f->f.plan.onProgress=()->{try{set(f.service,"explicitStop",true);}catch(Exception e){throw new AssertionError(e);}});
   mutations.put("lifecycle-after-native-read",f->f.plan.onProgress=()->{try{((AtomicLong)get(f.service,"lifecycle")).incrementAndGet();}catch(Exception e){throw new AssertionError(e);}});
   mutations.put("replacement-after-native-read",f->f.plan.onProgress=()->{try{set(f.service,"currentService",new java.lang.ref.WeakReference<>(new LayeredVpnService()));}catch(Exception e){throw new AssertionError(e);}});
+  mutations.put("missing-server-pins",f->f.plan.pins="{}");mutations.put("wrong-packet-key",f->f.plan.pins=new JSONObject(pins()).put("expected_packet_public_key","bad").toString());mutations.put("null-pq-pin",f->f.plan.pins=new JSONObject(pins()).put("expected_pq_client_identity",JSONObject.NULL).toString());mutations.put("unknown-pin",f->f.plan.pins=new JSONObject(pins()).put("extra","unowned").toString());
+  mutations.put("native-pin-error",f->f.plan.pinFailure=true);mutations.put("owner-during-pins",f->f.plan.onPins=()->AndroidHomeStateStore.value=homeWithNewGeneration());
+  mutations.put("config-during-pins",f->f.plan.onPins=()->{try{set(f.service,"activeConfig","replacement");}catch(Exception e){throw new AssertionError(e);}});
+  mutations.put("session-during-pins",f->f.plan.onPins=()->{try{set(f.service,"activeSession",new File("replacement"));}catch(Exception e){throw new AssertionError(e);}});
+  mutations.put("home-mode-during-pins",f->f.plan.onPins=()->{AndroidHomeStateStore.Snapshot changed=home();changed.runtimeMode="wg-pq";AndroidHomeStateStore.value=changed;});
+  mutations.put("native-health-during-pins",f->f.plan.onPins=()->f.plan.alive=false);
   for(var mutation:mutations.entrySet())reject(mutation.getKey(),mutation.getValue());
   System.out.println("Android native multihop winner capture: "+checks+" whole-service checks; retained Box/lease/Home/network ownership and no score reuse");
  }
@@ -67,7 +75,13 @@ def main():
  public int getConnectionOwnerUid(int p,java.net.InetSocketAddress a,java.net.InetSocketAddress b){return 1;}public void registerDefaultNetworkCallback(NetworkCallback c){}public void unregisterNetworkCallback(NetworkCallback c){}
  public static class NetworkCallback{public void onAvailable(Network n){}public void onLost(Network n){}public void onCapabilitiesChanged(Network n,NetworkCapabilities c){}public void onLinkPropertiesChanged(Network n,LinkProperties p){}}
 }'''
-    stubs['io/nekohasekai/libbox/RouterMultihop.java']='''package io.nekohasekai.libbox;public class RouterMultihop {public boolean alive=true;public String progress;public int runs;public Runnable onProgress;public void networkChanged(){}public boolean healthy(){return alive;}public String progressJSON(){if(onProgress!=null)onProgress.run();return progress;}public String config(){return "";}public void run(CommandServer c)throws Exception{runs++;}public void close()throws Exception{}}'''
+    stubs['io/nekohasekai/libbox/RouterMultihop.java']='''package io.nekohasekai.libbox;public class RouterMultihop {public boolean alive=true;public String progress,pins="{}";public boolean pinFailure;public int runs;public Runnable onProgress,onPins;public void networkChanged(){}public boolean healthy(){return alive;}public String progressJSON(){if(onProgress!=null)onProgress.run();return progress;}public String serverIdentityPinsJSON()throws Exception{if(onPins!=null)onPins.run();if(pinFailure)throw new IllegalStateException("stale pins");return pins;}public String config(){return "";}public void run(CommandServer c)throws Exception{runs++;}public void close()throws Exception{}}'''
+    controller=(JAVA/'AndroidMultihopController.java').read_text()
+    validator=controller[controller.index('    static String validatedServerIdentityPins('):controller.index('    private static void applyServerIdentityPins(')]
+    stubs['com/eabusham/routervpn/AndroidMultihopController.java']='package com.eabusham.routervpn;import org.json.*;import android.util.Base64;final class AndroidMultihopController{'+validator+'}'
+    stubs['com/eabusham/routervpn/NativeSingBoxController.java']='package com.eabusham.routervpn;final class NativeSingBoxController{static boolean nativeWireGuardFamily(String m){return java.util.Arrays.asList("wg","awg2-fast","awg2-strong").contains(m);}static boolean nativePQFamily(String m){return java.util.Arrays.asList("wg-pq","awg2-pq").contains(m);}}'
+    stubs['com/eabusham/routervpn/AndroidNativeMAXProfile.java']='package com.eabusham.routervpn;final class AndroidNativeMAXProfile{static boolean isMode(String m){return java.util.Arrays.asList("max-tls-wg","max-quic-wg","max-tls-awg","max-quic-awg").contains(m);}}'
+    stubs['android/util/Base64.java']='package android.util;public class Base64{public static final int DEFAULT=0,NO_WRAP=2;public static byte[] decode(String s,int flags){return java.util.Base64.getMimeDecoder().decode(s);}public static String encodeToString(byte[] b,int flags){return java.util.Base64.getEncoder().encodeToString(b);}}'
     with tempfile.TemporaryDirectory(prefix='routervpn-multihop-restore-') as directory:
         root=Path(directory)
         for name,body in stubs.items():p=root/name;p.parent.mkdir(parents=True,exist_ok=True);p.write_text(body)
