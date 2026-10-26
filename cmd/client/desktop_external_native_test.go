@@ -6,6 +6,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/netip"
 	"os"
@@ -281,7 +282,8 @@ func TestDesktopExternalProcessFixture(t *testing.T) {
 	}
 	write := func(name string, value any) {
 		data, _ := json.Marshal(value)
-		if atomicWritePrivate(filepath.Join(dir, name), data) != nil {
+		if err := atomicWritePrivate(filepath.Join(dir, name), data); err != nil {
+			fmt.Fprintf(os.Stderr, "isolated external fixture publication %s: %v\n", name, err)
 			os.Exit(92)
 		}
 	}
@@ -348,7 +350,8 @@ func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *
 	expected, _ := json.Marshal(launch.external.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopExternalProcessFixture$")
 	command.Env = append(os.Environ(), "ROUTERVPN_DESKTOP_EXTERNAL_CHILD="+kind, "ROUTERVPN_DESKTOP_EXTERNAL_DIRECTORY="+launch.directory, "ROUTERVPN_DESKTOP_EXTERNAL_EXPECTED="+base64.StdEncoding.EncodeToString(expected))
-	command.Stdout, command.Stderr = io.Discard, io.Discard
+	var childOutput desktopTorFixtureOutput
+	command.Stdout, command.Stderr = io.Discard, &childOutput
 	launch.command = command
 	launch.external.started = time.Now()
 	if err := command.Start(); err != nil {
@@ -357,8 +360,15 @@ func desktopExternalRunCompiledFixture(t *testing.T, kind, root string, launch *
 	a.cmd = command
 	desktopNodeOwners.Store(a, launch)
 	t.Cleanup(func() {
+		if t.Failed() && strings.HasPrefix(kind, "dns-") {
+			record, err := readDesktopDNSDrainRecord(launch)
+			t.Logf("isolated external DNS mailbox before fixture cleanup: generation=%d request=%q status=%+v error=%v", record.Generation, record.Request, record.Status, err)
+		}
 		_ = command.Process.Kill()
 		<-desktopExternalProcessDone(launch)
+		if t.Failed() {
+			t.Logf("isolated external fixture process status: %v; stderr:\n%s", command.ProcessState, childOutput.String())
+		}
 		desktopNodeOwners.Delete(a)
 		_ = launch.directoryRoot.Close()
 	})
