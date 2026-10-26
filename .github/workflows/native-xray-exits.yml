@@ -19,6 +19,7 @@ on:
       - 'deploy/router-agent.Dockerfile'
       - 'deploy/test_native_xray_*.py'
       - 'deploy/test_native_naive_pairing.py'
+      - 'deploy/test_mobile_multihop_groups.py'
       - 'server/scripts/provision-multihop-relays.py'
 permissions:
   contents: read
@@ -60,7 +61,8 @@ jobs:
           java-version: '21'
       - name: Shared policy and agent regressions
         run: |
-          go test -race -count=1 -timeout=180s ./internal/applexray ./internal/mobilemultihop ./internal/multihoprelay ./cmd/router-agent
+          python3 deploy/test_mobile_multihop_groups.py
+          go test -race -count=1 -timeout=180s ./internal/applexray ./internal/multihoprelay ./cmd/router-agent
           go vet ./internal/applexray ./internal/mobilemultihop ./internal/multihoprelay ./cmd/router-agent
           python3 deploy/test_native_xray_pairing.py
           python3 deploy/test_native_naive_pairing.py
