@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import ast
+import re
 
 ROOT = Path(__file__).resolve().parents[1]
 errors: list[str] = []
@@ -46,6 +47,89 @@ def need_android_tor_editor_controls(path: str) -> None:
             raise ValueError("mutated shipping editor must fail its specific executable assertion")
     except (SyntaxError, ValueError, TypeError, IndexError, StopIteration) as error:
         errors.append(f"{path}: Tor editor negative controls are incomplete: {error}")
+
+
+def go_contract_tokens(source: str) -> tuple[str, ...]:
+    # Keep strings/runes as single tokens, so braces inside literals do not
+    # affect block ownership and a comment/string cannot replace a real call.
+    pattern = r'//[^\n]*|/\*[\s\S]*?\*/|"(?:\\.|[^"\\])*"|`[^`]*`|\'(?:\\.|[^\'\\])*\'|[A-Za-z_]\w*|\d+|:=|==|!=|<=|>=|<-|&&|\|\||\+\+|--|[^\s]'
+    return tuple(token for token in re.findall(pattern, source)
+                 if not token.startswith(("//", "/*")))
+
+
+def go_contract_at(tokens: tuple[str, ...], marker: str) -> int:
+    expected = go_contract_tokens(marker)
+    matches = [i for i in range(len(tokens) - len(expected) + 1)
+               if tokens[i:i + len(expected)] == expected]
+    if len(matches) != 1:
+        raise ValueError(f"expected one executable occurrence of {marker!r}")
+    return matches[0]
+
+
+def go_contract_block(tokens: tuple[str, ...], marker: str) -> tuple[str, ...]:
+    start = tokens.index("{", go_contract_at(tokens, marker) + len(go_contract_tokens(marker)))
+    depth = 1
+    for end in range(start + 1, len(tokens)):
+        depth += (tokens[end] == "{") - (tokens[end] == "}")
+        if depth == 0:
+            return tokens[start + 1:end]
+    raise ValueError(f"unterminated executable block after {marker!r}")
+
+
+def need_desktop_tor_maintenance() -> None:
+    try:
+        command = go_contract_block(go_contract_tokens(read("mobile/desktop/external_tor.go.tmpl")), "func routerVPNRunTor(")
+        worker_source = go_contract_tokens(read("mobile/desktop/external_tor_transition.go.tmpl"))
+        worker = go_contract_block(worker_source, "func routerVPNTorMaintain(")
+        heartbeat = go_contract_block(worker, "if result.heartbeat")
+        for marker in ("verify, cancel := context.WithTimeout(ctx, mobiletor.DesktopBridgeHeartbeatMaxAge)",
+                       "err := owner.VerifyCurrentPath(verify)", "cancel()"):
+            go_contract_at(heartbeat, marker)
+        invalid = go_contract_block(heartbeat, "if err != nil || ctx.Err() != nil || !owner.Healthy() || files.current() != nil || routerVPNTorRefreshReadback(owner, &result.proof) != nil")
+        go_contract_at(invalid, "result.err = routerVPNTorFailure")
+        if not (go_contract_at(heartbeat, "owner.VerifyCurrentPath(verify)") < go_contract_at(heartbeat, "cancel()") < go_contract_at(heartbeat, "result.err = routerVPNTorFailure")):
+            raise ValueError("retained heartbeat must verify before adopting readback")
+
+        admission = go_contract_block(command, "if maintenance == nil")
+        for marker in ("ctx, cancel := context.WithCancel(parent)", "cancelMaintenance = cancel", "maintenance = completed", "version: proofVersion", "heartbeat: transitionDone == nil",
+                       "go func() { completed <- routerVPNTorMaintain(ctx, owner, files, dnsFiles, mtuFiles, pathFiles, captured) }()"):
+            go_contract_at(admission, marker)
+        start = go_contract_at(command, "case result := <-maintenance:")
+        end = go_contract_at(command, "case result := <-done:")
+        adopted = command[start:end]
+        stale = go_contract_block(adopted, "if result.version != proofVersion")
+        go_contract_at(stale, "break")
+        rejected = go_contract_block(adopted, "if result.err != nil")
+        go_contract_at(rejected, "failure, stopping = routerVPNTorFailure, true")
+        go_contract_at(rejected, "break")
+        fresh = go_contract_block(adopted, "if result.heartbeat")
+        for marker in ("receipt = result.proof", "receipt.HeartbeatAt = heartbeat.UnixMilli()", 'files.publish("proof.json", receipt)', "proofVersion++"):
+            go_contract_at(fresh, marker)
+        if not (go_contract_at(adopted, "if result.version != proofVersion") < go_contract_at(adopted, "if result.err != nil") < go_contract_at(adopted, "if result.heartbeat")):
+            raise ValueError("late or failed worker result reached proof adoption")
+        go_contract_at(go_contract_block(command, "if cancelMaintenance != nil"), "cancelMaintenance()")
+        go_contract_at(go_contract_block(command, "if maintenance != nil"), "<-maintenance")
+        if not (go_contract_at(command, "if cancelMaintenance != nil") < go_contract_at(command, "owner.Cancel()") <
+                go_contract_at(command, "if maintenance != nil") < go_contract_at(command, "owner.Close(cleanup)")):
+            raise ValueError("native close preceded retained maintenance cancellation/join")
+
+        transition = go_contract_block(worker_source, "func routerVPNTorTransitionKeepsAlive(")
+        for marker in ("value.ExpiresAt > now.UnixMilli()", "value.ExpiresAt-value.StartedAt > 0", "value.ExpiresAt-value.StartedAt <= mobiletor.DesktopBridgeMTUTransitionLimit.Milliseconds()",
+                       "proof.HeartbeatAt == value.FromHeartbeatAt", "*proof.MTUReadback == value.From"):
+            go_contract_at(transition, marker)
+        native = go_contract_block(go_contract_tokens(read("mobile/desktop/external_tor_native.go.tmpl")), "func (n *routerVPNTorNative) VerifyCurrentPath(")
+        go_contract_at(native, "if err := tor.VerifyCurrentPath(ctx); err != nil || !n.Healthy()")
+        path = go_contract_block(go_contract_tokens(read("mobile/desktop/mtu_tor.go.tmpl")), "func (p *routerVPNTorFreshPath) VerifyCurrentPathContext(")
+        go_contract_at(path, "state, err := mtu.owner.Capture()")
+        go_contract_at(path, "mtu.owner.VerifyExternal(ctx, state) != nil")
+        fixtures = go_contract_tokens(read("mobile/desktop/external_tor_transition_test.go.tmpl"))
+        for marker in ("func TestRouterVPNDesktopTorMTUTransitionRejectsForeignExpiredAndReplacedAdmission(",
+                       "func TestRouterVPNDesktopTorMTUTransitionKeepsControlResponsiveAndJoinsSlowReader(",
+                       "func TestRouterVPNDesktopTorMTUTransitionWaitsForActualCompletionBeforeHeartbeat(",
+                       "func TestRouterVPNDesktopTorHeartbeatAllowsOwnedSlowControlWithoutInventingFreshness("):
+            go_contract_block(fixtures, marker)
+    except (ValueError, IndexError) as error:
+        errors.append(f"desktop Tor retained maintenance/proof ownership: {error}")
 
 
 # Canonical external profile model: PT family is explicit, dynamic Tor exit is
@@ -141,9 +225,10 @@ need(
 need(
     "mobile/desktop/external_tor.go.tmpl",
     'Use: "routervpn-tor"', "routerVPNOpenTorFiles", 'files.publish("progress.json", progress)',
-    "routerVPNCaptureTorBinary", "routerVPNOpenDesktopDNSService", "owner.VerifyCurrentPath",
+    "routerVPNCaptureTorBinary", "routerVPNOpenDesktopDNSService",
     "owner.Cancel()", "<-done", "owner.Close(cleanup)", 'files.publish("stopped.json", closed)',
 )
+need_desktop_tor_maintenance()
 need(
     "mobile/desktop/external_tor_test.go.tmpl",
     "TestRouterVPNDesktopTorCommandPublishesExactProofHeartbeatDNSAndStop",
