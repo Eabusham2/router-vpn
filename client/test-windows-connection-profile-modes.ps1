@@ -157,12 +157,12 @@ public sealed class ProfileModeOwner {
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'UnifiedSelectedProfile')))
     . ([ScriptBlock]::Create((ShippingFunction $ProductSource 'BaseChoice')))
     $MultihopEntryCombo=$entry;$MultihopExitCombo=$exit;$BaseCombo=New-Object ProfileModeCombo
+    $RouterCombo=[pscustomobject]@{SelectedValue='private-node';Tag=[pscustomobject]@{selected_id='private-node';profiles=@([pscustomobject]@{id='private-node';node_kind='router-vpn'})}}
     $BaseCombo.Items.Add((New-Object ProfileModeItem 'auto'));$BaseCombo.SelectedIndex=0
     function Control([string]$Name){return $Owner.FindName($Name)}
     function UnifiedAsyncBusy{return $false}
     function Api($Path,$Method,$Body,$Timeout){
         if($Path-ceq'/api/status'){return [pscustomobject]@{connected=$false;phase='off'}}
-        if($Path-ceq'/api/profiles'){return [pscustomobject]@{selected_id='private-node';profiles=@([pscustomobject]@{id='private-node';node_kind='router-vpn'})}}
         throw 'Unexpected Connect boundary'
     }
     function Log($Message){}
