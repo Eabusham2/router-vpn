@@ -31,13 +31,15 @@ native Windows and selected-path DNS acceptance remain independent.
 Desktop Router-to-Tor preparation now binds the physical firewall tuples to a
 hashed runtime projection of the captured entry graph. Unix and Windows
 wrappers check the exact host, port, network and order before protection;
-the native compiler independently validates the complete graph. This is the
-protection subset is now reached by both public Tor and unified external
-Connect routes. They capture Direct or a saved/explicit Router entry, its exact
-raw mode, Auto base and selected DNS before stopping the previous runtime.
-Native preflight precedes DNS owner transfer. Speed Lab and persistent chosen
-path restoration remain subsequent work; physical/public-circuit acceptance
-is separate.
+the native compiler independently validates the complete graph. Both public
+Tor and unified external Connect routes reach this protection. They capture
+Direct or a saved/explicit Router entry, its exact raw mode, Auto base and
+selected DNS before stopping the previous runtime. Native preflight precedes
+DNS owner transfer. Speed Lab now retains that exact private path through
+temporary preparation, cancellation and restoration, requiring current
+ownership before stopping a runtime and fresh proof before restoring its MTU.
+The saved chosen-path preference and Startup Last remain subsequent work;
+physical/public-circuit acceptance is separate.
 
 Tor selected-DNS proof now checks the exact native receipt and configuration,
 including the resolver transport and captured entry/exit detour. Retained DNS

@@ -152,12 +152,16 @@ func TestTorUsesOwnedDynamicAdapterInsteadOfFixedExitStore(t *testing.T) {
 	// neither can reintroduce the old command-only adapter around our tested
 	// cancellation/start-failure cleanup boundary.
 	for _, caller := range []struct{ file, function, prepare string }{
-		{"speed_lab_paths.go", "func (a *app) startSpeedLabTorPath", "prepareTorBridgeCommand(a, policy, profile)"},
+		{"speed_lab_tor_path.go", "func (a *app) startPreparedSpeedLabTorPath", "prepared.prelaunch.start(current)"},
 		{"tor_bridge_routes.go", "func (a *app) torBridgeConnectSelectionOwned", "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)"},
 	} {
 		source := sourceFunctionForTest(t, caller.file, caller.function)
 		if !strings.Contains(source, caller.prepare) || !strings.Contains(source, "prelaunch.start(") {
 			t.Fatal("shipping Tor caller dropped its prepared workspace owner", caller.file)
 		}
+	}
+	preparation := sourceFunctionForTest(t, "speed_lab_tor_path.go", "func (a *app) prepareSpeedLabTorPathWithRuntime")
+	if !strings.Contains(preparation, "prepareTorBridgeCommandWithRuntime(a, selection.policy, profile, selection.predecessor, driver)") {
+		t.Fatal("Speed Lab lost exact predecessor preparation before stopping its previous runtime")
 	}
 }
