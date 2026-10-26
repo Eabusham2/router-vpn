@@ -63,12 +63,15 @@ function Get-RouterVPNTorCaptureIdentity {
       if($held.Length -le 0 -or $held.Length -gt $Limit){throw 'Tor captured private input exceeds its bound.'}
       if((Get-RouterVPNPrivateFileSHA256 $path 'Captured Tor identity' $Limit) -cne $expected){throw 'Tor identity input changed after capture.'}
       $value=Read-RouterVPNPrivateJson $path 'Captured Tor identity' $Limit
-      return [pscustomobject]@{value=$value;length=$held.Length}
+      $reader=[IO.StreamReader]::new($held,[Text.UTF8Encoding]::new($false,$true),$true,4096,$true)
+      try{$raw=$reader.ReadToEnd()}finally{$reader.Dispose()}
+      return [pscustomobject]@{value=$value;length=$held.Length;raw=$raw}
     }finally{$held.Dispose()}
   }
   $captured=& $read 'tor-capture.json' 'HOMEVPN_TOR_CAPTURE_SHA256' 8388608
   $capture=$captured.value
-  $profile=(& $read 'tor-profile.json' 'HOMEVPN_TOR_PROFILE_SHA256' 4194304).value
+  $profileCapture=& $read 'tor-profile.json' 'HOMEVPN_TOR_PROFILE_SHA256' 4194304
+  $profile=$profileCapture.value
   $required=@('schema','session_id','isolation_secret','target_os','tor_binary')
   $fields=@($capture.PSObject.Properties.Name)
   $predecessor=$capture.PSObject.Properties['predecessor']
@@ -139,6 +142,23 @@ function Get-RouterVPNTorCaptureIdentity {
     $seen[$key]=$true;$hosts[[string]$item.host]=$true
   }
   if($hasArrays -and $hosts.Count -ne $addresses.Count){throw 'Tor physical egress omitted a captured endpoint.'}
+  $projection=$profile.PSObject.Properties['desktop_physical_egress']
+  if($viaEntry){
+    if($null -eq $projection -or $null -eq $projection.Value -or $projection.Value -isnot [Array]){throw 'Tor Router entry lacks its captured physical graph projection.'}
+    # Consume every complete JSON string before identifying this key, so an
+    # escaped key-shaped string inside a credential cannot be confused with a
+    # member. Its canonical tuple bytes must match the environment exactly;
+    # ConvertFrom-Json must not collapse duplicate members or coerce types.
+    $projectionKeys=@([regex]::Matches($profileCapture.raw,'"(?:\\.|[^"\\])*"')|Where-Object{
+      $_.Value -ceq '"desktop_physical_egress"' -and $profileCapture.raw.Substring($_.Index+$_.Length) -match '^\s*:'
+    })
+    $projectionTuples=[regex]::Matches($profileCapture.raw,('"desktop_physical_egress":(?<tuples>\['+$tuple+'(?:,'+$tuple+')*\])(?=[,}])'))
+    $rawProjectionValid=$projectionKeys.Count -eq 1 -and $projectionTuples.Count -eq 1 -and
+      $projectionTuples[0].Index -eq $projectionKeys[0].Index -and $projectionTuples[0].Groups['tuples'].Value -ceq $egressRaw
+    if(-not $rawProjectionValid){throw 'Tor physical graph projection differs from its exact captured tuples.'}
+  }elseif($null -ne $projection -or $hasArrays -or [string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION']){
+    throw 'Direct Tor acquired an unowned physical predecessor projection.'
+  }
   # The controller and native compiler validate the complete entry graph.
   # This envelope binds the firewall handoff to that same immutable capture;
   # it never substitutes the Tor bridge or private proof/DNS destination.

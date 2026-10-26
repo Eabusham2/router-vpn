@@ -168,6 +168,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if (profile["multihop_enabled"] == true) != (predecessor != nil) {
 		return nil, errors.New("desktop Tor graph requires the exact captured Router-entry selection")
 	}
+	if err := validateDesktopPhysicalEgress(profile, predecessor); err != nil {
+		return nil, err
+	}
 	if profile["daita_enabled"] == true {
 		return nil, errors.New("desktop Tor cannot discard a requested padding policy; its authenticated native implementation is still required")
 	}

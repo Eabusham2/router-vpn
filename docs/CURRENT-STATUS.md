@@ -28,6 +28,13 @@ stderr and the child exactly once and preserves early startup diagnostics.
 The pinned module race suite and both Windows target compilations pass;
 native Windows and selected-path DNS acceptance remain independent.
 
+Desktop Router-to-Tor preparation now binds the physical firewall tuples to a
+hashed runtime projection of the captured entry graph. Unix and Windows
+wrappers check the exact host, port, network and order before protection;
+the native compiler independently validates the complete graph. This is the
+protection subset: public Connect and Speed Lab predecessor wiring are still
+pending reconstruction, and physical/public-circuit acceptance is separate.
+
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and

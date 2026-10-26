@@ -33,6 +33,7 @@ DIGEST_FILES = {
 DIGEST_KEYS = ("HOMEVPN_TOR_SOURCE_SHA256", *DIGEST_FILES, "HOMEVPN_TOR_BINARY_SHA256")
 OBSERVED_ENV = (
     "HOMEVPN_ROOT", "HOMEVPN_PROFILE_ID", "HOMEVPN_POLICY_PROFILE_ID",
+    "HOMEVPN_ENDPOINT", "HOMEVPN_NATIVE_ENDPOINTS_JSON", "HOMEVPN_NATIVE_EGRESS_JSON", "HOMEVPN_EXTERNAL_SESSION",
     "HOMEVPN_STANDARD_ENGINE", "HOMEVPN_NATIVE_CONTROLLER", "HOMEVPN_NATIVE_PACKAGE",
     "HOMEVPN_TOR_SESSION", *DIGEST_KEYS, "ROUTERVPN_WRAPPER_LITERAL", "ROUTERVPN_WRAPPER_EMPTY",
 )
@@ -133,12 +134,16 @@ class Fixture:
         for path in (self.controller, self.native, self.tor, self.scripts / "kill-switch-platform.py"):
             path.write_text(f"#!{sys.executable}\n" + BOUNDARY, encoding="utf-8")
             path.chmod(0o700)
+        source_sha = hashlib.sha256(b"captured source identity").hexdigest()
         self.inputs = {
             "tor-profile.json": '{"id":"captured-node","fixture":"private"}\n',
-            "tor-capture.json": '{"session_id":"' + "a" * 32 + '"}\n',
+            "tor-capture.json": json.dumps({"schema": 1, "session_id": "a" * 32, "isolation_secret": "b" * 64,
+                                           "target_os": "darwin" if sys.platform == "darwin" else "linux", "tor_binary": str(self.tor)}),
             "torrc": "DisableNetwork 1\nSocksPort 0\nUseBridges 0\n",
             "tor-defaults": "DisableNetwork 1\n",
-            "sing-box.json": '{"inbounds":[],"outbounds":[]}\n',
+            "sing-box.json": json.dumps({"inbounds": [], "outbounds": [], "services": [
+                {"type": "routervpn-desktop-tor-network", "tag": "routervpn-tor-physical",
+                 "session_id": "a" * 32, "source_sha256": source_sha}]}),
         }
         for name, content in self.inputs.items():
             path = self.runtime / name
@@ -155,9 +160,10 @@ class Fixture:
         self.env.update({
             "HOMEVPN_ROOT": str(self.private), "HOMEVPN_PROFILE_ID": "captured-node",
             "HOMEVPN_POLICY_PROFILE_ID": "captured-node", "HOMEVPN_STANDARD_ENGINE": "native",
+            "HOMEVPN_ENDPOINT": self.endpoint, "HOMEVPN_NATIVE_ENDPOINTS_JSON": "", "HOMEVPN_NATIVE_EGRESS_JSON": "", "HOMEVPN_EXTERNAL_SESSION": "",
             "HOMEVPN_NATIVE_CONTROLLER": str(self.controller), "HOMEVPN_NATIVE_PACKAGE": str(self.package),
             "HOMEVPN_TOR_SESSION": "a" * 32,
-            "HOMEVPN_TOR_SOURCE_SHA256": hashlib.sha256(b"captured source identity").hexdigest(),
+            "HOMEVPN_TOR_SOURCE_SHA256": source_sha,
             "HOMEVPN_TOR_BINARY_SHA256": sha(self.tor),
             "ROUTERVPN_WRAPPER_LITERAL": "λ 中 $() & | ' \" value=exact\nsecond line",
             "ROUTERVPN_WRAPPER_EMPTY": "",
@@ -172,6 +178,38 @@ class Fixture:
             "observed_env": OBSERVED_ENV, "digest_keys": DIGEST_KEYS, "digest_files": DIGEST_FILES,
         }
         self.expected_path.write_text(json.dumps(self.expected), encoding="utf-8")
+
+    def set_input(self, name: str, value) -> None:
+        raw = value if isinstance(value, str) else json.dumps(value, separators=(",", ":"))
+        self.inputs[name] = raw
+        (self.runtime / name).write_text(raw, encoding="utf-8")
+        for variable, filename in DIGEST_FILES.items():
+            if filename == name:
+                self.env[variable] = sha(self.runtime / name)
+        self.sync()
+
+    def sync(self) -> None:
+        self.expected["env"] = {key: self.env[key] for key in OBSERVED_ENV}
+        self.expected["endpoint"] = self.env["HOMEVPN_ENDPOINT"]
+        self.expected_path.write_text(json.dumps(self.expected), encoding="utf-8")
+
+    def router_entry(self) -> None:
+        egress = [{"host": "203.0.113.20", "port": 51820, "network": "udp"},
+                  {"host": "2001:db8::20", "port": 51822, "network": "udp"}]
+        self.env.update({"HOMEVPN_PROFILE_ID": "captured-entry", "HOMEVPN_ENDPOINT": "203.0.113.20",
+                         "HOMEVPN_EXTERNAL_SESSION": self.env["HOMEVPN_TOR_SESSION"],
+                         "HOMEVPN_NATIVE_ENDPOINTS_JSON": '["203.0.113.20","2001:db8::20"]',
+                         "HOMEVPN_NATIVE_EGRESS_JSON": json.dumps(egress, separators=(",", ":"))})
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile.update({"multihop_enabled": True, "multihop_entry_id": "captured-entry", "multihop_exit_id": "captured-node",
+                        "multihop_entry_mode": "wg", "multihop_exit_mode": "tor-bridge", "multihop_execution": "local",
+                        "desktop_physical_egress": egress})
+        capture = json.loads(self.inputs["tor-capture.json"])
+        capture["predecessor"] = {"schema": 1, "entry_mode": "wg", "assets_sha256": "f" * 64,
+                                  "profile": {"id": "captured-entry", "node_kind": "router-vpn"},
+                                  "config": {"route": {"final": "entry-wg"}}}
+        self.set_input("tor-profile.json", profile)
+        self.set_input("tor-capture.json", capture)
 
     def run(self, action: str = "up", *, updates: dict[str, str | None] | None = None,
             runtime: Path | None = None, native: Path | None = None) -> tuple[subprocess.CompletedProcess, list[dict], int]:
@@ -369,14 +407,18 @@ class UnixTorWrapper(unittest.TestCase):
                 self.assertNotEqual(result.returncode, 0)
                 self.assertEqual(events, [])
 
-    def test_native_capture_rejection_is_preserved_without_receipt_or_deletion(self):
+    def test_capture_rejection_precedes_protection_and_native_retains_binary_guard(self):
         for key in DIGEST_KEYS:
             with self.subTest(key=key):
                 result, events, process_id = self.fixture.run(updates={key: "f" * 64})
-                self.assertEqual(result.returncode, 51)
-                self.assertEqual([entry["kind"] for entry in events], ["verify", "help", "config", "protect", "native-admission", "native-rejected"])
-                self.assertEqual(events[-1]["pid"], process_id)
-                self.assertEqual(events[-1]["env"][key], "f" * 64, "The wrapper silently replaced a stale captured digest.")
+                if key == "HOMEVPN_TOR_BINARY_SHA256":
+                    self.assertEqual(result.returncode, 51)
+                    self.assertEqual([entry["kind"] for entry in events], ["verify", "help", "config", "protect", "native-admission", "native-rejected"])
+                    self.assertEqual(events[-1]["pid"], process_id)
+                    self.assertEqual(events[-1]["env"][key], "f" * 64, "The wrapper silently replaced a stale captured digest.")
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(events, [], "Changed capture reached a native or protection boundary.")
                 self.assertFalse((self.fixture.runtime / "stopped.json").exists())
         for name in DIGEST_FILES.values():
             with self.subTest(input=name):
@@ -385,10 +427,84 @@ class UnixTorWrapper(unittest.TestCase):
                 try:
                     path.write_bytes(original + b"changed")
                     result, events, _ = self.fixture.run()
-                    self.assertEqual(result.returncode, 52)
-                    self.assertEqual(events[-1]["kind"], "native-rejected")
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertEqual(events, [], "Changed private bytes reached protection.")
                 finally:
                     path.write_bytes(original)
+
+    def test_router_entry_preserves_physical_endpoint_and_exact_tuples(self):
+        self.fixture.router_entry()
+        self.assert_success()
+        self.assertNotEqual(self.fixture.env["HOMEVPN_ENDPOINT"], self.fixture.endpoint)
+
+    def test_router_entry_rejects_changed_physical_projection_before_protection(self):
+        faults = ("port", "network", "extra", "missing", "order", "host", "physical-id", "policy-id", "session",
+                  "entry-id", "entry-mode", "server", "projection-missing", "projection-null", "projection-unknown",
+                  "projection-duplicate", "tuple-duplicate-member", "port-string", "port-bool", "source")
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="routervpn-tor-physical-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.router_entry()
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                egress = json.loads(fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"])
+                if fault == "port": egress[0]["port"] = 443
+                elif fault == "network": egress[0]["network"] = "tcp"
+                elif fault == "extra": egress.append({"host": "203.0.113.20", "port": 443, "network": "tcp"})
+                elif fault == "missing": egress.pop()
+                elif fault == "order": egress.reverse()
+                elif fault == "host": egress[0]["host"] = "198.51.100.99"
+                elif fault == "physical-id": fixture.env["HOMEVPN_PROFILE_ID"] = "other-entry"
+                elif fault == "policy-id": fixture.env["HOMEVPN_POLICY_PROFILE_ID"] = "other-exit"
+                elif fault == "session": fixture.env["HOMEVPN_EXTERNAL_SESSION"] = "d" * 32
+                elif fault == "entry-id": profile["multihop_entry_id"] = "other-entry"
+                elif fault == "entry-mode": profile["multihop_entry_mode"] = "hysteria2"
+                elif fault == "server": profile["multihop_execution"] = "server"
+                elif fault == "projection-missing": del profile["desktop_physical_egress"]
+                elif fault == "projection-null": profile["desktop_physical_egress"] = None
+                elif fault == "projection-unknown": profile["desktop_physical_egress"][0]["allow_all"] = True
+                elif fault == "port-string": egress[0]["port"] = "51820"
+                elif fault == "port-bool": egress[0]["port"] = True
+                elif fault == "source": fixture.env["HOMEVPN_TOR_SOURCE_SHA256"] = "d" * 64
+                fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = json.dumps(egress, separators=(",", ":"))
+                fixture.set_input("tor-profile.json", profile)
+                if fault == "projection-duplicate":
+                    fixture.set_input("tor-profile.json", fixture.inputs["tor-profile.json"].replace('"desktop_physical_egress":', '"desktop_physical_egress":[],"desktop_physical_egress":', 1))
+                elif fault == "tuple-duplicate-member":
+                    fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"].replace('"port":51820', '"port":443,"port":51820', 1)
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertNotIn("protect", [item["kind"] for item in events], fault)
+                self.assertNotIn("native-admission", [item["kind"] for item in events], fault)
+
+    def test_direct_tor_cannot_borrow_an_entry_projection(self):
+        for fault in ("projection", "endpoint", "arrays", "session"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="routervpn-tor-direct-") as directory:
+                fixture = Fixture(Path(directory))
+                if fault == "projection":
+                    profile = json.loads(fixture.inputs["tor-profile.json"])
+                    profile["desktop_physical_egress"] = [{"host": "203.0.113.44", "port": 443, "network": "tcp"}]
+                    fixture.set_input("tor-profile.json", profile)
+                elif fault == "endpoint": fixture.env["HOMEVPN_ENDPOINT"] = "203.0.113.20"
+                elif fault == "arrays": fixture.env["HOMEVPN_NATIVE_ENDPOINTS_JSON"] = '["203.0.113.44"]'
+                else: fixture.env["HOMEVPN_EXTERNAL_SESSION"] = fixture.env["HOMEVPN_TOR_SESSION"]
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(events, [])
+
+    def test_actual_projection_guard_detects_same_host_port_mutation(self):
+        self.fixture.router_entry()
+        self.fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = self.fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"].replace('"port":51820', '"port":443', 1)
+        result, events, _ = self.fixture.run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, [])
+        verifier = self.fixture.scripts / "tor-prelaunch-witness.py"
+        original = verifier.read_text()
+        changed = original.replace("if projected != egress:", "if False:")
+        self.assertNotEqual(changed, original)
+        verifier.write_text(changed)
+        result, events, _ = self.fixture.run()
+        self.assertEqual(result.returncode, 0, "Projection mutation did not reach its intended execution boundary.")
+        self.assertIn("protect", [item["kind"] for item in events], "Removed projection guard did not permit the intended defective firewall handoff.")
 
     def test_native_exit_and_signal_keep_the_same_controller_process_identity(self):
         for updates, expected in (({"FIXTURE_NATIVE_EXIT": "67"}, 67), ({"FIXTURE_SIGNAL": "term"}, -signal.SIGTERM)):

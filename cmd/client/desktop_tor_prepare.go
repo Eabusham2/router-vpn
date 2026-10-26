@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -110,6 +111,20 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 			return result, err
 		}
 		fields["multihop_exit_mode"], err = json.Marshal(policyCopy.External.Protocol)
+		if err != nil {
+			return result, err
+		}
+		if predecessor.native == nil {
+			return result, errors.New("Tor physical policy has no captured Router graph")
+		}
+		egress, err := mobilemultihop.NodePhysicalEgress(predecessor.mode, predecessor.native.Profile(), predecessor.native.Config())
+		if err != nil {
+			return result, err
+		}
+		// This runtime-only projection is covered by the same private profile
+		// digest as the selected policy. Both launch wrappers compare it with
+		// their physical firewall inputs before installing any exception.
+		fields["desktop_physical_egress"], err = json.Marshal(egress)
 		if err == nil {
 			profileRaw, err = json.Marshal(fields)
 		}

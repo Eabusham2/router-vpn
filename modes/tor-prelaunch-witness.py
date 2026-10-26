@@ -1,14 +1,16 @@
 #!/usr/bin/env python3
-"""Record a failed Unix wrapper only while no native process has been launched.
+"""Validate a captured Unix Tor launch and record an owned prelaunch failure.
 
-The wrapper invokes this exclusively from its own EXIT trap. A successful exec
-replaces that shell and its trap, including when the native process later fails.
-This is not a native drain receipt and grants no deletion or firewall authority.
+The --validate path runs before protection and writes no receipt. Only the
+wrapper's EXIT trap requests a failure witness. A successful exec replaces
+that shell and its trap, including when the native process later fails. The
+witness is not a native drain receipt and grants no deletion or firewall authority.
 """
 from __future__ import annotations
 
 import hashlib
 import importlib.util
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -26,6 +28,164 @@ INPUTS = {
 }
 FILE_FLAGS = os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
 DIR_FLAGS = FILE_FLAGS | getattr(os, "O_DIRECTORY", 0)
+
+
+def private_verifier():
+    helper = Path(__file__).with_name("cleanup-private-runtime.py")
+    if helper.is_symlink() or not helper.is_file():
+        raise ValueError("private directory verifier is unavailable")
+    spec = importlib.util.spec_from_file_location("routervpn_private_verifier", helper)
+    verifier = importlib.util.module_from_spec(spec)
+    sys.dont_write_bytecode = True
+    spec.loader.exec_module(verifier)
+    return verifier
+
+
+def exact_json(raw: bytes):
+    def object_value(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ValueError("duplicate captured JSON member")
+            value[key] = item
+        return value
+
+    def invalid_constant(_):
+        raise ValueError("non-finite captured JSON value")
+
+    return json.loads(raw, object_pairs_hook=object_value, parse_constant=invalid_constant)
+
+
+def physical_address(value):
+    if type(value) is not str:
+        raise ValueError("physical address is not a string")
+    address = ipaddress.ip_address(value)
+    if (str(address) != value or "%" in value or address.is_unspecified or address.is_loopback
+            or address.is_multicast or address.is_link_local
+            or isinstance(address, ipaddress.IPv6Address) and address.ipv4_mapped is not None
+            or isinstance(address, ipaddress.IPv4Address) and (address.packed[0] == 0 or address.packed[0] >= 224)):
+        raise ValueError("physical address is not a canonical unicast literal")
+    return value
+
+
+def physical_tuples(value):
+    if type(value) is not list or not 1 <= len(value) <= 16:
+        raise ValueError("physical tuple bound is invalid")
+    seen = set()
+    result = []
+    for item in value:
+        if (type(item) is not dict or set(item) != {"host", "port", "network"}
+                or type(item["port"]) is not int or not 1 <= item["port"] <= 65535
+                or type(item["network"]) is not str or item["network"] not in {"tcp", "udp"}):
+            raise ValueError("physical tuple has unowned or untyped fields")
+        host = physical_address(item["host"])
+        key = (host, item["port"], item["network"])
+        if key in seen:
+            raise ValueError("duplicate physical tuple")
+        seen.add(key)
+        result.append({"host": host, "port": item["port"], "network": item["network"]})
+    return result
+
+
+def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary: str | None = None) -> None:
+    """Bind the pre-protection environment to the hashed native capture."""
+    session = os.environ.get("HOMEVPN_TOR_SESSION", "")
+    source = os.environ.get("HOMEVPN_TOR_SOURCE_SHA256", "")
+    physical = os.environ.get("HOMEVPN_PROFILE_ID", "")
+    policy = os.environ.get("HOMEVPN_POLICY_PROFILE_ID", "")
+    if (not re.fullmatch(r"[a-f0-9]{32}", session) or not re.fullmatch(r"[a-f0-9]{64}", source)
+            or os.environ.get("HOMEVPN_STANDARD_ENGINE") != "native"
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", physical)
+            or not re.fullmatch(r"[A-Za-z0-9_-]{1,64}", policy)):
+        raise ValueError("native launch identity is incomplete")
+    verifier = private_verifier()
+    root = os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")
+    directory = verifier.verify_directory(root, target)
+    relative = directory.relative_to(verifier.lexical(root) / "run")
+    if len(relative.parts) != 2 or relative.parts[0] != "tor-bridge":
+        raise ValueError("native launch has another private directory")
+    before = directory.lstat()
+    if before.st_mode & 0o077:
+        raise ValueError("native launch directory is not private")
+    descriptor = verifier.open_directory(directory, before, "Tor launch capture")
+    try:
+        inputs = {}
+        for name, variable in INPUTS.items():
+            expected = os.environ.get(variable, "")
+            raw = regular_at(descriptor, name, 8 << 20 if name == "tor-capture.json" else 4 << 20)
+            if not re.fullmatch(r"[a-f0-9]{64}", expected) or hashlib.sha256(raw).hexdigest() != expected:
+                raise ValueError("private launch input differs from its captured digest")
+            inputs[name] = raw
+        profile = exact_json(inputs["tor-profile.json"])
+        capture = exact_json(inputs["tor-capture.json"])
+        graph = exact_json(inputs["sing-box.json"])
+        if type(profile) is not dict or type(capture) is not dict or type(graph) is not dict:
+            raise ValueError("native launch inputs require exact JSON objects")
+        required = {"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
+        via_entry = "predecessor" in capture
+        if (set(capture) != required | ({"predecessor"} if via_entry else set())
+                or type(capture.get("schema")) is not int or capture["schema"] != 1
+                or capture.get("session_id") != session or profile.get("id") != policy
+                or type(capture.get("isolation_secret")) is not str
+                or not re.fullmatch(r"[a-f0-9]{64}", capture["isolation_secret"])
+                or capture.get("target_os") != ("darwin" if sys.platform == "darwin" else "linux")
+                or type(capture.get("tor_binary")) is not str or not os.path.isabs(capture["tor_binary"])
+                or tor_binary is not None and capture["tor_binary"] != tor_binary):
+            raise ValueError("private capture belongs to another launch owner")
+        endpoint = physical_address(os.environ.get("HOMEVPN_ENDPOINT", ""))
+        if via_entry:
+            entry = capture["predecessor"]
+            if (type(entry) is not dict or set(entry) != {"schema", "entry_mode", "profile", "config", "assets_sha256"}
+                    or type(entry.get("schema")) is not int or entry["schema"] != 1
+                    or type(entry.get("entry_mode")) is not str or not re.fullmatch(r"[a-z0-9-]{1,32}", entry["entry_mode"])
+                    or type(entry.get("assets_sha256")) is not str or not re.fullmatch(r"[a-f0-9]{64}", entry["assets_sha256"])
+                    or type(entry.get("profile")) is not dict or type(entry.get("config")) is not dict
+                    or entry["profile"].get("id") != physical or entry["profile"].get("node_kind") != "router-vpn"
+                    or physical == policy or profile.get("multihop_enabled") is not True
+                    or profile.get("multihop_entry_id") != physical or profile.get("multihop_exit_id") != policy
+                    or profile.get("multihop_entry_mode") != entry["entry_mode"]
+                    or profile.get("multihop_exit_mode") != "tor-bridge" or profile.get("multihop_execution", "") not in {"", "local"}
+                    or os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session):
+                raise ValueError("Router predecessor differs from the captured Local selection")
+            address_raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON", "")
+            egress_raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON", "")
+            if len(address_raw) > 1024 or len(egress_raw) > 4096:
+                raise ValueError("physical environment exceeds its bound")
+            addresses = exact_json(address_raw.encode())
+            if (type(addresses) is not list or not 1 <= len(addresses) <= 16
+                    or json.dumps(addresses, separators=(",", ":")) != address_raw
+                    or addresses[0] != endpoint or len(set(addresses)) != len(addresses)):
+                raise ValueError("physical endpoint list changed its captured owner")
+            for address in addresses:
+                physical_address(address)
+            egress = physical_tuples(exact_json(egress_raw.encode()))
+            if (json.dumps(egress, separators=(",", ":")) != egress_raw
+                    or {item["host"] for item in egress} != set(addresses)):
+                raise ValueError("physical tuples do not cover the exact captured endpoints")
+            # This projection was derived by the shared complete-graph compiler
+            # and is inside the checked profile digest. Native reconstruction
+            # independently compares it with the same predecessor graph.
+            projected = physical_tuples(profile.get("desktop_physical_egress"))
+            if projected != egress:
+                raise ValueError("physical tuples differ from the captured graph projection")
+        elif (len(inputs["tor-capture.json"]) > 16 << 10 or physical != policy
+              or profile.get("multihop_enabled", False) is not False
+              or bridge_endpoint is not None and endpoint != bridge_endpoint
+              or "desktop_physical_egress" in profile
+              or os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON") or os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON")
+              or os.environ.get("HOMEVPN_EXTERNAL_SESSION")):
+            raise ValueError("direct Tor acquired an unowned physical predecessor")
+        services = graph.get("services")
+        if type(services) is not list:
+            raise ValueError("native graph lacks its captured network owner")
+        owners = [item for item in services if type(item) is dict and item.get("type") == "routervpn-desktop-tor-network"]
+        if (len(owners) != 1 or owners[0].get("tag") != "routervpn-tor-physical"
+                or owners[0].get("session_id") != session or owners[0].get("source_sha256") != source):
+            raise ValueError("native graph network identity changed")
+        if verifier.verify_directory(root, target) != directory or not os.path.samestat(before, directory.lstat()):
+            raise ValueError("private launch directory changed during capture")
+    finally:
+        os.close(descriptor)
 
 
 def regular_at(directory: int, name: str, bound: int) -> bytes:
@@ -57,6 +217,7 @@ def regular_at(directory: int, name: str, bound: int) -> bytes:
 
 
 def write_witness(target: str) -> None:
+    validate_launch(target)
     session = os.environ.get("HOMEVPN_TOR_SESSION", "")
     source = os.environ.get("HOMEVPN_TOR_SOURCE_SHA256", "")
     if (not re.fullmatch(r"[a-f0-9]{32}", session)
@@ -66,13 +227,7 @@ def write_witness(target: str) -> None:
     for variable in INPUTS.values():
         if not re.fullmatch(r"[a-f0-9]{64}", os.environ.get(variable, "")):
             raise ValueError("missing captured private digest")
-    helper = Path(__file__).with_name("cleanup-private-runtime.py")
-    if helper.is_symlink() or not helper.is_file():
-        raise ValueError("private directory verifier is unavailable")
-    spec = importlib.util.spec_from_file_location("routervpn_private_verifier", helper)
-    verifier = importlib.util.module_from_spec(spec)
-    sys.dont_write_bytecode = True
-    spec.loader.exec_module(verifier)
+    verifier = private_verifier()
     root = os.environ.get("HOMEVPN_ROOT", "/opt/router-vpn-client")
     directory = verifier.verify_directory(root, target)
     relative = directory.relative_to(verifier.lexical(root) / "run")
@@ -87,7 +242,8 @@ def write_witness(target: str) -> None:
         if names - set(INPUTS) - {"tor-data", "stop.json"} or not (set(INPUTS) | {"tor-data"}) <= names:
             raise ValueError("native admission or foreign files already exist")
         for name, variable in INPUTS.items():
-            if hashlib.sha256(regular_at(descriptor, name, 4 << 20)).hexdigest() != os.environ[variable]:
+            bound = 8 << 20 if name == "tor-capture.json" else 4 << 20
+            if hashlib.sha256(regular_at(descriptor, name, bound)).hexdigest() != os.environ[variable]:
                 raise ValueError("private input digest changed")
         data_info = os.stat("tor-data", dir_fd=descriptor, follow_symlinks=False)
         if not stat.S_ISDIR(data_info.st_mode) or data_info.st_mode & 0o077:
@@ -125,9 +281,12 @@ def write_witness(target: str) -> None:
 
 if __name__ == "__main__":
     try:
-        if len(sys.argv) != 2:
+        if len(sys.argv) == 5 and sys.argv[1] == "--validate":
+            validate_launch(sys.argv[2], sys.argv[3], sys.argv[4])
+        elif len(sys.argv) == 2:
+            write_witness(sys.argv[1])
+        else:
             raise ValueError("expected one captured runtime")
-        write_witness(sys.argv[1])
     except Exception:
         # Do not print private profiles, transports, paths, or captured values.
         print("Tor prelaunch witness could not be safely recorded.", file=sys.stderr)

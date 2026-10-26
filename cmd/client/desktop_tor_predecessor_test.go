@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/mobiletor"
 )
 
@@ -153,6 +154,20 @@ func TestDesktopTorPredecessorStagingAndProofRetainBothIdentities(t *testing.T) 
 	profileRaw, err := readDesktopRuntimeFile(launch, "tor-profile.json", desktopTorInputLimit("tor-profile.json"))
 	if err != nil {
 		t.Fatal(err)
+	}
+	var physical struct {
+		Egress []mobilemultihop.PhysicalEgress `json:"desktop_physical_egress"`
+	}
+	if err := json.Unmarshal(profileRaw, &physical); err != nil {
+		t.Fatal(err)
+	}
+	expectedEgress, err := mobilemultihop.NodePhysicalEgress(captured.mode, captured.native.Profile(), captured.native.Config())
+	if err != nil || len(physical.Egress) == 0 || !reflect.DeepEqual(physical.Egress, expectedEgress) {
+		t.Fatal("staging lost the exact physical graph projection", err)
+	}
+	saved, err := json.Marshal(profile)
+	if err != nil || strings.Contains(string(saved), "desktop_physical_egress") {
+		t.Fatal("runtime physical projection entered the durable private node schema", err)
 	}
 	captureRaw, err := readDesktopRuntimeFile(launch, "tor-capture.json", desktopTorInputLimit("tor-capture.json"))
 	if err != nil {
