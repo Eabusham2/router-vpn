@@ -16,6 +16,10 @@ static const struct { const char *id; const char *label; } linux_multihop_exits_
     {"max", "MAX exit"},
     {"wg-pq", "WG + PQ exit"},
     {"awg2-pq", "AWG + PQ exit"},
+    {"max-tls-wg", "Complete MAX TLS / WG exit"},
+    {"max-tls-awg", "Complete MAX TLS / AWG exit"},
+    {"max-quic-wg", "Complete MAX QUIC / WG exit"},
+    {"max-quic-awg", "Complete MAX QUIC / AWG exit"},
 };
 
 static gboolean linux_multihop_exit_supported_v22(const char *mode) {

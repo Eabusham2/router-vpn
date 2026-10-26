@@ -65,6 +65,12 @@ func multihopNodeFixture(t *testing.T, mode, layer, id string) *NodeProfile {
 
 func multihopNodeCapacityFixture(t *testing.T, mode, layer, id string, capacity int) *NodeProfile {
 	t.Helper()
+	if id == "exit" && MAXMode(mode) {
+		// A complete MAX exit carries one consistent generated packet/PQ
+		// source. Reuse the independently paired whole-chain fixture instead
+		// of changing only its public node label after generation.
+		return nodeMAXFixture(t, mode, layer, capacity)
+	}
 	files, profile, start := multihopNodeSources(t, mode, layer, id)
 	if capacity != 0 {
 		profile["mtu_policy"], profile["manual_mtu"] = "manual", float64(capacity)
@@ -124,7 +130,18 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 							t.Fatal("captured WG/AWG parameters changed", prior, actual)
 						}
 						outer := nodes["proxy"]
-						if CompositeMode(exitMode) {
+						if MAXMode(exitMode) {
+							base, children := nodeMAXOwners(t, graph)
+							restored, restoredChildren, err := multihoprelay.RelabelMAXChain(base, children, exitMode, predecessorText(exit.profile, "node_proof_id"), exitLayer, maxTags("proxy", false), generatedMAXTags(), "entry-wg", "")
+							original := startObject(t, exitBefore)
+							if err != nil || !reflect.DeepEqual(restored, original["endpoints"].([]any)[0]) || !reflect.DeepEqual(restoredChildren, original["outbounds"]) {
+								t.Fatal("MAX lost its complete captured packet/PQ/middle/outer credentials or routing closure", err)
+							}
+							outer = nodes[MAXExitPrefix+"outer"]
+							if exitLayer != "" {
+								outer = nodes[MAXExitPrefix+"start"]
+							}
+						} else if CompositeMode(exitMode) {
 							captured, err := nativecomposite.Extract(startObject(t, exitBefore), exitMode, predecessorText(exit.profile, "node_proof_id"), exitLayer, "proxy", nativecomposite.SourcePrefix, "")
 							actual, actualErr := nativecomposite.Extract(graph, exitMode, predecessorText(exit.profile, "node_proof_id"), exitLayer, "proxy", CompositeExitPrefix, "entry-wg")
 							if err != nil || actualErr != nil || !reflect.DeepEqual(captured, actual) || len(nodes["proxy"]) != 6 || nodes["proxy"]["detour"] != nil {
@@ -150,6 +167,9 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 						}
 						for _, raw := range startObject(t, exitBefore)["outbounds"].([]any) {
 							prior := raw.(map[string]any)
+							if MAXMode(exitMode) {
+								continue // Every field of the relabeled closure was compared above.
+							}
 							if CompositeMode(exitMode) && (prior["tag"] == "proxy" || strings.HasPrefix(predecessorText(prior, "tag"), nativecomposite.SourcePrefix)) {
 								continue // Exact complete lane/credential equality is proved above.
 							}

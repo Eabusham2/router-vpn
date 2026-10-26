@@ -48,6 +48,10 @@ enum RouterVPNNodeExitModes {
         ("awg2-fast", "AWG Fast"), ("awg2-strong", "AWG Strong"),
         ("ss-v2ray", "SS/V2Ray"), ("split", "Split"), ("max", "MAX"),
         ("wg-pq", "WG + PQ"), ("awg2-pq", "AWG + PQ"),
+        ("max-tls-wg", "Complete MAX TLS / WG"),
+        ("max-tls-awg", "Complete MAX TLS / AWG"),
+        ("max-quic-wg", "Complete MAX QUIC / WG"),
+        ("max-quic-awg", "Complete MAX QUIC / AWG"),
     ]
     static func id(at index: Int) -> String? {
         choices.indices.contains(index) ? choices[index].id : nil

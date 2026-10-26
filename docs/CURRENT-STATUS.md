@@ -59,33 +59,33 @@ the request before connection. Windows and GTK retain the catalog used by the
 actual node renderer, and GTK deep-copies its public JSON objects so a nested
 refresh cannot change a request already being prepared.
 
-The shared node compiler can now attach a complete MAX exit without bypassing
-its PQ, SS2022, outer transport or optional Start Layer. Public packet/PQ
-identities require the whole validated chain. Inner interface capacity and
-the outer QUIC datagram envelope have separate checks. This prerequisite does
-not yet expand the desktop catalog. Desktop host Server substitution,
-independent packet/KEM pins, renewal and already-proved restoration now pass
-actual sealed-engine parsing and ownership tests. The required native bundle
-now also passes genuine complete-MAX TLS WG/AWG Local/Server TCP/UDP, real PQ
-rekey, exact wrong-layer rejection and restoration. Hysteria2 now enforces
-session-owned write deadlines at actual QUIC datagram admission, including a
-locked final cancellation check and timer cleanup. The pinned normal and
-low-memory packages pass their race and defect tests. A complete engine rebuild,
-genuine QUIC MAX traffic and native controls remain before these exits are
-offered in the catalog.
+The shared node compiler and desktop hosts now offer all four complete MAX
+TLS/QUIC WG/AWG exits. They retain the mandatory PQ, SS2022, outer transport
+and optional Start Layer, with whole-chain packet/PQ identities, independent
+Server pins and already-proved restoration. Hysteria2 enforces session-owned
+write deadlines at actual QUIC datagram admission, including a locked final
+cancellation check and timer cleanup. Genuine TLS and QUIC Local/Server traffic,
+real PQ rekey, wrong-layer rejection and restoration have passed on the recorded
+complete native engines. The required bundle gate now executes all eight
+family/base/execution phases without increasing their bounds.
+
+The fresh Linux AMD64 engine matches all 862 native inputs at `d3924c6b` and
+includes the production build tags and real Rust/C PQ ABI. The nineteen-choice
+catalog and native controls were tested separately against that engine; current
+cross-platform packages and physical acceptance still need their own evidence.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and
 SS-V2Ray, Split and MAX TCP/UDP composite exits, plus mandatory WG-PQ and
-AWG-PQ packet exits. Native entry selection now preserves nineteen exact raw
+AWG-PQ packet exits and four complete MAX TLS/QUIC WG/AWG exits. Native entry selection now preserves nineteen exact raw
 Router transports, including proxy, PQ, composite and complete-MAX entries.
 Local, Server and Compare retain
 the captured exit transport, independent node credentials, Start Layers,
 selected DNS and proof routes. Naive resolver bootstrap follows the captured
 entry; replacing an exit Start Layer with an authenticated Server lease moves
 only that layer's owned resolver edges. Windows, macOS and Linux controls,
-complete profiles and Speed Lab retain all fifteen exit IDs and nineteen entry
+complete profiles and Speed Lab retain all nineteen exit IDs and nineteen entry
 IDs. An empty entry choice retains the existing saved mode/base fallback;
 unknown or unavailable choices cannot silently become another transport.
 Packet/PQ Server execution
@@ -118,9 +118,9 @@ policy owner, restores the already-proved Local/Server winner and live MTU,
 and rejects a same-ID replacement both before and after capture. The native
 runtime base remains truthfully `native` for non-packet entry families.
 
-The shared entry matrix passed 855 configurations; desktop host compilation
-passed 1,710 Local/Server graphs and 114 checks with the actual complete native
-runtime. Separate encrypted TCP/UDP tests passed for Shadowsocks, Hysteria2
+The expanded shared matrices passed 1,596 graph configurations. Desktop host
+compilation passed 2,166 Local/Server graphs and 114 actual native parser calls;
+the separate full-catalog/layer capture matrix passed 342 parser configurations. Separate encrypted TCP/UDP tests passed for Shadowsocks, Hysteria2
 and Naive H2/H3 entries in both execution modes, including wrong entry and
 lease credentials followed by valid restoration. WPF, AppKit and GTK profile,
 Connect and Speed Lab callbacks preserve the same modes through the actual Go
@@ -173,9 +173,9 @@ policy and proof routes remain captured. Real encrypted Local/Server traffic
 passes for all three modes, including wrong credentials, independent lane
 failures and restoration. The native package gate requires this separate
 traffic group alongside its existing native and AWG groups. This `max`
-composite support does not close the distinct complete MAX packet/helper exit
-graph. Complete-MAX exits and other requested graph combinations remain source
-gaps; this extension does not establish full graph parity with the mobile hosts.
+composite family has its own TCP/UDP graph. The complete MAX packet/helper
+families are also enabled by the separately proved implementation above.
+Other requested Tor graph combinations and physical graph parity remain open.
 
 The authenticated router-agent HTTP decoder now carries the already-defined
 packet identity pin through discovery, creation, renewal and deletion. It

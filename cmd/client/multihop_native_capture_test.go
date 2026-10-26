@@ -201,6 +201,13 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 						}
 					}
 					checkNative()
+					var maxOwners map[string]bool
+					if mobilemultihop.MAXMode(exitMode) {
+						maxOwners, err = nativeMAXExitOwners(local, sel)
+						if err != nil || len(maxOwners) != 2+boolInt(layer != "off") {
+							t.Fatal("complete catalog MAX source lost a mandatory or selected helper", err)
+						}
+					}
 					_, descriptor := executionFixture()
 					descriptor.Lease.ExitMode = exitMode
 					if layer != "off" {
@@ -218,7 +225,7 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 					if nativeMultihopPacketExitMode(exitMode) {
 						serverEndpoints := server["endpoints"].([]any)
 						if len(serverEndpoints) != 1 || !reflect.DeepEqual(serverEndpoints[0], endpoint) || len(local["endpoints"].([]any)) != 2 || sel.Native.localPacketPublic[exitMode] == "" {
-							t.Fatal("Server did not remove only the captured local WG/AWG exit")
+							t.Fatal("Server did not remove only the captured local packet/PQ/MAX exit")
 						}
 					} else if !reflect.DeepEqual(local["endpoints"], server["endpoints"]) {
 						t.Fatal("Server substitution changed the captured entry")
@@ -241,6 +248,9 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 					}
 					for _, raw := range server["outbounds"].([]any) {
 						out := raw.(map[string]any)
+						if tag, _ := out["tag"].(string); maxOwners[tag] {
+							t.Fatal("Server retained a competing Local complete-MAX helper", tag)
+						}
 						if out["tag"] == mobilemultihop.NativeStartLayerTag {
 							t.Fatal("server-owned exit Start Layer remained local")
 						}

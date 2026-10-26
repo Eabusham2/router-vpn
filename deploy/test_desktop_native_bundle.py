@@ -233,15 +233,14 @@ def test(bundle, target):
         subprocess.run(['go', 'test', *race, '-count=1', '-timeout=45s', './cmd/client',
                         '-run', '^TestNativeMAXTLSReference'],
                        cwd=ROOT, env=env, check=True, timeout=90)
-        for mode in ('max-tls-wg', 'max-tls-awg'):
-            for execution in ('local', 'server'):
-                subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
-                                '-run', '^TestNativeMAXDesktopEncryptedLoopback$/^tls$/^' + mode + '$/^' + execution + '$'],
-                               cwd=ROOT, env=env, check=True, timeout=240)
-        print('Complete native runtime passed genuine complete-MAX TLS Local/Server TCP/UDP, paired-key rekey and witnessed rejection/restoration', flush=True)
-        # QUIC MAX remains outside the advertised desktop catalog until its
-        # native HY2 packet session enforces write deadlines and its distinct
-        # encrypted phases pass. Never bypass the PQ deadline admission guard.
+        for family in ('tls', 'quic'):
+            for base in ('wg', 'awg'):
+                mode = 'max-' + family + '-' + base
+                for execution in ('local', 'server'):
+                    subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
+                                    '-run', '^TestNativeMAXDesktopEncryptedLoopback$/^' + family + '$/^' + mode + '$/^' + execution + '$'],
+                                   cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed genuine complete-MAX TLS/QUIC Local/Server TCP/UDP, paired-key rekey and witnessed rejection/restoration', flush=True)
 
 
 if __name__ == '__main__':

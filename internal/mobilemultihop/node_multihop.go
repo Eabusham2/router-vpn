@@ -11,7 +11,7 @@ import (
 // Local and Server node-to-node execution. WireGuard retains its packet
 // endpoint; it is never represented as a proxy in the Local graph.
 func NodeMultihopExitModes() []string {
-	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong", "ss-v2ray", "split", "max", "wg-pq", "awg2-pq"}
+	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong", "ss-v2ray", "split", "max", "wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"}
 }
 
 func NodeMultihopExitMode(mode string) bool {

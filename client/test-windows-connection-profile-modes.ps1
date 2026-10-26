@@ -98,7 +98,7 @@ public sealed class ProfileModeOwner {
     $MultihopEntryModeCombo=$Owner.FindName('UnifiedEntryMode');$MultihopEntryModeCombo.SelectedIndex=0
     $ExpectedEntries=@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
     Check ((@($MultihopEntryModeCombo.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedEntries-join',')) 'Generated entry choices changed or disappeared'
-    $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq')
+    $ExpectedModes=@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg')
     $ExpectedExecutions=@('local','server','auto')
     Check ((@($MultihopExitModeCombo.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedModes-join',')) 'Generated exit choices changed or disappeared'
     Check ((@($execution.Items|ForEach-Object{$_.Tag})-join',')-ceq($ExpectedExecutions-join',')) 'Generated execution choices changed or disappeared'
