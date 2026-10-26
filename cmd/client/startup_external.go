@@ -2,7 +2,6 @@ package main
 
 import (
 	"bytes"
-	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -141,16 +140,7 @@ func startupExternalSourceToken(a *app, entry common.RouterProfile, mode string)
 			}()
 		}
 	}
-	raw, err := json.Marshal(struct {
-		Mode         string
-		Files, Start map[string][]byte
-	}{mode, files, start})
-	if err != nil {
-		return "", err
-	}
-	sum := sha256.Sum256(raw)
-	clear(raw)
-	return fmt.Sprintf("%x", sum), nil
+	return desktopNodeAssetsIdentity(mode, files, start)
 }
 
 func startupExternalProfileToken(profile common.RouterProfile) string {

@@ -96,10 +96,13 @@ func (owner *torBridgePrelaunch) start(check func() error) error {
 		}
 		owner.app.mu.Lock()
 		profile, found := owner.app.profileByIDLocked(launch.profileID)
-		current := found && owner.app.cmd == nil && desktopTorSourceIdentityToken(profile) == launch.tor.profileToken
+		current := found && owner.app.cmd == nil && desktopTorSourceIdentityToken(profile) == launch.tor.profileToken && launch.tor.entryCurrentLocked(owner.app) == nil
 		owner.app.mu.Unlock()
 		if !current {
 			return errors.Join(errTorPrelaunchRejected, errors.New("Tor node or process changed before launch"), owner.cleanup())
+		}
+		if err := launch.tor.entryCurrent(owner.app); err != nil {
+			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
 		launch.command, launch.tor.started = owner.command, time.Now()
 		if _, exists := desktopNodeOwners.LoadOrStore(owner.app, launch); exists {
@@ -108,6 +111,10 @@ func (owner *torBridgePrelaunch) start(check func() error) error {
 		// Admission itself may race cancellation. The final operation check
 		// runs after the native owner is registered and before any child starts.
 		if err := check(); err != nil {
+			desktopNodeOwners.CompareAndDelete(owner.app, launch)
+			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
+		}
+		if err := launch.tor.entryCurrent(owner.app); err != nil {
 			desktopNodeOwners.CompareAndDelete(owner.app, launch)
 			return errors.Join(errTorPrelaunchRejected, err, owner.cleanup())
 		}
@@ -142,7 +149,7 @@ func (owner *torBridgePrelaunch) validate() error {
 		}
 		if owner.workspace.tor != nil && entry.Name() != "tor-data" {
 			input, known := owner.workspace.tor.inputs[entry.Name()]
-			raw, err := readDesktopRuntimeFile(owner.workspace, entry.Name(), 4<<20)
+			raw, err := readDesktopRuntimeFile(owner.workspace, entry.Name(), desktopTorInputLimit(entry.Name()))
 			if !known || err != nil || desktopTorDigest(raw) != input.digest {
 				return errors.New("Tor prelaunch input contents changed after capture")
 			}

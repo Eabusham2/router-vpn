@@ -39,6 +39,7 @@ type desktopTorRuntime struct {
 	expected              mobiletor.DesktopBridgeMetadata
 	digests               mobiletor.DesktopBridgeInputDigests
 	profileToken          string
+	predecessor           *desktopTorPredecessorCapture
 	network               string
 	networkIdentity       func() string
 	started               time.Time
@@ -68,6 +69,7 @@ type desktopTorProof struct {
 	Healthy        bool                                `json:"healthy"`
 	HeartbeatAt    int64                               `json:"heartbeat_at"`
 	MTUReadback    *mobiletor.DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
+	EntryProof     *mobiletor.DesktopBridgeEntryProof  `json:"entry_proof,omitempty"`
 }
 
 type desktopTorProgress struct {
@@ -115,6 +117,9 @@ func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time
 	if ip, err := publicTorExit(proof.Proof.IP); err != nil || ip != proof.Proof.IP {
 		return proof, bad
 	}
+	if !expected.ValidEntryProof(proof.EntryProof, owner.started, now) {
+		return proof, bad
+	}
 	if proof.InterfaceIndex <= 0 || proof.InterfaceName == "" || len(proof.InterfaceName) > 64 || proof.EffectiveMTU < 1280 || proof.EffectiveMTU > 9000 || expected.InterfaceName != "" && proof.InterfaceName != expected.InterfaceName {
 		return proof, bad
 	}
@@ -124,6 +129,9 @@ func validateDesktopTorProof(raw []byte, owner *desktopTorRuntime, now time.Time
 		}
 	}
 	if adopted := owner.adopted; adopted != nil && (proof.Proof.SessionID != adopted.Proof.SessionID || proof.Proof.IP != adopted.Proof.IP || !proof.Proof.CheckedAt.Equal(adopted.Proof.CheckedAt)) {
+		return proof, bad
+	}
+	if adopted := owner.adopted; adopted != nil && expected.EntryID != "" && (adopted.EntryProof == nil || proof.EntryProof.EntryID != adopted.EntryProof.EntryID || proof.EntryProof.EntrySHA256 != adopted.EntryProof.EntrySHA256 || !proof.EntryProof.CheckedAt.Equal(adopted.EntryProof.CheckedAt)) {
 		return proof, bad
 	}
 	if !desktopTorProofReadbackLocked(owner, proof) {
@@ -145,10 +153,13 @@ func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 	}
 	a.mu.Lock()
 	current, found := a.profileByIDLocked(launch.profileID)
-	valid := a.cmd == launch.command && found && owner.profileToken != "" && desktopTorSourceIdentityToken(current) == owner.profileToken
+	valid := a.cmd == launch.command && found && owner.profileToken != "" && desktopTorSourceIdentityToken(current) == owner.profileToken && owner.entryCurrentLocked(a) == nil
 	a.mu.Unlock()
 	if !valid {
 		return errors.New("Tor native session or captured private node changed")
+	}
+	if err := owner.entryCurrent(a); err != nil {
+		return err
 	}
 	if desktopNodeProcessExited(launch) {
 		return errors.New("Tor native process exited before its proof could be retained")
@@ -331,7 +342,7 @@ func desktopTorNoNativeWork(launch *desktopNodeLaunch) (bool, error) {
 			return false, bad
 		}
 		if input, ok := owner.inputs[name]; ok {
-			contents, err := readDesktopRuntimeSnapshot(root, name, 4<<20)
+			contents, err := readDesktopRuntimeSnapshot(root, name, desktopTorInputLimit(name))
 			if err != nil || input.info == nil || !os.SameFile(info, input.info) || desktopTorDigest(contents) != input.digest {
 				return false, bad
 			}
@@ -570,7 +581,7 @@ func cleanupDesktopTorLaunch(launch *desktopNodeLaunch) error {
 					return errors.New("Tor immutable input was replaced")
 				}
 				if info.Size() != 0 || input.digest != desktopTorDigest(nil) {
-					raw, err := readDesktopRuntimeSnapshot(root, name, 4<<20)
+					raw, err := readDesktopRuntimeSnapshot(root, name, desktopTorInputLimit(name))
 					if err != nil || desktopTorDigest(raw) != input.digest {
 						return errors.New("Tor immutable input contents changed")
 					}

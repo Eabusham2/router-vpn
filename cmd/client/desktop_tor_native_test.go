@@ -46,9 +46,13 @@ func desktopTorFixtureProof(expected mobiletor.DesktopBridgeMetadata, now time.T
 	if name == "" {
 		name = "utun9"
 	}
-	return desktopTorProof{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Policy: expected,
+	proof := desktopTorProof{Schema: 1, SessionID: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256, Policy: expected,
 		Proof:         mobiletor.Proof{SessionID: expected.SessionID, IP: "203.0.113.8", IsTor: true, DNSProven: true, CheckedAt: now.UTC()},
 		InterfaceName: name, InterfaceIndex: 99, EffectiveMTU: expected.ConfiguredMTU, Healthy: true, HeartbeatAt: now.UnixMilli()}
+	if expected.EntryID != "" {
+		proof.EntryProof = &mobiletor.DesktopBridgeEntryProof{EntryID: expected.EntryID, EntrySHA256: expected.EntrySHA256, CheckedAt: now.UTC()}
+	}
+	return proof
 }
 
 func TestDesktopTorProofBindsPolicyDNSReadbackAndEverySession(t *testing.T) {

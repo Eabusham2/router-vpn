@@ -67,6 +67,10 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 // exercise exact input ownership without installing a TUN or private server.
 // Shipping preparation above always verifies the complete packaged engine.
 func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, tor, native string) (result torBridgeRuntime, failure error) {
+	return stageDesktopTorInputsWithPredecessor(root, policy, profile, tor, native, nil)
+}
+
+func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.RouterProfile, tor, native string, predecessor *desktopTorPredecessorCapture) (result torBridgeRuntime, failure error) {
 	capturedToken := desktopTorSourceIdentityToken(profile)
 	profile, cfg, transports, endpoint, err := torBridgeProfile(cloneRouterProfile(profile))
 	if err != nil {
@@ -87,9 +91,31 @@ func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, to
 	if err != nil {
 		return result, err
 	}
-	profileRaw, err := json.Marshal(cloneRouterProfile(policy))
+	policyCopy := cloneRouterProfile(policy)
+	if predecessor != nil {
+		if policyCopy.MultihopEntryMode == "" {
+			policyCopy.MultihopEntryMode = predecessor.mode
+		}
+	}
+	profileRaw, err := json.Marshal(policyCopy)
 	if err != nil {
 		return result, err
+	}
+	if predecessor != nil {
+		// RouterProfile stores the exit protocol once. Add the compiler's
+		// explicit graph identity only to the runtime copy, preserving the
+		// profile marshaler's explicit defaults such as disabled LAN access.
+		var fields map[string]json.RawMessage
+		if err = json.Unmarshal(profileRaw, &fields); err != nil {
+			return result, err
+		}
+		fields["multihop_exit_mode"], err = json.Marshal(policyCopy.External.Protocol)
+		if err == nil {
+			profileRaw, err = json.Marshal(fields)
+		}
+		if err != nil {
+			return result, err
+		}
 	}
 	var random [48]byte
 	if _, err = io.ReadFull(rand.Reader, random[:]); err != nil {
@@ -99,14 +125,25 @@ func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, to
 	session, isolation := hex.EncodeToString(random[:16]), hex.EncodeToString(random[16:])
 	// Validate policy before creating a workspace; cached MTU and unsupported
 	// compositions can never be silently substituted during staging.
-	if _, err = mobiletor.NewDesktopBridgePolicy(string(profileRaw), session, isolation, runtime.GOOS); err != nil {
+	if predecessor == nil {
+		_, err = mobiletor.NewDesktopBridgePolicy(string(profileRaw), session, isolation, runtime.GOOS)
+	} else if predecessor.native == nil || predecessor.entry.ID != predecessor.native.ID() || predecessor.assetsSHA256 != predecessor.native.AssetsSHA256() {
+		err = errors.New("Tor staging has an incomplete Router entry capture")
+	} else {
+		_, err = mobiletor.NewDesktopBridgePolicyWithPredecessor(string(profileRaw), session, isolation, runtime.GOOS, predecessor.native)
+	}
+	if err != nil {
 		return result, err
 	}
 	directory, err := newPrivateRuntimeDir(root, "tor-bridge")
 	if err != nil {
 		return result, err
 	}
-	launch := &desktopNodeLaunch{root: root, profileID: profile.ID, policyProfileID: profile.ID, mode: "external-tor-bridge", endpoint: endpoint, tor: &desktopTorRuntime{profileToken: capturedToken, inputs: map[string]desktopTorInput{}}}
+	physicalEndpoint := endpoint
+	if predecessor != nil {
+		physicalEndpoint = predecessor.endpoint
+	}
+	launch := &desktopNodeLaunch{root: root, profileID: profile.ID, policyProfileID: profile.ID, mode: "external-tor-bridge", endpoint: physicalEndpoint, tor: &desktopTorRuntime{profileToken: capturedToken, predecessor: predecessor, inputs: map[string]desktopTorInput{}}}
 	if err = captureDesktopRuntimeDirectory(launch, directory); err != nil {
 		return result, err
 	}
@@ -116,7 +153,12 @@ func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, to
 			_ = launch.directoryRoot.Close()
 		}
 	}()
-	inputs, err := mobiletor.NewDesktopBridgeCapture(string(profileRaw), session, isolation, runtime.GOOS, tor, directory)
+	var inputs *mobiletor.DesktopBridgeInputs
+	if predecessor == nil {
+		inputs, err = mobiletor.NewDesktopBridgeCapture(string(profileRaw), session, isolation, runtime.GOOS, tor, directory)
+	} else {
+		inputs, err = mobiletor.NewDesktopBridgeCaptureWithPredecessor(string(profileRaw), session, isolation, runtime.GOOS, tor, directory, predecessor.native)
+	}
 	if err != nil {
 		return result, err
 	}
@@ -142,7 +184,7 @@ func stageDesktopTorInputs(root string, policy, profile common.RouterProfile, to
 // Capture the inode before writing, including a partial failed write. Cleanup
 // may retire only the exact bytes this writer supplied to that owned inode.
 func writeDesktopTorInput(launch *desktopNodeLaunch, name string, raw []byte) (failure error) {
-	if launch == nil || launch.tor == nil || !desktopRuntimeFilename(name) || len(raw) == 0 || len(raw) > 4<<20 {
+	if launch == nil || launch.tor == nil || !desktopRuntimeFilename(name) || len(raw) == 0 || int64(len(raw)) > desktopTorInputLimit(name) {
 		return errors.New("invalid captured Tor input")
 	}
 	launch.workspaceMu.Lock()
@@ -275,7 +317,7 @@ func preflightDesktopTorLaunch(ctx context.Context, binary string, launch *deskt
 		if err != nil || !os.SameFile(input.info, current) {
 			return errors.New("Tor preflight replaced a captured input")
 		}
-		raw, err := readDesktopRuntimeFile(launch, name, 4<<20)
+		raw, err := readDesktopRuntimeFile(launch, name, desktopTorInputLimit(name))
 		if err != nil || desktopTorDigest(raw) != input.digest {
 			return errors.New("Tor preflight changed a captured input")
 		}
