@@ -40,6 +40,7 @@ type multihopSelection struct {
 	// Only a previously proved Server restoration supplies this public pin.
 	// Fresh connections capture it through the authenticated entry lane.
 	serverPacketPublic string
+	serverPQIdentity   string
 }
 
 type multihopNodeSummary struct {

@@ -40,7 +40,7 @@ func TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU(t *t
 					t.Run(mode+"/"+layer+"/"+exitMode+"/"+execution, func(t *testing.T) {
 						root, sel := nativeMultihopCapturedFixture(t, mode, layer)
 						sel.ExitMode = exitMode
-						if awgpolicy.IsMode(exitMode) {
+						if awgpolicy.IsMode(exitMode) || exitMode == "awg2-pq" {
 							sel.Entry.MTUPolicy, sel.Entry.ManualMTU = "manual", 1500
 							sel.Control.MTUPolicy, sel.Control.ManualMTU = "manual", 1500
 						}

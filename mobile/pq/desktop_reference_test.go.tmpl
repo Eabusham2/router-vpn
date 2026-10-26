@@ -1,0 +1,191 @@
+//go:build cgo && routervpn_native_pq && routervpn_pq_traffic_test
+
+package routervpnpq
+
+import (
+	"bufio"
+	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativesip003"
+	"github.com/sagernet/sing-box/protocol/routervpnamnezia"
+)
+
+type desktopPQReferenceConfig struct {
+	Mode         string `json:"mode"`
+	PacketPublic string `json:"packet_public"`
+	PQClient     string `json:"pq_client"`
+}
+
+func parseDesktopPQReference(raw []byte) (desktopPQReferenceConfig, error) {
+	var config desktopPQReferenceConfig
+	bad := errors.New("invalid isolated PQ reference configuration")
+	if _, err := nativesip003.Object(raw); err != nil || len(raw) > 4096 {
+		return config, bad
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&config) != nil || (config.Mode != "wg-pq" && config.Mode != "awg2-pq") || (config.PQClient != "client" && config.PQClient != "other") {
+		return config, bad
+	}
+	public, err := base64.StdEncoding.Strict().DecodeString(config.PacketPublic)
+	if err != nil || len(public) != 32 || base64.StdEncoding.EncodeToString(public) != config.PacketPublic || bytes.Equal(public, make([]byte, 32)) {
+		return config, bad
+	}
+	return config, nil
+}
+
+// This process reuses the real pinned Rust protocol owner and independently
+// keyed native packet server. It exposes no OS tunnel or arbitrary forwarding.
+// Its stdout contains public socket/counter evidence only; genuine disposable
+// KEM material stays in the private test directory. EOF joins both owners.
+func TestDesktopPQReferencePeer(t *testing.T) {
+	path := os.Getenv("ROUTERVPN_PQ_REFERENCE_CONFIG")
+	if path == "" {
+		t.Skip("isolated desktop producer supplies a private reference configuration")
+	}
+	info, err := os.Lstat(path)
+	if !filepath.IsAbs(path) || err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 4096 || runtime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		t.Fatal("PQ reference input must be a bounded private regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal("PQ reference input unavailable")
+	}
+	opened, statErr := file.Stat()
+	raw, readErr := io.ReadAll(io.LimitReader(file, 4097))
+	file.Close()
+	if statErr != nil || readErr != nil || !os.SameFile(info, opened) || int64(len(raw)) != info.Size() {
+		t.Fatal("PQ reference input changed while opening")
+	}
+	config, err := parseDesktopPQReference(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	public, _ := base64.StdEncoding.DecodeString(config.PacketPublic)
+	reference := routervpnamnezia.NewNativePQTrafficReference(t, public, config.Mode == "awg2-pq")
+	server := newPQTrafficServerForPeer(t, reference, 2, config.PQClient)
+	emit := func(value map[string]any) {
+		data, err := json.Marshal(value)
+		if err != nil {
+			t.Fatal("PQ reference response could not be encoded")
+		}
+		if _, err := fmt.Fprintln(os.Stdout, "ROUTERVPN_PQ_REFERENCE "+string(data)); err != nil {
+			t.Fatal("PQ reference owner pipe closed")
+		}
+	}
+	packetAddress, _ := net.ResolveUDPAddr("udp4", reference.Address())
+	emit(map[string]any{"ready": true, "mode": config.Mode, "packet_public": base64.StdEncoding.EncodeToString(reference.Public), "packet_port": packetAddress.Port, "pq_port": server.conn.LocalAddr().(*net.UDPAddr).Port, "parameters": reference.Parameters})
+	scanner := bufio.NewScanner(os.Stdin)
+	scanner.Buffer(make([]byte, 32), 128)
+	for scanner.Scan() {
+		command := scanner.Text()
+		if command != "snapshot" && command != "rekey" {
+			t.Fatal("unknown PQ reference owner command")
+		}
+		if command == "rekey" {
+			before, err := reference.Snapshot()
+			if err != nil || reference.Updates() == 0 {
+				t.Fatal("cannot rekey an unauthenticated reference")
+			}
+			updates := reference.Updates()
+			server.force(t)
+			deadline := time.Now().Add(3 * time.Second)
+			for {
+				current, err := reference.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if reference.Updates() > updates && current.KeyDigest != before.KeyDigest {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("real reference did not adopt a fresh PQ key")
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if err := reference.InitiateHandshake(); err != nil {
+				t.Fatal("reference could not initiate its new native handshake", err)
+			}
+			// A protocol key event is not evidence that the other endpoint's
+			// asynchronous packet adapter has installed its key. The sealed
+			// desktop process exposes no private-key readback. Require a fresh
+			// authenticated native handshake instead, within the same bound.
+			for {
+				current, err := reference.Snapshot()
+				if err != nil {
+					t.Fatal(err)
+				}
+				if current.HandshakeNanos > before.HandshakeNanos {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatal("desktop peer did not confirm its rekeyed native handshake")
+				}
+				time.Sleep(100 * time.Millisecond)
+				if err := reference.InitiateHandshake(); err != nil {
+					t.Fatal(err)
+				}
+			}
+		}
+		snapshot, err := reference.Snapshot()
+		if err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case err := <-server.failure:
+			t.Fatal(err)
+		default:
+		}
+		emit(map[string]any{"command": command, "updates": reference.Updates(), "packets": reference.Packets(), "received": server.received.Load(), "handshake": snapshot.HandshakeNanos, "plaintext": reference.PlaintextSeen()})
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatal("PQ reference owner input failed")
+	}
+	server.close()
+	reference.Close()
+}
+
+func TestDesktopPQReferenceRejectsEscapedInputs(t *testing.T) {
+	base := map[string]any{"mode": "wg-pq", "packet_public": base64.StdEncoding.EncodeToString(bytes.Repeat([]byte{7}, 32)), "pq_client": "client"}
+	for _, fault := range []string{"mode", "packet", "zero-packet", "pq-client", "unknown", "duplicate", "trailing"} {
+		t.Run(fault, func(t *testing.T) {
+			encoded, _ := json.Marshal(base)
+			var value map[string]any
+			_ = json.Unmarshal(encoded, &value)
+			switch fault {
+			case "mode":
+				value["mode"] = "max"
+			case "packet":
+				value["packet_public"] = "invalid"
+			case "zero-packet":
+				value["packet_public"] = base64.StdEncoding.EncodeToString(make([]byte, 32))
+			case "pq-client":
+				value["pq_client"] = "../../user"
+			case "unknown":
+				value["target"] = "8.8.8.8"
+			}
+			encoded, _ = json.Marshal(value)
+			if fault == "duplicate" {
+				encoded = []byte(strings.Replace(string(encoded), "{", `{"mode":"wg-pq",`, 1))
+			}
+			if fault == "trailing" {
+				encoded = append(encoded, []byte(`{}`)...)
+			}
+			if _, err := parseDesktopPQReference(encoded); err == nil {
+				t.Fatal("escaped PQ reference input accepted")
+			}
+		})
+	}
+}

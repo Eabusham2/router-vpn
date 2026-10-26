@@ -10,7 +10,7 @@ import (
 )
 
 func TestNodeMultihopPacketIdentityUsesCanonicalPublicPeer(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong"} {
+	for _, mode := range []string{"wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq"} {
 		t.Run(mode, func(t *testing.T) { nodeMultihopPacketIdentityUsesCanonicalPublicPeer(t, mode) })
 	}
 }
@@ -18,7 +18,7 @@ func TestNodeMultihopPacketIdentityUsesCanonicalPublicPeer(t *testing.T) {
 func nodeMultihopPacketIdentityUsesCanonicalPublicPeer(t *testing.T, mode string) {
 	t.Helper()
 	asset := "wg.conf"
-	if mode != "wg" {
+	if mode != "wg" && mode != "wg-pq" {
 		asset = "awg.conf"
 	}
 	files, profile, start := multihopNodeSources(t, mode, "aes-256-gcm", "exit")
@@ -39,7 +39,11 @@ func nodeMultihopPacketIdentityUsesCanonicalPublicPeer(t *testing.T, mode string
 	for _, private := range [][]byte{original, alias} {
 		raw, _ := base64.StdEncoding.DecodeString(assets[asset])
 		text := strings.ReplaceAll(string(raw), base64.StdEncoding.EncodeToString(original), base64.StdEncoding.EncodeToString(private))
-		copy := map[string]string{asset: base64.StdEncoding.EncodeToString([]byte(text))}
+		copy := map[string]string{}
+		for name, value := range assets {
+			copy[name] = value
+		}
+		copy[asset] = base64.StdEncoding.EncodeToString([]byte(text))
 		node, err := NewNodeProfile(mode, startJSON(t, copy), startJSON(t, profile), start, "")
 		if err != nil {
 			t.Fatal(err)

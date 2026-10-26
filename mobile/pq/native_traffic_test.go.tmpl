@@ -118,15 +118,20 @@ type pqTrafficServer struct {
 	stop       sync.Once
 	initialKey chan struct{}
 	adopted    sync.Once
+	received   atomic.Int64
 }
 
 func newPQTrafficServer(t *testing.T, peer *routervpnamnezia.NativePQTrafficReference, version int) *pqTrafficServer {
+	return newPQTrafficServerForPeer(t, peer, version, "client")
+}
+
+func newPQTrafficServerForPeer(t *testing.T, peer *routervpnamnezia.NativePQTrafficReference, version int, remote string) *pqTrafficServer {
 	t.Helper()
 	conn, err := net.ListenUDP("udp4", &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1)})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server := &pqTrafficServer{conn: conn, protocol: realOwner(t, "server", "client", version), peer: peer, rekey: make(chan chan error), done: make(chan struct{}), failure: make(chan error, 1), initialKey: make(chan struct{})}
+	server := &pqTrafficServer{conn: conn, protocol: realOwner(t, "server", remote, version), peer: peer, rekey: make(chan chan error), done: make(chan struct{}), failure: make(chan error, 1), initialKey: make(chan struct{})}
 	t.Cleanup(server.close)
 	go server.run()
 	return server
@@ -190,6 +195,7 @@ func (s *pqTrafficServer) run() {
 			}
 			return
 		}
+		s.received.Add(1)
 		event, err := s.protocol.Step(1, packet[:n])
 		if errors.Is(err, mobilepq.ErrPacket) {
 			clear(event.Key)

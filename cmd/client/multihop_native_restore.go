@@ -5,8 +5,8 @@ import (
 	"os/exec"
 	"time"
 
-	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
+	"router-vpn/internal/mobilemultihop"
 )
 
 // Keep the actual proved graph and its frozen credentials. Recompiling from
@@ -25,7 +25,7 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		return multihopSelection{}, errors.New("previous multihop profiles differ from the proved captured graph")
 	}
 	var capturedRelay *desktopRelayOwner
-	if graph.Execution == "server" && awgpolicy.WireGuardFamily(selection.ExitMode) {
+	if graph.Execution == "server" && mobilemultihop.NodeMultihopPacketExitMode(selection.ExitMode) {
 		raw, found := desktopRelays.Load(a)
 		relay, _ := raw.(*desktopRelayOwner)
 		if !found || relay == nil {
@@ -37,6 +37,10 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 			relay.expected.Request == relay.request && relay.expected.ExitNodeID == selection.Exit.NodeProofID && relay.expected.NodeID == selection.Entry.NodeProofID && relay.expected.ExpiresAt.After(time.Now()) &&
 			relay.serverPacketPublic != "" && relay.request.ExpectedPacketPublicKey == relay.serverPacketPublic && relay.localPacketPublic == selection.Native.localPacketPublic[selection.ExitMode] && relay.localPacketPublic != relay.serverPacketPublic
 		selection.serverPacketPublic = relay.serverPacketPublic
+		if mobilemultihop.IsPQMode(selection.ExitMode) {
+			valid = valid && relay.validPQPin() && relay.localPQIdentity == selection.Native.localPQIdentity[selection.ExitMode]
+			selection.serverPQIdentity = relay.serverPQIdentity
+		}
 		relay.mu.Unlock()
 		if !valid {
 			return multihopSelection{}, errors.New("previous WG/AWG server lease identity changed")
@@ -54,7 +58,7 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 	if capturedRelay != nil {
 		raw, present := desktopRelays.Load(a)
 		capturedRelay.mu.Lock()
-		current := present && raw == capturedRelay && capturedRelay.packetCapabilityReady && capturedRelay.serverPacketPublic == selection.serverPacketPublic && capturedRelay.expected.ExpiresAt.After(time.Now())
+		current := present && raw == capturedRelay && capturedRelay.packetCapabilityReady && capturedRelay.serverPacketPublic == selection.serverPacketPublic && capturedRelay.expected.ExpiresAt.After(time.Now()) && capturedRelay.validPQPin() && capturedRelay.serverPQIdentity == selection.serverPQIdentity
 		capturedRelay.mu.Unlock()
 		if !current {
 			return multihopSelection{}, errors.New("WG/AWG server owner changed while capturing live MTU restoration")

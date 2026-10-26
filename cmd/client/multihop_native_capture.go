@@ -16,7 +16,6 @@ import (
 	"time"
 
 	"router-vpn/internal/applexray"
-	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
@@ -28,6 +27,7 @@ type nativeMultihopCapture struct {
 	controlToken, entryToken, exitToken                      string
 	configs                                                  map[string]string
 	localPacketPublic                                        map[string]string
+	localPQIdentity                                          map[string]string
 	failures                                                 map[string]error
 	assets                                                   []viaEntryAsset
 }
@@ -41,7 +41,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	sel.Control, sel.Entry, sel.Exit = cloneRouterProfile(sel.Control), cloneRouterProfile(sel.Entry), cloneRouterProfile(sel.Exit)
-	c := &nativeMultihopCapture{root: root, entryID: sel.Entry.ID, exitID: sel.Exit.ID, base: sel.Base, configs: map[string]string{}, localPacketPublic: map[string]string{}, failures: map[string]error{}, controlToken: liveMeasurementProfileToken(sel.Control), entryToken: liveMeasurementProfileToken(sel.Entry), exitToken: liveMeasurementProfileToken(sel.Exit)}
+	c := &nativeMultihopCapture{root: root, entryID: sel.Entry.ID, exitID: sel.Exit.ID, base: sel.Base, configs: map[string]string{}, localPacketPublic: map[string]string{}, localPQIdentity: map[string]string{}, failures: map[string]error{}, controlToken: liveMeasurementProfileToken(sel.Control), entryToken: liveMeasurementProfileToken(sel.Entry), exitToken: liveMeasurementProfileToken(sel.Exit)}
 	c.entryMode, err = viaEntrySourceMode(root, sel.Entry.ID, sel.Base)
 	if err != nil {
 		return sel, err
@@ -107,9 +107,12 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		}
 		exit, _, e := compile(sel.Exit, mode)
 		if e == nil {
-			public := ""
-			if awgpolicy.WireGuardFamily(mode) {
+			public, pqIdentity := "", ""
+			if mobilemultihop.NodeMultihopPacketExitMode(mode) {
 				public, e = exit.PacketClientPublicKey()
+			}
+			if e == nil && mobilemultihop.IsPQMode(mode) {
+				pqIdentity, e = exit.PQClientIdentity()
 			}
 			var config string
 			if e == nil {
@@ -122,6 +125,9 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 				c.configs[mode] = config
 				if public != "" {
 					c.localPacketPublic[mode] = public
+				}
+				if pqIdentity != "" {
+					c.localPQIdentity[mode] = pqIdentity
 				}
 			}
 		}
@@ -140,7 +146,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	for _, asset := range c.assets {
 		assetIDs = append(assetIDs, []string{asset.id, asset.mode, asset.digest})
 	}
-	identity, _ := json.Marshal([]any{c.entryMode, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic})
+	identity, _ := json.Marshal([]any{c.entryMode, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic, c.localPQIdentity})
 	sum := sha256.Sum256(identity)
 	clear(identity)
 	c.source = hex.EncodeToString(sum[:])

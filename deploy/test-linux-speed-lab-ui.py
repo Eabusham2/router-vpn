@@ -82,7 +82,7 @@ def main() -> int:
                 "/api/session/events": {"events": [], "last_event_seq": 0},
             }
             nodes=[{"id":"fixture-entry","name":"Test entry"},{"id":"fixture-exit","name":"Test exit"}]
-            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","wg","awg2-fast","awg2-strong","ss-v2ray","split","max"]}
+            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","wg","awg2-fast","awg2-strong","ss-v2ray","split","max","wg-pq","awg2-pq"]}
             fixtures["/api/forwarding/master"]={"enabled":False}
             fixtures["/api/connection/live-latency"]={}
             if state["selected"]:

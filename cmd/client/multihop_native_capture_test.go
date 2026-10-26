@@ -77,7 +77,11 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 			packetAssets[name] = []byte(strings.Replace(text, "[Interface]\n", "[Interface]\nMTU = 1420\n", 1))
 		}
 		write(exit.ID, exitMode, packetAssets)
+		if exitMode == "awg2-strong" {
+			write(exit.ID, "awg2-pq", nativeMultihopPQAssets(t, "awg2-pq", packetAssets, testWGKey('w')))
+		}
 	}
+	write(exit.ID, "wg-pq", nativeMultihopPQAssets(t, "wg-pq", identity, testWGKey('r')))
 	for _, p := range []common.RouterProfile{entry, exit} {
 		key := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
 		ss, _ := json.Marshal(map[string]any{"inbounds": []any{map[string]any{"type": "tun", "auto_route": true, "strict_route": true}}, "route": map[string]any{"final": "proxy"}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": p.Endpoint, "server_port": 8388, "method": mobilemultihop.NativeStartLayerMethod, "password": key}}})
@@ -208,7 +212,7 @@ func TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler(t *testing.
 							t.Fatal("Server substitution changed the captured entry or policy", key)
 						}
 					}
-					if awgpolicy.WireGuardFamily(exitMode) {
+					if mobilemultihop.NodeMultihopPacketExitMode(exitMode) {
 						serverEndpoints := server["endpoints"].([]any)
 						if len(serverEndpoints) != 1 || !reflect.DeepEqual(serverEndpoints[0], endpoint) || len(local["endpoints"].([]any)) != 2 || sel.Native.localPacketPublic[exitMode] == "" {
 							t.Fatal("Server did not remove only the captured local WG/AWG exit")
@@ -436,7 +440,7 @@ func TestNativeMultihopServerCannotChangeCapturedModeLayerOrConfig(t *testing.T)
 		for _, change := range []string{"capture", "mode", "layer", "bytes"} {
 			root, sel := nativeMultihopCapturedFixture(t, "awg2-fast", "aes-256-gcm+xor-whitening")
 			sel.ExitMode = mode
-			if awgpolicy.IsMode(mode) {
+			if awgpolicy.IsMode(mode) || mode == "awg2-pq" {
 				sel.Entry.MTUPolicy, sel.Entry.ManualMTU = "manual", 1500
 				sel.Control.MTUPolicy, sel.Control.ManualMTU = "manual", 1500
 			}

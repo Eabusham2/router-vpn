@@ -53,3 +53,17 @@ func (r *NativePQTrafficReference) Rehandshake() error {
 	peer.ExpireCurrentKeypairs()
 	return nil
 }
+
+// The desktop test process cannot call a private readback method in the sealed
+// client. Initiate a genuine fresh handshake from its independent reference
+// peer instead; successful traffic then proves both peers adopted the new PSK.
+func (r *NativePQTrafficReference) InitiateHandshake() error {
+	var key awg.NoisePublicKey
+	copy(key[:], r.client)
+	peer := r.device.LookupPeer(key)
+	if peer == nil {
+		return errors.New("reference peer disappeared")
+	}
+	peer.ExpireCurrentKeypairs()
+	return peer.SendHandshakeInitiation(false)
+}

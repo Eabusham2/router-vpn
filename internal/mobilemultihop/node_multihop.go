@@ -11,7 +11,7 @@ import (
 // Local and Server node-to-node execution. WireGuard retains its packet
 // endpoint; it is never represented as a proxy in the Local graph.
 func NodeMultihopExitModes() []string {
-	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong", "ss-v2ray", "split", "max"}
+	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong", "ss-v2ray", "split", "max", "wg-pq", "awg2-pq"}
 }
 
 func NodeMultihopExitMode(mode string) bool {
@@ -74,7 +74,7 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if _, _, _, err := predecessor.applyMTUWithPacketEnvelope(last.tun, last.final, selection, envelope); err != nil {
+	if err := nodeMultihopMTU(predecessor, last, selection, envelope); err != nil {
 		return "", err
 	}
 	// The merger moves the entry's checked cover owner to the entry role. The

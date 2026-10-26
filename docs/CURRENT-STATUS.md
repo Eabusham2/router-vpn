@@ -10,13 +10,14 @@ completion of the current commit's packages, physical devices or deployment.
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and
-SS-V2Ray, Split and MAX TCP/UDP composite exits. Entry ownership remains WG/AWG.
+SS-V2Ray, Split and MAX TCP/UDP composite exits, plus mandatory WG-PQ and
+AWG-PQ packet exits. Entry ownership remains WG/AWG.
 Local, Server and Compare retain
 the captured exit transport, independent node credentials, Start Layers,
 selected DNS and proof routes. Naive resolver bootstrap follows the captured
 entry; replacing an exit Start Layer with an authenticated Server lease moves
 only that layer's owned resolver edges. Windows, macOS and Linux controls,
-complete profiles and Speed Lab retain all thirteen IDs. WG/AWG Server execution
+complete profiles and Speed Lab retain all fifteen IDs. Packet/PQ Server execution
 requires an updated agent and a separately paired server client identity. The
 canonical public key is checked against the local client, pinned during
 authenticated discovery, enforced under the server lease lock, and retained
@@ -33,8 +34,34 @@ to open its protected UDP socket through a literal WireGuard entry. Failed,
 cancelled and closed devices cannot publish readiness. Actual encrypted
 WG-to-AWG Fast, Fast-to-Strong and Strong-to-Fast Local/Server TCP and UDP tests
 pass, including wrong-key, padding and lease-credential rejection. The local
-test CLI omitted the unavailable Rosenpass C-library tag; complete current
-native packages still require exact-SHA CI.
+AWG test CLI omitted the Rosenpass C-library tag. The separate PQ verification
+described below uses a newly built complete native engine with that factory;
+complete current native packages still require exact-SHA CI.
+
+Desktop WG-PQ and AWG-PQ exits retain mandatory native Rosenpass negotiation,
+exact packet/AWG parameters, selected DNS, Start Layers and captured MTU bounds.
+Server execution requires both an independently paired packet key and a
+different PQ public identity. Compare retains the first captured identities
+across trial teardown and winner reacquisition; a registry change cannot become
+a new winner. Temporary restoration retains those pins and the already-proved
+execution without rerunning Compare. MTU arithmetic validates the underlying
+packet envelope without replacing its mandatory PQ owner.
+
+A fresh complete Linux AMD64 native engine, the real pinned Rust ABI and three
+independent disposable KEM keypairs passed the separate encrypted desktop PQ
+gate: twelve Local/Server trials, both packet families, all three WG/AWG entry
+variants, two real handshake epochs, wrong-peer rejection/restoration and lease
+authentication negatives. The twelve trials delivered 120 TCP/UDP round trips
+at 64, 1200 and 2000 bytes in 125.789 seconds with race instrumentation. The
+existing native selector also passed in 152.686 seconds; both retain their
+180-second bounds. These traffic trials use Start Layer Off; all three layer
+choices and bounded MTU rejection also pass the captured graph/parser tests.
+The physical/TUN boundary is adapted to loopback, including a test-only exact
+destination datagram mapper using native SOCKS UoT v2. Production PQ write/error
+checks and the independently authenticated Server lease are unchanged. The
+mandatory package gate builds the separate reference and private disposable
+keys outside the sealed bundle. Windows/macOS execution, exact-SHA packaging,
+real off-LAN Server pairing and physical acceptance remain separate.
 
 The three composite exits retain independent authenticated TCP and HY2 UDP
 lanes. Both traverse the captured entry, or the one captured exit AES/XOR

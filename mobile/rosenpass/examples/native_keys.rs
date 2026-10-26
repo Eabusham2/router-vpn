@@ -6,7 +6,10 @@ use rosenpass_ciphers::StaticKem;
 use std::fs::{DirBuilder, OpenOptions};
 use std::io::Write;
 use std::ops::DerefMut;
+#[cfg(unix)]
 use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+#[cfg(windows)]
+use std::os::windows::fs::OpenOptionsExt;
 use std::path::PathBuf;
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -14,16 +17,27 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let directory = PathBuf::from(args.next().ok_or("test fixture output required")?);
     if args.next().is_some() { return Err("expected one test fixture directory".into()); }
     // create, never reuse/replace a directory containing existing key material.
-    DirBuilder::new().mode(0o700).create(&directory)?;
+    let mut builder = DirBuilder::new();
+    #[cfg(unix)]
+    builder.mode(0o700);
+    // The desktop gate creates a private inherited Windows ACL on the owned
+    // parent before invoking this example. Unix also limits creation modes.
+    builder.create(&directory)?;
     rosenpass_secret_memory::secret_policy_try_use_memfd_secrets();
     for name in ["client", "server", "other"] {
         let (mut secret, mut public) = (SSk::zero(), SPk::zero());
         StaticKem.keygen(secret.secret_mut(), public.deref_mut())?;
         let materials: [(&str, &[u8]); 2] = [("secret", secret.secret()), ("public", &public[..])];
         for (suffix, bytes) in materials {
-            let mut file = OpenOptions::new().write(true).create_new(true).mode(0o600)
-                .open(directory.join(format!("{name}.{suffix}")))?;
+            let mut options = OpenOptions::new();
+            options.write(true).create_new(true);
+            #[cfg(unix)]
+            options.mode(0o600);
+            #[cfg(windows)]
+            options.share_mode(0);
+            let mut file = options.open(directory.join(format!("{name}.{suffix}")))?;
             file.write_all(bytes)?;
+            file.sync_all()?;
         }
     }
     println!("Generated three independent test-only Rosenpass keypairs");

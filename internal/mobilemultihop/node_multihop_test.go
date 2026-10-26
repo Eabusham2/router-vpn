@@ -22,9 +22,9 @@ func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[stri
 	if id == "exit" {
 		profile["node_proof_id"] = strings.Repeat("f", 64)
 		profile["router_api"], profile["adguard_ipv4"] = "http://10.88.0.1:8787", "10.88.0.53"
-		if awgpolicy.WireGuardFamily(mode) {
+		if NodeMultihopPacketExitMode(mode) {
 			asset := "wg.conf"
-			if awgpolicy.IsMode(mode) {
+			if awgpolicy.IsMode(mode) || mode == "awg2-pq" {
 				asset = "awg.conf"
 			}
 			var assets map[string]string
@@ -44,9 +44,12 @@ func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[stri
 			text = strings.ReplaceAll(text, base64.StdEncoding.EncodeToString([]byte(strings.Repeat("a", 32))), base64.StdEncoding.EncodeToString([]byte(strings.Repeat("e", 32))))
 			text = strings.ReplaceAll(text, "10.77.0.2", "10.88.0.2")
 			assets[asset] = base64.StdEncoding.EncodeToString([]byte(text))
+			if IsPQMode(mode) {
+				pqReplace(assets, "rosenpass.env", base64.StdEncoding.EncodeToString([]byte(strings.Repeat("b", 32))), public)
+			}
 			files = startJSON(t, assets)
 			proof := sha256.Sum256([]byte("router-vpn-node-proof-v1\n" + public))
-			if mode == "wg" {
+			if mode == "wg" || mode == "wg-pq" {
 				profile["node_proof_id"] = hex.EncodeToString(proof[:])
 			}
 		}
@@ -83,7 +86,7 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 						// S4=32 plus an exit Start Layer exceeds a 1420-byte
 						// entry for the minimum 1280-byte nested packet. This
 						// positive composition explicitly captures a larger bound.
-						if awgpolicy.IsMode(exitMode) && exitLayer != "" {
+						if (awgpolicy.IsMode(exitMode) || exitMode == "awg2-pq") && exitLayer != "" {
 							capacity = 1500
 						}
 						entry, exit := multihopNodeCapacityFixture(t, mode, entryLayer, "entry", capacity), multihopNodeFixture(t, exitMode, exitLayer, "exit")
@@ -158,7 +161,7 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 								t.Fatal("captured exit credentials, TLS, Xray document or UDP framing changed")
 							}
 						}
-						if awgpolicy.WireGuardFamily(exitMode) {
+						if NodeMultihopPacketExitMode(exitMode) {
 							prior := startObject(t, exitBefore)["endpoints"].([]any)[0].(map[string]any)
 							actual := predecessorCopy(nodes["proxy"])
 							delete(prior, "mtu")

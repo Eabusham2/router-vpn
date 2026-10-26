@@ -135,6 +135,27 @@ def test(bundle, target):
                         '-run', '^TestNativeCompositeDesktopEncryptedLoopback$'],
                        cwd=ROOT, env=env, check=True, timeout=240)
         print('Complete native runtime passed SS-V2Ray, Split and MAX Local and Server encrypted TCP/UDP through captured WG/AWG entry graphs', flush=True)
+        # PQ exits require two independently pinned identities and genuine
+        # Rosenpass negotiation before packet traffic. Build the test peer with
+        # the exact production Rust/C ABI, generate fresh disposable keys, and
+        # keep this mandatory matrix separate from the existing bounded groups.
+        # The helper, keys and link input never enter the sealed payload.
+        pq = Path(temporary)/'reference-pq'
+        pq_cache = ROOT/'dist/.native-pq-cache'
+        BUILD.PQ.build(target, pq, pq_cache)
+        pq_reference = Path(temporary)/('pq-reference'+suffix)
+        pq_keys = Path(temporary)/'pq-private'/'keys'
+        subprocess.run([sys.executable, str(ROOT/'deploy/build_pq_reference_fixture.py'),
+                        '--core', str(core), '--pq', str(pq), '--keys', str(pq_keys),
+                        '--output', str(pq_reference), '--target', target, '--cache', str(pq_cache),
+                        *(['--race'] if race else [])],
+                       cwd=ROOT, env=env, check=True, timeout=2520)
+        env['ROUTERVPN_PQ_REFERENCE_CLI'] = str(pq_reference)
+        env['ROUTERVPN_PQ_TEST_KEYS'] = str(pq_keys)
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
+                        '-run', '^TestNativePQDesktopEncryptedLoopback$'],
+                       cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed genuine PQ-keyed WG/AWG Local and Server encrypted traffic, independent identity pins and rekey checks', flush=True)
 
 
 if __name__ == '__main__':

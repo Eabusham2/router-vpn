@@ -85,8 +85,10 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			wantType := "wireguard"
 			if awgpolicy.IsMode(sel.ExitMode) {
 				wantType = mobilemultihop.AmneziaType
+			} else if mobilemultihop.IsPQMode(sel.ExitMode) {
+				wantType = mobilemultihop.PQType
 			}
-			if !awgpolicy.WireGuardFamily(sel.ExitMode) || endpoint["type"] != wantType || packetExits != 0 {
+			if !mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) || endpoint["type"] != wantType || packetExits != 0 {
 				return nil, errors.New("native server path has an unowned packet exit")
 			}
 			if awgpolicy.IsMode(sel.ExitMode) {
@@ -95,12 +97,20 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 					return nil, errors.New("native AWG exit lost its captured parameters")
 				}
 			}
+			if mobilemultihop.IsPQMode(sel.ExitMode) {
+				encoded, _ := json.Marshal(endpoint)
+				captured, err := mobilemultihop.PQRuntimeConfig(string(encoded))
+				captured.PQ.Erase()
+				if err != nil || endpoint["mode"] != sel.ExitMode || endpoint["node_id"] != sel.Exit.NodeProofID {
+					return nil, errors.New("native PQ exit lost its captured packet and negotiation owner")
+				}
+			}
 			packetExits++
 		default:
 			return nil, errors.New("native server path contains an unrelated endpoint")
 		}
 	}
-	if entry == nil || awgpolicy.WireGuardFamily(sel.ExitMode) != (packetExits == 1) {
+	if entry == nil || mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) != (packetExits == 1) {
 		return nil, errors.New("native server path lost its captured entry or packet exit")
 	}
 	if entry["type"] == mobilemultihop.AmneziaType {

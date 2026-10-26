@@ -26,7 +26,7 @@ func (p *NodeProfile) WireGuardClientPublicKey() (string, error) {
 // obfuscation parameters never turn an AWG peer into a plain WireGuard path.
 func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 	bad := errors.New("native WG/AWG exit has no exact captured client identity")
-	if p == nil || !awgpolicy.WireGuardFamily(p.mode) {
+	if p == nil || !NodeMultihopPacketExitMode(p.mode) {
 		return "", bad
 	}
 	var graph map[string]any
@@ -41,6 +41,8 @@ func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 	wantType := "wireguard"
 	if awgpolicy.IsMode(p.mode) {
 		wantType = AmneziaType
+	} else if IsPQMode(p.mode) {
+		wantType = PQType
 	}
 	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != wantType {
 		return "", bad
@@ -48,6 +50,14 @@ func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 	if awgpolicy.IsMode(p.mode) {
 		encoded, _ := json.Marshal(endpoint)
 		if _, err := AmneziaRuntimeConfig(string(encoded)); err != nil {
+			return "", bad
+		}
+	}
+	if IsPQMode(p.mode) {
+		encoded, _ := json.Marshal(endpoint)
+		runtime, err := PQRuntimeConfig(string(encoded))
+		runtime.PQ.Erase()
+		if err != nil || endpoint["mode"] != p.mode || endpoint["node_id"] != p.profile["node_proof_id"] {
 			return "", bad
 		}
 	}
@@ -73,7 +83,7 @@ func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 // The public outer address determines IPv4/IPv6 overhead, not the rewritten
 // private WireGuard service address. This is a configured bound, not PMTU proof.
 func nodePacketEnvelope(exit *externalPredecessor, mode string) (int, error) {
-	if !awgpolicy.WireGuardFamily(mode) {
+	if !NodeMultihopPacketExitMode(mode) {
 		return 0, nil
 	}
 	bad := errors.New("WG/AWG exit Start Layer lost its captured packet envelope")
@@ -92,6 +102,20 @@ func nodePacketEnvelope(exit *externalPredecessor, mode string) (int, error) {
 			return 0, bad
 		}
 		padding = runtime.TransportPadding
+	} else if IsPQMode(mode) {
+		wantType = PQType
+		base, err := nodePQBase(exit.final, mode)
+		if err != nil {
+			return 0, err
+		}
+		if mode == "awg2-pq" {
+			encoded, _ := json.Marshal(base)
+			runtime, err := AmneziaRuntimeConfig(string(encoded))
+			if err != nil {
+				return 0, err
+			}
+			padding = runtime.TransportPadding
+		}
 	}
 	layer := exit.nodes[NativeStartLayerTag]
 	if exit.final["type"] != wantType || exit.final["detour"] != NativeStartLayerTag || layer == nil ||

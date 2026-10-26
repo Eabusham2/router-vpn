@@ -320,6 +320,10 @@ func nativeMultihopTrafficExchange(proxy, target int, network string) error {
 }
 
 func nativeMultihopTrafficExchangeTo(proxy, target int, network string, destination [4]byte, timeout time.Duration) error {
+	return nativeMultihopTrafficExchangeMarked(proxy, target, network, destination, timeout, nil)
+}
+
+func nativeMultihopTrafficExchangeMarked(proxy, target int, network string, destination [4]byte, timeout time.Duration, marker []byte) error {
 	control, err := net.DialTimeout("tcp", net.JoinHostPort("127.0.0.1", strconv.Itoa(proxy)), 3*time.Second)
 	if err != nil {
 		return err
@@ -366,6 +370,7 @@ func nativeMultihopTrafficExchangeTo(proxy, target int, network string, destinat
 	}
 	for _, size := range []int{64, 1200, 2000} {
 		payload := bytes.Repeat([]byte{byte(size)}, size)
+		copy(payload, marker)
 		packet := payload
 		if network == "udp" {
 			packet = append([]byte{0, 0, 0, 1, destination[0], destination[1], destination[2], destination[3], byte(target >> 8), byte(target)}, payload...)
