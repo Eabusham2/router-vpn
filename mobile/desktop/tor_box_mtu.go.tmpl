@@ -110,8 +110,12 @@ func (r *RouterVPNDesktopTor) ClaimMTU() (*RouterVPNDesktopTorMTULease, error) {
 		return nil, err
 	}
 	meta := r.policy.Metadata()
-	authority, err := json.Marshal(map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID,
-		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN})
+	parameters := map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID,
+		"source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN || meta.EntryJumboTUN}
+	if meta.EntryFixedMTU != 0 {
+		parameters["entry_fixed_mtu"] = meta.EntryFixedMTU
+	}
+	authority, err := json.Marshal(parameters)
 	if err != nil {
 		return nil, err
 	}
@@ -184,7 +188,7 @@ func (l *RouterVPNDesktopTorMTULease) RegisterOperation(generation uint64, reque
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	policy := r.policy.Metadata()
-	if !l.currentLifetime() || r.closing || l.active != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || policy.MTUPolicy != "auto" || policy.JumboTUN || !l.Healthy() {
+	if !l.currentLifetime() || r.closing || l.active != 0 || l.generation == ^uint64(0) || generation != l.generation+1 || !policy.AllowMTUOptimization() || !l.Healthy() {
 		return errors.New("desktop Tor MTU request is stale or another operation is still draining")
 	}
 	l.generation, l.request = generation, request
@@ -322,7 +326,7 @@ func (l *RouterVPNDesktopTorMTULease) changeMTUBounded(parent context.Context, e
 	verifiedAt := time.Now()
 	r.mu.Lock()
 	policy := r.policy.Metadata()
-	registered := l.generation != 0 && l.request != "" && !r.closing && policy.MTUPolicy == "auto" && !policy.JumboTUN
+	registered := l.generation != 0 && l.request != "" && !r.closing && policy.AllowMTUOptimization()
 	generation, request, transition := l.generation, l.request, l.transition
 	r.mu.Unlock()
 	r.interfaceMu.Lock()

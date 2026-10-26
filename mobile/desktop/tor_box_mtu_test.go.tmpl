@@ -752,3 +752,88 @@ func TestRouterVPNDesktopTorMTUTransitionDeadlineRetiresButJoinsNativeWorker(t *
 		t.Fatal("drained native transition did not close", err)
 	}
 }
+
+func TestRouterVPNDesktopTorEntryMTUAuthorityPreservesSingleTUNPolicy(t *testing.T) {
+	for _, kind := range []string{"auto", "fixed1392-auto", "fixed9000-auto", "fixed1392-default", "jumbo-auto", "jumbo-default"} {
+		t.Run(kind, func(t *testing.T) {
+			fixed, jumbo := 0, strings.HasPrefix(kind, "jumbo")
+			if strings.HasPrefix(kind, "fixed1392") {
+				fixed = 1392
+			} else if strings.HasPrefix(kind, "fixed9000") {
+				fixed = 9000
+			}
+			entry := desktopTorBoxEntryFixture(t, func(profile map[string]any) {
+				profile["jumbo_tun"] = jumbo
+				if fixed != 0 {
+					profile["mtu_policy"], profile["manual_mtu"] = "manual", fixed
+				}
+			})
+			exitPolicy := "auto"
+			if strings.HasSuffix(kind, "default") {
+				exitPolicy = "default"
+			}
+			f, _ := desktopTorBoxEntryRuntime(t, false, entry, func(profile map[string]any) { profile["mtu_policy"] = exitPolicy; delete(profile, "manual_mtu") })
+			owner := f.capture(t)
+			if err := owner.start(f.child); err != nil {
+				t.Fatal(err)
+			}
+			proof, err := owner.run(f.prover(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			expected := 1280
+			if fixed != 0 {
+				expected = fixed
+			}
+			if jumbo {
+				expected = 9000
+			}
+			if proof.EffectiveMTU != expected || proof.Policy.ConfiguredMTU != expected || proof.Policy.MTUPolicy != exitPolicy || proof.Policy.JumboTUN || proof.Policy.EntryFixedMTU != fixed || proof.Policy.EntryJumboTUN != jumbo {
+				t.Fatal("native entry MTU rewrote exit preference or lost its configured interface", proof)
+			}
+			lease, err := owner.ClaimMTU()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var authority map[string]any
+			if json.Unmarshal([]byte(lease.Authority()), &authority) != nil || authority["mtu_policy"] != exitPolicy || authority["jumbo_tun"] != jumbo || authority["source_sha256"] != f.policy.SourceSHA256() {
+				t.Fatal("native entry authority differs from immutable combined policy", lease.Authority())
+			}
+			if fixed != 0 && authority["entry_fixed_mtu"] != float64(fixed) || fixed == 0 && authority["entry_fixed_mtu"] != nil {
+				t.Fatal("native entry Fixed authority lost or fabricated", lease.Authority())
+			}
+			initial, err := lease.MTUReadback()
+			if err != nil || initial.Generation != 0 || initial.Revision != 0 || initial.RequestID != "" || initial.EffectiveMTU != expected {
+				t.Fatal("entry configuration pretended to measure a path", initial, err)
+			}
+			allowed := kind == "auto"
+			if err := lease.RegisterOperation(1, strings.Repeat("b", 32)); (err == nil) != allowed {
+				t.Fatal("entry immutable policy did not govern native optimizer admission", err)
+			}
+			if allowed {
+				return
+			}
+			if err := lease.SetTransitionHandler(func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error) { return func() {}, nil }); err != nil {
+				t.Fatal(err)
+			}
+			owner.mu.Lock()
+			lease.generation, lease.request = 1, strings.Repeat("b", 32)
+			owner.mu.Unlock()
+			reader, _ := lease.Inbound()
+			called := false
+			if _, err := lease.changeMTU(context.Background(), reader, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+				called = true
+				return reader, nil
+			}); err == nil || called {
+				t.Fatal("stale automatic request overwrote captured entry Fixed/Jumbo interface")
+			}
+			owner.mu.Lock()
+			lease.generation, lease.request = 0, ""
+			owner.mu.Unlock()
+			current, err := lease.MTUReadback()
+			if err != nil || current != initial || !owner.Healthy() {
+				t.Fatal("rejected entry optimizer changed current native path", current, err)
+			}
+		})
+	}
+}

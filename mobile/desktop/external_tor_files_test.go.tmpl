@@ -2,6 +2,7 @@ package main
 
 import (
 	"crypto/sha256"
+	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"os"
@@ -10,6 +11,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemultihop"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
 
@@ -23,6 +25,10 @@ type routerVPNTorFileFixture struct {
 }
 
 func routerVPNNewTorFileFixture(t *testing.T) *routerVPNTorFileFixture {
+	return routerVPNNewTorPredecessorFileFixture(t, nil)
+}
+
+func routerVPNNewTorPredecessorFileFixture(t *testing.T, predecessor *mobiletor.DesktopPredecessor) *routerVPNTorFileFixture {
 	t.Helper()
 	base := t.TempDir()
 	directory := filepath.Join(base, "session")
@@ -40,7 +46,21 @@ func routerVPNNewTorFileFixture(t *testing.T) *routerVPNTorFileFixture {
 		t.Fatal(err)
 	}
 	profile := `{"id":"tor-fixture","node_kind":"external","external":{"protocol":"tor-bridge","tor_bridge":{"transport":"obfs4","socks_port":19151,"bridges":["obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=` + strings.Repeat("A", 70) + ` iat-mode=0"]}},"dns_mode":"custom","dns_protocol":"tcp","dns_host":"9.9.9.9","dns_port":5353,"home_lan_access":false,"ipv6_mode":"off","kill_switch_policy":"off","mtu_policy":"manual","manual_mtu":1392}`
-	inputs, err := mobiletor.NewDesktopBridgeCapture(profile, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binary, directory)
+	var inputs *mobiletor.DesktopBridgeInputs
+	var err error
+	if predecessor != nil {
+		var selected map[string]any
+		if json.Unmarshal([]byte(profile), &selected) != nil {
+			t.Fatal("invalid fixture profile")
+		}
+		selected["multihop_enabled"], selected["multihop_entry_id"], selected["multihop_exit_id"] = true, predecessor.ID(), selected["id"]
+		selected["multihop_entry_mode"], selected["multihop_exit_mode"], selected["multihop_execution"] = predecessor.Mode(), "tor-bridge", "local"
+		raw, _ := json.Marshal(selected)
+		profile = string(raw)
+		inputs, err = mobiletor.NewDesktopBridgeCaptureWithPredecessor(profile, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binary, directory, predecessor)
+	} else {
+		inputs, err = mobiletor.NewDesktopBridgeCapture(profile, routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, binary, directory)
+	}
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -325,6 +345,78 @@ func TestRouterVPNDesktopTorDataCleanupRetainsCapturedDirectoryAndRefusesReplace
 			}
 			if _, err := os.Stat(filepath.Join(f.directory, "torrc")); err != nil {
 				t.Fatal("native cleanup consumed controller input", err)
+			}
+		})
+	}
+}
+
+func routerVPNTorEntryFileCapture(t *testing.T) *mobiletor.DesktopPredecessor {
+	t.Helper()
+	profile := `{"id":"captured-router","node_kind":"router-vpn","node_proof_id":"` + strings.Repeat("a", 64) + `","router_api":"http://10.80.0.1:8787","api_token":"captured-entry-token","endpoint":"192.0.2.44","dns_mode":"home","adguard_ipv4":"10.80.0.53","ipv6_mode":"off","home_lan_access":false,"mtu_policy":"auto"}`
+	graph := `{"inbounds":[{"type":"tun","tag":"tun-in","auto_route":true,"strict_route":true,"mtu":1280}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"192.0.2.44","server_port":443,"method":"2022-blake3-aes-256-gcm","password":"` + base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))) + `"}],"route":{"final":"proxy","rules":[]}}`
+	files, _ := json.Marshal(map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString([]byte(graph))})
+	compiled, err := mobilemultihop.NewNodeProfile("shadowsocks", string(files), profile, "", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry, err := mobiletor.NewDesktopPredecessor("shadowsocks", profile, compiled.Config(), strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+func TestRouterVPNDesktopTorFilesKeepLargePredecessorCaptureBoundedAndOwned(t *testing.T) {
+	for _, kind := range []string{"bounded-entry", "entry-over-limit", "direct-old-limit", "other-input-old-limit"} {
+		t.Run(kind, func(t *testing.T) {
+			var entry *mobiletor.DesktopPredecessor
+			if kind != "direct-old-limit" {
+				entry = routerVPNTorEntryFileCapture(t)
+			}
+			f := routerVPNNewTorPredecessorFileFixture(t, entry)
+			capture := f.inputs.JSON()
+			size := int(mobiletor.DesktopBridgeCaptureLimit)
+			if kind == "entry-over-limit" {
+				size++
+			}
+			if kind == "direct-old-limit" {
+				size = (16 << 10) + 1
+			}
+			capture += strings.Repeat(" ", size-len(capture))
+			if kind == "other-input-old-limit" {
+				if err := os.WriteFile(filepath.Join(f.directory, "sing-box.json"), []byte(strings.Repeat(" ", (4<<20)+1)), 0600); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := os.WriteFile(filepath.Join(f.directory, "tor-capture.json"), []byte(capture), 0600); err != nil {
+					t.Fatal(err)
+				}
+				hash := sha256.Sum256([]byte(capture))
+				f.environment["HOMEVPN_TOR_CAPTURE_SHA256"] = hex.EncodeToString(hash[:])
+			}
+			owned, err := routerVPNOpenTorFiles(f.directory, routerVPNTorTestSession, f.binary, f.getenv)
+			if kind != "bounded-entry" {
+				if err == nil || owned != nil {
+					if owned != nil {
+						owned.closeHandles()
+					}
+					t.Fatal("capture-only increase weakened existing exact input bound")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal("exact 8MiB Router predecessor capture rejected", err)
+			}
+			defer owned.closeHandles()
+			if owned.current() != nil || owned.inputs.Policy().Metadata().EntryID != entry.ID() {
+				t.Fatal("large Router capture lost source identity during current check")
+			}
+			path := filepath.Join(f.directory, "tor-capture.json")
+			if err := os.WriteFile(path, []byte(capture[:len(capture)-1]+"\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			if owned.current() == nil {
+				t.Fatal("same-size capture mutation retained private ownership")
 			}
 		})
 	}

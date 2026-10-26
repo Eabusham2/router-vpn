@@ -77,16 +77,10 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		return nil, errors.New("desktop Tor source does not match the running native graph")
 	}
 	meta := policy.Metadata()
-	// The pure source compiler can retain a Router entry before the native
-	// lower-dialer/proof owner has been installed. Never admit that capture as
-	// a direct physical Tor path while its runtime integration is pending.
-	if meta.EntryID != "" {
-		return nil, errors.New("desktop Tor captured predecessor has no native runtime owner")
-	}
 	if meta.TargetOS != runtime.GOOS {
 		return nil, errors.New("desktop Tor policy belongs to another native operating system")
 	}
-	engine, err := s.routerVPNCapturedEngine("", meta.TUNTag, meta.FinalTag, "routervpn-tor-dns", compiled)
+	engine, err := s.routerVPNCapturedEngine(meta.EntryTag, meta.TUNTag, meta.FinalTag, "routervpn-tor-dns", compiled)
 	if err != nil || engine.Identity() == "" {
 		return nil, errors.New("desktop Tor native graph owners are unavailable")
 	}
@@ -128,7 +122,11 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 	if meta.IPv6Mode == "off" {
 		resolver.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
 	}
-	owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+	if predecessor := policy.Predecessor(); predecessor != nil {
+		owner.pt, err = routervpndesktoppt.NewWithPredecessor(ctx, plan, resolver, predecessor, owner.currentNative)
+	} else {
+		owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -177,6 +175,14 @@ func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure
 			r.Cancel()
 		}
 	}()
+	// The same native entry object carries private authentication and every PT
+	// socket. No Tor listener is configured or network enabled before it proves
+	// the captured Router origin and credential through that encrypted route.
+	if r.policy.Predecessor() != nil {
+		if _, err := r.pt.ProvePredecessor(r.ctx); err != nil {
+			return err
+		}
+	}
 	if err := r.pt.Start(); err != nil {
 		return err
 	}
@@ -246,6 +252,14 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 	if !r.live() {
 		return result, errors.New("desktop Tor bootstrap finished after native retirement")
 	}
+	var entryProof *mobiletor.DesktopBridgeEntryProof
+	if r.policy.Predecessor() != nil {
+		var err error
+		entryProof, err = r.pt.ProvePredecessor(ctx)
+		if err != nil {
+			return result, err
+		}
+	}
 	if err := r.engine.DNSProof(ctx, r.policy.Metadata().TUNTag); err != nil {
 		return result, err
 	}
@@ -284,7 +298,7 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 		return result, errors.New("desktop Tor proof completed after cancellation")
 	}
 	return mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta, Proof: proof,
-		InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
+		EntryProof: entryProof, InterfaceName: name, InterfaceIndex: index, EffectiveMTU: mtu, Healthy: true, HeartbeatAt: time.Now().UnixMilli()}, nil
 }
 
 func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address string) (net.Conn, error) {
@@ -433,7 +447,11 @@ func (r *RouterVPNDesktopTor) DNSMeasurement() (*dnsmeasure.Service, error) {
 		return r.dns, nil
 	}
 	meta := r.policy.Metadata()
-	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNS.Address, Port: meta.DNS.Port, Transport: meta.DNS.Transport, ServerName: meta.DNS.ServerName, Path: meta.DNS.Path, Route: meta.FinalTag, RouteLabel: "Selected DNS via captured Tor exit"}
+	route, routeLabel := meta.FinalTag, "Selected DNS via captured Tor exit"
+	if meta.EntryTag != "" && meta.DNSDetour == meta.EntryTag {
+		route, routeLabel = meta.EntryTag, "Selected DNS via captured Router entry"
+	}
+	selected := dnsmeasure.Endpoint{ID: "selected", Name: "Selected DNS", Kind: "selected", Address: meta.DNS.Address, Port: meta.DNS.Port, Transport: meta.DNS.Transport, ServerName: meta.DNS.ServerName, Path: meta.DNS.Path, Route: route, RouteLabel: routeLabel}
 	engine := &routerVPNDesktopTorDNS{owner: r, ipv6: meta.IPv6Mode != "off"}
 	measurement, err := dnsmeasure.New(engine, dnsmeasure.Description{NodeID: meta.NodeID, SessionID: meta.SessionID, RouteLabel: "Current Tor connection", Selected: selected, IPv6Enabled: engine.ipv6})
 	if err != nil {

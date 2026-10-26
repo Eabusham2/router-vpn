@@ -49,9 +49,13 @@ func routerVPNNewTorCommandFixture(t *testing.T, files *routerVPNTorFileFixture,
 		name = "utun902"
 	}
 	now := time.Now()
+	var entryProof *mobiletor.DesktopBridgeEntryProof
+	if meta.EntryID != "" {
+		entryProof = &mobiletor.DesktopBridgeEntryProof{EntryID: meta.EntryID, EntrySHA256: meta.EntrySHA256, CheckedAt: now}
+	}
 	return &routerVPNTorCommandFixture{base: base, engine: engine, measurement: measurement, closeAttempted: make(chan struct{}),
 		proof: mobiletor.DesktopBridgeProof{Schema: 1, SessionID: meta.SessionID, SourceSHA256: meta.SourceSHA256, ConfigSHA256: meta.ConfigSHA256, Policy: meta,
-			Proof: mobiletor.Proof{SessionID: meta.SessionID, IP: "198.51.100.18", IsTor: true, DNSProven: true, CheckedAt: now}, InterfaceName: name, InterfaceIndex: 710, EffectiveMTU: meta.ConfiguredMTU, Healthy: true, HeartbeatAt: now.UnixMilli()}}
+			EntryProof: entryProof, Proof: mobiletor.Proof{SessionID: meta.SessionID, IP: "198.51.100.18", IsTor: true, DNSProven: true, CheckedAt: now}, InterfaceName: name, InterfaceIndex: 710, EffectiveMTU: meta.ConfiguredMTU, Healthy: true, HeartbeatAt: now.UnixMilli()}}
 }
 func (f *routerVPNTorCommandFixture) Start() error {
 	f.base.starts.Add(1)
@@ -447,5 +451,51 @@ func TestRouterVPNDesktopTorNativeConstructionRetainsActualBoxAndCancelsBeforeSp
 	}
 	if owner.Healthy() {
 		t.Fatal("unstarted native Box fabricated a usable path")
+	}
+}
+
+func TestRouterVPNDesktopTorCommandRequiresExactPrivateEntryReceipt(t *testing.T) {
+	for _, kind := range []string{"exact", "missing", "wrong-node", "wrong-source", "before-owner", "future", "direct-unowned"} {
+		t.Run(kind, func(t *testing.T) {
+			var entry *mobiletor.DesktopPredecessor
+			if kind != "direct-unowned" {
+				entry = routerVPNTorEntryFileCapture(t)
+			}
+			f := routerVPNNewTorPredecessorFileFixture(t, entry)
+			owner := routerVPNNewTorCommandFixture(t, f, false)
+			switch kind {
+			case "missing":
+				owner.proof.EntryProof = nil
+			case "wrong-node":
+				owner.proof.EntryProof.EntryID = "other-router"
+			case "wrong-source":
+				owner.proof.EntryProof.EntrySHA256 = strings.Repeat("f", 64)
+			case "before-owner":
+				owner.proof.EntryProof.CheckedAt = time.Now().Add(-time.Minute)
+			case "future":
+				owner.proof.EntryProof.CheckedAt = time.Now().Add(time.Minute)
+			case "direct-unowned":
+				owner.proof.EntryProof = &mobiletor.DesktopBridgeEntryProof{EntryID: "unowned-router", EntrySHA256: strings.Repeat("b", 64), CheckedAt: time.Now()}
+			}
+			done := routerVPNTorRunFixture(t, context.Background(), f, owner)
+			if kind == "exact" {
+				receipt := routerVPNTorReadProofFixture(t, f)
+				if receipt.EntryProof == nil || receipt.EntryProof.EntryID != owner.proof.EntryProof.EntryID || receipt.EntryProof.EntrySHA256 != owner.proof.EntryProof.EntrySHA256 || !receipt.EntryProof.CheckedAt.Equal(owner.proof.EntryProof.CheckedAt) || receipt.Policy.EntryID != entry.ID() {
+					t.Fatal("published native proof lost its exact captured private entry")
+				}
+				desktopExternalStopFile(t, f.directory, receipt.SessionID, receipt.SourceSHA256)
+				if err := desktopExternalWait(t, done); err != nil {
+					t.Fatal(err)
+				}
+			} else {
+				if err := desktopExternalWait(t, done); err == nil {
+					t.Fatal("native command accepted unowned private entry proof")
+				}
+				if _, err := os.Stat(filepath.Join(f.directory, "proof.json")); !os.IsNotExist(err) {
+					t.Fatal("unproved private entry was published as Connected", err)
+				}
+			}
+			routerVPNTorCheckStoppedFixture(t, f)
+		})
 	}
 }

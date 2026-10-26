@@ -1,12 +1,18 @@
 package box
 
 import (
+	"bufio"
+	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net"
+	"net/http"
+	"net/netip"
 	"strconv"
 	"strings"
 	"sync"
@@ -15,8 +21,19 @@ import (
 	"time"
 
 	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
 	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	pt "gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/goptlib"
+	"gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/lyrebird/transports/obfs4"
 )
 
 // Only the Tor daemon is a local protocol fixture. The Box, isolated native
@@ -210,12 +227,16 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 }
 
 func (f *desktopTorBoxFixture) prover(t *testing.T) func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error) {
+	return f.proverAfterDNS(t, func() bool { return f.socks.dnsCalls.Load() > 0 })
+}
+
+func (f *desktopTorBoxFixture) proverAfterDNS(t *testing.T, selectedDNSProved func() bool) func(context.Context, string, mobiletor.DialContext) (mobiletor.Proof, error) {
 	t.Helper()
 	return func(ctx context.Context, session string, dial mobiletor.DialContext) (mobiletor.Proof, error) {
 		if session != desktopTorBoxSession {
 			return mobiletor.Proof{}, errors.New("public proof changed its captured session")
 		}
-		if f.socks.dnsCalls.Load() == 0 {
+		if !selectedDNSProved() {
 			// Observe the ordering without implementing the production guard in
 			// this fixture. A skipped DNS proof must still reach the synthetic
 			// origin so the negative case can detect false Connected evidence.
@@ -372,4 +393,314 @@ func TestRouterVPNDesktopTorNativeCloseRetainsInflightPublicProof(t *testing.T) 
 		t.Fatal("retired proof callback produced a successful receipt")
 	}
 	closeDesktopTorBox(t, owner)
+}
+
+// A real SS2022 service terminates the actual captured native entry cipher.
+// The only fixture remapping is its outer TEST-NET socket to this local server;
+// every tunneled destination, private API credential, selected DNS message and
+// nested obfs4 handshake still passes through the shipping native protocols.
+type desktopTorBoxEntryServer struct {
+	listener                          net.Listener
+	workers                           sync.WaitGroup
+	mu                                sync.Mutex
+	closing                           bool
+	connections                       map[net.Conn]bool
+	proofCalls, dnsCalls, bridgeCalls atomic.Int32
+	wrongNode, badDNS                 atomic.Bool
+	bridgeLine                        string
+	wrapBridge                        func(net.Conn) (net.Conn, error)
+}
+
+func newDesktopTorBoxEntryServer(t *testing.T) *desktopTorBoxEntryServer {
+	t.Helper()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := &desktopTorBoxEntryServer{listener: listener, connections: map[net.Conn]bool{}}
+	transport := &obfs4.Transport{}
+	factory, err := transport.ServerFactory(t.TempDir(), &pt.Args{})
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	cert, _ := factory.Args().Get("cert")
+	s.bridgeLine = "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=" + cert + " iat-mode=0"
+	s.wrapBridge = factory.WrapConn
+	password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, s, nil)
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	s.workers.Add(1)
+	go func() {
+		defer s.workers.Done()
+		for {
+			conn, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			s.mu.Lock()
+			if s.closing {
+				s.mu.Unlock()
+				conn.Close()
+				return
+			}
+			s.connections[conn] = true
+			s.workers.Add(1)
+			s.mu.Unlock()
+			go func() {
+				defer s.workers.Done()
+				defer func() { conn.Close(); s.mu.Lock(); delete(s.connections, conn); s.mu.Unlock() }()
+				_ = conn.SetDeadline(time.Now().Add(15 * time.Second))
+				_ = service.NewConnection(context.Background(), conn, M.Metadata{Source: M.SocksaddrFromNet(conn.RemoteAddr())})
+			}()
+		}
+	}()
+	t.Cleanup(func() {
+		s.mu.Lock()
+		s.closing = true
+		for conn := range s.connections {
+			_ = conn.Close()
+		}
+		s.mu.Unlock()
+		listener.Close()
+		s.workers.Wait()
+	})
+	return s
+}
+func (s *desktopTorBoxEntryServer) NewConnection(_ context.Context, conn net.Conn, metadata M.Metadata) error {
+	switch metadata.Destination.String() {
+	case "10.80.0.1:8787":
+		request, err := http.ReadRequest(bufio.NewReader(conn))
+		if err != nil {
+			return err
+		}
+		if request.Method != "GET" || request.URL.String() != "/health" || request.Host != "10.80.0.1:8787" || request.Header.Get("Authorization") != "Bearer private-entry-token" {
+			return errors.New("encrypted entry proof changed private identity or credentials")
+		}
+		s.proofCalls.Add(1)
+		node := strings.Repeat("a", 64)
+		if s.wrongNode.Load() {
+			node = strings.Repeat("f", 64)
+		}
+		body := fmt.Sprintf(`{"ok":true,"node_id":%q,"proof":"router-vpn-private-agent-v1"}`, node)
+		_, err = fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+		return err
+	case "10.80.0.53:5353":
+		peer := &mDNS.Conn{Conn: conn}
+		for {
+			query, err := peer.ReadMsg()
+			if err != nil {
+				return err
+			}
+			s.dnsCalls.Add(1)
+			answer := new(mDNS.Msg)
+			answer.SetReply(query)
+			if s.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA {
+				answer.Rcode = mDNS.RcodeServerFailure
+			} else {
+				answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+			}
+			if err := peer.WriteMsg(answer); err != nil {
+				return err
+			}
+		}
+	case "203.0.113.44:443":
+		s.bridgeCalls.Add(1)
+		remote, err := s.wrapBridge(conn)
+		if err != nil {
+			return err
+		}
+		defer remote.Close()
+		_, err = io.Copy(remote, remote)
+		return err
+	default:
+		return errors.New("encrypted entry received an uncaptured destination")
+	}
+}
+func (*desktopTorBoxEntryServer) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("entry fixture permits only captured TCP operations")
+}
+func (*desktopTorBoxEntryServer) NewError(context.Context, error) {}
+func (s *desktopTorBoxEntryServer) register(t *testing.T) func(*outbound.Registry) {
+	t.Helper()
+	return func(registry *outbound.Registry) {
+		outbound.Register[option.ShadowsocksOutboundOptions](registry, C.TypeShadowsocks, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+			if options.Server != "192.0.2.44" || options.ServerPort != 443 || options.Method != "2022-blake3-aes-256-gcm" || options.Password != base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32))) || options.Detour != "" {
+				return nil, errors.New("entry final socket remapping did not receive the exact complete captured transport")
+			}
+			address := netip.MustParseAddrPort(s.listener.Addr().String())
+			options.Server, options.ServerPort = address.Addr().String(), address.Port()
+			return shadowsocks.NewOutbound(ctx, router, logger, tag, options)
+		})
+	}
+}
+func desktopTorBoxEntryPTExchange(ctx context.Context, address, bridgeLine string) error {
+	conn, err := (&net.Dialer{}).DialContext(ctx, "tcp4", address)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err = conn.Write([]byte{5, 1, 2}); err != nil {
+		return err
+	}
+	var reply [2]byte
+	if _, err = io.ReadFull(conn, reply[:]); err != nil || reply != [2]byte{5, 2} {
+		return errors.New("entry PT authentication negotiation failed")
+	}
+	parts := strings.Fields(bridgeLine)
+	arguments := strings.Join(parts[3:], ";")
+	if len(arguments) > 255 {
+		return errors.New("fixture bridge arguments exceeded SOCKS bounds")
+	}
+	auth := append([]byte{1, byte(len(arguments))}, []byte(arguments)...)
+	auth = append(auth, 1, 0)
+	if _, err = conn.Write(auth); err != nil {
+		return err
+	}
+	if _, err = io.ReadFull(conn, reply[:]); err != nil || reply != [2]byte{1, 0} {
+		return errors.New("entry PT arguments rejected")
+	}
+	target := netip.MustParseAddrPort("203.0.113.44:443")
+	request := append([]byte{5, 1, 0, 1}, target.Addr().AsSlice()...)
+	request = binary.BigEndian.AppendUint16(request, target.Port())
+	if _, err = conn.Write(request); err != nil {
+		return err
+	}
+	var response [10]byte
+	if _, err = io.ReadFull(conn, response[:]); err != nil || response[0] != 5 || response[1] != 0 {
+		return errors.New("entry-routed PT connect failed")
+	}
+	payload := bytes.Repeat([]byte("actual SS2022 then obfs4;"), 64)
+	if _, err = conn.Write(payload); err != nil {
+		return err
+	}
+	actual := make([]byte, len(payload))
+	_, err = io.ReadFull(conn, actual)
+	if err != nil || !bytes.Equal(payload, actual) {
+		return errors.New("captured native entry lost nested obfs4 payload")
+	}
+	return nil
+}
+func desktopTorBoxEntryRuntime(t *testing.T, home bool, entry *mobiletor.DesktopPredecessor, edit func(map[string]any)) (*desktopTorBoxFixture, *desktopTorBoxEntryServer) {
+	t.Helper()
+	server := newDesktopTorBoxEntryServer(t)
+	f := newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
+		profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"] = true, entry.ID(), profile["id"]
+		profile["multihop_entry_mode"], profile["multihop_exit_mode"], profile["multihop_execution"] = entry.Mode(), "tor-bridge", "local"
+		profile["external"].(map[string]any)["tor_bridge"].(map[string]any)["bridges"] = []string{server.bridgeLine}
+		if home {
+			profile["dns_mode"], profile["dns_host"] = "home", "10.80.0.53"
+		}
+		if edit != nil {
+			edit(profile)
+		}
+	}, entry, server.register(t))
+	f.child.configure = func(ctx context.Context, listeners map[string]string) error {
+		if server.proofCalls.Load() == 0 {
+			return errors.New("Tor control configured before encrypted private Router authentication")
+		}
+		if len(listeners) != 1 || listeners["obfs4"] == "" {
+			return errors.New("entry PT listeners differ from capture")
+		}
+		return desktopTorBoxEntryPTExchange(ctx, listeners["obfs4"], server.bridgeLine)
+	}
+	return f, server
+}
+
+func TestRouterVPNDesktopTorEntryOwnsEncryptedProofPTAndSelectedDNS(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		t.Run(fmt.Sprintf("home=%t", home), func(t *testing.T) {
+			entry := desktopTorBoxEntryFixture(t)
+			f, server := desktopTorBoxEntryRuntime(t, home, entry, nil)
+			owner := f.capture(t)
+			started := time.Now()
+			if err := owner.start(f.child); err != nil {
+				t.Fatal("native entry startup", err)
+			}
+			selectedDNS := func() bool {
+				if home {
+					return server.dnsCalls.Load() > 0
+				}
+				return f.socks.dnsCalls.Load() > 0
+			}
+			receipt, err := owner.run(f.proverAfterDNS(t, selectedDNS))
+			if err != nil {
+				t.Fatal("native entry proof", err)
+			}
+			if !f.policy.Metadata().ValidEntryProof(receipt.EntryProof, started, time.Now()) || server.proofCalls.Load() != 2 || server.bridgeCalls.Load() != 1 || !selectedDNS() || !owner.Healthy() {
+				t.Fatal("one-TUN entry proof/PT/DNS receipt is incomplete", receipt, server.proofCalls.Load(), server.bridgeCalls.Load())
+			}
+			if home && f.socks.dnsCalls.Load() != 0 || !home && server.dnsCalls.Load() != 0 {
+				t.Fatal("selected DNS used the wrong captured route")
+			}
+			if len(f.options.Inbounds) != 1 || receipt.InterfaceIndex != 710 || receipt.EffectiveMTU != 1392 || f.child.configured.Load() != 1 {
+				t.Fatal("entry introduced a second TUN or changed captured interface policy")
+			}
+			measurement, err := owner.DNSMeasurement()
+			if err != nil || measurement.Start(strings.Repeat("d", 32), "tcp") != nil {
+				t.Fatal("captured entry DNS retest did not start", err)
+			}
+			deadline := time.Now().Add(5 * time.Second)
+			var status dnsmeasure.Status
+			for time.Now().Before(deadline) {
+				if json.Unmarshal([]byte(measurement.StatusJSON()), &status) != nil {
+					t.Fatal("invalid native entry DNS status")
+				}
+				if status.Complete && status.Drained {
+					break
+				}
+				time.Sleep(time.Millisecond)
+			}
+			if !status.Complete || !status.Drained || status.Failure != "" || len(status.Results) != 13 {
+				t.Fatal("native entry DNS retest did not finish", measurement.StatusJSON())
+			}
+			selected := status.Results[0]
+			route, label := f.policy.Metadata().FinalTag, "Selected DNS via captured Tor exit"
+			if home {
+				route, label = entry.Tag(), "Selected DNS via captured Router entry"
+			}
+			if !selected.Ready || selected.Samples != 3 || selected.Failed != 0 || selected.Endpoint.Route != route || selected.Endpoint.RouteLabel != label {
+				t.Fatal("actual selected DNS timing was attributed to another path", selected)
+			}
+			closeDesktopTorBox(t, owner)
+			if owner.Healthy() || owner.pt.Current() {
+				t.Fatal("closed native entry retained Tor/PT authority")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorEntryRejectsWrongPrivateProofAndDNS(t *testing.T) {
+	for _, kind := range []string{"wrong-node-before-enable", "wrong-node-before-connected", "selected-dns"} {
+		t.Run(kind, func(t *testing.T) {
+			f, server := desktopTorBoxEntryRuntime(t, true, desktopTorBoxEntryFixture(t), nil)
+			owner := f.capture(t)
+			if kind == "wrong-node-before-enable" {
+				server.wrongNode.Store(true)
+			}
+			err := owner.start(f.child)
+			if kind == "wrong-node-before-enable" {
+				if err == nil || f.child.configured.Load() != 0 || server.bridgeCalls.Load() != 0 || f.child.active.Load() {
+					t.Fatal("wrong private Router enabled Tor/PT networking", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if kind == "wrong-node-before-connected" {
+				server.wrongNode.Store(true)
+			} else {
+				server.badDNS.Store(true)
+			}
+			receipt, err := owner.run(f.proverAfterDNS(t, func() bool { return server.dnsCalls.Load() > 0 }))
+			if err == nil || receipt.Healthy || receipt.EntryProof != nil || owner.Healthy() || f.socks.proofCalls.Load() != 0 {
+				t.Fatal("failed selected entry/DNS proof fabricated Connected", receipt, err)
+			}
+		})
+	}
 }

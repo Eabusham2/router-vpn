@@ -57,7 +57,7 @@ func routerVPNOpenTorFiles(directory, session, binary string, getenv func(string
 	if err != nil {
 		return nil, routerVPNTorFailure
 	}
-	capture, err := owned.captureInput("tor-capture.json", 16<<10)
+	capture, err := owned.captureInput("tor-capture.json", mobiletor.DesktopBridgeCaptureLimit)
 	if err != nil {
 		return nil, routerVPNTorFailure
 	}
@@ -169,7 +169,11 @@ func (f *routerVPNTorFiles) current() error {
 		if err != nil || !actual.Mode().IsRegular() || !os.SameFile(actual, captured.info) {
 			return routerVPNTorFailure
 		}
-		raw, err := f.read(name, 4<<20)
+		limit := int64(4 << 20)
+		if name == "tor-capture.json" {
+			limit = mobiletor.DesktopBridgeCaptureLimit
+		}
+		raw, err := f.read(name, limit)
 		if err != nil || sha256.Sum256(raw) != captured.hash {
 			return routerVPNTorFailure
 		}
