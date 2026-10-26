@@ -74,6 +74,9 @@ class State:
         self.bodies = []
         self.last_stage = "idle"
         self.response_history = []
+        self.info_pending = threading.Event()
+        self.dispatcher_release = threading.Event()
+        self.dispatcher_pulses = 0
 
     def view(self, stage="idle", complete=True, drained=True):
         self.last_stage = stage
@@ -128,6 +131,23 @@ def controller(scenario):
         def do_GET(self):
             parsed = urllib.parse.urlsplit(self.path)
             query = urllib.parse.parse_qs(parsed.query)
+            if parsed.path == "/fixture/dispatcher-pulse" and not query:
+                with state.lock:
+                    if not state.info_pending.is_set() or state.dispatcher_release.is_set():
+                        return self.reply(409, {"accepted": False})
+                    state.dispatcher_pulses += 1
+                    if state.dispatcher_pulses == 2:
+                        state.dispatcher_release.set()
+                    return self.reply(200, {"accepted": True, "pulse": state.dispatcher_pulses})
+            if parsed.path == "/api/dns/measurement" and not query:
+                # A synchronously blocked UI cannot acknowledge these events.
+                # No server lock is held while waiting for dispatcher progress.
+                state.info_pending.set()
+                if not state.dispatcher_release.wait(5):
+                    with state.lock:
+                        state.info_pending.clear()
+                        state.failures.append("dispatcher blocked behind pending HTTP response")
+                    return self.reply(409, {"error": "dispatcher did not make progress"})
             with state.lock:
                 if parsed.path == "/api/status" and not query:
                     state.status_count += 1
@@ -224,6 +244,7 @@ def controller(scenario):
     try:
         yield f"http://127.0.0.1:{server.server_address[1]}", state
     finally:
+        state.dispatcher_release.set()
         server.shutdown()
         server.server_close()
         worker.join(timeout=3)
@@ -276,6 +297,8 @@ def run_live_case(command, scenario):
             time.sleep(0.5)
         if state.failures:
             raise AssertionError(f"{scenario}: {state.failures}")
+        if state.dispatcher_pulses != 2:
+            raise AssertionError(f"{scenario}: no acknowledged dispatcher progress during held HTTP work")
         if scenario in ("success", "tcp", "tls"):
             if not state.saved or not state.selected or state.admitted != 1 or state.status_count != 2:
                 raise AssertionError(f"{scenario}: real measured Save contract was not exercised")
@@ -328,6 +351,17 @@ def main():
         if not args.unit_only:
             for scenario in ("success", "tcp", "tls", "early-close", "owner-close", "draining", "unavailable", "replacement"):
                 run_live_case(command, scenario)
+            blocked = "$Task=$State.Client.SendAsync($Request,$Cts.Token)"
+            if source.count(blocked) != 1:
+                raise AssertionError("Synchronous HTTP negative no longer targets the shipping request")
+            mutant = directory / "blocked-dispatcher.ps1"
+            mutant.write_text(source.replace(blocked, blocked + ";$null=$Task.GetAwaiter().GetResult()"), encoding="utf-8")
+            with controller("success") as (url, state):
+                run(command + ["-Source", mutant, "-Live", "-BaseUrl", url],
+                    rejection="CONTROL live capture starts exact owned request")
+                if "dispatcher blocked behind pending HTTP response" not in state.failures or state.dispatcher_pulses:
+                    raise AssertionError("Blocked UI negative did not fail at the held response")
+            print("PASS: rejected synchronous HTTP blocking the dispatcher", flush=True)
     print("Windows shipping DNS measurements, resolver staging, explicit Save and drain ownership: PASS", flush=True)
 
 

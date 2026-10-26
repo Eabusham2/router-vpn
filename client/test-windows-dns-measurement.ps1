@@ -67,6 +67,22 @@ function Staged {
 }
 
 if($Live){
+    # The loopback peer holds its initial HTTP response until two callbacks on
+    # this thread run. Count acknowledged callbacks, not incidental poll loops:
+    # WPF may process the entire fast response inside one dispatcher turn.
+    $Heartbeat=@{Count=0}
+    $Beat={
+        if($Heartbeat.Count-ge2){return}
+        $Handler=[Net.Http.HttpClientHandler]::new();$Handler.UseProxy=$false
+        $Client=[Net.Http.HttpClient]::new($Handler);$Client.Timeout=[TimeSpan]::FromSeconds(2);$Reply=$null
+        try{
+            $Reply=$Client.GetAsync($BaseUrl+'/fixture/dispatcher-pulse').GetAwaiter().GetResult()
+            if($Reply.IsSuccessStatusCode){
+                $Value=$Reply.Content.ReadAsStringAsync().GetAwaiter().GetResult()|ConvertFrom-Json
+                if($Value.accepted-eq$true-and[int]$Value.pulse-eq($Heartbeat.Count+1)){$Heartbeat.Count++}
+            }
+        }finally{if($null-ne$Reply){$Reply.Dispose()};$Client.Dispose()}
+    }
     $Visual=$env:OS-eq'Windows_NT';$Owner=$null
     if($Visual){
         Add-Type -AssemblyName PresentationFramework
@@ -80,26 +96,28 @@ if($Live){
         if($Scenario-cin@('tcp','tls')){$S.Transport=$Scenario}
         [void](New-RouterVPNDNSRequest $S 'info' '/api/dns/measurement')
     }
-    $Until=[DateTime]::UtcNow.AddSeconds(18);$Pulses=0
+    $Until=[DateTime]::UtcNow.AddSeconds(18)
     $Pump={
+        if($Visual){[Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]$Beat,[Windows.Threading.DispatcherPriority]::Background)}else{&$Beat}
         Update-RouterVPNDNSView $S
         if($Visual){[Windows.Threading.Dispatcher]::CurrentDispatcher.Invoke([Action]{},[Windows.Threading.DispatcherPriority]::Background)}
         Start-Sleep -Milliseconds 5
     }
-    while(-not$S.Request-and[DateTime]::UtcNow-lt$Until){&$Pump;$Pulses++}
+    while(-not$S.Request-and-not$S.Invalid-and[DateTime]::UtcNow-lt$Until){&$Pump}
     Check ($S.Ready-and$S.Request-cmatch'^[0-9a-f]{32}$'-and-not$S.Closed) 'live capture starts exact owned request'
+    Check ($Heartbeat.Count-eq2) 'live dispatcher acknowledged work while HTTP response was held'
     if($Scenario-cin@('early-close','owner-close','draining','unavailable','replacement')){
         if($Scenario-cin@('draining','unavailable')){while(-not$S.StartDone-and[DateTime]::UtcNow-lt$Until){&$Pump}}
         if($Scenario-ceq'replacement'){while(-not$S.Invalid-and[DateTime]::UtcNow-lt$Until){&$Pump};Check $S.Invalid 'replacement receipt was not rejected'}
         if($Visual){if($Scenario-ceq'owner-close'){$Owner.Close()}else{$S.Window.Close()}}else{[void](Request-RouterVPNDNSClose $S)}
         Check (-not$S.Closed) 'close must await an actual native drain receipt'
         if($Visual){Check $Owner.IsVisible 'owner remained visible during native cleanup'}
-        while(-not$S.Closed-and[DateTime]::UtcNow-lt$Until){&$Pump;$Pulses++}
+        while(-not$S.Closed-and[DateTime]::UtcNow-lt$Until){&$Pump}
         Check ($S.Closed-and$S.Drained-and$S.Jobs.Count-eq0) 'live close drained exact workers and HTTP tasks'
         Check ($S.Rows.Count-eq0-and$null-eq$S.Draft) 'closed cancellation retained no usable result'
         if($Visual-and$Scenario-ceq'owner-close'){Check (-not$Owner.IsVisible) 'owner closes only after native drain'}
     }else{
-        while((-not$S.Drained-or$S.Jobs.Count-ne0)-and[DateTime]::UtcNow-lt$Until){&$Pump;$Pulses++}
+        while((-not$S.Drained-or$S.Jobs.Count-ne0)-and[DateTime]::UtcNow-lt$Until){&$Pump}
         Check ($S.Stage-ceq'complete'-and$S.Rows.Count-eq12-and$S.Selected.Contains('Selected resolver:')) 'live rows keep selected policy separate'
         Check ($S.Rows[0].id-ceq'cf4b'-and$S.Rows[0].eligible) 'live fastest ignores faster selected resolver'
         if($Visual){$S.Window.FindName('Fastest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}else{[void](Select-RouterVPNDNSResult $S 'fastest')}
@@ -114,7 +132,6 @@ if($Live){
         if($Visual){Check $Owner.IsEnabled 'live results keep main Disconnect available';$S.Window.Close()}else{[void](Request-RouterVPNDNSClose $S);Update-RouterVPNDNSView $S}
         Check $S.Closed 'completed modeless view closes without reentrant Closing'
     }
-    Check ($Pulses-gt1) 'live HTTP work left dispatcher responsive'
     if($Visual-and$Owner.IsVisible){$Owner.Close()}
     Write-Host "PASS: $script:Checks real DNS loopback $Scenario checks (WPF=$Visual)";return
 }
