@@ -293,6 +293,7 @@ python3 "$ROOT/../deploy/prepare-mobile-tor.py" "$VENDOR" --go "$(command -v go)
     exit 1
   }
   gofmt -w experimental/libbox/routervpn_xray_bridge.go
+  python3 "$ROOT/../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   go_retry test ./experimental/libbox/routervpn/...
   go_retry test -race ./adapter/inbound -run TestRouterVPN -count=1
   go_retry test -race ./route -run '^TestRouterVPNStrategyInterface' -count=1 -timeout=90s

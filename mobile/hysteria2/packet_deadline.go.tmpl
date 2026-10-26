@@ -1,0 +1,31 @@
+package hysteria2
+
+import (
+	"context"
+	"net"
+	"time"
+)
+
+// One HY2 UDP session can cancel its own queue admission, never the multiplexed
+// QUIC connection. Keeping Close off this interface makes that boundary explicit.
+type routerVPNHysteriaPacketConnection interface {
+	LocalAddr() net.Addr
+	RouterVPNSendDatagram(context.Context, <-chan struct{}, []byte) error
+}
+
+func (c *udpPacketConn) routerVPNSetPacketDeadlines(t time.Time, read, write bool) error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	select {
+	case <-c.ctx.Done():
+		return net.ErrClosed
+	default:
+	}
+	if read {
+		c.readDeadline.Set(t)
+	}
+	if write {
+		c.writeDeadline.Set(t)
+	}
+	return nil
+}

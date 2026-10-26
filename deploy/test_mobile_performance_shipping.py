@@ -14,8 +14,9 @@ class Shipping(unittest.TestCase):
     def test_shared_policy_is_built_byte_exactly(self):
         with tempfile.TemporaryDirectory() as tmp:
             vendor=Path(tmp);(vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_prepare,mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
+            with mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_prepare,mock.patch.object(PREPARE.AMNEZIA,'prepare'),mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
                 PREPARE.prepare(vendor)
+                hy2_prepare.assert_called_once_with(vendor.resolve())
                 mtu_prepare.assert_called_once_with(vendor.resolve())
                 pq_prepare.assert_called_once_with(vendor.resolve())
                 strategy_prepare.assert_called_once_with(vendor.resolve())

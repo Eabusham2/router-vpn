@@ -1,0 +1,280 @@
+package quic
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net"
+	"os"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go/internal/protocol"
+	"github.com/sagernet/quic-go/internal/wire"
+)
+
+type routerVPNObservedContext struct {
+	context.Context
+	calls    atomic.Int32
+	observed chan int32
+	holdAt   int32
+	release  <-chan struct{}
+}
+
+func (c *routerVPNObservedContext) Done() <-chan struct{} {
+	n := c.calls.Add(1)
+	c.observed <- n
+	if n == c.holdAt {
+		<-c.release
+	}
+	return c.Context.Done()
+}
+
+func routerVPNWaitCall(t *testing.T, c *routerVPNObservedContext, n int32) {
+	t.Helper()
+	for {
+		select {
+		case actual := <-c.observed:
+			if actual == n {
+				return
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("datagram writer did not reach its admission barrier")
+		}
+	}
+}
+
+func routerVPNWaitDatagram(t *testing.T, done <-chan error, want error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if !errors.Is(err, want) {
+			t.Fatalf("datagram result %v, want %v", err, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("scoped datagram writer did not finish")
+	}
+}
+
+func routerVPNFullDatagrams(t *testing.T) *datagramQueue {
+	t.Helper()
+	q := newDatagramQueue(func() {}, nil)
+	for i := 0; i < maxDatagramSendQueueLen; i++ {
+		if err := q.Add(&wire.DatagramFrame{Data: []byte{byte(i)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return q
+}
+
+func routerVPNStartDatagram(t *testing.T, q *datagramQueue, ctx context.Context, deadline <-chan struct{}, data string, release func()) <-chan error {
+	t.Helper()
+	done := make(chan error, 1)
+	go func() {
+		defer close(done)
+		done <- q.routerVPNAddDatagram(ctx, deadline, &wire.DatagramFrame{Data: []byte(data)})
+	}()
+	t.Cleanup(func() {
+		release()
+		select {
+		case <-q.closed:
+		default:
+			q.CloseWithError(net.ErrClosed)
+		}
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Error("test's datagram owner did not join")
+		}
+	})
+	return done
+}
+
+func TestRouterVPNDatagramDeadlineAndSessionCancel(t *testing.T) {
+	for _, mode := range []string{"deadline", "session", "connection"} {
+		t.Run(mode, func(t *testing.T) {
+			q := routerVPNFullDatagrams(t)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			observed := &routerVPNObservedContext{Context: ctx, observed: make(chan int32, 16)}
+			deadline := make(chan struct{})
+			done := routerVPNStartDatagram(t, q, observed, deadline, "owned", cancel)
+			routerVPNWaitCall(t, observed, 3)
+			want := error(os.ErrDeadlineExceeded)
+			switch mode {
+			case "deadline":
+				close(deadline)
+			case "session":
+				cancel()
+				want = context.Canceled
+			case "connection":
+				want = errors.New("shared connection closed")
+				q.CloseWithError(want)
+			}
+			routerVPNWaitDatagram(t, done, want)
+			q.sendMx.Lock()
+			size := q.sendQueue.Len()
+			q.sendMx.Unlock()
+			if size != maxDatagramSendQueueLen {
+				t.Fatal("failed writer changed the shared queue")
+			}
+			if mode != "connection" {
+				q.Pop()
+				if err := q.routerVPNAddDatagram(context.Background(), nil, &wire.DatagramFrame{Data: []byte("other-session")}); err != nil {
+					t.Fatal("one session closed another", err)
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDatagramDeadlineAdmissionRechecksUnderLock(t *testing.T) {
+	for _, mode := range []string{"deadline", "session"} {
+		t.Run(mode, func(t *testing.T) {
+			q := newDatagramQueue(func() {}, nil)
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			release := make(chan struct{})
+			var once sync.Once
+			unblock := func() { once.Do(func() { close(release) }) }
+			observed := &routerVPNObservedContext{Context: ctx, observed: make(chan int32, 16), holdAt: 2, release: release}
+			deadline := make(chan struct{})
+			done := routerVPNStartDatagram(t, q, observed, deadline, "late", func() { cancel(); unblock() })
+			routerVPNWaitCall(t, observed, 2)
+			if q.sendMx.TryLock() {
+				q.sendMx.Unlock()
+				t.Fatal("admission check does not own the queue mutex")
+			}
+			want := error(os.ErrDeadlineExceeded)
+			if mode == "session" {
+				cancel()
+				want = context.Canceled
+			} else {
+				close(deadline)
+			}
+			unblock()
+			routerVPNWaitDatagram(t, done, want)
+			if q.Peek() != nil {
+				t.Fatal("stale session entered an empty queue")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDatagramDeadlineCancelledWakeIsForwarded(t *testing.T) {
+	q := routerVPNFullDatagrams(t)
+	badCtx, cancelBad := context.WithCancel(context.Background())
+	defer cancelBad()
+	goodCtx, cancelGood := context.WithCancel(context.Background())
+	defer cancelGood()
+	bad := &routerVPNObservedContext{Context: badCtx, observed: make(chan int32, 16)}
+	release := make(chan struct{})
+	var once sync.Once
+	unblock := func() { once.Do(func() { close(release) }) }
+	good := &routerVPNObservedContext{Context: goodCtx, observed: make(chan int32, 16), holdAt: 3, release: release}
+	badDone := routerVPNStartDatagram(t, q, bad, nil, "cancelled", cancelBad)
+	routerVPNWaitCall(t, bad, 3)
+	goodDone := routerVPNStartDatagram(t, q, good, nil, "retained", func() { cancelGood(); unblock() })
+	routerVPNWaitCall(t, good, 3)
+	// Pop under its real mutex, hold admission, and give only the first waiter
+	// its capacity notification. The second writer has already seen full.
+	func() {
+		q.sendMx.Lock()
+		defer q.sendMx.Unlock()
+		q.sendQueue.PopFront()
+		q.sent <- struct{}{}
+		routerVPNWaitCall(t, bad, 4)
+		cancelBad()
+		unblock()
+	}()
+	routerVPNWaitDatagram(t, badDone, context.Canceled)
+	routerVPNWaitDatagram(t, goodDone, nil)
+	q.sendMx.Lock()
+	size := q.sendQueue.Len()
+	q.sendMx.Unlock()
+	if size != maxDatagramSendQueueLen {
+		t.Fatal("retained writer did not use returned capacity")
+	}
+}
+
+func TestRouterVPNDatagramDeadlinePreservesFrameAndPayloadLimits(t *testing.T) {
+	c := &Conn{config: &Config{}, peerParams: &wire.TransportParameters{MaxDatagramFrameSize: 1200},
+		version: protocol.Version1, datagramQueue: newDatagramQueue(func() {}, nil)}
+	c.maxPayloadSizeEstimate.Store(100)
+	input := bytes.Repeat([]byte{9}, 64)
+	if err := c.SendDatagram(input); err != nil {
+		t.Fatal(err)
+	}
+	ordinary := c.datagramQueue.Peek()
+	c.datagramQueue.Pop()
+	if err := c.RouterVPNSendDatagram(context.Background(), nil, input); err != nil {
+		t.Fatal(err)
+	}
+	scoped := c.datagramQueue.Peek()
+	c.datagramQueue.Pop()
+	input[0] = 0
+	if !ordinary.DataLenPresent || !scoped.DataLenPresent || !bytes.Equal(ordinary.Data, scoped.Data) || scoped.Data[0] != 9 {
+		t.Fatal("scoped admission changed frame or borrowed payload memory")
+	}
+	for _, send := range []func([]byte) error{c.SendDatagram, func(p []byte) error { return c.RouterVPNSendDatagram(context.Background(), nil, p) }} {
+		var tooLarge *DatagramTooLargeError
+		if err := send(make([]byte, 101)); !errors.As(err, &tooLarge) || tooLarge.MaxDatagramPayloadSize != 100 {
+			t.Fatalf("payload bound changed: %v", err)
+		}
+	}
+	expired := make(chan struct{})
+	close(expired)
+	if err := c.RouterVPNSendDatagram(context.Background(), expired, []byte("expired")); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("already expired admission succeeded", err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if err := c.RouterVPNSendDatagram(ctx, nil, []byte("cancelled")); !errors.Is(err, context.Canceled) {
+		t.Fatal("already cancelled admission succeeded", err)
+	}
+	if c.datagramQueue.Peek() != nil {
+		t.Fatal("invalid frame entered queue")
+	}
+	c.peerParams.MaxDatagramFrameSize = 0
+	if err := c.RouterVPNSendDatagram(context.Background(), nil, []byte("unsupported")); err == nil {
+		t.Fatal("disabled datagrams were enabled")
+	}
+}
+
+func TestRouterVPNDatagramDeadlinePublicSendOwnsBlockedAdmission(t *testing.T) {
+	for _, mode := range []string{"session", "deadline"} {
+		t.Run(mode, func(t *testing.T) {
+			c := &Conn{config: &Config{}, peerParams: &wire.TransportParameters{MaxDatagramFrameSize: 1200},
+				version: protocol.Version1, datagramQueue: routerVPNFullDatagrams(t)}
+			c.maxPayloadSizeEstimate.Store(1200)
+			ctx, cancel := context.WithCancel(context.Background())
+			observed := &routerVPNObservedContext{Context: ctx, observed: make(chan int32, 16)}
+			deadline := make(chan struct{})
+			done := make(chan error, 1)
+			go func() { defer close(done); done <- c.RouterVPNSendDatagram(observed, deadline, []byte("blocked")) }()
+			t.Cleanup(func() {
+				cancel()
+				c.datagramQueue.CloseWithError(net.ErrClosed)
+				select {
+				case <-done:
+				case <-time.After(5 * time.Second):
+					t.Error("public datagram owner did not join")
+				}
+			})
+			routerVPNWaitCall(t, observed, 4)
+			want := error(os.ErrDeadlineExceeded)
+			if mode == "session" {
+				cancel()
+				want = context.Canceled
+			} else {
+				close(deadline)
+			}
+			routerVPNWaitDatagram(t, done, want)
+			if c.datagramQueue.sendQueue.Len() != maxDatagramSendQueueLen {
+				t.Fatal("failed public send changed queue")
+			}
+		})
+	}
+}

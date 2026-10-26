@@ -217,6 +217,7 @@ git -C "$VENDOR" tag -f "v$VERSION" "$COMMIT" >/dev/null
   bash "$ROOT/../../deploy/test_mobile_sip003_pinned.sh" "$VENDOR"
   bash "$ROOT/../../deploy/test_mobile_external_pinned.sh" "$VENDOR"
   python3 "$ROOT/../../deploy/test_ios_composite_multihop_pinned.py" --vendor "$VENDOR"
+  python3 "$ROOT/../../deploy/test_hysteria2_deadlines_pinned.py" "$VENDOR"
   go test ./experimental/libbox/routervpn/...
   go test -race ./adapter/inbound -run TestRouterVPN -count=1
   go test -race . ./daemon ./route -run '^TestRouterVPNStrategy' -count=1 -timeout=90s

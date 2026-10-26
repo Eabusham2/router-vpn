@@ -26,7 +26,7 @@ class NativePolicyScope(unittest.TestCase):
             # This fixture owns package copying, not vendored transport files.
             # Every native patcher has its own exact-source/executable tests.
             prepared = {}
-            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE'):
+            for hook in ('WHITENING','AMNEZIA','MTU','PERFORMANCE','WIREGUARD_BIND','OPENVPN_CLOSE','OPENVPN_REMOTE','EXTERNAL_POLICY','PQ','STRATEGY','COMPOSITE','HY2_DEADLINES'):
                 if hasattr(module,hook):
                     prepared[hook]=mocks.enter_context(mock.patch.object(getattr(module,hook),'prepare'))
             if hasattr(module,'CORE'):
@@ -38,9 +38,9 @@ class NativePolicyScope(unittest.TestCase):
             module.prepare(vendor)
             # The relay copies policy here, then applies its native runtime
             # guards in prepare_native. Mobile applies both in prepare.
-            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE'):
+            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
                 if hook in prepared:
-                    expected=[] if name=='prepare-relay-core.py' and hook=='OPENVPN_CLOSE' else [mock.call(vendor.resolve())]
+                    expected=[] if name=='prepare-relay-core.py' and hook in ('OPENVPN_CLOSE','HY2_DEADLINES') else [mock.call(vendor.resolve())]
                     self.assertEqual(prepared[hook].call_args_list,expected)
             self.assertFalse(parent.exists())
             for filename in ('config.go','config_test.go','start_layer.go','start_layer_test.go'):
@@ -55,9 +55,9 @@ class NativePolicyScope(unittest.TestCase):
                 self.assertNotIn('"router-vpn/internal/', source.read_text())
             before={str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()}
             module.prepare(vendor)
-            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE'):
+            for hook in ('OPENVPN_CLOSE','OPENVPN_REMOTE','HY2_DEADLINES'):
                 if hook in prepared:
-                    expected=[] if name=='prepare-relay-core.py' and hook=='OPENVPN_CLOSE' else [mock.call(vendor.resolve())]*2
+                    expected=[] if name=='prepare-relay-core.py' and hook in ('OPENVPN_CLOSE','HY2_DEADLINES') else [mock.call(vendor.resolve())]*2
                     self.assertEqual(prepared[hook].call_args_list,expected)
             self.assertEqual(before,{str(p.relative_to(vendor)):p.read_bytes() for p in vendor.rglob('*') if p.is_file()})
     def test_relay_native_guards_follow_verified_package_preparation(self):
@@ -71,6 +71,7 @@ class NativePolicyScope(unittest.TestCase):
                 ('checkout',module.XRAY,'checkout'),('packages',module,'prepare'),
                 ('whitening',module.WHITENING,'prepare'),('xray',module.XRAY,'prepare'),
                 ('pq',module.PQ,'prepare'),('composite',module.COMPOSITE,'prepare'),
+                ('hy2_deadlines',module.HY2_DEADLINES,'prepare'),
                 ('close_policy',module.OPENVPN_CLOSE,'prepare'),('strategy',module.STRATEGY,'prepare'),
                 ('go',module.subprocess,'run'),
             ):
@@ -81,10 +82,11 @@ class NativePolicyScope(unittest.TestCase):
                 mock.call.checkout(xray,module.XRAY.XRAY_PIN,'github.com/xtls/xray-core'),
                 mock.call.packages(vendor),
             ])
+            calls.hy2_deadlines.assert_called_once_with(vendor)
             calls.close_policy.assert_called_once_with(vendor)
             calls.strategy.assert_called_once_with(vendor,mobile=False)
             first_go=next(i for i,call in enumerate(calls.mock_calls) if call[0]=='go')
-            for guard in (mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False)):
+            for guard in (mock.call.hy2_deadlines(vendor),mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False)):
                 self.assertLess(calls.mock_calls.index(guard),first_go)
             # Reject a mismatched second checkout before copying or patching
             # either tree, including before the native close-policy guard.

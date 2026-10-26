@@ -23,8 +23,9 @@ class Shipping(unittest.TestCase):
     def assert_compiler_and_bridge_are_copied_byte_exactly(self):
         with tempfile.TemporaryDirectory() as temp:
             root=Path(temp);(root/'go.mod').write_text('module github.com/sagernet/sing-box\n')
-            with mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
+            with mock.patch.object(PREPARE.HY2_DEADLINES,'prepare') as hy2_prepare, mock.patch.object(PREPARE.PQ,'prepare') as pq_prepare, mock.patch.object(PREPARE.WHITENING,'prepare'), mock.patch.object(PREPARE.WIREGUARD_BIND,'prepare'), mock.patch.object(PREPARE.OPENVPN_CLOSE,'prepare') as openvpn_close_prepare, mock.patch.object(PREPARE.OPENVPN_REMOTE,'prepare') as openvpn_remote_prepare, mock.patch.object(PREPARE.EXTERNAL_POLICY,'prepare') as external_policy_prepare, mock.patch.object(PREPARE.AMNEZIA,'prepare'), mock.patch.object(PREPARE.PERFORMANCE,'prepare'),mock.patch.object(PREPARE.MTU,'prepare') as mtu_prepare,mock.patch.object(PREPARE.STRATEGY,'prepare') as strategy_prepare,mock.patch.object(PREPARE.COMPOSITE,'prepare') as composite_prepare:
                 PREPARE.prepare(root)
+                hy2_prepare.assert_called_once_with(root.resolve())
                 mtu_prepare.assert_called_once_with(root.resolve())
                 pq_prepare.assert_called_once_with(root.resolve())
                 strategy_prepare.assert_called_once_with(root.resolve())

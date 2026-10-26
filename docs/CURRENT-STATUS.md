@@ -63,10 +63,12 @@ not yet expand the desktop catalog. Desktop host Server substitution,
 independent packet/KEM pins, renewal and already-proved restoration now pass
 actual sealed-engine parsing and ownership tests. The required native bundle
 now also passes genuine complete-MAX TLS WG/AWG Local/Server TCP/UDP, real PQ
-rekey, exact wrong-layer rejection and restoration. QUIC still fails closed
-because its Hysteria2 packet transport does not enforce the PQ write deadline.
-That native repair, complete QUIC traffic and native controls remain before
-these exits are offered in the catalog.
+rekey, exact wrong-layer rejection and restoration. Hysteria2 now enforces
+session-owned write deadlines at actual QUIC datagram admission, including a
+locked final cancellation check and timer cleanup. The pinned normal and
+low-memory packages pass their race and defect tests. A complete engine rebuild,
+genuine QUIC MAX traffic and native controls remain before these exits are
+offered in the catalog.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2

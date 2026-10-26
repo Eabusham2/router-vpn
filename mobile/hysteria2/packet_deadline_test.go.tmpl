@@ -1,0 +1,292 @@
+package hysteria2
+
+import (
+	"bytes"
+	"context"
+	"errors"
+	"net"
+	"os"
+	"reflect"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/quic-go"
+	"github.com/sagernet/sing-quic/hysteria2/internal/protocol"
+	"github.com/sagernet/sing/common/buf"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/common/pipe"
+)
+
+type routerVPNPacketDeadlinePeer struct {
+	send func(context.Context, <-chan struct{}, []byte) error
+}
+
+func (*routerVPNPacketDeadlinePeer) LocalAddr() net.Addr {
+	return &net.UDPAddr{IP: net.IPv4(127, 0, 0, 1), Port: 443}
+}
+func (p *routerVPNPacketDeadlinePeer) RouterVPNSendDatagram(c context.Context, d <-chan struct{}, b []byte) error {
+	return p.send(c, d, b)
+}
+
+func routerVPNPacketDone(t *testing.T, done <-chan error, want error) {
+	t.Helper()
+	select {
+	case err := <-done:
+		if !errors.Is(err, want) {
+			t.Fatalf("packet write %v, want %v", err, want)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("owned packet write did not stop")
+	}
+}
+func routerVPNPacketEntered(t *testing.T, entered <-chan struct{}) {
+	t.Helper()
+	select {
+	case <-entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("packet did not enter real scoped send")
+	}
+}
+func routerVPNDeadlineHasTimer(d *pipe.Deadline) bool {
+	return !reflect.ValueOf(d).Elem().FieldByName("timer").IsNil()
+}
+
+func TestRouterVPNHysteriaDeadlineBlockedWriteAndSessionIsolation(t *testing.T) {
+	for _, mode := range []string{"deadline", "close", "parent"} {
+		t.Run(mode, func(t *testing.T) {
+			entered := make(chan struct{})
+			stop := make(chan struct{})
+			defer close(stop)
+			var once sync.Once
+			peer := &routerVPNPacketDeadlinePeer{send: func(ctx context.Context, deadline <-chan struct{}, p []byte) error {
+				once.Do(func() { close(entered) })
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-deadline:
+					return os.ErrDeadlineExceeded
+				case <-stop:
+					return context.Canceled
+				}
+			}}
+			parent, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			c := newUDPPacketConn(parent, peer, func() {})
+			defer c.Close()
+			if err := c.SetWriteDeadline(time.Now().Add(time.Hour)); err != nil {
+				t.Fatal(err)
+			}
+			done := make(chan error, 1)
+			go func() {
+				_, err := c.WriteTo([]byte("owned"), &net.UDPAddr{IP: net.IPv4(10, 0, 0, 1), Port: 53})
+				done <- err
+			}()
+			routerVPNPacketEntered(t, entered)
+			want := error(os.ErrDeadlineExceeded)
+			switch mode {
+			case "deadline":
+				if err := c.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+					t.Fatal(err)
+				}
+			case "close":
+				c.Close()
+				want = net.ErrClosed
+			case "parent":
+				cancel()
+				want = net.ErrClosed
+			}
+			routerVPNPacketDone(t, done, want)
+			// The interface cannot close shared QUIC. A separate live session still
+			// reaches that same peer and owns independent context and deadlines.
+			peer.send = func(ctx context.Context, deadline <-chan struct{}, p []byte) error {
+				select {
+				case <-ctx.Done():
+					return ctx.Err()
+				case <-deadline:
+					return os.ErrDeadlineExceeded
+				default:
+					return nil
+				}
+			}
+			other := newUDPPacketConn(context.Background(), peer, func() {})
+			defer other.Close()
+			if _, err := other.WriteTo([]byte("other"), &net.UDPAddr{IP: net.IPv4(10, 0, 0, 2), Port: 53}); err != nil {
+				t.Fatal("cancelled session retired shared peer", err)
+			}
+		})
+	}
+}
+
+func TestRouterVPNHysteriaDeadlineExtensionAndClear(t *testing.T) {
+	entered := make(chan struct{})
+	stop := make(chan struct{})
+	defer close(stop)
+	var captured <-chan struct{}
+	peer := &routerVPNPacketDeadlinePeer{send: func(ctx context.Context, deadline <-chan struct{}, p []byte) error {
+		captured = deadline
+		close(entered)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return os.ErrDeadlineExceeded
+		case <-stop:
+			return context.Canceled
+		}
+	}}
+	c := newUDPPacketConn(context.Background(), peer, func() {})
+	defer c.Close()
+	if err := c.SetWriteDeadline(time.Now().Add(time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { _, err := c.WriteTo([]byte("pending"), &net.UDPAddr{Port: 1}); done <- err }()
+	routerVPNPacketEntered(t, entered)
+	if err := c.SetWriteDeadline(time.Now().Add(2 * time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if c.writeDeadline.Wait() != captured {
+		t.Fatal("extension orphaned the pending writer")
+	}
+	if err := c.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	if c.writeDeadline.Wait() != captured || routerVPNDeadlineHasTimer(&c.writeDeadline) {
+		t.Fatal("cleared deadline retained a timer or orphaned writer")
+	}
+	select {
+	case <-captured:
+		t.Fatal("extended/cleared deadline cancelled a live writer")
+	default:
+	}
+	c.Close()
+	routerVPNPacketDone(t, done, net.ErrClosed)
+}
+
+func TestRouterVPNHysteriaDeadlineFragmentCancellationAndFraming(t *testing.T) {
+	for _, writePacket := range []bool{false, true} {
+		for _, cancelFragment := range []bool{false, true} {
+			t.Run(map[bool]string{false: "WriteTo", true: "WritePacket"}[writePacket]+map[bool]string{false: "/complete", true: "/cancel"}[cancelFragment], func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				var frames [][]byte
+				calls := 0
+				peer := &routerVPNPacketDeadlinePeer{send: func(owned context.Context, deadline <-chan struct{}, p []byte) error {
+					calls++
+					if cancelFragment && calls == 2 {
+						cancel()
+					}
+					select {
+					case <-owned.Done():
+						return owned.Err()
+					case <-deadline:
+						return os.ErrDeadlineExceeded
+					default:
+					}
+					frames = append(frames, append([]byte(nil), p...))
+					return nil
+				}}
+				c := newUDPPacketConn(ctx, peer, func() {})
+				defer c.Close()
+				c.sessionID = 17
+				c.udpMTU = 300
+				input := bytes.Repeat([]byte{0x7c}, 2000)
+				destination := M.ParseSocksaddr("10.88.0.2:8388")
+				var err error
+				if writePacket {
+					err = c.WritePacket(buf.As(input), destination)
+				} else {
+					_, err = c.WriteTo(input, destination.UDPAddr())
+				}
+				if cancelFragment {
+					if !errors.Is(err, net.ErrClosed) || calls != 2 || len(frames) != 1 {
+						t.Fatalf("cancelled fragments kept sending: calls=%d frames=%d error=%v", calls, len(frames), err)
+					}
+					return
+				}
+				if err != nil || len(frames) < 2 {
+					t.Fatal("real fragmentation did not execute", err)
+				}
+				var payload []byte
+				for index, frame := range frames {
+					message := allocMessage()
+					if err := decodeUDPMessage(message, frame); err != nil {
+						t.Fatal(err)
+					}
+					if message.sessionID != 17 || int(message.fragmentID) != index || int(message.fragmentTotal) != len(frames) || message.destination != destination.String() || len(frame) > c.udpMTU {
+						t.Fatal("scoped send changed packet framing")
+					}
+					payload = append(payload, message.data.Bytes()...)
+					message.releaseMessage()
+				}
+				if !bytes.Equal(payload, input) {
+					t.Fatal("fragmented payload changed")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNHysteriaDeadlineRejectsExpiredAndOversizeWrites(t *testing.T) {
+	var calls atomic.Int32
+	peer := &routerVPNPacketDeadlinePeer{send: func(ctx context.Context, deadline <-chan struct{}, p []byte) error {
+		calls.Add(1)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return os.ErrDeadlineExceeded
+		default:
+			return nil
+		}
+	}}
+	c := newUDPPacketConn(context.Background(), peer, func() {})
+	defer c.Close()
+	if err := c.SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.WriteTo([]byte("expired"), &net.UDPAddr{Port: 1}); !errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatal("expired deadline accepted", err)
+	}
+	if err := c.SetWriteDeadline(time.Time{}); err != nil {
+		t.Fatal(err)
+	}
+	before := calls.Load()
+	var tooLarge *quic.DatagramTooLargeError
+	if _, err := c.WriteTo(make([]byte, protocol.MaxUDPSize+1), &net.UDPAddr{Port: 1}); !errors.As(err, &tooLarge) || tooLarge.MaxDatagramPayloadSize != protocol.MaxUDPSize {
+		t.Fatal("packet size guard changed", err)
+	}
+	if calls.Load() != before {
+		t.Fatal("oversize packet reached transport")
+	}
+}
+
+func TestRouterVPNHysteriaDeadlineCloseRetiresBothTimers(t *testing.T) {
+	peer := &routerVPNPacketDeadlinePeer{send: func(context.Context, <-chan struct{}, []byte) error { return nil }}
+	for i := 0; i < 64; i++ {
+		c := newUDPPacketConn(context.Background(), peer, func() {})
+		if err := c.SetDeadline(time.Now().Add(time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		if !routerVPNDeadlineHasTimer(&c.readDeadline) || !routerVPNDeadlineHasTimer(&c.writeDeadline) {
+			t.Fatal("deadline setters did not create timers")
+		}
+		var group sync.WaitGroup
+		for _, set := range []func(time.Time) error{c.SetDeadline, c.SetReadDeadline, c.SetWriteDeadline} {
+			group.Add(1)
+			go func(set func(time.Time) error) { defer group.Done(); _ = set(time.Now().Add(2 * time.Hour)) }(set)
+		}
+		c.Close()
+		group.Wait()
+		for _, set := range []func(time.Time) error{c.SetDeadline, c.SetReadDeadline, c.SetWriteDeadline} {
+			if err := set(time.Now().Add(time.Hour)); !errors.Is(err, net.ErrClosed) {
+				t.Fatal("closed session admitted a new deadline", err)
+			}
+		}
+		if routerVPNDeadlineHasTimer(&c.readDeadline) || routerVPNDeadlineHasTimer(&c.writeDeadline) {
+			t.Fatal("closed session retained or resurrected a deadline timer")
+		}
+	}
+}

@@ -40,13 +40,16 @@ _openvpn_remote_spec.loader.exec_module(OPENVPN_REMOTE)
 _pq_spec = importlib.util.spec_from_file_location('routervpn_pq', ROOT/'deploy/prepare-mobile-pq.py')
 PQ = importlib.util.module_from_spec(_pq_spec)
 _pq_spec.loader.exec_module(PQ)
+_hy2_spec = importlib.util.spec_from_file_location('routervpn_hy2_deadlines', ROOT/'deploy/prepare-hysteria2-deadlines.py')
+HY2_DEADLINES = importlib.util.module_from_spec(_hy2_spec)
+_hy2_spec.loader.exec_module(HY2_DEADLINES)
 def inputs():
     paths = [ROOT/'deploy/test_ios_xray_exits.py', ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMultihopGraph.swift', ROOT/'deploy/testfixtures/xray-entry/main.go', ROOT/'deploy/test_ios_multihop_graph.py', ROOT/'mobile/routervpn_hop_measurement.go.tmpl', ROOT/'mobile/routervpn_multihop_bridge.go.tmpl', ROOT/'mobile/routervpn_external_policy_bridge.go.tmpl', ROOT/'mobile/routervpn_multihop_native_test.go.tmpl', ROOT/'mobile/routervpn_sip003_bridge.go.tmpl', ROOT/'mobile/sip003/traffic_test.go.tmpl']
     paths.append(ROOT/'mobile/routervpn_external_measurement_bridge.go.tmpl')
     paths.append(ROOT/'mobile/routervpn_dns_measurement.go.tmpl')
     for package in PACKAGES:
         paths += sorted((ROOT/'internal'/package).glob('*.go'))
-    return paths + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
+    return paths + HY2_DEADLINES.inputs() + PQ.inputs() + WIREGUARD_BIND.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + WHITENING.inputs() + AMNEZIA.inputs() + PERFORMANCE.inputs() + MTU.inputs() + STRATEGY.inputs() + EXTERNAL_POLICY.inputs() + COMPOSITE.inputs() + [Path(__file__).resolve()]
 
 def digest():
     h=hashlib.sha256()
@@ -58,6 +61,7 @@ def prepare(vendor):
     vendor=vendor.resolve();module=vendor/'go.mod'
     if not module.is_file() or not module.read_text().startswith('module github.com/sagernet/sing-box\n'):
         raise ValueError('expected the verified disposable sing-box checkout')
+    HY2_DEADLINES.prepare(vendor)
     WHITENING.prepare(vendor)
     root=vendor/'experimental/libbox'
     for package in PACKAGES:

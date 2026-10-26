@@ -469,7 +469,7 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
         binary = stage/binary_name(target)
         stage_cronet(source, stage, target, env)
         host = ('darwin' if platform.system() == 'Darwin' else platform.system().lower())+'/'+{
-            'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64'}.get(platform.machine(), '')
+            'x86_64': 'amd64', 'AMD64': 'amd64', 'aarch64': 'arm64', 'arm64': 'arm64', 'ARM64': 'arm64'}.get(platform.machine(), '')
         if target == host:
             # These execute the actual command owner and Box proof factory.
             # Run before installing the executable-only Cronet loader, whose
@@ -477,6 +477,8 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
             # The pinned Go toolchain supports race on all shipped native
             # desktop hosts except Windows ARM64 (internal/platform/supported.go).
             race = [] if target == 'windows/arm64' else ['-race']
+            run([sys.executable, ROOT/'deploy/test_hysteria2_deadlines_pinned.py', source],
+                env=env, timeout=400)
             run(['go', 'test', *race, '-mod=readonly', '-tags='+','.join(tags(target)),
                  '-ldflags=-checklinkname=0', './protocol/wireguard', '-run', '^TestRouterVPNWireGuard',
                  '-count=1', '-timeout=60s'], cwd=source, env=env, timeout=120)

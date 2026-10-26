@@ -1,0 +1,110 @@
+package quic
+
+import (
+	"context"
+	"errors"
+	"net"
+	"os"
+
+	"github.com/sagernet/quic-go/internal/protocol"
+	"github.com/sagernet/quic-go/internal/wire"
+)
+
+// RouterVPNSendDatagram admits one HY2 session's datagram without giving that
+// session ownership of the shared QUIC connection. The frame and size checks
+// are identical to the pinned SendDatagram; ordinary callers stay unchanged.
+// deadline is the current session-owned pipe.Deadline channel. Updating an
+// unexpired deadline changes that channel's timer, including while Add blocks.
+func (c *Conn) RouterVPNSendDatagram(ctx context.Context, deadline <-chan struct{}, p []byte) error {
+	if ctx == nil {
+		return errors.New("missing datagram session context")
+	}
+	if err := c.datagramQueue.routerVPNDatagramError(ctx, deadline); err != nil {
+		return err
+	}
+	if !c.supportsDatagrams() {
+		return errors.New("datagram support disabled")
+	}
+	f := &wire.DatagramFrame{DataLenPresent: true}
+	maxDataLen := min(
+		f.MaxDataLen(c.peerMaxDatagramFrameSize(), c.version),
+		protocol.ByteCount(c.maxPayloadSizeEstimate.Load()),
+	)
+	if protocol.ByteCount(len(p)) > maxDataLen {
+		return &DatagramTooLargeError{MaxDatagramPayloadSize: int64(maxDataLen)}
+	}
+	f.Data = append([]byte(nil), p...)
+	return c.datagramQueue.routerVPNAddDatagram(ctx, deadline, f)
+}
+
+func (h *datagramQueue) routerVPNDatagramError(ctx context.Context, deadline <-chan struct{}) error {
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	default:
+	}
+	select {
+	case <-h.closed:
+		if h.closeErr != nil {
+			return h.closeErr
+		}
+		return net.ErrClosed
+	default:
+	}
+	select {
+	case <-deadline:
+		return os.ErrDeadlineExceeded
+	default:
+		return nil
+	}
+}
+
+func (h *datagramQueue) routerVPNAddDatagram(ctx context.Context, deadline <-chan struct{}, f *wire.DatagramFrame) (err error) {
+	defer func() {
+		if err == nil {
+			return
+		}
+		// A cancelled writer might have consumed Pop's only wakeup before
+		// reacquiring sendMx. Return available capacity to another waiter.
+		h.sendMx.Lock()
+		if h.sendQueue.Len() < maxDatagramSendQueueLen {
+			select {
+			case h.sent <- struct{}{}:
+			default:
+			}
+		}
+		h.sendMx.Unlock()
+	}()
+	for {
+		if err = h.routerVPNDatagramError(ctx, deadline); err != nil {
+			return err
+		}
+		h.sendMx.Lock()
+		// Cancellation/deadline can arrive while acquiring the shared queue.
+		// Recheck at the actual admission boundary, before any frame is added.
+		if err = h.routerVPNDatagramError(ctx, deadline); err != nil {
+			h.sendMx.Unlock()
+			return err
+		}
+		if h.sendQueue.Len() < maxDatagramSendQueueLen {
+			h.sendQueue.PushBack(f)
+			h.sendMx.Unlock()
+			h.hasData()
+			return nil
+		}
+		select {
+		case <-h.sent:
+		default:
+		}
+		h.sendMx.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-deadline:
+			return os.ErrDeadlineExceeded
+		case <-h.closed:
+			return h.routerVPNDatagramError(ctx, deadline)
+		case <-h.sent:
+		}
+	}
+}
