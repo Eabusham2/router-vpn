@@ -29,9 +29,14 @@ func asyncMeasurementPathContext(parent context.Context, a *app, p common.Router
 	if profiles[p.ID] != token {
 		return nil, nil, nil, errors.New("captured profile changed before live measurement")
 	}
+	tor, err := captureDesktopTorMeasurementBinding(a, st)
+	if err != nil {
+		return nil, nil, nil, err
+	}
 	binding := &asyncMeasurementAdoption{
 		owner: a, session: session, stateToken: mtuStateSnapshotToken(st), profiles: profiles,
 		multihop: st.Mode == "multihop", graph: graph, generation: homeExitProofs.generation(a),
+		tor: tor,
 	}
 	// The observer and terminal persistence use the exact same immutable
 	// binding. Stop cancels HTTP only; it never stops or replaces the VPN.

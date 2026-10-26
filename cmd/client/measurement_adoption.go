@@ -23,6 +23,7 @@ type asyncMeasurementAdoption struct {
 	multihop    bool
 	graph       activeMultihopGraph
 	generation  uint64
+	tor         *desktopTorMeasurementBinding
 }
 
 // speedLabPathContext runs validate synchronously before starting its observer.
@@ -83,6 +84,11 @@ func (b *asyncMeasurementAdoption) validateLocked(current *connectionSession) er
 		}
 		if !sameActiveMultihopGraph(graph, b.graph) {
 			return errors.New("multihop graph changed before live measurement adoption")
+		}
+	}
+	if b.tor != nil {
+		if err := b.tor.currentLocked(a); err != nil {
+			return err
 		}
 	}
 	return validateMeasurementProfilesLocked(a, b.profiles)

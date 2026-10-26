@@ -22,7 +22,7 @@ func proveExternalHomeDNS(ctx context.Context, a *app, s observedConnection, run
 		return fail(errors.New("selected Home DNS proof has no live context"))
 	}
 	launch := desktopExternalMTULaunch(a)
-	if launch == nil || launch.external.direct || launch.mode != runtimeID || !s.Connected || s.Phase != "connected" {
+	if launch == nil || launch.external == nil || launch.external.direct || launch.mode != runtimeID || !s.Connected || s.Phase != "connected" {
 		return fail(errors.New("selected Home DNS has no captured native entry path"))
 	}
 	owner := launch.external

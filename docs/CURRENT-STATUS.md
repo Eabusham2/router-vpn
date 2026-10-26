@@ -35,6 +35,11 @@ the native compiler independently validates the complete graph. This is the
 protection subset: public Connect and Speed Lab predecessor wiring are still
 pending reconstruction, and physical/public-circuit acceptance is separate.
 
+Tor selected-DNS proof now checks the exact native receipt and configuration,
+including the resolver transport and captured entry/exit detour. Retained DNS
+and measurement results bind the original entry assets, native owner, session
+and network. Receipt validation supplies no fabricated DNS query timing.
+
 The shared node compiler can now attach a complete MAX exit without bypassing
 its PQ, SS2022, outer transport or optional Start Layer. Public packet/PQ
 identities require the whole validated chain. Inner interface capacity and

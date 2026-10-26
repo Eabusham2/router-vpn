@@ -266,6 +266,10 @@ func verifySingBoxDNSConfig(path string, selected dnsSelection) error {
 }
 
 func verifySingBoxDNSConfigBytes(b []byte, selected dnsSelection) error {
+	return verifySingBoxDNSConfigBytesForTag(b, selected, "selected-dns")
+}
+
+func verifySingBoxDNSConfigBytesForTag(b []byte, selected dnsSelection, selectedTag string) error {
 	var cfg map[string]any
 	if err := json.Unmarshal(b, &cfg); err != nil {
 		return fmt.Errorf("invalid active sing-box config: %w", err)
@@ -274,15 +278,15 @@ func verifySingBoxDNSConfigBytes(b []byte, selected dnsSelection) error {
 	if !ok {
 		return errors.New("active sing-box config has no DNS policy")
 	}
-	if final, _ := dns["final"].(string); final != "selected-dns" {
-		return fmt.Errorf("active sing-box DNS final is %q, not selected-dns", final)
+	if final, _ := dns["final"].(string); selectedTag == "" || final != selectedTag {
+		return fmt.Errorf("active sing-box DNS final is %q, not %q", final, selectedTag)
 	}
 	servers, _ := dns["servers"].([]any)
 	matched := false
 	owners := 0
 	for _, raw := range servers {
 		server, _ := raw.(map[string]any)
-		if server == nil || server["tag"] != "selected-dns" {
+		if server == nil || server["tag"] != selectedTag {
 			continue
 		}
 		owners++
@@ -357,6 +361,9 @@ func proveSelectedDNSContext(parent context.Context, a *app, s observedConnectio
 }
 
 func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnection, runtimeID string, lookup func(context.Context, string) ([]string, error)) dnsProofState {
+	if torDNSObservation(s, runtimeID) {
+		return proveDesktopTorDNS(parent, a, s, runtimeID)
+	}
 	if externalHomeDNSObservation(s) {
 		return proveExternalHomeDNS(parent, a, s, runtimeID)
 	}

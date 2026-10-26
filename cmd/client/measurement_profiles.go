@@ -20,6 +20,14 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 	if st.Mode == "external-node" {
 		if value, found := desktopNodeOwners.Load(a); found {
 			launch, typed := value.(*desktopNodeLaunch)
+			if st.RuntimeMode == "external-tor-bridge" {
+				if !typed || launch == nil || launch.tor == nil || launch.external != nil || launch.command != a.cmd || launch.mode != st.RuntimeMode || launch.tor.expected.NodeID != st.RouterID || launch.tor.entryCurrentLocked(a) != nil {
+					return nil, errors.New("measurement Tor native owner changed before capture")
+				}
+				if launch.tor.expected.EntryID != "" {
+					ids = []string{launch.tor.expected.EntryID, st.RouterID}
+				}
+			}
 			if typed && launch != nil && launch.external != nil {
 				if launch.command != a.cmd || launch.mode != st.RuntimeMode || launch.external.expected.ExitID != st.RouterID {
 					return nil, errors.New("measurement external native owner changed before capture")
@@ -28,6 +36,8 @@ func captureMeasurementProfiles(a *app, st state, graph activeMultihopGraph, sup
 					ids = []string{launch.external.expected.EntryID, st.RouterID}
 				}
 			}
+		} else if st.RuntimeMode == "external-tor-bridge" {
+			return nil, errors.New("measurement Tor native owner is missing")
 		}
 	}
 	tokens := make(map[string]string, len(ids))
