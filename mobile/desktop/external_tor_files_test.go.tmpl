@@ -280,7 +280,7 @@ func TestRouterVPNDesktopTorDataCleanupRetainsCapturedDirectoryAndRefusesReplace
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer tree.close()
+			defer func() { tree.close() }()
 			switch kind {
 			case "file-replacement":
 				path := filepath.Join(data, "keys", "state")
@@ -299,9 +299,43 @@ func TestRouterVPNDesktopTorDataCleanupRetainsCapturedDirectoryAndRefusesReplace
 				}
 			case "root-replacement":
 				if err := os.Rename(data, data+".old"); err != nil {
-					t.Fatal(err)
+					if runtime.GOOS != "windows" || !os.IsPermission(err) {
+						t.Fatal(err)
+					}
+					// Windows can prohibit replacing a retained directory. Verify
+					// that protection, then release only fixture-owned handles to
+					// exercise the independent captured-identity rejection below.
+					if err := owned.current(); err != nil {
+						t.Fatal("denied replacement changed the captured owner", err)
+					}
+					if _, err := os.Lstat(data + ".old"); !os.IsNotExist(err) {
+						t.Fatal("denied replacement published another directory", err)
+					}
+					tree.close()
+					if err := owned.data.Close(); err != nil {
+						t.Fatal(err)
+					}
+					if err := os.Rename(data, data+".old"); err != nil {
+						t.Fatal(err)
+					}
+					owned.data, err = os.OpenRoot(data + ".old")
+					if err != nil {
+						t.Fatal(err)
+					}
+					info, err := owned.data.Stat(".")
+					if err != nil || !os.SameFile(info, owned.dataInfo) {
+						t.Fatal("fixture failed to retain the original data owner", err)
+					}
+					budget = routerVPNTorDataBudget{files: 4096, bytes: 512 << 20}
+					tree, err = routerVPNTorCaptureData(owned.data, &budget, 0)
+					if err != nil {
+						t.Fatal(err)
+					}
 				}
 				if err := os.Mkdir(data, 0700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(data, "replacement"), []byte("unowned state"), 0600); err != nil {
 					t.Fatal(err)
 				}
 			case "link":
@@ -330,6 +364,16 @@ func TestRouterVPNDesktopTorDataCleanupRetainsCapturedDirectoryAndRefusesReplace
 			if kind != "clean" {
 				if err == nil {
 					t.Fatal("cleanup removed a replacement owner")
+				}
+				if kind == "root-replacement" {
+					for path, expected := range map[string]string{
+						filepath.Join(data+".old", "keys", "state"): "private native state",
+						filepath.Join(data, "replacement"):          "unowned state",
+					} {
+						if raw, err := os.ReadFile(path); err != nil || string(raw) != expected {
+							t.Fatal("refused cleanup changed captured or replacement state", path, err)
+						}
+					}
 				}
 				return
 			}

@@ -361,6 +361,11 @@ class WindowsDependencyDelivery(unittest.TestCase):
                 pq = root/'verified pq'
                 dependencies = ['-loqs', '-ladvapi32', '-lunwind', '-lwindows', '-lkernel32']
                 builds = []
+                preparations = []
+
+                def prepare_external(directory, *, env):
+                    # Capture before build() adds the final verified linker flags.
+                    preparations.append((directory, env.copy()))
 
                 def run(command, *, env=None, **kwargs):
                     args = [str(value) for value in command]
@@ -391,11 +396,13 @@ class WindowsDependencyDelivery(unittest.TestCase):
                      patch.object(N.PQ, 'verify', return_value={'native_static_libs': dependencies}), \
                      patch.object(N.POLICY, 'prepare_native'), patch.object(N.PERFORMANCE, 'prepare'), \
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
-                     patch.object(N.EXTERNAL, 'prepare') as external_prepare, \
+                     patch.object(N.EXTERNAL, 'prepare', side_effect=prepare_external) as external_prepare, \
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet', side_effect=cronet):
+                    preparation_environment = N.environment(target, compiler=True)
                     with self.assertRaises(CompilerBoundary):
                         N.build(target, root/'output', source=source, xray=root/'xray', pq=pq)
-                    external_prepare.assert_called_once_with(source.resolve())
+                    external_prepare.assert_called_once_with(source.resolve(), env=builds[0][1])
+                    self.assertEqual(preparations, [(source.resolve(), preparation_environment)])
                 self.assertEqual(len(builds), 1)
                 self.assertEqual(shlex.split(builds[0][1]['CGO_LDFLAGS']), ['-static', '-L'+str(pq), *dependencies])
 
