@@ -7,6 +7,15 @@ completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
 
+The PQ controller now separates its five-second connection admission bound
+from the lifetime of an admitted native socket. Successful Xray/Hysteria/gVisor
+packet dials can retain their owner context until controller shutdown; late or
+cancelled returns still close before protocol or key adoption. Explicit
+monotonic timing protects the bound even if a timer callback is delayed. The
+existing repeated race gate, deadline enforcement, packet byte-count checks,
+and authenticated readiness are preserved. Current packaged native traffic
+and physical acceptance remain separate from these controller tests.
+
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and

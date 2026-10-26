@@ -108,9 +108,14 @@ func(c *Controller)run(){
  watcherDone:=make(chan struct{})
  stopWatcher:=context.AfterFunc(c.ctx,func(){defer close(watcherDone);c.mu.Lock();conn:=c.conn;c.mu.Unlock();if conn!=nil{_ = conn.Close()}})
  defer func(){if !stopWatcher(){<-watcherDone}}()
- dialContext,cancelDial:=context.WithTimeout(c.ctx,5*time.Second)
- conn,err:=c.dial(dialContext);cancelDial()
- if err!=nil||conn==nil{
+ // Native packet transports retain this context as their connection owner.
+ // Bound admission independently, then keep the admitted owner until run exits.
+ dialContext,cancelDial:=context.WithCancel(c.ctx);defer cancelDial()
+ deadline:=time.Now().Add(5*time.Second)
+ admission:=time.AfterFunc(5*time.Second,cancelDial)
+ conn,err:=c.dial(dialContext)
+ admitted:=admission.Stop()&&time.Now().Before(deadline)
+ if !admitted||dialContext.Err()!=nil||err!=nil||conn==nil{
   if conn!=nil{_ = conn.Close()};failure=errors.New("protected PQ peer transport could not open");return
  }
  c.mu.Lock()
