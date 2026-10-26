@@ -49,7 +49,10 @@ def main():
         raise SystemExit("Refusing a linked reference executable destination")
     output.parent.mkdir(parents=True, exist_ok=True)
     environment = os.environ.copy()
-    environment.update(GOWORK="off", GOTOOLCHAIN="local", GOFLAGS="")
+    # The enclosing native builder selects this exact toolchain even when an
+    # older Go launcher is first on PATH. Keep that selection for the separate
+    # reference build; `local` would silently return to the ambient compiler.
+    environment.update(GOWORK="off", GOTOOLCHAIN="go1.26.3", GOFLAGS="")
     if subprocess.check_output([args.go, "env", "GOVERSION"], env=environment, text=True).strip() != "go1.26.3":
         raise SystemExit("AWG reference requires the pinned native Go compiler")
     dependency = json.loads(subprocess.check_output(
