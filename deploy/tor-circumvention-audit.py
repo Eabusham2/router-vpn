@@ -76,6 +76,77 @@ def go_contract_block(tokens: tuple[str, ...], marker: str) -> tuple[str, ...]:
     raise ValueError(f"unterminated executable block after {marker!r}")
 
 
+def need_desktop_tor_choice() -> None:
+    """Follow the admitted durable save instead of a retired inline call."""
+    try:
+        route = go_contract_block(go_contract_tokens(read("cmd/client/tor_bridge_routes.go")),
+                                  "func (a *app) torBridgeConnectSelectionOwned(")
+        save = go_contract_at(route, "saved, saveErr := a.commitDesktopTorChoice(selection, prelaunch.workspace, q, startup, operation, selected, actualIP)")
+        rejected = go_contract_block(route, "if saveErr != nil")
+        for marker in ("a.torBridgeStopFailure(cmd, saveErr.Error())", "http.Error(w, message, status)", "return"):
+            go_contract_at(rejected, marker)
+        adopted = go_contract_at(route, "retainedProof, err = saved.adopt(a)")
+        monitored = go_contract_at(route, "a.monitorDesktopTorRuntime(prelaunch.workspace)")
+        if not (save < go_contract_at(route, "if saveErr != nil") < adopted < monitored):
+            raise ValueError("Tor route did not save and admit its captured choice before monitoring")
+        failed_adoption = go_contract_block(route[adopted:monitored], "if err != nil")
+        for marker in ("a.torBridgeStopFailure(cmd,", "http.Error(w, message, status)", "return"):
+            go_contract_at(failed_adoption, marker)
+
+        source = go_contract_tokens(read("cmd/client/desktop_tor_persistence.go"))
+        commit = go_contract_block(source, "func (a *app) commitDesktopTorChoice(")
+        write = go_contract_at(commit, "if err := a.persistProfilesLocked(); err != nil")
+        before_write = commit[:write]
+        for marker in ("proof, err := a.readDesktopTorProof(launch)", "if proof.Proof.IP != actualIP",
+                       "if err := selection.current(a); err != nil"):
+            go_contract_at(before_write, marker)
+        go_contract_at(go_contract_block(before_write, "if err := selection.current(a); err != nil"), "return nil, err")
+        admission = "if desktopTorOperationCurrentLocked(a, operation, selected) != nil || !present || registered != launch || !desktopTorChoiceRuntimeCurrentLocked(a, launch) || !found || launch.tor.committedChoice.Load() != nil || selection.currentLocked(a) != nil || a.validateExternalProfileExpectedProfilesLocked(q, selection.profile) != nil || startup != nil && startup.currentLocked(a) != nil"
+        go_contract_at(go_contract_block(before_write, admission), "return nil, errors.New(")
+        source_capture = go_contract_at(before_write, "source, err := startupExternalSourceToken(a, entry, mode)")
+        source_guard = "if err != nil || selection.predecessor != nil && source != selection.predecessor.assetsSHA256"
+        go_contract_at(go_contract_block(before_write, source_guard), "return nil, errors.New(")
+        final_marker = "if err := desktopTorOperationCurrentLocked(a, operation, selected); err != nil"
+        final_check = go_contract_at(before_write, final_marker)
+        go_contract_at(go_contract_block(before_write, final_marker), "return nil, err")
+        rollback = go_contract_block(commit, "if err := a.persistProfilesLocked(); err != nil")
+        restore = go_contract_at(rollback, "a.rollbackProfilesLocked(previous)")
+        failed_save = go_contract_at(rollback, 'return nil, fmt.Errorf("%w: %v", errDesktopTorChoiceSave, err)')
+        choice = go_contract_at(commit, "choice := &desktopTorCommittedChoice{profileToken: desktopTorSourceIdentityToken(updated), nodeID: updated.ID, sessionID: launch.tor.expected.SessionID, sourceSHA256: launch.tor.expected.SourceSHA256}")
+        bound = go_contract_at(commit, "launch.tor.committedChoice.Store(choice)")
+        if not source_capture < go_contract_at(before_write, source_guard) < final_check < write < choice < bound or restore >= failed_save:
+            raise ValueError("Tor committed-source binding preceded checked durable persistence")
+
+        token = go_contract_block(source, "func (owner *desktopTorRuntime) sourceIdentityToken(")
+        committed = go_contract_block(token, "if choice := owner.committedChoice.Load(); choice != nil")
+        mismatch = go_contract_block(committed, "if choice.nodeID != owner.expected.NodeID || choice.sessionID != owner.expected.SessionID || choice.sourceSHA256 != owner.expected.SourceSHA256")
+        go_contract_at(mismatch, 'return ""')
+        if go_contract_at(committed, "if choice.nodeID") >= go_contract_at(committed, "return choice.profileToken"):
+            raise ValueError("Tor committed-source token was not bound to its captured native session")
+
+        adopt = go_contract_block(source, "func (saved *desktopTorChoiceAdoption) adopt(")
+        startup = go_contract_at(adopt, "if err := a.saveStartupSelection(saved.startup); err != nil")
+        before_startup = adopt[:startup]
+        go_contract_at(before_startup, "a.readDesktopTorProof(saved.launch)")
+        go_contract_at(go_contract_block(before_startup, "if err != nil"), "return desktopTorProof{}, err")
+        go_contract_at(go_contract_block(before_startup, "if err := saved.currentLocked(a); err != nil"), "return desktopTorProof{}, err")
+        failed_startup = go_contract_block(adopt, "if err := a.saveStartupSelection(saved.startup); err != nil")
+        go_contract_at(failed_startup, "return desktopTorProof{}, fmt.Errorf(")
+        final_proof = go_contract_at(adopt, "proof, err := a.readDesktopTorProof(saved.launch)")
+        final = adopt[final_proof:]
+        go_contract_at(go_contract_block(final, "if err != nil"), "return desktopTorProof{}, err")
+        guard = go_contract_block(final, "if err := saved.currentLocked(a); err != nil")
+        go_contract_at(guard, "return desktopTorProof{}, err")
+        connected = go_contract_at(final, 'a.state.Connected, a.state.Phase, a.state.LastError = true, "connected", ""')
+        if not startup < final_proof or go_contract_at(final, "if err := saved.currentLocked(a); err != nil") >= connected:
+            raise ValueError("Tor Connected preceded fresh proof and final source/operation admission")
+        for post_save in (failed_adoption, adopt):
+            if any(post_save[i:i + 4] == ("a", ".", "rollbackProfilesLocked", "(") for i in range(len(post_save) - 3)):
+                raise ValueError("Tor post-save failure tried to roll back the committed choice")
+    except (ValueError, IndexError) as error:
+        errors.append(f"desktop Tor durable choice/adoption ownership: {error}")
+
+
 def need_desktop_tor_maintenance() -> None:
     try:
         command = go_contract_block(go_contract_tokens(read("mobile/desktop/external_tor.go.tmpl")), "func routerVPNRunTor(")
@@ -399,8 +470,8 @@ need(
     "tor_transport",
     "tor-project-is-tor-passed",
     "a.stopOwnedConnectionRuntime(cmd)",
-    "a.persistProfilesLocked()",
 )
+need_desktop_tor_choice()
 need(
     "cmd/client/tor_bridge_dns.go",
     'case "tcp", "tls", "https"',
