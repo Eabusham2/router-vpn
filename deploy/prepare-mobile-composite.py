@@ -9,7 +9,7 @@ ROOT = Path(__file__).resolve().parents[1]
 PIN = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 
 def inputs():
-    return [Path(__file__).resolve(), ROOT/'deploy/test_mobile_composite_pinned.sh', ROOT/'deploy/test_mobile_sip003_pinned.sh', ROOT/'deploy/test_mobile_composite_shipping.py', ROOT/'deploy/testfixtures/composite/main.go'] + sorted((ROOT / 'mobile/composite').glob('*.tmpl'))
+    return [Path(__file__).resolve(), ROOT/'deploy/build_composite_reference_fixture.py', ROOT/'deploy/test_mobile_composite_pinned.sh', ROOT/'deploy/test_mobile_sip003_pinned.sh', ROOT/'deploy/test_mobile_composite_shipping.py', ROOT/'deploy/testfixtures/composite/main.go'] + sorted((ROOT / 'mobile/composite').glob('*.tmpl'))
 
 def digest():
     value = hashlib.sha256()

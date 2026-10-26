@@ -88,6 +88,9 @@ func nativeMultihopCapturedFixture(t *testing.T, mode, layer string) (string, mu
 	for _, selected := range []string{"reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3"} {
 		write(exit.ID, selected, nativeMultihopProxyExitAssets(t, exit, selected))
 	}
+	for _, selected := range []string{"ss-v2ray", "split", "max"} {
+		write(exit.ID, selected, nativeMultihopCompositeExitAssets(t, exit, selected))
+	}
 	return root, multihopSelection{Control: cloneRouterProfile(entry), Entry: entry, Exit: exit, Base: entry.BaseTunnel, ExitMode: "shadowsocks"}
 }
 

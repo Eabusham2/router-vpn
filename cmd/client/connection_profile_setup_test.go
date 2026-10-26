@@ -272,7 +272,7 @@ func TestConnectionProfileCompleteNativeExitModesKeepExactGraph(t *testing.T) {
 	}
 	// The canonical wg packet exit is covered by every execution round trip
 	// above; aliases, malformed packet names and unsupported exits stay rejected.
-	for _, mode := range []string{"http", "socks5", "naive", "reality", "split", "max", "wireguard", "wg-obsolete", "awg2-unavailable", "openvpn"} {
+	for _, mode := range []string{"http", "socks5", "naive", "reality", "split-unknown", "max-unknown", "wireguard", "wg-obsolete", "awg2-unavailable", "openvpn"} {
 		if _, err := normalizeConnectionProfileExitMode(mode); err == nil {
 			t.Fatal("unsupported or ambiguous native exit was persisted", mode)
 		}

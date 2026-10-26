@@ -10,6 +10,7 @@ import (
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilemultihop"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 	"runtime"
 )
 
@@ -112,6 +113,20 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 	if !ok {
 		return nil, errors.New("native multihop outbounds missing")
 	}
+	removedExitOwners := map[string]bool{}
+	if nativecomposite.Mode(sel.ExitMode) {
+		// The lease executes this exact complete paired transport. Validate
+		// both local lanes before removing their entire owned closure; merely
+		// replacing the dispatcher would leave private dormant exit engines.
+		if _, err := nativecomposite.Extract(cfg, sel.ExitMode, sel.Exit.NodeProofID, layer, "proxy", mobilemultihop.CompositeExitPrefix, "entry-wg"); err != nil {
+			return nil, err
+		}
+		removedExitOwners[mobilemultihop.CompositeExitPrefix+"tcp"] = true
+		removedExitOwners[mobilemultihop.CompositeExitPrefix+"udp"] = true
+		if layer != "" {
+			removedExitOwners[mobilemultihop.CompositeExitPrefix+"start"] = true
+		}
+	}
 	found := 0
 	removedExitLayer := false
 	retained := make([]any, 0, len(outbounds))
@@ -127,6 +142,9 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		if !ok {
 			return nil, errors.New("invalid native outbound")
 		}
+		if tag, _ := out["tag"].(string); removedExitOwners[tag] {
+			continue
+		}
 		if out["tag"] == "proxy" {
 			if packetExits != 0 {
 				return nil, errors.New("native packet exit also contains an ambiguous proxy")
@@ -140,6 +158,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 				return nil, errors.New("server lease does not own the captured exit Start Layer")
 			}
 			removedExitLayer = true
+			removedExitOwners[mobilemultihop.NativeStartLayerTag] = true
 			continue
 		}
 		retained = append(retained, out)
@@ -147,8 +166,8 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 	if found+packetExits != 1 || packetExits == 1 && (layer != "") != removedExitLayer {
 		return nil, errors.New("ambiguous exit proxy")
 	}
-	if removedExitLayer {
-		// A captured Naive bootstrap can use its exact exit AES owner. That
+	if len(removedExitOwners) != 0 {
+		// A captured resolver can use an exact exit child or AES owner. That
 		// owner now lives behind the authenticated Server lease: keep the
 		// selected resolver/TLS/port and move only this owned edge to the lease.
 		// Other entry, exit and application DNS references remain unchanged.
@@ -165,7 +184,7 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			if !ok {
 				return nil, errors.New("native server graph has invalid captured DNS")
 			}
-			if resolver["detour"] == mobilemultihop.NativeStartLayerTag {
+			if tag, _ := resolver["detour"].(string); removedExitOwners[tag] {
 				resolver["detour"] = "proxy"
 			}
 		}

@@ -12,6 +12,7 @@ import (
 
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/multihoprelay"
+	"router-vpn/internal/nativecomposite"
 )
 
 func multihopNodeSources(t *testing.T, mode, layer, id string) (string, map[string]any, string) {
@@ -120,7 +121,22 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 							t.Fatal("captured WG/AWG parameters changed", prior, actual)
 						}
 						outer := nodes["proxy"]
-						if exitLayer != "" && exitMode != "shadowsocks" {
+						if CompositeMode(exitMode) {
+							captured, err := nativecomposite.Extract(startObject(t, exitBefore), exitMode, predecessorText(exit.profile, "node_proof_id"), exitLayer, "proxy", nativecomposite.SourcePrefix, "")
+							actual, actualErr := nativecomposite.Extract(graph, exitMode, predecessorText(exit.profile, "node_proof_id"), exitLayer, "proxy", CompositeExitPrefix, "entry-wg")
+							if err != nil || actualErr != nil || !reflect.DeepEqual(captured, actual) || len(nodes["proxy"]) != 6 || nodes["proxy"]["detour"] != nil {
+								t.Fatal("composite lost either complete captured lane or gained a generic root detour", err, actualErr)
+							}
+							for tag := range nodes {
+								if strings.HasPrefix(tag, nativecomposite.SourcePrefix) {
+									t.Fatal("standalone composite child remained beside its relabeled owner")
+								}
+							}
+							outer = nodes[CompositeExitPrefix+"tcp"]
+							if exitLayer != "" {
+								outer = nodes[CompositeExitPrefix+"start"]
+							}
+						} else if exitLayer != "" && exitMode != "shadowsocks" {
 							if outer["detour"] != NativeStartLayerTag {
 								t.Fatal("exit Start Layer bypassed")
 							}
@@ -131,6 +147,9 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 						}
 						for _, raw := range startObject(t, exitBefore)["outbounds"].([]any) {
 							prior := raw.(map[string]any)
+							if CompositeMode(exitMode) && (prior["tag"] == "proxy" || strings.HasPrefix(predecessorText(prior, "tag"), nativecomposite.SourcePrefix)) {
+								continue // Exact complete lane/credential equality is proved above.
+							}
 							actual := predecessorCopy(nodes[predecessorText(prior, "tag")])
 							if prior["tag"] == outer["tag"] {
 								delete(actual, "detour")

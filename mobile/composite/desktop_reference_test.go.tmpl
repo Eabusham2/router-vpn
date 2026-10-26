@@ -1,0 +1,143 @@
+//go:build with_quic
+
+package routervpncomposite_test
+
+import (
+	"bytes"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/netip"
+	"os"
+	"path/filepath"
+	goruntime "runtime"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativecomposite"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/nativesip003"
+)
+
+type desktopCompositeReferenceConfig struct {
+	Mode    string            `json:"mode"`
+	Host    string            `json:"host"`
+	NodeID  string            `json:"node_id"`
+	Targets map[string]string `json:"targets"`
+}
+
+func parseDesktopCompositeReference(raw []byte) (desktopCompositeReferenceConfig, error) {
+	var config desktopCompositeReferenceConfig
+	bad := errors.New("invalid isolated composite reference configuration")
+	if _, err := nativesip003.Object(raw); err != nil || len(raw) > 16<<10 {
+		return config, bad
+	}
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.DisallowUnknownFields()
+	if decoder.Decode(&config) != nil || !nativecomposite.Mode(config.Mode) || len(config.NodeID) != 64 || len(config.Targets) == 0 || len(config.Targets) > 8 {
+		return config, bad
+	}
+	identity, err := hex.DecodeString(config.NodeID)
+	if err != nil || hex.EncodeToString(identity) != config.NodeID {
+		return config, bad
+	}
+	host, err := netip.ParseAddr(config.Host)
+	if err != nil || !netip.MustParsePrefix("198.51.100.0/24").Contains(host) {
+		return config, bad
+	}
+	for destination, physical := range config.Targets {
+		from, err := netip.ParseAddrPort(destination)
+		if err != nil || from.Port() == 0 || from.Addr() != netip.MustParseAddr("127.0.0.1") {
+			return config, bad
+		}
+		to, err := netip.ParseAddrPort(physical)
+		if err != nil || to.Port() == 0 || to.Addr() != netip.MustParseAddr("127.0.0.1") {
+			return config, bad
+		}
+	}
+	return config, nil
+}
+
+// A test-only peer process reuses the exact existing native SS/TLS/WebSocket,
+// pinned Xray and HY2 servers. Fresh complete assets enter the actual desktop
+// capture/compiler over the inherited stdout pipe. No helper is packaged or
+// registered as a production transport. EOF is the cross-platform owner.
+func TestDesktopCompositeReferencePeer(t *testing.T) {
+	path := os.Getenv("ROUTERVPN_COMPOSITE_REFERENCE_CONFIG")
+	if path == "" {
+		t.Skip("isolated desktop producer supplies a private reference configuration")
+	}
+	if !filepath.IsAbs(path) {
+		t.Fatal("composite reference configuration must be absolute")
+	}
+	info, err := os.Lstat(path)
+	if err != nil || !info.Mode().IsRegular() || info.Size() <= 0 || info.Size() > 16<<10 || goruntime.GOOS != "windows" && info.Mode().Perm()&0077 != 0 {
+		t.Fatal("composite reference configuration must be a bounded private regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		t.Fatal("composite reference configuration could not be opened")
+	}
+	opened, statErr := file.Stat()
+	raw, readErr := io.ReadAll(io.LimitReader(file, (16<<10)+1))
+	file.Close()
+	if statErr != nil || readErr != nil || !os.SameFile(info, opened) || int64(len(raw)) != info.Size() {
+		t.Fatal("composite reference configuration changed while opening")
+	}
+	config, err := parseDesktopCompositeReference(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	peer := startNode(t, config.Host, config.NodeID, config.Targets, config.Mode)
+	ready, err := json.Marshal(map[string]any{"ready": true, "mode": config.Mode, "node_id": config.NodeID, "tcp_port": peer.tcpPort, "udp_port": peer.udpPort, "assets": peer.assets(t)})
+	if err != nil {
+		t.Fatal("composite reference assets could not be encoded")
+	}
+	if _, err := fmt.Fprintln(os.Stdout, "ROUTERVPN_COMPOSITE_REFERENCE "+string(ready)); err != nil {
+		t.Fatal("composite reference owner pipe closed before readiness")
+	}
+	clear(ready)
+	if _, err := io.Copy(io.Discard, io.LimitReader(os.Stdin, 1)); err != nil {
+		t.Fatal("composite reference owner pipe failed")
+	}
+	if peer.physical.tcp.Load() == 0 || peer.physical.packets.Load() == 0 {
+		t.Fatal("desktop graph did not traverse both actual encrypted composite lanes")
+	}
+}
+
+func TestDesktopCompositeReferenceRejectsEscapedInputs(t *testing.T) {
+	base := map[string]any{"mode": "split", "host": "198.51.100.9", "node_id": strings.Repeat("a", 64), "targets": map[string]string{"127.0.0.1:9001": "127.0.0.1:9002"}}
+	for _, fault := range []string{"mode", "host", "identity", "unknown", "target-host", "target-port", "destination-host", "duplicate", "empty"} {
+		t.Run(fault, func(t *testing.T) {
+			encoded, _ := json.Marshal(base)
+			var value map[string]any
+			_ = json.Unmarshal(encoded, &value)
+			switch fault {
+			case "mode":
+				value["mode"] = "direct"
+			case "host":
+				value["host"] = "8.8.8.8"
+			case "identity":
+				value["node_id"] = strings.Repeat("A", 64)
+			case "unknown":
+				value["arbitrary"] = true
+			case "target-host":
+				value["targets"] = map[string]string{"127.0.0.1:9001": "192.0.2.1:9002"}
+			case "target-port":
+				value["targets"] = map[string]string{"127.0.0.1:9001": "127.0.0.1:0"}
+			case "destination-host":
+				value["targets"] = map[string]string{"192.0.2.1:9001": "127.0.0.1:9002"}
+			case "empty":
+				value["targets"] = map[string]string{}
+			}
+			encoded, _ = json.Marshal(value)
+			if fault == "duplicate" {
+				encoded = append([]byte(`{"mode":"split",`), encoded[1:]...)
+			}
+			if _, err := parseDesktopCompositeReference(encoded); err == nil {
+				t.Fatal("unsafe peer input was accepted")
+			}
+		})
+	}
+}

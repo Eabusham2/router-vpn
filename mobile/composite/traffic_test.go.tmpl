@@ -372,7 +372,7 @@ func startNode(t *testing.T, host, id string, targets map[string]string, mode st
 	})
 	return n
 }
-func (n *node) plan(t *testing.T) map[string]any {
+func (n *node) assets(t *testing.T) map[string]string {
 	t.Helper()
 	helperPort, helperName := 1092, "sslocal.json"
 	helper := map[string]any{"server": n.host, "server_port": n.tcpPort, "password": n.secret, "method": "2022-blake3-aes-256-gcm", "local_address": "127.0.0.1", "local_port": 1092, "mode": "tcp_only", "plugin": "v2ray-plugin", "plugin_opts": "tls;host=node.test;path=/shadowsocks;certRaw=" + n.certRaw}
@@ -383,7 +383,12 @@ func (n *node) plan(t *testing.T) map[string]any {
 		map[string]any{"type": "socks", "tag": "tcp-stack", "server": "127.0.0.1", "server_port": helperPort, "version": "5"},
 		map[string]any{"type": "hysteria2", "tag": "udp-stack", "server": n.host, "server_port": n.udpPort, "password": n.hySecret, "obfs": map[string]any{"type": "salamander", "password": n.mask}, "tls": map[string]any{"enabled": true, "server_name": "node.test", "certificate_path": "cert.pem"}},
 	}, "route": map[string]any{"rules": []any{map[string]any{"protocol": "dns", "action": "hijack-dns"}, map[string]any{"network": "tcp", "action": "route", "outbound": "tcp-stack"}, map[string]any{"network": "udp", "action": "route", "outbound": "udp-stack"}}, "final": "tcp-stack"}, "dns": map[string]any{"servers": []any{map[string]any{"type": "udp", "tag": "selected", "server": "10.77.0.1", "detour": "tcp-stack"}}, "final": "selected"}}
-	profile := map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(encode(t, graph)), helperName: base64.StdEncoding.EncodeToString(encode(t, helper)), "cert.pem": base64.StdEncoding.EncodeToString([]byte(n.cert))}
+	return map[string]string{"sing-box.json": base64.StdEncoding.EncodeToString(encode(t, graph)), helperName: base64.StdEncoding.EncodeToString(encode(t, helper)), "cert.pem": base64.StdEncoding.EncodeToString([]byte(n.cert))}
+}
+
+func (n *node) plan(t *testing.T) map[string]any {
+	t.Helper()
+	profile := n.assets(t)
 	metadata := map[string]any{"node_id": n.id, "node_kind": "router-vpn", "router_api": "http://10.77.0.1:8787", "start_layer": ""}
 	compiled, err := nativecomposite.Compile(n.mode, string(encode(t, profile)), string(encode(t, metadata)), "")
 	if err != nil {

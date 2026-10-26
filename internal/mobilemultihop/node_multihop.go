@@ -11,7 +11,7 @@ import (
 // Local and Server node-to-node execution. WireGuard retains its packet
 // endpoint; it is never represented as a proxy in the Local graph.
 func NodeMultihopExitModes() []string {
-	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong"}
+	return []string{"shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "wg", "awg2-fast", "awg2-strong", "ss-v2ray", "split", "max"}
 }
 
 func NodeMultihopExitMode(mode string) bool {
@@ -53,13 +53,20 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	// Layer. Attach the complete exit's outer edge to the entry, never overwrite
 	// that edge on the inner transport and silently bypass the saved layer.
 	outer := last.final
-	for depth := 0; outer["detour"] != nil; depth++ {
-		if depth > 1 {
-			return "", bad
+	if CompositeMode(exit.mode) {
+		outer, err = nodeCompositeExit(last, exit)
+		if err != nil {
+			return "", err
 		}
-		outer = last.nodes[predecessorText(outer, "detour")]
-		if outer == nil || outer["tag"] != NativeStartLayerTag {
-			return "", bad
+	} else {
+		for depth := 0; outer["detour"] != nil; depth++ {
+			if depth > 1 {
+				return "", bad
+			}
+			outer = last.nodes[predecessorText(outer, "detour")]
+			if outer == nil || outer["tag"] != NativeStartLayerTag {
+				return "", bad
+			}
 		}
 	}
 	selection := externalPolicyCapture{Profile: predecessorCopy(exit.profile), Entry: predecessorCopy(entry.profile)}

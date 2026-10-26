@@ -184,6 +184,22 @@ func freezeDesktopNodeAssets(files map[string][]byte, host, address string) (map
 				return nil, e
 			}
 			copy[name] = value
+		case "sslocal.json":
+			// SIP003 keeps its physical TCP address at the document root.
+			// Freeze that exact node alongside the wrapper's HY2 UDP address;
+			// plugin TLS name/path and credentials remain captured verbatim.
+			var helper map[string]any
+			if decodeRelayControlJSON(body, &helper) != nil {
+				return nil, errors.New("native SIP003 JSON is ambiguous")
+			}
+			if server, ok := helper["server"].(string); ok && strings.EqualFold(server, host) {
+				helper["server"] = address
+			}
+			value, err := json.Marshal(helper)
+			if err != nil {
+				return nil, err
+			}
+			copy[name] = value
 		}
 	}
 	return copy, nil

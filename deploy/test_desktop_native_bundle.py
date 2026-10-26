@@ -110,6 +110,31 @@ def test(bundle, target):
                         '-run', '^TestNativeAmneziaMultihopEncryptedLoopback$'],
                        cwd=ROOT, env=env, check=True, timeout=240)
         print('Complete native runtime passed actual AWG Fast/Strong Local and Server encrypted traffic with independent reference peers', flush=True)
+        # Composite exits own independent authenticated TCP and UDP lanes. Feed
+        # fresh reference-node assets through the actual desktop capture and
+        # Server lease compiler, then execute those graphs with this sealed
+        # engine. Keep this mandatory matrix separate from the existing bounded
+        # native and AWG groups; none may silently skip a missing helper.
+        xray = Path(temporary)/'reference-xray'
+        BUILD.checkout(xray, 'https://github.com/XTLS/Xray-core.git', BUILD.POLICY.XRAY.XRAY_PIN)
+        subprocess.run([sys.executable, str(ROOT/'deploy/prepare-relay-core.py'), str(core), str(xray)],
+                       cwd=ROOT, env=env, check=True, timeout=300)
+        subprocess.run(['go', 'mod', 'tidy'], cwd=core, env=env, check=True, timeout=300)
+        suffix = '.exe' if target.startswith('windows/') else ''
+        composite_reference = Path(temporary)/('composite-reference'+suffix)
+        xray_reference = Path(temporary)/('xray-reference'+suffix)
+        subprocess.run([sys.executable, str(ROOT/'deploy/build_composite_reference_fixture.py'),
+                        '--core', str(core), '--output', str(composite_reference),
+                        '--xray-output', str(xray_reference), *(['--race'] if race else [])],
+                       cwd=ROOT, env=env, check=True, timeout=1260)
+        subprocess.run([str(composite_reference), '-test.run', '^TestDesktopCompositeReferenceRejectsEscapedInputs$',
+                        '-test.count=1', '-test.timeout=30s'], cwd=ROOT, env=env, check=True, timeout=45)
+        env['ROUTERVPN_COMPOSITE_REFERENCE_CLI'] = str(composite_reference)
+        env['ROUTER_VPN_XRAY_TEST_BINARY'] = str(xray_reference)
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=180s', './cmd/client',
+                        '-run', '^TestNativeCompositeDesktopEncryptedLoopback$'],
+                       cwd=ROOT, env=env, check=True, timeout=240)
+        print('Complete native runtime passed SS-V2Ray, Split and MAX Local and Server encrypted TCP/UDP through captured WG/AWG entry graphs', flush=True)
 
 
 if __name__ == '__main__':

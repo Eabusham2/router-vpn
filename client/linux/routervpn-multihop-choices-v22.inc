@@ -11,6 +11,9 @@ static const struct { const char *id; const char *label; } linux_multihop_exits_
     {"wg", "WireGuard exit"},
     {"awg2-fast", "AWG Fast exit"},
     {"awg2-strong", "AWG Strong exit"},
+    {"ss-v2ray", "SS/V2Ray exit"},
+    {"split", "Split exit"},
+    {"max", "MAX exit"},
 };
 
 static gboolean linux_multihop_exit_supported_v22(const char *mode) {

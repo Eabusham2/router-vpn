@@ -9,14 +9,14 @@ completion of the current commit's packages, physical devices or deployment.
 
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
-and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits. Entry
-ownership remains WG/AWG.
+and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and
+SS-V2Ray, Split and MAX TCP/UDP composite exits. Entry ownership remains WG/AWG.
 Local, Server and Compare retain
 the captured exit transport, independent node credentials, Start Layers,
 selected DNS and proof routes. Naive resolver bootstrap follows the captured
 entry; replacing an exit Start Layer with an authenticated Server lease moves
 only that layer's owned resolver edges. Windows, macOS and Linux controls,
-complete profiles and Speed Lab retain all ten IDs. WG/AWG Server execution
+complete profiles and Speed Lab retain all thirteen IDs. WG/AWG Server execution
 requires an updated agent and a separately paired server client identity. The
 canonical public key is checked against the local client, pinned during
 authenticated discovery, enforced under the server lease lock, and retained
@@ -34,9 +34,30 @@ cancelled and closed devices cannot publish readiness. Actual encrypted
 WG-to-AWG Fast, Fast-to-Strong and Strong-to-Fast Local/Server TCP and UDP tests
 pass, including wrong-key, padding and lease-credential rejection. The local
 test CLI omitted the unavailable Rosenpass C-library tag; complete current
-native packages still require exact-SHA CI. Broader Router entry, packet and
-composite combinations remain source gaps; this extension does not establish
-full graph parity with the mobile hosts.
+native packages still require exact-SHA CI.
+
+The three composite exits retain independent authenticated TCP and HY2 UDP
+lanes. Both traverse the captured entry, or the one captured exit AES/XOR
+Start Layer which traverses that entry. Their dispatcher never gains a generic
+detour. Server execution validates and removes the entire local exit closure
+before installing its authenticated lease; selected DNS/bootstrap, entry
+policy and proof routes remain captured. Real encrypted Local/Server traffic
+passes for all three modes, including wrong credentials, independent lane
+failures and restoration. The native package gate requires this separate
+traffic group alongside its existing native and AWG groups. This `max`
+composite support does not close the distinct complete MAX packet/helper
+graph. Broader Router entry and packet/helper combinations remain source gaps;
+this extension does not establish full graph parity with the mobile hosts.
+
+The authenticated router-agent HTTP decoder now carries the already-defined
+packet identity pin through discovery, creation, renewal and deletion. It
+rejects malformed, foreign and unowned pins without starting an engine.
+Windows private runtime handling now validates the actual opened file's ACL
+instead of applying POSIX mode bits to Windows. Runtime directories receive
+private ACLs before secret staging. DNS proof uses the same validated bytes,
+file identity and connection owner, and rejects replacements or stale owners.
+Linux race tests and both Windows compilations passed; actual Windows ACL
+execution remains a current native-CI obligation.
 
 Apple connection-profile schema 5 now captures Tor DNS, protection, LAN ranges,
 MTU/Jumbo, startup and Router-entry preferences. Add/Update and Load run the

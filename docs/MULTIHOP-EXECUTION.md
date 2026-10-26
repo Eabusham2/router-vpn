@@ -557,8 +557,9 @@ publishes a literal WireGuard entry only after its device has initialized under
 its lifecycle lock, so the dependent AWG bind can open during the same startup
 phase. Deferred hostname peers, failed or cancelled starts and closed owners
 remain unavailable; initialization does not replace node/DNS path proof. Broader Router entry
-families, other packet/helper/composite exits and physical acceptance remain
-separate unfinished requirements.
+families, additional packet/helper graphs and physical acceptance remain
+separate unfinished requirements. The next section describes the separately
+implemented SS-V2Ray/Split/MAX composite exits.
 
 Local retains both native packet endpoints. Server removes only the captured
 local exit endpoint and replaces it with the authenticated owned relay. Its
@@ -593,3 +594,61 @@ Wrong exit keys, mismatched S4 and a wrong relay password must fail, and valid
 captured bytes must work again afterward. Those loopback tests do not establish
 private deployment, end-user path proof, leak behavior or physical-device
 network-transition acceptance.
+
+
+## Desktop SS-V2Ray, Split and MAX composite exits — October 26, 2026
+
+The desktop Router-node graph composes `wg`, `awg2-fast` or `awg2-strong`
+entries with captured `ss-v2ray`, `split` and `max` TCP/UDP composite exits.
+These three choices follow the prior ten in the Windows, macOS and Linux
+catalogs; existing defaults and the separate transport-AUTO candidate search
+are unchanged. Complete profiles and Speed Lab preserve each exact exit and
+Local / Server / Compare both preference. The comparison still uses the two
+required routed response times through each candidate and the same external
+endpoint. It does not give a failed candidate a zero score.
+
+The shared compiler extracts the validated transport from the complete node
+graph, including its selected DNS, LAN/IPv6 policy, cover and MTU settings.
+The six-field composite dispatcher never gains a generic `detour`. Its
+independent authenticated TCP and HY2 UDP children both route through the
+captured entry. With AES or AES+XOR selected, both instead route through the
+one captured exit Start Layer, whose outer route is the entry. TCP credentials,
+HY2 credentials and certificate, REALITY/PQ settings and per-node identities
+remain separate. Hostname capture freezes both physical lanes from the same
+lookup while retaining TLS names, SS-V2Ray plugin host/path and authentication.
+
+Server execution requires the exact composite mode and exit Start Layer in
+the entry's paired private registry. It validates the captured local closure,
+removes its dispatcher children and exit-layer owner, and installs the
+authenticated private lease as the exit. The entry endpoint and its own layer,
+selected DNS and bootstrap paths, interface policy and separate entry/exit
+proofs remain owned. Temporary Speed Lab restoration retains the already-proved
+Local or Server execution and exact captured source rather than starting a new
+Compare operation. Missing or changed owners, malformed/extra child routes,
+a bypassed lane or a stale source are rejected.
+
+The native package gate has a separate mandatory bounded composite traffic
+group. A test-only peer process supplies fresh complete node assets to the
+actual desktop capture and Local/Server compilers. The packaged native engine
+then transfers TCP and UDP payloads through WG/AWG entries and independently
+authenticated SS-V2Ray, Split and MAX lanes. The Server cases execute the real
+relay compiler and listener authentication. Exact loopback adapters translate
+only the test's captured physical sockets and SOCKS UDP association endpoint;
+protocol framing and encryption remain native. Wrong TCP credentials, wrong
+UDP credentials and wrong lease passwords must fail. A wrong single-lane
+credential must leave the other independent lane working; a wrong lease
+password must block both. Restoring the captured credentials must restore
+traffic. Peer shutdown joins its owned listeners and asserts traffic
+through both real encrypted lanes. The helper is excluded from release assets.
+
+Shared graph tests cover all supported entry and exit Start Layer combinations,
+selected policy and MTU retention, full Server closure removal, canonical
+child ownership and malformed-graph negatives. The dedicated traffic matrix
+uses one WG/AWG entry representative per composite mode with Start Layer Off;
+it does not claim every layered live path was exercised. Existing shared
+native composite suites separately exercise nested encrypted lane behavior.
+Current-SHA native/package results and physical device, off-LAN, leak and
+network-transition acceptance remain separate requirements. The `max`
+composite addition does not close the distinct complete MAX packet/helper
+graph, all Router entry families, ALL, Tor Server/Compare or unrestricted
+platform graph parity.
