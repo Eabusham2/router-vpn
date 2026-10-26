@@ -78,6 +78,9 @@ func validateExistingRuntimeAncestors(runRoot, configPath string) error {
 		if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 			return fmt.Errorf("active DNS runtime parent is unsafe: %s", current)
 		}
+		if err := validatePrivateRuntimePathPermissions(current, info); err != nil {
+			return fmt.Errorf("active DNS runtime parent is not private: %w", err)
+		}
 		if current == runRoot {
 			break
 		}
@@ -93,8 +96,8 @@ func validateExistingRuntimeAncestors(runRoot, configPath string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
 		return errors.New("active DNS runtime config is not a regular non-symlink file")
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		return errors.New("active DNS runtime config is not private")
+	if err := validatePrivateRuntimePathPermissions(configPath, info); err != nil {
+		return fmt.Errorf("active DNS runtime config is not private: %w", err)
 	}
 	if info.Size() <= 0 || info.Size() > maxPrivateStoreBytes {
 		return errors.New("active DNS runtime config is empty or oversized")
@@ -166,58 +169,91 @@ func deterministicExternalDNSRuntime(a *app, profileID, runtimeID string) (activ
 }
 
 func activeDNSRuntimeConfigFor(a *app, profileID, runtimeID string) (string, bool, error) {
+	snapshot, owned, err := activeDNSRuntimeSnapshotFor(a, profileID, runtimeID)
+	if err != nil || !owned {
+		return "", owned, err
+	}
+	return snapshot.source.path, true, nil
+}
+
+func captureActiveDNSRuntimeSource(a *app, profileID, runtimeID string) (*activeDNSRuntimeSource, bool, error) {
+	if a == nil {
+		return nil, false, nil
+	}
 	profileID = strings.TrimSpace(profileID)
 	runtimeID = strings.TrimSpace(runtimeID)
+	owner, err := captureActiveDNSRuntimeOwner(a, profileID)
+	if err != nil {
+		return nil, true, err
+	}
 	var identity activeDNSRuntimeIdentity
 	matched := false
+	kind := ""
 	if raw, ok := activeDNSRuntimeIdentities.Load(a); ok {
 		registered, typeOK := raw.(activeDNSRuntimeIdentity)
 		if !typeOK {
-			return "", true, errors.New("active DNS runtime identity has invalid type")
+			return nil, true, errors.New("active DNS runtime identity has invalid type")
 		}
 		if registered.ProfileID == profileID && registered.RuntimeID == runtimeID {
 			identity = registered
 			matched = true
+			kind = "registered"
 		}
 	}
 	if !matched {
 		deterministic, owned, err := deterministicLinuxMultihopDNSRuntime(a, profileID, runtimeID)
 		if err != nil {
-			return "", owned, err
+			return nil, owned, err
 		}
 		if owned {
 			identity = deterministic
 			matched = true
+			kind = "linux-multihop"
 		}
 	}
 	if !matched {
 		deterministic, owned, err := deterministicExternalDNSRuntime(a, profileID, runtimeID)
 		if err != nil {
-			return "", owned, err
+			return nil, owned, err
 		}
 		if owned {
 			identity = deterministic
 			matched = true
+			kind = "external"
 		}
 	}
 	if !matched {
-		return "", false, nil
+		return nil, false, nil
 	}
 	configPath, err := runtimeConfigUnderPrivateRun(a, identity.Config)
 	if err != nil {
-		return "", true, err
+		return nil, true, err
 	}
 	root, err := filepath.Abs(filepath.Clean(clientRoot(a)))
 	if err != nil {
-		return "", true, err
+		return nil, true, err
 	}
 	if err := validateExistingRuntimeAncestors(filepath.Join(root, "run"), configPath); err != nil {
-		return "", true, err
+		return nil, true, err
 	}
-	// Reuse the race-safe open+SameFile reader only after the non-creating
-	// ancestor/file checks above have proved the registered runtime still exists.
-	if _, err := readPrivateRegular(configPath, maxPrivateStoreBytes); err != nil {
-		return "", true, err
+	info, err := os.Lstat(configPath)
+	if err != nil {
+		return nil, true, err
 	}
-	return configPath, true, nil
+	file, err := openPrivateRuntimeForRead(configPath, info)
+	if err != nil {
+		return nil, true, err
+	}
+	defer file.Close()
+	// Windows pathname FileInfo can defer its file-ID query. Freeze the ID
+	// from this actual open handle before handing the source to its reader.
+	info, err = file.Stat()
+	if err != nil {
+		return nil, true, err
+	}
+	source := &activeDNSRuntimeSource{app: a, identity: identity, kind: kind, owner: owner, path: configPath, runRoot: filepath.Join(root, "run"), fileInfo: info}
+	if err := source.current(); err != nil {
+		return nil, true, err
+	}
+	return source, true, nil
 }

@@ -245,14 +245,14 @@ func verifySingBoxDNSRuntime(root, profileID, mode string, selected dnsSelection
 }
 
 func verifySingBoxDNSRuntimeForApp(a *app, root, profileID, mode string, selected dnsSelection) error {
-	if path, owned, err := activeDNSRuntimeConfigFor(a, profileID, mode); owned {
+	if snapshot, owned, err := activeDNSRuntimeSnapshotFor(a, profileID, mode); owned {
 		if err != nil {
 			return fmt.Errorf("active owned DNS runtime config is unsafe or unavailable: %w", err)
 		}
-		if err := verifySingBoxDNSConfig(path, selected); err != nil {
+		if err := verifySingBoxDNSConfigBytes(snapshot.body, selected); err != nil {
 			return fmt.Errorf("active owned DNS runtime policy mismatch: %w", err)
 		}
-		return nil
+		return snapshot.source.current()
 	}
 	return verifySingBoxDNSRuntime(root, profileID, mode, selected)
 }
@@ -262,8 +262,12 @@ func verifySingBoxDNSConfig(path string, selected dnsSelection) error {
 	if err != nil {
 		return err
 	}
+	return verifySingBoxDNSConfigBytes(b, selected)
+}
+
+func verifySingBoxDNSConfigBytes(b []byte, selected dnsSelection) error {
 	var cfg map[string]any
-	if err = json.Unmarshal(b, &cfg); err != nil {
+	if err := json.Unmarshal(b, &cfg); err != nil {
 		return fmt.Errorf("invalid active sing-box config: %w", err)
 	}
 	dns, ok := cfg["dns"].(map[string]any)
@@ -380,9 +384,11 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 	}
 	root := clientRoot(a)
 	var err error
-	_, nativeOwned, nativeErr := activeDNSRuntimeConfigFor(a, s.RouterID, runtimeID)
+	snapshot, nativeOwned, nativeErr := activeDNSRuntimeSnapshotFor(a, s.RouterID, runtimeID)
 	if nativeErr != nil {
 		err = nativeErr
+	} else if nativeOwned {
+		err = verifySingBoxDNSConfigBytes(snapshot.body, selected)
 	} else if kernelDNSMode(runtimeID) && !nativeOwned {
 		err = verifyKernelDNSRuntimeContext(parent, root, s.RouterID, runtimeID, selected)
 	} else {
@@ -391,6 +397,12 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 	if err != nil {
 		result.Reason = err.Error()
 		return result
+	}
+	if nativeOwned {
+		if err := snapshot.source.current(); err != nil {
+			result.Reason = err.Error()
+			return result
+		}
 	}
 
 	started := time.Now()
@@ -407,6 +419,12 @@ func proveSelectedDNSWithLookup(parent context.Context, a *app, s observedConnec
 		}
 		result.Reason = "active selected-DNS policy is structurally enforced, but OS resolver proof failed: " + err.Error()
 		return result
+	}
+	if nativeOwned {
+		if err := snapshot.source.current(); err != nil {
+			result.Reason = err.Error()
+			return result
+		}
 	}
 	result.Status = "passed"
 	result.LatencyMs = float64(time.Since(started).Microseconds()) / 1000.0

@@ -63,10 +63,11 @@ func TestRouterHomeDNSPreservesExactTransportThroughNativeCompilerAndProof(t *te
 				}
 				root := t.TempDir()
 				a := &app{cfg: common.ClientConfig{ProfilesFile: filepath.Join(root, "routers.json")}}
-				config := filepath.Join(root, "run", "captured", "sing-box.json")
-				if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
+				directory, err := privateRuntimeBase(root, "captured")
+				if err != nil {
 					t.Fatal(err)
 				}
+				config := filepath.Join(directory, "sing-box.json")
 				if err := os.WriteFile(config, []byte(compiled.Config()), 0600); err != nil {
 					t.Fatal(err)
 				}

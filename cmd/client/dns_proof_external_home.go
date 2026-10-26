@@ -73,18 +73,21 @@ func proveExternalHomeDNS(ctx context.Context, a *app, s observedConnection, run
 		return fail(errors.New("selected Home DNS metadata differs from the proved entry path"))
 	}
 	selected := dnsSelection{Mode: metadata.DNSMode, Protocol: metadata.DNSProtocol, Host: metadata.DNSServer, Port: metadata.DNSPort, ServerName: metadata.DNSServerName, Path: metadata.DNSPath}
-	config, owned, err := activeDNSRuntimeConfigFor(a, s.RouterID, runtimeID)
-	if err != nil || !owned || config != filepath.Join(launch.directory, "sing-box.json") {
+	snapshot, owned, err := activeDNSRuntimeSnapshotFor(a, s.RouterID, runtimeID)
+	if err != nil || !owned || snapshot.source.path != filepath.Join(launch.directory, "sing-box.json") {
 		return fail(errors.New("selected Home DNS configuration belongs to a different native owner"))
 	}
-	raw, err := readDesktopRuntimeFile(launch, "sing-box.json", 8<<20)
-	if err != nil || fmt.Sprintf("%x", sha256.Sum256(raw)) != metadata.ConfigSHA256 {
+	raw := snapshot.body
+	if fmt.Sprintf("%x", sha256.Sum256(raw)) != metadata.ConfigSHA256 {
 		return fail(errors.New("selected Home DNS configuration changed after native proof"))
 	}
-	if err := verifySingBoxDNSConfig(config, selected); err != nil {
+	if err := verifySingBoxDNSConfigBytes(raw, selected); err != nil {
 		return fail(err)
 	}
 	if err := current(); err != nil {
+		return fail(err)
+	}
+	if err := snapshot.source.current(); err != nil {
 		return fail(err)
 	}
 	result.Host, result.Status = selected.Host, "passed"

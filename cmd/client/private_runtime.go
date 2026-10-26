@@ -31,10 +31,8 @@ func ensurePrivateRuntimeDirectory(path string) error {
 	if info.Mode()&os.ModeSymlink != 0 || !info.IsDir() {
 		return fmt.Errorf("private runtime path is not a non-symlink directory: %s", path)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
-		if err := os.Chmod(path, 0o700); err != nil {
-			return err
-		}
+	if err := preparePrivateRuntimeDirectoryPermissions(path, info); err != nil {
+		return err
 	}
 	return validatePrivateParent(filepath.Join(path, ".runtime-dir-check"))
 }
