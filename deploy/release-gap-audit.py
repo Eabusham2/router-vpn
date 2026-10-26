@@ -112,7 +112,7 @@ require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
     "var startLayer: String",
     "profile.startLayer = prefs.startLayer",
-    "iosConnectionProfilesSchemaVersion = 4",
+    "iosConnectionProfilesSchemaVersion = 5",
 )
 forbid(
     "ios/RouterVPN/PacketTunnel/IOSStartLayer.swift",

@@ -143,7 +143,7 @@ func TestAppleStartLayerIsComposedByOwnedAuthenticatedPacketTunnel(t *testing.T)
 		`startLayer = try c.decodeIfPresent(String.self, forKey: .startLayer) ?? "off"`,
 		`startLayer: (selected.startLayer ?? "off").lowercased()`,
 		"profile.startLayer = prefs.startLayer",
-		"iosConnectionProfilesSchemaVersion = 4",
+		"iosConnectionProfilesSchemaVersion = 5",
 	} {
 		if !strings.Contains(profiles, required) {
 			t.Fatalf("iOS whole connection profiles no longer preserve Start Layer: missing %q", required)

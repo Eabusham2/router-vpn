@@ -225,7 +225,7 @@ require("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift", "LibboxRouterAp
 require("ios/RouterVPN/App/IOSConnectionProfilesView.swift", "profile.daitaEnabled = prefs.daitaEnabled", "profile.jumboTUN = prefs.jumboTUN")
 ios_profiles = require(
     "ios/RouterVPN/App/IOSConnectionProfilesView.swift",
-    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 4", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
+    "IOSConnectionProfileStore", "IOSConnectionSafePreferences", "iosConnectionProfilesSchemaVersion = 5", "IOSConnectionProfileEnvelope", "Add", "Load", "Update", "Delete",
     "routervpn.connection-profiles.v1", "routervpn.unified.mode.v1", "routervpn.unified.custom-presets.v1",
     "dnsMode", "dnsProtocol", "multihopEnabled", "multihopEntryID", "multihopExitID",
     "multihopExitMode", "iosMultihopEntryBundle(for: bundle)",
