@@ -12,6 +12,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 SWIFT = r'''
+@MainActor enum IOSPrivateJSONStore {
+ static var value:Data?
+ static func read(_ name:String,maximumBytes:Int)throws->Data?{value}
+ static func write(_ data:Data,filename:String,maximumBytes:Int)throws{guard data.count<=maximumBytes else{throw IOSMultihopExecution.issue()};value=data}
+}
 @MainActor @main struct Tests {
  static var checks=0
  static func check(_ text:String,_ value:@autoclosure()->Bool){guard value()else{fatalError("FAIL: "+text)};checks+=1}
@@ -70,7 +75,7 @@ SWIFT = r'''
   reject("startup choice cannot borrow Speed Lab's live restoration lease"){_ = try IOSMultihopExecution.restoredExecution(option:startupText as NSString,source:capturedSource,mtuHold:hold)}
   for field in ["schema","request","execution","extra"] {
    var malformed=try JSONSerialization.jsonObject(with:startupBytes) as! [String:Any]
-   if field=="schema"{malformed[field]=2}else{malformed[field]="not-a-valid-choice"}
+   if field=="schema"{malformed[field]=3}else{malformed[field]="not-a-valid-choice"}
    reject("startup choice rejects malformed contract "+field){_ = try IOSMultihopExecution.StartupChoice.decode(JSONSerialization.data(withJSONObject:malformed),source:capturedSource)}
   }
   for field in ["bundle","entryBundle"]{
@@ -201,6 +206,68 @@ SWIFT = r'''
   let local=try external("local"),needsLocal=try IOSMultihopExecution.requiresCapture(configuration:local)
   check("plain external Local does not invent lease ownership",!needsLocal)
   reject("plain external Local cannot adopt an unrelated execution receipt"){_ = try IOSMultihopExecution.Source(configuration:local,digest:digest)}
+  for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"] {
+   let config=try source("auto","wg",mode),source=try IOSMultihopExecution.Source(configuration:config,digest:digest)
+   let pq=mode.contains("pq") || mode.hasPrefix("max-")
+   var fields:[String:String]=["expected_packet_public_key":Data(repeating:7,count:32).base64EncodedString()]
+   if pq {fields["expected_pq_client_identity"]=String(repeating:"a",count:64)}
+   let text=String(decoding:try JSONSerialization.data(withJSONObject:fields),as:UTF8.self)
+   let pins=try IOSMultihopExecution.ServerIdentityPins(json:text,source:source,execution:"server")
+   let receipt=try IOSMultihopExecution.Capture(source:source,execution:"server",session:session,request:request,pins:pins),encoded=try receipt.encoded()
+   let restored=try IOSMultihopExecution.restoredCapture(option:String(decoding:encoded,as:UTF8.self) as NSString,source:source,mtuHold:hold)!
+   check("Server receipt retains both exact identities "+mode,restored.pins==pins && restored.execution=="server" && restored.source.requested=="auto")
+   let metadata=["entry_id":source.entryID,"exit_id":source.exitID,"entry_mode":source.entryMode,"exit_mode":mode,"execution":"server","exit_token":"original private token"]
+   let applied=try restored.pins.applying(to:metadata,source:source)
+   check("Server restoration adds constraints without replacing private metadata "+mode,applied["expected_packet_public_key"]==fields["expected_packet_public_key"] && applied["expected_pq_client_identity"]==fields["expected_pq_client_identity"] && applied["exit_token"]==metadata["exit_token"])
+   let last=try IOSMultihopExecution.StartupChoice(source:source,execution:"server",pins:pins)
+   let cold=try IOSMultihopExecution.restoredStartupChoice(option:String(decoding:last.encoded(),as:UTF8.self) as NSString,source:source)!
+   check("Last retains constraints but never a live proof "+mode,cold.pins==pins && cold.execution=="server")
+   IOSPrivateJSONStore.value=nil
+   try IOSStartupLastChoice.record(configuration:config,receipt:receipt,digest:digest)
+   let remembered=try IOSStartupLastChoice.restored(configuration:config,digest:digest)
+   check("durable Last source retains packet/PQ constraints "+mode,remembered?.pins==pins && remembered?.execution=="server")
+   var replacement=config,entry=try JSONSerialization.jsonObject(with:config["entryBundle"] as! Data) as! [String:Any]
+   entry["profiles"]=["private":"a replacement entry"]
+   replacement["entryBundle"]=try JSONSerialization.data(withJSONObject:entry)
+   let unrelated=try IOSStartupLastChoice.restored(configuration:replacement,digest:digest)
+   check("durable Last cannot transfer public pins to replaced private entry "+mode,unrelated==nil)
+   reject("Server cannot restore without captured identities "+mode){_ = try IOSMultihopExecution.Capture(source:source,execution:"server",session:session,request:request)}
+   reject("Local cannot adopt Server identities "+mode){_ = try IOSMultihopExecution.Capture(source:source,execution:"local",session:session,request:request,pins:pins)}
+   for field in ["entry_id","exit_id","entry_mode","exit_mode","execution","expected_packet_public_key","expected_pq_client_identity"] {
+    var changed=metadata;changed[field]="foreign"
+    reject("source/override cannot replace captured pins "+mode+field){_ = try pins.applying(to:changed,source:source)}
+   }
+   for fault in ["missing-packet","null-packet","empty-packet","short-packet","zero-packet","noncanonical-packet","foreign-key","pq-only"]+(pq ? ["missing-pq","null-pq","empty-pq","uppercase-pq"]:["unexpected-pq"]) {
+    var bad:[String:Any]=fields
+    switch fault {
+    case "missing-packet":bad.removeValue(forKey:"expected_packet_public_key")
+    case "null-packet":bad["expected_packet_public_key"]=NSNull()
+    case "empty-packet":bad["expected_packet_public_key"]=""
+    case "short-packet":bad["expected_packet_public_key"]=Data(repeating:7,count:31).base64EncodedString()
+    case "zero-packet":bad["expected_packet_public_key"]=Data(repeating:0,count:32).base64EncodedString()
+    case "noncanonical-packet":bad["expected_packet_public_key"]=fields["expected_packet_public_key"]!+"\n"
+    case "foreign-key":bad["private_key"]="never accepted"
+    case "pq-only":bad=["expected_pq_client_identity":String(repeating:"a",count:64)]
+    case "missing-pq":bad.removeValue(forKey:"expected_pq_client_identity")
+    case "null-pq":bad["expected_pq_client_identity"]=NSNull()
+    case "empty-pq":bad["expected_pq_client_identity"]=""
+    case "uppercase-pq":bad["expected_pq_client_identity"]=String(repeating:"A",count:64)
+    default:bad["expected_pq_client_identity"]=String(repeating:"a",count:64)
+    }
+    let badJSON=String(decoding:try JSONSerialization.data(withJSONObject:bad),as:UTF8.self)
+    reject("native pin snapshot rejects "+mode+fault){_ = try IOSMultihopExecution.ServerIdentityPins(json:badJSON,source:source,execution:"server")}
+    var malformed=try JSONSerialization.jsonObject(with:encoded) as! [String:Any];malformed["server_identity_pins"]=bad
+    reject("restoration receipt rejects "+mode+fault){_ = try IOSMultihopExecution.Capture.decode(JSONSerialization.data(withJSONObject:malformed),source:source)}
+   }
+   var legacy=try JSONSerialization.jsonObject(with:encoded) as! [String:Any];legacy["schema"]=1;legacy.removeValue(forKey:"server_identity_pins")
+   reject("old unpinned packet Server receipt cannot claim retained ownership "+mode){_ = try IOSMultihopExecution.Capture.decode(JSONSerialization.data(withJSONObject:legacy),source:source)}
+   legacy["execution"]="local"
+   let local=try IOSMultihopExecution.Capture.decode(JSONSerialization.data(withJSONObject:legacy),source:source)
+   check("legacy Local receipt does not acquire Server pins "+mode,local.execution=="local" && local.pins == .empty)
+  }
+  var legacy=try JSONSerialization.jsonObject(with:bytes) as! [String:Any];legacy["schema"]=1;legacy.removeValue(forKey:"server_identity_pins")
+  let previous=try IOSMultihopExecution.Capture.decode(JSONSerialization.data(withJSONObject:legacy),source:capturedSource)
+  check("legacy proxy receipt remains valid without inventing packet identities",previous.pins == .empty && previous.execution=="server")
   print("Apple exact multihop winner receipt: PASS (\(checks) shipping Swift checks)")
  }
 }
@@ -212,7 +279,7 @@ def main():
         raise SystemExit('swiftc required')
     with tempfile.TemporaryDirectory(prefix='routervpn-ios-execution-') as folder:
         path, binary = Path(folder)/'test.swift', Path(folder)/'test'
-        path.write_text((APP/'IOSMultihopExecution.swift').read_text()+'\n'+SWIFT)
+        path.write_text((APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSStartupLastChoice.swift').read_text()+'\n'+SWIFT)
         subprocess.run([swift, '-swift-version', '6', '-parse-as-library', str(path), '-o', str(binary)], check=True, timeout=90)
         fixtures=[ROOT/'deploy/fixtures'/name for name in ['external-openvpn-multihost-client.json','external-openvpn-multihost-layered-aes-client.json','external-openvpn-multihost-layered-xor-client.json']]
         subprocess.run([str(binary), *map(str,fixtures)], check=True, timeout=20)
@@ -220,8 +287,10 @@ def main():
     assert 'currentPathProofGuard() === guardState' in provider
     assert 'engine.bindMultihopExecutionSource(source, metadata: hopMetadata)' in provider
     assert '"execution": restoredMultihopExecution ?? selectedProfile["multihop_execution"]' in provider
-    assert 'IOSMultihopExecution.restoredStartupExecution(' in provider
-    assert 'guard restoredMultihopExecution == nil || startupExecution == nil else' in provider
+    assert 'IOSMultihopExecution.restoredStartupChoice(' in provider
+    assert 'guard restored == nil || startup == nil else' in provider
+    assert 'restoredMultihopIdentityPins = restored?.pins ?? startup?.pins' in provider
+    assert 'metadata = try pins.applying(to: metadata, source: source)' in provider
     assert 'options?[IOSMultihopExecution.startupLaunchKey] != nil { throw IOSMultihopExecution.issue() }' in provider
     assert '} else if execution == "local" { try engine.start(files: finalFiles, strict: strict) }' not in provider
     assert 'App/IOSMultihopExecution.swift' in (ROOT/'ios/RouterVPN/project.yml').read_text()

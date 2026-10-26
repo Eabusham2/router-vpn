@@ -52,6 +52,26 @@ this extension does not establish full graph parity with the mobile hosts.
 The authenticated router-agent HTTP decoder now carries the already-defined
 packet identity pin through discovery, creation, renewal and deletion. It
 rejects malformed, foreign and unowned pins without starting an engine.
+Shared mobile Server execution now retains both the canonical packet public
+key and, for PQ/complete MAX packet modes, the paired PQ public-key identity.
+Discovery, lease creation/renewal and the native receipt share those captured
+pins; a changed registry or replacement engine cannot silently substitute them.
+The authenticated HTTP route applies the same strict field and mode rules.
+Its isolated mobile/controller/relay/HTTP race suite passed 333 test and subtest
+records. That is ownership evidence, not a new PQ dataplane or device claim.
+
+Apple Speed Lab and startup Last now carry those public Server pins with the
+exact original source hashes and the already-proved Local/Server selection.
+The provider reapplies them before native startup, including across MAX
+hostname preparation. Speed Lab checks the pins before stopping its original
+session and after proving a fresh restored session. Schema-1 Local and proxy
+receipts retain compatibility; an old unpinned packet/PQ Server receipt cannot
+authorize restoration. Durable records contain public identities and hashes,
+not private node credentials. Shipping Swift callback/store tests, malformed
+receipt and guard-removal negatives, and the actual Go MAX launch compiler
+passed. The native handle and OS boundaries are doubled in those tests; current
+Xcode-generated binding/package and physical-device evidence remain separate.
+
 Windows private runtime handling now validates the actual opened file's ACL
 instead of applying POSIX mode bits to Windows. Runtime directories receive
 private ACLs before secret staging. DNS proof uses the same validated bytes,

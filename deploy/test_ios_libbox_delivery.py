@@ -70,6 +70,8 @@ public final class LibboxRouterMultihop {
     private var valid = true
     private var completed = false
     private var execution = "local"
+    private var pins = "{}"
+    private var pinFailure = false
     public let entered = DispatchSemaphore(value: 0)
     private let release = DispatchSemaphore(value: 0)
     init(_ text: String, block: Bool, fail: Bool) { self.text = text; self.block = block; self.fail = fail }
@@ -85,6 +87,12 @@ public final class LibboxRouterMultihop {
     public func close() throws { lock.lock(); closed = true; lock.unlock(); release.signal() }
     public func progressJSON() -> String { lock.lock();defer{lock.unlock()};return String(decoding:try! JSONSerialization.data(withJSONObject:["stage":completed ? "selected":"pending","complete":completed,"execution":execution]),as:UTF8.self) }
     public func setExecution(_ value:String,complete:Bool=true) { lock.lock();execution=value;completed=complete;lock.unlock() }
+    public func serverIdentityPinsJSON(_ failure: UnsafeMutablePointer<NSError?>?) -> String? {
+        lock.lock();defer{lock.unlock()}
+        guard !closed && valid && completed && !pinFailure else { failure?.pointee=NSError(domain:"Fixture.Pins",code:1);return nil }
+        return pins
+    }
+    public func setPins(_ value:String,fail:Bool=false) {lock.lock();pins=value;pinFailure=fail;lock.unlock()}
     public func allowCompletion() { release.signal() }
 }
 public final class LibboxCommandServer {
@@ -416,17 +424,24 @@ final class CompletionState: @unchecked Sendable {
             check("non-multihop completes immediately once", completed.values() == (1, 0))
             engine.stop()
         }
-        for execution in ["local", "server"] {
+        for exitMode in ["hysteria2","wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"] { for execution in ["local", "server"] {
             state.configure()
-            let sourceBundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-quic-awg","multihop_exit_mode":"hysteria2","multihop_execution":"auto"]]])
+            let sourceBundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"exit","routerProfiles":[["id":"exit","multihop_enabled":true,"multihop_entry_id":"entry","multihop_exit_id":"exit","multihop_entry_mode":"max-quic-awg","multihop_exit_mode":exitMode,"multihop_execution":"auto"]]])
             let entryBundle=try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[["id":"entry"]]])
-            let source=try IOSMultihopExecution.Source(configuration:["engine":"multihop-libbox","mode":"hysteria2","bundle":sourceBundle,"entryBundle":entryBundle]) { $0==sourceBundle ? String(repeating:"a",count:64):String(repeating:"b",count:64) }
-            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:["entry_id":"entry","exit_id":"exit","entry_mode":"max-quic-awg","exit_mode":"hysteria2","execution":execution]),as:UTF8.self)
+            let source=try IOSMultihopExecution.Source(configuration:["engine":"multihop-libbox","mode":exitMode,"bundle":sourceBundle,"entryBundle":entryBundle]) { $0==sourceBundle ? String(repeating:"a",count:64):String(repeating:"b",count:64) }
+            let metadata=String(decoding:try JSONSerialization.data(withJSONObject:["entry_id":"entry","exit_id":"exit","entry_mode":"max-quic-awg","exit_mode":exitMode,"execution":execution]),as:UTF8.self)
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState(),request=String(repeating:"c",count:32)
             try owner.start(files:files,strict:true,multihopMetadata:metadata)
             owner.completeMultihopExecution(done.finish)
             check("restorable execution waits for controller completion",done.wait() && done.values()==(1,0))
             state.current()!.setExecution(execution)
+            var fields:[String:String]=[:]
+            if execution=="server" && exitMode != "hysteria2" {
+                fields["expected_packet_public_key"]=Data(repeating:7,count:32).base64EncodedString()
+                if exitMode.contains("pq") || exitMode.hasPrefix("max-") {fields["expected_pq_client_identity"]=String(repeating:"a",count:64)}
+            }
+            let pinsJSON=String(decoding:try JSONSerialization.data(withJSONObject:fields),as:UTF8.self)
+            state.current()!.setPins(pinsJSON)
             check("comparison alone cannot expose unproved original source",owner.multihopExecutionSnapshot(request:request)==nil)
             try owner.enableHopMeasurement(metadata:metadata)
             var rejected=false
@@ -435,6 +450,13 @@ final class CompletionState: @unchecked Sendable {
             try owner.bindMultihopExecutionSource(source,metadata:metadata)
             let captured=try IOSMultihopExecution.Capture.decode(owner.multihopExecutionSnapshot(request:request)!,source:source,request:request)
             check("receipt binds actual winner and native epoch without changing requested auto",captured.execution==execution && captured.sessionID==owner.settingsEpoch && captured.source.requested=="auto")
+            let expectedPins=try IOSMultihopExecution.ServerIdentityPins(json:pinsJSON,source:source,execution:execution)
+            check("actual native owner pins reach the same receipt",captured.pins==expectedPins)
+            state.current()!.setPins(pinsJSON,fail:true)
+            check("failed native pin capture cannot mint a partial receipt",owner.multihopExecutionSnapshot(request:request)==nil)
+            state.current()!.setPins("{\"private_key\":\"unowned\"}")
+            check("extra native fields cannot leak into a receipt",owner.multihopExecutionSnapshot(request:request)==nil)
+            state.current()!.setPins(pinsJSON)
             check("malformed request cannot mint a restoration receipt",owner.multihopExecutionSnapshot(request:"foreign")==nil)
             state.current()!.setExecution(execution,complete:false)
             check("unfinished comparison cannot be restored",owner.multihopExecutionSnapshot(request:request)==nil)
@@ -443,7 +465,7 @@ final class CompletionState: @unchecked Sendable {
             check("expired network or lease invalidates the winner receipt",owner.multihopExecutionSnapshot(request:request)==nil)
             owner.stop()
             check("retired native owner cannot expose a winner",owner.multihopExecutionSnapshot(request:request)==nil)
-        }
+        }}
         do {
             state.configure()
             let provider = PacketTunnelProvider(), completed = CompletionState()

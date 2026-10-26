@@ -42,11 +42,15 @@ enum Status {case connected,connecting,reasserting,disconnecting,disconnected,in
  var status:Status = .connected,connectedDate:Date?=Date(timeIntervalSince1970:1)
  var starts=0,stops=0,hold="",failedProof=false,stuckStop=false
  var execution="server",epoch=UUID().uuidString
+ var pinsJSON="{}",restorePinsOverride:String?
  func startVPNTunnel(options:[String:NSObject]?=nil)throws{
   if let config=(NETunnelProviderManager.stored.first?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration,
      try IOSMultihopExecution.requiresCapture(configuration:config) {
    let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
-   execution=try IOSMultihopExecution.restoredExecution(option:options?[IOSMultihopExecution.launchKey],source:source,mtuHold:options?["routervpn_mtu_hold"] as? String ?? "") ?? "local"
+   let restored=try IOSMultihopExecution.restoredCapture(option:options?[IOSMultihopExecution.launchKey],source:source,mtuHold:options?["routervpn_mtu_hold"] as? String ?? "")
+   execution=restored?.execution ?? "local"
+   let expectedPins=String(decoding:try JSONEncoder().encode(restored?.pins ?? .empty),as:UTF8.self)
+   pinsJSON=restorePinsOverride ?? expectedPins
   }
   epoch=UUID().uuidString
   starts+=1;hold=options?["routervpn_mtu_hold"] as? String ?? "";status = .connected;connectedDate=Date(timeIntervalSince1970:Double(starts+10));Trace.values.append("native-start")
@@ -82,7 +86,8 @@ typealias NETunnelProviderSession=Connection
   guard healthy,operation=="speed-lab-execution",session.isEmpty,
         let config=(NETunnelProviderManager.stored.first?.protocolConfiguration as? NETunnelProviderProtocol)?.providerConfiguration else{throw IOSMultihopExecution.issue()}
   let source=try IOSMultihopExecution.Source(configuration:config,digest:RouterVPNModel.iosStrategyDigest)
-  return try IOSMultihopExecution.Capture(source:source,execution:connection.execution,session:connection.epoch,request:request).encoded()
+  let pins=try IOSMultihopExecution.ServerIdentityPins(json:connection.pinsJSON,source:source,execution:connection.execution)
+  return try IOSMultihopExecution.Capture(source:source,execution:connection.execution,session:connection.epoch,request:request,pins:pins).encoded()
  }
 }
 @MainActor final class RouterVPNModel {
@@ -136,12 +141,17 @@ typealias NETunnelProviderSession=Connection
    c["strategy"]=["version":1,"kind":"smart","candidates":[["raw":"wg","logical":"base-raw"],["raw":raw,"logical":"base-raw"]]]
   }
   p.providerConfiguration=c;m.protocolConfiguration=p;NETunnelProviderManager.stored=[m]
+  if engine=="multihop-libbox" {
+   var pins=["expected_packet_public_key":Data(repeating:7,count:32).base64EncodedString()]
+   if raw.contains("pq") || raw.hasPrefix("max-") {pins["expected_pq_client_identity"]=String(repeating:"a",count:64)}
+   if ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"].contains(raw) {m.connection.pinsJSON=String(decoding:try JSONSerialization.data(withJSONObject:pins),as:UTF8.self)}
+  }
   model.activeSessionIdentity=try IOSSessionIdentity(connectedAt:m.connection.connectedDate!,engine:engine,rawProfile:raw,bundleData:source,configuration:c)
   let owner=try model.iosSpeedLabOwnership.begin{}
   return(model,m,owner)
  }
  static func main()async throws {
-  for (engine,raw,strategy,entry,packetCompare) in [("libbox","awg2-fast",true,false,false),("wireguard","wg",false,false,false),("multihop-libbox","max-tls-awg",false,true,false),("external-libbox","external-amneziawg",false,true,false),("external-libbox","external-tor",false,true,false),("external-libbox","external-shadowsocks",false,true,false),("external-libbox","external-wireguard",false,true,true),("external-libbox","external-amneziawg",false,true,true)]{
+  for (engine,raw,strategy,entry,packetCompare) in [("libbox","awg2-fast",true,false,false),("wireguard","wg",false,false,false),("multihop-libbox","max-tls-awg",false,true,false),("multihop-libbox","wg",false,true,false),("multihop-libbox","wg-pq",false,true,false),("multihop-libbox","awg2-pq",false,true,false),("external-libbox","external-amneziawg",false,true,false),("external-libbox","external-tor",false,true,false),("external-libbox","external-shadowsocks",false,true,false),("external-libbox","external-wireguard",false,true,true),("external-libbox","external-amneziawg",false,true,true)]{
    let (model,m,owner)=try fresh(engine,raw,strategy,entry,packetCompare),before=model.activeSessionIdentity!
    try await IOSSpeedLabContext.$owner.withValue(owner){
     let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
@@ -168,6 +178,25 @@ typealias NETunnelProviderSession=Connection
      check("restoration keeps actual server winner without changing Compare preference",m.connection.execution=="server" && source.requested=="auto" && restored.providerConfiguration?[IOSMultihopExecution.launchKey]==nil)
     }
    }
+  }
+  for mode in ["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"] {
+   for phase in ["before-stop","after-restore"] { for changed in ["packet","pq"] where changed=="packet" || mode.contains("pq") || mode.hasPrefix("max-") {
+    let(model,m,owner)=try fresh("multihop-libbox",mode,false,true)
+    let captured=try await IOSSpeedLabTunnel.capture(model:model,owner:owner)
+    var fields=try JSONSerialization.jsonObject(with:Data(m.connection.pinsJSON.utf8)) as! [String:String]
+    fields[changed=="packet" ? "expected_packet_public_key":"expected_pq_client_identity"]=changed=="packet" ? Data(repeating:8,count:32).base64EncodedString():String(repeating:"b",count:64)
+    let replacement=String(decoding:try JSONSerialization.data(withJSONObject:fields),as:UTF8.self)
+    if phase=="before-stop" {
+     m.connection.pinsJSON=replacement
+     await rejected("changed Server identity cannot pause original "+mode+changed){try await captured.stopOriginal(model:model,owner:owner)}
+     check("foreign pin snapshot never stops original "+mode+changed,m.connection.stops==0)
+    } else {
+     try await captured.stopOriginal(model:model,owner:owner)
+     m.connection.restorePinsOverride=replacement
+     await rejected("restored readback cannot substitute Server identity "+mode+changed){try await captured.restore(model:model,owner:owner,reconnect:true)}
+     check("unverified replacement never enables On Demand "+mode+changed,!m.isOnDemandEnabled)
+    }
+   }}
   }
   for mutation in ["entry","source","date","ambiguous"]{
    let(model,m,owner)=try fresh("external-libbox","external-tor",false,true)
@@ -294,8 +323,22 @@ def main():
     cleanup+=declaration(runner,'private func restore(').replace('private func','func',1)+'\n}'
     with tempfile.TemporaryDirectory(prefix='routervpn-speed-native-') as folder:
         path=Path(folder)/'test.swift';binary=Path(folder)/'test'
-        path.write_text(SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'+source+'\n'+cleanup)
-        subprocess.run([swift,'-swift-version','6','-parse-as-library',str(path),'-o',str(binary)],check=True,timeout=90)
-        subprocess.run([str(binary)],check=True,timeout=30)
+        prefix=SHIM+'\n'+(APP/'IOSMultihopExecution.swift').read_text()+'\n'+(APP/'IOSSpeedLabOwnership.swift').read_text()+'\n'+(APP/'IOSSessionIdentity.swift').read_text()+'\n'+wire+'\n'
+        def compile_and_run(body, negative=None):
+            path.write_text(prefix+body+'\n'+cleanup)
+            subprocess.run([swift,'-swift-version','6','-parse-as-library',str(path),'-o',str(binary)],check=True,timeout=90)
+            result=subprocess.run([str(binary)],capture_output=negative is not None,text=True,timeout=30)
+            if negative is None:
+                result.check_returncode()
+            else:
+                assert result.returncode != 0 and negative in result.stdout+result.stderr, 'Pin ownership negative did not fail at the expected assertion'
+                print('Apple Speed Lab negative control rejected: '+negative)
+        compile_and_run(source)
+        before='current.execution == multihopExecution.execution, current.pins == multihopExecution.pins else'
+        assert source.count(before)==1
+        compile_and_run(source.replace(before,'current.execution == multihopExecution.execution else',1),'changed Server identity cannot pause original')
+        after='                          current.pins == multihopExecution.pins,\n'
+        assert source.count(after)==1
+        compile_and_run(source.replace(after,'',1),'restored readback cannot substitute Server identity')
 
 if __name__=='__main__':main()

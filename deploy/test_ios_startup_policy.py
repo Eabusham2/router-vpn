@@ -335,7 +335,7 @@ TESTS = r'''
   guard let remembered=IOSPrivateJSONStore.value else{throw NSError(domain:"StartupFixture",code:1,userInfo:[NSLocalizedDescriptionKey:"manual proved Compare records Last choice"])}
   let text=String(decoding:remembered,as:UTF8.self),object=try JSONSerialization.jsonObject(with:remembered) as! [String:Any]
   let records=object["records"] as! [[String:Any]]
-  try check("Last record has only hashes and proved choice",records.count==1 && Set(records[0].keys)==Set(["node","bundle","entry","execution"]) && records[0]["execution"] as? String=="server" && !text.contains("credential") && !text.contains("private") && !text.contains("Captured exit") && !text.contains("request_id") && !text.contains("session_id"))
+  try check("Last record has only hashes, proved choice and public pin constraints",records.count==1 && Set(records[0].keys)==Set(["node","bundle","entry","execution","serverIdentityPins"]) && (records[0]["serverIdentityPins"] as? [String:String])?.isEmpty==true && records[0]["execution"] as? String=="server" && !text.contains("credential") && !text.contains("private") && !text.contains("Captured exit") && !text.contains("request_id") && !text.contains("session_id"))
   let saved=first.bundle!,entry=first.entry!
   for mode in ["last","auto","smart-auto"] {
    IOSPrivateJSONStore.value=remembered

@@ -46,6 +46,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
     private var initialMTUHold = ""
     private var multihopExecutionSource: IOSMultihopExecution.Source?
     private var restoredMultihopExecution: String?
+    private var restoredMultihopIdentityPins: IOSMultihopExecution.ServerIdentityPins?
     private var forwardingChannel: RouterVPNForwardingChannel?
     private let telemetryLock = NSLock()
     private var telemetryChannel: RouterVPNTelemetryChannel?
@@ -475,17 +476,18 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             }
 
             let engine = (provider["engine"] as? String ?? "wireguard").lowercased()
-            multihopExecutionSource = nil; restoredMultihopExecution = nil
+            multihopExecutionSource = nil; restoredMultihopExecution = nil; restoredMultihopIdentityPins = nil
             if try IOSMultihopExecution.requiresCapture(configuration: provider) {
                 let source = try IOSMultihopExecution.Source(configuration: provider) {
                     SHA256.hash(data: $0).map { String(format: "%02x", $0) }.joined()
                 }
-                restoredMultihopExecution = try IOSMultihopExecution.restoredExecution(
+                let restored = try IOSMultihopExecution.restoredCapture(
                     option: options?[IOSMultihopExecution.launchKey], source: source, mtuHold: initialMTUHold)
-                let startupExecution = try IOSMultihopExecution.restoredStartupExecution(
+                let startup = try IOSMultihopExecution.restoredStartupChoice(
                     option: options?[IOSMultihopExecution.startupLaunchKey], source: source)
-                guard restoredMultihopExecution == nil || startupExecution == nil else { throw IOSMultihopExecution.issue() }
-                restoredMultihopExecution = restoredMultihopExecution ?? startupExecution
+                guard restored == nil || startup == nil else { throw IOSMultihopExecution.issue() }
+                restoredMultihopExecution = restored?.execution ?? startup?.execution
+                restoredMultihopIdentityPins = restored?.pins ?? startup?.pins
                 multihopExecutionSource = source
             } else if options?[IOSMultihopExecution.launchKey] != nil || options?[IOSMultihopExecution.startupLaunchKey] != nil { throw IOSMultihopExecution.issue() }
             // This complete validation is socket-free. The app's exact source
@@ -791,6 +793,10 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
             "entry_tag": RouterVPNMultihopGraph.entryTag, "entry_mode": entryMode, "exit_mode": exitMode, "execution": restoredMultihopExecution ?? selectedProfile["multihop_execution"] as? String ?? "local"]
         if entryLayer.mode != "off" { metadata["entry_start_layer"] = entryLayer.mode }
         if exitLayer.mode != "off" { metadata["exit_start_layer"] = exitLayer.mode }
+        if let pins = restoredMultihopIdentityPins {
+            guard let source = multihopExecutionSource else { throw IOSMultihopExecution.issue() }
+            metadata = try pins.applying(to: metadata, source: source)
+        }
         let encoded = try JSONSerialization.data(withJSONObject: metadata)
         guard encoded.count <= 16384 else { throw tunnelError(58, "Captured multihop metadata exceeds its bound.") }
         let hopMetadata = String(decoding: encoded, as: UTF8.self)

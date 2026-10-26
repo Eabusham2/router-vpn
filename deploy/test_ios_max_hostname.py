@@ -336,7 +336,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider, @unchecked Sendable {
  private var providerStrategy:PrestartStrategy?,strategyDriver:PrestartDriver?
  let trace=PrestartTrace()
  func configure(_ config:[String:Any]){let p=NETunnelProviderProtocol();p.providerConfiguration=config;protocolConfiguration=p}
- func executionState()->(IOSMultihopExecution.Source?,String?){(multihopExecutionSource,restoredMultihopExecution)}
+ func executionState()->(IOSMultihopExecution.Source?,String?,IOSMultihopExecution.ServerIdentityPins?){(multihopExecutionSource,restoredMultihopExecution,restoredMultihopIdentityPins)}
  private func currentProviderStrategy()->PrestartStrategy?{providerStrategy}
  private func retireLibboxSettings(epoch:String){}
  private func clearPathProofGuard(){}
@@ -432,23 +432,26 @@ __PRODUCTION__
  let input=try checked(changedBundle(capturedRoutes(fixtures)[1]){_,node in node["multihop_execution"]="auto"})
  let digest:(Data)->String={SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()}
  let source=try IOSMultihopExecution.Source(configuration:input,digest:digest),hold=String(repeating:"e",count:32)
- let capture=try IOSMultihopExecution.Capture(source:source,execution:"server",session:UUID().uuidString,request:String(repeating:"a",count:32))
+ let pinJSON=String(decoding:try JSONSerialization.data(withJSONObject:["expected_packet_public_key":Data(repeating:7,count:32).base64EncodedString(),"expected_pq_client_identity":String(repeating:"a",count:64)]),as:UTF8.self)
+ let pins=try IOSMultihopExecution.ServerIdentityPins(json:pinJSON,source:source,execution:"server")
+ let capture=try IOSMultihopExecution.Capture(source:source,execution:"server",session:UUID().uuidString,request:String(repeating:"a",count:32),pins:pins)
  let receipt=String(decoding:try capture.encoded(),as:UTF8.self) as NSString
  let options:[String:NSObject]=["routervpn_mtu_hold":hold as NSString,IOSMultihopExecution.launchKey:receipt]
  DNSSDTest.shared.configure();NetworkTest.shared.set()
  let p=PacketTunnelProvider(),started=Outcome(),stopped=Outcome();p.configure(input);p.startTunnel(options:options){started.receive($0)}
- try check("actual provider accepts the proved winner before DNS preparation",p.trace.entered.wait(timeout:.now()+5) == .success && p.executionState().0==source && p.executionState().1=="server")
+ try check("actual provider accepts the proved winner and exact identities before DNS preparation",p.trace.entered.wait(timeout:.now()+5) == .success && p.executionState().0==source && p.executionState().1=="server" && p.executionState().2==pins)
  let launch=try p.trace.launch(),launchedSource=try IOSMultihopExecution.Source(configuration:launch,digest:digest)
- try check("receipt retains original hostname sources across private resolution",launchedSource != source && p.executionState().0==source && source.requested=="auto")
+ try check("receipt retains original hostname sources and identities across private resolution",launchedSource != source && p.executionState().0==source && p.executionState().2==pins && source.requested=="auto")
  p.trace.prove();try check("restored startup still needs native proof",started.done.wait(timeout:.now()+5) == .success && started.result().1)
  p.stopTunnel(with:.userInitiated){stopped.receive(nil)};try check("restored native owner retires",stopped.done.wait(timeout:.now()+5) == .success && p.trace.counts().1==1)
- for fault in ["exit-source","entry-source","missing-hold","wrong-engine","malformed-receipt"] {
+ for fault in ["exit-source","entry-source","missing-hold","wrong-engine","missing-pins","malformed-receipt"] {
   var config=input,arguments=options
   switch fault {
   case "exit-source":config=try changedBundle(config){_,node in node["api_token"]="replacement-private-token"}
   case "entry-source":var entry=try object(config["entryBundle"] as! Data);entry["unrelated_saved_field"]="changed";config["entryBundle"]=try json(entry)
   case "missing-hold":arguments.removeValue(forKey:"routervpn_mtu_hold")
   case "wrong-engine":config["engine"]="libbox"
+  case "missing-pins":var value=try object(capture.encoded());value.removeValue(forKey:"server_identity_pins");arguments[IOSMultihopExecution.launchKey]=String(decoding:try json(value),as:UTF8.self) as NSString
   default:arguments[IOSMultihopExecution.launchKey]="{}" as NSString
   }
   let rejected=PacketTunnelProvider(),result=Outcome(),queries=DNSSDTest.shared.counts().0;rejected.configure(config);rejected.startTunnel(options:arguments){result.receive($0)}

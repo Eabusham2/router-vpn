@@ -75,7 +75,7 @@ import Foundation
         if let multihopExecution {
             let current = try await Self.readExecution(manager, model: model, identity: identity, owner: owner)
             guard current.source == multihopExecution.source, current.sessionID == multihopExecution.sessionID,
-                  current.execution == multihopExecution.execution else { throw IOSMultihopExecution.issue() }
+                  current.execution == multihopExecution.execution, current.pins == multihopExecution.pins else { throw IOSMultihopExecution.issue() }
         }
         try await Self.stop(manager, expected: expected, model: model, owner: owner)
     }
@@ -250,6 +250,7 @@ import Foundation
                 if let multihopExecution {
                     let current = try await Self.readExecution(manager, model: model, identity: restored, owner: owner)
                     guard current.source == multihopExecution.source, current.execution == multihopExecution.execution,
+                          current.pins == multihopExecution.pins,
                           current.sessionID != multihopExecution.sessionID else { throw IOSMultihopExecution.issue() }
                 }
                 if onDemand {

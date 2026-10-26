@@ -65,7 +65,7 @@ final class LibboxCommandServer {
  func closeService()throws{closed=true;Trace.shared.add("box-close")}
  func close(){released=true;Trace.shared.add("box-release")}
 }
-final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()->String{"{}"};func close()throws{}}
+final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()->String{"{}"};func serverIdentityPinsJSON(_ error:inout NSError?)->String?{"{}"};func close()throws{}}
 final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")}}
 func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterExternalProofRequest? {
  server.request.source=source;server.request.capture=capture;server.request.session=session;return server.request

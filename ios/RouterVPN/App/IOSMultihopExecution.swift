@@ -113,6 +113,69 @@ enum IOSMultihopExecution {
         }
     }
 
+    /// Public Server identities accompany the exact source and proved winner.
+    /// They are never resolver/transport configuration or new discovery input.
+    struct ServerIdentityPins: Codable, Equatable, Sendable {
+        let packetPublicKey: String?
+        let pqClientIdentity: String?
+
+        enum CodingKeys: String, CodingKey {
+            case packetPublicKey = "expected_packet_public_key"
+            case pqClientIdentity = "expected_pq_client_identity"
+        }
+
+        static let empty = ServerIdentityPins(packetPublicKey: nil, pqClientIdentity: nil)
+
+        private init(packetPublicKey: String?, pqClientIdentity: String?) {
+            self.packetPublicKey = packetPublicKey; self.pqClientIdentity = pqClientIdentity
+        }
+
+        init(json: String, source: Source, execution: String) throws {
+            let data = Data(json.utf8)
+            guard data.count <= 1024, let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
+                  Self.exactObject(object) else { throw issue() }
+            self = try JSONDecoder().decode(Self.self, from: data)
+            guard valid(source: source, execution: execution) else { throw issue() }
+        }
+
+        static func exactObject(_ value: Any?) -> Bool {
+            guard let object = value as? [String: Any],
+                  Set(object.keys).isSubset(of: ["expected_packet_public_key", "expected_pq_client_identity"]),
+                  object.values.allSatisfy({ $0 is String }) else { return false }
+            return true
+        }
+
+        var structurallyValid: Bool {
+            if let key = packetPublicKey {
+                guard key.utf8.count == 44, let decoded = Data(base64Encoded: key), decoded.count == 32,
+                      decoded.base64EncodedString() == key, decoded.contains(where: { $0 != 0 }) else { return false }
+            }
+            if let identity = pqClientIdentity {
+                guard packetPublicKey != nil, identity.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil else { return false }
+            }
+            return true
+        }
+
+        func valid(source: Source, execution: String) -> Bool {
+            guard source.valid, structurallyValid, ["local", "server"].contains(execution) else { return false }
+            let pq = ["wg-pq", "awg2-pq", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"].contains(source.exitMode)
+            let packet = pq || ["wg", "awg2-fast", "awg2-strong"].contains(source.exitMode)
+            if execution != "server" || !packet { return self == .empty }
+            return packetPublicKey != nil && (pq ? pqClientIdentity != nil : pqClientIdentity == nil)
+        }
+
+        func applying(to metadata: [String: String], source: Source) throws -> [String: String] {
+            guard metadata["entry_id"] == source.entryID, metadata["exit_id"] == source.exitID,
+                  metadata["entry_mode"] == source.entryMode, metadata["exit_mode"] == source.exitMode,
+                  metadata["expected_packet_public_key"] == nil, metadata["expected_pq_client_identity"] == nil,
+                  let execution = metadata["execution"], valid(source: source, execution: execution) else { throw issue() }
+            var result = metadata
+            if let packetPublicKey { result["expected_packet_public_key"] = packetPublicKey }
+            if let pqClientIdentity { result["expected_pq_client_identity"] = pqClientIdentity }
+            return result
+        }
+    }
+
     struct Capture: Codable, Equatable, Sendable {
         let schema: Int
         let requestID: String
@@ -120,20 +183,25 @@ enum IOSMultihopExecution {
         let source: Source
         let execution: String
         let healthy: Bool
+        let serverIdentityPins: ServerIdentityPins?
+
+        var pins: ServerIdentityPins { serverIdentityPins ?? .empty }
 
         enum CodingKeys: String, CodingKey {
             case schema, source, execution, healthy
             case requestID = "request_id", sessionID = "session_id"
+            case serverIdentityPins = "server_identity_pins"
         }
 
-        init(source: Source, execution: String, session: String, request: String) throws {
-            schema = 1; self.source = source; self.execution = execution
+        init(source: Source, execution: String, session: String, request: String, pins: ServerIdentityPins = .empty) throws {
+            schema = 2; self.source = source; self.execution = execution; serverIdentityPins = pins
             sessionID = session; requestID = request; healthy = true
             guard valid else { throw issue() }
         }
 
         private var valid: Bool {
-            schema == 1 && healthy && source.valid && UUID(uuidString: sessionID) != nil &&
+            ((schema == 1 && serverIdentityPins == nil) || (schema == 2 && serverIdentityPins != nil)) &&
+            healthy && source.valid && pins.valid(source: source, execution: execution) && UUID(uuidString: sessionID) != nil &&
             requestID.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil &&
             ["local", "server"].contains(execution) && (source.requested == "auto" || source.requested == execution)
         }
@@ -148,7 +216,9 @@ enum IOSMultihopExecution {
         static func decode(_ data: Data, source: Source, request: String? = nil) throws -> Capture {
             guard !data.isEmpty, data.count <= 4096,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys) == Set(["schema", "request_id", "session_id", "source", "execution", "healthy"]),
+                  (Set(object.keys) == Set(["schema", "request_id", "session_id", "source", "execution", "healthy"]) ||
+                   Set(object.keys) == Set(["schema", "request_id", "session_id", "source", "execution", "healthy", "server_identity_pins"])),
+                  object["server_identity_pins"] == nil || ServerIdentityPins.exactObject(object["server_identity_pins"]),
                   let savedSource = object["source"] as? [String: Any],
                   Set(savedSource.keys) == Set(["bundle_sha256", "entry_sha256", "entry_id", "exit_id", "entry_mode", "exit_mode", "requested"]) else { throw issue() }
             let value = try JSONDecoder().decode(Capture.self, from: data)
@@ -157,11 +227,15 @@ enum IOSMultihopExecution {
         }
     }
 
-    static func restoredExecution(option: NSObject?, source: Source, mtuHold: String) throws -> String? {
+    static func restoredCapture(option: NSObject?, source: Source, mtuHold: String) throws -> Capture? {
         guard let option else { return nil }
         guard let text = option as? String, text.utf8.count <= 4096,
               mtuHold.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil else { throw issue() }
-        return try Capture.decode(Data(text.utf8), source: source).execution
+        return try Capture.decode(Data(text.utf8), source: source)
+    }
+
+    static func restoredExecution(option: NSObject?, source: Source, mtuHold: String) throws -> String? {
+        try restoredCapture(option: option, source: source, mtuHold: mtuHold)?.execution
     }
 
     /// A cold-launch Last request chooses an already-recorded execution for
@@ -172,15 +246,24 @@ enum IOSMultihopExecution {
         let request: String
         let source: Source
         let execution: String
+        let serverIdentityPins: ServerIdentityPins?
 
-        init(source: Source, execution: String) throws {
-            schema = 1; request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
-            self.source = source; self.execution = execution
+        var pins: ServerIdentityPins { serverIdentityPins ?? .empty }
+
+        enum CodingKeys: String, CodingKey {
+            case schema, request, source, execution
+            case serverIdentityPins = "server_identity_pins"
+        }
+
+        init(source: Source, execution: String, pins: ServerIdentityPins = .empty) throws {
+            schema = 2; request = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
+            self.source = source; self.execution = execution; serverIdentityPins = pins
             guard valid else { throw issue() }
         }
 
         private var valid: Bool {
-            schema == 1 && source.valid &&
+            ((schema == 1 && serverIdentityPins == nil) || (schema == 2 && serverIdentityPins != nil)) &&
+                source.valid && pins.valid(source: source, execution: execution) &&
                 request.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil &&
                 ["local", "server"].contains(execution) && (source.requested == "auto" || source.requested == execution)
         }
@@ -195,7 +278,9 @@ enum IOSMultihopExecution {
         static func decode(_ data: Data, source: Source) throws -> StartupChoice {
             guard !data.isEmpty, data.count <= 4096,
                   let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
-                  Set(object.keys) == Set(["schema", "request", "source", "execution"]),
+                  (Set(object.keys) == Set(["schema", "request", "source", "execution"]) ||
+                   Set(object.keys) == Set(["schema", "request", "source", "execution", "server_identity_pins"])),
+                  object["server_identity_pins"] == nil || ServerIdentityPins.exactObject(object["server_identity_pins"]),
                   let selected = object["source"] as? [String: Any],
                   Set(selected.keys) == Set(["bundle_sha256", "entry_sha256", "entry_id", "exit_id", "entry_mode", "exit_mode", "requested"]) else { throw issue() }
             let value = try JSONDecoder().decode(StartupChoice.self, from: data)
@@ -204,10 +289,14 @@ enum IOSMultihopExecution {
         }
     }
 
-    static func restoredStartupExecution(option: NSObject?, source: Source) throws -> String? {
+    static func restoredStartupChoice(option: NSObject?, source: Source) throws -> StartupChoice? {
         guard let option else { return nil }
         guard let text = option as? String, text.utf8.count <= 4096 else { throw issue() }
-        return try StartupChoice.decode(Data(text.utf8), source: source).execution
+        return try StartupChoice.decode(Data(text.utf8), source: source)
+    }
+
+    static func restoredStartupExecution(option: NSObject?, source: Source) throws -> String? {
+        try restoredStartupChoice(option: option, source: source)?.execution
     }
 
     static func issue() -> NSError {

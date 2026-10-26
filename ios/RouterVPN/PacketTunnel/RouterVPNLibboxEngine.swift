@@ -933,11 +933,15 @@ final class RouterVPNLibboxEngine {
         }
         guard let plan, plan.healthy() else { return nil }
         let progress = Data(plan.progressJSON().utf8)
+        var pinFailure: NSError?
+        let pinText: String? = plan.serverIdentityPinsJSON(&pinFailure)
         guard progress.count <= 16384,
+              pinFailure == nil, let pinText,
               let value = try? JSONSerialization.jsonObject(with: progress) as? [String: Any],
               value["complete"] as? Bool == true, value["stage"] as? String == "selected",
               let execution = value["execution"] as? String,
-              let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request),
+              let pins = try? IOSMultihopExecution.ServerIdentityPins(json: pinText, source: source, execution: execution),
+              let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request, pins: pins),
               plan.healthy() else { return nil }
         ownershipLock.lock()
         let current = ownershipGeneration == generation && server === owned && multihop === plan &&

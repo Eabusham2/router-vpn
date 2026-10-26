@@ -1,7 +1,8 @@
 import Foundation
 
 /// An optional previous execution choice, not a cached connection proof.
-/// Only hashes and Local/Server are durable; every launch must prove its path.
+/// Only hashes, Local/Server and public Server identity pins are durable;
+/// every launch must prove its path.
 @MainActor enum IOSStartupLastChoice {
     private static let filename = "startup-execution-choices.json"
     private static let maximumBytes = 64 * 1024
@@ -11,10 +12,11 @@ import Foundation
         let bundle: String
         let entry: String
         let execution: String
+        let serverIdentityPins: IOSMultihopExecution.ServerIdentityPins?
 
         var valid: Bool {
             [node, bundle, entry].allSatisfy { $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil } &&
-                ["local", "server"].contains(execution)
+                ["local", "server"].contains(execution) && (serverIdentityPins ?? .empty).structurallyValid
         }
     }
 
@@ -31,14 +33,14 @@ import Foundation
         let verified = try IOSMultihopExecution.Capture.decode(receipt.encoded(), source: source)
         let key = digest(Data(source.exitID.utf8))
         let record = try Record(node: key, bundle: fingerprint(configuration["bundle"], digest: digest),
-                                entry: fingerprint(configuration["external_entry_bundle"], digest: digest),
-                                execution: verified.execution)
+                                entry: fingerprint(configuration[entryKey(configuration)], digest: digest),
+                                execution: verified.execution, serverIdentityPins: verified.pins)
         guard record.valid else { throw IOSMultihopExecution.issue() }
         var records = try load()
         records.removeAll { $0.node == key }
         records.append(record)
         if records.count > 64 { records.removeFirst(records.count - 64) }
-        let data = try JSONEncoder().encode(Envelope(schema: 1, records: records))
+        let data = try JSONEncoder().encode(Envelope(schema: 2, records: records))
         try IOSPrivateJSONStore.write(data, filename: filename, maximumBytes: maximumBytes)
     }
 
@@ -47,9 +49,13 @@ import Foundation
         let key = digest(Data(source.exitID.utf8))
         guard let record = try load().first(where: { $0.node == key }),
               record.bundle == (try fingerprint(configuration["bundle"], digest: digest)),
-              record.entry == (try fingerprint(configuration["external_entry_bundle"], digest: digest)),
+              record.entry == (try fingerprint(configuration[entryKey(configuration)], digest: digest)),
               source.requested == "auto" || source.requested == record.execution else { return nil }
-        return try IOSMultihopExecution.StartupChoice(source: source, execution: record.execution)
+        return try IOSMultihopExecution.StartupChoice(source: source, execution: record.execution, pins: record.serverIdentityPins ?? .empty)
+    }
+
+    private static func entryKey(_ configuration: [String: Any]) -> String {
+        configuration["engine"] as? String == "external-libbox" ? "external_entry_bundle" : "entryBundle"
     }
 
     private static func fingerprint(_ raw: Any?, digest: (Data) -> String) throws -> String {
@@ -77,11 +83,15 @@ import Foundation
         guard let object = try JSONSerialization.jsonObject(with: data) as? [String: Any],
               Set(object.keys) == Set(["schema", "records"]),
               let records = object["records"] as? [[String: Any]], records.count <= 64,
-              records.allSatisfy({ Set($0.keys) == Set(["node", "bundle", "entry", "execution"]) }) else {
+              records.allSatisfy({
+                  (Set($0.keys) == Set(["node", "bundle", "entry", "execution"]) ||
+                   Set($0.keys) == Set(["node", "bundle", "entry", "execution", "serverIdentityPins"])) &&
+                      ($0["serverIdentityPins"] == nil || IOSMultihopExecution.ServerIdentityPins.exactObject($0["serverIdentityPins"]))
+              }) else {
             throw IOSMultihopExecution.issue()
         }
         let envelope = try JSONDecoder().decode(Envelope.self, from: data)
-        guard envelope.schema == 1, envelope.records.allSatisfy(\.valid),
+        guard [1, 2].contains(envelope.schema), envelope.records.allSatisfy(\.valid),
               Set(envelope.records.map(\.node)).count == envelope.records.count else { throw IOSMultihopExecution.issue() }
         return envelope.records
     }
