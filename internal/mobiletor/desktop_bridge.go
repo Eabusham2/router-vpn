@@ -54,17 +54,31 @@ type DesktopBridgeMetadata struct {
 // alone cannot fill it: the native host must own the TUN readback and prove the
 // exact selected DNS plus the public Tor path before setting Healthy.
 type DesktopBridgeProof struct {
-	Schema         int                   `json:"schema"`
-	SessionID      string                `json:"session_id"`
-	SourceSHA256   string                `json:"source_sha256"`
-	ConfigSHA256   string                `json:"config_sha256"`
-	Policy         DesktopBridgeMetadata `json:"policy"`
-	Proof          Proof                 `json:"proof"`
-	InterfaceName  string                `json:"interface_name"`
-	InterfaceIndex int                   `json:"interface_index"`
-	EffectiveMTU   int                   `json:"effective_mtu"`
-	Healthy        bool                  `json:"healthy"`
-	HeartbeatAt    int64                 `json:"heartbeat_at"`
+	Schema         int                       `json:"schema"`
+	SessionID      string                    `json:"session_id"`
+	SourceSHA256   string                    `json:"source_sha256"`
+	ConfigSHA256   string                    `json:"config_sha256"`
+	Policy         DesktopBridgeMetadata     `json:"policy"`
+	Proof          Proof                     `json:"proof"`
+	InterfaceName  string                    `json:"interface_name"`
+	InterfaceIndex int                       `json:"interface_index"`
+	EffectiveMTU   int                       `json:"effective_mtu"`
+	Healthy        bool                      `json:"healthy"`
+	HeartbeatAt    int64                     `json:"heartbeat_at"`
+	MTUReadback    *DesktopBridgeMTUReadback `json:"mtu_readback,omitempty"`
+}
+
+// DesktopBridgeMTUReadback is authority from the same native connection's
+// leased TUN transaction. Revision advances only when that lease adopts a new
+// candidate or rollback reader; it does not reset for a later MTU request.
+// It reports interface state, never Internet PMTU or a successful measurement.
+type DesktopBridgeMTUReadback struct {
+	Generation     uint64 `json:"generation"`
+	RequestID      string `json:"request_id"`
+	Revision       uint64 `json:"revision"`
+	InterfaceName  string `json:"interface_name"`
+	InterfaceIndex int    `json:"interface_index"`
+	EffectiveMTU   int    `json:"effective_mtu"`
 }
 
 func (p *DesktopBridgePolicy) Config() string                  { return p.config }

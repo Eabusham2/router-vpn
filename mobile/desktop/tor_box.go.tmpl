@@ -48,6 +48,7 @@ type RouterVPNDesktopTor struct {
 	name                        string
 	index, mtu                  int
 	mu                          sync.Mutex
+	interfaceMu                 sync.Mutex
 	startUsed, runUsed, closing bool
 	session                     routerVPNDesktopTorSession
 	proofNetwork                *mobiletor.Network
@@ -59,6 +60,8 @@ type RouterVPNDesktopTor struct {
 	retired                     atomic.Bool
 	dns                         *dnsmeasure.Service
 	activity                    routerVPNExternalActivity
+	mtuLease                    atomic.Pointer[RouterVPNDesktopTorMTULease]
+	mtuRevision                 uint64
 }
 
 // RouterVPNDesktopTorCreate is single-use for this exact service generation.
@@ -105,7 +108,7 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 	if !ok {
 		return nil, errors.New("desktop Tor TUN has no native interface readback")
 	}
-	name, index, mtu, err := tun.RouterVPNDesktopMTU(owner.currentNative)
+	name, index, mtu, err := tun.RouterVPNDesktopMTU(owner.readerLifetimeCurrent)
 	if err != nil || name == "" || index < 1 || mtu != meta.ConfiguredMTU || meta.InterfaceName != "" && name != meta.InterfaceName {
 		return nil, errors.New("desktop Tor native interface does not match its selected MTU")
 	}
@@ -130,7 +133,15 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 }
 
 func (r *RouterVPNDesktopTor) currentNative() bool {
-	return r != nil && !r.retired.Load() && r.ctx != nil && r.ctx.Err() == nil && r.engine != nil && r.engine.Identity() != "" && r.network != nil && r.network.Current()
+	return r.readerLifetimeCurrent() && r.engine != nil && r.engine.Identity() != ""
+}
+
+// The TUN calls this during its serialized replacement while the engine
+// identity lock is held. Keep it independent of that lock: full graph identity
+// is checked on both sides of the exact native transaction. A real network
+// reset still permanently retires the captured generation during replacement.
+func (r *RouterVPNDesktopTor) readerLifetimeCurrent() bool {
+	return r != nil && !r.retired.Load() && r.ctx != nil && r.ctx.Err() == nil && r.network != nil && r.network.Current()
 }
 
 func (r *RouterVPNDesktopTor) Start(session *mobiletor.DesktopBridgeSession) error {
@@ -285,6 +296,12 @@ func (r *RouterVPNDesktopTor) proofDial(ctx context.Context, network, address st
 }
 
 func (r *RouterVPNDesktopTor) readback() (string, int, int, error) {
+	r.interfaceMu.Lock()
+	defer r.interfaceMu.Unlock()
+	return r.readbackLocked()
+}
+
+func (r *RouterVPNDesktopTor) readbackLocked() (string, int, int, error) {
 	if !r.currentNative() || r.tun == nil {
 		return "", 0, 0, errors.New("desktop Tor native interface retired")
 	}
@@ -334,8 +351,12 @@ func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
 	r.mu.Lock()
 	r.closing = true
 	measurement := r.dns
+	mtuLease := r.mtuLease.Load()
 	r.mu.Unlock()
 	r.Cancel()
+	if mtuLease != nil {
+		mtuLease.Close()
+	}
 	r.joinOnce.Do(func() { go func() { r.workers.Wait(); close(r.joined) }() })
 	select {
 	case <-r.joined:
