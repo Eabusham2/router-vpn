@@ -10,6 +10,8 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInfo;
+import android.content.pm.Signature;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
@@ -23,6 +25,7 @@ import java.io.InputStream;
 import java.net.HttpURLConnection;
 import java.net.URL;
 import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.Locale;
 import java.util.ArrayList;
 import java.util.List;
@@ -53,12 +56,15 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
         final String apkUrl;
         final long apkSize;
         final String apkSha256;
+        final String signing, certificate;
+        final int versionCode;
 
-        VerifiedUpdate(String target, String apkUrl, long apkSize, String apkSha256) {
+        VerifiedUpdate(String target, String apkUrl, long apkSize, String apkSha256, String signing, int versionCode, String certificate) {
             this.target = target;
             this.apkUrl = apkUrl;
             this.apkSize = apkSize;
             this.apkSha256 = apkSha256;
+            this.signing=signing;this.versionCode=versionCode;this.certificate=certificate;
         }
     }
 
@@ -102,11 +108,15 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
     static AndroidUpdateSnapshot availableUpdate(Context context) {
         try {
             SharedPreferences p=context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE);
-            return AndroidUpdateSnapshot.verified(installedSource(context),p.getString("checked_from_sha",""),
+            AndroidUpdateSnapshot result=AndroidUpdateSnapshot.verified(installedSource(context),p.getString("checked_from_sha",""),
                     p.getString("available_sha",""),p.getString("apk_url",""),p.getLong("apk_size",0),
                     p.getString("apk_sha256",""),p.getLong("verified_at_ms",0),
-                    p.getBoolean("release_manifest_verified",false),System.currentTimeMillis());
-        } catch (RuntimeException malformed) { return null; }
+                    p.getBoolean("release_manifest_verified",false),System.currentTimeMillis(),
+                    p.getString("apk_signing",""),p.getInt("apk_version_code",0),p.getString("apk_certificate_sha256",""));
+            if(result==null)return null;
+            return compatibleInstalledSigning(context,result.installed,new VerifiedUpdate(result.target,result.apkURL,
+                    result.apkBytes,result.apkDigest,result.signing,result.versionCode,result.certificateSHA256))?result:null;
+        } catch (Exception malformed) { return null; }
     }
 
     static String checkMessage(Context context) {
@@ -118,7 +128,7 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
 
     static void notifyAvailableUpdate(Context context) {
         AndroidUpdateSnapshot update=availableUpdate(context);
-        if(update!=null)notifyUpdate(context,new VerifiedUpdate(update.target,update.apkURL,update.apkBytes,update.apkDigest));
+        if(update!=null)notifyUpdate(context,new VerifiedUpdate(update.target,update.apkURL,update.apkBytes,update.apkDigest,update.signing,update.versionCode,update.certificateSHA256));
     }
 
     private static void check(Context context) {
@@ -126,12 +136,13 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
             String current = sourceSha(context);
             if (!validSha(current)) throw new IllegalStateException("This build has no exact source manifest; install a published generic package to use updates.");
             VerifiedUpdate update = newestVerifiedUpdate(current);
+            if(update!=null&&!compatibleInstalledSigning(context,current,update))update=null;
             if (update == null) {
                 context.getSharedPreferences("router_vpn_updates",Context.MODE_PRIVATE).edit()
                         .remove("available_sha").remove("apk_url").remove("apk_size").remove("apk_sha256")
                         .remove("verified_at_ms").putBoolean("release_manifest_verified",false)
                         .putString("checked_from_sha",current)
-                        .putString("check_message","No newer exact-source release with valid APK metadata is available.").apply();
+                        .putString("check_message","No newer exact-source release with compatible, verified APK metadata is available.").apply();
                 return;
             }
             context.getSharedPreferences("router_vpn_updates", Context.MODE_PRIVATE)
@@ -142,6 +153,9 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
                     .putString("apk_url", update.apkUrl)
                     .putLong("apk_size", update.apkSize)
                     .putString("apk_sha256", update.apkSha256)
+                    .putString("apk_signing",update.signing)
+                    .putInt("apk_version_code",update.versionCode)
+                    .putString("apk_certificate_sha256",update.certificate)
                     .putBoolean("release_manifest_verified", true)
                     .putString("check_message","A newer exact-source APK has verified published digest metadata.")
                     .apply();
@@ -199,7 +213,51 @@ public final class RouterVpnUpdateProvider extends ContentProvider {
                 || !trustedReleaseAssetUrl(new URL(apkUrl))) {
             return null;
         }
-        return new VerifiedUpdate(target, apkUrl, signedSize, signedDigest);
+        JSONObject delivery=manifest.optJSONObject("android_delivery");
+        if(delivery==null||delivery.optInt("schema_version",0)!=1||!target.equals(delivery.optString("source_sha"))
+                ||!"com.eabusham.routervpn".equals(delivery.optString("application_id"))
+                ||!APK_ASSET.equals(delivery.optString("compatibility_asset"))
+                ||!delivery.optBoolean("apk_signature_verified",false)||signedSize!=delivery.optLong("apk_size",0)
+                ||!signedDigest.equals(delivery.optString("apk_sha256")))return null;
+        String signing=delivery.optString("signing"),certificate=delivery.optString("certificate_sha256");
+        int code=delivery.optInt("version_code",0);
+        if(code<2||code>2100000000||!validDigest(certificate)
+                ||!(("production-signed".equals(signing)&&"release".equals(delivery.optString("variant")))
+                ||("debug-signed".equals(signing)&&"debug".equals(delivery.optString("variant"))))
+                ||!("0.1."+code+"-"+target.substring(0,12)).equals(delivery.optString("version_name")))return null;
+        return new VerifiedUpdate(target, apkUrl, signedSize, signedDigest,signing,code,certificate);
+    }
+
+    private static boolean compatibleInstalledSigning(Context context,String source,VerifiedUpdate update)throws Exception {
+        JSONObject installed;
+        try(InputStream input=context.getAssets().open("ROUTER-VPN-ANDROID.json")) {
+            installed=parseObject(readLimited(input,MAX_METADATA));
+        }catch(java.io.IOException missing){return false;}
+        String signing=installed.optString("signing");
+        if(installed.optInt("schema_version",0)!=1||!source.equals(installed.optString("source_sha"))
+                ||!context.getPackageName().equals(installed.optString("application_id"))
+                ||!("production-signed".equals(signing)||"debug-signed".equals(signing))
+                ||!("production-signed".equals(signing)?"release":"debug").equals(installed.optString("variant")))return false;
+        PackageInfo actual=context.getPackageManager().getPackageInfo(context.getPackageName(),
+                Build.VERSION.SDK_INT>=28?PackageManager.GET_SIGNING_CERTIFICATES:PackageManager.GET_SIGNATURES);
+        long currentCode=Build.VERSION.SDK_INT>=28?actual.getLongVersionCode():actual.versionCode;
+        if(currentCode<=0||currentCode>=update.versionCode||currentCode!=installed.optInt("version_code",0)
+                ||!("0.1."+currentCode+"-"+source.substring(0,12)).equals(actual.versionName))return false;
+        Signature[] certificates;
+        if(Build.VERSION.SDK_INT>=28) {
+            if(actual.signingInfo==null||actual.signingInfo.hasMultipleSigners())return false;
+            certificates=actual.signingInfo.getSigningCertificateHistory();
+        }else certificates=actual.signatures;
+        // This delivery contract retains one persistent signing identity.
+        // Certificate rotation/lineages and multiple signers need their own
+        // explicit migration implementation; an old history cert is not current.
+        if(certificates==null||certificates.length!=1||certificates[0]==null)return false;
+        byte[] fingerprint=MessageDigest.getInstance("SHA-256").digest(certificates[0].toByteArray());
+        StringBuilder hex=new StringBuilder(64);
+        for(byte value:fingerprint)hex.append(String.format(Locale.ROOT,"%02x",value&255));
+        String currentCertificate=hex.toString();
+        if("production-signed".equals(signing)&&!currentCertificate.equals(installed.optString("certificate_sha256")))return false;
+        return currentCertificate.equals(update.certificate);
     }
 
     private static String sourceSha(Context context) throws Exception {

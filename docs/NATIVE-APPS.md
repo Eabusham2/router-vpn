@@ -42,7 +42,7 @@ The app-private custom-node store and native controls support WireGuard, Amnezia
 
 Plain Tor and supported Tor bridges use the packaged native Tor and Go pluggable transports inside the existing VPN lifecycle. Direct and captured Router-entry Local paths require live circuit, DNS and entry proofs as applicable. Tor Server/Compare remains unimplemented; an ordinary external execution receipt cannot authorize a Tor session.
 
-Physical VPN permission, lockdown, reconnect/network change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative validation remain release gates. Current workflows assemble debug APKs. Persistent production signing and real-device upgrade acceptance remain open and are not proved by an APK build or provenance check.
+Physical VPN permission, lockdown, reconnect/network change, DNS/IPv4/IPv6, custom-exit traffic and leak-negative validation remain release gates. The authoritative delivery supports a configured persistent production key and verifies the final APK's signer, version and source; a missing optional configuration remains explicitly debug-signed and the dedicated CI fallback is debug-only. See [Android signing and upgrade delivery](../android/PRODUCTION-SIGNING.md). The owner's signing configuration, production-signed full release and real-device upgrade acceptance remain separate evidence requirements.
 
 ## iOS / iPadOS
 

@@ -24,6 +24,8 @@ EXACT_SHA_RELEASE_ASSETS: dict[str, str] = {
     "router-vpn-macos-arm64.zip": "RouterVPN-darwin-arm64.tar.gz",
     "router-vpn-linux-amd64.zip": "RouterVPN-linux-amd64.tar.gz",
     "router-vpn-linux-arm64.zip": "RouterVPN-linux-arm64.tar.gz",
+    # Compatibility basename; build type/signer are verified separately and
+    # published as RouterVPN-RELEASE.json.android_delivery.
     "router-vpn-android.apk": "app-debug.apk",
     "router-vpn-ios.ipa": "RouterVPN-native-unsigned-resignable.ipa",
     "router-vpn-ios-preview.ipa": "RouterVPN-native-unsigned-resignable.ipa",
@@ -67,6 +69,8 @@ NATIVE_PACKAGE_ARTIFACTS: dict[str, tuple[tuple[str, str], ...]] = {
 
 _ANDROID_SOURCES = (
     ("RouterVPN-Android-release-candidate", "app-debug.apk"),
+    # Dedicated CI is a debug-only fallback; it does not promise a persistent
+    # production signer. Embedded Android delivery metadata keeps that explicit.
     ("RouterVPN-Android-CI", "app-debug.apk"),
 )
 _IOS_SOURCES = (

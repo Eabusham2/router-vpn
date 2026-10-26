@@ -5,6 +5,7 @@ import importlib.util
 import json
 from pathlib import Path
 import tempfile
+from android_delivery_test_fixture import write_android_fixture
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "deploy/materialize-exact-sha-release.py"
@@ -24,16 +25,21 @@ with tempfile.TemporaryDirectory() as raw:
     for index, name in enumerate(expected):
         path = source / f"producer-{index}" / name
         path.parent.mkdir(parents=True)
-        path.write_bytes((name + "\n").encode("utf-8"))
+        if name == 'app-debug.apk':
+            write_android_fixture(path, SHA)
+        else:
+            path.write_bytes((name + "\n").encode("utf-8"))
 
     output = work / "release"
     metadata = module.materialize(source, output, SHA, "Eabusham2/router-vpn")
     assert metadata["source_sha"] == SHA
     assert metadata["tag"] == "router-vpn-sha-" + SHA
     for name in expected:
-        assert (output / name).read_bytes() == (name + "\n").encode("utf-8")
+        assert (output / name).read_bytes() == next(source.rglob(name)).read_bytes()
     saved = json.loads((output / "RouterVPN-RELEASE.json").read_text(encoding="utf-8"))
     assert saved["source_sha"] == SHA and saved["repository"] == "Eabusham2/router-vpn"
+    assert saved['android_delivery']['signing'] == 'debug-signed'
+    assert saved['android_delivery']['apk_sha256'] == next(item['sha256'] for item in saved['assets'] if item['name'] == 'app-debug.apk')
     manifest = (output / "SHA256SUMS").read_text(encoding="utf-8")
     for name in expected + ["RouterVPN-RELEASE.json"]:
         assert f"  {name}\n" in manifest
@@ -46,7 +52,10 @@ with tempfile.TemporaryDirectory() as raw:
     for index, name in enumerate(expected):
         path = source / f"producer-{index}" / name
         path.parent.mkdir(parents=True)
-        path.write_bytes(b"x")
+        if name == 'app-debug.apk':
+            write_android_fixture(path, SHA)
+        else:
+            path.write_bytes(b"x")
     duplicate = source / "duplicate" / expected[0]
     duplicate.parent.mkdir()
     duplicate.write_bytes(b"y")

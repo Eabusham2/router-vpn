@@ -19,6 +19,9 @@ if _spec is None or _spec.loader is None:
     raise RuntimeError(f"cannot load {POLICY_PATH}")
 _policy = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_policy)
+_android_spec = importlib.util.spec_from_file_location("router_vpn_android_delivery", ROOT / "android/verify-delivery.py")
+_android = importlib.util.module_from_spec(_android_spec)
+_android_spec.loader.exec_module(_android)
 
 CHUNK = 1024 * 1024
 MAX_ASSET = 768 * 1024 * 1024
@@ -134,11 +137,16 @@ def materialize(input_root: Path, output_root: Path, source_sha: str, repository
         raise RuntimeError("exact-SHA release asset policy is empty")
 
     assets: list[dict[str, object]] = []
+    android_delivery = None
     for name in expected:
         matches = [path for path in input_root.rglob(name) if path.is_file()]
         if len(matches) != 1:
             raise RuntimeError(f"expected exactly one release-candidate file named {name}; found {len(matches)}")
+        if name == _android.COMPATIBILITY_ASSET:
+            android_delivery = _android.load_receipt(matches[0], source_sha)
         size, digest = _verified_copy(matches[0], output_root / name)
+        if name == _android.COMPATIBILITY_ASSET and (size != android_delivery['apk_size'] or digest != android_delivery['apk_sha256']):
+            raise RuntimeError("Android APK changed after delivery receipt verification")
         assets.append({"name": name, "size": size, "sha256": digest})
 
     tag = f"{_policy.EXACT_SHA_RELEASE_TAG_PREFIX}{source_sha}"
@@ -149,6 +157,7 @@ def materialize(input_root: Path, output_root: Path, source_sha: str, repository
         "tag": tag,
         "producer_workflow": "build-all.yml",
         "assets": assets,
+        "android_delivery": android_delivery,
     }
     metadata_text = json.dumps(metadata, sort_keys=True, indent=2) + "\n"
     _atomic_text(output_root / "RouterVPN-RELEASE.json", metadata_text)

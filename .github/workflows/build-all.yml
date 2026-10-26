@@ -122,6 +122,15 @@ jobs:
 
           The selected package and its owned local build workspace remain retryable for 30 minutes after becoming ready, then are deleted automatically. Android and iOS remain exact-SHA GitHub-only. Generic assets are secret-free; private node linking is separate.
           EOF
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          android = json.loads(Path('dist/exact-sha-release/RouterVPN-RELEASE.json').read_text())['android_delivery']
+          with Path('dist/exact-sha-release-notes.md').open('a') as notes:
+              notes.write('\nAndroid delivery: ' + android['label'] + '.\n\n')
+              notes.write('Version code: ' + str(android['version_code']) + '. Signing certificate SHA-256: `' + android['certificate_sha256'] + '`.\n\n')
+              notes.write('`app-debug.apk` is the retained compatibility filename; the verified signing state above identifies its actual build variant. An upgrade requires the same installed signing identity. A new production key cannot upgrade an unrelated debug-key installation.\n')
+          PY
           if gh release view "$TAG" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             ACTUAL_TARGET="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/${TAG}" --jq .target_commitish)"
             test "$ACTUAL_TARGET" = "$GITHUB_SHA" || {

@@ -99,7 +99,7 @@ Android is a real native `VpnService` application. It includes WireGuard and Amn
 
 Ordinary custom nodes support WireGuard, AmneziaWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and bounded inline OpenVPN through the shared native policy compiler. Plain Tor and supported bridges use the packaged native Tor and Go pluggable transports, directly or through a captured Router entry with Local execution. Tor Server/Compare remains unfinished. Protocol support does not promise every graph combination or every provider's OpenVPN configuration.
 
-Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit and leak-negative tests remain release gates. Current workflows build debug APKs; persistent production signing and real-device upgrade acceptance remain open.
+Physical Android VPN-permission, lockdown, reconnect, DNS/IPv4/IPv6, custom-exit and leak-negative tests remain release gates. The authoritative delivery supports a configured persistent production signing key, verifies the actual APK and publishes its signing/version receipt; the dedicated CI fallback stays debug-only. The updater compares the actual installed certificate and version before offering a compatible upgrade. See [Android signing and upgrade delivery](../android/PRODUCTION-SIGNING.md). The owner's production configuration and real-device installation/upgrade still require separate evidence.
 
 ## iPhone / iPad
 

@@ -18,7 +18,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 1
+          fetch-depth: 0
       - name: Archive exact checked-out source
         shell: bash
         run: |
@@ -26,20 +26,26 @@ jobs:
           archive="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.tar.gz"
           members="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.members.txt"
           manifest="$RUNNER_TEMP/router-vpn-source-${GITHUB_SHA}.json"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse --is-shallow-repository)" = false
           git archive --format=tar.gz --prefix="router-vpn-${GITHUB_SHA}/" -o "$archive" HEAD
           tree_sha="$(git rev-parse 'HEAD^{tree}')"
           [[ "$tree_sha" =~ ^[0-9a-f]{40}$ ]]
-          python3 - "$manifest" "$GITHUB_SHA" "$tree_sha" "$GITHUB_REPOSITORY" <<'PY'
+          android_version_code="$(( $(git rev-list --count HEAD) + 1 ))"
+          python3 - "$manifest" "$GITHUB_SHA" "$tree_sha" "$GITHUB_REPOSITORY" "$android_version_code" <<'PY'
           import json, pathlib, re, sys
-          path, commit, tree, repo = sys.argv[1:]
+          path, commit, tree, repo, android_code = sys.argv[1:]
           if not re.fullmatch(r"[0-9a-f]{40}", commit) or not re.fullmatch(r"[0-9a-f]{40}", tree):
               raise SystemExit("invalid exact source snapshot identity")
+          if not 2 <= int(android_code) <= 2100000000:
+              raise SystemExit("Android version code exceeds its supported range")
           pathlib.Path(path).write_text(json.dumps({
               "schema_version": 1,
               "repository": repo,
               "source_sha": commit,
               "tree_sha": tree,
               "artifact_family": "exact-source-snapshot",
+              "android_version_code": int(android_code),
           }, indent=2, sort_keys=True) + "\n", encoding="utf-8")
           PY
           (cd "$RUNNER_TEMP" && sha256sum "$(basename "$archive")" > "$(basename "$archive").sha256")

@@ -225,7 +225,8 @@ for rel, body in (
     (diag_rel, diag),
     (combined_rel, combined),
 ):
-    require(body, rel, ":app:assembleDebug", "actions/setup-java@v5", "actions/setup-go@v5", "go-version: '1.26.3'", "gradle-version: '9.5.0'")
+    require(body, rel, "python3 android/build-delivery.py" if rel == rc_rel else ":app:assembleDebug",
+            "actions/setup-java@v5", "actions/setup-go@v5", "go-version: '1.26.3'", "gradle-version: '9.5.0'")
     assert "actions/setup-java@v4" not in body, f"{rel}: deprecated setup-java v4 returned"
 
 # The dedicated combined-runtime gate must track both native dependency builders,
@@ -306,7 +307,9 @@ require(rc, rc_rel,
         "bash deploy/scope-windows-release-candidate.sh",
         "path: |\n            dist/packages/*",
         "name: RouterVPN-Android-release-candidate",
-        "path: android/app/build/outputs/apk/debug/app-debug.apk",
+        "android/app/build/outputs/routervpn/app-debug.apk",
+        "android/app/build/outputs/routervpn/android-delivery.json",
+        'python3 android/test_android_signing.py --gradle gradle --sdk "$ANDROID_HOME"',
         "name: RouterVPN-iOS-release-candidate",
         "path: ios/RouterVPN/build/RouterVPN-native-unsigned-resignable.ipa",
         "name: RouterVPN-macOS-release-candidate",

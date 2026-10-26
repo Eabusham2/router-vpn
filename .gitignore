@@ -11,6 +11,15 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 android/.vendor/
+android/.gradle/
+android/build/
+android/app/build/
+android/buildSrc/.gradle/
+android/buildSrc/build/
+android/*.jks
+android/*.keystore
+android/*.p12
+android/keystore.properties
 android/app/libs/amneziawg-tunnel.aar
 android/app/libs/amneziawg-tunnel.commit
 android/app/libs/amneziawg-tunnel-LICENSE.txt

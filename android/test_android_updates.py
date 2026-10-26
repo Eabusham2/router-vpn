@@ -17,18 +17,21 @@ STUBS = {
     "android/Manifest.java": '''package android;public final class Manifest {public static final class permission {public static final String POST_NOTIFICATIONS="post_notifications";}}''',
     "android/R.java": '''package android;public final class R {public static final class drawable {public static final int stat_sys_download_done=1;}}''',
     "android/os/Build.java": '''package android.os;public final class Build {public static final class VERSION {public static int SDK_INT=33;}}''',
-    "android/content/pm/PackageManager.java": '''package android.content.pm;public final class PackageManager {public static final int PERMISSION_GRANTED=0;public static final int PERMISSION_DENIED=-1;}''',
-    "android/content/res/AssetManager.java": '''package android.content.res;public class AssetManager {public String source="";public java.io.InputStream open(String name)throws java.io.IOException {if(!name.equals("ROUTER-VPN-SOURCE.json"))throw new java.io.IOException("unknown asset");return new java.io.ByteArrayInputStream(source.getBytes(java.nio.charset.StandardCharsets.UTF_8));}}''',
+    "android/content/pm/PackageManager.java": '''package android.content.pm;public final class PackageManager {public static final int PERMISSION_GRANTED=0;public static final int PERMISSION_DENIED=-1;public static final int GET_SIGNATURES=64,GET_SIGNING_CERTIFICATES=134217728;public final PackageInfo info=new PackageInfo();public PackageInfo getPackageInfo(String name,int flags){return info;}}''',
+    "android/content/pm/Signature.java": '''package android.content.pm;public final class Signature {final byte[] bytes;public Signature(byte[] b){bytes=b;}public byte[] toByteArray(){return bytes;}}''',
+    "android/content/pm/SigningInfo.java": '''package android.content.pm;public final class SigningInfo {public boolean multiple;public Signature[] history={new Signature("installed signing fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8))};public boolean hasMultipleSigners(){return multiple;}public Signature[] getSigningCertificateHistory(){return history;}}''',
+    "android/content/pm/PackageInfo.java": '''package android.content.pm;public final class PackageInfo {public int versionCode=2;public String versionName="0.1.2-"+"1".repeat(12);public SigningInfo signingInfo=new SigningInfo();public Signature[] signatures=signingInfo.history;public long getLongVersionCode(){return versionCode;}}''',
+    "android/content/res/AssetManager.java": '''package android.content.res;public class AssetManager {public String source="",delivery="";public java.io.InputStream open(String name)throws java.io.IOException {String value;if(name.equals("ROUTER-VPN-SOURCE.json"))value=source;else if(name.equals("ROUTER-VPN-ANDROID.json"))value=delivery;else throw new java.io.IOException("unknown asset");return new java.io.ByteArrayInputStream(value.getBytes(java.nio.charset.StandardCharsets.UTF_8));}}''',
     "android/content/res/Resources.java": '''package android.content.res;public class Resources {public static class Metrics {public float density=1;}public Metrics getDisplayMetrics(){return new Metrics();}}''',
-    "android/content/SharedPreferences.java": '''package android.content;public interface SharedPreferences {String getString(String k,String d);boolean getBoolean(String k,boolean d);long getLong(String k,long d);Editor edit();interface Editor {Editor putString(String k,String v);Editor putBoolean(String k,boolean v);Editor putLong(String k,long v);Editor remove(String k);void apply();}}''',
+    "android/content/SharedPreferences.java": '''package android.content;public interface SharedPreferences {String getString(String k,String d);boolean getBoolean(String k,boolean d);int getInt(String k,int d);long getLong(String k,long d);Editor edit();interface Editor {Editor putString(String k,String v);Editor putBoolean(String k,boolean v);Editor putLong(String k,long v);Editor putInt(String k,int v);Editor remove(String k);void apply();}}''',
     "android/content/MemoryPreferences.java": '''package android.content;public class MemoryPreferences implements SharedPreferences {
  public final java.util.Map<String,Object> values=new java.util.concurrent.ConcurrentHashMap<>();
- public String getString(String k,String d){return (String)values.getOrDefault(k,d);}public boolean getBoolean(String k,boolean d){return (Boolean)values.getOrDefault(k,d);}public long getLong(String k,long d){return (Long)values.getOrDefault(k,d);}
- public Editor edit(){return new Editor(){final java.util.Map<String,Object> staged=new java.util.HashMap<>();public Editor putString(String k,String v){staged.put(k,v);return this;}public Editor putBoolean(String k,boolean v){staged.put(k,v);return this;}public Editor putLong(String k,long v){staged.put(k,v);return this;}public Editor remove(String k){staged.put(k,null);return this;}public void apply(){for(var e:staged.entrySet()){if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}}};}}
+ public String getString(String k,String d){return (String)values.getOrDefault(k,d);}public boolean getBoolean(String k,boolean d){return (Boolean)values.getOrDefault(k,d);}public int getInt(String k,int d){return (Integer)values.getOrDefault(k,d);}public long getLong(String k,long d){return (Long)values.getOrDefault(k,d);}
+ public Editor edit(){return new Editor(){final java.util.Map<String,Object> staged=new java.util.HashMap<>();public Editor putString(String k,String v){staged.put(k,v);return this;}public Editor putBoolean(String k,boolean v){staged.put(k,v);return this;}public Editor putLong(String k,long v){staged.put(k,v);return this;}public Editor putInt(String k,int v){staged.put(k,v);return this;}public Editor remove(String k){staged.put(k,null);return this;}public void apply(){for(var e:staged.entrySet()){if(e.getValue()==null)values.remove(e.getKey());else values.put(e.getKey(),e.getValue());}}};}}
 ''',
     "android/content/Context.java": '''package android.content;public class Context {
  public static final int MODE_PRIVATE=0;public int permission=-1;public final MemoryPreferences prefs=new MemoryPreferences();public final android.content.res.AssetManager assets=new android.content.res.AssetManager();public final android.app.NotificationManager manager=new android.app.NotificationManager();public final java.util.List<Intent> intents=new java.util.ArrayList<>();
- public Context getApplicationContext(){return this;}public MemoryPreferences getSharedPreferences(String n,int m){return prefs;}public android.content.res.AssetManager getAssets(){return assets;}public android.content.res.Resources getResources(){return new android.content.res.Resources();}public String getPackageName(){return "com.eabusham.routervpn";}public int checkSelfPermission(String p){return permission;}public <T>T getSystemService(Class<T> t){return t.cast(manager);}public void startActivity(Intent i){intents.add(i);}}
+ public Context getApplicationContext(){return this;}public MemoryPreferences getSharedPreferences(String n,int m){return prefs;}public android.content.res.AssetManager getAssets(){return assets;}public android.content.res.Resources getResources(){return new android.content.res.Resources();}public final android.content.pm.PackageManager packageManager=new android.content.pm.PackageManager();public android.content.pm.PackageManager getPackageManager(){return packageManager;}public String getPackageName(){return "com.eabusham.routervpn";}public int checkSelfPermission(String p){return permission;}public <T>T getSystemService(Class<T> t){return t.cast(manager);}public void startActivity(Intent i){intents.add(i);}}
 ''',
     "android/content/Intent.java": '''package android.content;public class Intent {public static final String ACTION_VIEW="view";public static final int FLAG_ACTIVITY_NEW_TASK=1;public final String action;public android.net.Uri data;public Intent(String a){action=a;}public Intent(String a,android.net.Uri d){action=a;data=d;}public Intent addFlags(int f){return this;}public Intent putExtra(String k,String v){return this;}}''',
     "android/content/DialogInterface.java": '''package android.content;public interface DialogInterface {interface OnClickListener {void onClick(DialogInterface d,int i);}interface OnShowListener {void onShow(DialogInterface d);}}''',
@@ -58,10 +61,11 @@ STUBS = {
 HARNESS = r'''package com.eabusham.routervpn;
 import android.app.*;import android.widget.*;import android.os.Build;import java.net.*;import java.io.*;import java.util.*;import java.util.concurrent.*;import java.util.concurrent.atomic.*;import org.json.*;
 public final class UpdatesHarness {
- static final String CURRENT="1".repeat(40),TARGET="2".repeat(40),DIGEST="a".repeat(64),BASE="https://github.com/Eabusham2/router-vpn/releases/download/router-vpn-sha-"+TARGET+"/",APK=BASE+"app-debug.apk";
+ static final String CURRENT="1".repeat(40),TARGET="2".repeat(40),DIGEST="a".repeat(64),BASE="https://github.com/Eabusham2/router-vpn/releases/download/router-vpn-sha-"+TARGET+"/",APK=BASE+"app-debug.apk",CERT=certificate();
+ static String certificate(){try {byte[] raw=java.security.MessageDigest.getInstance("SHA-256").digest("installed signing fixture".getBytes(java.nio.charset.StandardCharsets.UTF_8));return java.util.HexFormat.of().formatHex(raw);}catch(Exception e){throw new AssertionError(e);}}
  static int checks;static volatile String fault="";static final AtomicInteger requests=new AtomicInteger();static volatile CountDownLatch entered,release;
  static void check(boolean b,String m){checks++;if(!b)throw new AssertionError(m);}
- static Activity owner()throws Exception{Activity a=new Activity();a.assets.source=new JSONObject().put("repository","Eabusham2/router-vpn").put("source_sha",CURRENT).toString();return a;}
+ static Activity owner()throws Exception{Activity a=new Activity();a.assets.source=new JSONObject().put("repository","Eabusham2/router-vpn").put("source_sha",CURRENT).toString();a.assets.delivery=new JSONObject().put("schema_version",1).put("source_sha",CURRENT).put("application_id","com.eabusham.routervpn").put("version_code",2).put("variant","debug").put("signing","debug-signed").put("certificate_sha256","").toString();return a;}
  static JSONObject asset(String name,long size)throws Exception{return new JSONObject().put("name",name).put("size",size).put("browser_download_url",BASE+name);}
  static String response(URL u)throws Exception {
   String path=u.getPath();
@@ -74,7 +78,16 @@ public final class UpdatesHarness {
    return new JSONArray().put(new JSONObject().put("tag_name","router-vpn-sha-"+TARGET).put("target_commitish",fault.equals("wrong-target")?CURRENT:TARGET).put("draft",false).put("assets",assets)).toString();
   }
   if(path.contains("/compare/"))return new JSONObject().put("status",fault.equals("diverged")?"diverged":"ahead").put("ahead_by",1).put("behind_by",0).put("base_commit",new JSONObject().put("sha",CURRENT)).put("merge_base_commit",new JSONObject().put("sha",CURRENT)).toString();
-  if(u.toString().equals(BASE+"RouterVPN-RELEASE.json"))return new JSONObject().put("schema_version",1).put("repository","Eabusham2/router-vpn").put("source_sha",TARGET).put("tag","router-vpn-sha-"+TARGET).put("producer_workflow",fault.equals("producer")?"untrusted.yml":"build-all.yml").put("assets",new JSONArray().put(new JSONObject().put("name","app-debug.apk").put("size",fault.equals("size")?1025:1024).put("sha256",fault.equals("digest")?"bad":DIGEST))).toString();
+  if(u.toString().equals(BASE+"RouterVPN-RELEASE.json")) {
+   JSONObject delivery=new JSONObject().put("schema_version",1).put("source_sha",TARGET).put("application_id","com.eabusham.routervpn")
+    .put("version_code",fault.equals("version")?2:3).put("version_name","0.1.3-"+TARGET.substring(0,12)).put("variant","release").put("signing","production-signed")
+    .put("certificate_sha256",fault.equals("certificate")?"f".repeat(64):CERT).put("compatibility_asset","app-debug.apk")
+    .put("apk_signature_verified",!fault.equals("unverified-signature")).put("apk_size",1024).put("apk_sha256",DIGEST);
+   if(fault.equals("delivery-sha"))delivery.put("source_sha",CURRENT);
+   JSONObject manifest=new JSONObject().put("schema_version",1).put("repository","Eabusham2/router-vpn").put("source_sha",TARGET).put("tag","router-vpn-sha-"+TARGET).put("producer_workflow",fault.equals("producer")?"untrusted.yml":"build-all.yml").put("assets",new JSONArray().put(new JSONObject().put("name","app-debug.apk").put("size",fault.equals("size")?1025:1024).put("sha256",fault.equals("digest")?"bad":DIGEST)));
+   if(!fault.equals("missing-delivery"))manifest.put("android_delivery",delivery);
+   return manifest.toString();
+  }
   throw new AssertionError("unexpected endpoint: "+u);
  }
  static final class HTTP extends HttpURLConnection {
@@ -97,10 +110,25 @@ public final class UpdatesHarness {
  }
  static void discovery()throws Exception{
   Activity a=owner();valid(a);check(a.manager.notifications==0&&a.requests==0,"denied notifications must not notify or auto-prompt");
-  for(String bad:List.of("duplicate","foreign-apk","foreign-manifest","wrong-target","diverged","producer","size","digest")){fault=bad;scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"bad metadata adopted: "+bad);check(!a.prefs.values.containsKey("apk_url"),"rejected old receipt retained: "+bad);}
+  for(String bad:List.of("duplicate","foreign-apk","foreign-manifest","wrong-target","diverged","producer","size","digest","version","certificate","unverified-signature","delivery-sha","missing-delivery")){fault=bad;scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"bad metadata adopted: "+bad);check(!a.prefs.values.containsKey("apk_url"),"rejected old receipt retained: "+bad);}
   valid(a);fault="network";scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)!=null,"temporary check failure erased still-valid receipt");check(RouterVpnUpdateProvider.checkMessage(a).contains("unavailable"),"missing check failure");
   a.assets.source=a.assets.source.replace(CURRENT,TARGET);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"different installed source reused cached receipt");
   a.prefs.values.put("check_message",42);check(RouterVpnUpdateProvider.checkMessage(a).contains("Check again"),"malformed preferences crashed UI");
+ }
+ static void installedSigningAndVersion()throws Exception{
+  for(int api:List.of(24,28,36)){
+   Build.VERSION.SDK_INT=api;Activity a=owner();valid(a);check(RouterVpnUpdateProvider.availableUpdate(a).deliveryLabel().contains("Production-signed"),"truthful delivery label");
+   a.packageManager.info.signatures=new android.content.pm.Signature[]{new android.content.pm.Signature("different key".getBytes())};
+   a.packageManager.info.signingInfo.history=a.packageManager.info.signatures;
+   check(RouterVpnUpdateProvider.availableUpdate(a)==null,"cached receipt accepted another installed signer on API "+api);
+   a=owner();a.packageManager.info.versionCode=3;scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"actual installed version was ignored");
+   a=owner();a.assets.delivery=new JSONObject(a.assets.delivery).put("signing","production-signed").put("variant","release").put("certificate_sha256",CERT).toString();valid(a);
+   a.assets.delivery=new JSONObject(a.assets.delivery).put("certificate_sha256","f".repeat(64)).toString();check(RouterVpnUpdateProvider.availableUpdate(a)==null,"forged installed certificate metadata was trusted");
+  }
+  Build.VERSION.SDK_INT=36;Activity a=owner();a.packageManager.info.signingInfo.multiple=true;scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"multiple signers accepted");
+  a=owner();a.packageManager.info.signingInfo.history=new android.content.pm.Signature[]{a.packageManager.info.signatures[0],a.packageManager.info.signatures[0]};scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"unimplemented rotation lineage accepted");
+  a=owner();a.assets.delivery=new JSONObject(a.assets.delivery).put("schema_version",99).toString();scan(a);check(RouterVpnUpdateProvider.availableUpdate(a)==null,"invalid installed metadata schema accepted");
+  Build.VERSION.SDK_INT=33;
  }
  static void notificationVersions()throws Exception{
   for(int api:List.of(24,25,26,32,33,36)){Build.VERSION.SDK_INT=api;Activity a=owner();a.permission=0;valid(a);check(a.manager.notifications==1,"notification omitted on API "+api);check(a.manager.channels==(api>=26?1:0),"channel API gate");check(PendingIntent.last.data.toString().equals(APK),"notification wrong exact asset");}
@@ -125,7 +153,7 @@ public final class UpdatesHarness {
   AndroidUpdateDialog.show(a);AlertDialog d=AlertDialog.last;check(!button(d,1).enabled,"visible startup scan should disable Check");String status=((TextView)body(d).children.get(0)).text;d.dismiss();a.destroyed=true;release.countDown();check(done.await(3,TimeUnit.SECONDS),"joined callbacks missing");
   long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(1);while(requests.get()<before+3&&System.nanoTime()<deadline)Thread.yield();check(requests.get()==before+3,"parallel duplicate discovery scan");check(((TextView)body(d).children.get(0)).text.equals(status),"destroyed dialog rendered late result");entered=null;release=null;
  }
- public static void main(String[]args)throws Exception{URL.setURLStreamHandlerFactory(protocol->protocol.equals("https")?new URLStreamHandler(){protected URLConnection openConnection(URL u){return new HTTP(u);}}:null);receipts();discovery();notificationVersions();dialog();singleFlight();System.out.println("Android shipped updates: PASS ("+checks+" checks; UI/HTTPS/permission boundary doubles)");}
+ public static void main(String[]args)throws Exception{URL.setURLStreamHandlerFactory(protocol->protocol.equals("https")?new URLStreamHandler(){protected URLConnection openConnection(URL u){return new HTTP(u);}}:null);receipts();discovery();installedSigningAndVersion();notificationVersions();dialog();singleFlight();System.out.println("Android shipped updates: PASS ("+checks+" checks; UI/HTTPS/permission boundary doubles)");}
 }
 '''
 

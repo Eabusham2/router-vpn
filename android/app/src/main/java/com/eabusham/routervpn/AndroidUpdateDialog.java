@@ -46,10 +46,10 @@ final class AndroidUpdateDialog {
         int pad=(int)(16*activity.getResources().getDisplayMetrics().density);body.setPadding(pad,pad,pad,pad);
         status=new TextView(activity);status.setTextIsSelectable(true);body.addView(status);
         check=new Button(activity);check.setAllCaps(false);check.setText("Check for updates");body.addView(check);
-        download=new Button(activity);download.setAllCaps(false);download.setText("Download release APK");body.addView(download);
+        download=new Button(activity);download.setAllCaps(false);download.setText("Download APK");body.addView(download);
         notifications=new Button(activity);notifications.setAllCaps(false);body.addView(notifications);
         TextView note=new TextView(activity);
-        note.setText("The published release metadata is checked against this installed source. Download opens Android's browser; Android confirms installation and checks the package signature. Router VPN does not silently replace the app. Notifications are optional; this screen works without them.");
+        note.setText("The published release metadata is checked against this installed source. An upgrade requires the same signing identity as the installed app; a new production key cannot replace an APK signed by an unrelated debug key. Download opens Android's browser; Android confirms installation and checks the package signature. Router VPN does not silently replace or uninstall the app. Notifications are optional; this screen works without them.");
         body.addView(note);
         ScrollView scroll=new ScrollView(activity);scroll.addView(body);
         dialog=new AlertDialog.Builder(activity).setTitle("Router VPN updates").setView(scroll).setPositiveButton("Close",null).create();
@@ -70,8 +70,9 @@ final class AndroidUpdateDialog {
             if(activity.isFinishing()||activity.isDestroyed()||!dialog.isShowing())return;
             AndroidUpdateSnapshot update=RouterVpnUpdateProvider.availableUpdate(activity);
             String message="Installed source: "+RouterVpnUpdateProvider.installedSource(activity)+"\n\n"+RouterVpnUpdateProvider.checkMessage(activity);
-            if(update!=null)message+="\n\nAvailable: "+update.target+"\nAPK size: "+update.apkBytes+" bytes\nPublished SHA-256: "+update.apkDigest+"\nMetadata verified: "+DateFormat.getDateTimeInstance().format(new Date(update.verifiedAt));
+            if(update!=null)message+="\n\nAvailable: "+update.target+"\n"+update.deliveryLabel()+"\nVersion code: "+update.versionCode+"\nSigning certificate SHA-256: "+update.certificateSHA256+"\nAPK size: "+update.apkBytes+" bytes\nPublished SHA-256: "+update.apkDigest+"\nMetadata verified: "+DateFormat.getDateTimeInstance().format(new Date(update.verifiedAt));
             status.setText(message);download.setEnabled(update!=null);check.setEnabled(!RouterVpnUpdateProvider.isChecking());
+            download.setText(update==null?"Download APK":"production-signed".equals(update.signing)?"Download production APK":"Download debug APK");
             check.setText(RouterVpnUpdateProvider.isChecking()?"Checking…":"Check for updates");
             notifications.setText(notificationPermissionMissing(activity)?"Allow update notifications":"Notification settings");
         }

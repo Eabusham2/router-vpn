@@ -19,6 +19,9 @@ if _spec is None or _spec.loader is None:
     raise RuntimeError(f"cannot load {MOBILE_PATH}")
 _mobile = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(_mobile)
+_android_spec = importlib.util.spec_from_file_location("routervpn_android_delivery", ROOT / "android/verify-delivery.py")
+_android = importlib.util.module_from_spec(_android_spec)
+_android_spec.loader.exec_module(_android)
 
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
 MANIFEST = "ROUTER-VPN-SOURCE.json"
@@ -181,6 +184,7 @@ def verify_tree(root: Path, expected_sha: str) -> None:
             _tar_manifest(path, expected_sha, family)
         elif kind == "android":
             _mobile.verify("router-vpn-android.apk", path, expected_sha, REPO)
+            _android.load_receipt(path, expected_sha)
         elif kind == "ios":
             _mobile.verify("router-vpn-ios.ipa", path, expected_sha, REPO)
         else:

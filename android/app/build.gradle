@@ -18,8 +18,6 @@ android {
         applicationId 'com.eabusham.routervpn'
         minSdk 24
         targetSdk 36
-        versionCode 1
-        versionName '0.1.0'
     }
 
     compileOptions {
@@ -42,6 +40,25 @@ android {
             keepDebugSymbols += ['**/libroutervpn_tor.so']
         }
     }
+}
+
+apply from: rootProject.file('release-build.gradle')
+
+def generatedDeliveryAssets = file("$buildDir/generated/routervpn-android-delivery-assets")
+['debug', 'release'].each { variant ->
+    android.sourceSets.getByName(variant).assets.srcDir new File(generatedDeliveryAssets, variant)
+    def taskName = "stageAndroid${variant.capitalize()}Delivery"
+    def metadata = routerVpnAndroidPolicy.publicMetadata(variant)
+    tasks.register(taskName) {
+        inputs.property 'deliveryMetadata', groovy.json.JsonOutput.toJson(metadata)
+        def destination = new File(generatedDeliveryAssets, "$variant/ROUTER-VPN-ANDROID.json")
+        outputs.file destination
+        doLast {
+            destination.parentFile.mkdirs()
+            destination.text = groovy.json.JsonOutput.prettyPrint(groovy.json.JsonOutput.toJson(metadata)) + '\n'
+        }
+    }
+    tasks.named('preBuild').configure { dependsOn taskName }
 }
 
 def awgAar = file('libs/amneziawg-tunnel.aar')
@@ -206,6 +223,57 @@ tasks.register('testNativeTorNdkSelection', Exec) {
 
 tasks.matching { it.name == 'assembleDebug' }.configureEach {
     finalizedBy tasks.named('verifyDebugNativeTor')
+}
+
+// Release packaging has the same license/provenance and real native Tor gates
+// as debug. Neither signing configuration nor an APK filename proves its bytes.
+tasks.register('verifyReleasePackage', Exec) {
+    dependsOn 'packageRelease'
+    workingDir rootProject.projectDir
+    doFirst {
+        def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+        if (!sdkRoot) throw new GradleException('Android SDK is required to verify the release APK')
+        def apkName = routerVpnAndroidPolicy.production ? 'app-release.apk' : 'app-release-unsigned.apk'
+        commandLine 'python3', 'verify-delivery.py', '--apk', file("$buildDir/outputs/apk/release/$apkName").absolutePath,
+            '--sdk', sdkRoot, '--sha', routerVpnAndroidPolicy.sourceSha, '--variant', 'release',
+            '--version-code', routerVpnAndroidPolicy.versionCode.toString(),
+            '--certificate', routerVpnAndroidPolicy.certificateSHA256, '--allow-unsigned'
+    }
+}
+
+tasks.register('verifyReleaseNativeTor', Exec) {
+    dependsOn 'packageRelease'
+    workingDir rootProject.projectDir
+    doFirst {
+        def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+        if (!sdkRoot) throw new GradleException('Android SDK is missing from ANDROID_HOME/ANDROID_SDK_ROOT')
+        def torSources = new groovy.json.JsonSlurper().parse(rootProject.file('../mobile/torpack/sources.json'))
+        def pinnedNdk = new File(rootProject.file(sdkRoot), "ndk/${torSources.android_ndk}")
+        def apkName = routerVpnAndroidPolicy.production ? 'app-release.apk' : 'app-release-unsigned.apk'
+        commandLine 'python3', '../deploy/verify-mobile-tor-link.py', '--native-package',
+            nativeTorPackage.absolutePath, '--android-apk', file("$buildDir/outputs/apk/release/$apkName").absolutePath,
+            '--ndk', pinnedNdk.absolutePath
+    }
+}
+tasks.matching { it.name == 'assembleRelease' }.configureEach {
+    finalizedBy tasks.named('verifyReleasePackage'), tasks.named('verifyReleaseNativeTor')
+}
+
+def deliveryVariant = routerVpnAndroidPolicy.deliveryVariant()
+tasks.register('assembleDelivery', Exec) {
+    dependsOn "assemble${deliveryVariant.capitalize()}"
+    dependsOn(deliveryVariant == 'release' ? 'verifyReleasePackage' : 'verifyDebugProjectLicense')
+    dependsOn(deliveryVariant == 'release' ? 'verifyReleaseNativeTor' : 'verifyDebugNativeTor')
+    workingDir rootProject.projectDir
+    doFirst {
+        def sdkRoot = System.getenv('ANDROID_HOME') ?: System.getenv('ANDROID_SDK_ROOT')
+        if (!sdkRoot) throw new GradleException('Android SDK is required to verify the delivered APK')
+        commandLine 'python3', 'verify-delivery.py', '--apk', file("$buildDir/outputs/apk/$deliveryVariant/app-$deliveryVariant.apk").absolutePath,
+            '--sdk', sdkRoot, '--sha', routerVpnAndroidPolicy.sourceSha, '--variant', deliveryVariant,
+            '--version-code', routerVpnAndroidPolicy.versionCode.toString(),
+            '--certificate', routerVpnAndroidPolicy.certificateSHA256,
+            '--output', file("$buildDir/outputs/routervpn").absolutePath
+    }
 }
 
 dependencies {

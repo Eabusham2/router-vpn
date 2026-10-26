@@ -1,0 +1,31 @@
+import com.eabusham.routervpn.build.AndroidBuildPolicy
+
+// A shared executable policy owns exact-source versions and validates the
+// private key against an explicitly supplied public certificate fingerprint.
+ext.routerVpnAndroidPolicy = AndroidBuildPolicy.resolve(rootProject.file('..'), System.getenv())
+
+android {
+    defaultConfig {
+        versionCode routerVpnAndroidPolicy.versionCode
+        versionName routerVpnAndroidPolicy.versionName
+    }
+    signingConfigs {
+        if (routerVpnAndroidPolicy.production) {
+            production {
+                storeFile routerVpnAndroidPolicy.storeFile
+                storePassword routerVpnAndroidPolicy.storePassword
+                keyAlias routerVpnAndroidPolicy.keyAlias
+                keyPassword routerVpnAndroidPolicy.keyPassword
+                storeType 'PKCS12'
+            }
+        }
+    }
+    buildTypes {
+        release {
+            debuggable false
+            if (routerVpnAndroidPolicy.production) {
+                signingConfig signingConfigs.production
+            }
+        }
+    }
+}

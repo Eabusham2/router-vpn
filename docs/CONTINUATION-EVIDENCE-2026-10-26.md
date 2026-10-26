@@ -22,6 +22,11 @@ numbered user passages, C1–C7 source messages, or the entire later 32-item
 request. The repository audits provide a derived index, not a verbatim original.
 An unavailable source is not evidence that its requirement was cancelled.
 
+A later targeted retrieval also returned a user-indexed October 19 passage for
+desktop packet exits, proxy entries, OpenVPN, Tor, MAX/ALL and external-node
+additions. It supplied continuity evidence, not the complete original numbered
+messages. A further private-file search returned no matching original files.
+
 The supplied handoff's explicit corrections remain binding: Home AdGuard;
 SMART AUTO and IPv6 On defaults; AUTO encryption/obfuscation requirements Off;
 Off/AES-256-GCM/AES-256-GCM plus XOR Start Layers; comparison arithmetic mean
@@ -50,10 +55,12 @@ a remote branch read. A pushed commit is not evidence of its completed release.
 | `fa56a3548eba94008ccd4e6d1d6d322c373fa9a0` | Existing Apple release guards recognize schema 5 and retain Start Layer requirements. | Profile/release-gap audits and the actual Go Start Layer contract. | Does not independently prove migration or device installation. |
 | `93f3106b0407f1828dfaf086c4882d54cf4b0e6b` | Desktop WG/AWG entry supports seven native proxy exits; profile/UI/Speed Lab retain exact transport and execution. Naive bootstrap follows the captured entry and owned Server lease. Missing mode cannot become Shadowsocks. | 189 graph/layer combinations; 126 native Local/Server parser cases; retained MTU/ownership tests; real WG→Naive H2/H3 TCP/UDP, wrong-key rejection and restoration; WPF490/AppKit727/GTK1074 profile checks; three native Speed Lab form→Go consumers; full GTK shipping/lifecycle gate. | Entry remains WG/AWG; broader packet/composite exits and entry parity remain open. Current all-platform packages and physical paths require separate proof. |
 | `0e56a990870591194f751a46362112f9e7c33912` | Tor MTU subprocess fixture waits for a complete bounded mailbox record, matching the real native reader. | A forced 12-byte prefix reproduced exit 93 before the fix; complete transition race suite and four repeated partial-write/publication cases pass. Wrong-owner, expiry and stale-proof rejection remain. | This corrects a fixture race; production ownership, heartbeat and MTU limits are unchanged. |
-| `cba811aa8efdb1561063d04d44d0a014ec4d7c75` | DoH3 fixture allocates its TCP downgrade witness first, then reserves the same UDP endpoint with bounded retry. | Complete pinned DNS proxy module passes race tests, including real IPv4/IPv6 HTTP/3, TLS failures, cancellation, listener cleanup and zero TCP fallback. | The observed Windows ARM64 bind failure needs a new hosted Windows run; Linux loopback success does not establish that result. |
+| `cba811aa8efdb1561063d04d44d0a014ec4d7c75` | DoH3 fixture allocates its TCP downgrade witness first, then reserves the same UDP endpoint with bounded retry. | Complete pinned DNS proxy module passes race tests, including real IPv4/IPv6 HTTP/3, TLS failures, cancellation, listener cleanup and zero TCP fallback. The authoritative Windows ARM64 native DNS HTTP/3 and kernel-proof step subsequently passed at `79192471`. | This establishes the hosted Windows step at that SHA, not every later package or physical DNS path. |
 | `bafd28b9a8eab4e43db129b03e2a4baef2c9e916` | Complete-profile Load returns an atomic selected/hop token map; AppKit catalog replies retain generation, request and source ownership. Windows/macOS Speed Lab checks the detached selection again at Run and sends exact source preconditions, including an explicit empty first-use selection. | 873 AppKit profile checks and nine rejected mutations; 156 candidate checks; 126 WPF and 503 Swift Speed Lab checks; both actual form payload sets pass the Go race consumer. Backend tests cover credential/policy changes, privacy, rollback, temporary preflight and current-path ownership without blocking Disconnect. | Exact native packages and physical OS behavior remain independent. Windows uses modal window ownership and value/token checks; it does not claim AppKit's generation mechanism. |
 | `64c6521751bcb5464e312dcd212b52c2ab4e91ff` | Native Tor DNS fixture peers add real response latency so an instantaneous local reply cannot be mistaken for a valid zero-duration measurement. | A coarse-clock control reproduces both old CI failures; the delayed real peers pass three times under that same clock. All 25 native Tor cases pass three times with the original sampler; zero/backward/submillisecond clock tests pass under race instrumentation. | Native loopback suite ran without race and without the unrelated Rosenpass C-library tag unavailable in this workspace. Production timing validation is unchanged; hosted Windows verification remains necessary. |
-| GTK change accompanying this ledger | Linux Speed Lab retains the opened main selection and hop preferences, freezes opaque catalog tokens, and sends the same Run preconditions as Windows/macOS. | 582 actual GTK callback checks; 1,074 complete-profile checks; real form payloads pass the Go race consumer. Full shipping GTK build, controller shutdown and all seven built-app Speed Lab cancellation/close scenarios pass; related map/MTU/CUSTOM UI checks report no errors. | This establishes the tested native Linux composition and loopback ownership, not physical VPN traffic or all-platform release publication. |
+| `7919247145493fd5547e9a6877d2217ec207a6c2` | Linux Speed Lab retains the opened main selection and hop preferences, freezes opaque catalog tokens, and sends the same Run preconditions as Windows/macOS. | 582 actual GTK callback checks; 1,074 complete-profile checks; real form payloads pass the Go race consumer. Full shipping GTK build, controller shutdown and all seven built-app Speed Lab cancellation/close scenarios pass; related map/MTU/CUSTOM UI checks report no errors. | This establishes the tested native Linux composition and loopback ownership, not physical VPN traffic or all-platform release publication. |
+| `355fc9b4b6dfabe7e1545190994852381de53e45` | The macOS native import gate follows both real callers into the owned catalog helper and all five popups after the profile-ownership change. | 200 executable Swift form cases and their Go race consumer; 873 profile checks and nine rejected defect mutations. The corrected native import/Go compiler step also passed in the hosted macOS AWG job for this SHA. | A passed import step does not establish the complete AppKit package, iOS build or device behavior. |
+| Android signing change accompanying this ledger | The authoritative build can use a configured persistent PKCS12 key, verifies the actual APK certificate/source/version, retains stable increasing ancestry-based version codes, and publishes digest-bound signing metadata. The updater compares the actual installed signer/version; changed keys cannot be labeled compatible upgrades. | Seven executable signing/capture cases with a disposable private key; 182 updater checks and installed-source/expiry negative mutations; six release-provenance cases, materialization and focused workflow/parity checks. | The real Gradle/APK fixture was explicitly skipped locally because no Gradle/Android SDK was available; the authoritative Android job requires it. No owner's key was created or installed. Production-key availability, a production-signed full package and actual device upgrades remain unverified. |
 
 The native Xray REALITY Vision, PQ REALITY Vision and XHTTP engine additionally
 passed its real encrypted loopback TCP/UDP interoperability suite using the
@@ -75,7 +82,7 @@ The later corrections and external-node additions overlap these groups.
 | 111–119: complete profiles and startup | Desktop setup metadata and native mobile profile stores; Apple Tor schema 5; desktop seven-exit round trips; delayed AppKit catalog restoration; all three desktop Speed Lab form-to-controller source captures. | Full original source wording still needs recovery; startup and complete-profile behavior retain OS permission/restart and physical-device acceptance obligations. |
 | 120–148: native map-first UI and telemetry | WPF/AppKit/GTK/Android/SwiftUI shipping composition, native controls and truthful telemetry tests. | Real visual/DPI/orientation/accessibility and location permission checks; a source marker does not establish visual acceptance. |
 | 149–169: modes, AUTO/SMART/CUSTOM, DNS | Shared native mode compilers, saved CUSTOM and DNS proof paths. | Complete requested platform/graph parity and actual provider/network proof. Fixed-transport Local/Server/Compare preserves the user formula; the older API-only transport-AUTO path remains separately bounded. |
-| 170–199: all requested platforms/architectures | Current authoritative build workflow, native packages and provenance gates. | Same-SHA published release, Apple distribution/signing, persistent Android production signing/upgrade acceptance and physical devices. Broader qualified Unix/BSD packaging remains in scope. |
+| 170–199: all requested platforms/architectures | Current authoritative build workflow, native packages and provenance gates; configured Android production signing/version/receipt path. | Same-SHA published release, Apple distribution/signing, the owner's Android production key/full signed package/upgrade acceptance and physical devices. Broader qualified Unix/BSD packaging remains in scope. |
 | 200–213: kill switch | Native firewall/route ownership, fail-closed mutation and negative controls. | Physical leak/transition checks; desktop dynamic Tor PT strict egress remains a source boundary. |
 | 214–224: real multihop | Native entry/exit identity, seven desktop proxy exits, mobile wider graph families, authenticated per-session server leases. | Desktop entry/packet/composite graph parity; Tor Server/Compare and ordinary external predecessors remain unimplemented boundaries, pending full original scope reconciliation and implementation. |
 | 225–241: MTU, measurements, Jumbo, padding | Path-owned Auto/Fixed/Retest/Cancel, native interface readback, 50-sample node statistics, real byte/time throughput. | Physical path MTU and per-hop performance; Tor exit padding semantics must not be invented from an assistant's unsupported-feature list. |
@@ -101,17 +108,24 @@ when the wrapper says queued. Workflow counts vary with changed paths; an old
 
 Verify all required native assets, checksums, manifest entries, ARM64 custom
 images and generated exact-SHA compose before calling publication complete.
-Unsigned re-signable IPA, debug APK, image-only compose and a published
-prerelease keep those exact meanings. None is private deployment evidence.
+Unsigned re-signable IPA, debug-signed versus production-signed APK, image-only
+compose and a published prerelease keep those exact meanings. The Android
+compatibility filename alone does not identify its signing state. None is
+private deployment evidence. The available GitHub connector rejected signing
+secret/variable inventory as unsupported; this does not prove configuration
+is absent. See [Android signing](../android/PRODUCTION-SIGNING.md) for the exact
+configuration and evidence contract.
 
-At the last pre-commit observation, `64c65217`'s authoritative run
-[40272096247](https://github.com/Eabusham2/router-vpn/actions/runs/40272096247)
-had passed unified delivery contracts, exact-source snapshot verification and
-native-target enumeration, with native builds still running or queued. The
-previous `bafd28b9` authoritative attempt was cancelled after the new push;
-cancellation is not a successful release. The latest published prerelease
-still targeted `745b3e41`. Re-read live GitHub for the commit containing this
-ledger; these observations deliberately do not claim a completed current release.
+At the latest recorded observation, `355fc9b4`'s authoritative run
+[40273179956](https://github.com/Eabusham2/router-vpn/actions/runs/40273179956)
+had passed unified delivery contracts, exact-source snapshot verification,
+native-target enumeration and both Linux native engine jobs. Windows native
+MTU cancellation/rollback and the corrected macOS import step had passed in
+their separate exact-SHA workflows. Remaining native builds were running or
+queued. Superseded attempts cancelled by a later push are not successful
+releases. The latest published prerelease still targeted `745b3e41`.
+Re-read live GitHub for the commit containing this ledger; these observations
+deliberately do not claim a completed current release.
 
 No live router, AdGuard, forwarding, Portainer deployment or private test device
 was changed in this continuation. The record must remain incomplete until the

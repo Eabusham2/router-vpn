@@ -57,9 +57,8 @@ def tar_desktop(path: Path, family: str, sha: str = SHA) -> None:
 
 
 def android(path: Path, sha: str = SHA) -> None:
-    with zipfile.ZipFile(path, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("classes.dex", b"dex")
-        zf.writestr("assets/ROUTER-VPN-SOURCE.json", manifest("android-apk", sha))
+    from android_delivery_test_fixture import write_android_fixture
+    write_android_fixture(path, sha)
 
 
 def ios_plist(family: str, sha: str = SHA) -> bytes:
