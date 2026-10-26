@@ -31,7 +31,7 @@ type desktopTorMTULeaseFixture struct {
 
 func (l *desktopTorMTULeaseFixture) Authority() string {
 	meta := l.policy.Metadata()
-	raw, _ := json.Marshal(map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID, "source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": false})
+	raw, _ := json.Marshal(map[string]any{"schema": 1, "source_kind": "tor", "id": meta.NodeID, "source_sha256": meta.SourceSHA256, "mtu_policy": meta.MTUPolicy, "jumbo_tun": meta.JumboTUN})
 	return string(raw)
 }
 func (*desktopTorMTULeaseFixture) VerificationTarget() (string, string) {
@@ -40,7 +40,7 @@ func (*desktopTorMTULeaseFixture) VerificationTarget() (string, string) {
 func (l *desktopTorMTULeaseFixture) RegisterOperation(generation uint64, request string) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	if generation != l.generation+1 || !routerVPNExternalSession.MatchString(request) || l.active || l.closed.Load() || l.policy.Metadata().MTUPolicy != "auto" {
+	if generation != l.generation+1 || !routerVPNExternalSession.MatchString(request) || l.active || l.closed.Load() || l.policy.Metadata().MTUPolicy != "auto" || l.policy.Metadata().JumboTUN {
 		return errors.New("unowned Tor request")
 	}
 	l.generation, l.request = generation, request
@@ -169,6 +169,47 @@ func TestRouterVPNDesktopMTUTorRequestAndRevisionRemainBoundThroughCancel(t *tes
 	}
 	if lease.Config() != lease.policy.Config() || lease.policy.Metadata().ConfiguredMTU != 1280 {
 		t.Fatal("Tor optimization changed its immutable saved policy")
+	}
+}
+
+func TestRouterVPNDesktopMTUTorJumboRemainsConfiguredWithoutAutoRetestOrRestore(t *testing.T) {
+	files := routerVPNNewTorFileFixture(t)
+	raw, err := os.ReadFile(filepath.Join(files.directory, "tor-profile.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var profile map[string]any
+	if err := json.Unmarshal(raw, &profile); err != nil {
+		t.Fatal(err)
+	}
+	profile["jumbo_tun"], profile["mtu_policy"], profile["manual_mtu"] = true, "auto", 0
+	source, _ := json.Marshal(profile)
+	policy, err := mobiletor.NewDesktopBridgePolicy(string(source), routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS)
+	if err != nil {
+		t.Fatal(err)
+	}
+	mtu, lease, _ := desktopTorMTUFixtureForPolicy(t, policy)
+	assertConfigured := func() {
+		t.Helper()
+		record := mtu.record()
+		if record.Requested || record.Generation != 0 || record.Status.Request != "" || record.MTUReadback != nil ||
+			record.Status.Measured || record.Status.Running || record.Status.Source != "configured-unmeasured" ||
+			record.Status.EffectiveMTU != 9000 || len(record.Status.Candidates) != 0 || len(lease.changes) != 0 {
+			t.Fatal("Jumbo capacity was mutated or relabeled as measured path MTU", record, lease.changes)
+		}
+	}
+	assertConfigured()
+	if mtu.controller.Start(strings.Repeat("a", 32), false) == nil || mtu.controller.Start(strings.Repeat("b", 32), true) == nil {
+		t.Fatal("Jumbo automatic/forced Retest entered the shared optimizer")
+	}
+	for _, restore := range []int{0, 1400, 9000} {
+		if mtu.start(routerVPNDesktopMTURequest{Generation: 1, Request: strings.Repeat("c", 32), Force: true, RestoreMTU: restore}) == nil {
+			t.Fatal("Jumbo command admitted automatic Retest or captured-value restore", restore)
+		}
+		assertConfigured()
+	}
+	if !lease.Healthy() || mtu.owner.invalid.Load() {
+		t.Fatal("refused optimization retired the healthy Jumbo connection")
 	}
 }
 

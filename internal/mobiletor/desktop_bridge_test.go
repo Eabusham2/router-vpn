@@ -134,6 +134,82 @@ func TestDesktopBridgeAutoIgnoresHistoricalMTUAndKeepsOmittedLANOff(t *testing.T
 	}
 }
 
+func TestDesktopBridgeJumboCapturesOnlyVirtualInterfaceCapacity(t *testing.T) {
+	for _, target := range []string{"linux", "darwin", "windows"} {
+		for _, mtuPolicy := range []string{"", "auto", "default", "manual", "fixed"} {
+			t.Run(target+"/"+mtuPolicy, func(t *testing.T) {
+				profile := desktopProfile()
+				profile["mtu_policy"], profile["manual_mtu"], profile["effective_mtu"] = mtuPolicy, 9000, 1420
+				profile["dns_protocol"], profile["dns_server_name"], profile["dns_path"] = "doh", "selected.example", "/chosen-query?network=one"
+				profile["home_lan_access"], profile["ipv6_mode"] = false, "off"
+				plain := desktopPolicy(t, profile, target)
+				profile["jumbo_tun"] = true
+				source := torHostEncode(t, profile)
+				if err := ValidateDesktopBridgeProfile(source); err != nil {
+					t.Fatal("valid idle Jumbo preference was rejected", err)
+				}
+				jumbo := desktopPolicy(t, profile, target)
+				meta := jumbo.Metadata()
+				wantPolicy := mtuPolicy
+				if wantPolicy == "" {
+					wantPolicy = "auto"
+				}
+				if !meta.JumboTUN || meta.ConfiguredMTU != 9000 || meta.MTUPolicy != wantPolicy || meta.KillSwitchPolicy != "on-connect" ||
+					meta.SourceSHA256 == plain.SourceSHA256() || jumbo.Profile() != source || source != torHostEncode(t, profile) {
+					t.Fatal("Jumbo lost its requested interface, source or strict policy", meta)
+				}
+				graph, err := profileObject(jumbo.Config(), 4<<20)
+				if err != nil {
+					t.Fatal(err)
+				}
+				base, err := profileObject(plain.Config(), 4<<20)
+				if err != nil {
+					t.Fatal(err)
+				}
+				tun := graph["inbounds"].([]any)[0].(map[string]any)
+				if tun["mtu"] != json.Number("9000") || tun["stack"] != "system" || tun["auto_route"] != true || tun["strict_route"] != true {
+					t.Fatal("Jumbo was not applied to the captured system TUN")
+				}
+				// Only the owned virtual capacity and its source-bound observer
+				// identity may change. DNS, SOCKS isolation, PT bootstrap, device
+				// routes and the physical network policy remain byte-equivalent.
+				tun["mtu"] = base["inbounds"].([]any)[0].(map[string]any)["mtu"]
+				graph["services"].([]any)[0].(map[string]any)["source_sha256"] = plain.SourceSHA256()
+				if !reflect.DeepEqual(graph, base) || meta.DNS != plain.Metadata().DNS || meta.ConfigSHA256 != desktopDigest([]byte(jumbo.Config())) {
+					t.Fatal("Jumbo changed a transport, resolver or protected route")
+				}
+			})
+		}
+	}
+}
+
+func TestDesktopBridgeJumboRejectsConflictingFixedAndUntypedPreferences(t *testing.T) {
+	for _, value := range []any{1280, 1492, 0, 9001, "9000"} {
+		for _, policy := range []string{"manual", "fixed"} {
+			profile := desktopProfile()
+			profile["jumbo_tun"], profile["mtu_policy"], profile["manual_mtu"] = true, policy, value
+			source := torHostEncode(t, profile)
+			if ValidateDesktopBridgeProfile(source) == nil {
+				t.Fatal("conflicting idle Jumbo and Fixed preference was accepted", policy, value)
+			}
+			if compiled, err := NewDesktopBridgePolicy(source, desktopSession, desktopIsolation, "linux"); err == nil || compiled != nil {
+				t.Fatal("conflicting Jumbo and Fixed preference reached the native graph", policy, value)
+			}
+		}
+	}
+	for _, value := range []any{"true", 1, nil} {
+		profile := desktopProfile()
+		profile["jumbo_tun"] = value
+		source := torHostEncode(t, profile)
+		if ValidateDesktopBridgeProfile(source) == nil {
+			t.Fatal("untyped Jumbo preference was accepted", value)
+		}
+		if compiled, err := NewDesktopBridgePolicy(source, desktopSession, desktopIsolation, "linux"); err == nil || compiled != nil {
+			t.Fatal("untyped Jumbo preference reached the native graph", value)
+		}
+	}
+}
+
 func TestDesktopBridgeSourceAndPlanRemainCaptured(t *testing.T) {
 	p := desktopProfile()
 	policy := desktopPolicy(t, p, "linux")
@@ -226,7 +302,7 @@ func TestDesktopBridgeIdleHomeIsNotRunnableAndInvalidPolicyDoesNotFallback(t *te
 }
 
 func TestDesktopBridgeDoesNotDiscardUnimplementedSelections(t *testing.T) {
-	for _, key := range []string{"multihop_enabled", "jumbo_tun", "daita_enabled"} {
+	for _, key := range []string{"multihop_enabled", "daita_enabled"} {
 		p := desktopProfile()
 		p[key] = true
 		if policy, err := NewDesktopBridgePolicy(torHostEncode(t, p), desktopSession, desktopIsolation, "linux"); err == nil || policy != nil {

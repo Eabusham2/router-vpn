@@ -348,6 +348,84 @@ func TestRouterVPNDesktopTorMTUFixedPolicyAndForeignOwnerCannotChange(t *testing
 	}
 }
 
+func TestRouterVPNDesktopTorJumboRetainsNativeProofAndCannotRegisterOptimizer(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, func(profile map[string]any) {
+		profile["jumbo_tun"], profile["mtu_policy"], profile["manual_mtu"] = true, "auto", 0
+	})
+	owner := f.capture(t)
+	if err := owner.start(f.child); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := owner.run(f.prover(t))
+	if err != nil || !proof.Policy.JumboTUN || proof.Policy.ConfiguredMTU != 9000 || proof.EffectiveMTU != 9000 ||
+		proof.Policy != f.policy.Metadata() || !proof.Proof.DNSProven || !proof.Proof.IsTor || f.socks.proofCalls.Load() != 1 {
+		t.Fatal("Jumbo did not retain the actual native path and selected DNS proof", proof, err)
+	}
+	lease, err := owner.ClaimMTU()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var authority map[string]any
+	if json.Unmarshal([]byte(lease.Authority()), &authority) != nil || authority["jumbo_tun"] != true || authority["mtu_policy"] != "auto" ||
+		authority["source_sha256"] != f.policy.SourceSHA256() || lease.Config() != f.policy.Config() {
+		t.Fatal("Jumbo was lost at the real native MTU authority boundary", lease.Authority())
+	}
+	initial, err := lease.MTUReadback()
+	if err != nil || initial.Generation != 0 || initial.RequestID != "" || initial.Revision != 0 || initial.EffectiveMTU != 9000 {
+		t.Fatal("configured Jumbo capacity acquired a measurement or lost its reader", initial, err)
+	}
+	if lease.RegisterOperation(1, strings.Repeat("b", 32)) == nil {
+		t.Fatal("Jumbo registered an automatic MTU request")
+	}
+	if err := lease.SetTransitionHandler(func(context.Context, mobiletor.DesktopBridgeMTUTransition) (func(), error) { return func() {}, nil }); err != nil {
+		t.Fatal(err)
+	}
+	// A stale/internal request cannot bypass the mutation-side policy check
+	// even if a registration bug were to leave a nonce behind.
+	owner.mu.Lock()
+	lease.generation, lease.request = 1, strings.Repeat("b", 32)
+	owner.mu.Unlock()
+	reader, _ := lease.Inbound()
+	called := false
+	if _, err := lease.changeMTU(context.Background(), reader, 1400, func(context.Context, adapter.Inbound, int) (adapter.Inbound, error) {
+		called = true
+		return reader, nil
+	}); err == nil || called {
+		t.Fatal("Jumbo interface was changed by a stale automatic request")
+	}
+	owner.mu.Lock()
+	lease.generation, lease.request = 0, ""
+	owner.mu.Unlock()
+	current, err := lease.MTUReadback()
+	if err != nil || current != initial || !owner.Healthy() {
+		t.Fatal("rejected optimizer request changed the retained Jumbo interface", current, err)
+	}
+	if err := owner.VerifyCurrentPath(context.Background()); err != nil {
+		t.Fatal("valid Jumbo readback failed the strict heartbeat", err)
+	}
+	f.tun.mu.Lock()
+	f.tun.mtu = 1280
+	f.tun.mu.Unlock()
+	if err := owner.VerifyCurrentPath(context.Background()); err == nil || owner.Healthy() {
+		t.Fatal("Jumbo heartbeat accepted a silently replaced 1280-byte interface")
+	}
+}
+
+func TestRouterVPNDesktopTorJumboRejectsWrongInitialReadback(t *testing.T) {
+	f := newDesktopTorBoxFixture(t, func(profile map[string]any) {
+		profile["jumbo_tun"], profile["mtu_policy"], profile["manual_mtu"] = true, "default", 0
+	})
+	if err := f.box.RouterVPNStrategyStart(); err != nil {
+		t.Fatal(err)
+	}
+	f.tun.mu.Lock()
+	f.tun.mtu = 1280
+	f.tun.mu.Unlock()
+	if owner, err := f.box.RouterVPNDesktopTorCreate(f.policy); err == nil || owner != nil {
+		t.Fatal("Jumbo capture accepted a native interface that did not apply 9000")
+	}
+}
+
 func TestRouterVPNDesktopTorMTUCandidateActivityRetainsBothProofsAndSelectedResolver(t *testing.T) {
 	f, owner, lease := desktopTorMTULeaseFixture(t)
 	before := f.socks.dnsCalls.Load()

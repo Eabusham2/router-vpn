@@ -48,6 +48,7 @@ type DesktopBridgeMetadata struct {
 	KillSwitchPolicy string           `json:"kill_switch_policy"`
 	MTUPolicy        string           `json:"mtu_policy"`
 	ConfiguredMTU    int              `json:"configured_mtu"`
+	JumboTUN         bool             `json:"jumbo_tun"`
 }
 
 // DesktopBridgeProof is the native child receipt. A control bootstrap status
@@ -103,7 +104,28 @@ func ValidateDesktopBridgeProfile(source string) error {
 	}
 	root, tun, _, _ := torPredecessor("")
 	root["dns"] = map[string]any{}
-	return applyTorDevicePolicy(root, tun, profile)
+	if err := applyTorDevicePolicy(root, tun, profile); err != nil {
+		return err
+	}
+	return applyDesktopTorJumboPolicy(tun, profile)
+}
+
+// The system TUN passes TCP streams to the captured standalone Tor SOCKS
+// owner. Jumbo changes only that virtual interface's capacity; it does not
+// advertise a measured transport PMTU or authorize larger underlay packets.
+// Keep this desktop capability separate from the mobile host's TUN contract.
+func applyDesktopTorJumboPolicy(tun, profile map[string]any) error {
+	if profile["jumbo_tun"] != true {
+		return nil
+	}
+	if policy := profileString(profile, "mtu_policy"); policy == "manual" || policy == "fixed" {
+		mtu, err := profileInteger(profile, "manual_mtu", 0)
+		if err != nil || mtu != 9000 {
+			return errors.New("desktop Tor Jumbo requires a 9000-byte virtual interface and conflicts with the saved Fixed MTU")
+		}
+	}
+	tun["mtu"] = 9000
+	return nil
 }
 
 // NewDesktopBridgePolicy compiles the exact saved direct bridge selection. The
@@ -124,10 +146,8 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	if profile["multihop_enabled"] == true {
 		return nil, errors.New("desktop Tor requires its captured Router-entry runtime before multihop can run")
 	}
-	for _, field := range []string{"jumbo_tun", "daita_enabled"} {
-		if profile[field] == true {
-			return nil, errors.New("desktop Tor cannot discard a requested Jumbo or padding policy; its native implementation is still required")
-		}
+	if profile["daita_enabled"] == true {
+		return nil, errors.New("desktop Tor cannot discard a requested padding policy; its authenticated native implementation is still required")
 	}
 	selected, _, err := torSelectedDNS(profile, nil, false)
 	if err != nil {
@@ -157,6 +177,9 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	route["final"] = ProfileOutboundTag
 	route["default_domain_resolver"] = map[string]any{"server": bootstrapDNS}
 	if err := applyTorDevicePolicy(root, tun, profile); err != nil {
+		return nil, err
+	}
+	if err := applyDesktopTorJumboPolicy(tun, profile); err != nil {
 		return nil, err
 	}
 	// Capture classic DNS before its first packet has been protocol-classified;
@@ -204,7 +227,7 @@ func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string)
 	metadata := DesktopBridgeMetadata{
 		Schema: 1, NodeID: profileString(profile, "id"), SessionID: sessionID, SourceSHA256: sourceSHA, ConfigSHA256: desktopDigest(encoded),
 		TargetOS: targetOS, FinalTag: ProfileOutboundTag, TUNTag: profileString(tun, "tag"), InterfaceName: profileString(tun, "interface_name"), SocksPort: socksPort,
-		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu,
+		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true,
 	}
 	bridges := make([]string, len(plan.Bridges))
 	for i, bridge := range plan.Bridges {
