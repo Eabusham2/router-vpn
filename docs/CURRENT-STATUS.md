@@ -1,6 +1,6 @@
 # Current implementation status
 
-Updated October 25, 2026 (UTC). This file describes committed source
+Updated October 26, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
@@ -146,12 +146,20 @@ not labelled as measured DNS latency. These are source and executable controller
 checks, including isolated child-process fixtures; they do not establish live
 AdGuard encrypted service availability or physical-device routing.
 
-The legacy raw kernel DNS proxy has no HTTP/3 engine. Its actual CLI now rejects
-H3 before binding listeners instead of silently changing it to HTTPS. Native
-sing-box paths retain H3 support; raw-path H3 remains unfinished. Unix launchers
-also stop when DNS capture fails, before inherited environment settings can
-reach the runtime. Windows and Unix Home config writers require an owned tunnel
-outbound and never fall through to direct DNS.
+The raw kernel DNS proxy now owns an authenticated HTTP/3 transport for the
+captured resolver's literal IP, port, TLS identity and HTTPS path. Its pinned
+QUIC/TLS implementation does not redirect, use early data or downgrade to TCP.
+Cancellation and shutdown join the owned request workers, listeners and QUIC
+socket. Actual CLI, UDP/TCP listener, HTTP/3 server and kernel-proof tests cover
+both address families, identity failures and drain. Windows raw WireGuard now
+passes the selected H3 policy to this proxy; the required native-runtime matrix
+executes the transport tests on all six desktop OS/architecture hosts. Package
+builders use the pinned toolchain and include dependency/license receipts.
+These source and executable checks do not establish live Home AdGuard HTTP/3
+availability or physical routing. Unix launchers stop when DNS capture fails,
+before inherited environment settings can reach the runtime. Windows and Unix
+Home config writers require an owned tunnel outbound and never fall through to
+direct DNS. Native sing-box paths retain their separate H3 implementation.
 
 Compact desktop Home and Rescue actions now capture the displayed node before
 reading its DNS revision. Re-selecting Home preserves an already-selected
