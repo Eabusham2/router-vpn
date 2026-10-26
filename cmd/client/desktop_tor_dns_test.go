@@ -212,22 +212,23 @@ func TestDesktopTorDNSCancellationRetainsNativeOwnerAndHoldUntilDrain(t *testing
 		t.Run(kind, func(t *testing.T) {
 			a, launch := desktopTorDNSControllerFixture(t, kind)
 			operation, request := desktopDNSStartForTest(t, a, "https")
-			deadline := time.Now().Add(5 * time.Second)
-			for {
-				record, err := readDesktopDNSRecord(launch)
-				if err == nil && record.Generation > 0 || kind == "tor-dns-read-fail" && err != nil {
-					break
-				}
-				if time.Now().After(deadline) {
-					t.Fatal("isolated native DNS request did not arrive")
-				}
-				time.Sleep(5 * time.Millisecond)
+			expectedStage := "draining"
+			if kind == "tor-dns-read-fail" {
+				// Exercise the real ordering that failed in CI: the invalid
+				// mailbox has already entered owned cleanup when explicit Cancel
+				// arrives. Cancel changes its label, not its undrained ownership.
+				desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Stage == "draining" })
+				expectedStage = "cancelled"
+			} else {
+				desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Stage == "measuring" })
 			}
 			request.Transport = ""
 			if w := desktopDNSHTTP(t, a, http.MethodPost, "/api/dns/measurement/cancel", request); w.Code != http.StatusAccepted {
 				t.Fatal("Tor DNS cancel was not admitted", w.Code)
 			}
-			desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Stage == "draining" })
+			view := desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool {
+				return v.Status.Stage == expectedStage && v.Status.Complete && !v.Status.Drained
+			})
 			if launch.tor.dnsMu.TryLock() {
 				launch.tor.dnsMu.Unlock()
 				t.Fatal("Tor DNS released native command ownership before worker drain")
@@ -243,7 +244,7 @@ func TestDesktopTorDNSCancellationRetainsNativeOwnerAndHoldUntilDrain(t *testing
 			if err := os.WriteFile(filepath.Join(launch.directory, "dns-drain-release.fixture"), []byte("release"), 0600); err != nil {
 				t.Fatal(err)
 			}
-			view := desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Complete && v.Status.Drained })
+			view = desktopDNSWaitForTest(t, a, operation, func(v desktopDNSView) bool { return v.Status.Complete && v.Status.Drained })
 			<-operation.done
 			if view.Status.Stage != "cancelled" || len(view.Status.Results) != 0 || a.cmd != launch.command {
 				t.Fatal("cancelled Tor DNS retained results or changed the VPN", view.Status)
