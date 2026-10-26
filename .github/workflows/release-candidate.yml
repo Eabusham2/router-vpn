@@ -295,6 +295,20 @@ jobs:
             & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
             if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch suspended-process Job tests failed in $shell"}
           }
+      - name: Execute packaged Windows WFP enforcement
+        shell: pwsh
+        env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}
+        run: |
+          $ErrorActionPreference='Stop'; $arch=$env:ROUTER_VPN_ARCH
+          $installed=Join-Path $env:RUNNER_TEMP "installed-$arch"
+          $roots=@(Get-ChildItem -LiteralPath $installed -Directory)
+          if($roots.Count -ne 1){throw 'Expected exactly one extracted Windows release package'}
+          $test=Join-Path $roots[0].FullName 'client/test-windows-wfp.ps1'
+          if(-not(Test-Path -LiteralPath $test -PathType Leaf)){throw 'Shipped Windows package lacks its WFP enforcement test'}
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName
+            if($LASTEXITCODE -ne 0){throw "Packaged Windows $arch WFP kernel enforcement failed in $shell"}
+          }
       - name: Execute packaged Tor wrapper lifecycle
         shell: pwsh
         env: {ROUTER_VPN_ARCH: '${{ matrix.arch }}'}

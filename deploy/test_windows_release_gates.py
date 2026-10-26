@@ -135,6 +135,28 @@ def check_owned_process_gate(job: str, packaged: bool, tor_wrapper: bool = False
         raise AssertionError("Windows Job gate omitted real kernel execution or became nonblocking")
 
 
+def check_wfp_gate(job: str, packaged: bool) -> None:
+    name = "Execute packaged Windows WFP enforcement" if packaged else "Executable-scoped Windows WFP enforcement"
+    marker = "      - name: " + name + "\n"
+    if job.count(marker) != 1:
+        raise AssertionError("Windows WFP kernel gate is missing or duplicated")
+    gate = job.split(marker, 1)[1].split("      - ", 1)[0]
+    required = ["shell: pwsh", "foreach($shell in @('pwsh','powershell.exe'))", "if($LASTEXITCODE -ne 0){throw"]
+    if packaged:
+        required += [
+            "installed-$arch", "$roots.Count -ne 1",
+            "$test=Join-Path $roots[0].FullName 'client/test-windows-wfp.ps1'",
+            "Test-Path -LiteralPath $test -PathType Leaf",
+            "& $shell -NoProfile -ExecutionPolicy Bypass -File $test -SourceRoot $roots[0].FullName",
+        ]
+    else:
+        required.append("& $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp.ps1 -SourceRoot $env:GITHUB_WORKSPACE")
+    if any(value not in gate for value in required):
+        raise AssertionError("WFP kernel gate lost a real shell or exact package boundary")
+    if "-compileonly" in gate.lower() or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
+        raise AssertionError("WFP gate omitted native enforcement or became nonblocking")
+
+
 def native_dns_test_script(workflow: str, candidate: str) -> str:
     dependency = workflow_job(candidate, "native-runtimes")
     if "uses: ./.github/workflows/desktop-native-runtime.yml" not in dependency or "platform: all" not in dependency:
@@ -169,6 +191,7 @@ def check_workflow(candidate: str, build_all: str) -> None:
     check_workspace_gate(windows)
     check_owned_process_gate(windows, True)
     check_owned_process_gate(windows, True, True)
+    check_wfp_gate(windows, True)
     source = workflow_job(candidate, "source-audit")
     for command in ("run: go test ./...", "python3 deploy/test_desktop_tor_unix_wrapper.py", "python3 modes/test_cleanup_private_runtime.py"):
         if command not in source:
@@ -299,6 +322,23 @@ class WindowsReleaseGateTests(unittest.TestCase):
                     before, after = job.split(marker, 1)
                     with self.subTest(filename=filename, wrapper=tor_wrapper, mutation=new), self.assertRaises(AssertionError):
                         check_owned_process_gate(before + marker + after.replace(old, new, 1), packaged, tor_wrapper)
+
+    def test_wfp_gates_require_both_shells_and_actual_kernel_enforcement(self):
+        for filename, job_name, packaged in (("windows-native-contract.yml", "native-windows", False), ("release-candidate.yml", "windows-native-smoke", True)):
+            job = workflow_job((REPOSITORY / ".github/workflows" / filename).read_text(encoding="utf-8"), job_name)
+            check_wfp_gate(job, packaged)
+            name = "Execute packaged Windows WFP enforcement" if packaged else "Executable-scoped Windows WFP enforcement"
+            marker = "      - name: " + name + "\n"
+            before, after = job.split(marker, 1)
+            source = "$roots[0].FullName" if packaged else "$env:GITHUB_WORKSPACE"
+            for old, new in (
+                ("foreach($shell in @('pwsh','powershell.exe'))", "foreach($shell in @('pwsh'))"),
+                ("-SourceRoot " + source, "-CompileOnly -SourceRoot " + source),
+                ("-SourceRoot " + source, "-SourceRoot 'unrelated source'"),
+                ("shell: pwsh", "continue-on-error: true\n        shell: pwsh"),
+            ):
+                with self.subTest(file=filename, mutation=new), self.assertRaises(AssertionError):
+                    check_wfp_gate(before + marker + after.replace(old, new, 1), packaged)
 
     def test_broken_release_edges_and_weakened_commands_are_rejected(self):
         candidate = (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")

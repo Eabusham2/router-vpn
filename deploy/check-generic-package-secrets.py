@@ -19,6 +19,7 @@ PUBLIC_SOURCE_PATHS=(
 PWA_MARKERS=(b"beforeinstallprompt",b"serviceWorker.register",b"manifest.webmanifest",b"router-vpn-ui-v1",b"installPWA(")
 RETIRED_WINDOWS_PAYLOADS=("client/Prepare-Windows-Mode-Catalog.ps1","client/RouterVPN-Windows-Product.ps1")
 WINDOWS_NATIVE_HELPERS=(
+ "client/Private-RouterVPN-Wfp.ps1",
  "client/RouterVPN-Windows-App.ps1",
  "client/RouterVPN-Windows-UnifiedShell.ps1",
  "client/RouterVPN-Windows-Telemetry.ps1",

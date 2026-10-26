@@ -25,6 +25,8 @@ jobs:
             'client/Private-RouterVPN-State.ps1',
             'client/Private-RouterVPN-Job.ps1',
             'client/test-windows-private-job.ps1',
+            'client/Private-RouterVPN-Wfp.ps1',
+            'client/test-windows-wfp.ps1',
             'client/test-windows-tor-wrapper-lifecycle.ps1',
             'client/native-wireguard-windows.ps1',
             'client/native-windows-mode.ps1',
@@ -49,6 +51,14 @@ jobs:
               $errors | ForEach-Object { Write-Error "${file}: $($_.Message) at $($_.Extent.Text)" }
               throw "PowerShell parser rejected $file"
             }
+          }
+      - name: Executable-scoped Windows WFP enforcement
+        shell: pwsh
+        run: |
+          $ErrorActionPreference='Stop'
+          foreach($shell in @('pwsh','powershell.exe')){
+            & $shell -NoProfile -ExecutionPolicy Bypass -File client/test-windows-wfp.ps1 -SourceRoot $env:GITHUB_WORKSPACE
+            if($LASTEXITCODE -ne 0){throw "Windows WFP kernel enforcement failed in $shell"}
           }
       - name: Async action completion and cancellation regressions
         shell: pwsh
