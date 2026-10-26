@@ -32,17 +32,53 @@ type routerNodeAutomaticMTU struct {
 	command   *exec.Cmd
 	waiting   bool
 	attempted bool
+	completed bool
 	resume    bool
 }
 
 var routerNodeAutomaticMTUs sync.Map
 
+// Called with the captured live owner's lock after successful Commit and
+// checked kernel cleanup. A proved explicit Retest satisfies initial Auto for
+// this same connection; neither an uncommitted value nor another session's
+// delayed cleanup may consume the replacement connection's Auto work.
+func retainCompletedRouterNodeMTU(live *mtuLiveOwner) {
+	if live == nil || live.a == nil || !live.committed || !live.closed || live.restored || live.command == nil || live.snapshot.persistence == nil {
+		return
+	}
+	a, snapshot := live.a, live.snapshot
+	if live.network != "" && live.network != physicalNetworkIdentity() || validateMTURetestSnapshot(a, snapshot) != nil {
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	profile, found := a.profileByIDLocked(snapshot.Profile.ID)
+	if !found || a.cmd != live.command || a.profiles.SelectedID != snapshot.SelectedID ||
+		mtuStateSnapshotToken(a.state) != snapshot.StateToken || mtuProfileSnapshotToken(profile) != snapshot.ProfileToken ||
+		snapshot.persistence.applied == "" || snapshot.persistence.applied != mtuMeasurementFieldsDigest(profile) || profile.EffectiveMTU != live.current.MTU {
+		return
+	}
+	raw, _ := routerNodeAutomaticMTUs.LoadOrStore(a, &routerNodeAutomaticMTU{command: live.command})
+	owner := raw.(*routerNodeAutomaticMTU)
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if owner.command != live.command {
+		owner.command, owner.waiting = live.command, false
+	}
+	owner.attempted, owner.completed, owner.resume = true, true, false
+}
+
 func resetRouterNodeAutomaticMTU(a *app) {
 	if raw, found := routerNodeAutomaticMTUs.Load(a); found {
 		owner := raw.(*routerNodeAutomaticMTU)
 		owner.mu.Lock()
-		owner.attempted = false
-		owner.resume = true
+		// A hold may still encounter the running HTTP view after its exact
+		// kernel owner has committed and closed. Cancel that view without
+		// turning its retained proof into another pending Auto attempt.
+		if !owner.completed {
+			owner.attempted = false
+			owner.resume = true
+		}
 		owner.mu.Unlock()
 	}
 }
@@ -103,7 +139,7 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 	owner := raw.(*routerNodeAutomaticMTU)
 	owner.mu.Lock()
 	if owner.command != command {
-		owner.command, owner.waiting, owner.attempted, owner.resume = command, false, false, false
+		owner.command, owner.waiting, owner.attempted, owner.completed, owner.resume = command, false, false, false, false
 	}
 	if owner.waiting {
 		// A hold can release before the old waiting worker runs its defer.
@@ -157,7 +193,7 @@ func (a *app) startRouterNodeAutomaticMTUWithRun(run func(mtuRetestSnapshot) mtu
 				result := run(snapshot)
 				if !result.accepted && result.retry {
 					owner.mu.Lock()
-					if owner.command == command {
+					if owner.command == command && !owner.completed {
 						owner.attempted, owner.resume = false, true
 					}
 					owner.mu.Unlock()

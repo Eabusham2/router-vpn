@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 	"time"
 )
@@ -69,6 +70,57 @@ func TestDesktopMTUCompletedRetestSatisfiesAutoOnlyAfterProvedAdoption(t *testin
 				owner.mu.Unlock()
 				if satisfied != (outcome == "committed") || active != "" {
 					t.Fatalf("Auto completion escaped proved Retest adoption: outcome=%s satisfied=%t active=%q", outcome, satisfied, active)
+				}
+			})
+		}
+	}
+}
+
+// Exercise the same adoption boundary used after the child proof, then let
+// the real transition cancellation find its still-active retained operation.
+// No scheduler timing or pause between two goroutine instructions is assumed.
+func TestDesktopMTUCompletedAutoSurvivesFinalDrainCancellation(t *testing.T) {
+	for _, protocol := range []string{"external", "tor"} {
+		for _, outcome := range []string{"committed", "cancelled-before", "replaced-request", "replaced-generation"} {
+			t.Run(protocol+"/"+outcome, func(t *testing.T) {
+				var a *app
+				var launch *desktopNodeLaunch
+				if protocol == "tor" {
+					a, launch = desktopTorMTUControllerFixture(t, "tor-mtu-winner")
+				} else {
+					a, launch = desktopMTUControllerFixture(t, "mtu-winner")
+				}
+				owner := desktopMeasurementMTUSession(launch)
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				identifier, generation := strings.Repeat("a", 32), uint64(7)
+				owner.mu.Lock()
+				owner.active, owner.generation, owner.cancel = identifier, generation, cancel
+				owner.automatic, owner.activeAutomatic = true, true
+				owner.mu.Unlock()
+				t.Cleanup(func() {
+					owner.mu.Lock()
+					owner.active, owner.cancel, owner.activeAutomatic = "", nil, false
+					owner.mu.Unlock()
+				})
+				switch outcome {
+				case "cancelled-before":
+					cancel()
+				case "replaced-request":
+					identifier = strings.Repeat("b", 32)
+				case "replaced-generation":
+					generation--
+				}
+				err := owner.retainCompletedMTU(ctx, identifier, generation)
+				if (err == nil) != (outcome == "committed") {
+					t.Fatal("completion accepted the wrong captured operation", err)
+				}
+				cancelCapturedMTU(a)
+				owner.mu.Lock()
+				satisfied, active := owner.automatic, owner.active
+				owner.mu.Unlock()
+				if ctx.Err() != context.Canceled || active == "" || satisfied != (outcome == "committed") {
+					t.Fatalf("final drain cancellation lost its completion boundary: outcome=%s satisfied=%t active=%q", outcome, satisfied, active)
 				}
 			})
 		}

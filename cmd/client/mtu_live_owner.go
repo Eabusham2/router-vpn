@@ -323,6 +323,7 @@ func (owner *mtuLiveOwner) Close() error {
 	}
 	owner.closed = true
 	mtuLiveOwners.CompareAndDelete(owner.a, owner)
+	retainCompletedRouterNodeMTU(owner)
 	return nil
 }
 

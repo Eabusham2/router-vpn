@@ -82,6 +82,23 @@ type desktopMTUSnapshot struct {
 	stateToken string
 }
 
+// The caller has already persisted and re-proved the exact retained reader.
+// Complete its Auto policy before the operation's final drain: a concurrent
+// transition may cancel that drain, but it must not discard the proved result.
+func (owner *desktopMTUSession) retainCompletedMTU(ctx context.Context, identifier string, generation uint64) error {
+	owner.mu.Lock()
+	defer owner.mu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if owner.active != identifier || owner.generation != generation {
+		return errors.New("native MTU completion lost its captured operation")
+	}
+	owner.automatic = true
+	owner.activeAutomatic = false
+	return nil
+}
+
 var desktopMTURequestPattern = regexp.MustCompile(`^[0-9a-f]{32}$`)
 var desktopMTUPathPattern = regexp.MustCompile(`^[0-9a-f]{64}$`)
 
@@ -474,21 +491,13 @@ func (a *app) runDesktopExternalMTU(parent context.Context, launch *desktopNodeL
 				if err := a.waitDesktopTorMTUReadback(ctx, launch, record); err != nil {
 					return result, err
 				}
-				snapshot.session.mu.Lock()
-				if err := ctx.Err(); err != nil {
-					snapshot.session.mu.Unlock()
-					return result, err
-				}
-				if snapshot.session.active != identifier || snapshot.session.generation != generation {
-					snapshot.session.mu.Unlock()
-					return result, errors.New("native MTU completion lost its captured operation")
-				}
 				// A successful explicit Retest has also satisfied this connection's
 				// initial Auto comparison. DNS/Speed Lab hold release must retain
 				// its proved reader instead of launching a second Auto operation.
 				// Failed or cancelled attempts never reach this adoption boundary.
-				snapshot.session.automatic = true
-				snapshot.session.mu.Unlock()
+				if err := snapshot.session.retainCompletedMTU(ctx, identifier, generation); err != nil {
+					return result, err
+				}
 				adopted = true
 				return result, nil
 			}
