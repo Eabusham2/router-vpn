@@ -54,9 +54,17 @@ func TestDesktopTorMTUTransitionChildFixture(t *testing.T) {
 	for {
 		if !admitted {
 			var request desktopMTURequest
-			raw, err := os.ReadFile(filepath.Join(directory, "mtu-request.json"))
-			if err == nil {
-				if decodeRelayControlJSON(raw, &request) != nil || request.Schema != 1 || request.Session != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 || request.ConfigSHA256 != expected.ConfigSHA256 || request.Generation != 1 || !desktopMTURequestPattern.MatchString(request.Request) {
+			raw, readErr := readDesktopRuntimeSnapshot(publisher.root, "mtu-request.json", 4096)
+			decodeErr := readErr
+			if readErr == nil {
+				decodeErr = decodeRelayControlJSON(raw, &request)
+			}
+			// The real native mailbox reader retries records that are not yet
+			// complete: the O_EXCL writer can be observed between create and
+			// write. Such bytes grant no transition or operation ownership.
+			if decodeErr == nil {
+				if request.Schema != 1 || request.Session != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 || request.ConfigSHA256 != expected.ConfigSHA256 || request.Generation != 1 || !desktopMTURequestPattern.MatchString(request.Request) {
+					fmt.Fprintln(os.Stderr, "isolated Tor transition request has invalid operation identity")
 					os.Exit(93)
 				}
 				now := time.Now().Truncate(time.Millisecond)
@@ -75,6 +83,13 @@ func TestDesktopTorMTUTransitionChildFixture(t *testing.T) {
 				fresh.Revision, fresh.InterfaceIndex, fresh.EffectiveMTU = 1, from.InterfaceIndex+1, receipt.TargetMTU
 				proof.MTUReadback, proof.InterfaceIndex, proof.EffectiveMTU = &fresh, fresh.InterfaceIndex, fresh.EffectiveMTU
 				admitted = true
+			} else if readErr == nil && len(raw) == 12 && os.Getenv("ROUTERVPN_TOR_TRANSITION_FRAGMENTED_REQUEST") == "1" {
+				// Test-only synchronization makes the incomplete-record window
+				// deterministic before the parent finishes the same owned file.
+				control := os.Getenv("ROUTERVPN_TOR_TEST_RELEASE")
+				if err := atomicWritePrivate(control+".partial-seen", []byte(desktopTorFixturePauseIdentity(expected))); err != nil {
+					t.Fatal(err)
+				}
 			}
 		}
 		proof.HeartbeatAt = time.Now().UnixMilli()
@@ -94,7 +109,7 @@ type desktopTorTransitionChild struct {
 	receipt mobiletor.DesktopBridgeMTUTransition
 }
 
-func newDesktopTorTransitionChild(t *testing.T) *desktopTorTransitionChild {
+func newDesktopTorTransitionChild(t *testing.T, fragmented ...bool) *desktopTorTransitionChild {
 	t.Helper()
 	profile, _ := desktopTorPolicyFixture(t)
 	policy, err := speedLabTorPolicy(profile)
@@ -111,6 +126,9 @@ func newDesktopTorTransitionChild(t *testing.T) *desktopTorTransitionChild {
 	expected, _ := json.Marshal(launch.tor.expected)
 	command := exec.Command(os.Args[0], "-test.run=^TestDesktopTorMTUTransitionChildFixture$")
 	command.Env = append(os.Environ(), "ROUTERVPN_TOR_TRANSITION_TEST_CHILD=1", "ROUTERVPN_TOR_TEST_DIRECTORY="+launch.directory, "ROUTERVPN_TOR_TEST_EXPECTED="+base64.StdEncoding.EncodeToString(expected), "ROUTERVPN_TOR_TEST_RELEASE="+control, "GORACE=atexit_sleep_ms=0")
+	if len(fragmented) == 1 && fragmented[0] {
+		command.Env = append(command.Env, "ROUTERVPN_TOR_TRANSITION_FRAGMENTED_REQUEST=1")
+	}
 	var output desktopTorFixtureOutput
 	command.Stdout, command.Stderr = io.Discard, &output
 	launch.command, launch.tor.started = command, time.Now()
@@ -152,6 +170,53 @@ func newDesktopTorTransitionChild(t *testing.T) *desktopTorTransitionChild {
 	if err := atomicWritePrivate(control+".pause", []byte(desktopTorFixturePauseIdentity(launch.tor.expected))); err != nil {
 		t.Fatal(err)
 	}
+	if len(fragmented) == 1 && fragmented[0] {
+		// Force the real O_EXCL mailbox visibility window. The native reader
+		// must wait for complete JSON; an empty/prefix input grants no reader
+		// transition. The normal typed writer still checks the finished bytes.
+		if err := authorizeDesktopTorMTURequest(launch, request); err != nil {
+			t.Fatal(err)
+		}
+		file, err := launch.directoryRoot.OpenFile("mtu-request.json", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer file.Close()
+		encoded, _ := json.Marshal(request)
+		const prefixLength = 12
+		if _, err := file.Write(encoded[:prefixLength]); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		tick := time.NewTicker(5 * time.Millisecond)
+		defer tick.Stop()
+		for {
+			if seen, err := os.ReadFile(control + ".partial-seen"); err == nil && string(seen) == desktopTorFixturePauseIdentity(launch.tor.expected) {
+				break
+			}
+			select {
+			case <-ctx.Done():
+				t.Fatal("child did not observe the deliberately incomplete request", ctx.Err())
+			case <-desktopNodeProcessDone(launch):
+				t.Fatal("child admitted or crashed on a not-yet-complete request")
+			case <-tick.C:
+			}
+		}
+		if _, err := os.Stat(filepath.Join(launch.directory, "mtu-transition.json")); !errors.Is(err, os.ErrNotExist) {
+			t.Fatal("incomplete request published a transition", err)
+		}
+		if _, err := file.Write(encoded[prefixLength:]); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Sync(); err != nil {
+			t.Fatal(err)
+		}
+		if err := file.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	if err := writeDesktopMTUControl(launch, "mtu-request.json", request); err != nil {
 		t.Fatal(err)
 	}
@@ -165,6 +230,20 @@ func newDesktopTorTransitionChild(t *testing.T) *desktopTorTransitionChild {
 		t.Fatal("transition base was not a real admitted fresh publication", err)
 	}
 	return fixture
+}
+
+func TestDesktopTorMTUTransitionActualChildWaitsForCompleteRequest(t *testing.T) {
+	fixture := newDesktopTorTransitionChild(t, true)
+	if fixture.receipt.Generation != 1 || fixture.receipt.RequestID != strings.Repeat("c", 32) {
+		t.Fatal("completed request lost its exact operation identity")
+	}
+	if _, err := fixture.resumeFresh(); err != nil {
+		t.Fatal(err)
+	}
+	proof, err := fixture.a.readDesktopTorProof(fixture.launch)
+	if err != nil || proof.MTUReadback == nil || proof.MTUReadback.Revision != 1 || proof.MTUReadback.RequestID != fixture.receipt.RequestID {
+		t.Fatal("completed request did not earn a fresh owned reader proof", err)
+	}
 }
 
 func (fixture *desktopTorTransitionChild) waitForOldHeartbeat(t *testing.T) {
