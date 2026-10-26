@@ -67,6 +67,7 @@ type RouterVPNTorMTULease struct {
 	cancel            context.CancelFunc
 	closed            atomic.Bool
 	config, authority string
+	automatic         bool
 }
 
 func (s *Box) RouterVPNTorClaimMTU(proof *RouterVPNTorProofRequest, config, profileJSON string) (*RouterVPNTorMTULease, error) {
@@ -81,12 +82,21 @@ func (s *Box) RouterVPNTorClaimMTU(proof *RouterVPNTorProofRequest, config, prof
 	if err != nil || s.routerVPNTorOptions == "" || routerVPNTorOptionsSnapshot(s.ctx, compiled) != s.routerVPNTorOptions {
 		return nil, errors.New("Tor MTU source differs from its captured native graph")
 	}
-	authority, err := mobiletor.MTUAuthority(config, profileJSON, proof.sessionID)
+	authority, err := mobiletor.MTUAuthorityWithPredecessor(config, profileJSON, proof.sessionID, proof.predecessor)
 	if err != nil {
 		return nil, err
 	}
+	var policy struct {
+		MTUPolicy     string `json:"mtu_policy"`
+		Jumbo         bool   `json:"jumbo_tun"`
+		EntryFixedMTU int    `json:"entry_fixed_mtu"`
+	}
+	if json.Unmarshal([]byte(authority), &policy) != nil {
+		return nil, errors.New("Tor MTU captured policy authority is invalid")
+	}
 	ctx, cancel := context.WithCancel(proof.ctx)
-	lease := &RouterVPNTorMTULease{proof: proof, owner: owner, box: s, ctx: ctx, cancel: cancel, config: config, authority: authority}
+	lease := &RouterVPNTorMTULease{proof: proof, owner: owner, box: s, ctx: ctx, cancel: cancel, config: config, authority: authority,
+		automatic: policy.MTUPolicy == "auto" && !policy.Jumbo && policy.EntryFixedMTU == 0}
 	if !owner.mtu.CompareAndSwap(nil, lease) {
 		cancel()
 		return nil, errors.New("Tor proof already owns an MTU controller")
@@ -149,6 +159,9 @@ func (l *RouterVPNTorMTULease) Inbound() (adapter.Inbound, error) {
 	return e.tun, nil
 }
 func (l *RouterVPNTorMTULease) ChangeMTU(parent context.Context, expected adapter.Inbound, mtu int) (adapter.Inbound, error) {
+	if l == nil || !l.automatic {
+		return expected, errors.New("captured Tor Fixed, Default or Jumbo policy does not permit MTU optimization")
+	}
 	ctx, release, err := l.Lifetime(parent)
 	if err != nil {
 		return nil, err

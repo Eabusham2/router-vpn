@@ -2,13 +2,33 @@ package libbox
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"net"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/miekg/dns"
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
 	"github.com/sagernet/sing-box/daemon"
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
 )
 
 func TestRouterTorMTURequiresSuccessfulCapturedProof(t *testing.T) {
+	if (*RouterMTU)(nil).AutoRequested() || (&RouterMTU{}).AutoRequested() {
+		t.Fatal("missing native controller requested automatic MTU")
+	}
 	for _, server := range []*CommandServer{nil, {}, {StartedService: &daemon.StartedService{}}} {
 		for _, proof := range []*RouterTorProofRequest{nil, {}} {
 			if result, err := NewRouterTorMTU(server, &mtuPlatformFixture{}, proof, "{}", "{}"); err == nil || result != nil {
@@ -22,5 +42,235 @@ func TestRouterTorMTURequiresSuccessfulCapturedProof(t *testing.T) {
 		if conn, err := owner.dialExternal(context.Background(), state, "tcp", target); err == nil || conn != nil {
 			t.Fatal("empty Tor MTU owner reached a proof destination")
 		}
+	}
+}
+
+// The real daemon, Box, retained proof, selected DNS transport and Libbox
+// constructor run here. Only OS TUN I/O and the external Tor circuit are test
+// peers, so this exercises adoption without opening a host VPN interface.
+type torMTUBindingInbound struct {
+	inbound.Adapter
+	mtu int
+}
+
+func (*torMTUBindingInbound) Start(adapter.StartStage) error { return nil }
+func (*torMTUBindingInbound) Close() error                   { return nil }
+
+type torMTUBindingOptions struct {
+	option.DialerOptions
+	SessionID     string   `json:"session_id"`
+	Bridges       []string `json:"bridges"`
+	ProfileSHA256 string   `json:"profile_sha256"`
+	EntrySHA256   string   `json:"entry_sha256,omitempty"`
+}
+
+type torMTUBindingOutbound struct {
+	outbound.Adapter
+	N.Dialer
+	ctx      context.Context
+	cancel   context.CancelFunc
+	session  string
+	entrySHA string
+	mu       sync.Mutex
+	closed   bool
+	workers  sync.WaitGroup
+}
+
+func (o *torMTUBindingOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx.Err() != nil || network != N.NetworkTCP || destination.String() != "9.9.9.9:53" {
+		return nil, errors.New("constructor fixture refused an unowned Tor destination")
+	}
+	o.mu.Lock()
+	if o.closed || o.ctx.Err() != nil {
+		o.mu.Unlock()
+		return nil, net.ErrClosed
+	}
+	o.workers.Add(1)
+	o.mu.Unlock()
+	client, server := net.Pipe()
+	stop := context.AfterFunc(o.ctx, func() { _ = client.Close(); _ = server.Close() })
+	go func() {
+		defer o.workers.Done()
+		defer stop()
+		defer server.Close()
+		peer := &dns.Conn{Conn: server}
+		for {
+			query, err := peer.ReadMsg()
+			if err != nil {
+				return
+			}
+			answer := new(dns.Msg)
+			answer.SetReply(query)
+			if len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != dns.TypeA {
+				answer.Rcode = dns.RcodeRefused
+			} else {
+				answer.Answer = []dns.RR{&dns.A{Hdr: dns.RR_Header{Name: "example.com.", Rrtype: dns.TypeA, Class: dns.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+			}
+			if peer.WriteMsg(answer) != nil {
+				return
+			}
+		}
+	}()
+	return client, nil
+}
+
+func (o *torMTUBindingOutbound) TorSessionID() string { return o.session }
+func (o *torMTUBindingOutbound) TorHealthy(session string) bool {
+	return session == o.session && o.ctx.Err() == nil
+}
+func (o *torMTUBindingOutbound) CancelTor(session string) {
+	if session == o.session {
+		o.cancel()
+	}
+}
+func (o *torMTUBindingOutbound) TorProofWithPredecessor(ctx context.Context, session string, entry *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+	if ctx.Err() != nil || entry.Fingerprint() != o.entrySHA || !o.TorHealthy(session) {
+		return mobiletor.Proof{}, errors.New("wrong constructor proof owner")
+	}
+	return mobiletor.Proof{SessionID: session, IsTor: true, IP: "198.51.100.7", CheckedAt: time.Now()}, nil
+}
+func (o *torMTUBindingOutbound) Close() error {
+	o.mu.Lock()
+	o.closed = true
+	o.mu.Unlock()
+	o.cancel()
+	o.workers.Wait()
+	return nil
+}
+
+type torMTUBindingPlatform struct {
+	tun             *torMTUBindingInbound
+	reported        int
+	changes, writes int
+}
+
+func (p *torMTUBindingPlatform) CaptureMTU() *RouterMTUState {
+	mtu := p.tun.mtu
+	if p.reported != 0 {
+		mtu = p.reported
+	}
+	return &RouterMTUState{Session: "binding-session", Path: "captured-physical-generation", Interface: "captured-reader", MTU: int32(mtu)}
+}
+func (p *torMTUBindingPlatform) BeginMTUChange(*RouterMTUState) error {
+	p.changes++
+	return errors.New("non-optimizing policy cannot change the test TUN")
+}
+func (*torMTUBindingPlatform) EndMTUChange() error { return nil }
+func (*torMTUBindingPlatform) BindMTUSocket(*RouterMTUState, int64) error {
+	return errors.New("non-optimizing policy cannot open a probe")
+}
+func (*torMTUBindingPlatform) ReadMTUCache() string                         { return "" }
+func (p *torMTUBindingPlatform) CompareAndSwapMTUCache(string, string) bool { p.writes++; return false }
+func (*torMTUBindingPlatform) AbortMTU(string)                              {}
+
+func torMTUBindingFixture(t *testing.T, policy string, jumbo bool, entryKind ...string) (*CommandServer, *RouterTorProofRequest, *torMTUBindingPlatform, string, string) {
+	t.Helper()
+	selected := map[string]any{"id": "binding-tor", "node_kind": "external", "external": map[string]any{"protocol": "tor"}, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "9.9.9.9", "dns_port": 53, "ipv6_mode": "off", "home_lan_access": false, "mtu_policy": policy, "manual_mtu": 9000, "jumbo_tun": jumbo}
+	entry, base := "", ""
+	if len(entryKind) != 0 && entryKind[0] != "" {
+		captured := map[string]any{"id": "binding-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64), "router_api": "http://10.77.0.1:8787", "api_token": "captured-private-proof", "mtu_policy": "auto", "jumbo_tun": entryKind[0] == "jumbo"}
+		if entryKind[0] == "fixed" {
+			captured["mtu_policy"], captured["manual_mtu"] = "fixed", 9000
+		}
+		encoded, err := json.Marshal(captured)
+		if err != nil {
+			t.Fatal(err)
+		}
+		entry = string(encoded)
+		base = `{"inbounds":[{"type":"tun","tag":"owned-tun","stack":"system","address":["172.29.10.1/30"],"mtu":9000,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"198.51.100.22","server_port":443,"method":"aes-256-gcm","password":"exact-transport-key"}],"route":{"final":"proxy","auto_detect_interface":true}}`
+		selected["multihop_enabled"], selected["multihop_entry_id"], selected["multihop_exit_id"] = true, "binding-entry", selected["id"]
+		selected["multihop_entry_mode"], selected["multihop_exit_mode"], selected["multihop_execution"] = "ss", "tor", "local"
+	}
+	profileBytes, err := json.Marshal(selected)
+	if err != nil {
+		t.Fatal(err)
+	}
+	profile := string(profileBytes)
+	config, err := mobiletor.CompileProfileWithPredecessor(profile, "binding-session", base, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	platform := new(torMTUBindingPlatform)
+	inbounds, outbounds := include.InboundRegistry(), include.OutboundRegistry()
+	inbound.Register[option.TunInboundOptions](inbounds, "tun", func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options option.TunInboundOptions) (adapter.Inbound, error) {
+		platform.tun = &torMTUBindingInbound{Adapter: inbound.NewAdapter("tun", tag), mtu: int(options.MTU)}
+		return platform.tun, nil
+	})
+	outbound.Register[torMTUBindingOptions](outbounds, "routervpn-tor", func(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options torMTUBindingOptions) (adapter.Outbound, error) {
+		owned, cancel := context.WithCancel(ctx)
+		return &torMTUBindingOutbound{Adapter: outbound.NewAdapter("routervpn-tor", tag, []string{N.NetworkTCP}, nil), ctx: owned, cancel: cancel, session: options.SessionID, entrySHA: options.EntrySHA256}, nil
+	})
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(cancel)
+	ctx = box.Context(ctx, inbounds, outbounds, include.EndpointRegistry(), include.DNSTransportRegistry(), include.ServiceRegistry(), include.CertificateProviderRegistry())
+	started := daemon.NewStartedService(daemon.ServiceOptions{Context: ctx, LogMaxLines: 16})
+	server := &CommandServer{StartedService: started}
+	t.Cleanup(func() { _ = started.CloseService(); started.Close() })
+	if err := started.StartOrReloadService(ctx, config, nil); err != nil {
+		t.Fatal("actual daemon failed to start constructor fixture", err)
+	}
+	proof, err := RouterTorCreateProofWithPredecessor(server, mobiletor.ProfileOutboundTag, "binding-session", entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(proof.Cancel)
+	if _, err := proof.Run(); err != nil || !proof.Healthy() {
+		t.Fatal("actual Box/DNS proof failed", err)
+	}
+	return server, proof, platform, config, profile
+}
+
+func TestRouterTorMTUConstructorAcceptsProvedJumboWithoutOptimizer(t *testing.T) {
+	for _, selected := range []struct {
+		policy string
+		jumbo  bool
+		entry  string
+	}{{"auto", true, ""}, {"default", true, ""}, {"fixed", false, ""}, {"auto", false, "jumbo"}, {"auto", false, "fixed"}} {
+		t.Run(selected.policy+"/"+selected.entry, func(t *testing.T) {
+			server, proof, platform, config, profile := torMTUBindingFixture(t, selected.policy, selected.jumbo, selected.entry)
+			mtu, err := NewRouterTorMTU(server, platform, proof, config, profile)
+			if err != nil || mtu == nil {
+				t.Fatal("CONTROL: live Jumbo/Fixed constructor entered the optimizer envelope", err)
+			}
+			defer mtu.Close()
+			if platform.tun.mtu != 9000 || !strings.Contains(mtu.StatusJSON(), `"effective_mtu":9000`) || !strings.Contains(mtu.StatusJSON(), `"source":"configured-unmeasured"`) || mtu.AutoRequested() || mtu.Start(strings.Repeat("a", 32), true) == nil || mtu.Running() || platform.changes != 0 || platform.writes != 0 {
+				t.Fatal("CONTROL: native constructor changed or measured configured virtual capacity", mtu.StatusJSON())
+			}
+			if err := server.CloseService(); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := mtu.owner.Capture(); err == nil || proof.Healthy() {
+				t.Fatal("closed native instance retained Jumbo ownership")
+			}
+			if next, err := NewRouterTorMTU(server, platform, proof, config, profile); err == nil || next != nil {
+				t.Fatal("retired Tor instance admitted a replacement MTU owner")
+			}
+		})
+	}
+}
+
+func TestRouterTorMTUConstructorRejectsWrongReadbackAndReleasesClaim(t *testing.T) {
+	server, proof, platform, config, profile := torMTUBindingFixture(t, "auto", true)
+	platform.reported = 1280
+	if mtu, err := NewRouterTorMTU(server, platform, proof, config, profile); err == nil || mtu != nil {
+		t.Fatal("CONTROL: native Jumbo constructor accepted a downsized live TUN")
+	}
+	platform.reported = 0
+	mtu, err := NewRouterTorMTU(server, platform, proof, config, profile)
+	if err != nil {
+		t.Fatal("failed capture leaked its native MTU claim", err)
+	}
+	defer mtu.Close()
+}
+
+func TestRouterTorMTUConstructorRetainsAutoWithoutStartingMeasurement(t *testing.T) {
+	server, proof, platform, config, profile := torMTUBindingFixture(t, "auto", false)
+	mtu, err := NewRouterTorMTU(server, platform, proof, config, profile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mtu.Close()
+	if !mtu.AutoRequested() || mtu.Running() || platform.changes != 0 || platform.writes != 0 {
+		t.Fatal("CONTROL: ordinary Tor Auto policy was lost or started during adoption")
 	}
 }

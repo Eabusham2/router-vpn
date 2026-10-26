@@ -4,7 +4,15 @@ import (
 	"errors"
 
 	"github.com/sagernet/sing-box/experimental/libbox/routervpn/mobilemtu"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
 )
+
+// AutoRequested reflects the retained native policy, including a proved
+// predecessor's Fixed/Jumbo choice. It does not rewrite the saved exit profile
+// or claim that the interface has been measured; Start still checks ownership.
+func (m *RouterMTU) AutoRequested() bool {
+	return m != nil && m.controller != nil && m.controller.Requested()
+}
 
 // Adoption requires the exact successful proof, full native configuration and
 // profile frozen before connection. No host boolean or old MTU result grants
@@ -31,12 +39,12 @@ func NewRouterTorMTU(server *CommandServer, platform RouterMTUPlatform, proof *R
 			lease.Close()
 		}
 	}()
-	plan, err := mobilemtu.NewPlan(lease.Config(), state.MTU)
-	if err != nil {
-		return nil, err
+	tag, configuredMTU, err := mobiletor.MTUInterface(lease.Config())
+	if err != nil || configuredMTU != state.MTU {
+		return nil, errors.New("Tor MTU configuration differs from the captured system-interface readback")
 	}
 	inbound, err := lease.Inbound()
-	if err != nil || inbound == nil || inbound.Type() != "tun" || inbound.Tag() != plan.TunTag {
+	if err != nil || inbound == nil || inbound.Type() != "tun" || inbound.Tag() != tag {
 		return nil, errors.New("Tor MTU does not own the captured native TUN")
 	}
 	owner := &routerMTUOwner{platform: platform, server: server, instance: instance, inbound: inbound, session: state.Session, path: state.Path, external: lease, proofCurrent: proof.Healthy}

@@ -339,6 +339,87 @@ func TestRouterTorMTUCapturesActualNativeGraphAndPolicy(t *testing.T) {
 	}
 }
 
+func TestRouterTorMTUJumboAndInheritedFixedRetainNativeLease(t *testing.T) {
+	for _, mode := range []string{"jumbo", "default-jumbo", "fixed", "entry-jumbo", "entry-fixed"} {
+		t.Run(mode, func(t *testing.T) {
+			var profile map[string]any
+			if err := json.Unmarshal([]byte(torMTUFrozenProfile), &profile); err != nil {
+				t.Fatal(err)
+			}
+			entry, base := "", ""
+			wantPolicy, wantJumbo, wantEntryFixed := "auto", true, 0
+			switch mode {
+			case "jumbo", "default-jumbo":
+				profile["jumbo_tun"] = true
+				if mode == "default-jumbo" {
+					profile["mtu_policy"], wantPolicy = "default", "default"
+				}
+			case "fixed":
+				profile["mtu_policy"], profile["manual_mtu"], wantPolicy, wantJumbo = "fixed", 9000, "fixed", false
+			case "entry-jumbo", "entry-fixed":
+				captured := map[string]any{"id": "private-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64), "router_api": "http://10.77.0.1:8787", "api_token": "exact-entry-proof", "mtu_policy": "auto", "jumbo_tun": mode == "entry-jumbo"}
+				if mode == "entry-fixed" {
+					captured["mtu_policy"], captured["manual_mtu"], wantJumbo, wantEntryFixed = "fixed", 9000, false, 9000
+				}
+				encoded, err := json.Marshal(captured)
+				if err != nil {
+					t.Fatal(err)
+				}
+				entry = string(encoded)
+				base = `{"inbounds":[{"type":"tun","tag":"owned-tun","stack":"system","address":["172.29.10.1/30"],"mtu":9000,"auto_route":true,"strict_route":true}],"outbounds":[{"type":"shadowsocks","tag":"proxy","server":"198.51.100.22","server_port":443,"method":"aes-256-gcm","password":"exact-transport-key"}],"route":{"final":"proxy","auto_detect_interface":true}}`
+				profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"] = true, "private-entry", profile["id"]
+				profile["multihop_entry_mode"], profile["multihop_exit_mode"], profile["multihop_execution"] = "ss", "tor", "local"
+			}
+			encoded, err := json.Marshal(profile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			config, err := mobiletor.CompileProfileWithPredecessor(string(encoded), "frozen-session", base, entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			engine, _ := torMTUNativeConfigFixture(t, config)
+			proof, err := engine.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, "frozen-session", entry)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(proof.Cancel)
+			if _, err := proof.Run(); err != nil || !proof.Healthy() {
+				t.Fatal("native Tor/DNS proof failed", err)
+			}
+			lease, err := engine.RouterVPNTorClaimMTU(proof, config, string(encoded))
+			if err != nil {
+				t.Fatal("CONTROL: proved native Jumbo/Fixed could not retain its TUN", err)
+			}
+			defer lease.Close()
+			var policy struct {
+				MTUPolicy     string `json:"mtu_policy"`
+				Jumbo         bool   `json:"jumbo_tun"`
+				EntryFixedMTU int    `json:"entry_fixed_mtu"`
+			}
+			if json.Unmarshal([]byte(lease.Authority()), &policy) != nil || policy.MTUPolicy != wantPolicy || policy.Jumbo != wantJumbo || policy.EntryFixedMTU != wantEntryFixed {
+				t.Fatal("native lease relabeled the exact captured preference", lease.Authority())
+			}
+			inbound, err := lease.Inbound()
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, requested := range []int{1280, 1500, 9000} {
+				current, err := lease.ChangeMTU(context.Background(), inbound, requested)
+				if err == nil || !strings.Contains(err.Error(), "does not permit MTU optimization") || current != inbound || !lease.Healthy() || !proof.Healthy() {
+					t.Fatal("CONTROL: native Fixed/Jumbo lease reached the mutation boundary", err)
+				}
+			}
+			if err := engine.Inbound().Remove(inbound.Tag()); err != nil {
+				t.Fatal(err)
+			}
+			if lease.Healthy() || proof.Healthy() {
+				t.Fatal("retired Jumbo reader retained native authority")
+			}
+		})
+	}
+}
+
 func TestRouterTorMTUCancellationAndArbitraryReplacementRetireProof(t *testing.T) {
 	for _, kind := range []string{"cancel", "TUN", "DNS", "Tor"} {
 		t.Run(kind, func(t *testing.T) {
