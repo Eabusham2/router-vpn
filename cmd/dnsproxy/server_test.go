@@ -30,6 +30,81 @@ func dnsCLIEnvironment(extra ...string) []string {
 	return append(env, append([]string{"ROUTER_VPN_TEST_DNS_MAIN=1", "GODEBUG=x509usefallbackroots=1", "GORACE=atexit_sleep_ms=0"}, extra...)...)
 }
 
+type dnsCLIProcess struct {
+	command *exec.Cmd
+	lines   chan string
+	done    chan struct{}
+	mu      sync.Mutex
+	output  []string
+	err     error
+}
+
+func watchDNSCLI(command *exec.Cmd) (*dnsCLIProcess, error) {
+	stderr, err := command.StderrPipe()
+	if err != nil {
+		return nil, err
+	}
+	if err = command.Start(); err != nil {
+		return nil, err
+	}
+	p := &dnsCLIProcess{command: command, lines: make(chan string, 64), done: make(chan struct{})}
+	go func() {
+		scanner := bufio.NewScanner(stderr)
+		for scanner.Scan() {
+			line := scanner.Text()
+			p.mu.Lock()
+			p.output = append(p.output, line)
+			if len(p.output) > 64 {
+				p.output = p.output[1:]
+			}
+			p.mu.Unlock()
+			select {
+			case p.lines <- line:
+			default:
+			}
+		}
+		// Drain the pipe before the sole Wait. Otherwise Wait can close the
+		// reader and hide the startup error that this fixture needs to report.
+		waitErr := command.Wait()
+		p.mu.Lock()
+		p.err = errors.Join(waitErr, scanner.Err())
+		p.mu.Unlock()
+		close(p.done)
+	}()
+	return p, nil
+}
+
+func (p *dnsCLIProcess) diagnostic() string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return fmt.Sprintf("%v; stderr: %s", p.err, strings.Join(p.output, "\n"))
+}
+
+func (p *dnsCLIProcess) readiness(ctx context.Context, expected string) (string, error) {
+	for {
+		select {
+		case line := <-p.lines:
+			const marker = "RouterVPN DNS listening on "
+			if _, rest, found := strings.Cut(line, marker); found {
+				address, selected, ok := strings.Cut(rest, " -> ")
+				if !ok || selected != expected {
+					return "", fmt.Errorf("CLI changed the selected DNS address or port: %s", line)
+				}
+				select {
+				case <-p.done:
+					return "", fmt.Errorf("DNS CLI exited during readiness: %s", p.diagnostic())
+				default:
+					return address, nil
+				}
+			}
+		case <-p.done:
+			return "", fmt.Errorf("DNS CLI exited before listener readiness: %s", p.diagnostic())
+		case <-ctx.Done():
+			return "", fmt.Errorf("DNS CLI listener readiness: %w; %s", ctx.Err(), p.diagnostic())
+		}
+	}
+}
+
 func startDNSCLI(t *testing.T, f *dnsTestH3, useEnvironment bool, name string) (string, func()) {
 	t.Helper()
 	ca := filepath.Join(t.TempDir(), "isolated-ca.pem")
@@ -47,60 +122,71 @@ func startDNSCLI(t *testing.T, f *dnsTestH3, useEnvironment bool, name string) (
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	command := exec.CommandContext(ctx, os.Args[0], args...)
 	command.Env = env
-	stderr, err := command.StderrPipe()
+	process, err := watchDNSCLI(command)
 	if err != nil {
 		cancel()
 		t.Fatal(err)
 	}
-	if err = command.Start(); err != nil {
-		cancel()
-		t.Fatal(err)
-	}
-	lines := make(chan string, 64)
-	drained := make(chan struct{})
-	go func() {
-		defer close(drained)
-		scanner := bufio.NewScanner(stderr)
-		for scanner.Scan() {
-			select {
-			case lines <- scanner.Text():
-			default:
-			}
-		}
-	}()
 	var stopOnce sync.Once
+	ready := false
 	stop := func() {
 		stopOnce.Do(func() {
-			if runtime.GOOS == "windows" {
-				// Windows does not implement os.Interrupt for child processes.
-				// Context-driven listener/worker shutdown is exercised below.
-				_ = command.Process.Kill()
-			} else {
-				_ = command.Process.Signal(os.Interrupt)
+			select {
+			case <-process.done:
+			default:
+				if runtime.GOOS == "windows" {
+					// Windows does not implement child-process os.Interrupt.
+					// Context-driven worker shutdown is exercised below.
+					_ = command.Process.Kill()
+				} else {
+					_ = command.Process.Signal(os.Interrupt)
+				}
 			}
-			err := command.Wait()
+			<-process.done
 			cancel()
-			<-drained
-			if runtime.GOOS != "windows" && err != nil {
-				t.Errorf("actual DNS CLI did not shut down cleanly: %v", err)
+			if ready && runtime.GOOS != "windows" && process.err != nil {
+				t.Errorf("actual DNS CLI did not shut down cleanly: %s", process.diagnostic())
 			}
 		})
 	}
 	t.Cleanup(stop)
-	for {
-		select {
-		case line := <-lines:
-			const marker = "RouterVPN DNS listening on "
-			if _, rest, found := strings.Cut(line, marker); found {
-				address, selected, ok := strings.Cut(rest, " -> ")
-				if !ok || selected != describe(f.upstream) {
-					t.Fatal("CLI did not retain selected H3 address and port", line)
-				}
-				return address, stop
+	address, err := process.readiness(ctx, describe(f.upstream))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ready = true
+	return address, stop
+}
+
+func TestDNSCLIReadinessReportsAndJoinsEarlyExit(t *testing.T) {
+	for _, test := range []struct {
+		name string
+		args []string
+		want string
+	}{
+		{"invalid-port", []string{"--listen", "127.0.0.1:65536", "--server", "192.0.2.53"}, "65536"},
+		{"clean-exit-without-listener", []string{"--licenses"}, "exited before listener readiness"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+			defer cancel()
+			args := append([]string{"-test.run=^TestDNSProxyCLIProcess$", "--"}, test.args...)
+			command := exec.CommandContext(ctx, os.Args[0], args...)
+			command.Env = dnsCLIEnvironment()
+			process, err := watchDNSCLI(command)
+			if err != nil {
+				t.Fatal(err)
 			}
-		case <-ctx.Done():
-			t.Fatal("actual DNS CLI did not open its local listeners", ctx.Err())
-		}
+			address, err := process.readiness(ctx, "udp://192.0.2.53:53")
+			if address != "" || err == nil || ctx.Err() != nil || !strings.Contains(err.Error(), test.want) {
+				t.Fatal("CLI readiness hid the actual early exit", address, err)
+			}
+			select {
+			case <-process.done:
+			default:
+				t.Fatal("early CLI exit did not join its scanner and child")
+			}
+		})
 	}
 }
 

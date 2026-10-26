@@ -16,6 +16,14 @@ existing repeated race gate, deadline enforcement, packet byte-count checks,
 and authenticated readiness are preserved. Current packaged native traffic
 and physical acceptance remain separate from these controller tests.
 
+The DNS helper reserves one shared TCP/UDP endpoint with TCP ownership first,
+including IPv6 and its captured zone. Only ephemeral requests retry a UDP
+collision, at most eight times, releasing each partial owner before retry;
+a fixed configured port is never substituted. Its process fixture now joins
+stderr and the child exactly once and preserves early startup diagnostics.
+The pinned module race suite and both Windows target compilations pass;
+native Windows and selected-path DNS acceptance remain independent.
+
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and

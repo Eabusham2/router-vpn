@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net"
@@ -16,21 +17,11 @@ import (
 const maxDNSWorkers = 256
 
 func runDNSProxy(parent context.Context, listen string, u upstream) (result error) {
-	udpAddress, err := net.ResolveUDPAddr("udp", listen)
-	if err != nil {
-		return err
-	}
-	udp, err := net.ListenUDP("udp", udpAddress)
+	udp, tcp, err := listenDNSProxy(listen)
 	if err != nil {
 		return err
 	}
 	defer udp.Close()
-	// A requested zero port is one shared ephemeral UDP/TCP port. Production
-	// callers pass 127.0.0.1:53; tests do not need privilege or a system resolver.
-	tcp, err := net.Listen("tcp", udp.LocalAddr().String())
-	if err != nil {
-		return err
-	}
 	defer tcp.Close()
 	resolver, err := newDNSResolver(u, nil)
 	if err != nil {
@@ -39,6 +30,50 @@ func runDNSProxy(parent context.Context, listen string, u upstream) (result erro
 	defer func() { result = errors.Join(result, resolver.Close()) }()
 	log.Printf("RouterVPN DNS listening on %s -> %s", udp.LocalAddr(), describe(u))
 	return serveDNSProxy(parent, udp, tcp, resolver)
+}
+
+func listenDNSProxy(listen string) (*net.UDPConn, net.Listener, error) {
+	return listenDNSProxyWith(listen, func(address *net.TCPAddr) (net.Listener, error) {
+		return net.ListenTCP("tcp", address)
+	}, func(address *net.UDPAddr) (*net.UDPConn, error) {
+		return net.ListenUDP("udp", address)
+	})
+}
+
+// TCP owns the selected port before UDP adopts it. Windows may reserve TCP
+// ranges that its UDP ephemeral allocator can still select. A requested zero
+// port may retry a UDP collision, but every partial TCP owner is closed before
+// another attempt. A fixed port is never replaced with another port.
+func listenDNSProxyWith(listen string, openTCP func(*net.TCPAddr) (net.Listener, error), openUDP func(*net.UDPAddr) (*net.UDPConn, error)) (*net.UDPConn, net.Listener, error) {
+	address, err := net.ResolveTCPAddr("tcp", listen)
+	if err != nil {
+		return nil, nil, err
+	}
+	attempts := 1
+	if address.Port == 0 {
+		attempts = 8
+	}
+	var lastUDPError error
+	for range attempts {
+		tcp, err := openTCP(address)
+		if err != nil {
+			return nil, nil, err
+		}
+		selected, ok := tcp.Addr().(*net.TCPAddr)
+		if !ok || selected.Port == 0 {
+			return nil, nil, errors.Join(errors.New("DNS TCP listener did not own an actual port"), tcp.Close())
+		}
+		udp, udpErr := openUDP(&net.UDPAddr{IP: append(net.IP(nil), selected.IP...), Port: selected.Port, Zone: selected.Zone})
+		if udpErr == nil {
+			return udp, tcp, nil
+		}
+		// Do not retry if releasing the previous owner failed.
+		if closeErr := tcp.Close(); closeErr != nil {
+			return nil, nil, errors.Join(udpErr, closeErr)
+		}
+		lastUDPError = udpErr
+	}
+	return nil, nil, fmt.Errorf("DNS could not reserve the same TCP/UDP port after %d attempt(s): %w", attempts, lastUDPError)
 }
 
 // Listener loops stop before waiting for workers, so no late accepted request
