@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"router-vpn/internal/awgpolicy"
+	"router-vpn/internal/multihoprelay"
 )
 
 // WireGuardClientPublicKey derives the canonical public identity from the
@@ -26,7 +27,7 @@ func (p *NodeProfile) WireGuardClientPublicKey() (string, error) {
 // obfuscation parameters never turn an AWG peer into a plain WireGuard path.
 func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 	bad := errors.New("native WG/AWG exit has no exact captured client identity")
-	if p == nil || !NodeMultihopPacketExitMode(p.mode) {
+	if p == nil || (!NodeMultihopPacketExitMode(p.mode) && !MAXMode(p.mode)) {
 		return "", bad
 	}
 	var graph map[string]any
@@ -38,26 +39,35 @@ func (p *NodeProfile) PacketClientPublicKey() (string, error) {
 		return "", bad
 	}
 	endpoint, ok := endpoints[0].(map[string]any)
+	mode := p.mode
+	if MAXMode(mode) {
+		captured, err := nodeMAXCapture(p)
+		if err != nil {
+			return "", bad
+		}
+		endpoint = captured.final
+		mode = multihoprelay.MAXBaseMode(mode)
+	}
 	wantType := "wireguard"
-	if awgpolicy.IsMode(p.mode) {
+	if awgpolicy.IsMode(mode) {
 		wantType = AmneziaType
-	} else if IsPQMode(p.mode) {
+	} else if IsPQMode(mode) {
 		wantType = PQType
 	}
 	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != wantType {
 		return "", bad
 	}
-	if awgpolicy.IsMode(p.mode) {
+	if awgpolicy.IsMode(mode) {
 		encoded, _ := json.Marshal(endpoint)
 		if _, err := AmneziaRuntimeConfig(string(encoded)); err != nil {
 			return "", bad
 		}
 	}
-	if IsPQMode(p.mode) {
+	if IsPQMode(mode) {
 		encoded, _ := json.Marshal(endpoint)
 		runtime, err := PQRuntimeConfig(string(encoded))
 		runtime.PQ.Erase()
-		if err != nil || endpoint["mode"] != p.mode || endpoint["node_id"] != p.profile["node_proof_id"] {
+		if err != nil || endpoint["mode"] != mode || endpoint["node_id"] != p.profile["node_proof_id"] {
 			return "", bad
 		}
 	}

@@ -35,6 +35,13 @@ the native compiler independently validates the complete graph. This is the
 protection subset: public Connect and Speed Lab predecessor wiring are still
 pending reconstruction, and physical/public-circuit acceptance is separate.
 
+The shared node compiler can now attach a complete MAX exit without bypassing
+its PQ, SS2022, outer transport or optional Start Layer. Public packet/PQ
+identities require the whole validated chain. Inner interface capacity and
+the outer QUIC datagram envelope have separate checks. This prerequisite does
+not expand the desktop catalog: host Server substitution, renewal/restoration
+and native controls must adopt these exits before they are offered there.
+
 Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and

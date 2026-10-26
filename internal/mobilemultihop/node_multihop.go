@@ -31,7 +31,7 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	bad := errors.New("native node multihop requires two complete captured native entry and exit graphs")
 	if entry == nil || exit == nil || entry.profile == nil || exit.profile == nil ||
 		!NodeMultihopEntryMode(entry.mode) ||
-		!NodeMultihopExitMode(exit.mode) ||
+		(!NodeMultihopExitMode(exit.mode) && !MAXMode(exit.mode)) ||
 		entry.profile["id"] == exit.profile["id"] || entry.profile["node_proof_id"] == exit.profile["node_proof_id"] {
 		return "", bad
 	}
@@ -47,7 +47,12 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	// Layer. Attach the complete exit's outer edge to the entry, never overwrite
 	// that edge on the inner transport and silently bypass the saved layer.
 	outer := last.final
-	if CompositeMode(exit.mode) {
+	if MAXMode(exit.mode) {
+		outer, err = nodeMAXExit(last, exit)
+		if err != nil {
+			return "", err
+		}
+	} else if CompositeMode(exit.mode) {
 		outer, err = nodeCompositeExit(last, exit)
 		if err != nil {
 			return "", err
@@ -68,7 +73,7 @@ func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if err := nodeMultihopMTU(predecessor, last, selection, envelope); err != nil {
+	if err := nodeMultihopMTU(predecessor, last, selection, envelope, exit.mode); err != nil {
 		return "", err
 	}
 	// The merger moves the entry's checked cover owner to the entry role. The

@@ -6,6 +6,7 @@ import (
 
 	"router-vpn/internal/awgpolicy"
 	"router-vpn/internal/mobilepq"
+	"router-vpn/internal/multihoprelay"
 )
 
 // This desktop node-to-node subset deliberately excludes the distinct complete
@@ -16,9 +17,10 @@ func NodeMultihopPacketExitMode(mode string) bool {
 
 func (p *NodeProfile) PQClientIdentity() (string, error) {
 	bad := errors.New("native PQ exit has no exact captured negotiation identity")
-	if p == nil || !IsPQMode(p.mode) {
+	if p == nil || (!IsPQMode(p.mode) && !MAXMode(p.mode)) {
 		return "", bad
 	}
+	mode := p.mode
 	var graph map[string]any
 	if exactJSON([]byte(p.config), &graph, 4<<20) != nil {
 		return "", bad
@@ -28,7 +30,15 @@ func (p *NodeProfile) PQClientIdentity() (string, error) {
 		return "", bad
 	}
 	endpoint, ok := endpoints[0].(map[string]any)
-	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != PQType || endpoint["mode"] != p.mode || endpoint["node_id"] != p.profile["node_proof_id"] {
+	if MAXMode(mode) {
+		captured, err := nodeMAXCapture(p)
+		if err != nil {
+			return "", bad
+		}
+		endpoint = captured.final
+		mode = multihoprelay.MAXBaseMode(mode)
+	}
+	if !ok || endpoint["tag"] != "proxy" || endpoint["type"] != PQType || endpoint["mode"] != mode || endpoint["node_id"] != p.profile["node_proof_id"] {
 		return "", bad
 	}
 	encoded, _ := json.Marshal(endpoint)
@@ -64,7 +74,10 @@ func nodePQBase(endpoint map[string]any, mode string) (map[string]any, error) {
 	return base, nil
 }
 
-func nodeMultihopMTU(entry, exit *externalPredecessor, selection externalPolicyCapture, envelope int) error {
+func nodeMultihopMTU(entry, exit *externalPredecessor, selection externalPolicyCapture, envelope int, mode string) error {
+	if MAXMode(mode) {
+		return nodeMAXMTU(entry, exit, selection, mode)
+	}
 	packet := exit.final
 	if packet["type"] == PQType {
 		var err error
