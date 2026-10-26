@@ -350,7 +350,7 @@ func TestDesktopTorMTUTransitionActualChildPublicationRaceUsesFreshStrictRead(t 
 			} else {
 				readback := fixture.receipt.From
 				readback.Revision, readback.InterfaceIndex, readback.EffectiveMTU = 1, readback.InterfaceIndex+1, fixture.receipt.TargetMTU
-				record := desktopMTURecord{Schema: 1, Session: fixture.receipt.SessionID, SourceSHA256: fixture.receipt.SourceSHA256, ConfigSHA256: fixture.receipt.ConfigSHA256, Generation: fixture.receipt.Generation,
+				record := desktopMTURecord{Schema: 1, Session: fixture.receipt.SessionID, SourceSHA256: fixture.receipt.SourceSHA256, ConfigSHA256: fixture.receipt.ConfigSHA256, Generation: fixture.receipt.Generation, Requested: true,
 					Status: mobilemtu.Status{Request: fixture.receipt.RequestID, Complete: true, EffectiveMTU: readback.EffectiveMTU}, MTUReadback: &readback}
 				ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 				err = a.waitDesktopTorMTUReadback(ctx, launch, record)

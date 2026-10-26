@@ -34,7 +34,7 @@ func sameDesktopTorMTUInterface(left, right *mobiletor.DesktopBridgeMTUReadback)
 // can authorize a changed reader. The last accepted receipt remains valid
 // while the next request is admitted; it cannot authorize another revision.
 func desktopTorMTUReadbackAllowedLocked(owner *desktopTorRuntime, readback *mobiletor.DesktopBridgeMTUReadback, adopt bool) bool {
-	if owner == nil || owner.adopted == nil || owner.mtu == nil || !validDesktopTorMTUReadback(readback) {
+	if owner == nil || owner.expected.JumboTUN || owner.expected.MTUPolicy != "auto" || owner.adopted == nil || owner.mtu == nil || !validDesktopTorMTUReadback(readback) {
 		return false
 	}
 	if expected := owner.expected.InterfaceName; expected != "" && readback.InterfaceName != expected {
@@ -79,7 +79,7 @@ func authorizeDesktopTorMTURequest(launch *desktopNodeLaunch, request desktopMTU
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
 	expected := owner.expected
-	if request.Schema != 1 || request.Session != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 || request.ConfigSHA256 != expected.ConfigSHA256 || owner.adopted == nil || owner.mtu == nil {
+	if expected.JumboTUN || expected.MTUPolicy != "auto" || request.Schema != 1 || request.Session != expected.SessionID || request.SourceSHA256 != expected.SourceSHA256 || request.ConfigSHA256 != expected.ConfigSHA256 || owner.adopted == nil || owner.mtu == nil {
 		return bad
 	}
 	previous := owner.mtuAuthority
@@ -108,6 +108,10 @@ func validateDesktopTorMTURecord(launch *desktopNodeLaunch, record desktopMTURec
 	owner := launch.tor
 	owner.mu.Lock()
 	defer owner.mu.Unlock()
+	requested := owner.expected.MTUPolicy == "auto" && !owner.expected.JumboTUN
+	if record.Requested != requested || record.Generation != 0 && !requested {
+		return bad
+	}
 	if record.Generation == 0 {
 		initial := owner.adopted
 		status := record.Status

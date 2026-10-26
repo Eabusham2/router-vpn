@@ -134,9 +134,22 @@ transition window; its old proof cannot authorize a measured result or renew
 that window. Normal heartbeat publication waits for the actual native reader
 and authenticated control check. Cancellation retains the worker through exact
 rollback, and persistence preserves the requested Auto policy and private node
-identity. The reported interface value is not an authenticated UDP path-MTU or
-ICMP measurement. Fixed and Default remain unmeasured interface choices.
-Router-entry/server/Compare Tor graphs, compatible Jumbo/padding and
+identity. A successfully proved manual Retest also satisfies that connection's
+pending Auto work, so releasing a DNS or Speed Lab measurement hold retains
+the committed reader. Cancelled operations and failed saves do not claim that
+completion. The reported interface value is not an authenticated UDP path-MTU
+or ICMP measurement. Fixed and Default remain unmeasured interface choices.
+
+Standalone desktop Tor now applies Jumbo as an exact 9000-byte virtual
+interface, with native readback and a captured settings transaction in Windows,
+macOS and Linux. Auto/Default preferences remain saved unchanged; a conflicting
+Fixed MTU is rejected. Neither the native optimizer nor its parent can admit
+an MTU mutation or measured receipt while this configured capacity is selected.
+Restoring an already configured Jumbo reader requires fresh Tor/DNS path proof
+without issuing a reader-change command. The actual child/controller and native
+Box tests cover these boundaries, while physical TUN and network acceptance
+remain separate. Virtual capacity does not assert 9000-byte packets on the
+underlying network. Router-entry/server/Compare Tor graphs, bounded padding and
 dynamic-bridge strict protection remain requirements to implement.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private

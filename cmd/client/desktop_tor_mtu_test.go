@@ -24,7 +24,7 @@ import (
 // claim about a physical TUN, Internet PMTU, loss or live Tor performance.
 func desktopTorMTUChildFixture(kind, directory string, expected mobiletor.DesktopBridgeMetadata, proof *desktopTorProof, write func(string, any)) func() {
 	record := desktopMTURecord{Schema: 1, Session: expected.SessionID, SourceSHA256: expected.SourceSHA256, ConfigSHA256: expected.ConfigSHA256,
-		Requested: expected.MTUPolicy == "auto", Status: mobilemtu.Status{Phase: "idle", EffectiveMTU: expected.ConfiguredMTU, Source: "configured-unmeasured", Candidates: []mobilemtu.Candidate{}}}
+		Requested: expected.MTUPolicy == "auto" && !expected.JumboTUN, Status: mobilemtu.Status{Phase: "idle", EffectiveMTU: expected.ConfiguredMTU, Source: "configured-unmeasured", Candidates: []mobilemtu.Candidate{}}}
 	write("mtu-status.json", record)
 	read := func(name string, value any) bool {
 		raw, err := os.ReadFile(filepath.Join(directory, name))
