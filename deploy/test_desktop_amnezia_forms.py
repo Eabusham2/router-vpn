@@ -46,9 +46,21 @@ def swift_form(directory):
     dispatch = unified[start:end] + '    }\n'
     dispatch = dispatch.replace('UserDefaults.standard', 'DispatchDefaults.standard')
     product = (ROOT/'client/macos/RouterVPNMacProduct.swift').read_text()
-    for name in ('routerPopup', 'nodePopup', 'externalEntryPopup', 'multihopEntryPopup', 'multihopExitPopup'):
-        assert 'self.populateIdentityPopup(self.'+name+', names: names, ids:' in product
-        assert 'self.'+name+'.addItems(withTitles: names)' not in product
+    profiles = (ROOT/'client/macos/RouterVPNConnectionProfiles.swift').read_text()
+    # Catalog population moved into the owned profile refresh callbacks. Trace
+    # both shipping callers and all five controls; the executable identity
+    # fixture below still verifies duplicate labels and mismatched ID counts.
+    for caller, method, controls in (
+        ('func refreshProfiles(order:', 'applyConnectionProfileNodeCatalog',
+         ('routerPopup', 'nodePopup', 'externalEntryPopup')),
+        ('func refreshAdvanced(', 'applyConnectionProfileHopCatalog',
+         ('multihopEntryPopup', 'multihopExitPopup')),
+    ):
+        assert 'guard try self.'+method+'(payload, capture: capture)' in block(product, caller)
+        catalog = block(profiles, 'func '+method+'(')
+        assert 'for popup in ['+', '.join(controls)+']' in catalog
+        assert 'populateIdentityPopup(popup, names: names, ids: ids)' in catalog
+        assert '.addItems(withTitles: names)' not in catalog
     test = r'''
 import Foundation
 HELPER
