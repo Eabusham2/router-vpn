@@ -332,7 +332,7 @@ def main():
             body=dns.read_text();assert body.count('import Network\n')==1
             dns=temp/dns.name;dns.write_text(body.replace('import Network\n',F.NETWORK_SHIM))
         source=temp/'Tests.swift';source.write_text(SWIFT)
-        subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSRuntimeSelection.swift'),str(TUN/'RouterVPNMultihopGraph.swift'),str(TUN/'RouterVPNMTUPolicy.swift'),str(TUN/'IOSStartLayer.swift'),str(source),'-o',str(temp/'tests')],check=True,timeout=120)
+        subprocess.run(['swiftc','-swift-version','6',str(APP/'Models.swift'),str(dns),str(APP/'IOSNativeXrayProfile.swift'),str(APP/'IOSNativePQProfile.swift'),str(APP/'IOSMultihopStartLayer.swift'),str(APP/'IOSMultihopExecution.swift'),str(APP/'IOSRuntimeSelection.swift'),str(TUN/'RouterVPNMultihopGraph.swift'),str(TUN/'RouterVPNMTUPolicy.swift'),str(TUN/'IOSStartLayer.swift'),str(source),'-o',str(temp/'tests')],check=True,timeout=120)
         subprocess.run([str(temp/'tests'),str(binary)],check=True,timeout=150)
     provider=(TUN/'PacketTunnelProvider.swift').read_text()
     start=provider[provider.index('    private func startLibbox('):provider.index('    private struct LibboxCompilation')]

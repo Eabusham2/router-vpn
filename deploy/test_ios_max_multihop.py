@@ -42,6 +42,8 @@ PROVIDER = r'''
 @MainActor final class ProviderPreparation {
  static let maxProfileBytes=4*1024*1024, maxBundleBytes=32*1024*1024, maxLayeredBytes=12*1024*1024
  var restoredMultihopExecution:String?
+ var restoredMultihopIdentityPins:IOSMultihopExecution.ServerIdentityPins?
+ var multihopExecutionSource:IOSMultihopExecution.Source?
  struct Prepared {let files:[String:Data];let metadata:String;let entryLayer:String?;let exitLayer:String?;let mtuProfile:Data}
  func tunnelError(_ code:Int,_ message:String)->NSError{NSError(domain:"ProductionPreparationTest",code:code,userInfo:[NSLocalizedDescriptionKey:message])}
  func multihopWireGuardEndpoint(root:[String:Any],expectedProofID:String,name:String)throws->(endpoint:[String:Any],dns:[String]){throw tunnelError(1,"ordinary raw helper has separate native tests")}
@@ -135,6 +137,15 @@ func maxCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:String)t
   let root:[String:Any]=["selectedRouterID":"exit","nodeProofId":b.capture!.nodeID,"routerProfiles":[exit],"profiles":[b.mode:bp["files"]!]]
   return (["rawProfileID":b.mode,"entryBundle":try json(entry)],root,exit)
  }
+ static func capturedSource(_ provider:[String:Any],_ root:[String:Any])throws->IOSMultihopExecution.Source{
+  var configuration=provider;configuration["engine"]="multihop-libbox";configuration["bundle"]=try json(root)
+  // The receipt parser has separate SHA-256 caller tests. This deterministic
+  // byte-sensitive test digest makes changed source captures distinguishable.
+  return try IOSMultihopExecution.Source(configuration:configuration,digest:{data in
+   let value=data.reduce(UInt64(14695981039346656037)){($0 ^ UInt64($1)) &* 1099511628211}
+   return String(repeating:String(format:"%016llx",value),count:4)
+  })
+ }
  @MainActor static func main()throws{
   defer{TestCompiler.shared.close()}
   let fixtures=try object(Data(contentsOf:URL(fileURLWithPath:ProcessInfo.processInfo.environment["ROUTERVPN_MAX_MULTIHOP_FIXTURES"]!)))
@@ -211,6 +222,29 @@ func maxCompose(_ config:String,_ metadata:String,_ entry:String,_ exit:String)t
   try check("actual production assembly matrix",assemblies==192)
   let a=try hop(fixtures,"entry","max-tls-wg","aes-256-gcm",1500),b=try hop(fixtures,"exit","max-quic-awg","aes-256-gcm+xor-whitening",1280)
   let meta=try metadata(a,b,"auto"),initial=try construction(a,b)
+  let roots=try sourceRoots(fixtures,a,b,"auto"),executionSource=try capturedSource(roots.0,roots.1)
+  let publicPins=["expected_packet_public_key":key(19),"expected_pq_client_identity":String(repeating:"b",count:64)]
+  let pins=try IOSMultihopExecution.ServerIdentityPins(json:text(publicPins),source:executionSource,execution:"server")
+  let resumed=ProviderPreparation();resumed.restoredMultihopExecution="server";resumed.multihopExecutionSource=executionSource;resumed.restoredMultihopIdentityPins=pins
+  let pinned=try resumed.prepare(provider:roots.0,root:roots.1,selectedProfile:roots.2)
+  let pinnedMetadata=try object(Data(pinned.metadata.utf8))
+  try check("actual production assembly retains both proved public Server identities",publicPins.allSatisfy{pinnedMetadata[$0.key] as? String==$0.value})
+  try check("restored Server does not rewrite saved Compare selection",pinnedMetadata["execution"] as? String=="server" && roots.2["multihop_execution"] as? String=="auto")
+  resumed.multihopExecutionSource=nil
+  reject("restored pins require their captured source"){_ = try resumed.prepare(provider:roots.0,root:roots.1,selectedProfile:roots.2)}
+  for field in ["entry_id","exit_id","entry_mode","exit_mode"]{
+   var provider=roots.0,root=roots.1,exit=roots.2
+   if field=="entry_id"{
+    var entry=try object(provider["entryBundle"] as! Data),profile=a.profile;profile["id"]="replacement-entry"
+    entry["selectedRouterID"]="replacement-entry";entry["routerProfiles"]=[profile];provider["entryBundle"]=try json(entry);exit["multihop_entry_id"]="replacement-entry"
+   }else if field=="exit_id"{root["selectedRouterID"]="replacement-exit";exit["id"]="replacement-exit";exit["multihop_exit_id"]="replacement-exit"
+   }else if field=="entry_mode"{exit["multihop_entry_mode"]="max-tls-awg"
+   }else{exit["multihop_exit_mode"]="max-quic-wg";provider["rawProfileID"]="max-quic-wg"}
+   root["routerProfiles"]=[exit];resumed.multihopExecutionSource=try capturedSource(provider,root)
+   reject("actual preparation rejects pins from changed "+field){_ = try resumed.prepare(provider:roots.0,root:roots.1,selectedProfile:roots.2)}
+  }
+  resumed.multihopExecutionSource=executionSource;resumed.restoredMultihopIdentityPins = .empty
+  reject("actual packet Server preparation rejects missing pins"){_ = try resumed.prepare(provider:roots.0,root:roots.1,selectedProfile:roots.2)}
   reject("missing complete source"){_ = try IOSNativeMAXMultihop.compose(files:initial,metadata:meta,entry:nil,exit:b.capture,compiler:maxCompose)}
   reject("wrong node source"){_ = try IOSNativeMAXMultihop.compose(files:initial,metadata:meta,entry:b.capture,exit:b.capture,compiler:maxCompose)}
   reject("native compiler failed"){_ = try IOSNativeMAXMultihop.compose(files:initial,metadata:meta,entry:a.capture,exit:b.capture){_,_,_,_ in throw NSError(domain:"test",code:1)}}
