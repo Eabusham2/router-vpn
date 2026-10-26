@@ -551,9 +551,16 @@ func (m *Manager) Close(ctx context.Context) error {
 	}
 	return last
 }
+
+const maxTransportBytes = 256 * 1024
+
 func copyMap(v map[string]any) (map[string]any, error) {
+	return copyMapBounded(v, maxTransportBytes)
+}
+
+func copyMapBounded(v map[string]any, limit int) (map[string]any, error) {
 	b, err := json.Marshal(v)
-	if err != nil || len(b) > 256*1024 {
+	if err != nil || len(b) > limit {
 		return nil, errors.New("exit transport exceeds safety limit")
 	}
 	var out map[string]any
@@ -653,7 +660,7 @@ func validateTransportForSelection(e Exit, allowHostname bool) (map[string]any, 
 			return nil, err
 		}
 	}
-	p, err := copyMap(e.Transport)
+	p, err := copyTransportMap(e.Transport, e.Mode)
 	if err != nil {
 		return nil, err
 	}

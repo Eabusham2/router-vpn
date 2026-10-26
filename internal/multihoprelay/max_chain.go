@@ -102,7 +102,7 @@ func ValidateMAXChain(base map[string]any, outputs []any, mode, node, layer stri
 	if !maxFields(base, "type", "tag", "mode", "node_id", "system", "mtu", "address", "private_key", "listen_port", "peers", "pq", "amnezia", "detour") {
 		return bad
 	}
-	checked, err := copyMap(base)
+	checked, err := copyTransportMap(base, MAXBaseMode(mode))
 	if err != nil {
 		return bad
 	}
@@ -256,7 +256,7 @@ func RelabelMAXChain(base map[string]any, outputs []any, mode, node, layer strin
 		return nil, nil, errors.New("invalid complete MAX destination names")
 	}
 	all := map[string]any{"base": base, "outputs": outputs}
-	copy, err := copyMap(all)
+	copy, err := boundedMAXCopy(all)
 	if err != nil {
 		return nil, nil, err
 	}

@@ -104,7 +104,7 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 		// inline compiler's 256 KiB source / 512 KiB emitted endpoint bound.
 		inner, e = nativeopenvpn.ValidateEndpoint(transport)
 	} else {
-		inner, e = copyMap(transport)
+		inner, e = copyTransportMap(transport, mode)
 	}
 	if e != nil || len(inner) == 0 {
 		return nil, nil, bad
@@ -115,7 +115,7 @@ func wrapStartLayer(transport map[string]any, mode string, layer *StartLayer, ta
 	}
 	checked := inner
 	if mode != "openvpn" {
-		checked, e = copyMap(inner)
+		checked, e = copyTransportMap(inner, mode)
 	}
 	if e != nil {
 		return nil, nil, bad

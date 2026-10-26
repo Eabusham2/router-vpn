@@ -60,6 +60,16 @@ The authenticated HTTP route applies the same strict field and mode rules.
 Its isolated mobile/controller/relay/HTTP race suite passed 333 test and subtest
 records. That is ownership evidence, not a new PQ dataplane or device claim.
 
+Private PQ relay copies now accommodate the actual native Rosenpass public-key
+size. Both WG-PQ/AWG-PQ and complete-MAX server paths preserve the exact private
+key bytes and routing owners through Start Layers and relabeling. The ordinary
+transport envelope remains limited to 256 KiB; validated PQ configuration retains
+its existing 8 MiB aggregate and 2 MiB-per-key bounds, and complete MAX retains
+its 4 MiB bound. Public lease/request limits are unchanged. Native-sized
+serialization and strict oversize/owner negatives pass against an isolated
+source overlay; these bounded tests do not replace actual PQ negotiation or
+physical Server traffic acceptance.
+
 Apple Speed Lab and startup Last now carry those public Server pins with the
 exact original source hashes and the already-proved Local/Server selection.
 The provider reapplies them before native startup, including across MAX

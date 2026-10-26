@@ -16,6 +16,43 @@ func PacketMode(mode string) bool {
 	return awgpolicy.WireGuardFamily(mode) || mobilepq.IsMode(mode) || ExternalPacketMode(mode)
 }
 
+const maxPQConfigBytes = 8 * 1024 * 1024
+
+// copyTransportMap allows the private PQ key object to retain its existing
+// native configuration bound. The ordinary envelope still has the same small
+// limit as every other transport, and a mode label alone cannot grant a larger
+// copy. Complete validation of the captured peer and routing owner follows in
+// the caller; no client request supplies this administrator-owned key material.
+func copyTransportMap(transport map[string]any, mode string) (map[string]any, error) {
+	if !mobilepq.IsMode(mode) {
+		return copyMap(transport)
+	}
+	if transport["type"] != "routervpn-pq" || transport["mode"] != mode {
+		return nil, errors.New("private PQ transport lost its captured mode")
+	}
+	config, err := pqConfig(transport)
+	defer config.Erase()
+	if err != nil {
+		return nil, err
+	}
+	envelope := make(map[string]any, len(transport))
+	for name, value := range transport {
+		if name != "pq" {
+			envelope[name] = value
+		}
+	}
+	result, err := copyMap(envelope)
+	if err != nil {
+		return nil, err
+	}
+	pq, err := copyMapBounded(transport["pq"].(map[string]any), maxPQConfigBytes)
+	if err != nil {
+		return nil, err
+	}
+	result["pq"] = pq
+	return result, nil
+}
+
 func pqConfig(transport map[string]any) (mobilepq.Config, error) {
 	var config mobilepq.Config
 	bad := errors.New("invalid bounded paired PQ configuration")
@@ -24,7 +61,7 @@ func pqConfig(transport map[string]any) (mobilepq.Config, error) {
 		return config, bad
 	}
 	raw, err := json.Marshal(object)
-	if err != nil || len(raw) > 8*1024*1024 {
+	if err != nil || len(raw) > maxPQConfigBytes {
 		return config, bad
 	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
