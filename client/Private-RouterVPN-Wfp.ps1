@@ -411,7 +411,18 @@ namespace RouterVPN {
             WfpNative.Check(WfpNative.FwpmFilterGetByKey0(handle, ref key, out pointer), "read owned WFP filter " + rule.Name);
             try {
                 WfpNative.Filter value = (WfpNative.Filter)Marshal.PtrToStructure(pointer, typeof(WfpNative.Filter));
-                if (value.Key != key || value.Layer != rule.Layer || value.Sublayer != policy.SublayerKey || value.Flags != (persistent ? 1U : 0U) || value.Provider != IntPtr.Zero || value.Action.Type != (rule.Permit ? 0x1002U : 0x1001U) || value.Action.Key != Guid.Empty || value.FilterId == 0 || value.ConditionCount != rule.Conditions.Length || !WfpMemory.EqualBlob(value.Data, policy.Metadata(rule.Name)) || value.Weight.Type != 4 || value.Weight.Data.Pointer == IntPtr.Zero || unchecked((ulong)Marshal.ReadInt64(value.Weight.Data.Pointer)) != rule.Weight) throw new InvalidOperationException("WFP filter identity, action or lifetime changed: " + rule.Name);
+                if (value.Key != key || value.Layer != rule.Layer || value.Sublayer != policy.SublayerKey || value.Flags != (persistent ? 1U : 0U) || value.Provider != IntPtr.Zero || value.Action.Type != (rule.Permit ? 0x1002U : 0x1001U) || value.Action.Key != Guid.Empty || value.FilterId == 0 || value.ConditionCount != rule.Conditions.Length || !WfpMemory.EqualBlob(value.Data, policy.Metadata(rule.Name)) || value.Weight.Type != 4 || value.Weight.Data.Pointer == IntPtr.Zero || unchecked((ulong)Marshal.ReadInt64(value.Weight.Data.Pointer)) != rule.Weight) {
+                    // Keep rejection exact while identifying which native
+                    // readback contract failed. Never print provider metadata,
+                    // credentials, the captured source or condition payloads.
+                    string weight = value.Weight.Type == 4 && value.Weight.Data.Pointer != IntPtr.Zero ? unchecked((ulong)Marshal.ReadInt64(value.Weight.Data.Pointer)).ToString(CultureInfo.InvariantCulture) : "unavailable";
+                    throw new InvalidOperationException("WFP filter identity, action or lifetime changed: " + rule.Name +
+                        "; key=" + (value.Key == key) + "; layer=" + (value.Layer == rule.Layer) + "; sublayer=" + (value.Sublayer == policy.SublayerKey) +
+                        "; flags=" + value.Flags.ToString("x8", CultureInfo.InvariantCulture) + "; persistent=" + persistent + "; no-provider=" + (value.Provider == IntPtr.Zero) +
+                        "; action=" + value.Action.Type.ToString("x8", CultureInfo.InvariantCulture) + "; expected-permit=" + rule.Permit + "; no-action-key=" + (value.Action.Key == Guid.Empty) +
+                        "; id=" + value.FilterId.ToString(CultureInfo.InvariantCulture) + "; conditions=" + value.ConditionCount.ToString(CultureInfo.InvariantCulture) + "/" + rule.Conditions.Length.ToString(CultureInfo.InvariantCulture) +
+                        "; metadata=" + WfpMemory.EqualBlob(value.Data, policy.Metadata(rule.Name)) + "; weight-type=" + value.Weight.Type.ToString(CultureInfo.InvariantCulture) + "; weight=" + weight + "/" + rule.Weight.ToString(CultureInfo.InvariantCulture));
+                }
                 if (value.ConditionCount != 0 && value.Conditions == IntPtr.Zero) throw new InvalidOperationException("WFP filter lost its captured conditions.");
                 int stride = Marshal.SizeOf(typeof(WfpNative.Condition));
                 for (int i = 0; i < rule.Conditions.Length; i++) rule.Conditions[i].Assert((WfpNative.Condition)Marshal.PtrToStructure(IntPtr.Add(value.Conditions, i * stride), typeof(WfpNative.Condition)));
