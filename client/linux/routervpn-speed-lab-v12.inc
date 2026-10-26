@@ -15,7 +15,10 @@ typedef struct {
     gboolean updating_choices;
     gboolean path_invalid;
     gboolean staged_multihop;
+    gboolean selection_captured;
+    char *staged_selected;
     char *staged_entry, *staged_exit, *staged_exit_mode, *staged_execution;
+    JsonObject *captured_profile_tokens;
     GtkWidget *layers;
     GtkWidget *duration_mode;
     GtkWidget *min_time;
@@ -136,6 +139,8 @@ static void linux_speed_lab_destroy_v12(GtkWidget *widget, gpointer data) {
     if (s->worker != NULL) { g_thread_join(s->worker); s->worker = NULL; }
     linux_speed_lab_release_request_v12(s);
     g_clear_pointer(&s->options, json_node_free);
+    g_clear_pointer(&s->captured_profile_tokens, json_object_unref);
+    g_clear_pointer(&s->staged_selected, g_free);
     g_clear_pointer(&s->staged_entry, g_free); g_clear_pointer(&s->staged_exit, g_free);
     g_clear_pointer(&s->staged_exit_mode, g_free); g_clear_pointer(&s->staged_execution, g_free);
 }
@@ -190,6 +195,13 @@ static gboolean linux_speed_lab_apply_options_v12(LinuxSpeedLabV12 *s) {
     }
     s->updating_choices = TRUE;
     g_clear_pointer(&s->options, json_node_free); s->options = json_node_copy(root);
+    const char *capture_error = linux_speed_lab_capture_catalog_v19(s);
+    if (capture_error != NULL) {
+        s->updating_choices = FALSE;
+        gtk_label_set_text(GTK_LABEL(s->status), capture_error);
+        json_node_free(root);
+        return FALSE;
+    }
     JsonObject *obj = json_node_get_object(root); JsonArray *nodes = json_object_has_member(obj, "nodes") ? json_object_get_array_member(obj, "nodes") : NULL;
     linux_speed_lab_append_nodes_v12(s->node, nodes, NULL); linux_speed_lab_append_nodes_v12(s->entry, nodes, NULL); linux_speed_lab_append_nodes_v12(s->exit, nodes, "router-vpn");
     gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->mode)); JsonArray *modes = json_object_has_member(obj, "logical_modes") ? json_object_get_array_member(obj, "logical_modes") : NULL;
@@ -270,10 +282,16 @@ static void linux_speed_lab_time_v12(GtkRange *ignored, gpointer data) {
 static char *linux_speed_lab_request_body_v12(LinuxSpeedLabV12 *s) {
     const char *error=linux_speed_lab_path_error_v19(s);
     if(error!=NULL){gtk_label_set_text(GTK_LABEL(s->status),error);return NULL;}
+    JsonObject *tokens = json_object_new();
+    error = linux_speed_lab_bind_profiles_v19(s, tokens);
+    if (error != NULL) { json_object_unref(tokens); gtk_label_set_text(GTK_LABEL(s->status), error); return NULL; }
     JsonBuilder *b=json_builder_new(); json_builder_begin_object(b);
 #define SL_STR(name,value) do{json_builder_set_member_name(b,(name));json_builder_add_string_value(b,(value));}while(0)
 #define SL_BOOL(name,value) do{json_builder_set_member_name(b,(name));json_builder_add_boolean_value(b,(value));}while(0)
     const char *scope=linux_speed_lab_active_id_v12(s->scope),*duration=linux_speed_lab_active_id_v12(s->duration_mode); SL_STR("scope",scope);SL_STR("duration_mode",duration);
+    SL_STR("expected_selected_node_id", s->staged_selected);
+    json_builder_set_member_name(b, "expected_profile_tokens");
+    JsonNode *token_node = json_node_new(JSON_NODE_OBJECT); json_node_take_object(token_node, tokens); json_builder_add_value(b, token_node);
     if(strcmp(duration,"custom")==0){json_builder_set_member_name(b,"min_seconds");json_builder_add_double_value(b,gtk_range_get_value(GTK_RANGE(s->min_time)));json_builder_set_member_name(b,"max_seconds");json_builder_add_double_value(b,gtk_range_get_value(GTK_RANGE(s->max_time)));}
     if(strcmp(scope,"temporary")==0){
         const char *top=linux_speed_lab_active_id_v12(s->topology); SL_STR("topology",top);
@@ -432,8 +450,7 @@ static GtkWidget *linux_speed_lab_grid_label_v12(const char*text){GtkWidget*w=gt
 
 static void linux_speed_lab_open_v12(GtkButton *button,gpointer data){
     (void)button;App*app=data;if(app==NULL)return;LinuxSpeedLabV12*s=g_new0(LinuxSpeedLabV12,1);s->app=app;
-    linux_profile_selection_v11(&s->staged_multihop, &s->staged_entry, &s->staged_exit, &s->staged_exit_mode);
-    s->staged_execution = linux_multihop_execution_choice_v1();
+    linux_speed_lab_capture_selection_v19(s);
     s->dialog=gtk_dialog_new_with_buttons("Router VPN Speed Lab",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Close",GTK_RESPONSE_CLOSE,NULL);gtk_window_set_default_size(GTK_WINDOW(s->dialog),900,690);
     GtkWidget*area=gtk_dialog_get_content_area(GTK_DIALOG(s->dialog)),*root=gtk_box_new(GTK_ORIENTATION_VERTICAL,10);gtk_container_set_border_width(GTK_CONTAINER(root),16);GtkWidget*title=gtk_label_new(NULL);gtk_label_set_markup(GTK_LABEL(title),"<span size='xx-large' weight='bold'>Router VPN Speed Lab</span>\nReal HTTPS Mbps with idle, download-loaded and upload-loaded latency. Current path is default; Temporary builds and restores a test-only graph.");gtk_label_set_line_wrap(GTK_LABEL(title),TRUE);gtk_label_set_xalign(GTK_LABEL(title),0.0f);gtk_box_pack_start(GTK_BOX(root),title,FALSE,FALSE,0);
     GtkWidget*cards=gtk_box_new(GTK_ORIENTATION_HORIZONTAL,8);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("IDLE LATENCY",&s->idle,&s->idle_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("DOWNLOAD",&s->download,&s->download_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(cards),linux_speed_lab_metric_v12("UPLOAD",&s->upload,&s->upload_detail),TRUE,TRUE,0);gtk_box_pack_start(GTK_BOX(root),cards,FALSE,FALSE,0);

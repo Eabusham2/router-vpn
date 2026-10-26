@@ -46,6 +46,7 @@ def linux_form(directory):
         'static GtkWidget *linux_speed_lab_combo_v12(',
         'static void linux_speed_lab_append_nodes_v12(',
     ))
+    methods += '\n' + block((ROOT/'client/linux/routervpn-gtk-product-v3.c').read_text(), 'static const char *active_router_id(')
     methods += '\n' + (ROOT/'client/linux/routervpn-speed-lab-path-v19.inc').read_text()
     methods += '\n' + '\n'.join(block(source, marker) for marker in (
         'static gboolean linux_speed_lab_apply_options_v12(',
@@ -58,11 +59,17 @@ def linux_form(directory):
 #include <json-glib/json-glib.h>
 #include <stdlib.h>
 #include <string.h>
-typedef struct { int unused; } App;
+typedef struct { GtkWidget *router_combo; GPtrArray *router_ids; } App;
 typedef struct { char *data; size_t len; } Buffer;
 STRUCT
 static JsonNode *parse_json(const char *raw){JsonParser*p=json_parser_new();JsonNode*n=NULL;if(json_parser_load_from_data(p,raw,-1,NULL))n=json_node_copy(json_parser_get_root(p));g_object_unref(p);return n;}
 static const char *obj_string(JsonObject*o,const char*k){return o&&json_object_has_member(o,k)?json_object_get_string_member(o,k):"";}
+/* Public preference reads are controlled at this boundary. The actual dialog
+ * capture, main-node reader, options parser, validation and Run callback run. */
+static gboolean staged_enabled;
+static const char *staged_entry="", *staged_exit="", *staged_mode="shadowsocks", *staged_execution="local";
+static gboolean linux_profile_selection_v11(gboolean*enabled,char**entry,char**exit,char**mode){*enabled=staged_enabled;*entry=g_strdup(staged_entry);*exit=g_strdup(staged_exit);*mode=g_strdup(staged_mode);return staged_enabled;}
+static char *linux_multihop_execution_choice_v1(void){return g_strdup(staged_execution);}
 METHODS
 static char *captured;
 static void linux_speed_lab_start_v12(LinuxSpeedLabV12*s,gboolean options){g_assert(!options);g_free(captured);captured=linux_speed_lab_request_body_v12(s);}
@@ -73,7 +80,8 @@ static GtkWidget *combo(const char*const*ids,size_t count){return linux_speed_la
 static void choose(GtkWidget*w,const char*id){check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(w),id),"Missing fixture choice");}
 static void emit(LinuxSpeedLabV12*s,const char*directory,const char*name){linux_speed_lab_refresh_controls_v12(NULL,s);check(gtk_widget_get_sensitive(s->run),gtk_label_get_text(GTK_LABEL(s->status)));g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured!=NULL,gtk_label_get_text(GTK_LABEL(s->status)));char*path=g_strdup_printf("%s/%s.json",directory,name);check(g_file_set_contents(path,captured,-1,NULL),"Cannot write captured Run payload");g_free(path);}
 static void reject(LinuxSpeedLabV12*s){linux_speed_lab_refresh_controls_v12(NULL,s);check(!gtk_widget_get_sensitive(s->run),"Invalid path left Run enabled");g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s->run));check(captured==NULL,"Invalid selection reached the controller");}
-int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixture directory");LinuxSpeedLabV12 s={0};
+int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixture directory");LinuxSpeedLabV12 s={0};App app={0};s.app=&app;
+ app.router_combo=gtk_combo_box_text_new();app.router_ids=g_ptr_array_new_with_free_func(g_free);const char*main_ids[]={"exit","entry","external-entry","exit-router"};for(guint i=0;i<G_N_ELEMENTS(main_ids);i++){gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(app.router_combo),main_ids[i],main_ids[i]);g_ptr_array_add(app.router_ids,g_strdup(main_ids[i]));}choose(app.router_combo,"exit");linux_speed_lab_capture_selection_v19(&s);
  const char*scopes[]={"current","temporary"},*tops[]={"system-direct","router","multihop","external"},*bases[]={"auto","wg","awg"},*times[]={"auto","custom"};
  s.scope=combo(scopes,2);s.topology=combo(tops,4);s.base=combo(bases,3);s.exit_mode=gtk_combo_box_text_new();linux_multihop_exit_choices_v22(s.exit_mode,"shadowsocks");s.duration_mode=combo(times,2);
  s.node=gtk_combo_box_text_new();s.entry=gtk_combo_box_text_new();s.exit=gtk_combo_box_text_new();s.mode=gtk_combo_box_text_new();s.entry_mode=gtk_combo_box_text_new();s.execution=gtk_combo_box_text_new();s.layers=gtk_entry_new();
@@ -92,6 +100,9 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  choose(s.entry,"entry");choose(s.execution,"auto");linux_speed_lab_select_v19(s.entry_mode,"missing-mode");reject(&s);choose(s.entry_mode,"wg");
  linux_speed_lab_select_v19(s.entry,"missing-entry");reject(&s);choose(s.entry,"entry");linux_speed_lab_select_v19(s.execution,"invalid");reject(&s);choose(s.execution,"auto");
  JsonObject*node=linux_speed_lab_find_v19(&s,"nodes","exit");json_object_set_boolean_member(node,"has_response_probe",FALSE);reject(&s);json_object_set_boolean_member(node,"has_response_probe",TRUE);
+ char*original_token=g_strdup(obj_string(node,"profile_token"));json_object_set_string_member(node,"profile_token","ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff");reject(&s);check(g_strcmp0(obj_string(s.captured_profile_tokens,"exit"),original_token)==0,"Relink replaced the detached capture");json_object_set_string_member(node,"profile_token",original_token);g_free(original_token);
+ JsonObject*entry_node=linux_speed_lab_find_v19(&s,"nodes","entry");char*entry_token=g_strdup(obj_string(entry_node,"profile_token"));json_object_remove_member(entry_node,"profile_token");reject(&s);json_object_set_string_member(entry_node,"profile_token",entry_token);g_free(entry_token);
+ choose(app.router_combo,"entry");reject(&s);choose(app.router_combo,"exit");staged_enabled=TRUE;reject(&s);staged_enabled=FALSE;
  json_object_set_boolean_member(node,"has_openvpn_pairing",FALSE);reject(&s);json_object_set_boolean_member(node,"has_openvpn_pairing",TRUE);
  JsonArray*nodes=linux_speed_lab_catalog_v19(&s,"nodes");json_array_add_object_element(nodes,json_object_ref(node));reject(&s);json_array_remove_element(nodes,json_array_get_length(nodes)-1);
  json_object_set_string_member(node,"multihop_entry_id","removed-entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.entry),"removed-entry")==0,"Unavailable entry became Direct");reject(&s);json_object_set_string_member(node,"multihop_entry_id","entry");linux_speed_lab_defaults_v19(&s);
@@ -102,11 +113,15 @@ int main(int argc,char**argv){gtk_init(&argc,&argv);check(argc==2,"Expected fixt
  json_array_add_string_element(exit_modes,"naive-h3");reject(&s);json_array_remove_element(exit_modes,json_array_get_length(exit_modes)-1);
  JsonObject*current=json_object_get_object_member(json_node_get_object(s.options),"current");json_object_set_boolean_member(current,"connected",TRUE);json_object_set_string_member(current,"mode","multihop");json_object_set_string_member(current,"entry_id","different-entry");json_object_set_string_member(current,"exit_id","exit-router");json_object_set_string_member(current,"exit_mode","reality-xhttp");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"naive-h3")==0,"Another live graph changed the selected exit transport");
  json_object_set_string_member(current,"entry_id","entry");linux_speed_lab_defaults_v19(&s);check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-xhttp")==0,"Exact live graph exit transport was not preserved");
+ json_object_set_string_member(current,"router_id","exit-router");choose(s.scope,"current");char*current_body=linux_speed_lab_request_body_v12(&s);check(current_body!=NULL,"Current hopped owner could not bind revisions");JsonNode*current_request=parse_json(current_body);JsonObject*current_tokens=json_object_get_object_member(json_node_get_object(current_request),"expected_profile_tokens");check(json_object_get_size(current_tokens)==3&&json_object_has_member(current_tokens,"exit")&&json_object_has_member(current_tokens,"entry")&&json_object_has_member(current_tokens,"exit-router"),"Current path omitted its active hop or selected node");json_node_free(current_request);g_free(current_body);json_object_set_string_member(current,"entry_id","removed-entry");reject(&s);json_object_set_string_member(current,"entry_id","entry");json_object_set_string_member(current,"router_id","");reject(&s);json_object_set_string_member(current,"router_id","exit-router");choose(s.scope,"temporary");
  choose(s.exit,"entry");reject(&s);choose(s.exit,"exit-router");choose(s.topology,"system-direct");emit(&s,argv[1],"speed-lab-system-direct");
  JsonNode*reload=parse_json(s.response.data);JsonArray*reload_nodes=json_object_get_array_member(json_node_get_object(reload),"nodes");for(guint i=0;i<json_array_get_length(reload_nodes);i++){JsonObject*n=json_array_get_object_element(reload_nodes,i);json_object_set_boolean_member(n,"selected",strcmp(obj_string(n,"id"),"entry")==0);}JsonGenerator*generator=json_generator_new();json_generator_set_root(generator,reload);g_free(s.response.data);s.response.data=json_generator_to_data(generator,NULL);g_object_unref(generator);json_node_free(reload);
- s.staged_multihop=TRUE;s.staged_entry=g_strdup("entry");s.staged_exit=g_strdup("exit-router");s.staged_exit_mode=g_strdup("reality-pq-vision");s.staged_execution=g_strdup("auto");check(linux_speed_lab_apply_options_v12(&s),"Reloaded options failed");check(strcmp(linux_speed_lab_active_id_v12(s.topology),"multihop")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry),"entry")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit),"exit-router")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-pq-vision")==0&&strcmp(linux_speed_lab_active_id_v12(s.execution),"auto")==0,"Loaded whole-connection profile choices changed");
- g_free(s.staged_exit_mode);s.staged_exit_mode=g_strdup("missing-saved-exit");check(linux_speed_lab_apply_options_v12(&s),"Unknown saved mode options failed");check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"missing-saved-exit")==0,"Unknown saved exit was replaced");reject(&s);g_free(s.staged_entry);g_free(s.staged_exit);g_free(s.staged_exit_mode);g_free(s.staged_execution);
- json_node_free(s.options);g_free(s.response.data);g_free(captured);printf("Actual GTK Speed Lab options/defaults/Run callback: %u checks PASS\n",checks);return 0;}
+ staged_enabled=TRUE;staged_entry="entry";staged_exit="exit-router";staged_mode="reality-pq-vision";staged_execution="auto";choose(app.router_combo,"entry");check(!linux_speed_lab_apply_options_v12(&s),"A delayed catalog replaced the original main selection");linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Reloaded options failed");check(strcmp(linux_speed_lab_active_id_v12(s.topology),"multihop")==0&&strcmp(linux_speed_lab_active_id_v12(s.entry),"entry")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit),"exit-router")==0&&strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"reality-pq-vision")==0&&strcmp(linux_speed_lab_active_id_v12(s.execution),"auto")==0,"Loaded whole-connection profile choices changed");
+ exit_modes=linux_speed_lab_catalog_v19(&s,"supported_exit_modes");for(guint i=0;i<json_array_get_length(exit_modes);i++){const char*mode=json_array_get_string_element(exit_modes,i);choose(s.exit_mode,mode);for(guint j=0;j<3;j++){choose(s.execution,executions[j]);char*name=g_strdup_printf("speed-lab-multihop-%s-%s",mode,executions[j]);emit(&s,argv[1],name);g_free(name);}}
+ staged_mode="naive-h2";reject(&s);staged_mode="reality-pq-vision";staged_execution="server";reject(&s);staged_execution="auto";staged_entry="exit-router";reject(&s);staged_entry="entry";
+ staged_mode="missing-saved-exit";linux_speed_lab_capture_selection_v19(&s);check(linux_speed_lab_apply_options_v12(&s),"Unknown saved mode options failed");check(strcmp(linux_speed_lab_active_id_v12(s.exit_mode),"missing-saved-exit")==0,"Unknown saved exit was replaced");reject(&s);
+ staged_enabled=FALSE;gtk_combo_box_set_active(GTK_COMBO_BOX(app.router_combo),-1);linux_speed_lab_capture_selection_v19(&s);g_free(s.response.data);s.response.data=g_strdup("{\"nodes\":[],\"logical_modes\":[{\"id\":\"smart-auto\"}]}");check(linux_speed_lab_apply_options_v12(&s),"First-use empty node options failed");choose(s.scope,"temporary");choose(s.topology,"system-direct");char*empty_body=linux_speed_lab_request_body_v12(&s);check(empty_body!=NULL,"First-use System direct was blocked");JsonNode*empty_request=parse_json(empty_body);JsonObject*empty_object=json_node_get_object(empty_request);check(!obj_string(empty_object,"expected_selected_node_id")[0]&&json_object_get_size(json_object_get_object_member(empty_object,"expected_profile_tokens"))==0,"First-use System direct invented a node identity");json_node_free(empty_request);g_free(empty_body);s.closed=TRUE;g_clear_pointer(&captured,g_free);gtk_button_clicked(GTK_BUTTON(s.run));check(captured==NULL,"Closed Speed Lab issued a request");
+ json_node_free(s.options);json_object_unref(s.captured_profile_tokens);g_free(s.staged_selected);g_free(s.staged_entry);g_free(s.staged_exit);g_free(s.staged_exit_mode);g_free(s.staged_execution);g_free(s.response.data);g_free(captured);g_ptr_array_unref(app.router_ids);printf("Actual GTK Speed Lab options/defaults/Run callback: %u checks PASS\n",checks);return 0;}
 '''.replace('STRUCT', struct).replace('METHODS', methods).replace('\nCALLBACK\n', '\n'+callback+'\n')
     path = directory/'speed-lab.c'; path.write_text(program)
     flags = subprocess.check_output(['pkg-config','--cflags','--libs','gtk+-3.0','json-glib-1.0'], text=True).split()
@@ -262,7 +277,7 @@ def main():
     for shell in shells:
         with tempfile.TemporaryDirectory(prefix='router-vpn-speed-lab-forms-') as temporary:
             directory=Path(temporary);env=dict(os.environ,ROUTERVPN_EXTERNAL_FORM_PAYLOADS=str(directory),
-                ROUTERVPN_SPEED_LAB_FORM_CAPTURE_REQUIRED='1' if args.platform in ('windows','darwin') else '0')
+                ROUTERVPN_SPEED_LAB_FORM_CAPTURE_REQUIRED='1')
             subprocess.run(['go','test','-count=1','./cmd/client','-run','^TestDesktopSpeedLabPathFormCatalog$'],cwd=ROOT,env=env,check=True,timeout=180)
             if args.platform=='linux': linux_form(directory)
             elif args.platform=='darwin': swift_form(directory)

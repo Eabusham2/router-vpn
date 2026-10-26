@@ -33,6 +33,109 @@ static const char *linux_speed_lab_kind_v19(JsonObject *value) {
     return kind[0] != '\0' ? kind : "router-vpn";
 }
 
+static const char *linux_speed_lab_main_selection_v19(LinuxSpeedLabV12 *s) {
+    if (s->app == NULL || s->app->router_combo == NULL || s->app->router_ids == NULL) return "";
+    const char *id = active_router_id(s->app);
+    return id != NULL ? id : "";
+}
+
+static void linux_speed_lab_capture_selection_v19(LinuxSpeedLabV12 *s) {
+    g_clear_pointer(&s->staged_selected, g_free);
+    g_clear_pointer(&s->staged_entry, g_free); g_clear_pointer(&s->staged_exit, g_free);
+    g_clear_pointer(&s->staged_exit_mode, g_free); g_clear_pointer(&s->staged_execution, g_free);
+    g_clear_pointer(&s->captured_profile_tokens, json_object_unref);
+    s->staged_selected = g_strdup(linux_speed_lab_main_selection_v19(s));
+    linux_profile_selection_v11(&s->staged_multihop, &s->staged_entry, &s->staged_exit, &s->staged_exit_mode);
+    s->staged_execution = linux_multihop_execution_choice_v1();
+    s->selection_captured = TRUE;
+}
+
+static gboolean linux_speed_lab_valid_token_v19(const char *token) {
+    if (token == NULL || strlen(token) != 64) return FALSE;
+    for (const char *p = token; *p; p++) if (!(*p >= '0' && *p <= '9') && !(*p >= 'a' && *p <= 'f')) return FALSE;
+    return TRUE;
+}
+
+static const char *linux_speed_lab_selection_error_v19(LinuxSpeedLabV12 *s) {
+    const char *changed = "The connection profile changed while Speed Lab was open. Reopen Speed Lab for that selection.";
+    if (s->closed || !s->selection_captured || g_strcmp0(s->staged_selected, linux_speed_lab_main_selection_v19(s)) != 0) return changed;
+    gboolean enabled = FALSE;
+    char *entry = NULL, *exit = NULL, *mode = NULL;
+    linux_profile_selection_v11(&enabled, &entry, &exit, &mode);
+    char *execution = linux_multihop_execution_choice_v1();
+    gboolean same = enabled == s->staged_multihop && (!enabled ||
+        (g_strcmp0(entry, s->staged_entry) == 0 && g_strcmp0(exit, s->staged_exit) == 0 &&
+         g_strcmp0(mode, s->staged_exit_mode) == 0 && g_strcmp0(execution, s->staged_execution) == 0));
+    g_free(entry); g_free(exit); g_free(mode); g_free(execution);
+    if (!same) return changed;
+    JsonArray *nodes = linux_speed_lab_catalog_v19(s, "nodes");
+    if (nodes == NULL) return "Speed Lab has no captured node catalog. Reopen Speed Lab.";
+    guint selected = 0;
+    for (guint i = 0; i < json_array_get_length(nodes); i++) {
+        JsonObject *node = json_array_get_object_element(nodes, i);
+        if (linux_speed_lab_flag_v19(node, "selected")) {
+            selected++;
+            if (g_strcmp0(obj_string(node, "id"), s->staged_selected) != 0) return changed;
+        }
+    }
+    if (selected != (s->staged_selected[0] ? 1u : 0u) ||
+        (s->staged_selected[0] && linux_speed_lab_find_v19(s, "nodes", s->staged_selected) == NULL)) return changed;
+    return NULL;
+}
+
+static const char *linux_speed_lab_capture_catalog_v19(LinuxSpeedLabV12 *s) {
+    const char *error = linux_speed_lab_selection_error_v19(s);
+    if (error != NULL) return error;
+    JsonArray *nodes = linux_speed_lab_catalog_v19(s, "nodes");
+    JsonObject *tokens = json_object_new();
+    for (guint i = 0; i < json_array_get_length(nodes); i++) {
+        JsonObject *node = json_array_get_object_element(nodes, i);
+        const char *id = obj_string(node, "id"), *token = obj_string(node, "profile_token");
+        if (!id[0] || json_object_has_member(tokens, id) || !linux_speed_lab_valid_token_v19(token) ||
+            (s->captured_profile_tokens != NULL && g_strcmp0(obj_string(s->captured_profile_tokens, id), token) != 0)) {
+            json_object_unref(tokens);
+            return "A Speed Lab node was removed, relinked, or has no unique source identity. Reopen Speed Lab.";
+        }
+        json_object_set_string_member(tokens, id, token);
+    }
+    if (s->captured_profile_tokens == NULL) s->captured_profile_tokens = tokens;
+    else json_object_unref(tokens);
+    return NULL;
+}
+
+static gboolean linux_speed_lab_add_profile_v19(LinuxSpeedLabV12 *s, JsonObject *tokens, const char *id) {
+    if (id == NULL || id[0] == '\0') return TRUE;
+    JsonObject *node = linux_speed_lab_find_v19(s, "nodes", id);
+    const char *token = obj_string(node, "profile_token");
+    if (node == NULL || !linux_speed_lab_valid_token_v19(token) ||
+        g_strcmp0(obj_string(s->captured_profile_tokens, id), token) != 0) return FALSE;
+    if (tokens != NULL) json_object_set_string_member(tokens, id, token);
+    return TRUE;
+}
+
+static const char *linux_speed_lab_bind_profiles_v19(LinuxSpeedLabV12 *s, JsonObject *tokens) {
+    const char *error = linux_speed_lab_selection_error_v19(s);
+    if (error != NULL) return error;
+    const char *missing = "A captured test node was removed or relinked. Reopen Speed Lab before running this path.";
+    if (s->captured_profile_tokens == NULL || !linux_speed_lab_add_profile_v19(s, tokens, s->staged_selected)) return missing;
+    JsonObject *selected = linux_speed_lab_find_v19(s, "nodes", s->staged_selected);
+    if (s->staged_multihop && strcmp(linux_speed_lab_kind_v19(selected), "router-vpn") == 0 &&
+        (!s->staged_entry[0] || !s->staged_exit[0] || !linux_speed_lab_add_profile_v19(s, tokens, s->staged_entry) || !linux_speed_lab_add_profile_v19(s, tokens, s->staged_exit))) return missing;
+    if (strcmp(linux_speed_lab_active_id_v12(s->scope), "temporary") == 0) {
+        const char *top = linux_speed_lab_active_id_v12(s->topology);
+        if ((strcmp(top, "router") == 0 || strcmp(top, "external") == 0) && !linux_speed_lab_add_profile_v19(s, tokens, linux_speed_lab_active_id_v12(s->node))) return missing;
+        if ((strcmp(top, "multihop") == 0 || strcmp(top, "external") == 0) && !linux_speed_lab_add_profile_v19(s, tokens, linux_speed_lab_active_id_v12(s->entry))) return missing;
+        if (strcmp(top, "multihop") == 0 && !linux_speed_lab_add_profile_v19(s, tokens, linux_speed_lab_active_id_v12(s->exit))) return missing;
+    } else {
+        JsonNode *current_node = json_object_get_member(json_node_get_object(s->options), "current");
+        JsonObject *current = current_node != NULL && JSON_NODE_HOLDS_OBJECT(current_node) ? json_node_get_object(current_node) : NULL;
+        if (linux_speed_lab_flag_v19(current, "connected") &&
+            (!obj_string(current, "router_id")[0] || !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "router_id")) ||
+             !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "entry_id")) || !linux_speed_lab_add_profile_v19(s, tokens, obj_string(current, "exit_id")))) return missing;
+    }
+    return NULL;
+}
+
 static void linux_speed_lab_select_v19(GtkWidget *combo, const char *id) {
     /* Keep an unavailable saved identity visible. Run rejects it until the user
      * deliberately chooses a current node/mode; it never becomes Direct/WG. */
@@ -132,6 +235,8 @@ static gboolean linux_speed_lab_server_ready_v19(JsonObject *node) {
 }
 
 static const char *linux_speed_lab_path_error_v19(LinuxSpeedLabV12 *s) {
+    const char *capture_error = linux_speed_lab_bind_profiles_v19(s, NULL);
+    if (capture_error != NULL) return capture_error;
     if (strcmp(linux_speed_lab_active_id_v12(s->scope), "current") == 0) return NULL;
     const char *top = linux_speed_lab_active_id_v12(s->topology);
     if (strcmp(top, "system-direct") == 0) return NULL;

@@ -176,7 +176,10 @@ def main() -> int:
                 if self.wait_for_response(6 if delayed else .4, "action_cancelled"):
                     self.respond(200, b'{"ok":true}')
                 return
-            if self.path != "/api/speed-lab/run" or body != {"scope": "current", "duration_mode": "auto"}:
+            if self.path != "/api/speed-lab/run" or body != {
+                "scope": "current", "duration_mode": "auto",
+                "expected_selected_node_id": "", "expected_profile_tokens": {},
+            }:
                 with lock:
                     state["errors"].append([self.path, body])
                 self.respond(400, b"unexpected test configuration")
