@@ -81,11 +81,48 @@ state, and connection-profile fixtures, including source mutations that remove
 ownership, drain, capacity, and policy guards. The real APK/AAR build and device
 networking remain separate gates.
 
+## Apple host
+
+The external-node device editor exposes a Tor-only Jumbo switch. Its captured
+save preserves Auto/Runtime default, the selected resolver, protection, entry
+references, and private bridge configuration. Fixed values other than 9000
+cannot be combined with Jumbo. Active, stale-source, and failed persistence
+transactions leave the previous node unchanged.
+
+The existing entry preparation applies its saved interface preference before
+the Tor compiler receives that complete graph. Tor retains the captured entry
+profile and the exact resulting single TUN. Proxy and composite predecessors
+that pass their existing capacity validation may provide Jumbo; packet-bearing
+WG/AWG/PQ/MAX entry guards remain in force. Inherited Fixed 9000 is distinct from
+an explicit Jumbo request, and neither changes the saved exit Auto/Default
+selection. Tor does not rewrite the prepared predecessor's protocol endpoints.
+
+`RouterVPNMTUSession` adopts the real Libbox Tor owner after proof and matching
+OS readback, then asks its retained `AutoRequested()` authority. The platform
+passes the compiled capacity unchanged to NetworkExtension settings. A late
+platform open or failed native adoption cannot report a successful connection.
+Failed Close retains the exact native handle for a later drain attempt.
+
+The app requires current readback before displaying configured capacity or
+enabling Retest. Configured 9000 is shown as unmeasured, and inherited Fixed or
+Jumbo disables both deferred Auto and explicit Retest. The displayed measured
+candidate ceiling remains 1500. The app control binds replies and Cancel
+to the captured session/request; an old response cannot revive permission in a
+replacement session.
+
+Executable coverage runs the shipping Swift editor, provider graph assembly,
+MTU platform/open method, owner, decoder and app client. Native Go policy
+compilers are used for the graph and editor checks. The framework and OS
+boundaries in these fixtures are doubles; actual generated Libbox binding,
+Xcode app/extension builds and device acceptance remain separate evidence.
+
 ## Remaining platform evidence
 
-The shared/native capacity foundation supports both mobile hosts. The Apple
-host still needs its corresponding editor and effective-authority adoption
-integration; the shared implementation alone does not complete that task.
+Apple whole connection profiles still treat Tor as a selection-only legacy
+record. Complete Tor Add/Load/Update/Delete preference snapshots and restore
+validation remain a separate implementation task; the device editor does not
+substitute for them.
+
 Android and Apple real-device interface readback, traffic segmentation, reconnect,
 network transitions, leak checks, and signed-package upgrade acceptance require
 their own device evidence. Standalone Tor padding and additional graph families

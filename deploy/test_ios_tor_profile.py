@@ -51,7 +51,7 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="checked"
  case "tor-with-predecessor":value,err=mobiletor.CompileProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
- case "tor-mtu-authority":value,err=mobiletor.MTUAuthority(r.Config,r.Policy,r.Node)
+ case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
  case "external-validate-dns":err=mobilemultihop.ValidateExternalDNS(r.Config,r.Policy);value="checked"
@@ -364,10 +364,10 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   let graph=try object(runtime.files["sing-box.json"]!),out=try tagged(graph,"routervpn-tor-exit"),sid=runtime.torSessionID!
   try check("fresh session identity",sessions.insert(sid).inserted && out["session_id"] as? String==sid)
   try check("Tor MTU retains the exact compiled profile capture",runtime.torProfileJSON==String(decoding:before,as:UTF8.self))
-  let authority=try object(Data(bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":sid]).utf8))
+  let authority=try object(Data(bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":sid,"Source":runtime.torPredecessorProfile ?? ""]).utf8))
   try check("native Tor options bind the frozen MTU and DNS policy",authority["source_kind"] as? String=="tor" && authority["id"] as? String==selected["id"] as? String)
   var changedPolicy=selected;changedPolicy["mtu_policy"]="auto"
-  reject("Tor factory cannot change frozen policy after native construction"){_ = try bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":text(changedPolicy),"Node":sid])}
+  reject("Tor factory cannot change frozen policy after native construction"){_ = try bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":text(changedPolicy),"Node":sid,"Source":runtime.torPredecessorProfile ?? ""])}
   try check("one TUN and one Tor",(graph["inbounds"] as! [[String:Any]]).count==1 && (graph["outbounds"] as! [[String:Any]]).filter{$0["type"] as? String=="routervpn-tor"}.count==1)
   try check("Tor keeps dynamic exit semantics",runtime.expectedPublicIP.isEmpty && (graph["route"] as! [String:Any])["final"] as? String=="routervpn-tor-exit")
   try check("Tor keeps bridge order and plain emptiness",out["bridges"] as? [String]==lines(kind))
@@ -522,6 +522,50 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   if !failures.isEmpty {throw NSError(domain:"TorPolicyPairs",code:1,userInfo:[NSLocalizedDescriptionKey:failures.joined(separator:"\n")])}
   try check("complete independent profile-policy combinations",policyCases==320)
  }
+ @MainActor static func jumboCapacity(_ maximum:[String:Any],_ composite:[String:Any])throws {
+  for kind in ["tor","obfs4"] {for policy in ["auto","default","fixed"] {
+   var selected=try tor(kind);selected["jumbo_tun"]=true;selected["mtu_policy"]=policy;selected["manual_mtu"]=policy=="fixed" ? 9000:0
+   let frozen=try text(selected),runtime=try ProviderPreparation().prepare(provider:[:],selectedProfile:selected,strict:true).runtime
+   let graph=try object(runtime.files["sing-box.json"]!),tun=(graph["inbounds"] as! [[String:Any]])[0]
+   let authority=try object(Data(bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":runtime.torSessionID!]).utf8))
+   try check("direct Tor Jumbo uses its single 9000 virtual interface",tun["mtu"] as? Int==9000 && (graph["inbounds"] as! [[String:Any]]).count==1 && tun["stack"] as? String=="system")
+   try check("direct Tor Jumbo retains exact saved preference",runtime.torProfileJSON==frozen && authority["mtu_policy"] as? String==policy && authority["jumbo_tun"] as? Bool==true && authority["entry_fixed_mtu"]==nil)
+   var conflict=selected;conflict["mtu_policy"]="fixed";conflict["manual_mtu"]=1420
+   reject("Tor Jumbo cannot silently normalize conflicting Fixed"){_ = try ProviderPreparation().prepare(provider:[:],selectedProfile:conflict,strict:true)}
+  }}
+  for mode in ["wg","awg2-fast","shadowsocks","hysteria2","naive-h3","split","max-tls-wg"] {
+   for inherited in ["fixed-small","fixed-9000","jumbo"] {for policy in ["auto","default"] {
+    var source=try root(mode,"off",maximum,composite),entry=(source["routerProfiles"] as! [[String:Any]])[0]
+    let jumbo=inherited=="jumbo",capacity=inherited=="fixed-small" ? 1392:9000
+    entry["mtu_policy"]=jumbo ? "default":"fixed";entry["manual_mtu"]=jumbo ? 0:capacity;entry["jumbo_tun"]=jumbo
+    source["routerProfiles"]=[entry]
+    var selected=try tor("obfs4");selected["mtu_policy"]=policy;selected["manual_mtu"]=0;selected["jumbo_tun"]=false
+    selected["multihop_enabled"]=true;selected["multihop_entry_id"]="entry";selected["multihop_entry_mode"]=mode;selected["multihop_exit_id"]=selected["id"];selected["multihop_exit_mode"]="tor-bridge";selected["multihop_execution"]="local"
+    let provider:[String:Any]=["tor_entry_bundle":try json(source),"tor_entry_mode":mode]
+    if jumbo && ["wg","awg2-fast","max-tls-wg"].contains(mode) {
+     reject("packet-bearing entry Jumbo capability stays enforced "+mode){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:selected,strict:true)}
+     continue
+    }
+    let frozen=try text(selected),frozenEntry=try text(source),baseline=try ProviderPreparation().entry(source,mode)
+    let runtime=try ProviderPreparation().prepare(provider:provider,selectedProfile:selected,strict:true).runtime
+    let graph=try object(runtime.files["sing-box.json"]!),tun=(graph["inbounds"] as! [[String:Any]])[0]
+    let authority=try object(Data(bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":runtime.torSessionID!,"Source":runtime.torPredecessorProfile!]).utf8))
+    try check("Apple preserves inherited single TUN capacity "+mode+":"+inherited,tun["mtu"] as? Int==capacity && (graph["inbounds"] as! [[String:Any]]).count==1)
+    try check("native authority distinguishes inherited Fixed from Jumbo",authority["mtu_policy"] as? String==policy && authority["jumbo_tun"] as? Bool==jumbo && (authority["entry_fixed_mtu"] as? Int)==(jumbo ? nil:capacity))
+    try check("Tor Jumbo does not rewrite saved sources",runtime.torProfileJSON==frozen && text(source)==frozenEntry && runtime.torPredecessorProfile==text(entry))
+    let previous=try object(baseline["sing-box.json"]!)
+    try check("Tor capacity does not change raw predecessor endpoints",text(["endpoints":graph["endpoints"] ?? NSNull()])==text(["endpoints":previous["endpoints"] ?? NSNull()]))
+    var wrong=entry;wrong["manual_mtu"]=capacity==9000 ? 1392:9000;wrong["mtu_policy"]="fixed";wrong["jumbo_tun"]=false
+    reject("Tor MTU cannot substitute another captured entry policy"){_ = try bridge(["Op":"tor-mtu-authority","Config":String(decoding:runtime.files["sing-box.json"]!,as:UTF8.self),"Policy":runtime.torProfileJSON!,"Node":runtime.torSessionID!,"Source":text(wrong)])}
+    var conflict=selected;conflict["mtu_policy"]="fixed";conflict["manual_mtu"]=capacity==9000 ? 1392:9000
+    reject("one TUN rejects conflicting entry and exit capacity "+mode){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:conflict,strict:true)}
+    if capacity != 9000 {
+     var oversized=selected;oversized["jumbo_tun"]=true
+     reject("Tor Jumbo cannot overwrite a captured smaller Fixed entry"){_ = try ProviderPreparation().prepare(provider:provider,selectedProfile:oversized,strict:true)}
+    }
+   }}
+  }
+ }
  @MainActor static func negatives(_ maximum:[String:Any],_ composite:[String:Any])throws {
   let model=RouterVPNModel();try create(model,"tor");let saved=model.saved,writes=model.writes
   model.profileMutationBlocked=true;reject("active profile mutation"){try create(model,"obfs4")};model.profileMutationBlocked=false
@@ -590,6 +634,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   try check("complete Tor matrix",graphs==348)
   try homeDNS(maximum,composite)
   try policies(maximum,composite)
+  try jumboCapacity(maximum,composite)
   try negatives(maximum,composite)
   try ordinaryExternalEntry(maximum,composite)
   try importedAmneziaCreation()

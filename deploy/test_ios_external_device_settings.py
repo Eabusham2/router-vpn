@@ -191,9 +191,37 @@ enum IOSDNSRuntimePolicy {
    }
   }
  }
+ static func torJumboEditor()throws {
+  for kind in ["tor","tor-bridge"] {for mode in ["auto","default","manual"] {
+   var p=try profile(kind);p.jumboTUN=nil;p.mtuPolicy=mode;p.manualMTU=mode=="manual" ? 9000:0
+   let model=RouterVPNModel();model.bundle=try bundle(p);let before=model.bundle!,editor=Settings(model);editor.load()
+   try check("Tor Jumbo loads absent flag without inventing true",!editor.jumboTUN && editor.mtuPolicy==mode)
+   editor.jumboTUN=true;editor.saveExternalDevicePolicy()
+   var expected=p;expected.jumboTUN=true;expected.homeLANAccess=editor.homeLANAccess;expected.killSwitchPolicy=editor.killSwitchPolicy;expected.killSwitch=editor.killSwitchPolicy != "off";expected.ipv6Mode=editor.ipv6Mode
+   try check("Tor Jumbo editor saves exact visible choice "+kind+":"+mode,model.imports==1 && model.bundle!.routerProfiles[1]==expected && editor.loadedProfile==expected)
+   try check("Jumbo preserves credentials DNS entry and unrelated sources",model.bundle!.routerProfiles[0]==before.routerProfiles[0] && model.bundle!.routerProfiles[2]==before.routerProfiles[2] && model.bundle!.profiles==before.profiles)
+   editor.load();try check("Tor Jumbo toggle reloads saved choice",editor.jumboTUN && editor.mtuPolicy==mode)
+   editor.jumboTUN=false;editor.saveExternalDevicePolicy();expected.jumboTUN=false
+   try check("Tor Jumbo toggle restores exact Auto or Default choice "+mode,model.imports==2 && model.bundle!.routerProfiles[1]==expected)
+  }}
+  for kind in protocols where !kind.hasPrefix("tor") {
+   let p=try profile(kind),model=RouterVPNModel();model.bundle=try bundle(p);let editor=Settings(model);editor.load()
+   try check("ordinary hidden Jumbo loads unchanged "+kind,editor.jumboTUN)
+   editor.jumboTUN=false;editor.saveExternalDevicePolicy()
+   try check("ordinary editor cannot mutate its hidden Jumbo flag "+kind,model.imports==1 && model.bundle!.routerProfiles[1].jumboTUN==true)
+  }
+  for fault in ["active","stale","store"] {
+   let model=RouterVPNModel();model.bundle=try bundle(profile("tor"));let editor=Settings(model);editor.load();editor.mtuPolicy="auto";editor.jumboTUN=true
+   if fault=="active"{model.profileMutationBlocked=true}
+   if fault=="stale"{model.bundle!.routerProfiles[1].external!.protocolName="tor-bridge"}
+   if fault=="store"{model.failImport=true}
+   let before=try encoded(model.bundle!);editor.saveExternalDevicePolicy()
+   try check("Jumbo stale or failed transaction keeps source exact "+fault,model.imports==0 && encoded(model.bundle!)==before)
+  }
+ }
  static func main(){
   defer{RouterVPNTorTestClose()}
-  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
+  do{try saveMatrix();try invalidDrafts();try nativeRejections();try torJumboNativePolicy();try torJumboEditor();print("Apple external device settings: PASS (\(checks) shipping editor/model checks with real native ordinary/Tor transport-policy validation)")}
   catch{FileHandle.standardError.write(Data((error.localizedDescription+"\n").utf8));exit(1)}
  }
 }
@@ -203,7 +231,7 @@ enum IOSDNSRuntimePolicy {
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--shipping-only', action='store_true')
-    parser.add_argument('--mutation', action='append', choices=['active-write', 'stale-source', 'native-validation', 'historical-mtu'])
+    parser.add_argument('--mutation', action='append', choices=['active-write', 'stale-source', 'native-validation', 'historical-mtu', 'jumbo-load', 'jumbo-save'])
     args = parser.parse_args()
     swift, go = shutil.which('swiftc'), shutil.which('go')
     if not swift or not go: raise RuntimeError('swiftc and go are required')
@@ -217,6 +245,9 @@ def main():
     source = SWIFT.replace(' // SETTINGS_METHODS', methods).replace(' // SELECTED_PROFILE', selected).replace(' // TRANSPORT_FIXTURES', fixtures)
     policy = (APP / 'IOSDevicePolicySettings.swift').read_text()
     assert 'Button("Save device policy for next connection") { saveExternalDevicePolicy() }' in view
+    assert 'if torNode {\n                            Toggle("Jumbo virtual interface (9000)", isOn: $jumboTUN)' in view
+    assert 'not a measured Internet packet limit' in view and 'Jumbo disables Auto MTU and Retest' in view
+    assert '("Auto — default","auto")' in view and 'Auto measured — default' not in view
     assert view.index('Section("Live MTU")') > view.index('Section("MTU")'), 'keep the common current-owner MTU card'
     with tempfile.TemporaryDirectory(prefix='ios-external-device-settings-') as temporary, tempfile.TemporaryDirectory(prefix='.ios-device-go-', dir=ROOT) as go_dir:
         work = Path(temporary)
@@ -240,6 +271,8 @@ def main():
             ('stale-source', 'source', '              selected == loadedProfile,\n', '', 'device editor rejects stale or active write selection'),
             ('native-validation', 'source', 'try IOSExternalExecution.validateDeviceDraft(prepared)', '', 'real native validator rejects wireguard-key'),
             ('historical-mtu', 'policy', 'profile.mtuPolicy = mtuPolicy; profile.manualMTU = fixed', 'profile.mtuPolicy = mtuPolicy; profile.manualMTU = source.effectiveMTU ?? fixed', 'native device save wireguard/auto'),
+            ('jumbo-load', 'source', '            jumboTUN = policy.jumboTUN', '            jumboTUN = false', 'valid native Tor Jumbo preserves saved preference'),
+            ('jumbo-save', 'source', '        draft.jumboTUN = jumboTUN', '', 'Tor Jumbo editor saves exact visible choice'),
         ):
             if args.mutation and name not in args.mutation: continue
             original = source if target == 'source' else policy

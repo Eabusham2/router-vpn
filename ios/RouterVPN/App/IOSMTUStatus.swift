@@ -26,7 +26,7 @@ struct IOSMTUStatus: Decodable, Sendable {
         let upload: Transfer?
         let failure: String?
         func valid(source: String) -> Bool {
-            guard let mtu, (1280...9000).contains(mtu), working == true,
+            guard let mtu, (1280...1500).contains(mtu), working == true,
                   let median_rtt_ms, median_rtt_ms.isFinite, median_rtt_ms > 0,
                   download?.valid == true, upload?.valid == true,
                   failure == nil || failure == "" else { return false }
@@ -52,17 +52,30 @@ struct IOSMTUStatus: Decodable, Sendable {
     let failure: String?
     let candidates: [Candidate]?
     let measurement_hold: Bool?
+    let interface_readback_valid: Bool?
+    let optimization_allowed: Bool?
+    let tor_connection: Bool?
+    let policy_note: String?
 
     var verified: Bool {
         guard let session_id, UUID(uuidString: session_id) != nil,
               let request_id, request_id.range(of: "^[0-9a-f]{32}$", options: .regularExpression) != nil,
               phase == "complete", complete == true, running == false, measured == true, restored != true,
+              interface_readback_valid == true,
               let source, ["measured-private-system-tun", "measured-public-system-tun-transfer", "measured-tor-system-tun-transfer"].contains(source), let effective_mtu,
-              (1280...9000).contains(effective_mtu), let original_mtu,
+              (1280...1500).contains(effective_mtu), let original_mtu,
               (1280...9000).contains(original_mtu), let candidates,
               (1...5).contains(candidates.count), Set(candidates.compactMap(\.mtu)).count == candidates.count,
               failure == nil || failure == "" else { return false }
         return candidates.contains { $0.mtu == effective_mtu && $0.valid(source: source) }
+    }
+    var configuredCapacity: Int? {
+        guard let session_id, UUID(uuidString: session_id) != nil,
+              source == "configured-unmeasured", measured == false, running == false,
+              restored != true, interface_readback_valid == true,
+              let effective_mtu, (1280...9000).contains(effective_mtu),
+              failure == nil || failure == "" else { return nil }
+        return effective_mtu
     }
     var summary: String {
         if verified, let effective_mtu {
@@ -72,6 +85,10 @@ struct IOSMTUStatus: Decodable, Sendable {
         }
         if running == true { return "MTU test: \(phase ?? "measuring") • result not yet verified" }
         if restored == true { return "Original MTU restored • no new measurement adopted" }
+        if let capacity = configuredCapacity {
+            let retained = optimization_allowed == false ? " • Auto MTU and Retest are disabled by the captured policy" : ""
+            return "Configured interface capacity: \(capacity) bytes • not a measured path MTU\(retained)"
+        }
         return "MTU measurement unavailable — \(failure ?? "no fresh result for this VPN session")"
     }
 }

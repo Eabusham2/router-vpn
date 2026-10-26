@@ -4,6 +4,7 @@ import SwiftUI
 
 @MainActor final class IOSMTUClient: ObservableObject {
     @Published private(set) var running = false
+    @Published private(set) var optimizationAllowed = false
     @Published private(set) var text = "No fresh MTU measurement for this session."
     private var generation = UUID()
     private var task: Task<Void, Never>?
@@ -19,11 +20,12 @@ import SwiftUI
             let data = try await IOSMTUControl.message(captured, model: model, operation: "mtu-status", request: request)
             let status = try JSONDecoder().decode(IOSMTUStatus.self, from: data)
             guard generation == round, !running else { return }
+            optimizationAllowed = status.optimization_allowed == true && status.interface_readback_valid == true
             text = status.summary
-        } catch { if generation == round, !running { text = error.localizedDescription } }
+        } catch { if generation == round, !running { optimizationAllowed = false; text = error.localizedDescription } }
     }
     func start(model: RouterVPNModel) {
-        guard !running, !IOSMTUMeasurementGate.held else { return }
+        guard !running, optimizationAllowed, !IOSMTUMeasurementGate.held else { return }
         let round = UUID(); generation = round
         let request = round.uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         running = true; text = "Capturing the current native TUN and proved exit…"
@@ -44,6 +46,7 @@ import SwiftUI
                     let status = try JSONDecoder().decode(IOSMTUStatus.self, from: data)
                     guard generation == round, status.session_id == captured.session,
                           status.request_id == request else { throw CancellationError() }
+                    optimizationAllowed = status.optimization_allowed == true && status.interface_readback_valid == true
                     text = status.summary
                     if status.complete == true || status.running == false { return }
                     operation = "mtu-status"
@@ -51,7 +54,7 @@ import SwiftUI
                 }
                 throw IOSMTUControl.failure("MTU Retest timed out; cancellation requested.")
             } catch {
-                if generation == round { cancelRequest(); text = "MTU result discarded: \(error.localizedDescription)" }
+                if generation == round { cancelRequest(); optimizationAllowed = false; text = "MTU result discarded: \(error.localizedDescription)" }
             }
         }
     }
@@ -64,7 +67,7 @@ import SwiftUI
     }
     func cancel() {
         cancelRequest(); generation = UUID(); task?.cancel(); task = nil
-        ownedRequest = ""; binding = nil; running = false
+        ownedRequest = ""; binding = nil; running = false; optimizationAllowed = false
         text = "No new measurement adopted; refreshing current native status."
     }
 }
@@ -78,7 +81,7 @@ struct IOSMTUCard: View {
             Text(probe.text).font(.caption.monospacedDigit()).textSelection(.enabled)
             Button(probe.running ? "Cancel MTU Retest" : "Retest current native MTU") {
                 if probe.running { probe.cancel() } else { probe.start(model: model) }
-            }.disabled(!model.connected || (!probe.running && (IOSMTUMeasurementGate.held || !model.activeEngine.contains("libbox"))))
+            }.disabled(!model.connected || (!probe.running && (!probe.optimizationAllowed || IOSMTUMeasurementGate.held || !model.activeEngine.contains("libbox"))))
             Text("Router VPN nodes use authenticated packets and transfers. External and Tor exits use HTTPS response and transfer tests through the actual system VPN interface, with native DNS and exit verification. Tor tests can take up to four minutes; Cancel stops the owned test. Saved values and restored settings are not fresh measurements. Manual and Jumbo policies do not enter Auto-MTU.")
                 .font(.caption).foregroundStyle(.secondary)
         }

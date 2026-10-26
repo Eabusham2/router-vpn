@@ -26,9 +26,10 @@ struct IOSProfileSettingsView: View {
     private let ipv6Values = [("On — default","on"),("Auto","auto"),("Off","off")]
     private let baseValues = [("Auto","auto"),("WireGuard","wg"),("AmneziaWG","awg")]
     private let startLayerValues = [("Off — default","off"),("AES-256-GCM — authenticated Libbox modes","aes-256-gcm"),("AES-256-GCM + XOR whitening — native","aes-256-gcm+xor-whitening")]
-    private let mtuValues = [("Auto measured — default","auto"),("Fixed / manual","manual"),("Runtime default","default")]
+    private let mtuValues = [("Auto — default","auto"),("Fixed / manual","manual"),("Runtime default","default")]
     private let startupValues = [("SMART AUTO — recommended","smart-auto"),("AUTO","auto"),("Last proven mode","last"),("Manual / stay disconnected","manual")]
     private var externalNode: Bool { selectedProfile()?.normalizedNodeKind == "external" }
+    private var torNode: Bool { ["tor", "tor-bridge"].contains(selectedProfile()?.external?.protocolName.lowercased() ?? "") }
 
     var body: some View {
         NavigationStack {
@@ -47,6 +48,11 @@ struct IOSProfileSettingsView: View {
                         Picker("MTU policy", selection: $mtuPolicy) { ForEach(mtuValues, id: \.1) { Text($0.0).tag($0.1) } }
                         if mtuPolicy == "manual" {
                             TextField("Fixed MTU 1280–9000", text: $manualMTU).keyboardType(.numberPad)
+                        }
+                        if torNode {
+                            Toggle("Jumbo virtual interface (9000)", isOn: $jumboTUN)
+                            Text("Tor carries TCP streams through this virtual interface; 9000 is not a measured Internet packet limit. Jumbo disables Auto MTU and Retest. Fixed MTU must also be 9000, and the captured entry must be compatible.")
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         Button("Save device policy for next connection") { saveExternalDevicePolicy() }
                             .disabled(model.profileMutationBlocked)
@@ -156,6 +162,7 @@ struct IOSProfileSettingsView: View {
             let policy = IOSDevicePolicySettings(profile: p)
             homeLANAccess = policy.homeLANAccess; killSwitchPolicy = policy.killSwitchPolicy
             ipv6Mode = policy.ipv6Mode; mtuPolicy = policy.mtuPolicy; manualMTU = policy.manualMTU
+            jumboTUN = policy.jumboTUN
             return
         }
         homeLANAccess = p.homeLANAccess ?? true
@@ -184,6 +191,7 @@ struct IOSProfileSettingsView: View {
         var draft = IOSDevicePolicySettings(profile: selected)
         draft.homeLANAccess = homeLANAccess; draft.killSwitchPolicy = killSwitchPolicy
         draft.ipv6Mode = ipv6Mode; draft.mtuPolicy = mtuPolicy; draft.manualMTU = manualMTU
+        draft.jumboTUN = jumboTUN
         do {
             let prepared = try draft.applying(to: selected)
             try IOSExternalExecution.validateDeviceDraft(prepared)

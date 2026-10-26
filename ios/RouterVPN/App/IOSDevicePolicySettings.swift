@@ -8,6 +8,7 @@ struct IOSDevicePolicySettings: Equatable {
     var ipv6Mode: String
     var mtuPolicy: String
     var manualMTU: String
+    var jumboTUN: Bool
 
     init(profile: RouterProfile) {
         homeLANAccess = profile.homeLANAccess ?? true
@@ -20,6 +21,7 @@ struct IOSDevicePolicySettings: Equatable {
         let mtu = (profile.mtuPolicy ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         mtuPolicy = mtu == "fixed" ? "manual" : mtu.isEmpty ? "auto" : mtu
         manualMTU = profile.manualMTU.map(String.init) ?? ""
+        jumboTUN = profile.jumboTUN ?? false
     }
 
     func applying(to source: RouterProfile) throws -> RouterProfile {
@@ -36,11 +38,16 @@ struct IOSDevicePolicySettings: Equatable {
             }
             fixed = value
         } else { fixed = 0 }
+        let tor = ["tor", "tor-bridge"].contains(source.external?.protocolName.lowercased() ?? "")
+        if tor && jumboTUN && mtuPolicy == "manual" && fixed != 9000 {
+            throw issue("Tor Jumbo requires a 9000-byte virtual interface; choose Fixed 9000 or retain Auto/Runtime default.")
+        }
         var profile = source
         profile.homeLANAccess = homeLANAccess
         profile.killSwitchPolicy = killSwitchPolicy; profile.killSwitch = killSwitchPolicy != "off"
         profile.ipv6Mode = ipv6Mode
         profile.mtuPolicy = mtuPolicy; profile.manualMTU = fixed
+        if tor, jumboTUN != (source.jumboTUN ?? false) { profile.jumboTUN = jumboTUN }
         return profile
     }
 

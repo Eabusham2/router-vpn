@@ -21,7 +21,7 @@ public final class LibboxRouterMTUState:NSObject {
 }
 public final class LibboxCommandServer:NSObject {}
 public final class LibboxRouterExternalProofRequest:NSObject { public var valid=true }
-public final class LibboxRouterTorProofRequest:NSObject { public var valid=true }
+public final class LibboxRouterTorProofRequest:NSObject { public var valid=true;public var entryJumbo=false;public var entryFixedMTU:Int32=0 }
 public enum FakeOS {
  nonisolated(unsafe) public static var mtu:Int32=1420
  nonisolated(unsafe) public static var path="physical-path-a"
@@ -30,6 +30,7 @@ public enum FakeOS {
  nonisolated(unsafe) public static var changedDuringBind=false
  nonisolated(unsafe) public static var bound=""
  nonisolated(unsafe) public static var starts=0
+ nonisolated(unsafe) public static var startCalls=0
  nonisolated(unsafe) public static var closes=0
  nonisolated(unsafe) public static var current:LibboxRouterMTU?
  nonisolated(unsafe) public static var externalArguments:[String]=[]
@@ -44,10 +45,13 @@ public enum FakeOS {
 public final class LibboxRouterMTU:NSObject {
  private var active=false;private var request="";private var phase="idle"
  public var closeFailures=0
+ public var automatic=true
+ public func autoRequested()->Bool{automatic && !closed}
  public private(set) var closeCalls=0
  public private(set) var closed=false
  public func start(_ request:String,force:Bool)throws {
-  if active || closed {throw NSError(domain:"fixture",code:1)}
+  FakeOS.startCalls += 1
+  if active || closed || !automatic {throw NSError(domain:"fixture",code:1)}
   self.request=request;active=true;phase="proving";FakeOS.starts += 1
  }
  public func cancel(_ request:String){if request==self.request{active=false;phase="cancelled"}}
@@ -60,7 +64,7 @@ public final class LibboxRouterMTU:NSObject {
  public func running()->Bool{active}
  public func statusJSON()->String{
   let body:[String:Any]=["request_id":request,"phase":phase,"running":active,"complete":!active,
-   "measured":false,"effective_mtu":Int(FakeOS.mtu),"original_mtu":1420,"source":"unmeasured","candidates":[]]
+   "measured":false,"effective_mtu":Int(FakeOS.mtu),"original_mtu":1420,"source":phase=="idle" ? "configured-unmeasured":"unmeasured","candidates":[]]
   return String(data:try! JSONSerialization.data(withJSONObject:body),encoding:.utf8)!
  }
 }
@@ -77,8 +81,15 @@ public func LibboxNewRouterExternalMTU(_ server:LibboxCommandServer?,_ platform:
 }
 public func LibboxNewRouterTorMTU(_ server:LibboxCommandServer?,_ platform:LibboxRouterMTUPlatformProtocol?,_ proof:LibboxRouterTorProofRequest?,_ config:String?,_ profile:String?,_ error:UnsafeMutablePointer<NSError?>?)->LibboxRouterMTU?{
  FakeOS.torArguments=[config ?? "",profile ?? ""];FakeOS.torProof=proof
- guard proof?.valid==true,platform?.captureMTU() != nil else{error?.pointee=NSError(domain:"TorMTUFixture",code:1);return nil}
- let core=LibboxRouterMTU();core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core
+ guard let proof,proof.valid,let state=platform?.captureMTU(),let profile,
+       let data=profile.data(using:.utf8),let policy=(try? JSONSerialization.jsonObject(with:data)) as? [String:Any] else{error?.pointee=NSError(domain:"TorMTUFixture",code:1);return nil}
+ let mode=(policy["mtu_policy"] as? String ?? "auto").trimmingCharacters(in:.whitespacesAndNewlines).lowercased()
+ let jumbo=policy["jumbo_tun"] as? Bool==true,manual=(policy["manual_mtu"] as? Int).map(Int32.init) ?? state.mtu
+ let fixed=mode=="fixed" || mode=="manual"
+ let capacity: Int32 = proof.entryJumbo || jumbo ? 9000 : proof.entryFixedMTU>0 ? proof.entryFixedMTU : fixed ? manual : state.mtu
+ guard state.mtu==capacity,!(fixed && manual != capacity) else{error?.pointee=NSError(domain:"TorMTUReadbackFixture",code:1);return nil}
+ let core=LibboxRouterMTU();core.automatic=(mode.isEmpty || mode=="auto") && !jumbo && !proof.entryJumbo && proof.entryFixedMTU==0
+ core.closeFailures=FakeOS.newCloseFailures;FakeOS.current=core
  if FakeOS.returnOwnerWithError{error?.pointee=NSError(domain:"TorMTUFixture",code:2)}
  FakeOS.torCreated?();return core
 }
@@ -98,23 +109,80 @@ import Libbox
 var checks=0
 @MainActor func check(_ value:Bool,_ name:String){checks += 1;if !value{fatalError(name)}}
 @MainActor func rejects(_ name:String,_ block:()throws->Void){do{try block();fatalError(name)}catch{checks += 1}}
+// Execute the actual platform openTun method. Only NetworkExtension option,
+// settings and descriptor objects are boundary doubles; reader ownership is the
+// real RouterVPNMTUSession used throughout this fixture.
+final class NEPacketTunnelNetworkSettings {
+ var mtu:NSNumber?,dnsSettings:NEDNSSettings?,ipv4Settings:NEIPv4Settings?,ipv6Settings:NEIPv6Settings?,proxySettings:NEProxySettings?
+ init(tunnelRemoteAddress:String){}
+}
+final class NEDNSSettings {var matchDomains:[String]?,matchDomainsNoSearch=false;init(servers:[String]){}}
+final class NEIPv4Settings {var includedRoutes:[NEIPv4Route]?,excludedRoutes:[NEIPv4Route]?;init(addresses:[String],subnetMasks:[String]){}}
+final class NEIPv6Settings {var includedRoutes:[NEIPv6Route]?,excludedRoutes:[NEIPv6Route]?;init(addresses:[String],networkPrefixLengths:[NSNumber]){}}
+final class NEIPv4Route {init(destinationAddress:String,subnetMask:String){};static func `default`()->NEIPv4Route{NEIPv4Route(destinationAddress:"0.0.0.0",subnetMask:"0.0.0.0")}}
+final class NEIPv6Route {init(destinationAddress:String,networkPrefixLength:NSNumber){};static func `default`()->NEIPv6Route{NEIPv6Route(destinationAddress:"::",networkPrefixLength:0)}}
+final class NEProxySettings {var httpServer:NEProxyServer?,httpsServer:NEProxyServer?,httpEnabled=false,httpsEnabled=false,exceptionList:[String]?,matchDomains:[String]?}
+final class NEProxyServer {init(address:String,port:Int){}}
+func IPv4Address(_ value:String)->String?{value=="172.29.94.2" ? value:nil}
+func IPv6Address(_ value:String)->String?{nil}
+final class Prefix {func address()->String{"172.29.94.1"};func mask()->String{"255.255.255.252"};func prefix()->Int32{30}}
+final class Prefixes {var remaining:Int;init(_ count:Int=0){remaining=count};func hasNext()->Bool{remaining>0};func next()->Prefix?{remaining-=1;return Prefix()}}
+final class Strings {var values:[String];init(_ values:[String]=[]){self.values=values};func hasNext()->Bool{!values.isEmpty};func next()->String{values.removeFirst()}}
+final class LibboxTunOptionsProtocol {
+ var capacity:Int32;init(_ capacity:Int32){self.capacity=capacity}
+ func getAutoRoute()->Bool{true};func getMTU()->Int32{capacity};func getDNSServerAddress()throws->Strings{Strings(["172.29.94.2"])}
+ func getInet4Address()->Prefixes?{Prefixes(1)};func getInet4RouteAddress()->Prefixes?{Prefixes()};func getInet4RouteExcludeAddress()->Prefixes?{Prefixes()}
+ func getInet6Address()->Prefixes?{Prefixes()};func getInet6RouteAddress()->Prefixes?{Prefixes()};func getInet6RouteExcludeAddress()->Prefixes?{Prefixes()}
+ func isHTTPProxyEnabled()->Bool{false};func getHTTPProxyServer()->String{"127.0.0.1"};func getHTTPProxyServerPort()->Int32{0}
+ func getHTTPProxyBypassDomain()->Strings?{Strings()};func getHTTPProxyMatchDomain()->Strings?{Strings()}
+}
+final class Flow {func value(forKeyPath:String)->Any?{Int32(31)}}
+final class PacketTunnelProvider {let packetFlow=Flow();var applied:NEPacketTunnelNetworkSettings?;var count=0}
+func LibboxGetTunnelFileDescriptor()->Int32{-1}
+final class OpenTunHost {
+ let mtu=RouterVPNMTUSession(),settingsLock=NSRecursiveLock()
+ var tunnel:PacketTunnelProvider?=PacketTunnelProvider(),networkSettings:NEPacketTunnelNetworkSettings?,duringApply:(()->Void)?
+ func error(_ message:String)->NSError{NSError(domain:"PlatformFixture",code:1,userInfo:[NSLocalizedDescriptionKey:message])}
+ func apply(_ settings:NEPacketTunnelNetworkSettings,to tunnel:PacketTunnelProvider)throws{
+  tunnel.applied=settings;tunnel.count+=1;FakeOS.mtu=settings.mtu!.int32Value;duringApply?()
+ }
+ // CAPTURED_OPENTUN
+}
 func request(_ owner:RouterVPNMTUSession,_ op:String,_ id:String,_ session:String)->[String:Any]?{
  guard let data=owner.request(operation:op,request:id,session:session) else{return nil}
  return try! JSONSerialization.jsonObject(with:data) as? [String:Any]
 }
-@MainActor func ready(_ hold:String="")->RouterVPNMTUSession{
- FakeOS.path="physical-path-a";FakeOS.mtu=1420;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
+@MainActor func ready(_ hold:String="",capacity:Int32=1420)->RouterVPNMTUSession{
+ FakeOS.path="physical-path-a";FakeOS.mtu=capacity;FakeOS.readable=true;FakeOS.bindOK=true;FakeOS.changedDuringBind=false
  FakeOS.newCloseFailures=0;FakeOS.returnOwnerWithError=false;FakeOS.externalCreated=nil;FakeOS.torCreated=nil
  let owner=RouterVPNMTUSession();try! owner.initialMeasurementHold(hold)
  check(owner.captureMTU()==nil,"unopened TUN looked live")
  owner.observePhysicalPath(name:"en0",signature:"route-a")
- let token=try! owner.beforeOpen(mtu:1420)
+ let token=try! owner.beforeOpen(mtu:capacity)
  check(owner.captureMTU()==nil,"partially opening TUN looked live")
- try! owner.didOpen(token,mtu:1420);owner.registerInterface("utun7")
- check(owner.captureMTU()?.mtu==1420,"real interface readback missing")
+ try! owner.didOpen(token,mtu:capacity);owner.registerInterface("utun7")
+ check(owner.captureMTU()?.mtu==capacity,"real interface readback missing")
  return owner
 }
 let id=String(repeating:"a",count:32),other=String(repeating:"b",count:32)
+for capacity:Int32 in [1280,1392,9000] {
+ FakeOS.path="physical-path-a";FakeOS.readable=true
+ let host=OpenTunHost();host.mtu.observePhysicalPath(name:"en0",signature:"route-a")
+ var fd:Int32 = -1;try host.openTun(LibboxTunOptionsProtocol(capacity),ret0_:&fd);host.mtu.registerInterface("utun7")
+ check(host.tunnel?.applied?.mtu?.int32Value==capacity && host.tunnel?.count==1,"system VPN settings lost exact compiled interface capacity")
+ check(fd==31 && host.mtu.captureMTU()?.mtu==capacity,"system VPN interface did not retain exact native readback")
+ try host.mtu.stopChecked()
+}
+for capacity:Int32 in [1279,9001] {
+ let host=OpenTunHost();host.mtu.observePhysicalPath(name:"en0",signature:"route-a");var fd:Int32 = -1
+ rejects("invalid TUN capacity reached system settings"){try host.openTun(LibboxTunOptionsProtocol(capacity),ret0_:&fd)}
+ check(fd == -1 && host.tunnel?.count==0,"invalid TUN capacity mutated system interface")
+ try host.mtu.stopChecked()
+}
+let retiredPlatform=OpenTunHost();retiredPlatform.mtu.observePhysicalPath(name:"en0",signature:"route-a")
+retiredPlatform.duringApply={retiredPlatform.mtu.stop()};var retiredFD:Int32 = -1
+rejects("retired platform installed a live Jumbo reader"){try retiredPlatform.openTun(LibboxTunOptionsProtocol(9000),ret0_:&retiredFD)}
+check(retiredFD == -1 && retiredPlatform.mtu.captureMTU()==nil,"late system settings claimed owned Jumbo capacity")
 let owner=ready();let before=owner.captureMTU()!
 check(!owner.observePhysicalPath(name:"en0",signature:"route-a"),"duplicate callback reset endpoints")
 rejects("unowned replacement permitted"){_ = try owner.beforeOpen(mtu:1400)}
@@ -268,9 +336,46 @@ for policy in ["auto","fixed","manual","default"] {for startupHold in ["",id] {
  rejects("duplicate Tor factory adopted another controller"){try tor.activateTor(server:LibboxCommandServer(),proof:proof,config:"foreign graph",profile:profile){_ in}}
  try tor.stopChecked()
 }}
-let torJumbo=ready(),torJumboStarts=FakeOS.starts
+let torJumbo=ready(capacity:9000),torJumboStarts=FakeOS.starts
 try torJumbo.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"exact",profile:"{\"mtu_policy\":\"auto\",\"jumbo_tun\":true}"){_ in}
 check(FakeOS.starts==torJumboStarts,"Tor Jumbo silently became Auto-MTU");try torJumbo.stopChecked()
+// The native authority includes the exact captured predecessor, independently
+// of an exit whose saved preference remains Auto or Runtime default.
+for inherited in ["jumbo","fixed"] {for mode in ["auto","default"] {for startupHold in ["",id] {
+ let retained=ready(startupHold,capacity:9000),proof=LibboxRouterTorProofRequest(),starts=FakeOS.starts,calls=FakeOS.startCalls
+ proof.entryJumbo=inherited=="jumbo";proof.entryFixedMTU=inherited=="fixed" ? 9000:0
+ let profile="{\"mtu_policy\":\""+mode+"\",\"jumbo_tun\":false,\"manual_mtu\":0}"
+ try retained.activateTor(server:LibboxCommandServer(),proof:proof,config:"captured single TUN at 9000",profile:profile){_ in}
+ let session=retained.captureMTU()!.session
+ let current=request(retained,"mtu-status",other,session)!
+ check(FakeOS.torArguments.last==profile && FakeOS.starts==starts && FakeOS.startCalls==calls,"inherited Tor capacity rewrote saved exit preference or entered Auto")
+ check(current["tor_connection"] as? Bool==true && current["effective_mtu"] as? Int==9000 && current["measured"] as? Bool==false && current["source"] as? String=="configured-unmeasured" && current["interface_readback_valid"] as? Bool==true && current["optimization_allowed"] as? Bool==false,"configured Tor capacity lost exact unmeasured native readback")
+ if !startupHold.isEmpty {_=request(retained,"mtu-release",id,session)}
+ check(FakeOS.startCalls==calls,"released hold optimized a retained Tor predecessor capacity")
+ let denied=request(retained,"mtu-start",other,session)!
+ check(denied["command_failure"] as? String != nil && FakeOS.startCalls==calls,"forbidden Tor Retest reached the native controller")
+ FakeOS.mtu=1280
+ let unread=request(retained,"mtu-status",other,session)!
+ check(unread["interface_readback_valid"] as? Bool==false && unread["effective_mtu"] as? Int==0 && unread["optimization_allowed"] as? Bool==false && unread["source"] as? String=="unmeasured","mismatched Tor OS reader retained a configured capacity claim")
+ FakeOS.mtu=9000;retained.invalidate()
+ check(request(retained,"mtu-status",other,session)==nil,"retired Tor owner retained a configured capacity claim")
+ try retained.stopChecked()
+}}}
+for jumbo in [false,true] {
+ let fixed=ready(capacity:9000),calls=FakeOS.startCalls
+ let profile="{\"mtu_policy\":\"manual\",\"manual_mtu\":9000,\"jumbo_tun\":"+(jumbo ? "true":"false")+"}"
+ try fixed.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"exact 9000",profile:profile){_ in}
+ check(FakeOS.startCalls==calls && FakeOS.torArguments.last==profile,"explicit Fixed9000 became Jumbo or Auto")
+ try fixed.stopChecked()
+}
+for inherited in ["jumbo","fixed"] {
+ let wrong=ready(capacity:1420),proof=LibboxRouterTorProofRequest(),calls=FakeOS.startCalls
+ proof.entryJumbo=inherited=="jumbo";proof.entryFixedMTU=inherited=="fixed" ? 9000:0
+ rejects("Tor configured capacity accepted a different OS reader"){try wrong.activateTor(server:LibboxCommandServer(),proof:proof,config:"expected 9000",profile:"{\"mtu_policy\":\"auto\"}"){_ in}}
+ check(FakeOS.startCalls==calls && request(wrong,"mtu-status",id,wrong.captureMTU()!.session)?["optimization_allowed"] as? Bool==false,"failed Tor capacity adoption authorized a test")
+ try wrong.stopChecked()
+}
+
 let torDenied=ready(),invalidTorProof=LibboxRouterTorProofRequest();invalidTorProof.valid=false
 rejects("invalid retained Tor proof enabled MTU"){try torDenied.activateTor(server:LibboxCommandServer(),proof:invalidTorProof,config:"exact",profile:"{}"){_ in}}
 try torDenied.stopChecked()
@@ -308,6 +413,12 @@ import Foundation
  }
 }
 """
+platform_source=(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNLibboxPlatform.swift').read_text()
+platform_begin=platform_source.index('    func openTun(')
+platform_end=platform_source.index('    // Libbox renamed',platform_begin)
+platform_method=platform_source[platform_begin:platform_end].rstrip()
+assert TEST.count(' // CAPTURED_OPENTUN')==1
+TEST=TEST.replace(' // CAPTURED_OPENTUN',platform_method)
 with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  tmp=Path(directory);(tmp/'Libbox.swift').write_text(STUB);(tmp/'main.swift').write_text(TEST)
  extension = 'dylib' if platform.system() == 'Darwin' else 'so'
@@ -331,6 +442,27 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
  assert bad.returncode != 0 and 'late or error-bearing owner was lost or automatically started' in bad.stdout+bad.stderr, 'Lost-owner regression control did not fail at the native lifetime assertion'
  print('Negative control: discarded failed-Close factory owner correctly rejected')
+ for label, before, after, expected in (
+  ('native-predecessor-authority','nativeTorAuthority ? next.autoRequested() : ','','inherited Tor capacity rewrote saved exit preference or entered Auto'),
+  ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
+  ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
+ ):
+  assert text.count(before)==1,label
+  broken.write_text(text.replace(before,after,1))
+  run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(broken),str(tmp/'main.swift'),'-o',str(tmp/'broken')])
+  bad=subprocess.run([str(tmp/'broken')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
+  assert bad.returncode != 0 and expected in bad.stdout+bad.stderr, label+': wrong negative boundary: '+(bad.stdout+bad.stderr)[-2000:]
+  print('Negative control rejected: '+label)
+
+ # A real native option must reach the actual NetworkExtension settings
+ # unchanged. This negative mutates only that shipping method's assignment.
+ before='settings.mtu = NSNumber(value: mtu)'
+ assert TEST.count(before)==1
+ (tmp/'main.swift').write_text(TEST.replace(before,'settings.mtu = NSNumber(value: 1280)',1))
+ run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(source),str(tmp/'main.swift'),'-o',str(tmp/'broken-platform')])
+ bad=subprocess.run([str(tmp/'broken-platform')],cwd=tmp,env=env,capture_output=True,text=True,timeout=30)
+ assert bad.returncode != 0 and 'system VPN settings lost exact compiled interface capacity' in bad.stdout+bad.stderr,'Platform capacity defect missed actual settings mutation'
+ print('Negative control rejected: system-VPN-capacity')
  (tmp/'gate.swift').write_text(GATE)
  run([SWIFT,'-swift-version','6',str(ROOT/'ios/RouterVPN/App/IOSMTUMeasurementGate.swift'),str(tmp/'gate.swift'),'-o',str(tmp/'gate')])
  run([str(tmp/'gate')])

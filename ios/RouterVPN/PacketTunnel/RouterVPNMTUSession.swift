@@ -22,6 +22,8 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     private var invalid = false
     private var activated = false
     private var automaticPending = false
+    private var optimizationAllowed = false
+    private var torAuthority = false
     private var heldBy = ""
     private var core: LibboxRouterMTU?
     private var constructing = false
@@ -173,17 +175,18 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
               (try JSONSerialization.jsonObject(with: Data(profile.utf8))) is [String: Any] else {
             throw failure("Tor MTU lost its frozen profile")
         }
-        guard activateOwned(profile: profile, onAbort: onAbort, create: { createError in
+        guard activateOwned(profile: profile, onAbort: onAbort, nativeTorAuthority: true, create: { createError in
             LibboxNewRouterTorMTU(server, self, proof, config, profile, &createError)
         }) else { throw failure("Tor MTU could not retain its proved native TUN owner") }
     }
 
     private func activateOwned(profile: String, onAbort: @escaping @Sendable (String) -> Void,
+                               nativeTorAuthority: Bool = false,
                                create: (inout NSError?) -> LibboxRouterMTU?) -> Bool {
         commandLock.lock(); defer { commandLock.unlock() }
         stateLock.lock()
         guard !stopped, !invalid, !activated else { stateLock.unlock(); return false }
-        activated = true; constructing = true; abortHandler = onAbort
+        activated = true; constructing = true; abortHandler = onAbort; torAuthority = nativeTorAuthority
         stateLock.unlock()
         var createError: NSError?
         let next = create(&createError)
@@ -201,13 +204,14 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         core = next
         let hold = !heldBy.isEmpty
         stateLock.unlock()
-        // The shared profile parser owns policy validation. Manual/fixed/Jumbo
-        // never silently become automatic; do not start a test for those modes.
+        // The retained Tor authority includes the captured predecessor. The
+        // exit's saved Auto preference alone cannot authorize a reader change.
+        // Ordinary owners keep their existing validated profile semantics.
         let policy = (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) as? [String: Any]
         let mode = (policy?["mtu_policy"] as? String ?? "auto").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        let automatic = mode.isEmpty || mode == "auto"
-        stateLock.lock(); automaticPending = automatic && policy?["jumbo_tun"] as? Bool != true && hold; stateLock.unlock()
-        if automatic && policy?["jumbo_tun"] as? Bool != true && !hold {
+        let automatic = nativeTorAuthority ? next.autoRequested() : ((mode.isEmpty || mode == "auto") && policy?["jumbo_tun"] as? Bool != true)
+        stateLock.lock(); optimizationAllowed = automatic; automaticPending = automatic && hold; stateLock.unlock()
+        if automatic && !hold {
             try? next.start(UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased(), force: false)
         }
         return true
@@ -319,6 +323,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
             heldBy = ""
         } else if operation == "mtu-start" {
             guard heldBy.isEmpty, let captured else { stateLock.unlock(); return statusData(ack: request) }
+            guard optimizationAllowed else { stateLock.unlock(); return statusData(ack: request, commandFailure: "The captured interface policy does not allow Auto MTU or Retest.") }
             stateLock.unlock()
             do { try captured.start(request, force: true) }
             catch { return statusData(ack: request, commandFailure: "MTU Retest could not start for this frozen native policy.") }
@@ -337,7 +342,7 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         return statusData(ack: request)
     }
     private func statusData(ack: String, commandFailure: String? = nil) -> Data? {
-        stateLock.lock(); let captured = core, lease = heldBy, dead = stopped || invalid, message = unavailable
+        stateLock.lock(); let captured = core, lease = heldBy, dead = stopped || invalid, message = unavailable, automatic = optimizationAllowed, tor = torAuthority
         stateLock.unlock()
         var status: [String: Any] = ["phase": "unavailable", "running": false, "complete": true,
                                    "measured": false, "source": "unmeasured", "failure": message, "candidates": []]
@@ -348,8 +353,16 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
         let actual = captureMTU()
         let active = captured?.running() ?? false
         let readbackMatches = captured == nil || (status["effective_mtu"] as? Int) == actual.map { Int($0.mtu) }
+        status["interface_readback_valid"] = !dead && actual != nil && readbackMatches
+        status["optimization_allowed"] = !dead && captured != nil && automatic && actual != nil && readbackMatches
+        status["tor_connection"] = tor
+        if tor && captured != nil && !automatic {
+            status["policy_note"] = "Configured interface capacity is retained without Auto MTU or Retest. This is not a measured packet-path limit."
+        }
         status["measurement_ready"] = !dead && !lease.isEmpty && !active && !isChanging && actual != nil && readbackMatches
-        if dead { status["measured"] = false; status["source"] = "unmeasured"; status["effective_mtu"] = 0 }
+        if dead || actual == nil || !readbackMatches {
+            status["measured"] = false; status["source"] = "unmeasured"; status["effective_mtu"] = 0
+        }
         if let commandFailure { status["command_failure"] = commandFailure }
         guard let data = try? JSONSerialization.data(withJSONObject: status), data.count <= 32768 else { return nil }
         return data

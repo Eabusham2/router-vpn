@@ -21,6 +21,15 @@ import Foundation
             let decoded = try JSONDecoder().decode(IOSMTUStatus.self, from: data)
             guard decoded.verified == expected else { fatalError("MTU sample \(index) verification changed") }
             guard decoded.summary.contains("Verified current MTU:") == expected else { fatalError("Unverified measurement was labelled current") }
+            let configured = row["configured"] as? Int
+            guard decoded.configuredCapacity == configured else { fatalError("Configured capacity accepted without live readback") }
+            guard decoded.summary.contains("Configured interface capacity:") == (configured != nil) else { fatalError("Configured interface capacity display lost its evidence") }
+            if configured != nil {
+                guard decoded.summary.contains("not a measured path MTU"), !decoded.verified else { fatalError("Virtual capacity was called measured MTU") }
+                if decoded.optimization_allowed == false {
+                    guard decoded.summary.contains("Retest are disabled") else { fatalError("Configured policy lost Retest boundary") }
+                }
+            }
             if expected {
                 let external = decoded.source == "measured-public-system-tun-transfer" || decoded.source == "measured-tor-system-tun-transfer"
                 guard decoded.summary.contains("HTTPS response and transfer tests") == external,
@@ -40,12 +49,13 @@ def cases():
                  'download': transfer, 'upload': transfer}
     original = {'session_id': '413c0c39-6641-4cec-b13c-76c2e0d24139', 'request_id': 'a' * 32,
                 'phase': 'complete', 'complete': True, 'running': False, 'measured': True,
+                'interface_readback_valid': True,
                 'effective_mtu': 1420, 'original_mtu': 1280, 'source': 'measured-private-system-tun',
                 'candidates': [candidate]}
     samples = [{'status': original, 'verified': True}]
     for key, value in [('source', 'cached'), ('source', 'restored-unmeasured'), ('measured', False),
                        ('complete', False), ('running', True), ('effective_mtu', 1280),
-                       ('session_id', 'not-a-session'), ('candidates', [])]:
+                       ('session_id', 'not-a-session'), ('candidates', []), ('interface_readback_valid', False), ('interface_readback_valid', None)]:
         data = json.loads(json.dumps(original)); data[key] = value
         samples.append({'status': data, 'verified': False})
     for key, value in [('packets_received', 5), ('packets_sent', 5), ('working', False),
@@ -89,6 +99,25 @@ def cases():
             copied = json.loads(json.dumps(row))
             copied['status']['source'] = 'measured-tor-system-tun-transfer'
             samples.append(copied)
+    # A matching candidate cannot widen the actual optimizer's 1500 ceiling.
+    for baseline in [original, public, {**public, 'source': 'measured-tor-system-tun-transfer'}]:
+        data = json.loads(json.dumps(baseline)); data['effective_mtu'] = 9000
+        data['candidates'][0]['mtu'] = 9000
+        if baseline['source'] == original['source']: data['candidates'][0]['datagram_bytes'] = 8972
+        samples.append({'status': data, 'verified': False})
+    # Native configured capacity is a live readback without a probe result.
+    for capacity in [1280, 1420, 9000]:
+        configured = {'session_id': original['session_id'], 'request_id': '', 'phase': 'idle',
+                      'complete': False, 'running': False, 'measured': False, 'effective_mtu': capacity,
+                      'source': 'configured-unmeasured', 'interface_readback_valid': True,
+                      'optimization_allowed': False, 'tor_connection': True, 'candidates': []}
+        samples.append({'status': configured, 'verified': False, 'configured': capacity})
+        for key, value in [('session_id', 'retired'), ('source', 'unmeasured'), ('source', 'cached'),
+                           ('measured', True), ('running', True), ('restored', True),
+                           ('interface_readback_valid', False), ('interface_readback_valid', None),
+                           ('effective_mtu', 0), ('effective_mtu', 9001), ('failure', 'reader changed')]:
+            data = json.loads(json.dumps(configured)); data[key] = value
+            samples.append({'status': data, 'verified': False})
     return samples
 
 
@@ -102,6 +131,18 @@ def main():
         (root / 'cases.json').write_text(json.dumps(cases(), allow_nan=False))
         subprocess.run([swift, '-swift-version', '6', str(SOURCE), str(root / 'Main.swift'), '-o', str(root / 'verify')], check=True, timeout=90)
         subprocess.run([str(root / 'verify'), str(root / 'cases.json')], check=True, timeout=15)
+        original = SOURCE.read_text()
+        for name, before, after, expected in (
+            ('optimizer-ceiling', '(1280...1500)', '(1280...9000)', 'verification changed'),
+            ('configured-readback', 'restored != true, interface_readback_valid == true,', 'restored != true,', 'Configured capacity accepted without live readback'),
+        ):
+            assert before in original, name
+            mutated = root / 'IOSMTUStatus.swift'; mutated.write_text(original.replace(before, after))
+            subprocess.run([swift, '-swift-version', '6', str(mutated), str(root / 'Main.swift'), '-o', str(root / 'broken')], check=True, timeout=90)
+            result = subprocess.run([str(root / 'broken'), str(root / 'cases.json')], capture_output=True, text=True, timeout=15)
+            assert result.returncode != 0 and expected in result.stdout + result.stderr, name + ': wrong defect boundary'
+            print('MTU decoder defect rejected: ' + name)
+
 
 if __name__ == '__main__':
     main()
