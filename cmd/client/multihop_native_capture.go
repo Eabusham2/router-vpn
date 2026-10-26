@@ -24,6 +24,8 @@ import (
 // candidate can re-read a different AWG variant, key, layer or DNS preference.
 type nativeMultihopCapture struct {
 	root, entryID, exitID, base, entryMode, endpoint, source string
+	entrySelection                                           string
+	entryOwners                                              mobilemultihop.NodeEntryOwners
 	controlToken, entryToken, exitToken                      string
 	configs                                                  map[string]string
 	localPacketPublic                                        map[string]string
@@ -33,8 +35,11 @@ type nativeMultihopCapture struct {
 }
 
 func captureNativeMultihopSelection(ctx context.Context, root string, sel multihopSelection, modes []string, lookup applexray.Lookup) (multihopSelection, error) {
-	if ctx == nil || ctx.Err() != nil || (sel.Base != "wg" && sel.Base != "awg") {
-		return sel, errors.New("native multihop requires a current captured WG or AWG selection")
+	if ctx == nil || ctx.Err() != nil || (sel.Base != "wg" && sel.Base != "awg" && sel.Base != "native") {
+		return sel, errors.New("native multihop requires a current captured entry selection")
+	}
+	if sel.EntryMode != "" && (!mobilemultihop.NodeMultihopEntryMode(sel.EntryMode) || desktopExternalEntryBase(sel.EntryMode) != sel.Base) || sel.EntryMode == "" && sel.Base == "native" {
+		return sel, errors.New("native multihop entry differs from its exact raw transport")
 	}
 	root, err := canonicalBundleRoot(root)
 	if err != nil {
@@ -42,10 +47,14 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	}
 	sel.Control, sel.Entry, sel.Exit = cloneRouterProfile(sel.Control), cloneRouterProfile(sel.Entry), cloneRouterProfile(sel.Exit)
 	c := &nativeMultihopCapture{root: root, entryID: sel.Entry.ID, exitID: sel.Exit.ID, base: sel.Base, configs: map[string]string{}, localPacketPublic: map[string]string{}, localPQIdentity: map[string]string{}, failures: map[string]error{}, controlToken: liveMeasurementProfileToken(sel.Control), entryToken: liveMeasurementProfileToken(sel.Entry), exitToken: liveMeasurementProfileToken(sel.Exit)}
-	c.entryMode, err = viaEntrySourceMode(root, sel.Entry.ID, sel.Base)
-	if err != nil {
-		return sel, err
+	c.entrySelection, c.entryMode = sel.EntryMode, sel.EntryMode
+	if c.entryMode == "" {
+		c.entryMode, err = viaEntrySourceMode(root, sel.Entry.ID, sel.Base)
+		if err != nil {
+			return sel, err
+		}
 	}
+	sel.EntryMode = c.entryMode
 	owned := map[string]map[string][]byte{}
 	defer func() {
 		for _, files := range owned {
@@ -85,7 +94,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 			return nil, "", e
 		}
 		var start map[string][]byte
-		if p.StartLayer != "" && p.StartLayer != "off" && mode != "shadowsocks" {
+		if p.StartLayer != "" && p.StartLayer != "off" && mode != "shadowsocks" && !mobilemultihop.MAXMode(mode) {
 			start, e = read(p.ID, "shadowsocks")
 			if e != nil {
 				return nil, "", e
@@ -98,6 +107,10 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 		return sel, err
 	}
 	c.endpoint = endpoint
+	c.entryOwners, err = entry.MultihopEntryOwners()
+	if err != nil {
+		return sel, err
+	}
 	for _, mode := range modes {
 		if !mobilemultihop.NodeMultihopExitMode(mode) {
 			return sel, errors.New("native multihop exit mode is not supported")
@@ -146,7 +159,7 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 	for _, asset := range c.assets {
 		assetIDs = append(assetIDs, []string{asset.id, asset.mode, asset.digest})
 	}
-	identity, _ := json.Marshal([]any{c.entryMode, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic, c.localPQIdentity})
+	identity, _ := json.Marshal([]any{c.entrySelection, c.entryMode, c.entryOwners, c.endpoint, c.controlToken, c.entryToken, c.exitToken, assetIDs, c.configs, c.localPacketPublic, c.localPQIdentity})
 	sum := sha256.Sum256(identity)
 	clear(identity)
 	c.source = hex.EncodeToString(sum[:])
@@ -159,11 +172,13 @@ func captureNativeMultihopSelection(ctx context.Context, root string, sel multih
 
 func (c *nativeMultihopCapture) validate(sel multihopSelection) error {
 	bad := errors.New("captured native multihop source changed; choose the path again")
-	if c == nil || sel.Entry.ID != c.entryID || sel.Exit.ID != c.exitID || sel.Base != c.base || liveMeasurementProfileToken(sel.Control) != c.controlToken || liveMeasurementProfileToken(sel.Entry) != c.entryToken || liveMeasurementProfileToken(sel.Exit) != c.exitToken {
+	if c == nil || sel.Entry.ID != c.entryID || sel.Exit.ID != c.exitID || sel.Base != c.base || sel.EntryMode != c.entryMode || liveMeasurementProfileToken(sel.Control) != c.controlToken || liveMeasurementProfileToken(sel.Entry) != c.entryToken || liveMeasurementProfileToken(sel.Exit) != c.exitToken {
 		return bad
 	}
-	if mode, err := viaEntrySourceMode(c.root, c.entryID, c.base); err != nil || mode != c.entryMode {
-		return bad
+	if c.entrySelection == "" {
+		if mode, err := viaEntrySourceMode(c.root, c.entryID, c.base); err != nil || mode != c.entryMode {
+			return bad
+		}
 	}
 	for _, asset := range c.assets {
 		files, err := readDesktopNodeAssets(c.root, asset.id, asset.mode)

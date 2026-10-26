@@ -205,7 +205,9 @@ func TestNodeMultihopPreservesCompleteCapturedBasesAndLayers(t *testing.T) {
 
 func TestNodeMultihopRejectsUnownedAndUnsupportedCaptures(t *testing.T) {
 	entry, exit := multihopNodeFixture(t, "awg2-strong", "aes-256-gcm", "entry"), multihopNodeFixture(t, "hysteria2", "", "exit")
-	for _, pair := range [][2]*NodeProfile{{nil, exit}, {entry, nil}, {entry, entry}, {exit, entry}, {&NodeProfile{config: entry.config}, exit}} {
+	unsupported := *entry
+	unsupported.mode = "unknown-entry"
+	for _, pair := range [][2]*NodeProfile{{nil, exit}, {entry, nil}, {entry, entry}, {&unsupported, exit}, {&NodeProfile{config: entry.config}, exit}} {
 		if _, err := NodeMultihopConfig(pair[0], pair[1]); err == nil {
 			t.Fatal("unowned or unsupported capture accepted")
 		}

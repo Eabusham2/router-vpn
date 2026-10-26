@@ -178,18 +178,21 @@ function global:Set-RouterVPNLoadedModeSnapshot {
 function global:Get-RouterVPNVisibleConnectionSnapshot {
     param([System.Windows.Window]$Owner,[hashtable]$Provided)
     if($null -ne $Provided){return $Provided}
-    $result=@{multihop_enabled=$false;multihop_entry_id='';multihop_exit_id='';multihop_exit_mode='';multihop_execution=''}
+    $result=@{multihop_enabled=$false;multihop_entry_id='';multihop_exit_id='';multihop_exit_mode='';multihop_execution='';multihop_entry_mode=''}
     if($null -eq $Owner){return $result}
+    $entryChoiceValid=$false
     try{
-        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
+        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$entryMode=$Owner.FindName('UnifiedEntryMode');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
         if($null -ne $toggle){$result.multihop_enabled=[bool]$toggle.IsChecked}
         if($result.multihop_enabled){
             if($null -ne $entry){$result.multihop_entry_id=[string]$entry.SelectedValue}
+            if($null-ne$entryMode-and$null-ne$entryMode.SelectedItem){$result.multihop_entry_mode=[string]$entryMode.SelectedItem.Tag;$entryChoiceValid=$true}
             if($null -ne $exit){$result.multihop_exit_id=[string]$exit.SelectedValue}
             if($null -ne $exitMode -and $null -ne $exitMode.SelectedItem){$result.multihop_exit_mode=[string]$exitMode.SelectedItem.Tag}
             $result.multihop_execution='local';if($null-ne$execution -and $null-ne$execution.SelectedItem){$result.multihop_execution=[string]$execution.SelectedItem.Tag}
         }
     }catch{}
+    if($result.multihop_enabled-and(-not$entryChoiceValid-or([string]$result.multihop_entry_mode)-cnotin@('','wg','awg2-fast','awg2-strong','wg-pq','awg2-pq','shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','ss-v2ray','split','max','max-tls-wg','max-tls-awg','max-quic-wg','max-quic-awg'))){throw 'Select a supported entry mode before saving the connection profile.'}
     if($result.multihop_enabled -and ([string]$result.multihop_exit_mode)-cnotin@('shadowsocks','hysteria2','reality-vision','reality-pq-vision','reality-xhttp','naive-h2','naive-h3','wg','awg2-fast','awg2-strong','ss-v2ray','split','max','wg-pq','awg2-pq')){throw 'Select a supported exit transport before saving the connection profile.'}
     return $result
 }
@@ -198,12 +201,19 @@ function global:Apply-RouterVPNLoadedConnectionSnapshot {
     param([System.Windows.Window]$Owner,$Loaded)
     if($null -eq $Owner){return}
     try{
-        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
+        $toggle=$Owner.FindName('UnifiedMultihop');$entry=$Owner.FindName('UnifiedEntryCombo');$entryMode=$Owner.FindName('UnifiedEntryMode');$exit=$Owner.FindName('UnifiedExitCombo');$exitMode=$Owner.FindName('UnifiedExitMode');$execution=$Owner.FindName('UnifiedExecution')
         if($null-ne$execution){$wanted=[string]$Loaded.multihop_execution;if($wanted-notin@('local','server','auto')){$wanted='local'};foreach($item in $execution.Items){if([string]$item.Tag-eq$wanted){$execution.SelectedItem=$item;break}}}
         $enabled=[bool]$Loaded.multihop_enabled
         if($null -ne $toggle){$toggle.IsChecked=$enabled}
         if($null -ne $entry -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_entry_id)){$entry.SelectedValue=[string]$Loaded.multihop_entry_id}
         if($null -ne $exit -and -not [string]::IsNullOrWhiteSpace([string]$Loaded.multihop_exit_id)){$exit.SelectedValue=[string]$Loaded.multihop_exit_id}
+        if($null-ne$entryMode){
+            $wantEntry=''
+            if($Loaded-is[System.Collections.IDictionary]){if($Loaded.Contains('multihop_entry_mode')){$wantEntry=[string]$Loaded['multihop_entry_mode']}}
+            elseif($null-ne$Loaded.PSObject.Properties['multihop_entry_mode']){$wantEntry=[string]$Loaded.multihop_entry_mode}
+            $entryMode.SelectedIndex=-1
+            for($i=0;$i-lt$entryMode.Items.Count;$i++){if([string]$entryMode.Items[$i].Tag-ceq$wantEntry){$entryMode.SelectedIndex=$i;break}}
+        }
         if($null -ne $exitMode -and $exitMode.Items.Count -gt 0){
             $want=[string]$Loaded.multihop_exit_mode;$exitMode.SelectedIndex=-1
             for($i=0;$i-lt$exitMode.Items.Count;$i++){if([string]$exitMode.Items[$i].Tag -eq $want){$exitMode.SelectedIndex=$i;break}}
@@ -312,7 +322,7 @@ function global:Show-RouterVPNProfileSettingsDialog {
         param([string]$Name,[string]$ID)
         $snap=Get-RouterVPNCurrentModeSnapshot
         $visible=Get-RouterVPNVisibleConnectionSnapshot -Owner $Owner -Provided $ConnectionSnapshot
-        $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=[bool]$visible.multihop_enabled;multihop_entry_id=[string]$visible.multihop_entry_id;multihop_exit_id=[string]$visible.multihop_exit_id;multihop_exit_mode=[string]$visible.multihop_exit_mode;multihop_execution=[string]$visible.multihop_execution}
+        $body=@{name=$Name;mode=[string]$snap.mode;custom_layers=@($snap.custom_layers);multihop_enabled=[bool]$visible.multihop_enabled;multihop_entry_id=[string]$visible.multihop_entry_id;multihop_exit_id=[string]$visible.multihop_exit_id;multihop_exit_mode=[string]$visible.multihop_exit_mode;multihop_execution=[string]$visible.multihop_execution;multihop_entry_mode=[string]$visible.multihop_entry_mode}
         if($ID){$body.id=$ID}
         return $body
     }

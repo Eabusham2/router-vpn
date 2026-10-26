@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Execute desktop profile callbacks with all eight exit modes and three owners.
+"""Execute desktop profile callbacks with captured entry/exit modes and three owners.
 
 Uses the shipping WPF composition and both AppKit profile entry points. Widgets
 are value-only doubles; HTTP is a recording local boundary and UserDefaults uses
@@ -48,9 +48,9 @@ def run(command, *, negative=False):
 def windows(shell):
     command = [shell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
                str(ROOT / "client/test-windows-connection-profile-modes.ps1")]
-    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback"):
+    for mutation in ("shipping", "capture-two-modes", "load-fallback", "connect-fallback", "entry-capture-fallback", "entry-load-fallback", "entry-connect-fallback"):
         run(command + ["-Mutation", mutation], negative=mutation != "shipping")
-    print("WPF historical capture, load-default and Connect-default negatives: 3 rejected")
+    print("WPF exit/entry capture, load-default and Connect-default negatives: 6 rejected")
 
 
 SWIFT_BOUNDARIES = r'''
@@ -97,7 +97,7 @@ import Foundation
             check(path == "/api/multihop/status" && !hopReplies.isEmpty, "unexpected hop catalog request")
             return try JSONSerialization.data(withJSONObject: hopReplies.removeFirst())
         }
-        check(method == "POST" && ["/api/connection-profile/setup/save", "/api/connection-profile/setup/update", "/api/connection-profile/setup/load", "/api/profile/select"].contains(path), "unexpected endpoint or automatic connection")
+        check(method == "POST" && ["/api/connection-profile/setup/save", "/api/connection-profile/setup/update", "/api/connection-profile/setup/load", "/api/profile/select", "/api/multihop/connect"].contains(path), "unexpected endpoint or automatic connection")
         let body = body ?? [:]
         // JSON round trip models the actual controller boundary, including
         // quoted identities, Boolean types, and array preservation.
@@ -130,14 +130,16 @@ var checks = 0
 SWIFT_PRODUCT = r'''
 @MainActor final class ProductWindowController {
     let routerPopup = Popup(), multihopEntryPopup = Popup(), multihopExitPopup = Popup()
-    let nodePopup = Popup(), externalEntryPopup = Popup(), nodeSortPopup = Popup()
-    let multihopExitModePopup = Popup(), multihopExecutionPopup = Popup()
+    let nodePopup = Popup(), externalEntryPopup = Popup(), nodeSortPopup = Popup(), basePopup = Popup()
+    let multihopExitModePopup = Popup(), multihopExecutionPopup = Popup(), multihopEntryModePopup = Popup()
     let api = ProductAPI()
     let window: Window? = Window()
     let errorLabel = Field(), advancedText = Field(), multihopComparisonLabel = Field()
     var profiles: [[String: Any]] = []
     var routerIDs: [String] = []
     PRODUCT_PROPERTIES
+    func startMultihopProgress() {}
+    func stopMultihopProgress() {}
     func refreshModes() {}
     func refreshLive() {}
     func refreshUnifiedModeMenu(preferred: String?) {}
@@ -173,6 +175,8 @@ settings.name.stringValue = "Saved \"whole\" path"
 let toggle = NSButton(); toggle.identifier = NSView.Identifier(rawValue: "unified-multihop-toggle")
 owner.window?.contentView?.subviews = [toggle]
 let selectedID = "private-node", entryID = "entry \"private\"", exitID = "exit \"private\""
+let expectedEntries = ["", "wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "naive-h2", "naive-h3", "ss-v2ray", "split", "max", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg"]
+check(RouterVPNNodeEntryModes.choices.map { $0.id } == expectedEntries, "entry mode catalog changed or reduced")
 let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: String(repeating: "b", count: 64), exitID: String(repeating: "c", count: 64)]
 @MainActor func catalogRows(_ ids: [String], tokens: [String: String] = sourceTokens) -> [[String: Any]] {
     ids.map { ["id": $0, "name": "Same display name", "node_kind": "router-vpn", "profile_token": tokens[$0] ?? String(repeating: "d", count: 64)] }
@@ -188,14 +192,18 @@ let sourceTokens = [selectedID: String(repeating: "a", count: 64), entryID: Stri
     fixtureDefaults.set(true, forKey: macConnectionMultihopEnabledKey)
     owner.routerPopup.selectItem(at: 0); owner.multihopEntryPopup.selectItem(at: 0); owner.multihopExitPopup.selectItem(at: 1)
     owner.multihopExitModePopup.selectItem(at: mode); owner.multihopExecutionPopup.selectItem(at: execution)
+    owner.multihopEntryModePopup.selectItem(at: (mode * 3 + execution) % expectedEntries.count)
+    owner.basePopup.selectItem(at: 0)
 }
 @MainActor func verify(_ body: [String: Any], _ mode: String, _ execution: String, updating: Bool) {
-    var keys = Set(["name", "mode", "custom_layers", "multihop_enabled", "multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "multihop_execution"])
+    var keys = Set(["name", "mode", "custom_layers", "multihop_enabled", "multihop_entry_id", "multihop_exit_id", "multihop_exit_mode", "multihop_execution", "multihop_entry_mode"])
     if updating { keys.insert("id") }
     check(Set(body.keys) == keys, "private fields copied or snapshot fields missing")
     check(body["multihop_enabled"] as? Bool == true && body["multihop_entry_id"] as? String == "entry \"private\"" && body["multihop_exit_id"] as? String == "exit \"private\"", "exact graph identities changed")
     check(body["multihop_exit_mode"] as? String == mode, "snapshot replaced the selected exit mode")
     check(body["multihop_execution"] as? String == execution, "snapshot replaced the selected execution")
+    let entryIndex = (expectedModes.firstIndex(of: mode)! * 3 + executions.firstIndex(of: execution)!) % expectedEntries.count
+    check(body["multihop_entry_mode"] as? String == expectedEntries[entryIndex], "snapshot replaced the selected entry mode")
     check(body["mode"] as? String == "custom:Saved layers" && body["custom_layers"] as? [String] == ["pq", "wg"], "mode or CUSTOM layers changed")
     if updating { check(body["id"] as? String == "saved-profile", "saved profile identity changed") }
 }
@@ -246,6 +254,29 @@ for (m, mode) in expectedModes.enumerated() {
         verify(settings.api.calls.last!.body, mode, execution, updating: true)
     }
 }
+// Execute the composed main Connect callback with its real deferred work.
+for (i, entryMode) in expectedEntries.enumerated() {
+    for (e, execution) in executions.enumerated() {
+        choose(i % expectedModes.count, e); owner.multihopEntryModePopup.selectItem(at: i)
+        let before = owner.api.calls.count
+        owner.connectMultihop()
+        check(owner.api.calls.count == before, "Connect posted before its deferred owner ran")
+        // Replacing the displayed value cannot rewrite the already captured body.
+        owner.multihopEntryModePopup.selectItem(at: (i + 1) % expectedEntries.count)
+        DispatchQueue.background.run()
+        check(owner.api.calls.count == before + 1, "main Connect lost its captured request")
+        let call = owner.api.calls.last!
+        check(call.path == "/api/multihop/connect" && Set(call.body.keys) == Set(["entry_id", "exit_id", "base", "entry_mode", "exit_mode", "execution"]), "main Connect copied private fields or omitted graph choices")
+        check(call.body["entry_mode"] as? String == entryMode && call.body["exit_mode"] as? String == expectedModes[i % expectedModes.count] && call.body["execution"] as? String == execution, "main Connect replaced captured entry, exit or execution")
+        check(call.body["entry_id"] as? String == entryID && call.body["exit_id"] as? String == exitID && call.body["base"] as? String == "auto", "main Connect replaced exact identities or saved base fallback")
+        DispatchQueue.clear()
+    }
+}
+for i in [-1, expectedEntries.count, 100] {
+    choose(0, 0); owner.multihopEntryModePopup.selectItem(at: i)
+    let before = owner.api.calls.count; owner.connectMultihop()
+    check(owner.api.calls.count == before && DispatchQueue.background.pending.isEmpty, "unavailable main entry reached Connect")
+}
 for invalid: String? in ["stale-mode", "", nil, "SHADOWSOCKS"] {
     choose(0, 0)
     var payload = loaded(try owner.connectionProfileSnapshot(name: "bad", id: nil))
@@ -257,6 +288,24 @@ for invalid: String? in ["stale-mode", "", nil, "SHADOWSOCKS"] {
     let settingsPrevious = owner.captureConnectionProfileSelection()
     settings.loadProfile()
     check(settings.status.stringValue.hasPrefix("Load failed:") && owner.captureConnectionProfileSelection() == settingsPrevious, "Settings Load accepted an unsupported exit")
+}
+for invalidEntry: Any in ["stale-mode", "WG", "wg ", "auto", "wireguard", NSNull(), 7] {
+    choose(0, 0)
+    var payload = loaded(try owner.connectionProfileSnapshot(name: "bad entry", id: nil))
+    payload["multihop_entry_mode"] = invalidEntry
+    let before = owner.captureConnectionProfileSelection(), generation = owner.connectionProfileSelectionGeneration
+    rejects({ try owner.applyLoadedConnectionProfile(payload) }, "loaded entry silently became a base or another mode")
+    check(owner.captureConnectionProfileSelection() == before && owner.connectionProfileSelectionGeneration == generation, "invalid entry load changed the captured owner")
+}
+choose(4, 2)
+var legacyEntry = loaded(try owner.connectionProfileSnapshot(name: "legacy", id: nil))
+legacyEntry.removeValue(forKey: "multihop_entry_mode")
+try owner.applyLoadedConnectionProfile(legacyEntry)
+check(try RouterVPNNodeEntryModes.require(index: owner.multihopEntryModePopup.indexOfSelectedItem) == "", "legacy load retained a different explicit entry mode")
+for invalidIndex in [-1, expectedEntries.count, 100] {
+    choose(0, 0); owner.multihopEntryModePopup.selectItem(at: invalidIndex)
+    rejects({ _ = try owner.connectionProfileSnapshot(name: "bad entry", id: nil) }, "unavailable entry selector reached main profile save")
+    rejects({ _ = try settings.currentMultihopSnapshot() }, "unavailable entry selector reached Settings save")
 }
 for invalidIndex in [-1, expectedModes.count, 100] {
     choose(0, 0); owner.multihopExitModePopup.selectItem(at: invalidIndex)
@@ -475,7 +524,7 @@ def swift_source():
     for endpoint in ("save", "update"):
         assert f'connectionProfilePOST("/api/connection-profile/setup/{endpoint}", body: connectionProfileSnapshot(' in profiles
     assert 'try applyLoadedConnectionProfile(payload)' in profiles
-    catalog = block(product, "enum RouterVPNNodeExitModes {")
+    catalog = block(product, "enum RouterVPNNodeExitModes {") + "\n" + block(product, "enum RouterVPNNodeEntryModes {")
     declarations = profiles[profiles.index("private let macConnectionModeKey"):profiles.index("private struct MacConnectionProfileList")]
     declarations += block(profiles, "private struct MacConnectionCustomPreset:")
     declarations += "\n" + block(settings, "private struct MacConnectionPresetMirror:")
@@ -485,7 +534,7 @@ def swift_source():
     product_methods += "\n" + profiles[profiles.index("extension ProductWindowController {\n") + len("extension ProductWindowController {\n"):profiles.index("    @objc func manageConnectionProfiles()")]
     for marker in ("    func mutationBusy(from status:", "    func mutationBusy()", "    func requireMutationIdle(", "    @discardableResult func ensureMutationIdle("):
         product_methods += "\n" + block(generated_product, marker)
-    for marker in ("    func asyncAction(", "    @objc func selectRouter()"):
+    for marker in ("    func asyncAction(", "    @objc func selectRouter()", "    @objc func connectMultihop()", "    func multihopBaseChoice()"):
         product_methods += "\n" + block(generated_product, marker)
     for marker in ("    func refreshAll()", "    func refreshProfiles()", "    func refreshProfiles(order:", "    func refreshAdvanced()", "    @objc func multihopExecutionChanged()"):
         product_methods += "\n" + block(product, marker)
@@ -524,6 +573,12 @@ def macos(directory):
         "settings-two-mode-capture": replace_once(source,
             'let exitMode = try RouterVPNNodeExitModes.require(index: owner.multihopExitModePopup.indexOfSelectedItem)',
             'let exitMode = owner.multihopExitModePopup.indexOfSelectedItem == 1 ? "hysteria2" : "shadowsocks"'),
+        "manager-entry-capture": replace_once(source,
+            'let entryMode = try (multihop ? RouterVPNNodeEntryModes.require(index: multihopEntryModePopup.indexOfSelectedItem) : "")',
+            'let entryMode = "wg"'),
+        "main-entry-connect": replace_once(source, '"entry_mode": entryMode', '"entry_mode": "wg"'),
+        "unsupported-entry-load": replace_once(source,
+            'selection.entryMode.flatMap({ RouterVPNNodeEntryModes.index(for: $0) }) != nil,', 'true,'),
         "unsupported-load": replace_once(source,
             'RouterVPNNodeExitModes.index(for: selection.exitMode) != nil,', 'true,'),
         "selection-generation": replace_once(source,

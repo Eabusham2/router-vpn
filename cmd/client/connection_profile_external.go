@@ -315,6 +315,14 @@ func applySavedRouterConnectionPolicy(node common.RouterProfile, p *connectionPr
 	}
 	updated.CustomLayers = cloneStrings(p.CustomLayers)
 	updated.MultihopEnabled, updated.MultihopEntryID, updated.MultihopExitID = p.MultihopEnabled, p.MultihopEntryID, p.MultihopExitID
+	entryMode, err := normalizeConnectionProfileEntryMode(p.MultihopEntryMode)
+	if err != nil {
+		return node, err
+	}
+	if !p.MultihopEnabled {
+		entryMode = ""
+	}
+	updated.MultihopEntryMode = entryMode
 	if err := common.NormalizeRouterProfile(&updated); err != nil {
 		return node, err
 	}

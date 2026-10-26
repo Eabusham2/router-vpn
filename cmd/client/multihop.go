@@ -23,17 +23,19 @@ type multihopConnectRequest struct {
 	EntryID   string `json:"entry_id"`
 	ExitID    string `json:"exit_id"`
 	Base      string `json:"base"`
+	EntryMode string `json:"entry_mode,omitempty"`
 	ExitMode  string `json:"exit_mode"`
 	Execution string `json:"execution,omitempty"`
 }
 
 type multihopSelection struct {
-	Control  common.RouterProfile
-	Entry    common.RouterProfile
-	Exit     common.RouterProfile
-	Base     string
-	ExitMode string
-	Native   *nativeMultihopCapture
+	Control   common.RouterProfile
+	Entry     common.RouterProfile
+	Exit      common.RouterProfile
+	Base      string
+	EntryMode string
+	ExitMode  string
+	Native    *nativeMultihopCapture
 	// A live system-TUN readback captured before a temporary test. This is
 	// applied only to a newly owned restore graph, never to the entry endpoint.
 	restoreMTU int
@@ -72,7 +74,7 @@ var activeMultihopGraphs sync.Map
 
 func setActiveMultihopGraph(a *app, sel multihopSelection) {
 	graph := activeMultihopGraph{
-		Execution: "local", EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
+		Execution: "local", EntryID: sel.Entry.ID, ExitID: sel.Exit.ID, Base: sel.Base, EntryMode: sel.EntryMode, ExitMode: sel.ExitMode, Started: time.Now().UTC(),
 	}
 	if sel.Native != nil {
 		graph.EntryMode, graph.SourceSHA = sel.Native.entryMode, sel.Native.source
@@ -161,6 +163,16 @@ func resolveMultihopSelection(control common.RouterProfile, profiles []common.Ro
 	if err := validateMultihopStartLayer(control); err != nil {
 		return multihopSelection{}, err
 	}
+	entryMode := q.EntryMode
+	if entryMode == "" {
+		entryMode = control.MultihopEntryMode
+	}
+	if entryMode != "" && entryMode != "wg" {
+		return multihopSelection{}, errors.New("this legacy kernel path cannot retain the selected raw entry; use the complete native runtime")
+	}
+	if entryMode == "wg" {
+		q.Base = "wg"
+	}
 	entryID := strings.TrimSpace(q.EntryID)
 	exitID := strings.TrimSpace(q.ExitID)
 	if entryID == "" {
@@ -203,7 +215,7 @@ func resolveMultihopSelection(control common.RouterProfile, profiles []common.Ro
 	if exitMode != "shadowsocks" && exitMode != "hysteria2" {
 		return multihopSelection{}, errors.New("first native multihop runtime supports only Shadowsocks or Hysteria2 as the exit transport")
 	}
-	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, ExitMode: exitMode}, nil
+	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, EntryMode: entryMode, ExitMode: exitMode}, nil
 }
 
 func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
@@ -231,6 +243,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		"entry_id":              entryID,
 		"exit_id":               exitID,
 		"configured_entry_id":   control.MultihopEntryID,
+		"configured_entry_mode": control.MultihopEntryMode,
 		"configured_exit_id":    control.MultihopExitID,
 		"actual_entry_id":       actualEntry,
 		"actual_exit_id":        actualExit,
@@ -239,6 +252,7 @@ func (a *app) multihopStatus(w http.ResponseWriter, r *http.Request) {
 		"execution":             graph.Execution,
 		"supported_executions":  []string{"local", "server", "auto"},
 		"supported_entry_bases": []string{"wg", "awg"},
+		"supported_entry_modes": []string{"wg"},
 		"supported_exit_modes":  []string{"shadowsocks", "hysteria2"},
 		"connected":             state.Connected && state.Mode == "multihop",
 		"runtime_entry_base": func() string {

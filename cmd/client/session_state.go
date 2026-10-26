@@ -199,6 +199,12 @@ func (t *sessionTracker) declareRequest(mode, base string) {
 	homeExitProofs.Delete(t.a)
 	t.requestedMode = strings.TrimSpace(mode)
 	t.requestedBase = normalizeBase(base)
+	if base == "native" {
+		// Complete native proxy/PQ/MAX graphs do not select a WG/AWG base.
+		// Keep their already-resolved runtime identity instead of presenting
+		// the user's unrelated saved default as the requested path.
+		t.requestedBase = "native"
+	}
 	t.declaredAt = time.Now().UTC()
 	if t.session == nil || t.session.EndedAt != nil {
 		t.startLocked(t.capture(), "requested")

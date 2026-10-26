@@ -86,6 +86,13 @@ def test(bundle, target):
                         './cmd/client', '-run', '^Test(NativeMultihop|NativeServerGraph)'],
                        cwd=ROOT, env=env, check=True, timeout=300)
         print('Complete native runtime accepted captured WG/AWG Local and Server graphs with exact layers, DNS and cover; stale proof/source regressions passed', flush=True)
+        # Every additional entry preserves its full engine/DNS/cover closure
+        # through the same shipping capture and Server transformation. Keep
+        # this new matrix bounded independently of the established groups.
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=240s',
+                        './cmd/client', '-run', '^TestNativeEntryMultihop'],
+                       cwd=ROOT, env=env, check=True, timeout=360)
+        print('Complete native runtime passed exact 19-mode entry capture/parser and retained-owner checks, plus SS/HY2/Naive encrypted Local/Server TCP and UDP', flush=True)
         # The production AWG endpoint deliberately accepts only client peers.
         # Build a separate test-only cryptographic server; never widen that
         # production boundary or add the helper to the sealed runtime payload.

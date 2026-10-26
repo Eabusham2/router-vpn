@@ -30,9 +30,17 @@ func newRetainedMultihopFixture(t *testing.T, execution string) *retainedMultiho
 	return newRetainedMultihopModeFixture(t, execution, "shadowsocks")
 }
 
-func newRetainedMultihopModeFixture(t *testing.T, execution, exitMode string) *retainedMultihopFixture {
+func newRetainedMultihopModeFixture(t *testing.T, execution, exitMode string, exactEntry ...string) *retainedMultihopFixture {
 	t.Helper()
-	root, sel := nativeMultihopCapturedFixture(t, "awg2-strong", "aes-256-gcm+xor-whitening")
+	var root string
+	var sel multihopSelection
+	if len(exactEntry) == 0 {
+		root, sel = nativeMultihopCapturedFixture(t, "awg2-strong", "aes-256-gcm+xor-whitening")
+	} else if len(exactEntry) == 1 {
+		root, sel = nativeEntryMultihopFixture(t, exactEntry[0], "aes-256-gcm+xor-whitening")
+	} else {
+		t.Fatal("retained fixture needs one exact entry")
+	}
 	sel.ExitMode = exitMode
 	sel.Control.ID, sel.Control.StartLayer = "control", "off"
 	sel.Control.MTUPolicy, sel.Control.ManualMTU, sel.Control.EffectiveMTU = "manual", 1500, 1500

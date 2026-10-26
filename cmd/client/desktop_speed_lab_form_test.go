@@ -100,6 +100,9 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 		}
 		if request.hasExpectedProfiles() {
 			expectedSelected := "exit"
+			if strings.HasPrefix(name, "speed-lab-main-entry-") {
+				expectedSelected = "entry"
+			}
 			for _, mode := range mobilemultihop.NodeMultihopExitModes() {
 				if strings.HasPrefix(name, "speed-lab-multihop-"+mode+"-") {
 					expectedSelected = "entry"
@@ -171,12 +174,12 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 		})
 	}
 	for _, execution := range []string{"local", "server", "auto"} {
-		request, fields := read("speed-lab-multihop-" + execution)
+		request, _ := read("speed-lab-multihop-" + execution)
 		if request.Scope != "temporary" || request.Topology != "multihop" || request.EntryID != "entry" || request.ExitID != "exit-router" || request.Execution != execution {
 			t.Fatal("native Router multihop callback changed its path")
 		}
-		if _, ok := fields["entry_mode"]; ok {
-			t.Fatal("external-only entry mode entered Router multihop")
+		if request.EntryMode != "" {
+			t.Fatal("legacy Router multihop lost its saved entry/base fallback")
 		}
 		parsed, err := routeExecution(multihopConnectRequest{Execution: request.Execution})
 		if err != nil || string(parsed) != execution {
@@ -187,18 +190,38 @@ func TestDesktopSpeedLabPathFormPayload(t *testing.T) {
 	for _, mode := range mobilemultihop.NodeMultihopExitModes() {
 		for _, execution := range []string{"local", "server", "auto"} {
 			t.Run("router/"+mode+"/"+execution, func(t *testing.T) {
-				request, fields := read("speed-lab-multihop-" + mode + "-" + execution)
+				request, _ := read("speed-lab-multihop-" + mode + "-" + execution)
 				if request.Scope != "temporary" || request.Topology != "multihop" || request.EntryID != "entry" || request.ExitID != "exit-router" || request.ExitMode != mode || request.Execution != execution {
 					t.Fatal("native Router callback substituted its selected exit mode or execution")
 				}
-				if _, exists := fields["entry_mode"]; exists {
-					t.Fatal("external-only entry mode entered Router multihop")
+				if request.EntryMode != "" {
+					t.Fatal("legacy exit form changed its saved entry/base fallback")
 				}
 				selected, err := a.resolveSpeedLabMultihop(request, control, a.profiles.Profiles)
 				if err != nil || selected.ExitMode != mode || selected.Entry.ID != "entry" || selected.Exit.ID != "exit-router" || selected.Base != request.Base {
 					t.Fatal("shipping Speed Lab resolver changed native form graph", err)
 				}
 			})
+		}
+	}
+	for _, prefix := range []string{"speed-lab-multihop-entry-", "speed-lab-main-entry-"} {
+		for _, mode := range mobilemultihop.NodeMultihopEntryModes() {
+			for _, execution := range []string{"local", "server", "auto"} {
+				t.Run(prefix+mode+"/"+execution, func(t *testing.T) {
+					request, fields := read(prefix + mode + "-" + execution)
+					if request.Scope != "temporary" || request.Topology != "multihop" || request.EntryID != "entry" || request.ExitID != "exit-router" || request.EntryMode != mode || request.ExitMode != "shadowsocks" || request.Execution != execution || fields["entry_mode"] == nil {
+						t.Fatal("native Router form substituted its captured raw entry or execution")
+					}
+					entry, ok := profileByID(a.profiles.Profiles, request.EntryID)
+					if !ok {
+						t.Fatal("native Router form lost the linked entry")
+					}
+					selected, err := a.resolveSpeedLabTemporaryMultihop(request, control, entry, a.profiles.Profiles)
+					if err != nil || selected.EntryMode != mode || selected.Base != desktopExternalEntryBase(mode) || selected.ExitMode != "shadowsocks" || selected.Entry.ID != request.EntryID || selected.Exit.ID != request.ExitID || selected.Control.ID != entry.ID {
+						t.Fatal("shipping temporary resolver changed the form's exact graph or policy owner", err)
+					}
+				})
+			}
 		}
 	}
 	for _, name := range []string{"speed-lab-current", "speed-lab-system-direct"} {

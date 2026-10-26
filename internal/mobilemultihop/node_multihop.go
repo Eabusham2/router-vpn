@@ -24,28 +24,22 @@ func NodeMultihopExitMode(mode string) bool {
 }
 
 // NodeMultihopConfig composes two immutable, fully validated node captures.
-// The desktop's existing entry-wg tag identifies its proof lane; the endpoint
-// itself retains its exact WireGuard or AmneziaWG type and captured parameters.
+// The desktop's existing entry-wg tag identifies its proof lane. The complete
+// predecessor keeps its exact packet/proxy/PQ/MAX owners and dependencies.
 // It performs no I/O and does not establish either node's live proof.
 func NodeMultihopConfig(entry, exit *NodeProfile) (string, error) {
-	bad := errors.New("native node multihop requires a captured WG/AWG entry and a complete supported native exit")
+	bad := errors.New("native node multihop requires two complete captured native entry and exit graphs")
 	if entry == nil || exit == nil || entry.profile == nil || exit.profile == nil ||
-		(entry.mode != "wg" && entry.mode != "awg2-fast" && entry.mode != "awg2-strong") ||
+		!NodeMultihopEntryMode(entry.mode) ||
 		!NodeMultihopExitMode(exit.mode) ||
 		entry.profile["id"] == exit.profile["id"] || entry.profile["node_proof_id"] == exit.profile["node_proof_id"] {
 		return "", bad
 	}
-	prepare := func(node *NodeProfile) (*externalPredecessor, error) {
-		return newExternalPredecessor(externalPolicyCapture{
-			Entry: predecessorCopy(node.profile), EntryTag: externalEntryTag,
-			Profile: map[string]any{"multihop_entry_mode": node.mode}, PredecessorConfig: node.config,
-		})
-	}
-	predecessor, err := prepare(entry)
+	predecessor, err := nodeMultihopPredecessor(entry)
 	if err != nil {
 		return "", err
 	}
-	last, err := prepare(exit)
+	last, err := nodeMultihopPredecessor(exit)
 	if err != nil {
 		return "", err
 	}

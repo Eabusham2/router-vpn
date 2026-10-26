@@ -25,7 +25,7 @@ var connectionProfilePreferenceKeys = map[string]struct{}{
 	"daita_enabled": {}, "jumbo_tun": {}, "socks_enabled": {},
 	"dns_mode": {}, "dns_protocol": {}, "dns_host": {}, "dns_port": {},
 	"dns_server_name": {}, "dns_path": {}, "home_dns_captured": {}, "multihop_enabled": {},
-	"multihop_entry_id": {}, "multihop_exit_id": {}, "custom_layers": {},
+	"multihop_entry_id": {}, "multihop_exit_id": {}, "multihop_entry_mode": {}, "custom_layers": {},
 }
 
 func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
@@ -41,7 +41,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("connection profile preferences contain unsupported field %q", key)
 		}
 	}
-	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured"} {
+	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured", "multihop_entry_mode"} {
 		if value, ok := raw[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("saved connection policy cannot be null")
 		}
@@ -124,6 +124,9 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 	if err := normalizeSavedConnectionDNS(p); err != nil {
 		return err
 	}
+	if _, err := normalizeConnectionProfileEntryMode(p.MultihopEntryMode); err != nil {
+		return err
+	}
 	if p.MultihopEnabled {
 		entryID := strings.TrimSpace(p.MultihopEntryID)
 		exitID := strings.TrimSpace(p.MultihopExitID)
@@ -135,7 +138,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 		// Disabled multihop owns no hop identity. Clear stale IDs from old or
 		// hand-edited snapshots so a later load/toggle cannot revive a graph that
 		// was not explicitly saved as enabled.
-		p.MultihopEntryID, p.MultihopExitID = "", ""
+		p.MultihopEntryID, p.MultihopExitID, p.MultihopEntryMode = "", "", ""
 	}
 	return nil
 }

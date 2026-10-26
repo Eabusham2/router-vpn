@@ -43,9 +43,10 @@ static void linux_speed_lab_capture_selection_v19(LinuxSpeedLabV12 *s) {
     g_clear_pointer(&s->staged_selected, g_free);
     g_clear_pointer(&s->staged_entry, g_free); g_clear_pointer(&s->staged_exit, g_free);
     g_clear_pointer(&s->staged_exit_mode, g_free); g_clear_pointer(&s->staged_execution, g_free);
+    g_clear_pointer(&s->staged_entry_mode, g_free);
     g_clear_pointer(&s->captured_profile_tokens, json_object_unref);
     s->staged_selected = g_strdup(linux_speed_lab_main_selection_v19(s));
-    linux_profile_selection_v11(&s->staged_multihop, &s->staged_entry, &s->staged_exit, &s->staged_exit_mode);
+    linux_profile_selection_v11(&s->staged_multihop, &s->staged_entry, &s->staged_exit, &s->staged_exit_mode, &s->staged_entry_mode);
     s->staged_execution = linux_multihop_execution_choice_v1();
     s->selection_captured = TRUE;
 }
@@ -60,13 +61,14 @@ static const char *linux_speed_lab_selection_error_v19(LinuxSpeedLabV12 *s) {
     const char *changed = "The connection profile changed while Speed Lab was open. Reopen Speed Lab for that selection.";
     if (s->closed || !s->selection_captured || g_strcmp0(s->staged_selected, linux_speed_lab_main_selection_v19(s)) != 0) return changed;
     gboolean enabled = FALSE;
-    char *entry = NULL, *exit = NULL, *mode = NULL;
-    linux_profile_selection_v11(&enabled, &entry, &exit, &mode);
+    char *entry = NULL, *exit = NULL, *mode = NULL, *entry_mode = NULL;
+    linux_profile_selection_v11(&enabled, &entry, &exit, &mode, &entry_mode);
     char *execution = linux_multihop_execution_choice_v1();
     gboolean same = enabled == s->staged_multihop && (!enabled ||
         (g_strcmp0(entry, s->staged_entry) == 0 && g_strcmp0(exit, s->staged_exit) == 0 &&
-         g_strcmp0(mode, s->staged_exit_mode) == 0 && g_strcmp0(execution, s->staged_execution) == 0));
-    g_free(entry); g_free(exit); g_free(mode); g_free(execution);
+         g_strcmp0(mode, s->staged_exit_mode) == 0 && g_strcmp0(execution, s->staged_execution) == 0 &&
+         g_strcmp0(entry_mode, s->staged_entry_mode) == 0));
+    g_free(entry); g_free(exit); g_free(mode); g_free(execution); g_free(entry_mode);
     if (!same) return changed;
     JsonArray *nodes = linux_speed_lab_catalog_v19(s, "nodes");
     if (nodes == NULL) return "Speed Lab has no captured node catalog. Reopen Speed Lab.";
@@ -147,6 +149,21 @@ static void linux_speed_lab_select_v19(GtkWidget *combo, const char *id) {
     }
 }
 
+static void linux_speed_lab_fill_entry_modes_v23(LinuxSpeedLabV12 *s, const char *selected) {
+    if (strcmp(linux_speed_lab_active_id_v12(s->topology), "multihop") == 0) {
+        linux_multihop_entry_choices_v23(s->entry_mode, linux_speed_lab_catalog_v19(s, "supported_entry_modes"), selected);
+        return;
+    }
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(s->entry_mode));
+    JsonArray *modes = linux_speed_lab_catalog_v19(s, "router_vpn_entry_modes");
+    for (guint i = 0; modes != NULL && i < json_array_get_length(modes); i++) {
+        JsonObject *mode = json_array_get_object_element(modes, i);
+        const char *id = obj_string(mode, "id"), *name = obj_string(mode, "name");
+        if (id[0]) gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(s->entry_mode), id, name[0] ? name : id);
+    }
+    linux_speed_lab_select_v19(s->entry_mode, selected);
+}
+
 static void linux_speed_lab_entry_default_v19(LinuxSpeedLabV12 *s) {
     const char *id = linux_speed_lab_active_id_v12(s->entry);
     JsonObject *entry = linux_speed_lab_find_v19(s, "nodes", id);
@@ -156,12 +173,16 @@ static void linux_speed_lab_entry_default_v19(LinuxSpeedLabV12 *s) {
     }
     const char *mode = "";
     if (node != NULL && strcmp(id, obj_string(node, "multihop_entry_id")) == 0) mode = obj_string(node, "multihop_entry_mode");
+    if (strcmp(linux_speed_lab_active_id_v12(s->topology), "multihop") == 0) {
+        linux_speed_lab_fill_entry_modes_v23(s, mode);
+        return;
+    }
     if (mode[0] == '\0') {
         const char *base=obj_string(entry,"base_tunnel");
         if(strcmp(base,"wg")!=0&&strcmp(base,"awg")!=0&&node!=NULL)base=obj_string(node,"base_tunnel");
         mode=strcmp(base,"awg")==0?"awg2-fast":"wg";
     }
-    linux_speed_lab_select_v19(s->entry_mode, mode);
+    linux_speed_lab_fill_entry_modes_v23(s, mode);
 }
 
 static void linux_speed_lab_defaults_v19(LinuxSpeedLabV12 *s) {
@@ -185,12 +206,15 @@ static void linux_speed_lab_defaults_v19(LinuxSpeedLabV12 *s) {
         if (saved && exit[0] != '\0') linux_speed_lab_select_v19(s->exit, exit);
         const char *execution = saved ? obj_string(node, "multihop_execution") : "local";
         linux_speed_lab_select_v19(s->execution, execution[0] != '\0' ? execution : "local");
+        linux_speed_lab_entry_default_v19(s);
         JsonNode *current_node = json_object_get_member(json_node_get_object(s->options), "current");
         JsonObject *current = current_node != NULL && JSON_NODE_HOLDS_OBJECT(current_node) ? json_node_get_object(current_node) : NULL;
         if (linux_speed_lab_flag_v19(current, "connected") && g_strcmp0(obj_string(current, "mode"), "multihop") == 0 &&
             g_strcmp0(obj_string(current, "entry_id"), linux_speed_lab_active_id_v12(s->entry)) == 0 &&
             g_strcmp0(obj_string(current, "exit_id"), linux_speed_lab_active_id_v12(s->exit)) == 0) {
             linux_speed_lab_select_v19(s->exit_mode, obj_string(current, "exit_mode"));
+            if (obj_string(current, "entry_mode")[0]) linux_speed_lab_fill_entry_modes_v23(s, obj_string(current, "entry_mode"));
+            if (obj_string(current, "execution")[0]) linux_speed_lab_select_v19(s->execution, obj_string(current, "execution"));
         }
     }
     s->updating_choices = FALSE;
@@ -248,6 +272,7 @@ static const char *linux_speed_lab_path_error_v19(LinuxSpeedLabV12 *s) {
         JsonObject *exit = linux_speed_lab_find_v19(s, "nodes", linux_speed_lab_active_id_v12(s->exit));
         if (strcmp(linux_speed_lab_kind_v19(entry), "router-vpn") != 0 || strcmp(linux_speed_lab_kind_v19(exit), "router-vpn") != 0 || entry == exit) return "Select two different linked Router VPN nodes.";
         if (!linux_multihop_exit_advertised_v22(linux_speed_lab_catalog_v19(s, "supported_exit_modes"), linux_speed_lab_active_id_v12(s->exit_mode))) return "Select an exit transport supported by this controller; an unavailable saved choice is never replaced automatically.";
+        if (!linux_multihop_entry_advertised_v23(linux_speed_lab_catalog_v19(s, "supported_entry_modes"), gtk_combo_box_get_active_id(GTK_COMBO_BOX(s->entry_mode)))) return "Select an entry transport supported by this controller; an unavailable saved choice is never replaced automatically.";
     } else if (strcmp(top, "external") == 0) {
         if (strcmp(linux_speed_lab_kind_v19(node), "external") != 0) return "Select a linked external exit.";
         const char *entryID = linux_speed_lab_active_id_v12(s->entry);

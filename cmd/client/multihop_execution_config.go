@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -64,23 +65,28 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 	if !ok || route["final"] != "proxy" {
 		return nil, errors.New("unowned native multihop final route")
 	}
+	entryOwners, entrySnapshot, err := nativeMultihopEntrySnapshot(cfg, sel.Native.entryOwners)
+	if err != nil {
+		return nil, err
+	}
+	defer clear(entrySnapshot)
 	endpoints, ok := cfg["endpoints"].([]any)
-	if !ok {
+	if cfg["endpoints"] != nil && !ok {
 		return nil, errors.New("native server path requires its owned endpoints")
 	}
-	var entry map[string]any
+	retainedEndpoints := make([]any, 0, len(endpoints))
 	packetExits := 0
 	for _, raw := range endpoints {
 		endpoint, valid := raw.(map[string]any)
 		if !valid {
 			return nil, errors.New("invalid native endpoint")
 		}
-		switch endpoint["tag"] {
-		case "entry-wg":
-			if entry != nil || endpoint["type"] != "wireguard" && endpoint["type"] != mobilemultihop.AmneziaType {
-				return nil, errors.New("native entry endpoint identity changed")
-			}
-			entry = endpoint
+		tag, _ := endpoint["tag"].(string)
+		if entryOwners[tag] {
+			retainedEndpoints = append(retainedEndpoints, endpoint)
+			continue
+		}
+		switch tag {
 		case "proxy":
 			wantType := "wireguard"
 			if awgpolicy.IsMode(sel.ExitMode) {
@@ -110,14 +116,8 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 			return nil, errors.New("native server path contains an unrelated endpoint")
 		}
 	}
-	if entry == nil || mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) != (packetExits == 1) {
-		return nil, errors.New("native server path lost its captured entry or packet exit")
-	}
-	if entry["type"] == mobilemultihop.AmneziaType {
-		encoded, _ := json.Marshal(entry)
-		if _, err := mobilemultihop.AmneziaRuntimeConfig(string(encoded)); err != nil {
-			return nil, errors.New("native AWG entry lost its captured parameters")
-		}
+	if mobilemultihop.NodeMultihopPacketExitMode(sel.ExitMode) != (packetExits == 1) {
+		return nil, errors.New("native server path lost its captured packet exit")
 	}
 	outbounds, ok := cfg["outbounds"].([]any)
 	if !ok {
@@ -144,13 +144,17 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 	if packetExits == 1 {
 		// The independent lease now owns the packet exit. Remove its local
 		// endpoint entirely so a dormant local peer cannot roam the server key.
-		cfg["endpoints"] = []any{entry}
+		cfg["endpoints"] = retainedEndpoints
 		retained = append(retained, serverExit)
 	}
 	for _, item := range outbounds {
 		out, ok := item.(map[string]any)
 		if !ok {
 			return nil, errors.New("invalid native outbound")
+		}
+		if tag, _ := out["tag"].(string); entryOwners[tag] {
+			retained = append(retained, out)
+			continue
 		}
 		if tag, _ := out["tag"].(string); removedExitOwners[tag] {
 			continue
@@ -224,6 +228,11 @@ func compileDesktopExecutionConfig(raw []byte, d desktopExecutionDescriptor, sel
 		return nil, errors.New("entry control must have exactly one private tunnel route")
 	}
 	cfg["outbounds"] = retained
+	_, afterEntry, err := nativeMultihopEntrySnapshot(cfg, sel.Native.entryOwners)
+	defer clear(afterEntry)
+	if err != nil || !bytes.Equal(entrySnapshot, afterEntry) {
+		return nil, errors.New("Server execution changed the captured entry graph or DNS policy")
+	}
 	body, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return nil, err

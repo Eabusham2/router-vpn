@@ -426,8 +426,14 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 		if !ok {
 			return plan, errors.New("previous multihop control profile disappeared")
 		}
-		plan.request = speedLabRequest{Topology: "multihop", EntryID: graph.EntryID, ExitID: graph.ExitID, Base: graph.Base, ExitMode: graph.ExitMode, Execution: graph.Execution}
-		selection, err := a.resolveSpeedLabMultihop(plan.request, control, snapshot.Profiles.Profiles)
+		plan.request = speedLabRequest{Topology: "multihop", EntryID: graph.EntryID, ExitID: graph.ExitID, EntryMode: graph.EntryMode, Base: graph.Base, ExitMode: graph.ExitMode, Execution: graph.Execution}
+		request := plan.request
+		if request.Base == "native" {
+			// native is a derived runtime base, never a new legacy base request.
+			// The exact retained raw mode reconstructs it during validation.
+			request.Base = ""
+		}
+		selection, err := a.resolveSpeedLabMultihop(request, control, snapshot.Profiles.Profiles)
 		if err != nil {
 			return plan, err
 		}

@@ -11,13 +11,17 @@ Desktop Router-to-Router multihop now accepts seven native proxy exit families:
 Shadowsocks, Hysteria2, REALITY Vision, PQ REALITY Vision, REALITY XHTTP, Naive H2
 and Naive H3, plus WireGuard and AmneziaWG Fast/Strong packet exits and
 SS-V2Ray, Split and MAX TCP/UDP composite exits, plus mandatory WG-PQ and
-AWG-PQ packet exits. Entry ownership remains WG/AWG.
+AWG-PQ packet exits. Native entry selection now preserves nineteen exact raw
+Router transports, including proxy, PQ, composite and complete-MAX entries.
 Local, Server and Compare retain
 the captured exit transport, independent node credentials, Start Layers,
 selected DNS and proof routes. Naive resolver bootstrap follows the captured
 entry; replacing an exit Start Layer with an authenticated Server lease moves
 only that layer's owned resolver edges. Windows, macOS and Linux controls,
-complete profiles and Speed Lab retain all fifteen IDs. Packet/PQ Server execution
+complete profiles and Speed Lab retain all fifteen exit IDs and nineteen entry
+IDs. An empty entry choice retains the existing saved mode/base fallback;
+unknown or unavailable choices cannot silently become another transport.
+Packet/PQ Server execution
 requires an updated agent and a separately paired server client identity. The
 canonical public key is checked against the local client, pinned during
 authenticated discovery, enforced under the server lease lock, and retained
@@ -37,6 +41,26 @@ pass, including wrong-key, padding and lease-credential rejection. The local
 AWG test CLI omitted the Rosenpass C-library tag. The separate PQ verification
 described below uses a newly built complete native engine with that factory;
 complete current native packages still require exact-SHA CI.
+
+The expanded entry compiler retains the whole captured engine, resolver,
+bootstrap, cover and optional Start Layer closure when Server execution
+substitutes the exit. Complete-profile Add/Update/Load preserves the raw entry
+transactionally without copying credentials between nodes. Speed Lab captures
+the visible control node's entry preference before changing its temporary
+policy owner, restores the already-proved Local/Server winner and live MTU,
+and rejects a same-ID replacement both before and after capture. The native
+runtime base remains truthfully `native` for non-packet entry families.
+
+The shared entry matrix passed 855 configurations; desktop host compilation
+passed 1,710 Local/Server graphs and 114 checks with the actual complete native
+runtime. Separate encrypted TCP/UDP tests passed for Shadowsocks, Hysteria2
+and Naive H2/H3 entries in both execution modes, including wrong entry and
+lease credentials followed by valid restoration. WPF, AppKit and GTK profile,
+Connect and Speed Lab callbacks preserve the same modes through the actual Go
+resolver. Their source/ownership tests do not establish physical acceptance or
+encrypted traffic for every entry/exit combination. The package gate runs the
+expanded entry matrix in its own bounded group; existing gates keep their
+original budgets.
 
 Desktop WG-PQ and AWG-PQ exits retain mandatory native Rosenpass negotiation,
 exact packet/AWG parameters, selected DNS, Start Layers and captured MTU bounds.
@@ -72,9 +96,9 @@ policy and proof routes remain captured. Real encrypted Local/Server traffic
 passes for all three modes, including wrong credentials, independent lane
 failures and restoration. The native package gate requires this separate
 traffic group alongside its existing native and AWG groups. This `max`
-composite support does not close the distinct complete MAX packet/helper
-graph. Broader Router entry and packet/helper combinations remain source gaps;
-this extension does not establish full graph parity with the mobile hosts.
+composite support does not close the distinct complete MAX packet/helper exit
+graph. Complete-MAX exits and other requested graph combinations remain source
+gaps; this extension does not establish full graph parity with the mobile hosts.
 
 The authenticated router-agent HTTP decoder now carries the already-defined
 packet identity pin through discovery, creation, renewal and deletion. It

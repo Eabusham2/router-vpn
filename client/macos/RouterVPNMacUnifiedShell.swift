@@ -332,6 +332,8 @@ extension ProductWindowController {
         let editHops = NSButton(title: "Details", target: self, action: #selector(openUnifiedMultihop)); editHops.bezelStyle = .rounded; multihopRow.addArrangedSubview(editHops); controls.addArrangedSubview(multihopRow)
 
         configureMultihopExecution()
+        let entryModeRow = unifiedLabeledRow(title: "Entry mode")
+        entryModeRow.addArrangedSubview(multihopEntryModePopup); controls.addArrangedSubview(entryModeRow)
         let baseRow = unifiedLabeledRow(title: "Entry base")
         basePopup.toolTip = "Auto follows the selected entry node's saved base. AmneziaWG retains its exact saved Fast or Strong configuration."
         baseRow.addArrangedSubview(basePopup); controls.addArrangedSubview(baseRow)

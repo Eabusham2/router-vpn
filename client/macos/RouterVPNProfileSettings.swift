@@ -255,14 +255,14 @@ private final class MacConnectionProfileControls: NSObject {
         return id
     }
 
-    private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String, execution: String) {
+    private func currentMultihopSnapshot() throws -> (enabled: Bool, entry: String, exit: String, exitMode: String, execution: String, entryMode: String) {
         let enabled = UserDefaults.standard.bool(forKey: macConnectionMultihopEnabledKey)
         guard let owner else {
             throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 6, userInfo: [NSLocalizedDescriptionKey: "Reopen Settings from the current Router VPN window."])
         }
         try owner.requireMutationIdle("saving a connection profile")
         try owner.requireResolvedConnectionProfileSelection()
-        guard enabled else { return (false, "", "", "", "") }
+        guard enabled else { return (false, "", "", "", "", "") }
         let entryIndex = owner.multihopEntryPopup.indexOfSelectedItem
         let exitIndex = owner.multihopExitPopup.indexOfSelectedItem
         guard entryIndex >= 0, exitIndex >= 0,
@@ -275,7 +275,8 @@ private final class MacConnectionProfileControls: NSObject {
             throw NSError(domain: "RouterVPN.ConnectionProfiles", code: 5, userInfo: [NSLocalizedDescriptionKey: "Multihop entry and exit nodes must be different."])
         }
         let exitMode = try RouterVPNNodeExitModes.require(index: owner.multihopExitModePopup.indexOfSelectedItem)
-        return (true, entry, exit, exitMode, owner.multihopExecutionChoice())
+        let entryMode = try RouterVPNNodeEntryModes.require(index: owner.multihopEntryModePopup.indexOfSelectedItem)
+        return (true, entry, exit, exitMode, owner.multihopExecutionChoice(), entryMode)
     }
 
     private func applyLoadedMultihop(_ root: [String: Any]) throws {
@@ -296,7 +297,7 @@ private final class MacConnectionProfileControls: NSObject {
         var body: [String: Any] = [
             "name": clean, "mode": snapshot.mode, "custom_layers": snapshot.layers,
             "multihop_enabled": hops.enabled, "multihop_entry_id": hops.entry,
-            "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode, "multihop_execution": hops.execution
+            "multihop_exit_id": hops.exit, "multihop_exit_mode": hops.exitMode, "multihop_execution": hops.execution, "multihop_entry_mode": hops.entryMode
         ]
         if updating { body["id"] = try selectedID() }
         let data = try api.request(path, method: "POST", body: body, timeout: 10)

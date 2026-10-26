@@ -45,6 +45,7 @@ type connectionProfilePreferences struct {
 	MultihopEnabled        bool      `json:"multihop_enabled"`
 	MultihopEntryID        string    `json:"multihop_entry_id,omitempty"`
 	MultihopExitID         string    `json:"multihop_exit_id,omitempty"`
+	MultihopEntryMode      string    `json:"multihop_entry_mode,omitempty"`
 	CustomLayers           []string  `json:"custom_layers,omitempty"`
 }
 
@@ -235,6 +236,13 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 	if err != nil {
 		return nil, err
 	}
+	entryMode, err := normalizeConnectionProfileEntryMode(p.MultihopEntryMode)
+	if err != nil {
+		return nil, err
+	}
+	if !p.MultihopEnabled {
+		entryMode = ""
+	}
 	// Optional pointers keep older snapshots from overwriting settings that
 	// they never captured. A new empty LAN list is still an explicit choice.
 	lan := append([]string{}, p.HomeLANCIDRs...)
@@ -264,7 +272,8 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort,
 		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, HomeDNSCaptured: homeDNSCaptured,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,
-		CustomLayers: layers,
+		MultihopEntryMode: entryMode,
+		CustomLayers:      layers,
 	}, nil
 }
 

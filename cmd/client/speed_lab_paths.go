@@ -424,7 +424,7 @@ func (a *app) startSpeedLabRouterPath(q speedLabRequest) (path speedLabPath, res
 }
 
 func (a *app) resolveSpeedLabMultihop(q speedLabRequest, control common.RouterProfile, profiles []common.RouterProfile) (multihopSelection, error) {
-	request := multihopConnectRequest{EntryID: q.EntryID, ExitID: q.ExitID, Base: q.Base, ExitMode: q.ExitMode, Execution: q.Execution}
+	request := multihopConnectRequest{EntryID: q.EntryID, ExitID: q.ExitID, Base: q.Base, EntryMode: q.EntryMode, ExitMode: q.ExitMode, Execution: q.Execution}
 	if runtime.GOOS == "linux" && !retainedNativeMultihopSelected() {
 		return resolveMultihopSelection(control, profiles, request)
 	}
@@ -435,6 +435,13 @@ func (a *app) resolveSpeedLabMultihop(q speedLabRequest, control common.RouterPr
 }
 
 func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error) {
+	// The visible complete-profile selection owns the raw entry default. The
+	// temporary hop's own saved graph is a different preference and must not
+	// become the default merely because it becomes the temporary policy owner.
+	a.mu.Lock()
+	selected, _ := a.profileByIDLocked(a.profiles.SelectedID)
+	selected = cloneRouterProfile(selected)
+	a.mu.Unlock()
 	entryProfile, err := a.applySpeedLabTemporaryProfile(q.EntryID, q)
 	if err != nil {
 		return speedLabPath{}, err
@@ -445,11 +452,32 @@ func (a *app) startSpeedLabMultihopPath(q speedLabRequest) (speedLabPath, error)
 	a.mu.Lock()
 	profiles := cloneRouterProfileStore(a.profiles).Profiles
 	a.mu.Unlock()
-	sel, err := a.resolveSpeedLabMultihop(q, entryProfile, profiles)
+	sel, err := a.resolveSpeedLabTemporaryMultihop(q, selected, entryProfile, profiles)
 	if err != nil {
 		return speedLabPath{}, err
 	}
 	return a.startSpeedLabMultihopSelection(sel, q)
+}
+
+func (a *app) resolveSpeedLabTemporaryMultihop(q speedLabRequest, selected, entryProfile common.RouterProfile, profiles []common.RouterProfile) (multihopSelection, error) {
+	mode, base, err := resolveNativeMultihopEntryMode(selected, entryProfile, q.EntryMode, q.Base)
+	if err != nil {
+		return multihopSelection{}, err
+	}
+	control := cloneRouterProfile(entryProfile)
+	control.MultihopEntryMode = mode
+	q.EntryMode = mode
+	if mode == "" {
+		q.Base = base
+	}
+	sel, err := a.resolveSpeedLabMultihop(q, control, profiles)
+	if err != nil {
+		return sel, err
+	}
+	// Only the selection default came from the visible profile. Keep the exact
+	// actual temporary policy owner's token for proof, cancellation and restore.
+	sel.Control = cloneRouterProfile(entryProfile)
+	return sel, nil
 }
 
 func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRequest) (speedLabPath, error) {
@@ -534,7 +562,7 @@ func (a *app) startSpeedLabMultihopSelection(sel multihopSelection, q speedLabRe
 		return speedLabPath{}, err
 	}
 	graph, _ := getActiveMultihopGraph(a)
-	return speedLabPath{Scope: "temporary", Topology: "multihop", Temporary: true, EntryID: sel.Entry.ID, EntryName: sel.Entry.Name, ExitID: sel.Exit.ID, ExitName: sel.Exit.Name, RuntimeMode: winner.Transport, LogicalMode: "multihop", Base: sel.Base, ExitMode: winner.Transport, Execution: string(winner.Execution), StartedAt: graph.Started, Description: "temporary proven multihop graph; entry/exit/base/exit transport and execution are not saved"}, nil
+	return speedLabPath{Scope: "temporary", Topology: "multihop", Temporary: true, EntryID: sel.Entry.ID, EntryName: sel.Entry.Name, ExitID: sel.Exit.ID, ExitName: sel.Exit.Name, RuntimeMode: winner.Transport, LogicalMode: "multihop", Base: sel.Base, EntryMode: graph.EntryMode, ExitMode: winner.Transport, Execution: string(winner.Execution), StartedAt: graph.Started, Description: "temporary proven multihop graph; entry/exit/base/exit transport and execution are not saved"}, nil
 }
 
 func speedLabExternalEntry(profiles []common.RouterProfile, external common.RouterProfile, q speedLabRequest) (common.RouterProfile, string, bool, error) {

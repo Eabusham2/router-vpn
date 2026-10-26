@@ -24,11 +24,13 @@ type connectionProfileSetupRequest struct {
 	MultihopEnabled   bool     `json:"multihop_enabled"`
 	MultihopEntryID   string   `json:"multihop_entry_id,omitempty"`
 	MultihopExitID    string   `json:"multihop_exit_id,omitempty"`
+	MultihopEntryMode string   `json:"multihop_entry_mode,omitempty"`
 	MultihopExitMode  string   `json:"multihop_exit_mode,omitempty"`
 	MultihopExecution string   `json:"multihop_execution,omitempty"`
 }
 
 type connectionProfileSetupMeta struct {
+	MultihopEntryMode string `json:"multihop_entry_mode,omitempty"`
 	MultihopExitMode  string `json:"multihop_exit_mode,omitempty"`
 	MultihopExecution string `json:"multihop_execution,omitempty"`
 }
@@ -96,6 +98,9 @@ func loadConnectionProfileSetupMeta(a *app) (connectionProfileSetupMetaStore, er
 		if _, err := normalizeConnectionProfileExitMode(meta.MultihopExitMode); err != nil {
 			return connectionProfileSetupMetaStore{}, err
 		}
+		if _, err := normalizeConnectionProfileEntryMode(meta.MultihopEntryMode); err != nil {
+			return connectionProfileSetupMetaStore{}, err
+		}
 	}
 	return store, nil
 }
@@ -150,6 +155,10 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 	}
 	q.MultihopEntryID = strings.TrimSpace(q.MultihopEntryID)
 	q.MultihopExitID = strings.TrimSpace(q.MultihopExitID)
+	q.MultihopEntryMode, err = normalizeConnectionProfileEntryMode(q.MultihopEntryMode)
+	if err != nil {
+		return q, err
+	}
 	execution, err := routeExecution(multihopConnectRequest{Execution: q.MultihopExecution})
 	q.MultihopExecution = string(execution)
 	if err != nil {
@@ -175,6 +184,7 @@ func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updati
 	} else {
 		q.MultihopEntryID = ""
 		q.MultihopExitID = ""
+		q.MultihopEntryMode = ""
 		q.MultihopExitMode = ""
 		q.MultihopExecution = ""
 	}
@@ -243,10 +253,21 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	if externalSelected {
 		q.Mode, q.CustomLayers = "external", nil
 		q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID = selected.MultihopEnabled, selected.MultihopEntryID, selected.MultihopExitID
+		q.MultihopEntryMode = selected.MultihopEntryMode
 		q.MultihopExitMode, q.MultihopExecution = "", selected.MultihopExecution
 		if q.MultihopExecution == "" {
 			q.MultihopExecution = "local"
 		}
+	} else if q.MultihopEnabled && q.MultihopEntryMode == "" && selectedOK {
+		q.MultihopEntryMode, err = normalizeConnectionProfileEntryMode(selected.MultihopEntryMode)
+		if err != nil {
+			a.mu.Unlock()
+			http.Error(w, err.Error(), http.StatusConflict)
+			return
+		}
+	}
+	if !q.MultihopEnabled {
+		q.MultihopEntryMode = ""
 	}
 	if err := validateConnectionProfileSetupGraphLocked(a, q); err != nil && !externalSelected {
 		a.mu.Unlock()
@@ -309,12 +330,14 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 				store.Profiles[i].Prefs.MultihopEnabled = q.MultihopEnabled
 				store.Profiles[i].Prefs.MultihopEntryID = q.MultihopEntryID
 				store.Profiles[i].Prefs.MultihopExitID = q.MultihopExitID
+				store.Profiles[i].Prefs.MultihopEntryMode = q.MultihopEntryMode
 				node, exists := a.profileByIDLocked(store.Profiles[i].NodeID)
 				if !exists {
 					err = errors.New("selected node disappeared before saving its graph")
 					break
 				}
 				node.MultihopEnabled, node.MultihopEntryID, node.MultihopExitID = q.MultihopEnabled, q.MultihopEntryID, q.MultihopExitID
+				node.MultihopEntryMode = q.MultihopEntryMode
 				_, store.Profiles[i].Hops, err = a.snapshotConnectionPathLocked(node)
 				if err != nil {
 					break
@@ -335,7 +358,7 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 		meta.Entries = map[string]connectionProfileSetupMeta{}
 	}
 	if err == nil {
-		meta.Entries[id] = connectionProfileSetupMeta{MultihopExitMode: q.MultihopExitMode, MultihopExecution: q.MultihopExecution}
+		meta.Entries[id] = connectionProfileSetupMeta{MultihopEntryMode: q.MultihopEntryMode, MultihopExitMode: q.MultihopExitMode, MultihopExecution: q.MultihopExecution}
 		err = persistConnectionProfileSetupMeta(a, meta)
 	}
 	var rollbackErr error
@@ -364,8 +387,17 @@ func (a *app) writeConnectionProfileSetup(w http.ResponseWriter, r *http.Request
 	base["multihop_enabled"] = q.MultihopEnabled
 	base["multihop_entry_id"] = q.MultihopEntryID
 	base["multihop_exit_id"] = q.MultihopExitID
+	base["multihop_entry_mode"] = q.MultihopEntryMode
 	base["multihop_exit_mode"] = q.MultihopExitMode
 	base["multihop_execution"] = q.MultihopExecution
+	for _, saved := range store.Profiles {
+		if saved.ID == id {
+			// Return the same finalized graph that was committed, rather than
+			// the inner Save's earlier snapshot of the visible node settings.
+			base["profile"] = saved
+			break
+		}
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(base)
@@ -394,6 +426,13 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 	}
 	a.mu.Lock()
 	meta, metaErr := loadConnectionProfileSetupMeta(a)
+	if metaErr == nil && meta.Entries[strings.TrimSpace(ref.ID)].MultihopEntryMode != "" {
+		var store connectionProfileStore
+		store, metaErr = loadConnectionProfileStore(a)
+		if metaErr == nil {
+			metaErr = validateConnectionProfileSetupEntryMeta(store, strings.TrimSpace(ref.ID), meta.Entries[strings.TrimSpace(ref.ID)].MultihopEntryMode)
+		}
+	}
 	a.mu.Unlock()
 	if metaErr != nil {
 		http.Error(w, metaErr.Error(), http.StatusInternalServerError)
@@ -425,6 +464,10 @@ func (a *app) loadConnectionProfileSetup(w http.ResponseWriter, r *http.Request)
 		payload["multihop_enabled"] = prefs["multihop_enabled"]
 		payload["multihop_entry_id"] = prefs["multihop_entry_id"]
 		payload["multihop_exit_id"] = prefs["multihop_exit_id"]
+		payload["multihop_entry_mode"] = ""
+		if mode, ok := prefs["multihop_entry_mode"].(string); ok {
+			payload["multihop_entry_mode"] = mode
+		}
 	}
 	if external, ok := profileMap["external_policy"].(map[string]any); ok {
 		payload["multihop_enabled"] = external["multihop_enabled"]

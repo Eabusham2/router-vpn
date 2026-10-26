@@ -82,7 +82,7 @@ def main() -> int:
                 "/api/session/events": {"events": [], "last_event_seq": 0},
             }
             nodes=[{"id":"fixture-entry","name":"Test entry"},{"id":"fixture-exit","name":"Test exit"}]
-            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","wg","awg2-fast","awg2-strong","ss-v2ray","split","max","wg-pq","awg2-pq"]}
+            fixtures["/api/multihop/status"]={"connected":state["selected"],"platform_supported":True,"entry_id":"fixture-entry","exit_id":"fixture-exit","nodes":nodes,"supported_exit_modes":["shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","wg","awg2-fast","awg2-strong","ss-v2ray","split","max","wg-pq","awg2-pq"],"supported_entry_modes":["wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","reality-vision","reality-pq-vision","reality-xhttp","naive-h2","naive-h3","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"]}
             fixtures["/api/forwarding/master"]={"enabled":False}
             fixtures["/api/connection/live-latency"]={}
             if state["selected"]:
@@ -146,7 +146,7 @@ def main() -> int:
                 with lock:
                     state["extended"].append(self.path)
                     speed_index=state["extended"].count("/api/connection/speed-test")
-                expected={"/api/profile/fastest":{"samples":5,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","exit_id":"fixture-exit","exit_mode":"shadowsocks","execution":"auto"},"/api/disconnect":{}}
+                expected={"/api/profile/fastest":{"samples":5,"select":True},"/api/connection/speed-test":{"bytes":8388608},"/api/multihop/speed-test":{"entry_id":"fixture-entry","exit_id":"fixture-exit","bytes":4194304},"/api/multihop/connect":{"entry_id":"fixture-entry","entry_mode":"","exit_id":"fixture-exit","exit_mode":"shadowsocks","execution":"auto"},"/api/disconnect":{}}
                 if body!=expected[self.path]:
                     state["errors"].append([self.path,body]);self.respond(400,b"wrong captured identity");return
                 delayed=self.path=="/api/multihop/connect" or (self.path=="/api/connection/speed-test" and speed_index>1)

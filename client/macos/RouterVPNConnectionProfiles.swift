@@ -11,6 +11,7 @@ struct RouterVPNConnectionProfileSelection: Equatable, Sendable {
     var selectedNodeID = ""
     var multihopEnabled = false
     var entryID = ""
+    var entryMode: String? = ""
     var exitID = ""
     var exitMode = ""
     var execution = ""
@@ -70,6 +71,7 @@ extension ProductWindowController {
             value.exitID = multihopNodeIDs[exit]
             if let token = multihopNodeTokens[value.exitID] { value.profileTokens[value.exitID] = token }
         }
+        value.entryMode = RouterVPNNodeEntryModes.id(at: multihopEntryModePopup.indexOfSelectedItem)
         value.exitMode = RouterVPNNodeExitModes.id(at: multihopExitModePopup.indexOfSelectedItem) ?? ""
         let executionIndex = multihopExecutionPopup.indexOfSelectedItem
         value.execution = (0..<3).contains(executionIndex) ? ["local", "server", "auto"][executionIndex] : ""
@@ -173,6 +175,7 @@ extension ProductWindowController {
             selectedNodeID: payload["selected_node_id"] as? String ?? "",
             multihopEnabled: !external && (payload["multihop_enabled"] as? Bool ?? false),
             entryID: payload["multihop_entry_id"] as? String ?? "",
+            entryMode: payload["multihop_entry_mode"] == nil ? "" : payload["multihop_entry_mode"] as? String,
             exitID: payload["multihop_exit_id"] as? String ?? "",
             exitMode: payload["multihop_exit_mode"] as? String ?? "",
             execution: payload["multihop_execution"] as? String ?? "local")
@@ -180,6 +183,7 @@ extension ProductWindowController {
         var referenced = Set([selection.selectedNodeID])
         if selection.multihopEnabled {
             guard !selection.entryID.isEmpty, !selection.exitID.isEmpty, selection.entryID != selection.exitID,
+                  selection.entryMode.flatMap({ RouterVPNNodeEntryModes.index(for: $0) }) != nil,
                   RouterVPNNodeExitModes.index(for: selection.exitMode) != nil,
                   ["local", "server", "auto"].contains(selection.execution) else {
                 throw NSError(domain: "RouterVPN.ConnectionProfile", code: 3, userInfo: [NSLocalizedDescriptionKey: "The loaded multihop setup is incomplete or unsupported. No replacement path was selected."])
@@ -204,6 +208,7 @@ extension ProductWindowController {
         nodePopup.selectItem(at: connectionProfileIdentityIndex(selection.selectedNodeID, ids: routerIDs, tokens: tokens, selection: selection))
         multihopEntryPopup.selectItem(at: connectionProfileIdentityIndex(selection.entryID, ids: multihopNodeIDs, tokens: multihopNodeTokens, selection: selection))
         multihopExitPopup.selectItem(at: connectionProfileIdentityIndex(selection.exitID, ids: multihopNodeIDs, tokens: multihopNodeTokens, selection: selection))
+        multihopEntryModePopup.selectItem(at: selection.entryMode.flatMap { RouterVPNNodeEntryModes.index(for: $0) } ?? -1)
         multihopExitModePopup.selectItem(at: RouterVPNNodeExitModes.index(for: selection.exitMode) ?? -1)
         multihopExecutionPopup.selectItem(at: ["local", "server", "auto"].firstIndex(of: selection.execution) ?? -1)
         if let content = window?.contentView {
@@ -375,10 +380,11 @@ extension ProductWindowController {
         let exitIndex = multihopExitPopup.indexOfSelectedItem
         let entry = multihop && entryIndex >= 0 && entryIndex < multihopNodeIDs.count ? multihopNodeIDs[entryIndex] : ""
         let exit = multihop && exitIndex >= 0 && exitIndex < multihopNodeIDs.count ? multihopNodeIDs[exitIndex] : ""
+        let entryMode = try (multihop ? RouterVPNNodeEntryModes.require(index: multihopEntryModePopup.indexOfSelectedItem) : "")
         let exitMode = try (multihop ? RouterVPNNodeExitModes.require(index: multihopExitModePopup.indexOfSelectedItem) : "")
         var body: [String: Any] = [
             "name": name, "mode": mode, "custom_layers": layers,
-            "multihop_enabled": multihop, "multihop_entry_id": entry,
+            "multihop_enabled": multihop, "multihop_entry_id": entry, "multihop_entry_mode": entryMode,
             "multihop_exit_id": exit, "multihop_exit_mode": exitMode,
             "multihop_execution": multihop ? multihopExecutionChoice() : "",
         ]

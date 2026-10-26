@@ -17,7 +17,7 @@ typedef struct {
     gboolean staged_multihop;
     gboolean selection_captured;
     char *staged_selected;
-    char *staged_entry, *staged_exit, *staged_exit_mode, *staged_execution;
+    char *staged_entry, *staged_exit, *staged_exit_mode, *staged_execution, *staged_entry_mode;
     JsonObject *captured_profile_tokens;
     GtkWidget *layers;
     GtkWidget *duration_mode;
@@ -143,6 +143,7 @@ static void linux_speed_lab_destroy_v12(GtkWidget *widget, gpointer data) {
     g_clear_pointer(&s->staged_selected, g_free);
     g_clear_pointer(&s->staged_entry, g_free); g_clear_pointer(&s->staged_exit, g_free);
     g_clear_pointer(&s->staged_exit_mode, g_free); g_clear_pointer(&s->staged_execution, g_free);
+    g_clear_pointer(&s->staged_entry_mode, g_free);
 }
 
 static const char *linux_speed_lab_active_id_v12(GtkWidget *combo) {
@@ -236,6 +237,7 @@ static gboolean linux_speed_lab_apply_options_v12(LinuxSpeedLabV12 *s) {
         linux_speed_lab_select_v19(s->entry, s->staged_entry);
         linux_speed_lab_select_v19(s->exit, s->staged_exit);
         linux_speed_lab_select_v19(s->exit_mode, s->staged_exit_mode);
+        linux_speed_lab_fill_entry_modes_v23(s, s->staged_entry_mode);
         linux_speed_lab_select_v19(s->execution, s->staged_execution);
         s->updating_choices = FALSE;
     }
@@ -260,11 +262,11 @@ static void linux_speed_lab_refresh_controls_v12(GtkComboBox *ignored, gpointer 
     gtk_widget_set_sensitive(s->entry, temporary && (strcmp(top,"multihop")==0 || strcmp(top,"external")==0)); gtk_widget_set_sensitive(s->exit, temporary && strcmp(top,"multihop")==0); gtk_widget_set_sensitive(s->exit_mode, temporary && strcmp(top,"multihop")==0); gtk_widget_set_sensitive(s->layers, temporary && strcmp(mode,"custom")==0);
     JsonObject *entry=linux_speed_lab_find_v19(s,"nodes",linux_speed_lab_active_id_v12(s->entry));
     gboolean router_entry=strcmp(linux_speed_lab_kind_v19(entry),"router-vpn")==0;
-    gtk_widget_set_sensitive(s->entry_mode,temporary&&strcmp(top,"external")==0&&router_entry);
+    gtk_widget_set_sensitive(s->entry_mode,temporary&&(strcmp(top,"multihop")==0||strcmp(top,"external")==0)&&router_entry);
     gtk_widget_set_sensitive(s->execution,temporary&&(strcmp(top,"multihop")==0||(strcmp(top,"external")==0&&router_entry)));
     gtk_widget_set_sensitive(s->node,temporary&&(strcmp(top,"router")==0||strcmp(top,"external")==0));
     gtk_widget_set_sensitive(s->mode,temporary&&strcmp(top,"router")==0);
-    gtk_widget_set_sensitive(s->base,temporary&&(strcmp(top,"router")==0||strcmp(top,"multihop")==0));
+    gtk_widget_set_sensitive(s->base,temporary&&(strcmp(top,"router")==0||(strcmp(top,"multihop")==0&&!linux_speed_lab_active_id_v12(s->entry_mode)[0])));
     gboolean custom_time=strcmp(linux_speed_lab_active_id_v12(s->duration_mode),"custom")==0; gtk_widget_set_sensitive(s->min_time,custom_time); gtk_widget_set_sensitive(s->max_time,custom_time);
     const char *error = linux_speed_lab_path_error_v19(s);
     gtk_widget_set_sensitive(s->run, error == NULL);
@@ -297,7 +299,7 @@ static char *linux_speed_lab_request_body_v12(LinuxSpeedLabV12 *s) {
         const char *top=linux_speed_lab_active_id_v12(s->topology); SL_STR("topology",top);
         if(strcmp(top,"router")==0||strcmp(top,"external")==0)SL_STR("node_id",linux_speed_lab_active_id_v12(s->node));
         if(strcmp(top,"router")==0){SL_STR("mode",linux_speed_lab_active_id_v12(s->mode));SL_STR("base",linux_speed_lab_active_id_v12(s->base));}
-        if(strcmp(top,"multihop")==0){SL_STR("entry_id",linux_speed_lab_active_id_v12(s->entry));SL_STR("exit_id",linux_speed_lab_active_id_v12(s->exit));SL_STR("base",linux_speed_lab_active_id_v12(s->base));SL_STR("exit_mode",linux_speed_lab_active_id_v12(s->exit_mode));SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));}
+        if(strcmp(top,"multihop")==0){SL_STR("entry_id",linux_speed_lab_active_id_v12(s->entry));SL_STR("entry_mode",linux_speed_lab_active_id_v12(s->entry_mode));SL_STR("exit_id",linux_speed_lab_active_id_v12(s->exit));SL_STR("base",linux_speed_lab_active_id_v12(s->base));SL_STR("exit_mode",linux_speed_lab_active_id_v12(s->exit_mode));SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));}
         if(strcmp(top,"external")==0){
             const char *entry_id=linux_speed_lab_active_id_v12(s->entry);SL_STR("entry_id",entry_id);SL_STR("execution",linux_speed_lab_active_id_v12(s->execution));
             JsonObject *entry=linux_speed_lab_find_v19(s,"nodes",entry_id);

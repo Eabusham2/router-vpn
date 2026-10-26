@@ -14,6 +14,19 @@ static void linux_multihop_store_execution_v1(const char *choice) {
     linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
 }
 
+static char *linux_multihop_entry_choice_v23(void) {
+    GKeyFile *key = linux_unified_load_keyfile_v8();
+    char *choice = g_key_file_get_string(key, "connection-profile-selection", "entry_mode", NULL);
+    g_key_file_unref(key);
+    return choice != NULL ? choice : g_strdup("");
+}
+
+static void linux_multihop_store_entry_v23(const char *choice) {
+    GKeyFile *key = linux_unified_load_keyfile_v8();
+    g_key_file_set_string(key, "connection-profile-selection", "entry_mode", choice != NULL ? choice : "");
+    linux_unified_save_keyfile_v8(key); g_key_file_unref(key);
+}
+
 /* Composed into the canonical core after its immutable-session transform. */
 #include "routervpn-http-job-v16.h"
 static void append_diag(App *app, const char *line);

@@ -54,18 +54,18 @@ function ShowUnifiedSpeedLab{
  $Reader=New-Object System.Xml.XmlNodeReader $SX;$D=[Windows.Markup.XamlReader]::Load($Reader);$D.Owner=$Window
  $Scope=$D.FindName('Scope');$Topology=$D.FindName('Topology');$Mode=$D.FindName('Mode');$Node=$D.FindName('Node');$Entry=$D.FindName('Entry');$Exit=$D.FindName('Exit');$Base=$D.FindName('Base');$ExitMode=$D.FindName('ExitMode');$EntryMode=$D.FindName('EntryMode');$Execution=$D.FindName('Execution');$Layers=$D.FindName('Layers');$DurationMode=$D.FindName('DurationMode');$MinTime=$D.FindName('MinTime');$MaxTime=$D.FindName('MaxTime');$MinLabel=$D.FindName('MinLabel');$MaxLabel=$D.FindName('MaxLabel');$Run=$D.FindName('Run');$Advanced=$D.FindName('Advanced');$Status=$D.FindName('Status');$Detail=$D.FindName('Detail');$D.Tag='initial'
  function SelectedTag($Combo){if($null-eq$Combo.SelectedItem){return''};return [string]$Combo.SelectedItem.Tag}
- $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();supported_exit_modes=@();current=$null;execution_choices=@();updating=$false}
+ $SpeedLabOptions=@{nodes=@();router_vpn_entry_modes=@();supported_entry_modes=@();supported_exit_modes=@();current=$null;execution_choices=@();updating=$false}
  function SpeedLabValue($Item,[string]$Name,$Default=''){
   if($null-eq$Item){return $Default};$P=$Item.PSObject.Properties[$Name];if($null-eq$P-or$null-eq$P.Value){return $Default};return $P.Value
  }
  function SpeedLabKind($Item){return [string](SpeedLabValue $Item 'node_kind' 'router-vpn')}
  function CaptureSpeedLabSelection{
   $enabled=[bool](Control 'UnifiedMultihop').IsChecked-and(SpeedLabKind $RouterCombo.SelectedItem)-ne'external'
-  return [pscustomobject]@{selectedNodeID=[string]$RouterCombo.SelectedValue;selectedNodeToken=[string](SpeedLabValue $RouterCombo.SelectedItem 'profile_token');multihopEnabled=$enabled;entryID=$(if($enabled){[string]$MultihopEntryCombo.SelectedValue}else{''});exitID=$(if($enabled){[string]$MultihopExitCombo.SelectedValue}else{''});entryToken=$(if($enabled){[string](SpeedLabValue $MultihopEntryCombo.SelectedItem 'profile_token')}else{''});exitToken=$(if($enabled){[string](SpeedLabValue $MultihopExitCombo.SelectedItem 'profile_token')}else{''});exitMode=$(if($enabled){SelectedTag $MultihopExitModeCombo}else{''});execution=$(if($enabled){SelectedTag (Control 'UnifiedExecution')}else{''})}
+  return [pscustomobject]@{selectedNodeID=[string]$RouterCombo.SelectedValue;selectedNodeToken=[string](SpeedLabValue $RouterCombo.SelectedItem 'profile_token');multihopEnabled=$enabled;entryID=$(if($enabled){[string]$MultihopEntryCombo.SelectedValue}else{''});exitID=$(if($enabled){[string]$MultihopExitCombo.SelectedValue}else{''});entryToken=$(if($enabled){[string](SpeedLabValue $MultihopEntryCombo.SelectedItem 'profile_token')}else{''});exitToken=$(if($enabled){[string](SpeedLabValue $MultihopExitCombo.SelectedItem 'profile_token')}else{''});entryMode=$(if($enabled){MultihopEntryModeChoice}else{''});exitMode=$(if($enabled){SelectedTag $MultihopExitModeCombo}else{''});execution=$(if($enabled){SelectedTag (Control 'UnifiedExecution')}else{''})}
  }
  function AssertSpeedLabSelection($Opt){
   $visible=CaptureSpeedLabSelection
-  foreach($key in @('selectedNodeID','selectedNodeToken','multihopEnabled','entryID','exitID','entryToken','exitToken','exitMode','execution')){if($visible.$key-cne$CapturedSpeedLabSelection.$key){throw 'The visible connection profile changed while Speed Lab loaded. Reopen Speed Lab for that selection.'}}
+  foreach($key in @('selectedNodeID','selectedNodeToken','multihopEnabled','entryID','exitID','entryToken','exitToken','entryMode','exitMode','execution')){if($visible.$key-cne$CapturedSpeedLabSelection.$key){throw 'The visible connection profile changed while Speed Lab loaded. Reopen Speed Lab for that selection.'}}
   if($CapturedSpeedLabSelection.selectedNodeID){
    $selected=@($Opt.nodes|Where-Object{[bool](SpeedLabValue $_ 'selected' $false)})
    $matching=@($Opt.nodes|Where-Object{[string]$_.id-ceq$CapturedSpeedLabSelection.selectedNodeID})
@@ -87,7 +87,7 @@ function ShowUnifiedSpeedLab{
   try{
    SelectSpeedLabTag $Topology 'multihop';SelectSpeedLabChoice $Node $CapturedSpeedLabSelection.selectedNodeID
    SelectSpeedLabChoice $Entry $CapturedSpeedLabSelection.entryID;SelectSpeedLabChoice $Exit $CapturedSpeedLabSelection.exitID
-   SelectSpeedLabTag $ExitMode $CapturedSpeedLabSelection.exitMode;SelectSpeedLabChoice $Execution $CapturedSpeedLabSelection.execution
+   SelectSpeedLabChoice $EntryMode $CapturedSpeedLabSelection.entryMode;SelectSpeedLabTag $ExitMode $CapturedSpeedLabSelection.exitMode;SelectSpeedLabChoice $Execution $CapturedSpeedLabSelection.execution
   }finally{$SpeedLabOptions.updating=$false}
  }
  # Detached values belong to this window. Later callbacks only compare the
@@ -105,6 +105,7 @@ function ShowUnifiedSpeedLab{
  function SetSpeedLabEntryMode{
   $entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$nodeValue=SpeedLabFind 'nodes' ([string]$Node.SelectedValue)
   if($null-eq$entryValue-or(SpeedLabKind $entryValue)-ne'router-vpn'){$EntryMode.SelectedIndex=-1;return}
+  if((SelectedTag $Topology)-eq'multihop'){SelectSpeedLabChoice $EntryMode ([string](SpeedLabValue $nodeValue 'multihop_entry_mode'));return}
   $modeValue='';if($null-ne$nodeValue-and([string]$Entry.SelectedValue)-ceq([string](SpeedLabValue $nodeValue 'multihop_entry_id'))){$modeValue=[string](SpeedLabValue $nodeValue 'multihop_entry_mode')}
   if(-not$modeValue){$baseValue=[string](SpeedLabValue $entryValue 'base_tunnel');if($baseValue-notin@('wg','awg')){$baseValue=[string](SpeedLabValue $nodeValue 'base_tunnel')};$modeValue=if($baseValue-eq'awg'){'awg2-fast'}else{'wg'}}
   SelectSpeedLabChoice $EntryMode $modeValue
@@ -126,7 +127,7 @@ function ShowUnifiedSpeedLab{
      $exitModeValue=[string](SpeedLabValue $SpeedLabOptions.current 'exit_mode');$ExitMode.SelectedIndex=-1
      for($i=0;$i-lt$ExitMode.Items.Count;$i++){if([string]$ExitMode.Items[$i].Tag-ceq$exitModeValue){$ExitMode.SelectedIndex=$i;break}}
     }
-    $executionValue=if($saved){[string](SpeedLabValue $n 'multihop_execution' 'local')}else{'local'};if(-not$executionValue){$executionValue='local'};SelectSpeedLabChoice $Execution $executionValue
+    $executionValue=if($saved){[string](SpeedLabValue $n 'multihop_execution' 'local')}else{'local'};if(-not$executionValue){$executionValue='local'};SelectSpeedLabChoice $Execution $executionValue;SetSpeedLabEntryMode
    }
   }finally{$SpeedLabOptions.updating=$false}
  }
@@ -180,7 +181,8 @@ function ShowUnifiedSpeedLab{
    $exitValue=SpeedLabFind 'nodes' ([string]$Exit.SelectedValue)
    if($null-eq$entryValue-or$null-eq$exitValue-or(SpeedLabKind $entryValue)-ne'router-vpn'-or(SpeedLabKind $exitValue)-ne'router-vpn'-or([string]$Entry.SelectedValue)-ceq([string]$Exit.SelectedValue)){throw 'Select two different linked Router VPN nodes.'}
    if((SelectedTag $ExitMode)-cnotin@($SpeedLabOptions.supported_exit_modes)){throw 'Select an exit transport supported by the installed runtime.'}
-   $payload.entry_id=[string]$Entry.SelectedValue;$payload.exit_id=[string]$Exit.SelectedValue;$payload.base=SelectedTag $Base;$payload.exit_mode=SelectedTag $ExitMode;$payload.execution=$executionValue
+   $modeValue=[string]$EntryMode.SelectedValue;if($null-eq$EntryMode.SelectedItem-or($modeValue-and$modeValue-cnotin@($SpeedLabOptions.supported_entry_modes))){throw 'Select an entry mode supported by the installed runtime, or the saved entry mode / base.'}
+   $payload.entry_mode=$modeValue;$payload.entry_id=[string]$Entry.SelectedValue;$payload.exit_id=[string]$Exit.SelectedValue;$payload.base=SelectedTag $Base;$payload.exit_mode=SelectedTag $ExitMode;$payload.execution=$executionValue
   }elseif($top-eq'external'){
    if($null-eq$n-or(SpeedLabKind $n)-ne'external'){throw 'Select a linked external exit.'}
    $entryID=[string]$Entry.SelectedValue
@@ -199,7 +201,7 @@ function ShowUnifiedSpeedLab{
   $temporary=(SelectedTag $Scope)-eq'temporary';foreach($c in @($Topology,$Mode,$Node,$Entry,$Exit,$Base,$ExitMode,$EntryMode,$Execution,$Layers,$D.FindName('DAITA'),$D.FindName('Jumbo'),$D.FindName('Encrypted'),$D.FindName('Obfuscated'))){$c.IsEnabled=$temporary}
   $custom=(SelectedTag $DurationMode)-eq'custom';$MinTime.IsEnabled=$custom;$MaxTime.IsEnabled=$custom
   $top=SelectedTag $Topology;$Entry.IsEnabled=$temporary-and($top-eq'multihop'-or$top-eq'external');$Exit.IsEnabled=$temporary-and$top-eq'multihop';$ExitMode.IsEnabled=$temporary-and$top-eq'multihop';$Layers.IsEnabled=$temporary-and$top-eq'router'-and([string]$Mode.SelectedValue)-eq'custom'
-  $entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$routerEntry=$null-ne$entryValue-and(SpeedLabKind $entryValue)-eq'router-vpn';$EntryMode.IsEnabled=$temporary-and$top-eq'external'-and$routerEntry;$Execution.IsEnabled=$temporary-and($top-eq'multihop'-or($top-eq'external'-and$routerEntry));$Mode.IsEnabled=$temporary-and$top-eq'router';$Node.IsEnabled=$temporary-and$top-in@('router','external');$Base.IsEnabled=$temporary-and$top-in@('router','multihop')
+  $entryValue=SpeedLabFind 'nodes' ([string]$Entry.SelectedValue);$routerEntry=$null-ne$entryValue-and(SpeedLabKind $entryValue)-eq'router-vpn';$EntryMode.IsEnabled=$temporary-and$top-in@('multihop','external')-and$routerEntry;$Execution.IsEnabled=$temporary-and($top-eq'multihop'-or($top-eq'external'-and$routerEntry));$Mode.IsEnabled=$temporary-and$top-eq'router';$Node.IsEnabled=$temporary-and$top-in@('router','external');$Base.IsEnabled=$temporary-and$top-in@('router','multihop')
  }
  $Run.IsEnabled=$false
  $D.Add_Loaded({
@@ -209,10 +211,10 @@ function ShowUnifiedSpeedLab{
    try{AssertSpeedLabSelection $Opt}catch{$Detail.Text=$_.Exception.Message;$Status.Text='Speed Lab selection changed.';$Run.IsEnabled=$false;$D.Tag='error';return}
    $SpeedLabOptions.updating=$true
    try{
-    $SpeedLabOptions.supported_exit_modes=@(SpeedLabValue $Opt 'supported_exit_modes' @());$SpeedLabOptions.current=SpeedLabValue $Opt 'current' $null
+    $SpeedLabOptions.supported_entry_modes=@(SpeedLabValue $Opt 'supported_entry_modes' @());$SpeedLabOptions.supported_exit_modes=@(SpeedLabValue $Opt 'supported_exit_modes' @());$SpeedLabOptions.current=SpeedLabValue $Opt 'current' $null
     $SpeedLabOptions.nodes=@($Opt.nodes);$SpeedLabOptions.router_vpn_entry_modes=@(SpeedLabValue $Opt 'router_vpn_entry_modes' @());$SpeedLabOptions.execution_choices=@(SpeedLabValue $Opt 'execution_choices' @())
     $Mode.ItemsSource=@($Opt.logical_modes);if($Mode.Items.Count){$Mode.SelectedValue='smart-auto'}
-    $EntryMode.ItemsSource=@($SpeedLabOptions.router_vpn_entry_modes);$Execution.ItemsSource=@($SpeedLabOptions.execution_choices);SelectSpeedLabChoice $Execution 'local'
+    $EntryMode.ItemsSource=@([pscustomobject]@{id='';name='Use saved entry mode / base'})+@($SpeedLabOptions.router_vpn_entry_modes);$Execution.ItemsSource=@($SpeedLabOptions.execution_choices);SelectSpeedLabChoice $Execution 'local'
     $Node.ItemsSource=NodeItems $Opt.nodes ''; $Entry.ItemsSource=@([pscustomobject]@{id='';display='Direct / no entry';kind=''})+@(NodeItems $Opt.nodes ''); $Exit.ItemsSource=NodeItems $Opt.nodes 'router-vpn'
     if($Node.Items.Count){$Node.SelectedIndex=0};if($Exit.Items.Count-gt1){$Exit.SelectedIndex=1}elseif($Exit.Items.Count){$Exit.SelectedIndex=0}
     $selected=@($Opt.nodes|Where-Object{[bool](SpeedLabValue $_ 'selected' $false)});if($selected.Count-eq1){$Node.SelectedValue=[string]$selected[0].id}

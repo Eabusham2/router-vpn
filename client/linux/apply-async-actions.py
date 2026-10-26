@@ -104,4 +104,10 @@ static void linux_unified_custom_builder_v8(LinuxUnifiedV8 *state) {
         candidates = importlib.util.module_from_spec(candidates_spec)
         candidates_spec.loader.exec_module(candidates)
         text = candidates.apply(text)
+        entry_spec = importlib.util.spec_from_file_location("linux_multihop_entry", Path(__file__).with_name("apply-multihop-entry.py"))
+        if entry_spec is None or entry_spec.loader is None:
+            raise RuntimeError("Missing exact Router entry UI composer")
+        entry = importlib.util.module_from_spec(entry_spec)
+        entry_spec.loader.exec_module(entry)
+        text = entry.apply(text)
     path.write_text(text)

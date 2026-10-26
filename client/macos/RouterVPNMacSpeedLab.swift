@@ -10,7 +10,7 @@ private enum RouterVPNMacSpeedLabPathPolicy {
     static func activeSelection(_ selection: RouterVPNConnectionProfileSelection) -> RouterVPNConnectionProfileSelection {
         var value = selection
         if !value.multihopEnabled {
-            value.entryID = ""; value.exitID = ""; value.exitMode = ""; value.execution = ""
+            value.entryID = ""; value.exitID = ""; value.entryMode = ""; value.exitMode = ""; value.execution = ""
             value.profileTokens = value.profileTokens.filter { $0.key == value.selectedNodeID }
         }
         return value
@@ -91,6 +91,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
     private let runButton = NSButton(title: "Run Speed Lab", target: nil, action: nil)
     private var nodes: [[String: Any]] = []
     private var entryModes: [[String: Any]] = []
+    private var supportedEntryModes: [String] = []
     private var exitModes: [String] = []
     private var currentPath: [String: Any] = [:]
     private var executions: [[String: Any]] = []
@@ -225,7 +226,11 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         guard RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, capturedSelection.selectedNodeID)) == "router-vpn" else {
             throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "The captured multihop profile no longer belongs to a linked Router VPN node."])
         }
+        guard let capturedEntryMode = capturedSelection.entryMode else {
+            throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "The captured entry mode is unavailable. Select the intended entry mode before reopening Speed Lab."])
+        }
         updatingChoices = true; defer { updatingChoices = false }
+        selectPreserving(entryMode, capturedEntryMode)
         selectPreserving(topology, "multihop"); selectPreserving(node, capturedSelection.selectedNodeID)
         selectPreserving(entry, capturedSelection.entryID); selectPreserving(exit, capturedSelection.exitID)
         selectPreserving(exitMode, capturedSelection.exitMode); selectPreserving(execution, capturedSelection.execution)
@@ -250,10 +255,15 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             if currentPath["entry_id"] as? String == selected(entry), currentPath["exit_id"] as? String == selected(exit), let mode = currentPath["exit_mode"] as? String { selectPreserving(exitMode, mode) }
             let choice = saved ? value["multihop_execution"] as? String ?? "local" : "local"
             selectPreserving(execution, choice.isEmpty ? "local" : choice)
+            setEntryModeDefault()
         }
     }
 
     private func setEntryModeDefault() {
+        if selected(topology) == "multihop" {
+            let value = RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node))?["multihop_entry_mode"] as? String ?? ""
+            selectPreserving(entryMode, value); return
+        }
         let value = RouterVPNMacSpeedLabPathPolicy.entryMode(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(node)), RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry)))
         if value.isEmpty { entryMode.selectItem(at: -1) } else { selectPreserving(entryMode, value) }
     }
@@ -309,6 +319,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                     self.updatingChoices = true
                     self.nodes = root["nodes"] as? [[String: Any]] ?? []
                     self.entryModes = root["router_vpn_entry_modes"] as? [[String: Any]] ?? []
+                    self.supportedEntryModes = root["supported_entry_modes"] as? [String] ?? []
                     self.exitModes = root["supported_exit_modes"] as? [String] ?? []
                     self.currentPath = root["current"] as? [String: Any] ?? [:]
                     self.executions = root["execution_choices"] as? [[String: Any]] ?? []
@@ -316,7 +327,9 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
                     self.entry.insertItem(withTitle: "Direct / no entry", at: 0); self.entry.item(at: 0)?.representedObject = ""
                     self.populate(self.mode, values: root["logical_modes"] as? [[String: Any]] ?? [])
                     self.selectPreserving(self.mode, "smart-auto")
-                    self.populate(self.entryMode, values: self.entryModes); self.populate(self.execution, values: self.executions); self.selectPreserving(self.execution, "local")
+                    self.populate(self.entryMode, values: self.entryModes)
+                    self.entryMode.insertItem(withTitle: "Use saved entry mode / base", at: 0); self.entryMode.item(at: 0)?.representedObject = ""
+                    self.populate(self.execution, values: self.executions); self.selectPreserving(self.execution, "local")
                     let selectedNodes = self.nodes.filter { $0["selected"] as? Bool == true }
                     if selectedNodes.count == 1, let id = selectedNodes[0]["id"] as? String { self.selectPreserving(self.node, id) }
                     let selectedNode = RouterVPNMacSpeedLabPathPolicy.find(self.nodes, self.selected(self.node))
@@ -345,7 +358,7 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
         mode.isEnabled = temporary && top == "router"; node.isEnabled = temporary && ["router", "external"].contains(top)
         base.isEnabled = temporary && ["router", "multihop"].contains(top)
         let routerEntry = RouterVPNMacSpeedLabPathPolicy.kind(RouterVPNMacSpeedLabPathPolicy.find(nodes, selected(entry))) == "router-vpn"
-        entryMode.isEnabled = temporary && top == "external" && routerEntry
+        entryMode.isEnabled = temporary && ["multihop", "external"].contains(top) && routerEntry
         execution.isEnabled = temporary && (top == "multihop" || top == "external" && routerEntry)
         let customTime = available && selected(durationMode) == "custom"; minTime.isEnabled = customTime; maxTime.isEnabled = customTime
     }
@@ -398,7 +411,10 @@ private final class RouterVPNMacSpeedLabController: NSWindowController, NSWindow
             guard exitModes.contains(selected(exitMode)) else {
                 throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select an exit transport supported by the installed runtime."])
             }
-            body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution)
+            guard let entryChoice = entryMode.selectedItem?.representedObject as? String, entryChoice.isEmpty || supportedEntryModes.contains(entryChoice) else {
+                throw NSError(domain: "RouterVPNSpeedLab", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select an entry mode supported by the installed runtime, or the saved entry mode / base."])
+            }
+            body["entry_mode"] = entryChoice; body["entry_id"] = selected(entry); body["exit_id"] = selected(exit); body["base"] = selected(base); body["exit_mode"] = selected(exitMode); body["execution"] = selected(execution)
         }
         if top == "external" {
             body["entry_id"] = selected(entry); body["execution"] = selected(execution)

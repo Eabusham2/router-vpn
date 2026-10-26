@@ -87,6 +87,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 	current := map[string]any{"connected": st.Connected, "phase": st.Phase, "router_id": st.RouterID, "mode": st.Mode, "logical_mode": st.LogicalMode, "runtime_mode": st.RuntimeMode, "base": st.Base}
 	if graph, ok := getActiveMultihopGraph(a); ok && st.Connected && st.Mode == "multihop" {
 		current["entry_id"], current["exit_id"], current["exit_mode"] = graph.EntryID, graph.ExitID, graph.ExitMode
+		current["entry_mode"], current["execution"] = graph.EntryMode, graph.Execution
 	}
 	if raw, exists := desktopNodeOwners.Load(a); exists && st.Connected && st.Mode == "external-node" {
 		if launch, ok := raw.(*desktopNodeLaunch); ok && launch != nil && launch.command == command && launch.profileID == st.RouterID && launch.external != nil {
@@ -108,6 +109,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 		"logical_modes":          logicalModes,
 		"raw_modes":              rawModes,
 		"router_vpn_entry_modes": a.externalRouterEntryModes(),
+		"supported_entry_modes":  desktopMultihopEntryModes(),
 		"supported_exit_modes":   desktopMultihopExitModes(),
 		"execution_choices": []map[string]string{
 			{"id": "local", "name": "Local"}, {"id": "server", "name": "Server"}, {"id": "auto", "name": "Compare both"},

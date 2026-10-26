@@ -63,3 +63,50 @@ static void linux_multihop_execution_choices_v22(GtkWidget *combo, const char *s
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), "auto", "Compare both");
     linux_multihop_select_preserving_v22(combo, selected);
 }
+
+static const struct { const char *id; const char *label; } linux_multihop_entries_v23[] = {
+    {"wg", "WireGuard"}, {"awg2-fast", "AWG Fast"}, {"awg2-strong", "AWG Strong"},
+    {"wg-pq", "WG + PQ"}, {"awg2-pq", "AWG + PQ"},
+    {"shadowsocks", "Shadowsocks"}, {"hysteria2", "Hysteria2"},
+    {"reality-vision", "REALITY / Vision"}, {"reality-pq-vision", "PQ REALITY / Vision"},
+    {"reality-xhttp", "REALITY / XHTTP"}, {"naive-h2", "Naive H2"}, {"naive-h3", "Naive H3"},
+    {"ss-v2ray", "SS/V2Ray"}, {"split", "Split"}, {"max", "MAX"},
+    {"max-tls-wg", "Complete MAX TLS / WG"}, {"max-tls-awg", "Complete MAX TLS / AWG"},
+    {"max-quic-wg", "Complete MAX QUIC / WG"}, {"max-quic-awg", "Complete MAX QUIC / AWG"},
+};
+
+static gboolean linux_multihop_entry_supported_v23(const char *mode) {
+    if (mode == NULL) return FALSE;
+    if (!mode[0]) return TRUE; /* The controller resolves the saved mode/base. */
+    for (guint i = 0; i < G_N_ELEMENTS(linux_multihop_entries_v23); i++) {
+        if (strcmp(mode, linux_multihop_entries_v23[i].id) == 0) return TRUE;
+    }
+    return FALSE;
+}
+
+static gboolean linux_multihop_entry_advertised_v23(JsonArray *catalog, const char *mode) {
+    if (!linux_multihop_entry_supported_v23(mode) || catalog == NULL || json_array_get_length(catalog) == 0) return FALSE;
+    if (!mode[0]) {
+        for (guint i = 0; i < G_N_ELEMENTS(linux_multihop_entries_v23); i++) {
+            if (linux_multihop_entry_advertised_v23(catalog, linux_multihop_entries_v23[i].id)) return TRUE;
+        }
+        return FALSE;
+    }
+    guint matches = 0;
+    for (guint i = 0; i < json_array_get_length(catalog); i++) {
+        JsonNode *item = json_array_get_element(catalog, i);
+        if (item != NULL && JSON_NODE_HOLDS_VALUE(item) && json_node_get_value_type(item) == G_TYPE_STRING &&
+            g_strcmp0(json_node_get_string(item), mode) == 0) matches++;
+    }
+    return matches == 1;
+}
+
+static void linux_multihop_entry_choices_v23(GtkWidget *combo, JsonArray *catalog, const char *selected) {
+    gtk_combo_box_text_remove_all(GTK_COMBO_BOX_TEXT(combo));
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), "", "Use saved graph mode / entry base");
+    for (guint i = 0; i < G_N_ELEMENTS(linux_multihop_entries_v23); i++) {
+        if (linux_multihop_entry_advertised_v23(catalog, linux_multihop_entries_v23[i].id))
+            gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(combo), linux_multihop_entries_v23[i].id, linux_multihop_entries_v23[i].label);
+    }
+    linux_multihop_select_preserving_v22(combo, selected);
+}

@@ -18,6 +18,9 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		return multihopSelection{}, err
 	}
 	selection := owner.selection
+	if !nativeMultihopLiveProfilesCurrent(a, selection) {
+		return multihopSelection{}, errors.New("previous multihop node sources were relinked before restoration")
+	}
 	if graph.Execution != "local" && graph.Execution != "server" ||
 		mtuProfileSnapshotToken(control) != mtuProfileSnapshotToken(selection.Control) ||
 		mtuProfileSnapshotToken(entry) != mtuProfileSnapshotToken(selection.Entry) ||
@@ -52,8 +55,8 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 		return multihopSelection{}, err
 	}
 	current, err := capturedNativeMultihopRuntime(a, command, graph)
-	if err != nil || current != owner {
-		return multihopSelection{}, errors.New("multihop owner changed while capturing live MTU restoration")
+	if err != nil || current != owner || !nativeMultihopLiveProfilesCurrent(a, selection) {
+		return multihopSelection{}, errors.New("multihop owner or node sources changed while capturing live MTU restoration")
 	}
 	if capturedRelay != nil {
 		raw, present := desktopRelays.Load(a)
@@ -68,4 +71,24 @@ func captureNativeMultihopRestore(a *app, command *exec.Cmd, graph activeMultiho
 	selection.Entry = common.CloneRouterProfile(selection.Entry)
 	selection.Exit = common.CloneRouterProfile(selection.Exit)
 	return selection, nil
+}
+
+// The already-proved source stays frozen, but a same-ID relink must disqualify
+// a new temporary-test restore capture. Check the actual catalog under its
+// lock; an older caller snapshot alone cannot bless replacement credentials.
+// The existing MTU identity excludes only the persisted EffectiveMTU value;
+// restoration uses the owned live readback, never that saved measurement.
+func nativeMultihopLiveProfilesCurrent(a *app, selection multihopSelection) bool {
+	if a == nil || selection.Native == nil {
+		return false
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	for _, captured := range []common.RouterProfile{selection.Control, selection.Entry, selection.Exit} {
+		current, ok := a.profileByIDLocked(captured.ID)
+		if !ok || mtuProfileSnapshotToken(current) != mtuProfileSnapshotToken(captured) {
+			return false
+		}
+	}
+	return true
 }

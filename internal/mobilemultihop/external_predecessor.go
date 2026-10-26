@@ -419,11 +419,7 @@ func (p *externalPredecessor) mergeAs(graph, tun, exit map[string]any, entryTag 
 	if entryTag != externalEntryTag && entryTag != "entry-wg" {
 		return bad
 	}
-	names := map[string]string{}
-	for tag := range p.nodes {
-		names[tag] = predecessorNamespace("node", tag)
-	}
-	names[p.finalTag] = entryTag
+	names := p.nodeOwnerNames(entryTag)
 	dnsNames := map[string]string{}
 	for tag := range p.resolvers {
 		dnsNames[tag] = predecessorNamespace("dns", tag)

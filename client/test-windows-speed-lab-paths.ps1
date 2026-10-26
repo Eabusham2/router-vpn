@@ -4,6 +4,11 @@ Set-StrictMode -Version Latest
 $ShellSource=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-SpeedLab.ps1')
 . ([ScriptBlock]::Create($ShellSource))
 $Source=Add-RouterVPNSpeedLabWindowsShell 'function ShowUnifiedPerformance{}'
+$MainSource=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-Product-v2.ps1')
+$MainAst=[ScriptBlock]::Create($MainSource).Ast
+$EntryFunctions=@($MainAst.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-eq'MultihopEntryModeChoice'},$true))
+if($EntryFunctions.Count-ne1){throw 'Shipping main entry choice helper changed.'};. ([ScriptBlock]::Create($EntryFunctions[0].Extent.Text))
+[xml]$EntryMarkup=[regex]::Match($MainSource,'<ComboBox Name="MultihopEntryModeCombo"[^>]*>.*?</ComboBox>','Singleline').Value
 $Ast=[ScriptBlock]::Create($Source).Ast
 $Functions=@($Ast.FindAll({param($N)$N-is[System.Management.Automation.Language.FunctionDefinitionAst]-and$N.Name-ne'ShowUnifiedSpeedLab'-and$N.Name-ne'ShowUnifiedPerformance'-and$N.Name-ne'ShowUnifiedAdvancedPerformance'},$true))
 foreach($F in $Functions){. ([ScriptBlock]::Create($F.Extent.Text))}
@@ -48,6 +53,7 @@ $Opt=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Output 'speed-lab-
 $RouterCombo=Combo @($Opt.nodes);$RouterCombo.SelectedValue='exit'
 $MultihopEntryCombo=Combo @($Opt.nodes);$MultihopEntryCombo.SelectedValue='entry'
 $MultihopExitCombo=Combo @($Opt.nodes);$MultihopExitCombo.SelectedValue='exit-router'
+$MultihopEntryModeCombo=Combo (Tags @($EntryMarkup.ComboBox.ComboBoxItem|ForEach-Object{[string]$_.Tag})) 'Tag'
 $MultihopExitModeCombo=Combo (Tags @($Xml.SelectNodes('//*[@Name="ExitMode"]/*')|ForEach-Object{[string]$_.Tag})) 'Tag'
 $MainFields=@{UnifiedMultihop=[pscustomobject]@{IsChecked=$true};UnifiedExecution=(Combo (Tags @('local','server','auto')) 'Tag')}
 function Control([string]$Name){return $MainFields[$Name]}
@@ -62,6 +68,7 @@ function StartUnifiedApiAsync($Label,$Path,$Method,$Body,$Timeout,$Success,$Fail
 & $Initializer $Opt
 Check ($Node.SelectedValue-ceq'exit'-and$Entry.SelectedValue-ceq'entry'-and$EntryMode.SelectedValue-ceq'awg2-strong'-and$Execution.SelectedValue-ceq'auto') 'Saved external path was replaced by unrelated defaults.'
 Check ($SpeedLabOptions.router_vpn_entry_modes.Count-eq19) 'Entry mode catalog was reduced.'
+Check ((@($MultihopEntryModeCombo.Items|ForEach-Object{[string]$_.Tag}|Where-Object{$_})-join',')-ceq(@($SpeedLabOptions.supported_entry_modes)-join',')) 'Main and runtime entry mode catalogs differ.'
 $Count=0
 function Emit([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-ne$script:Captured) ('Actual Run rejected '+$Name+': '+$Detail.Text);Check ($script:Captured.expected_selected_node_id-ceq$CapturedSpeedLabSelection.selectedNodeID) 'Run lost its captured main selection.';foreach($id in @($CapturedSpeedLabSelection.selectedNodeID,$script:Captured['node_id'],$script:Captured['entry_id'],$script:Captured['exit_id'])|Where-Object{$_}){Check ($script:Captured.expected_profile_tokens[$id]-cmatch'^[a-f0-9]{64}$') ('Run omitted exact identity for '+$id)};[IO.File]::WriteAllText((Join-Path $Output ($Name+'.json')),($script:Captured|ConvertTo-Json -Depth 12),[Text.UTF8Encoding]::new($false));$script:Count++}
 function Reject([string]$Name){$script:Captured=$null;& $RunCallback;Check ($null-eq$script:Captured) ('Invalid path reached controller: '+$Name);$script:Count++}
@@ -82,6 +89,10 @@ $Topology.SelectedValue='multihop';SpeedLabPathChanged 'topology';$Entry.Selecte
 foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-'+$E)}
 Check ((@($ExitMode.Items|ForEach-Object{[string]$_.Tag})-join',')-ceq(@($SpeedLabOptions.supported_exit_modes)-join',')) 'UI and native exit catalogs differ.'
 foreach($M in @($SpeedLabOptions.supported_exit_modes)){$ExitMode.SelectedValue=$M;foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-'+$M+'-'+$E)}}
+$ExitMode.SelectedValue='shadowsocks'
+foreach($M in @($SpeedLabOptions.supported_entry_modes)){$EntryMode.SelectedValue=$M;foreach($E in @('local','server','auto')){$Execution.SelectedValue=$E;Emit ('speed-lab-multihop-entry-'+$M+'-'+$E);Check ($script:Captured.entry_mode-ceq$M) 'Temporary entry mode changed before submission.'}}
+$EntryMode.SelectedValue='missing-entry-mode';Reject 'unknown Router entry mode';$EntryMode.SelectedValue='wg-pq'
+$SavedEntries=$SpeedLabOptions.supported_entry_modes;$SpeedLabOptions.supported_entry_modes=@($SavedEntries|Where-Object{$_-cne'wg-pq'});Reject 'runtime unavailable Router entry';$SpeedLabOptions.supported_entry_modes=$SavedEntries;$EntryMode.SelectedValue=''
 $ExitMode.SelectedValue='removed-exit-mode';Reject 'unknown exit transport';$ExitMode.SelectedValue='naive-h3'
 $OriginalModes=$SpeedLabOptions.supported_exit_modes;$SpeedLabOptions.supported_exit_modes=@($OriginalModes|Where-Object{$_-cne'naive-h3'});Reject 'runtime unavailable exit';$SpeedLabOptions.supported_exit_modes=$OriginalModes
 $SpeedLabOptions.current=[pscustomobject]@{entry_id='entry';exit_id='exit-router';exit_mode='reality-pq-vision'};SetSpeedLabDefaults;Check ((SelectedTag $ExitMode)-ceq'reality-pq-vision') 'Matching current graph lost its exact exit mode.'
@@ -99,6 +110,15 @@ foreach($M in @($SpeedLabOptions.supported_exit_modes)){foreach($E in @('local',
  Check ($D.Tag-ceq'ready'-and(SelectedTag $Topology)-ceq'multihop'-and$Entry.SelectedValue-ceq'entry'-and$Exit.SelectedValue-ceq'exit-router'-and(SelectedTag $ExitMode)-ceq$M-and$Execution.SelectedValue-ceq$E) 'Disconnected profile snapshot changed before Speed Lab.'
  Emit ('speed-lab-multihop-'+$M+'-'+$E)
 }}
+foreach($M in @($SpeedLabOptions.supported_entry_modes)){foreach($E in @('local','server','auto')){
+ $MultihopEntryModeCombo.SelectedValue=$M;$MultihopExitModeCombo.SelectedValue='shadowsocks';$MainFields.UnifiedExecution.SelectedValue=$E;$CapturedSpeedLabSelection=CaptureSpeedLabSelection
+ $D.Tag='owned-options';&$Initializer $RouterOpt
+ Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq$M) 'Captured main entry mode changed while options loaded.'
+ Emit ('speed-lab-main-entry-'+$M+'-'+$E);Check ($script:Captured.entry_mode-ceq$M) 'Captured main entry mode changed before submission.'
+}}
+$MultihopEntryModeCombo.SelectedValue='';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $RouterOpt
+Check ($D.Tag-ceq'ready'-and$EntryMode.SelectedValue-ceq'') 'Saved entry/base fallback disappeared.'
+$MultihopEntryModeCombo.SelectedValue='reality-xhttp';Reject 'main entry changed after Ready';$MultihopEntryModeCombo.SelectedValue=''
 # Readiness does not authorize a later replacement of the captured selection.
 $readyMode=[string](SelectedTag $MultihopExitModeCombo);$MultihopExitModeCombo.SelectedValue='reality-xhttp';Reject 'main mode changed after Ready';$MultihopExitModeCombo.SelectedValue=$readyMode
 $RouterCombo.SelectedValue='exit-router';Reject 'main node changed after Ready';$RouterCombo.SelectedValue='entry'
@@ -109,6 +129,8 @@ Emit ('speed-lab-multihop-'+$readyMode+'-'+[string]$Execution.SelectedValue)
 $MultihopExitModeCombo.SelectedValue='naive-h2';$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$before=[string](SelectedTag $ExitMode)
 $MultihopExitModeCombo.SelectedValue='reality-xhttp';$D.Tag='owned-options';&$Initializer $RouterOpt
 Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled-and(SelectedTag $ExitMode)-ceq$before) 'Replacement profile was installed by stale options.';Reject 'stale options owner'
+$CapturedSpeedLabSelection=CaptureSpeedLabSelection;$MultihopEntryModeCombo.SelectedValue='max-quic-wg';$D.Tag='owned-options';&$Initializer $RouterOpt
+Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled) 'Changed main entry accepted old options.';$MultihopEntryModeCombo.SelectedValue=''
 $CapturedSpeedLabSelection=CaptureSpeedLabSelection;$RouterCombo.SelectedValue='exit-router';$D.Tag='owned-options';&$Initializer $RouterOpt
 Check ($D.Tag-ceq'error'-and-not$Run.IsEnabled) 'Changed main node accepted old options.';$RouterCombo.SelectedValue='entry'
 $CapturedSpeedLabSelection=CaptureSpeedLabSelection;$D.Tag='owned-options';&$Initializer $Opt

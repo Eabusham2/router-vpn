@@ -5,6 +5,41 @@ import MapKit
 let routerVPNProductBaseURL = URL(string: "http://127.0.0.1:8788")!
 let routerVPNProductContractVersion = 3
 
+enum RouterVPNNodeEntryModes {
+    static let choices: [(id: String, title: String)] = [
+        ("", "Use saved entry mode / base"),
+        ("wg", "WireGuard"),
+        ("awg2-fast", "AWG Fast"),
+        ("awg2-strong", "AWG Strong"),
+        ("wg-pq", "WG + PQ"),
+        ("awg2-pq", "AWG + PQ"),
+        ("shadowsocks", "Shadowsocks"),
+        ("hysteria2", "Hysteria2"),
+        ("reality-vision", "REALITY Vision"),
+        ("reality-pq-vision", "PQ REALITY Vision"),
+        ("reality-xhttp", "REALITY XHTTP"),
+        ("naive-h2", "Naive H2"),
+        ("naive-h3", "Naive H3"),
+        ("ss-v2ray", "SS/V2Ray"),
+        ("split", "Split"),
+        ("max", "MAX TCP/UDP"),
+        ("max-tls-wg", "MAX TLS / WG + PQ"),
+        ("max-tls-awg", "MAX TLS / AWG + PQ"),
+        ("max-quic-wg", "MAX QUIC / WG + PQ"),
+        ("max-quic-awg", "MAX QUIC / AWG + PQ"),
+    ]
+    static func id(at index: Int) -> String? {
+        choices.indices.contains(index) ? choices[index].id : nil
+    }
+    static func index(for id: String) -> Int? { choices.firstIndex { $0.id == id } }
+    static func require(index: Int) throws -> String {
+        guard let value = id(at: index) else {
+            throw NSError(domain: "RouterVPN.Multihop", code: 1, userInfo: [NSLocalizedDescriptionKey: "Select a supported entry mode."])
+        }
+        return value
+    }
+}
+
 enum RouterVPNNodeExitModes {
     static let choices: [(id: String, title: String)] = [
         ("shadowsocks", "Shadowsocks"), ("hysteria2", "Hysteria2"),
@@ -111,6 +146,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     let modePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let basePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopEntryPopup = NSPopUpButton(frame: .zero, pullsDown: false)
+    let multihopEntryModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopExitPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopExitModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let multihopExecutionPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -121,7 +157,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     var multihopProgressDeadline = Date.distantPast
     var multihopProgressLastID = ""
     var multihopProgressOldID = ""
-    let multihopComparisonLabel = NSTextField(wrappingLabelWithString: "Compare: (last-node RTT + external-server RTT) / 2; either timeout rejects the candidate.")
+    let multihopComparisonLabel = NSTextField(wrappingLabelWithString: "Compare: (last-node response time + external-server response time) / 2; either timeout rejects the candidate.")
     let dnsModePopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsProtocolPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     let dnsPresetPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -214,6 +250,8 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         let exit = NSStackView(); exit.orientation = .vertical; exit.addArrangedSubview(label("Exit node")); exit.addArrangedSubview(multihopExitPopup)
         let mode = NSStackView(); mode.orientation = .vertical; mode.addArrangedSubview(label("Exit transport")); multihopExitModePopup.addItems(withTitles: RouterVPNNodeExitModes.choices.map { $0.title }); multihopExitModePopup.selectItem(at: 0); mode.addArrangedSubview(multihopExitModePopup)
         selectors.addArrangedSubview(entry); selectors.addArrangedSubview(exit); selectors.addArrangedSubview(mode); s.addArrangedSubview(selectors)
+        let entryTransport = NSStackView(); entryTransport.orientation = .horizontal; entryTransport.spacing = 8
+        entryTransport.addArrangedSubview(label("Entry mode")); entryTransport.addArrangedSubview(multihopEntryModePopup); s.addArrangedSubview(entryTransport)
         configureMultihopExecution(); s.addArrangedSubview(multihopExecutionPopup); s.addArrangedSubview(multihopComparisonLabel)
         let row = NSStackView(); row.orientation = .horizontal; row.addArrangedSubview(button("Connect real multihop", #selector(connectMultihop))); row.addArrangedSubview(button("Refresh multihop readiness", #selector(refreshAdvancedAction))); row.addArrangedSubview(button("Retest MTU", #selector(retestMTU))); row.addArrangedSubview(button("Emergency stop", #selector(emergencyStop))); s.addArrangedSubview(row); s.addArrangedSubview(scroll(advancedText)); return s
     }
@@ -265,6 +303,13 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         task.resume()
     }
     func configureMultihopExecution() {
+        if multihopEntryModePopup.numberOfItems == 0 {
+            multihopEntryModePopup.addItems(withTitles: RouterVPNNodeEntryModes.choices.map { $0.title })
+            multihopEntryModePopup.selectItem(at: 0)
+        }
+        multihopEntryModePopup.target = self
+        multihopEntryModePopup.action = #selector(connectionProfileHopChanged)
+        multihopEntryModePopup.toolTip = "Keep the saved entry mode or choose its complete transport. The entry base supplies the WG/AWG fallback when no mode was saved."
         multihopEntryPopup.target = self
         multihopEntryPopup.action = #selector(connectionProfileEntryChanged)
         multihopExitPopup.target = self
@@ -294,7 +339,7 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
     func multihopComparisonSummary(_ status: [String: Any]) -> String {
         multihopProgressLastID = (status["comparison"] as? [String: Any])?["id"] as? String ?? ""
         guard let comparison = status["comparison"] as? [String: Any] else {
-            return "Compare: (last-node RTT + external-server RTT) / 2; either timeout rejects the candidate."
+            return "Compare: (last-node response time + external-server response time) / 2; either timeout rejects the candidate."
         }
         var lines = ["Execution: \(status["execution"] as? String ?? "none") • \(comparison["stage"] as? String ?? "starting")"]
         for item in comparison["measurements"] as? [[String: Any]] ?? [] {
@@ -317,12 +362,13 @@ final class ProductWindowController: NSWindowController, MKMapViewDelegate {
         guard ei >= 0, xi >= 0, ei < multihopNodeIDs.count, xi < multihopNodeIDs.count else { appendHelp("Choose both multihop nodes."); return }
         let entryID = multihopNodeIDs[ei], exitID = multihopNodeIDs[xi]
         guard entryID != exitID else { appendHelp("Multihop entry and exit nodes must be different."); return }
+        guard let entryMode = RouterVPNNodeEntryModes.id(at: multihopEntryModePopup.indexOfSelectedItem) else { appendHelp("Select a supported entry mode."); return }
         guard let exitMode = RouterVPNNodeExitModes.id(at: multihopExitModePopup.indexOfSelectedItem) else { appendHelp("Select a supported exit transport."); return }
         let execution = multihopExecutionChoice()
         let base = multihopBaseChoice()
         multihopComparisonLabel.stringValue = execution == "auto" ? "Comparing local and server paths; timed-out probes are excluded…" : "Starting \(execution) multihop…"
         startMultihopProgress()
-        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
+        asyncAction { defer { DispatchQueue.main.async { self.stopMultihopProgress() } }; return String(data: try self.api.request("/api/multihop/connect", method: "POST", body: ["entry_id": entryID, "exit_id": exitID, "base": base, "entry_mode": entryMode, "exit_mode": exitMode, "execution": execution], timeout: 180), encoding: .utf8) ?? "Multihop connected" }
     }
     func multihopBaseChoice() -> String { ["auto", "wg", "awg"][max(0, min(basePopup.indexOfSelectedItem, 2))] }
     func selectedNodeID() -> String? {

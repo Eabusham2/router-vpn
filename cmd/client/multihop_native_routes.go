@@ -75,9 +75,9 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if strings.TrimSpace(entry.Endpoint) == "" || strings.TrimSpace(exit.Endpoint) == "" {
 		return multihopSelection{}, errors.New("both multihop nodes need public endpoints")
 	}
-	base := resolveMultihopEntryBase(control, entry, q.Base)
-	if base != "wg" && base != "awg" {
-		return multihopSelection{}, errors.New("native desktop multihop requires a captured WireGuard or AmneziaWG entry")
+	entryMode, base, err := resolveNativeMultihopEntryMode(control, entry, q.EntryMode, q.Base)
+	if err != nil {
+		return multihopSelection{}, err
 	}
 	exitMode := strings.TrimSpace(q.ExitMode)
 	if exitMode == "auto" && q.Execution == "auto" {
@@ -89,7 +89,7 @@ func resolveNativeMultihopSelection(control common.RouterProfile, profiles []com
 	if !mobilemultihop.NodeMultihopExitMode(exitMode) {
 		return multihopSelection{}, errors.New("native desktop multihop requires a supported complete exit transport")
 	}
-	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, ExitMode: exitMode}, nil
+	return multihopSelection{Control: control, Entry: entry, Exit: exit, Base: base, EntryMode: entryMode, ExitMode: exitMode}, nil
 }
 
 func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
@@ -131,6 +131,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"entry_id":                   entryID,
 		"exit_id":                    exitID,
 		"configured_entry_id":        control.MultihopEntryID,
+		"configured_entry_mode":      control.MultihopEntryMode,
 		"configured_exit_id":         control.MultihopExitID,
 		"actual_entry_id":            actualEntry,
 		"actual_exit_id":             actualExit,
@@ -139,6 +140,7 @@ func (a *app) nativeMultihopStatus(w http.ResponseWriter, r *http.Request) {
 		"execution":                  graph.Execution,
 		"supported_executions":       []string{"local", "server", "auto"},
 		"supported_entry_bases":      []string{"wg", "awg"},
+		"supported_entry_modes":      mobilemultihop.NodeMultihopEntryModes(),
 		"supported_exit_modes":       mobilemultihop.NodeMultihopExitModes(),
 		"standard_exit_capabilities": externalProfileProtocolCapabilities(),
 		"standard_exits":             standard,
