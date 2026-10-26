@@ -276,11 +276,13 @@ final class RouterVPNModel: ObservableObject {
         socksPassword = ""
         basePreference = "auto"
         baseFallback = false
+        homeLANAccess = true
+        homeLANCIDRs = []
         if let selected = decoded.routerProfiles.first(where: { $0.id == decoded.selectedRouterID }) ?? decoded.routerProfiles.first {
             basePreference = selected.baseTunnel ?? "auto"
             baseFallback = selected.baseFallback ?? false
-            if let access = selected.homeLANAccess { homeLANAccess = access }
-            if let cidrs = selected.homeLANCIDRs, !cidrs.isEmpty { homeLANCIDRs = cidrs }
+            homeLANAccess = selected.homeLANAccess ?? true
+            homeLANCIDRs = selected.homeLANCIDRs ?? []
         }
         let runnable = IOSRuntimeSelector.runnableModes(in: decoded)
         if !runnable.contains(where: { $0.id == selectedLogicalMode }) { selectedLogicalMode = runnable.first?.id ?? "base-raw" }

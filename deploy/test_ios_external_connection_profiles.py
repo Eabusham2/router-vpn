@@ -37,6 +37,11 @@ BOUNDARIES = r'''
  func bundleData(containing id:String,current:ClientBundle?)->Data? {bundles[id]}
 }
 enum TestFailure {static var error:NSError {NSError(domain:"ExternalConnectionFixture",code:1)}}
+enum IOSExternalExecution {
+ // Tor snapshots run the real native parser in test_ios_tor_connection_profiles.
+ // This ordinary-exit fixture must never call that path accidentally.
+ static func validateDeviceDraft(_ profile:RouterProfile)throws {throw TestFailure.error}
+}
 @MainActor final class RouterVPNModel {
  var bundle:ClientBundle?, allNodeProfiles:[RouterProfile]=[], profileMutationBlocked=false
  var imports=0, graphChecks=0, failGraph=false, failImport=false

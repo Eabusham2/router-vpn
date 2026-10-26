@@ -4,7 +4,7 @@ import SwiftUI
 
 private let iosConnectionProfilesKey = "routervpn.connection-profiles.v1"
 private let iosConnectionProfilesFile = "connection-profiles.json"
-private let iosConnectionProfilesSchemaVersion = 4
+private let iosConnectionProfilesSchemaVersion = 5
 private let iosConnectionProfilesMaximumBytes = 512 * 1024
 private let iosConnectionModeKey = "routervpn.unified.mode.v1"
 private let iosConnectionCustomPresetsKey = "routervpn.unified.custom-presets.v1"
@@ -17,7 +17,12 @@ private struct IOSConnectionCustomPresetMirror: Codable {
 private struct IOSConnectionSafePreferences: Codable, Hashable {
     static let routerHopModes: Set<String> = ["wg", "awg2-fast", "awg2-strong", "wg-pq", "awg2-pq", "shadowsocks", "hysteria2", "reality-vision", "reality-pq-vision", "reality-xhttp", "max-tls-wg", "max-tls-awg", "max-quic-wg", "max-quic-awg", "naive-h2", "naive-h3", "ss-v2ray", "split", "max"]
     static let ordinaryExternalModes: Set<String> = ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"]
+    static let torModes: Set<String> = ["tor", "tor-bridge"]
+    static let externalModes = ordinaryExternalModes.union(torModes)
     var homeLANAccess: Bool
+    // nil is a legacy record that did not capture ranges. New snapshots use
+    // an empty array for the default ranges, so Load can restore that choice.
+    var homeLANCIDRs: [String]? = nil
     var killSwitch: Bool
     var killSwitchPolicy: String
     var ipv6Mode: String
@@ -47,7 +52,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var multihopExecution: String? = nil
 
     enum CodingKeys: String, CodingKey {
-        case homeLANAccess, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
+        case homeLANAccess, homeLANCIDRs, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
         case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, jumboTUN
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath, dnsBootstrap
         case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
@@ -58,6 +63,7 @@ private extension IOSConnectionSafePreferences {
     init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         homeLANAccess = try c.decodeIfPresent(Bool.self, forKey: .homeLANAccess) ?? true
+        homeLANCIDRs = try c.decodeIfPresent([String].self, forKey: .homeLANCIDRs)
         killSwitch = try c.decodeIfPresent(Bool.self, forKey: .killSwitch) ?? false
         killSwitchPolicy = try c.decodeIfPresent(String.self, forKey: .killSwitchPolicy) ?? (killSwitch ? "always" : "off")
         ipv6Mode = try c.decodeIfPresent(String.self, forKey: .ipv6Mode) ?? "on"
@@ -86,7 +92,7 @@ private extension IOSConnectionSafePreferences {
         multihopExitID = try c.decodeIfPresent(String.self, forKey: .multihopExitID)
         multihopExitMode = try c.decodeIfPresent(String.self, forKey: .multihopExitMode)
         if let mode = multihopExitMode {
-            guard Self.routerHopModes.union(Self.ordinaryExternalModes).contains(mode) else {
+            guard Self.routerHopModes.union(Self.externalModes).contains(mode) else {
                 throw DecodingError.dataCorruptedError(forKey: .multihopExitMode, in: c, debugDescription: "Unknown multihop exit transport")
             }
         }
@@ -105,7 +111,9 @@ private struct IOSConnectionProfileRecord: Identifiable, Codable, Hashable {
     var preferences: IOSConnectionSafePreferences?
     var updatedAt: Date
     // These public identifiers bind new external snapshots to the imported
-    // exit. Keys, passwords, private node files and tokens remain in its store.
+    // exit. Tor explicitly retains an empty fixed IP and uses fresh dynamic
+    // exit proof when connecting. Bridge lines, keys, private files and tokens
+    // remain in the linked node's private store.
     var externalProtocol: String? = nil
     var externalPublicIP: String? = nil
 
@@ -158,7 +166,7 @@ private enum IOSConnectionProfileStore {
                 return sorted(values)
             }
             // The pre-v4 private store was a raw array. Treat that exact shape as
-            // known schema v1, validate it fully, then atomically rewrite v4.
+            // known schema v1, validate it fully, then atomically rewrite v5.
             let values = try validateStoredProfiles(decoder.decode([IOSConnectionProfileRecord].self, from: data))
             try persist(values)
             return sorted(values)
@@ -187,16 +195,18 @@ private enum IOSConnectionProfileStore {
             let mode = try normalizeMode(UserDefaults.standard.string(forKey: iosConnectionModeKey) ?? "smart-auto")
             selection = (mode, try customLayers(for: mode))
         }
-        let ordinaryExternal = selected.normalizedNodeKind == "external" && IOSConnectionSafePreferences.ordinaryExternalModes.contains(selected.external?.protocolName ?? "")
-        if ordinaryExternal && selected.external?.matchesStartLayer(selected.startLayer) != true { throw issue("The selected external Start Layer no longer matches its private node settings.") }
+        let completeExternal = selected.normalizedNodeKind == "external" && IOSConnectionSafePreferences.externalModes.contains(selected.external?.protocolName ?? "")
+        let torExternal = completeExternal && IOSConnectionSafePreferences.torModes.contains(selected.external?.protocolName ?? "")
+        if completeExternal && selected.external?.matchesStartLayer(selected.startLayer) != true { throw issue("The selected external Start Layer no longer matches its private node settings.") }
         let prefs: IOSConnectionSafePreferences?
-        if selected.normalizedNodeKind == "router-vpn" || ordinaryExternal {
+        if selected.normalizedNodeKind == "router-vpn" || completeExternal {
             if selected.multihopEnabled == true {
                 guard let bundle = model.bundle else { throw issue("The selected multihop bundle is missing.") }
                 _ = try model.iosMultihopEntryBundle(for: bundle)
             }
             prefs = IOSConnectionSafePreferences(
                 homeLANAccess: selected.homeLANAccess ?? true,
+                homeLANCIDRs: selected.homeLANCIDRs ?? [],
                 killSwitch: selected.killSwitch ?? false,
                 killSwitchPolicy: (selected.killSwitchPolicy ?? (selected.killSwitch == true ? "always" : "off")).lowercased(),
                 ipv6Mode: (selected.ipv6Mode ?? "on").lowercased(),
@@ -220,10 +230,10 @@ private enum IOSConnectionProfileStore {
                 dnsBootstrap: selected.dnsBootstrap,
                 multihopEnabled: selected.multihopEnabled ?? false,
                 multihopEntryID: selected.multihopEntryID,
-                multihopEntryMode: selected.multihopEntryMode,
+                multihopEntryMode: selected.multihopEntryMode ?? "wg",
                 multihopExitID: selected.multihopExitID,
                 multihopExitMode: selected.multihopExitMode,
-                multihopExecution: selected.multihopExecution
+                multihopExecution: selected.multihopExecution ?? "local"
             )
         } else {
             prefs = nil
@@ -231,9 +241,15 @@ private enum IOSConnectionProfileStore {
         let record = IOSConnectionProfileRecord(id: id ?? UUID().uuidString.lowercased(), name: name, nodeID: selected.id,
                                           nodeKind: selected.normalizedNodeKind, mode: selection.mode,
                                           customLayers: selection.layers, preferences: prefs, updatedAt: Date(),
-                                          externalProtocol: ordinaryExternal ? selected.external?.protocolName : nil,
-                                          externalPublicIP: ordinaryExternal ? selected.external?.expectedPublicIP : nil)
-        return try validateStoredProfiles([record])[0]
+                                          externalProtocol: completeExternal ? selected.external?.protocolName : nil,
+                                          externalPublicIP: completeExternal ? selected.external?.expectedPublicIP : nil)
+        let validated = try validateStoredProfiles([record])[0]
+        if torExternal, let captured = validated.preferences {
+            // Run the shipping Tor parser on the exact normalized preferences
+            // that will be saved, without starting a circuit or claiming proof.
+            try IOSExternalExecution.validateDeviceDraft(applying(captured, to: selected))
+        }
+        return validated
     }
 
     static func add(model: RouterVPNModel, name: String) throws -> IOSConnectionProfileRecord {
@@ -275,6 +291,9 @@ private enum IOSConnectionProfileStore {
                 }
                 profile = applying(prefs, to: profile)
                 guard profile.external?.matchesStartLayer(profile.startLayer) == true else { throw issue("The saved Start Layer no longer matches this private external node. Restore its provisioned layer or update the connection profile.") }
+                if IOSConnectionSafePreferences.torModes.contains(profile.external?.protocolName ?? "") {
+                    try IOSExternalExecution.validateDeviceDraft(profile)
+                }
                 bundle.routerProfiles[index] = profile
                 bundle.selectedRouterID = saved.nodeID
                 bundle.profileSchemaVersion = max(bundle.profileSchemaVersion, 4)
@@ -317,6 +336,7 @@ private enum IOSConnectionProfileStore {
     private static func applying(_ prefs: IOSConnectionSafePreferences, to source: RouterProfile) -> RouterProfile {
         var profile = source
         profile.homeLANAccess = prefs.homeLANAccess
+        if let ranges = prefs.homeLANCIDRs { profile.homeLANCIDRs = ranges }
         profile.killSwitch = prefs.killSwitch
         profile.killSwitchPolicy = prefs.killSwitchPolicy
         profile.ipv6Mode = prefs.ipv6Mode
@@ -393,13 +413,16 @@ private enum IOSConnectionProfileStore {
                     throw issue("External connection profile contains Router-only saved policy.")
                 }
                 if let preferences = value.preferences {
-                    guard let protocolName = record.externalProtocol, IOSConnectionSafePreferences.ordinaryExternalModes.contains(protocolName),
+                    guard let protocolName = record.externalProtocol, IOSConnectionSafePreferences.externalModes.contains(protocolName),
                           let address = record.externalPublicIP, address.count <= 64,
-                          address == address.trimmingCharacters(in: .whitespacesAndNewlines), !address.contains("%"),
-                          IPv4Address(address) != nil || IPv6Address(address) != nil else {
+                          address == address.trimmingCharacters(in: .whitespacesAndNewlines), !address.contains("%") else {
                         throw issue("External connection profile has no exact imported protocol and public exit identity.")
                     }
-                    record.preferences = try validatePreferences(preferences, external: true)
+                    let tor = IOSConnectionSafePreferences.torModes.contains(protocolName)
+                    guard tor ? address.isEmpty : (IPv4Address(address) != nil || IPv6Address(address) != nil) else {
+                        throw issue("External connection profile must retain its exact fixed or dynamic exit identity.")
+                    }
+                    record.preferences = try validatePreferences(preferences, external: true, tor: tor)
                     if record.preferences?.startLayer != "off" && !ExternalNodeConfig.serverExecutionProtocols.contains(protocolName) {
                         throw issue("Saved external Start Layer requires a supported provisioned exit transport.")
                     }
@@ -420,8 +443,13 @@ private enum IOSConnectionProfileStore {
         return validated
     }
 
-    private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false) throws -> IOSConnectionSafePreferences {
+    private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false) throws -> IOSConnectionSafePreferences {
         var p = value
+        if let ranges = p.homeLANCIDRs {
+            guard ranges.count <= 32, ranges.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 && !$0.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f }) }) else {
+                throw issue("Connection profile contains invalid saved LAN ranges.")
+            }
+        }
         p.killSwitchPolicy = p.killSwitchPolicy.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
         guard ["off", "on-connect", "always"].contains(p.killSwitchPolicy) || (external && p.killSwitchPolicy == "strict") else { throw issue("Connection profile contains an invalid kill-switch policy.") }
         // External startup also honors the independently imported Boolean.
@@ -445,8 +473,8 @@ private enum IOSConnectionProfileStore {
             guard let entry = p.multihopEntryID, let exit = p.multihopExitID, entry != exit,
                   [entry, exit].allSatisfy({ $0.range(of: "\\A[A-Za-z0-9._-]{1,128}\\z", options: .regularExpression) != nil }),
                   let mode = p.multihopExitMode,
-                  (external ? IOSConnectionSafePreferences.ordinaryExternalModes : IOSConnectionSafePreferences.routerHopModes).contains(mode),
-                  IOSConnectionSafePreferences.routerHopModes.union(external ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
+                  (external ? IOSConnectionSafePreferences.externalModes : IOSConnectionSafePreferences.routerHopModes).contains(mode),
+                  IOSConnectionSafePreferences.routerHopModes.union(external && !tor ? IOSConnectionSafePreferences.ordinaryExternalModes : []).contains(p.multihopEntryMode ?? "wg") else {
                 throw issue("Saved multihop requires distinct linked entry/exit ids and a supported exit transport.")
             }
         }
@@ -471,7 +499,7 @@ private enum IOSConnectionProfileStore {
                   p.dnsPath.isEmpty || (p.dnsPath.hasPrefix("/") && !p.dnsPath.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f })) else {
                 throw issue("External connection profile contains an invalid captured DNS transport, port or path.")
             }
-            if p.dnsMode == "home", !p.multihopEnabled { throw issue("Home AdGuard requires a captured Router VPN entry for an ordinary external exit.") }
+            if p.dnsMode == "home", !p.multihopEnabled, !tor { throw issue("Home AdGuard requires a captured Router VPN entry for an ordinary external exit.") }
             if ["custom", "dot", "doh", "doh3"].contains(p.dnsMode), p.dnsHost.isEmpty { throw issue("External connection profile requires the selected resolver host.") }
             if p.dnsMode == "custom", p.dnsProtocol.isEmpty { throw issue("External Custom DNS requires its explicit saved transport.") }
             // The shared compiler owns preset defaults and actual DNS proof.
@@ -612,6 +640,10 @@ struct IOSConnectionProfilesView: View {
                 Section("Saved connections") {
                     Text("Profiles restore your selected nodes, mode, DNS and path settings. Keep both nodes linked to load a saved multihop connection. Each saved path is checked before it is applied.")
                         .font(.caption).foregroundStyle(.secondary)
+                    if IOSConnectionSafePreferences.torModes.contains(model.selectedNodeProfile?.external?.protocolName ?? "") {
+                        Text("Tor profiles save DNS, protection, MTU/Jumbo, startup and any selected Router entry. Bridge settings stay with the linked node. Older Tor profiles may contain only a node selection; load one, check your settings, then Update to capture them. Connecting still requires fresh entry, DNS and dynamic exit proof.")
+                            .font(.caption).foregroundStyle(.secondary)
+                    }
                 }
             }
             .navigationTitle("Connection Profiles")

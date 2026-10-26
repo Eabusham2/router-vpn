@@ -118,10 +118,23 @@ Xcode app/extension builds and device acceptance remain separate evidence.
 
 ## Remaining platform evidence
 
-Apple whole connection profiles still treat Tor as a selection-only legacy
-record. Complete Tor Add/Load/Update/Delete preference snapshots and restore
-validation remain a separate implementation task; the device editor does not
-substitute for them.
+Apple connection-profile schema 5 captures Tor and Tor-bridge DNS, LAN ranges,
+protection, IPv6, MTU/Jumbo, startup, AUTO requirements and the selected local
+Router entry/exit references. Add and Update validate the saved preferences
+through the native Tor parser; Load validates them against the currently linked
+private node and entry before the transactional import. Bridge lines, keys and
+entry credentials remain in their owning node bundles. Tor retains dynamic exit
+proof rather than acquiring a fixed public IP. Schema 1–4 selection-only Tor
+records remain selection-only until the user explicitly updates them.
+
+`deploy/test_ios_tor_connection_profiles.py` executes the shipping view callbacks,
+profile/node stores, model import and rollback, entry readiness, and real Go Tor
+validation. The Darwin native-runtime contract invokes it before the iOS compile
+smoke and authoritative release builds. Storage and native marshalling boundaries
+are substituted; fresh circuit/DNS/entry proof and physical acceptance remain
+separate. Direct Home DNS can be saved as an unresolved draft and still needs its
+paired entry at Connect. Server/Compare, unsupported Tor predecessor families and
+standalone Tor padding remain separate implementation requirements.
 
 Android and Apple real-device interface readback, traffic segmentation, reconnect,
 network transitions, leak checks, and signed-package upgrade acceptance require
