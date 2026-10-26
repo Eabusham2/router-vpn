@@ -44,9 +44,10 @@ func TestMTUViewLegacyStatusCancelAndDrainKeepTheirOwner(t *testing.T) {
 			Session string           `json:"session_id"`
 			Profile string           `json:"profile_id"`
 			Status  mobilemtu.Status `json:"status"`
+			Allowed *bool            `json:"optimization_allowed"`
 		}
 		if response.Code == http.StatusOK {
-			if json.Unmarshal(response.Body.Bytes(), &decoded) != nil || decoded.Session != identity.Session || decoded.Profile != identity.Profile {
+			if json.Unmarshal(response.Body.Bytes(), &decoded) != nil || decoded.Session != identity.Session || decoded.Profile != identity.Profile || decoded.Allowed == nil || !*decoded.Allowed {
 				t.Fatal("status changed its connection identity")
 			}
 		}
@@ -122,9 +123,10 @@ func TestMTUViewNativeRetestUsesCallerIdentityAndConfirmsRollback(t *testing.T) 
 	statusResponse := httptest.NewRecorder()
 	a.desktopMTUStatus(statusResponse, httptest.NewRequest(http.MethodGet, "/api/mtu/status?request_id="+id+"&session_id="+launch.external.session, nil))
 	var status struct {
-		Status mobilemtu.Status `json:"status"`
+		Status  mobilemtu.Status `json:"status"`
+		Allowed *bool            `json:"optimization_allowed"`
 	}
-	if statusResponse.Code != http.StatusOK || json.Unmarshal(statusResponse.Body.Bytes(), &status) != nil || !status.Status.Running || status.Status.Complete || status.Status.Request != id {
+	if statusResponse.Code != http.StatusOK || json.Unmarshal(statusResponse.Body.Bytes(), &status) != nil || !status.Status.Running || status.Status.Complete || status.Status.Request != id || status.Allowed == nil || !*status.Allowed {
 		t.Fatal("native progress not bound to captured request", statusResponse.Code, status)
 	}
 	cancelResponse := httptest.NewRecorder()

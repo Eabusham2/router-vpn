@@ -34,12 +34,19 @@ struct RouterVPNMacMTUSnapshot: Decodable {
     let session_id: String
     let profile_id: String
     let requested: Bool
+    let optimization_allowed: Bool?
     let waiting_commit: Bool
     let status: Status
 
+    // Older controllers omit this capability; their Retest endpoint still
+    // validates policy. An explicit false from the captured owner wins.
+    var optimizationAllowed: Bool { optimization_allowed ?? true }
+
     static func decode(_ data: Data) throws -> RouterVPNMacMTUSnapshot {
         let value = try JSONDecoder().decode(Self.self, from: data)
+        let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         guard !value.session_id.isEmpty, value.session_id.utf8.count <= 128,
+              object?["optimization_allowed"] == nil || value.optimization_allowed != nil,
               !value.profile_id.isEmpty, value.profile_id.utf8.count <= 128,
               value.status.request_id.isEmpty || RouterVPNMacMTUTransport.validRequestID(value.status.request_id),
               !(value.status.running && value.status.complete),
@@ -215,7 +222,7 @@ final class RouterVPNMacMTUController {
 
     private func startManual() {
         guard !closed, !retired, !sessionID.isEmpty, !profileID.isEmpty,
-              !manualPostPending, cancelTask == nil else { return }
+              snapshot?.optimizationAllowed == true, !manualPostPending, cancelTask == nil else { return }
         requestID = UUID().uuidString.replacingOccurrences(of: "-", with: "").lowercased()
         seenRequest = false; manual = true; manualPostPending = true
         snapshot = nil; notice = "Starting MTU Retest on the captured connection."
@@ -311,7 +318,9 @@ final class RouterVPNMacMTUController {
             if readEpoch == completionEpoch { awaitingFinalStatus = false }
             if startAfterCapture {
                 startAfterCapture = false
-                if value.status.running || value.waiting_commit {
+                if !value.optimizationAllowed {
+                    notice = "This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy."
+                } else if value.status.running || value.waiting_commit {
                     notice = "An MTU operation is already active. Observing its captured request."
                 } else {
                     startManual(); return
@@ -362,7 +371,7 @@ final class RouterVPNMacMTUController {
         var next = RouterVPNMacMTUViewState()
         let status = snapshot?.status
         next.busy = !retired && (opening || operationPending)
-        next.canRetest = !closed && !retired && !opening && !next.busy && snapshot != nil
+        next.canRetest = !closed && !retired && !opening && !next.busy && snapshot?.optimizationAllowed == true
         next.canCancel = !closed && !retired && !requestID.isEmpty && next.busy
         next.closeReady = closeAfterDrain && !next.busy
         next.owner = sessionID.isEmpty ? "" : "Profile: \(profileID)\nConnection: \(sessionID)" + (requestID.isEmpty ? "" : "\nMTU request: \(requestID)")
@@ -382,6 +391,7 @@ final class RouterVPNMacMTUController {
             if status.original_mtu > 0 { detail.append("Original MTU: \(status.original_mtu) bytes") }
             detail.append("Source: " + status.source)
             detail.append(status.measured ? "Measured on this captured path." : "No fresh measurement is reported for this value.")
+            if snapshot?.optimizationAllowed == false { detail.append("Retest is disabled by this connection's Fixed, Default, or Jumbo MTU policy.") }
             if status.restored { detail.append("The controller reports that the original MTU was restored.") }
             if let failure = status.failure, !failure.isEmpty { detail.append("Reported failure: " + failure) }
             let candidates = status.candidates ?? []

@@ -57,6 +57,21 @@ if($Live){
     }
     while(-not$S.Session-and-not$S.Retired-and[DateTime]::UtcNow-lt$Until){&$Pump}
     Check ($S.Session-and-not$S.Retired) 'Real loopback status did not capture a connection'
+    if($Scenario-eq'configured'){
+        Check (-not$S.OptimizationAllowed-and$S.Detail.Contains('Effective interface MTU: 9000')) 'Configured live capacity was not retained'
+        if($Visual){
+            Check (-not$S.Window.FindName('Retest').IsEnabled) 'WPF enabled Retest against configured policy'
+            $S.Window.FindName('Retest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))
+        }else{Check (-not(Start-RouterVPNMTURetest $S)) 'Configured live policy accepted Retest'}
+        Check (-not$S.Own-and-not$S.Request) 'Configured policy emitted a real mutation'
+        if($Visual){Check $Owner.IsEnabled 'Configured MTU panel blocked main controls';$S.Window.Close()}
+        [void](Close-RouterVPNMTUView $S)
+        while(-not$S.Closed-and[DateTime]::UtcNow-lt$Until){&$Pump}
+        Check $S.Closed 'Configured observer did not drain on close'
+        if($Visual){$Owner.Close()}
+        Write-Host "PASS: $script:Checks real Windows configured-capacity checks (WPF=$Visual)"
+        return
+    }
     if($Visual){$S.Window.FindName('Retest').RaiseEvent([Windows.RoutedEventArgs]::new([Windows.Controls.Button]::ClickEvent))}
     else{[void](Start-RouterVPNMTURetest $S)}
     Check ($S.Own-and$S.Request-and-not$S.RunDone) 'Actual Retest callback blocked on its POST'
@@ -85,6 +100,22 @@ if($Live){
 Reject {New-RouterVPNMTUState 'https://127.0.0.1:8788'} 'TLS controller substitution accepted'
 Reject {New-RouterVPNMTUState 'http://example.com:8788'} 'Remote controller accepted'
 Reject {New-RouterVPNMTUState 'http://127.0.0.1:8788/else'} 'Controller path accepted'
+foreach($Allowed in @($false,$true)){
+    $S=State;$Value=Status;$Value.optimization_allowed=$Allowed
+    $Value.status.effective_mtu=9000;$Value.status.source='configured-unmeasured'
+    [void](Receive-RouterVPNMTUStatus $S $Value)
+    Check ($S.OptimizationAllowed-eq$Allowed) 'Captured optimization capability was lost'
+    $Before=$S.Client.Jobs.Count
+    Check ((Start-RouterVPNMTURetest $S)-eq$Allowed) 'Configured policy did not govern the actual Retest callback'
+    if(-not$Allowed){Check ($S.Client.Jobs.Count-eq$Before-and-not$S.Own-and$S.Status.Contains('configured MTU')-and$S.Detail.Contains('Effective interface MTU: 9000')) 'Configured Jumbo emitted a mutation or lost readback'}
+    CompleteAll $S
+}
+foreach($Bad in @($null,'false',0,1)){
+    $S=State;$Value=Status;$Value.optimization_allowed=$Bad
+    Reject {Receive-RouterVPNMTUStatus $S $Value} 'Malformed optimization capability was accepted'
+    Check (-not$S.Session-and-not$S.OptimizationAllowed) 'Malformed capability adopted a connection'
+    CompleteAll $S
+}
 $S=State;Idle $S
 Check ($S.Detail.Contains('historical; not measured on this path')) 'Saved MTU displayed as fresh readback'
 Check (-not$S.Detail.Contains('Effective interface MTU')) 'Historical source claimed live MTU'

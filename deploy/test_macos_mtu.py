@@ -46,14 +46,15 @@ func exists(_ name: String) -> Bool { FileManager.default.fileExists(atPath: fix
 func flag(_ name: String, _ value: String = "ready") { try! Data(value.utf8).write(to: fixture.appendingPathComponent(name), options: .atomic) }
 func status(_ request: String = "", session: String = "session-a", profile: String = "profile-a",
             running: Bool = false, complete: Bool = false, waiting: Bool = false, restored: Bool = false,
-            requested: Bool = false, measured: Bool = false, candidates: Bool = false) -> RouterVPNMacMTUReply {
+            requested: Bool = false, measured: Bool = false, candidates: Bool = false, optimization: Bool? = nil) -> RouterVPNMacMTUReply {
     var rows: [[String: Any]] = []
     if candidates { rows = [["mtu": 1360, "working": true, "packets_sent": 10, "packets_received": 9,
                             "median_rtt_ms": 12.5, "latency_kind": "authenticated UDP response", "download": ["bytes": 1048576, "seconds": 0.5, "mbps": 16.777216]]] }
-    let body: [String: Any] = ["session_id": session, "profile_id": profile, "requested": requested, "waiting_commit": waiting,
+    var body: [String: Any] = ["session_id": session, "profile_id": profile, "requested": requested, "waiting_commit": waiting,
         "status": ["request_id": request, "phase": complete ? "complete" : (running ? "measuring" : "idle"),
                    "running": running, "complete": complete, "measured": measured, "restored": restored,
                    "original_mtu": 1420, "effective_mtu": 1360, "source": measured ? "authenticated-path" : "saved-history", "candidates": rows]]
+    if let optimization { body["optimization_allowed"] = optimization }
     return RouterVPNMacMTUReply(code: 200, data: try! JSONSerialization.data(withJSONObject: body))
 }
 final class ControlledRequest: RouterVPNMacMTURequest {
@@ -203,6 +204,33 @@ do {
     check(owner.seenRequest && owner.requestID == String(repeating: "b", count: 32), "Idle Auto observer froze before its request appeared")
     f.next("/api/mtu/status").reply(status(String(repeating: "c", count: 32), running: true, requested: true))
     check(!owner.view.busy && !owner.view.canRetest && owner.requestID == String(repeating: "b", count: 32), "Auto observer silently followed a replacement request")
+    owner.stop()
+}
+
+// Configured interface policy is separate from the legacy requested flag.
+for start in [false, true] {
+    let f = ControlledFactory(); let owner = f.controller(); owner.open(retest: start)
+    f.next("/api/mtu/status").reply(status(optimization: false))
+    check(!owner.view.canRetest && !owner.view.busy && owner.view.detail.contains("Retest is disabled"), "Configured policy incorrectly enabled Retest")
+    owner.retest()
+    check(!f.requests.contains { $0.url.path == "/api/mtu/retest" }, "Configured policy emitted an MTU mutation")
+    owner.stop()
+}
+do {
+    let f = ControlledFactory(); let owner = f.controller(); owner.open()
+    f.next("/api/mtu/status").reply(status(optimization: true))
+    check(owner.view.canRetest, "Explicit eligible policy disabled Retest")
+    owner.retest()
+    f.next("/api/mtu/status").reply(status(optimization: false))
+    check(!owner.view.canRetest && !f.requests.contains { $0.url.path == "/api/mtu/retest" }, "Retest ignored freshly captured configured policy")
+    owner.stop()
+}
+for bad: Any in [NSNull(), "false", 0, 1] {
+    let f = ControlledFactory(); let owner = f.controller(); owner.open()
+    var body = try! JSONSerialization.jsonObject(with: status().data) as! [String: Any]
+    body["optimization_allowed"] = bad
+    f.next("/api/mtu/status").reply(RouterVPNMacMTUReply(code: 200, data: try! JSONSerialization.data(withJSONObject: body)))
+    check(owner.sessionID.isEmpty && !owner.view.canRetest && owner.view.detail.contains("MTU status rejected"), "Malformed optimization capability adopted a connection")
     owner.stop()
 }
 
@@ -441,6 +469,8 @@ def run_case(directory, mutation):
         "frozen-idle-observer": ("return operationPending || (!manual && snapshot != nil && requestID.isEmpty)", "return operationPending"),
         "follow-missing-owner": ("if !seenRequest && manualPostPending {", "if true {"),
         "closed-callback": ("guard let self, !self.closed, self.generation == owner, self.pollID == taskOwner else", "guard let self else"),
+        "configured-policy": ("var optimizationAllowed: Bool { optimization_allowed ?? true }", "var optimizationAllowed: Bool { true }"),
+        "null-capability": ('object?["optimization_allowed"] == nil || value.optimization_allowed != nil,', ''),
     }
     if mutation != "shipping":
         before, after = mutations[mutation]
@@ -473,6 +503,8 @@ def run_case(directory, mutation):
                 "frozen-idle-observer": "Missing owned request /api/mtu/status",
                 "follow-missing-owner": "Missing retired request remained pending",
                 "closed-callback": "Closed queued callback mutated captured view",
+                "configured-policy": "Configured policy incorrectly enabled Retest",
+                "null-capability": "Malformed optimization capability adopted a connection",
             }[mutation]
             assert result.returncode != 0 and expected in result.stdout, (mutation, result.returncode, result.stdout)
             print("MTU negative control " + mutation + ": rejected", flush=True)
@@ -486,7 +518,7 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--shipping-only", action="store_true")
     args = parser.parse_args()
-    cases = ["shipping"] if args.shipping_only else ["shipping", "missing-session-owner", "missing-request-owner", "missing-early-cancel", "early-completion", "stale-final-status", "frozen-idle-observer", "follow-missing-owner", "closed-callback"]
+    cases = ["shipping"] if args.shipping_only else ["shipping", "missing-session-owner", "missing-request-owner", "missing-early-cancel", "early-completion", "stale-final-status", "frozen-idle-observer", "follow-missing-owner", "closed-callback", "configured-policy", "null-capability"]
     with tempfile.TemporaryDirectory(prefix="router-vpn-macos-mtu-") as directory:
         for case in cases:
             run_case(Path(directory), case)

@@ -48,11 +48,15 @@ class State:
         self.stop = threading.Event()
 
     def status(self, request=''):
-        return {'session_id': 'captured-session', 'profile_id': 'router-a', 'requested': False,
+        value = {'session_id': 'captured-session', 'profile_id': 'router-a', 'requested': False,
                 'waiting_commit': False, 'status': {
                     'request_id': request, 'phase': 'measuring', 'running': bool(request),
                     'complete': False, 'measured': False, 'restored': False, 'original_mtu': 1420,
                     'effective_mtu': 1420, 'source': 'saved-auto-throughput', 'candidates': []}}
+        if self.scenario == 'configured':
+            value['optimization_allowed'] = False
+            value['status'].update(effective_mtu=9000, source='configured-unmeasured')
+        return value
 
 
 @contextlib.contextmanager
@@ -171,6 +175,9 @@ def controller(scenario):
             assert state.completed and state.cancel_ids == [state.request] and state.cancel_polls >= 2
         elif scenario == 'replaced':
             assert state.replaced and not state.cancel_ids and state.closed
+        elif scenario == 'configured':
+            assert state.request is None and not state.cancel_ids
+            assert all(path.startswith('/api/mtu/status') for path in state.paths)
         else:
             assert state.cancelled and not state.registered
     finally:
@@ -197,16 +204,17 @@ def windows(directory, shell):
         'drain': ('if($Pending){return $false}', 'if($false){return $false}'),
         'final-get': ('$Candidate-and$null-eq$State.Cancel-and(-not$State.Own-or($State.RunDone-and$AfterRun))', '$Candidate'),
         'cancel-epoch': ('$Job.Completion-ne$State.Completion-or($State.Own-and$State.RunDone-and-not$Job.AfterRun)', '$State.Own-and$State.RunDone-and-not$Job.AfterRun'),
+        'configured-policy': ('-or-not$State.OptimizationAllowed-or-not$State.Session', '-or-not$State.Session'),
     }
     for name, (before, after) in mutations.items():
         assert source.count(before) == 1, name
         path = directory/('windows-'+name+'.ps1')
         path.write_text(source.replace(before, after), encoding='utf-8')
         run([*prefix, '-Source', path], expect_failure=True)
-    for scenario in ('accepted', 'early', 'replaced'):
+    for scenario in ('accepted', 'early', 'replaced', 'configured'):
         with controller(scenario):
             run([*prefix, '-Live', '-Scenario', scenario], timeout=25)
-    print('PASS: Windows seven defect mutations and three real loopback lifecycle cases', flush=True)
+    print('PASS: Windows eight defect mutations and four real loopback lifecycle cases', flush=True)
 
 
 def linux(directory):
@@ -225,16 +233,18 @@ def linux(directory):
         'generation': ('s->job_generation[kind]==s->generation&&!s->detaching', '!s->detaching'),
         'final-get': ('s->terminal=candidate&&s->jobs[LINUX_MTU_CANCEL_V20]==NULL&&(!s->own||(s->run_done&&after_run));', 's->terminal=candidate;(void)after_run;'),
         'cancel-epoch': ('s->job_completion[kind]!=s->completion||(s->own&&s->run_done&&!s->job_after_run[kind])', 's->own&&s->run_done&&!s->job_after_run[kind]'),
+        'configured-policy': ('||!s->optimization_allowed||s->session==NULL', '||s->session==NULL'),
+        'configured-render': ('&&s->optimization_allowed&&s->session!=NULL', '&&s->session!=NULL'),
     }
     for name,(before,after) in mutations.items():
         assert source.count(before)==1,name
         path=directory/('linux-'+name+'.inc');path.write_text(source.replace(before,after),encoding='utf-8')
         run(build('gtk-'+name, ['-DROUTERVPN_MTU_SOURCE="'+str(path)+'"']),expect_failure=True)
     live=build('gtk-live',['-DROUTERVPN_MTU_LIVE'])
-    for scenario in ('accepted','early','replaced'):
+    for scenario in ('accepted','early','replaced','configured'):
         with controller(scenario):
             run([*live,scenario],timeout=25)
-    print('PASS: GTK six defect mutations and three real loopback lifecycle cases',flush=True)
+    print('PASS: GTK eight defect mutations and four real loopback lifecycle cases',flush=True)
 
 
 def integration(platform):

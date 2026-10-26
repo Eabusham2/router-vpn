@@ -59,7 +59,26 @@ static void dispose_view(LinuxMTUV20 *s){
 static void idle(LinuxMTUV20 *s){receive(s,status("",FALSE,FALSE,FALSE));linux_mtu_render_v20(s);check(gtk_widget_is_sensitive(s->retest),"requested false retains eligible Retest");}
 static void advance(LinuxMTUV20 *s){s->next_poll=0;(void)linux_mtu_tick_v20(s);}
 static void run_state_tests(App *app){
-    records=g_ptr_array_new();LinuxMTUV20 *s=open_view(app);freeze_timer(s);idle(s);
+    records=g_ptr_array_new();
+    for(int allowed=0;allowed<=1;allowed++){
+        LinuxMTUV20 *view=open_view(app);freeze_timer(view);JsonNode *n=status("",FALSE,FALSE,FALSE);
+        json_object_set_boolean_member(json_node_get_object(n),"optimization_allowed",allowed);
+        JsonObject *value=linux_mtu_object_v20(json_node_get_object(n),"status");
+        json_object_set_int_member(value,"effective_mtu",9000);json_object_set_string_member(value,"source","configured-unmeasured");
+        receive(view,n);linux_mtu_render_v20(view);
+        check(gtk_widget_is_sensitive(view->retest)==allowed,"configured policy governs rendered Retest eligibility");
+        guint before=records->len;check(linux_mtu_start_v20(view)==allowed,"configured policy governs direct Retest callback");
+        if(!allowed)check(records->len==before&&!view->own&&strstr(view->details,"Effective interface MTU: 9000")!=NULL&&strstr(view->message,"configured MTU")!=NULL,"configured Jumbo emitted a mutation or lost readback");
+        dispose_view(view);
+    }
+    for(int bad=0;bad<4;bad++){
+        LinuxMTUV20 *view=open_view(app);freeze_timer(view);JsonNode *n=status("",FALSE,FALSE,FALSE);JsonObject *o=json_node_get_object(n);
+        if(bad==0)json_object_set_null_member(o,"optimization_allowed");
+        else if(bad==1)json_object_set_string_member(o,"optimization_allowed","false");
+        else json_object_set_int_member(o,"optimization_allowed",bad-2);
+        receive(view,n);check(view->retired&&!view->optimization_allowed&&view->session==NULL,"malformed optimization capability adopted a connection");dispose_view(view);
+    }
+    LinuxMTUV20 *s=open_view(app);freeze_timer(s);idle(s);
     check(strstr(s->details,"historical; not measured")!=NULL&&strstr(s->details,"Effective interface MTU")==NULL,"saved value is not a fresh readback");
     gtk_button_clicked(GTK_BUTTON(s->retest));Record *run=last();char *id=g_strdup(s->request);
     JsonNode *body=parse_json(run->body);JsonObject *b=json_node_get_object(body);
@@ -118,6 +137,14 @@ static void live_test(App *app,const char *scenario){
     LinuxMTUV20 *s=open_view(app);gint64 deadline=g_get_monotonic_time()+8*G_USEC_PER_SEC;
     while(s->session==NULL&&!s->retired&&g_get_monotonic_time()<deadline)pump();
     check(s->session!=NULL&&!s->retired,"real loopback initial status accepted");
+    if(strcmp(scenario,"configured")==0){
+        check(!s->optimization_allowed&&!gtk_widget_is_sensitive(s->retest)&&strstr(s->details,"Effective interface MTU: 9000")!=NULL,"live configured capacity disables rendered Retest");
+        gtk_dialog_response(GTK_DIALOG(s->dialog),1);
+        check(!s->own&&s->request==NULL&&s->jobs[LINUX_MTU_RUN_V20]==NULL&&gtk_widget_is_sensitive(app->window),"configured callback emitted a real mutation or blocked main controls");
+        check(linux_mtu_close_v20(s),"configured observer can close");
+        for(int i=0;i<40;i++)pump();
+        return;
+    }
     gtk_button_clicked(GTK_BUTTON(s->retest));check(s->own&&s->request!=NULL,"actual Retest click returns before its HTTP response");
     guint pulses=0;
     if(strcmp(scenario,"early")==0){gtk_button_clicked(GTK_BUTTON(s->cancel));}

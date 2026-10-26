@@ -260,9 +260,9 @@ func (writer *mtuViewResponse) finish() {
 	}
 }
 
-func writeMTUViewStatus(w http.ResponseWriter, identity mtuViewIdentity, requested, waiting bool, status mobilemtu.Status) {
+func writeMTUViewStatus(w http.ResponseWriter, identity mtuViewIdentity, requested, waiting, optimizationAllowed bool, status mobilemtu.Status) {
 	w.Header().Set("content-type", "application/json")
-	_ = json.NewEncoder(w).Encode(map[string]any{"session_id": identity.Session, "profile_id": identity.Profile, "requested": requested, "waiting_commit": waiting, "status": status})
+	_ = json.NewEncoder(w).Encode(map[string]any{"session_id": identity.Session, "profile_id": identity.Profile, "requested": requested, "waiting_commit": waiting, "optimization_allowed": optimizationAllowed, "status": status})
 }
 
 func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) {
@@ -316,19 +316,23 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 		status := operation.status
 		operation.mu.Unlock()
 		waiting := false
-		if status.Running && identity.Native {
+		optimizationAllowed := !identity.Native // Legacy capture already validated Router-node Auto.
+		if identity.Native {
 			if launch := desktopExternalMTULaunch(a); launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
-				if record, err := readDesktopMTURecord(launch); err == nil && record.Status.Request == operation.request {
-					pendingPhase := status.Phase
-					status, waiting = record.Status, record.WaitingCommit
-					if status.Complete || pendingPhase == "canceling" {
-						status.Phase = pendingPhase
+				if record, err := readDesktopMTURecord(launch); err == nil {
+					optimizationAllowed = record.Requested
+					if status.Running && record.Status.Request == operation.request {
+						pendingPhase := status.Phase
+						status, waiting = record.Status, record.WaitingCommit
+						if status.Complete || pendingPhase == "canceling" {
+							status.Phase = pendingPhase
+						}
+						status.Running, status.Complete, status.Measured = true, false, false
 					}
-					status.Running, status.Complete, status.Measured = true, false, false
 				}
 			}
 		}
-		writeMTUViewStatus(w, identity, true, waiting, status)
+		writeMTUViewStatus(w, identity, true, waiting, optimizationAllowed, status)
 		return
 	}
 	if launch := desktopExternalMTULaunch(a); identity.Native && launch != nil && desktopMeasurementSessionMatches(launch, identity.Session) {
@@ -355,7 +359,7 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 			http.Error(w, "MTU request has not started or was replaced", http.StatusNotFound)
 			return
 		}
-		writeMTUViewStatus(w, identity, record.Requested, record.WaitingCommit, record.Status)
+		writeMTUViewStatus(w, identity, record.Requested, record.WaitingCommit, record.Requested, record.Status)
 		return
 	}
 	if request != "" {
@@ -371,7 +375,7 @@ func (a *app) writeDesktopMTUViewStatus(w http.ResponseWriter, r *http.Request) 
 	if snapshot.Profile.EffectiveMTU > 0 {
 		source = "saved-" + snapshot.Profile.EffectiveMTUSource
 	}
-	writeMTUViewStatus(w, identity, false, false, mobilemtu.Status{Phase: "idle", EffectiveMTU: snapshot.Profile.EffectiveMTU, Source: source, Candidates: []mobilemtu.Candidate{}})
+	writeMTUViewStatus(w, identity, false, false, true, mobilemtu.Status{Phase: "idle", EffectiveMTU: snapshot.Profile.EffectiveMTU, Source: source, Candidates: []mobilemtu.Candidate{}})
 }
 
 func cancelMTUViewOperation(a *app, w http.ResponseWriter, request mtuViewRequest) bool {

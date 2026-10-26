@@ -13,7 +13,7 @@ function global:New-RouterVPNMTUState {
     $Uri=[Uri]$BaseUrl
     if($Uri.Scheme-cne'http'-or$Uri.Host-cne'127.0.0.1'-or$Uri.UserInfo-or$Uri.Query-or$Uri.Fragment-or$Uri.AbsolutePath-ne'/'){throw 'MTU uses the captured local controller only.'}
     return @{BaseUrl=$BaseUrl.TrimEnd('/');Generation=[long]1;Completion=[long]0;Session='';Profile='';Request='';Seen=$false;Own=$false;
-        Cancelled=$false;CancelAck=$false;Terminal=$false;Retired=$false;Closing=$false;Detaching=$false;Closed=$false;RunDone=$true;
+        Cancelled=$false;CancelAck=$false;Terminal=$false;Retired=$false;Closing=$false;Detaching=$false;Closed=$false;RunDone=$true;OptimizationAllowed=$false;
         Run=$null;Poll=$null;Cancel=$null;Client=$null;Window=$null;Timer=$null;Next=[DateTime]::MinValue;
         Deadline=[DateTime]::MaxValue;PostError='';Status='Checking MTU on the connected path...';Detail='';Last=$null}
 }
@@ -65,6 +65,8 @@ function global:Receive-RouterVPNMTUStatus {
     $Session=Get-RouterVPNMTUValue $Value 'session_id';$Profile=Get-RouterVPNMTUValue $Value 'profile_id'
     $Status=Get-RouterVPNMTUValue $Value 'status';$Waiting=Get-RouterVPNMTUValue $Value 'waiting_commit'
     $Requested=Get-RouterVPNMTUValue $Value 'requested'
+    $OptimizationAllowed=Get-RouterVPNMTUValue $Value 'optimization_allowed' $true
+    if($OptimizationAllowed-isnot[bool]){throw 'Invalid captured MTU optimization capability.'}
     $ID=Get-RouterVPNMTUValue $Status 'request_id'
     if($Session-isnot[string]-or-not$Session-or$Session.Length-gt128-or$Profile-isnot[string]-or-not$Profile-or$Profile.Length-gt256-or$ID-isnot[string]-or($ID-and$ID-cnotmatch'^[0-9a-f]{32}$')-or$Waiting-isnot[bool]-or$Requested-isnot[bool]){throw 'Invalid captured MTU status.'}
     foreach($Name in @('running','complete','measured','restored')){if((Get-RouterVPNMTUValue $Status $Name)-isnot[bool]){throw 'Invalid MTU progress state.'}}
@@ -73,6 +75,7 @@ function global:Receive-RouterVPNMTUStatus {
     if($State.Request-and$State.Request-cne$ID){Stop-RouterVPNMTUOwner $State 'This MTU request was replaced. Its result was discarded.';return $false}
     if(-not$State.Request-and$ID){$State.Request=$ID;$State.Deadline=[DateTime]::UtcNow.AddSeconds(180)}
     if($ID){$State.Seen=$true}
+    $State.OptimizationAllowed=$OptimizationAllowed
     $State.Last=$Status;$State.Detail=Format-RouterVPNMTUCandidates $Status
     $Running=[bool](Get-RouterVPNMTUValue $Status 'running');$Complete=[bool](Get-RouterVPNMTUValue $Status 'complete')
     $Candidate=$ID-and$Complete-and-not$Running-and-not$Waiting
@@ -89,6 +92,7 @@ function global:Receive-RouterVPNMTUStatus {
     elseif($Waiting){$State.Status='Saving the verified MTU...'}
     elseif($Running){$Phase=[string](Get-RouterVPNMTUValue $Status 'phase' '');$State.Status=if($Phase){'MTU test: '+$Phase}else{'Measuring the captured path...'}}
     elseif($ID){$State.Status='Waiting for the captured MTU test...'}
+    elseif(-not$State.OptimizationAllowed){$State.Status='This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy.'}
     else{$State.Status='No MTU test is running. Retest measures this connected path.'}
     return $true
 }
@@ -130,7 +134,7 @@ function global:Complete-RouterVPNMTURequest {
 
 function global:Start-RouterVPNMTURetest {
     param($State)
-    if($State.Closed-or$State.Detaching-or$State.Closing-or$State.Retired-or-not$State.Session-or-not$State.RunDone-or$null-ne$State.Run-or$null-ne$State.Cancel-or($State.Request-and-not$State.Terminal)){return $false}
+    if($State.Closed-or$State.Detaching-or$State.Closing-or$State.Retired-or-not$State.OptimizationAllowed-or-not$State.Session-or-not$State.RunDone-or$null-ne$State.Run-or$null-ne$State.Cancel-or($State.Request-and-not$State.Terminal)){return $false}
     if(Get-Command UnifiedAsyncBusy -ErrorAction SilentlyContinue){if(UnifiedAsyncBusy){$State.Status='Another Router VPN action is running. Wait for it to finish.';return $false}}
     if($null-ne$State.Poll){$State.Poll.Cts.Cancel()}
     $State.Generation++;$State.Request=[Guid]::NewGuid().ToString('N');$State.Seen=$false;$State.Own=$true
@@ -194,7 +198,7 @@ function global:Update-RouterVPNMTUView {
     }
     if($null-ne$State.Window){
         $State.Window.FindName('MtuStatus').Text=$State.Status;$State.Window.FindName('MtuDetails').Text=$State.Detail
-        $Ready=-not$State.Retired-and$State.Session-and$State.RunDone-and$null-eq$State.Run-and$null-eq$State.Cancel-and(-not$State.Request-or$State.Terminal)
+        $Ready=-not$State.Retired-and$State.OptimizationAllowed-and$State.Session-and$State.RunDone-and$null-eq$State.Run-and$null-eq$State.Cancel-and(-not$State.Request-or$State.Terminal)
         $State.Window.FindName('Retest').IsEnabled=[bool]($Ready-and-not$State.Closing)
         $State.Window.FindName('CancelTest').IsEnabled=[bool](-not$State.Retired-and$State.Request-and-not$State.Terminal-and-not$State.CancelAck-and$null-eq$State.Cancel)
         if($State.Closing-and($State.Terminal-or$State.Retired)-and$State.RunDone-and$null-eq$State.Run-and$null-eq$State.Cancel){$State.Window.Close()}

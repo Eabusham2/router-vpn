@@ -13,7 +13,7 @@ typedef struct {
     gboolean job_after_run[LINUX_MTU_JOBS_V20];
     RVHttpJobV16 *jobs[LINUX_MTU_JOBS_V20];
     char *session, *profile, *request, *message, *details, *post_error;
-    gboolean seen, own, cancelled, cancel_ack, terminal, retired, closing, detaching, run_done;
+    gboolean seen, own, cancelled, cancel_ack, terminal, retired, closing, detaching, run_done, optimization_allowed;
     gint64 next_poll, deadline;
 } LinuxMTUV20;
 
@@ -92,9 +92,10 @@ static gboolean linux_mtu_receive_v20(LinuxMTUV20 *s,JsonObject *reply,gboolean 
     if(s->detaching||s->retired)return FALSE;
     const char *session=linux_mtu_string_v20(reply,"session_id"),*profile=linux_mtu_string_v20(reply,"profile_id");
     JsonObject *status=linux_mtu_object_v20(reply,"status");const char *id=linux_mtu_string_v20(status,"request_id");
-    gboolean waiting,requested,running,complete,measured,restored;
+    gboolean waiting,requested,running,complete,measured,restored,optimization_allowed=TRUE;
     if(session==NULL||!session[0]||strlen(session)>128||profile==NULL||!profile[0]||strlen(profile)>256||id==NULL||(id[0]&&!linux_mtu_id_v20(id))||
        !linux_mtu_bool_v20(reply,"waiting_commit",&waiting)||!linux_mtu_bool_v20(reply,"requested",&requested)||
+       (json_object_has_member(reply,"optimization_allowed")&&!linux_mtu_bool_v20(reply,"optimization_allowed",&optimization_allowed))||
        !linux_mtu_bool_v20(status,"running",&running)||!linux_mtu_bool_v20(status,"complete",&complete)||
        !linux_mtu_bool_v20(status,"measured",&measured)||!linux_mtu_bool_v20(status,"restored",&restored)){
         linux_mtu_retire_v20(s,"Invalid captured MTU progress. No result was adopted.");return FALSE;
@@ -107,6 +108,7 @@ static gboolean linux_mtu_receive_v20(LinuxMTUV20 *s,JsonObject *reply,gboolean 
     if(s->request!=NULL&&strcmp(s->request,id)!=0){linux_mtu_retire_v20(s,"This MTU request was replaced. Its result was discarded.");return FALSE;}
     if(s->request==NULL&&id[0]){s->request=g_strdup(id);s->deadline=g_get_monotonic_time()+180*G_USEC_PER_SEC;}
     if(id[0])s->seen=TRUE;
+    s->optimization_allowed=optimization_allowed;
     g_free(s->details);s->details=linux_mtu_details_v20(status);
     gboolean candidate=id[0]&&complete&&!running&&!waiting;
     s->terminal=candidate&&s->jobs[LINUX_MTU_CANCEL_V20]==NULL&&(!s->own||(s->run_done&&after_run));
@@ -121,6 +123,7 @@ static gboolean linux_mtu_receive_v20(LinuxMTUV20 *s,JsonObject *reply,gboolean 
     else if(s->cancelled)linux_mtu_message_v20(s,"Cancelling; waiting for this test to finish its restoration.");
     else if(waiting)linux_mtu_message_v20(s,"Saving the verified MTU...");
     else if(running){char *text=g_strdup_printf("MTU test: %.128s",phase!=NULL&&phase[0]?phase:"measuring the captured path");linux_mtu_message_v20(s,text);g_free(text);}
+    else if(!id[0]&&!s->optimization_allowed)linux_mtu_message_v20(s,"This connection keeps its configured MTU. Retest is disabled by its Fixed, Default, or Jumbo policy.");
     else linux_mtu_message_v20(s,id[0]?"Waiting for the captured MTU test...":"No MTU test is running. Retest measures this connected path.");
     return TRUE;
 }
@@ -138,7 +141,7 @@ static gboolean linux_mtu_start_job_v20(LinuxMTUV20 *s,int kind,const char *path
     s->job_generation[kind]=s->generation;s->job_completion[kind]=s->completion;s->job_after_run[kind]=s->run_done;return s->jobs[kind]!=NULL;
 }
 static gboolean linux_mtu_start_v20(LinuxMTUV20 *s) {
-    if(s->detaching||s->closing||s->retired||s->session==NULL||!s->run_done||s->jobs[LINUX_MTU_RUN_V20]!=NULL||s->jobs[LINUX_MTU_CANCEL_V20]!=NULL||(s->request!=NULL&&!s->terminal))return FALSE;
+    if(s->detaching||s->closing||s->retired||!s->optimization_allowed||s->session==NULL||!s->run_done||s->jobs[LINUX_MTU_RUN_V20]!=NULL||s->jobs[LINUX_MTU_CANCEL_V20]!=NULL||(s->request!=NULL&&!s->terminal))return FALSE;
     if(s->app!=NULL&&linux_async_busy_v16(s->app)){linux_mtu_message_v20(s,"Another Router VPN action is running. Wait for it to finish.");return FALSE;}
     rv_http_cancel_v16(s->jobs[LINUX_MTU_POLL_V20]);s->generation++;
     char *uuid=g_uuid_string_random();GString *id=g_string_new(NULL);for(char *p=uuid;*p;p++)if(*p!='-')g_string_append_c(id,*p);g_free(uuid);
@@ -167,7 +170,7 @@ static void linux_mtu_render_v20(LinuxMTUV20 *s) {
     if(s->dialog==NULL)return;
     gtk_label_set_text(GTK_LABEL(s->result),s->message!=NULL?s->message:"");
     gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(s->detail)),s->details!=NULL?s->details:"",-1);
-    gboolean ready=!s->retired&&!s->closing&&s->session!=NULL&&s->run_done&&s->jobs[LINUX_MTU_RUN_V20]==NULL&&s->jobs[LINUX_MTU_CANCEL_V20]==NULL&&(s->request==NULL||s->terminal);
+    gboolean ready=!s->retired&&!s->closing&&s->optimization_allowed&&s->session!=NULL&&s->run_done&&s->jobs[LINUX_MTU_RUN_V20]==NULL&&s->jobs[LINUX_MTU_CANCEL_V20]==NULL&&(s->request==NULL||s->terminal);
     gtk_widget_set_sensitive(s->retest,ready);
     gtk_widget_set_sensitive(s->cancel,!s->retired&&!s->terminal&&!s->cancel_ack&&s->request!=NULL&&s->jobs[LINUX_MTU_CANCEL_V20]==NULL);
 }
