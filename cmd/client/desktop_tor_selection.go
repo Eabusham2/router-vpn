@@ -9,8 +9,9 @@ import (
 )
 
 // A connection request captures a private source independently from the
-// effective runtime policy. Explicit Direct/entry choices never rewrite the
-// reusable imported Tor node or copy a Router's credentials into that node.
+// effective runtime policy. Capturing Direct/entry choices never rewrites the
+// reusable imported Tor node or copies a Router's credentials into that node.
+// Only a successfully proved public Connect can later save its chosen path.
 type desktopTorSelection struct {
 	profile      common.RouterProfile
 	policy       common.RouterProfile

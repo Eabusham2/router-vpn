@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"router-vpn/internal/mobiletor"
@@ -39,6 +40,7 @@ type desktopTorRuntime struct {
 	expected              mobiletor.DesktopBridgeMetadata
 	digests               mobiletor.DesktopBridgeInputDigests
 	profileToken          string
+	committedChoice       atomic.Pointer[desktopTorCommittedChoice]
 	predecessor           *desktopTorPredecessorCapture
 	network               string
 	networkIdentity       func() string
@@ -153,7 +155,7 @@ func (a *app) desktopTorCurrent(launch *desktopNodeLaunch) error {
 	}
 	a.mu.Lock()
 	current, found := a.profileByIDLocked(launch.profileID)
-	valid := a.cmd == launch.command && found && owner.profileToken != "" && desktopTorSourceIdentityToken(current) == owner.profileToken && owner.entryCurrentLocked(a) == nil
+	valid := a.cmd == launch.command && found && owner.sourceIdentityToken() != "" && desktopTorSourceIdentityToken(current) == owner.sourceIdentityToken() && owner.entryCurrentLocked(a) == nil
 	a.mu.Unlock()
 	if !valid {
 		return errors.New("Tor native session or captured private node changed")

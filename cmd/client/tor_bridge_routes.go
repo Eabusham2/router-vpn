@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os/exec"
 	"strings"
-	"time"
 
 	"router-vpn/internal/common"
 )
@@ -85,6 +84,14 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 			return
 		}
 	}
+	a.mu.Lock()
+	operation, selected := a.connectionContext, a.profiles.SelectedID
+	operationErr := desktopTorOperationCurrentLocked(a, operation, selected)
+	a.mu.Unlock()
+	if operationErr != nil {
+		http.Error(w, operationErr.Error(), http.StatusConflict)
+		return
+	}
 	selection, err := captureDesktopTorSelection(a, profile, q, nil)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -107,6 +114,12 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 	check := func() error {
 		if err := a.checkConnectionOperation(); err != nil {
 			return err
+		}
+		a.mu.Lock()
+		operationErr := desktopTorOperationCurrentLocked(a, operation, selected)
+		a.mu.Unlock()
+		if operationErr != nil {
+			return operationErr
 		}
 		if err := selection.current(a); err != nil {
 			return err
@@ -220,68 +233,20 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		http.Error(w, message, status)
 		return
 	}
-	now := time.Now().UTC().Format(time.RFC3339)
-	a.mu.Lock()
-	capturedProfile, capturedFound := a.profileByIDLocked(profile.ID)
-	if a.cmd != cmd || !capturedFound || desktopTorSourceIdentityToken(capturedProfile) != prelaunch.workspace.tor.profileToken || selection.currentLocked(a) != nil || a.validateExternalProfileExpectedProfilesLocked(q, profile) != nil || startup != nil && startup.currentLocked(a) != nil {
-		a.mu.Unlock()
-		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge runtime or captured startup selection changed before dynamic exit proof could be adopted")
+	saved, saveErr := a.commitDesktopTorChoice(selection, prelaunch.workspace, q, startup, operation, selected, actualIP)
+	if saveErr != nil {
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, saveErr.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
-		if cleanupFailed {
+		if cleanupFailed || errors.Is(saveErr, errDesktopTorChoiceSave) {
 			status = http.StatusInternalServerError
 		}
 		http.Error(w, message, status)
 		return
 	}
-	previousStore := cloneRouterProfileStore(a.profiles)
-	found := false
-	for i := range a.profiles.Profiles {
-		if a.profiles.Profiles[i].ID == profile.ID {
-			a.profiles.Profiles[i].UseCount++
-			a.profiles.Profiles[i].LastUsedAt = now
-			a.profiles.Profiles[i].PublicIP = actualIP
-			// Usage never changes the reusable node's saved graph. Explicit
-			// Direct/entry requests belong to this captured session only.
-			found = true
-			break
-		}
-	}
-	if !found {
-		a.mu.Unlock()
-		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge profile disappeared before result adoption")
-		sessionTrackerFor(a).markRequestFailure(message)
-		status := http.StatusConflict
-		if cleanupFailed {
-			status = http.StatusInternalServerError
-		}
-		http.Error(w, message, status)
-		return
-	}
-	a.state.Connected = true
-	a.state.Phase = "connected"
-	a.state.LastError = ""
-	persistErr := a.persistProfilesLocked()
-	if persistErr != nil {
-		a.rollbackProfilesLocked(previousStore)
-		a.state.Connected = false
-		a.state.Phase = "failed"
-		a.state.LastError = persistErr.Error()
-	} else {
-		captureDesktopMTUBaselineLocked(a, prelaunch.workspace)
-	}
-	a.mu.Unlock()
-	if persistErr != nil {
-		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor bridge path was proved but observed-exit/usage persistence failed: "+persistErr.Error())
-		if !cleanupFailed {
-			message += "; runtime was torn down"
-		}
-		sessionTrackerFor(a).markRequestFailure(message)
-		http.Error(w, message, http.StatusInternalServerError)
-		return
-	}
-	if err := check(); err != nil {
-		message, cleanupFailed := a.torBridgeStopFailure(cmd, err.Error())
+	retainedProof, err = saved.adopt(a)
+	if err != nil {
+		message, cleanupFailed := a.torBridgeStopFailure(cmd, "Tor path choice was saved, but the runtime could not be retained: "+err.Error())
 		sessionTrackerFor(a).markRequestFailure(message)
 		status := http.StatusConflict
 		if cleanupFailed {
@@ -317,6 +282,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		"entry_id":          entryID,
 		"entry_mode":        entryMode,
 		"execution":         "local",
+		"choice_saved":      true,
 		"actual_public_ip":  actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",
 		"dns_mode":          policy.DNSMode,

@@ -116,10 +116,10 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 	}
 	type runtimeWire common.RouterProfile
 	var captured runtimeWire
-	if json.Unmarshal(raw, &captured) != nil || captured.ID != profile.ID || captured.External == nil || captured.External.Protocol != "tor-bridge" || launch.tor.profileToken != desktopTorSourceIdentityToken(profile) {
+	if json.Unmarshal(raw, &captured) != nil || captured.ID != profile.ID || captured.External == nil || captured.External.Protocol != "tor-bridge" || launch.tor.sourceIdentityToken() != desktopTorSourceIdentityToken(profile) {
 		return nil, errors.New("previous Tor policy differs from its captured private source")
 	}
-	selection := &desktopTorSelection{profile: cloneRouterProfile(profile), policy: cloneRouterProfile(common.RouterProfile(captured)), profileToken: launch.tor.profileToken, predecessor: launch.tor.predecessor}
+	selection := &desktopTorSelection{profile: cloneRouterProfile(profile), policy: cloneRouterProfile(common.RouterProfile(captured)), profileToken: launch.tor.sourceIdentityToken(), predecessor: launch.tor.predecessor}
 	return &speedLabTorRestore{profileToken: identity.ProfileToken, policyToken: desktopTorSourceIdentityToken(selection.policy), network: identity.Network, mtu: mtu, automaticMTU: automatic, selection: selection}, nil
 }
 

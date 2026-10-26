@@ -29,7 +29,7 @@ func captureDesktopTorMeasurementBinding(a *app, st state) (*desktopTorMeasureme
 	owner, expected := launch.tor, launch.tor.expected
 	bound := &desktopTorMeasurementBinding{launch: launch, predecessor: owner.predecessor,
 		session: expected.SessionID, source: expected.SourceSHA256, config: expected.ConfigSHA256,
-		network: owner.network, profileToken: owner.profileToken}
+		network: owner.network, profileToken: owner.sourceIdentityToken()}
 	if err := bound.currentLocked(a); err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (bound *desktopTorMeasurementBinding) currentLocked(a *app) error {
 		return errors.New("Tor measurement native process or predecessor changed")
 	}
 	expected := owner.expected
-	if bound.session == "" || bound.source == "" || bound.config == "" || bound.network == "" || bound.profileToken == "" || expected.SessionID != bound.session || expected.SourceSHA256 != bound.source || expected.ConfigSHA256 != bound.config || expected.NodeID != launch.profileID || owner.network != bound.network || owner.currentNetworkIdentity() != bound.network || owner.profileToken != bound.profileToken {
+	if bound.session == "" || bound.source == "" || bound.config == "" || bound.network == "" || bound.profileToken == "" || expected.SessionID != bound.session || expected.SourceSHA256 != bound.source || expected.ConfigSHA256 != bound.config || expected.NodeID != launch.profileID || owner.network != bound.network || owner.currentNetworkIdentity() != bound.network || owner.sourceIdentityToken() != bound.profileToken {
 		return errors.New("Tor measurement source, session or physical network changed")
 	}
 	profile, exists := a.profileByIDLocked(launch.profileID)

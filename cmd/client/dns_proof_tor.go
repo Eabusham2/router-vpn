@@ -35,7 +35,8 @@ func proveDesktopTorDNS(ctx context.Context, a *app, s observedConnection, runti
 		return fail(errors.New("selected Tor DNS has no captured native runtime"))
 	}
 	owner := launch.tor
-	if desktopTorSourceIdentityToken(s.Profile) != owner.profileToken {
+	sourceToken := desktopTorSourceIdentityToken(s.Profile)
+	if sourceToken != owner.sourceIdentityToken() {
 		return fail(errors.New("selected Tor DNS observation differs from its captured private policy"))
 	}
 	current := func() error {
@@ -44,6 +45,9 @@ func proveDesktopTorDNS(ctx context.Context, a *app, s observedConnection, runti
 		}
 		if _, err := a.readDesktopTorProof(launch); err != nil {
 			return err
+		}
+		if sourceToken != owner.sourceIdentityToken() {
+			return errors.New("selected Tor DNS observation was superseded by a saved path choice")
 		}
 		a.mu.Lock()
 		defer a.mu.Unlock()

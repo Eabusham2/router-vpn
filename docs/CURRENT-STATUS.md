@@ -38,8 +38,12 @@ selected DNS before stopping the previous runtime. Native preflight precedes
 DNS owner transfer. Speed Lab now retains that exact private path through
 temporary preparation, cancellation and restoration, requiring current
 ownership before stopping a runtime and fresh proof before restoring its MTU.
-The saved chosen-path preference and Startup Last remain subsequent work;
-physical/public-circuit acceptance is separate.
+After proof, the chosen Direct/Router-entry path is now saved on the original
+private node and retained by Startup Last and complete-profile CRUD. A once-only
+committed-source binding keeps the same native owner while rejecting its old
+profile revision; the native capture and private entry assets stay immutable.
+Cancellation after a durable save reports the saved choice without pretending
+to roll disk state back. Physical/public-circuit acceptance is separate.
 
 Tor selected-DNS proof now checks the exact native receipt and configuration,
 including the resolver transport and captured entry/exit detour. Retained DNS

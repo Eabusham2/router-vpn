@@ -172,6 +172,12 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 					q.ExpectedProfileTokens[entry.ID] = publicProfileToken(entry)
 				}
 				original, entrySource := desktopTorSourceIdentityToken(*profile), cloneRouterProfile(f.a.profiles.Profiles[1])
+				wantSaved := cloneRouterProfile(*profile)
+				wantSaved.MultihopEnabled, wantSaved.MultihopExecution = wantEntry, "local"
+				wantSaved.MultihopEntryID, wantSaved.MultihopExitID, wantSaved.MultihopEntryMode = "", "", ""
+				if wantEntry {
+					wantSaved.MultihopEntryID, wantSaved.MultihopExitID, wantSaved.MultihopEntryMode = entrySource.ID, profile.ID, "wg"
+				}
 				response := f.request(t, q)
 				if response.Code != http.StatusOK {
 					t.Fatal(response.Code, response.Body.String())
@@ -190,9 +196,9 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 				current := cloneRouterProfile(f.a.profiles.Profiles[0])
 				connected, base := f.a.state.Connected, f.a.state.Base
 				f.a.mu.Unlock()
-				if !connected || original != desktopTorSourceIdentityToken(current) || !reflect.DeepEqual(entrySource, f.a.profiles.Profiles[1]) ||
+				if !connected || desktopTorSourceIdentityToken(wantSaved) != desktopTorSourceIdentityToken(current) || f.launch.tor.profileToken != original || f.launch.tor.sourceIdentityToken() != desktopTorSourceIdentityToken(current) || !reflect.DeepEqual(entrySource, f.a.profiles.Profiles[1]) ||
 					wantEntry && base != "wg" || !wantEntry && base != "tor" || f.preflight != 2 || f.commands != 1 {
-					t.Fatal("public Connect rewrote a saved selection or failed to adopt its actual native owner", base)
+					t.Fatal("public Connect lost the proved saved choice or changed the captured private source", base)
 				}
 				if got, ok := activeDNSRuntimeIdentities.Load(f.a); !ok || got.(activeDNSRuntimeIdentity).Config != filepath.Join(f.launch.directory, "sing-box.json") {
 					t.Fatal("admitted Tor runtime did not publish its own DNS configuration")
