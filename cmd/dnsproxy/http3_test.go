@@ -77,9 +77,26 @@ func newDNSTestH3At(t *testing.T, handler http.HandlerFunc, address, identity st
 	if ip.To4() == nil {
 		udpNetwork, tcpNetwork = "udp6", "tcp6"
 	}
-	udp, err := net.ListenUDP(udpNetwork, &net.UDPAddr{IP: ip})
+	// Let TCP choose an allowed ephemeral port before reserving the same UDP
+	// endpoint. A UDP-selected ephemeral port may be reserved against explicit
+	// TCP binds on Windows. Keep both sockets owned before starting the server;
+	// TCP remains the live forbidden-downgrade witness for every test.
+	var tcp net.Listener
+	var udp *net.UDPConn
+	var err error
+	for range 8 {
+		tcp, err = net.Listen(tcpNetwork, net.JoinHostPort(address, "0"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		udp, err = net.ListenUDP(udpNetwork, &net.UDPAddr{IP: ip, Port: tcp.Addr().(*net.TCPAddr).Port})
+		if err == nil {
+			break
+		}
+		_ = tcp.Close()
+	}
 	if err != nil {
-		t.Fatal(err)
+		t.Fatal("could not reserve the same owned TCP/UDP fixture endpoint", err)
 	}
 	f := &dnsTestH3{upstream: upstream{Protocol: "h3", Server: address, Port: udp.LocalAddr().(*net.UDPAddr).Port, ServerName: identity, Path: "/owned-query?node=captured"}, roots: roots, pem: pem, sni: make(chan string, 32)}
 	server := &http3.Server{TLSConfig: &tls.Config{MinVersion: tls.VersionTLS13, Certificates: []tls.Certificate{certificate}, GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
@@ -99,13 +116,6 @@ func newDNSTestH3At(t *testing.T, handler http.HandlerFunc, address, identity st
 	}), ConnContext: func(ctx context.Context, _ *quic.Conn) context.Context { f.conns.Add(1); return ctx }}
 	served := make(chan error, 1)
 	go func() { served <- server.Serve(udp) }()
-	// TCP on the same literal IP/port is a downgrade witness, never a resolver.
-	tcp, err := net.Listen(tcpNetwork, udp.LocalAddr().String())
-	if err != nil {
-		_ = server.Close()
-		_ = udp.Close()
-		t.Fatal(err)
-	}
 	tcpDone := make(chan struct{})
 	go func() {
 		defer close(tcpDone)
