@@ -106,6 +106,19 @@ foreach($name in @('FwpmEngineOpen0','FwpmGetAppIdFromFileName0','ConvertInterfa
     $import=$method.GetCustomAttributes([Runtime.InteropServices.DllImportAttribute],$false)[0]
     Check ($import.ExactSpelling -and $import.CharSet -eq [Runtime.InteropServices.CharSet]::Unicode -and $import.EntryPoint -ceq $name) 'An unsuffixed Unicode Windows API would be resolved through a different export name.'
 }
+$flagsMatch=$nativeType.GetMethod('FilterFlagsMatch',[Reflection.BindingFlags]'Static,NonPublic')
+foreach($persistent in @($false,$true)) {
+    $required=if($persistent) { [uint32]1 } else { [uint32]0 }
+    foreach($indexed in @([uint32]0,[uint32]64)) {
+        Check ([bool]$flagsMatch.Invoke($null,[object[]]@(($required -bor $indexed),$persistent))) 'Actual BFE indexing was confused with a changed policy lifetime.'
+        Check (-not [bool]$flagsMatch.Invoke($null,[object[]]@((($required -bxor 1) -bor $indexed),$persistent))) 'The native readback accepted another policy lifetime.'
+        for($bit=1;$bit -lt 32;$bit++) {
+            if($bit -eq 6) { continue }
+            $changed=[uint32](([uint64]1 -shl $bit) -bor $required -bor $indexed)
+            Check (-not [bool]$flagsMatch.Invoke($null,[object[]]@($changed,$persistent))) 'The native readback accepted disabled, boot-time, action-right or unknown flags.'
+        }
+    }
+}
 Check $policyType.IsSealed 'WFP plans can be subclassed.'
 Check ($policyType.GetConstructors().Length -eq 0) 'An unvalidated public WFP plan can be constructed.'
 Check ($policyType.GetFields([Reflection.BindingFlags]'Public,Instance').Length -eq 0) 'The WFP plan exposes mutable public fields.'
@@ -211,6 +224,11 @@ Reject { & ([scriptblock]::Create($helperText.Replace('value.Flags = persistent 
 $permitType=Source-Variant 'PermitDeny' 'Pair(bases, "deny", family, 1, new WfpCondition[0], appScope, false);' 'Pair(bases, "deny", family, 1, new WfpCondition[0], appScope, true);'
 $staticType=Source-Variant 'StaticLease' 'session.Flags = dynamic ? 1U : 0U;' 'session.Flags = 0U;'
 $ownerType=Source-Variant 'OwnerCollision' '"RouterVPN-WFP/1\n" + owner + "\n" + source + "\n" + digest + "\n" + label' '"RouterVPN-WFP/1\n" + label'
+$disabledType=Source-Variant 'DisabledReadback' '(flags & ~0x40U) == (persistent ? 1U : 0U)' '(flags & ~0x60U) == (persistent ? 1U : 0U)'
+$disabledNative=$disabledType.Assembly.GetType(($disabledType.Namespace+'.WfpNative'),$true)
+$disabledMatch=$disabledNative.GetMethod('FilterFlagsMatch',[Reflection.BindingFlags]'Static,NonPublic')
+Check ([bool]$disabledMatch.Invoke($null,[object[]]@([uint32]0x61,$true))) 'The disabled-filter defect did not reach the intended compiled readback.'
+Check (-not [bool]$flagsMatch.Invoke($null,[object[]]@([uint32]0x61,$true))) 'The readback accepted a disabled deny as effective protection.'
 $mutantA=Create-Policy $ownerType ('a'*32) ('b'*64) ([string[]]@('tcp|203.0.113.7|443')) ([string[]]@())
 $mutantB=Create-Policy $ownerType ('c'*32) ('d'*64) ([string[]]@('tcp|203.0.113.8|444')) ([string[]]@())
 Check ($mutantA.SublayerKey -eq $mutantB.SublayerKey) 'The intended ownership collision mutation did not execute.'

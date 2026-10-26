@@ -411,7 +411,7 @@ namespace RouterVPN {
             WfpNative.Check(WfpNative.FwpmFilterGetByKey0(handle, ref key, out pointer), "read owned WFP filter " + rule.Name);
             try {
                 WfpNative.Filter value = (WfpNative.Filter)Marshal.PtrToStructure(pointer, typeof(WfpNative.Filter));
-                if (value.Key != key || value.Layer != rule.Layer || value.Sublayer != policy.SublayerKey || value.Flags != (persistent ? 1U : 0U) || value.Provider != IntPtr.Zero || value.Action.Type != (rule.Permit ? 0x1002U : 0x1001U) || value.Action.Key != Guid.Empty || value.FilterId == 0 || value.ConditionCount != rule.Conditions.Length || !WfpMemory.EqualBlob(value.Data, policy.Metadata(rule.Name)) || value.Weight.Type != 4 || value.Weight.Data.Pointer == IntPtr.Zero || unchecked((ulong)Marshal.ReadInt64(value.Weight.Data.Pointer)) != rule.Weight) {
+                if (value.Key != key || value.Layer != rule.Layer || value.Sublayer != policy.SublayerKey || !WfpNative.FilterFlagsMatch(value.Flags, persistent) || value.Provider != IntPtr.Zero || value.Action.Type != (rule.Permit ? 0x1002U : 0x1001U) || value.Action.Key != Guid.Empty || value.FilterId == 0 || value.ConditionCount != rule.Conditions.Length || !WfpMemory.EqualBlob(value.Data, policy.Metadata(rule.Name)) || value.Weight.Type != 4 || value.Weight.Data.Pointer == IntPtr.Zero || unchecked((ulong)Marshal.ReadInt64(value.Weight.Data.Pointer)) != rule.Weight) {
                     // Keep rejection exact while identifying which native
                     // readback contract failed. Never print provider metadata,
                     // credentials, the captured source or condition payloads.
@@ -446,6 +446,11 @@ namespace RouterVPN {
     }
     static class WfpNative {
         internal const uint FilterNotFound = 0x80320003, SublayerNotFound = 0x80320007;
+        // BFE may add FWPM_FILTER_FLAG_INDEXED (0x40) during native lookup
+        // optimization. It changes neither action nor lifetime. Every other
+        // bit remains exact, including DISABLED, BOOTTIME and action rights.
+        // learn.microsoft.com/windows/win32/api/fwpmtypes/ns-fwpmtypes-fwpm_filter0
+        internal static bool FilterFlagsMatch(uint flags, bool persistent) { return (flags & ~0x40U) == (persistent ? 1U : 0U); }
         internal static readonly Guid Connect4 = new Guid("c38d57d1-05a7-4c33-904f-7fbceee60e82"), Connect6 = new Guid("4a72393b-319f-44bc-84c3-ba54dcb3b6b4"), Accept4 = new Guid("e1cd9fe7-f4b5-4273-96c0-592e487b8650"), Accept6 = new Guid("a3b42c97-9f04-4672-b87e-cee9c483257f");
         internal static readonly Guid RemoteAddress = new Guid("b235ae9a-1d64-49b8-a44c-5ff3d9095045"), RemotePort = new Guid("c35a604d-d22b-4e1a-91b4-68f674ee674b"), LocalPort = new Guid("0c1ba1af-5765-453f-af22-a8f791ac775b"), Protocol = new Guid("3971ef2b-623e-4f9a-8cb1-6e79b806b9a7"), Flags = new Guid("632ce23b-5167-435c-86d7-e903684aa80c"), Interface = new Guid("4cd62a49-59c3-4969-b7f3-bda5d32890a4"), AppId = new Guid("d78e1e87-8644-4ea5-9437-d809ecefc971");
         [StructLayout(LayoutKind.Sequential)] internal struct Display { internal IntPtr Name, Description; }
