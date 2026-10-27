@@ -409,7 +409,14 @@ physical firewall/leak acceptance. The idle import/update API now preserves the
 saved complete Router path when replacing bridge lines, checks captured
 selected/entry/exit revisions under the transaction and rejects cancelled or
 stale mutations before persistence. Four executable broken variants are
-rejected. Native editor adoption of that revision contract remains separate.
+rejected. Native Windows, Swift and GTK editors now retain the displayed
+source catalog, load the saved name/protection when Update is checked and send
+the same entry/exit revision expectations after a current-source recheck. The
+macOS menu opens that same Swift editor. Invalid saved protection requires an
+explicit choice, never an automatic Off fallback. Thirteen actual requests per
+platform pass the real importer, with nine broken callback/capture variants
+rejected. GTK widgets execute locally under Xvfb; actual WPF/AppKit and current
+packaged builds remain separate hosted-platform evidence.
 
 The ordinary-external predecessor prerequisite now captures its exact native
 transport, credentials, selected DNS/bootstrap and MTU through the shared

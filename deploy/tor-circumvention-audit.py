@@ -630,6 +630,12 @@ need("client/macos/UnifiedControlCenterPolicy.swift", "Tor pluggable transport +
 need(
     "client/macos/RouterVPNMenuBar.m",
     "Tor Bridges…",
+    'NSSelectorFromString(@"openTorBridgeBuilder")',
+    "window.windowController",
+    "[NSApp sendAction:action to:controller from:sender]",
+)
+need(
+    "client/macos/macos-tor-bridge-ui-transform.py",
     "/api/tor-bridge/capabilities",
     "/api/tor-bridge/import",
     "obfs4",
@@ -638,7 +644,9 @@ need(
     "WebTunnel",
     "Auto / Custom",
     "short-lived volunteer WebRTC proxies",
-    "profile data cannot inject ClientTransportPlugin commands",
+    "torBridgeImportBody",
+    "externalValidateCapturedBody(body, current: current)",
+    "profile_update_source_preconditions",
 )
 need(
     "client/RouterVPN-Windows-TorBridge.ps1",
@@ -666,10 +674,11 @@ need(
     "WebTunnel",
     "Auto / Custom",
     "It never accepts executable paths or raw torrc directives.",
-    "Update currently selected Tor node",
-    "active_router_id(state->app)",
-    'json_builder_set_member_name(builder, "id")',
-    "Existing private bridge lines are never read back into this form",
+    "Update the Tor node selected when this dialog opened",
+    "copy_public_source_value_v24(displayed)",
+    "external_captured_body_v24(payload, state->opened, current, validation_error)",
+    'json_object_set_string_member(captured_object, "id", update_id)',
+    "existing private lines are never read back",
 )
 need(
     "client/linux/routervpn-unified-shell-v8.inc",

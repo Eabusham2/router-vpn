@@ -380,12 +380,54 @@ function Add-RouterVPNTorBridgeWindowsShell {
     $stateMarker='$script:EventSeq=[uint64]0;$script:Busy=$false;$script:NodeSort=''current'';$script:DnsPolicySummary=''Saved DNS policy not loaded yet.'''
     if(-not $ProductSource.Contains($stateMarker)){throw 'Windows Tor bridge UI: product state marker drifted.'}
     $functions=@'
+function GetUnifiedTorUpdateProfile($Opened){
+    $ID=[string](ExternalPublicValue $Opened 'selected_id')
+    $Matches=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
+    if(-not$ID-or$Matches.Count-ne1){return $null}
+    $Profile=$Matches[0];$External=ExternalPublicValue $Profile 'external' $null
+    if((ExternalPublicValue $Profile 'node_kind') -cne 'external'-or(ExternalPublicValue $External 'protocol') -cne 'tor-bridge'){return $null}
+    return $Profile
+}
+function TestUnifiedTorRouterPath($Opened,$Profile){
+    if($null-eq$Profile-or(ExternalPublicValue $Profile 'multihop_enabled' $false) -cne $true){return $false}
+    $ID=[string](ExternalPublicValue $Profile 'id');$Entry=[string](ExternalPublicValue $Profile 'multihop_entry_id')
+    $Execution=[string](ExternalPublicValue $Profile 'multihop_execution')
+    if(-not$Entry-or$Entry-ceq$ID-or(ExternalPublicValue $Profile 'multihop_exit_id') -cne $ID-or$Execution-cnotin@('','local')){return $false}
+    $Entries=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Entry})
+    return $Entries.Count-eq1-and(ExternalPublicValue $Entries[0] 'node_kind' 'router-vpn') -cin@('','router-vpn')-and$null-eq(ExternalPublicValue $Entries[0] 'external' $null)
+}
+function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Current=$null){
+    if([string]$Body.kill_switch_policy-cnotin@('off','on-connect','always')){throw 'Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.'}
+    $Result=@{};foreach($Key in $Body.Keys){$Result[$Key]=$Body[$Key]}
+    $Profile=$null
+    if($Update){
+        $Version=ExternalPublicValue $Capabilities 'profile_update_source_preconditions' $null
+        if($Version-isnot[bool]-or-not$Version){throw 'Update the local controller before editing this captured Tor node.'}
+        $Profile=GetUnifiedTorUpdateProfile $Opened
+        if($null-eq$Profile){throw 'Open Tor bridges with the Tor node you want to update selected.'}
+        $ID=[string](ExternalPublicValue $Profile 'id')
+        $Capture=NewUnifiedExternalCapturedBody @{profile_id=$ID} $Opened $Current
+        $Result.id=$ID;$Result.expected_selected_node_id=$Capture.expected_selected_node_id;$Result.expected_profile_tokens=$Capture.expected_profile_tokens
+    }
+    $Rows=@((ExternalPublicValue $Capabilities 'transports' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq [string]$Body.transport})
+    if($Rows.Count-ne1){throw 'Refresh Tor transport support before saving.'}
+    $Direct=(ExternalPublicValue $Rows[0] 'strict_kill_switch' $false) -ceq $true-and@($Body.bridges).Count-eq1
+    $Router=$Update-and(TestUnifiedTorRouterPath $Opened $Profile)-and(ExternalPublicValue $Rows[0] 'strict_router_entry_kill_switch' $false) -ceq $true
+    if([string]$Body.kill_switch_policy-cne'off'-and-not$Direct-and-not$Router){throw 'This bridge selection needs a saved Local Router entry for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.'}
+    return $Result
+}
 function ShowUnifiedTorBridgeBuilder{
+    if(-not(TestUnifiedExternalMutationIdle)){Log 'Disconnect before adding or updating Tor bridge nodes.';return}
+    $Displayed=(Control 'UnifiedNodeCombo').Tag
+    $Opened=if($null-ne$Displayed){$Displayed|ConvertTo-Json -Depth 32|ConvertFrom-Json}else{$null}
+    if($null-ne$Opened-and[string](ExternalPublicValue $Opened 'selected_id') -cne [string](Control 'UnifiedNodeCombo').SelectedValue){Log 'Refresh the displayed node selection before opening Tor bridge controls.';return}
+    $CapturedProfile=GetUnifiedTorUpdateProfile $Opened
     [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Tor censorship circumvention" Width="760" Height="690" MinWidth="620" MinHeight="560" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
     <TextBlock Text="Tor bridges" FontSize="26" FontWeight="Bold"/>
     <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Choose how Tor gets through censorship. obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles ordinary HTTPS web traffic. Auto / Custom accepts validated Tor-issued bridge lines. Tor's proved circuit—not homemade XOR—is the encrypted final path."/>
+    <CheckBox Name="TorUpdate" Content="Update the Tor node selected when this dialog opened" Margin="0,0,0,10"/>
     <TextBlock Text="Node name"/><TextBox Name="TorName" Margin="0,4,0,10" Padding="8"/>
     <Grid Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
       <StackPanel Margin="0,0,6,0"><TextBlock Text="Transport"/><ComboBox Name="TorTransport" Margin="0,4,0,0"><ComboBoxItem Content="obfs4" Tag="obfs4"/><ComboBoxItem Content="meek" Tag="meek_lite"/><ComboBoxItem Content="Snowflake" Tag="snowflake"/><ComboBoxItem Content="WebTunnel" Tag="webtunnel"/><ComboBoxItem Content="Auto / Custom" Tag="custom"/></ComboBox></StackPanel>
@@ -402,31 +444,47 @@ function ShowUnifiedTorBridgeBuilder{
 "@
     $reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($reader);$D.Owner=$W
     $Name=$D.FindName('TorName');$Transport=$D.FindName('TorTransport');$Kill=$D.FindName('TorKill');$Lines=$D.FindName('TorLines');$Capability=$D.FindName('TorCapability');$Status=$D.FindName('TorStatus');$Transport.SelectedIndex=0;$Kill.SelectedIndex=0
-    $Caps=@{}
+    $Update=$D.FindName('TorUpdate');$Update.IsEnabled=$null-ne$CapturedProfile
+    if($null-ne$CapturedProfile){$Update.Content='Update '+[string](ExternalPublicValue $CapturedProfile 'name')+' (paste replacement bridge lines)'}
+    $Support=@{Root=$null;Transports=@{}}
     $Refresh={
         try{
             $R=Api '/api/tor-bridge/capabilities' -Timeout 8
-            $Caps=@{};foreach($C in @($R.transports)){$Caps[[string]$C.id]=$C}
-            $ID=[string](($Transport.SelectedItem).Tag);$C=$Caps[$ID]
+            $Support.Root=$R;$Support.Transports=@{};foreach($C in @($R.transports)){$Support.Transports[[string]$C.id]=$C}
+            $ID=[string](($Transport.SelectedItem).Tag);$C=$Support.Transports[$ID]
             if($C){
                 $Availability=if([bool]$C.supported){'Available'}else{'Unavailable'}
-                $Strict=if([bool]$C.strict_kill_switch){'supported'}else{'not currently safe'}
-                $Capability.Text=$Availability+" • strict kill switch "+$Strict+"`n"+[string]$C.description
+                $Strict=if([bool]$C.strict_kill_switch){'Direct with one fixed bridge'}elseif((ExternalPublicValue $C 'strict_router_entry_kill_switch' $false)-ceq$true){'with a saved Local Router entry'}else{'unavailable for this transport'}
+                $Capability.Text=$Availability+" • strict protection "+$Strict+"`n"+[string]$C.description
                 $Why=[string]$C.reason;if($Why){$Capability.Text+="`nReason: "+$Why}
             }else{$Capability.Text="Support details unavailable for $ID."}
         }catch{$Capability.Text='Tor support check failed: '+$_.Exception.Message}
     }
     $Transport.Add_SelectionChanged({&$Refresh})
-    $Kill.Add_SelectionChanged({$ID=[string](($Transport.SelectedItem).Tag);$C=$Caps[$ID];if($C -and -not[bool]$C.strict_kill_switch -and [string](($Kill.SelectedItem).Tag) -ne 'off'){$Status.Text='Dynamic CDN/STUN/WebRTC/bootstrap transports require Kill switch Off until process-scoped PT egress filtering exists.'}else{$Status.Text=''}})
+    $Kill.Add_SelectionChanged({$Status.Text='The saved path and bridge selection are checked together when you save.'})
+    $Update.Add_Checked({
+        $SavedProfile=GetUnifiedTorUpdateProfile $Opened
+        $SavedPolicy=[string](ExternalPublicValue $SavedProfile 'kill_switch_policy')
+        $Kill.SelectedIndex=-1
+        for($Index=0;$Index-lt$Kill.Items.Count;$Index++){if([string]$Kill.Items[$Index].Tag-ceq$SavedPolicy){$Kill.SelectedIndex=$Index;break}}
+        if($null-ne$SavedProfile){$Name.Text=[string](ExternalPublicValue $SavedProfile 'name')}
+        $Status.Text=if($Kill.SelectedIndex-lt0){'The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.'}else{'Loaded the captured node name and kill-switch policy. Paste replacement bridge lines; the saved path and DNS remain attached to this node.'}
+    })
+    $Update.Add_Unchecked({$Kill.SelectedIndex=0;$Status.Text='Adding a new Tor node. Choose its protection and paste bridge lines.'})
     $D.FindName('TorRefresh').Add_Click({&$Refresh})
     $D.FindName('TorClose').Add_Click({$D.Close()})
     $D.FindName('TorSave').Add_Click({
         try{
+            if(-not(TestUnifiedExternalMutationIdle)){throw 'VPN state changed while the Tor dialog was open. Nothing was saved.'}
             $Rows=@($Lines.Text -split "`r?`n"|ForEach-Object{$_.Trim()}|Where-Object{$_});if(-not$Rows){throw 'Paste at least one Tor bridge line.'}
-            $ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag);$C=$Caps[$ID]
-            if($C -and -not[bool]$C.strict_kill_switch -and $KillID -ne 'off'){throw 'This dynamic Tor transport requires Kill switch Off until Router VPN owns process-scoped PT egress.'}
-            $R=Api '/api/tor-bridge/import' 'POST' @{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID} 25
-            $Status.Text='Tor node saved and selected. Before connecting, choose Custom TCP, DoT, DoH or Rescue in DNS. Transport availability is shown above.'
+            $ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag)
+            $Body=@{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID}
+            [void](NewUnifiedTorImportBody $Body $Opened ([bool]$Update.IsChecked) $Support.Root)
+            $Current=if($Update.IsChecked){Api '/api/nodes' -Timeout 5}else{$null}
+            $Body=NewUnifiedTorImportBody $Body $Opened ([bool]$Update.IsChecked) $Support.Root $Current
+            $R=Api '/api/tor-bridge/import' 'POST' $Body 25
+            $Status.Text=if($Update.IsChecked){'Tor node updated. Its saved path and DNS choice are preserved. Reopen this dialog before making another edit.'}else{'Tor node saved and selected. Before connecting, choose its entry for Home AdGuard or choose Custom TCP, DoT, DoH or Rescue in DNS.'}
+            $D.FindName('TorSave').IsEnabled=$false
             Log ('Tor bridge profile saved: '+[string]$R.profile.name);RefreshProduct
         }catch{$Status.Text='Tor node rejected: '+$_.Exception.Message}
     })

@@ -15,7 +15,27 @@ typedef struct {
     GtkWidget *lines;
     GtkWidget *capability;
     GtkWidget *status;
+    JsonNode *opened;
+    JsonNode *capabilities;
 } LinuxTorBridgeV13;
+
+static JsonObject *linux_tor_update_profile_v13(LinuxTorBridgeV13 *state) {
+    JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
+    JsonObject *profile = external_source_profile_v24(store, external_source_selection_v24(store));
+    return g_strcmp0(external_path_string_v4(profile, "node_kind"), "external") == 0 &&
+        g_strcmp0(external_path_string_v4(external_path_object_v4(profile, "external"), "protocol"), "tor-bridge") == 0 ? profile : NULL;
+}
+
+static gboolean linux_tor_router_path_v13(LinuxTorBridgeV13 *state, JsonObject *profile) {
+    const char *id = external_path_string_v4(profile, "id"), *entry_id = external_path_string_v4(profile, "multihop_entry_id");
+    const char *execution = external_path_string_v4(profile, "multihop_execution");
+    if (!external_path_flag_v4(profile, "multihop_enabled") || !entry_id[0] || g_strcmp0(id, entry_id) == 0 ||
+        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0)) return FALSE;
+    JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
+    JsonObject *entry = external_source_profile_v24(store, entry_id);
+    const char *kind = external_path_string_v4(entry, "node_kind");
+    return entry != NULL && (!kind[0] || g_strcmp0(kind, "router-vpn") == 0) && !json_object_has_member(entry, "external");
+}
 
 static char *linux_tor_text_v13(GtkWidget *view) {
     GtkTextBuffer *buffer = gtk_text_view_get_buffer(GTK_TEXT_VIEW(view));
@@ -27,6 +47,21 @@ static char *linux_tor_text_v13(GtkWidget *view) {
 static void linux_tor_status_v13(LinuxTorBridgeV13 *state, const char *text) {
     if (state == NULL || state->status == NULL) return;
     gtk_label_set_text(GTK_LABEL(state->status), text != NULL ? text : "");
+}
+
+static void linux_tor_update_changed_v13(GtkToggleButton *button, gpointer data) {
+    LinuxTorBridgeV13 *state = data;
+    if (!gtk_toggle_button_get_active(button)) {
+        gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->kill), "off");
+        linux_tor_status_v13(state, "Adding a new Tor node. Choose its protection and paste bridge lines.");
+        return;
+    }
+    JsonObject *profile = linux_tor_update_profile_v13(state);
+    const char *policy = external_path_string_v4(profile, "kill_switch_policy");
+    gtk_combo_box_set_active(GTK_COMBO_BOX(state->kill), -1);
+    gboolean loaded = gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->kill), policy);
+    if (profile != NULL) gtk_entry_set_text(GTK_ENTRY(state->name), external_path_string_v4(profile, "name"));
+    linux_tor_status_v13(state, loaded ? "Loaded the captured node name and kill-switch policy. Paste replacement bridge lines; the saved path and DNS remain attached to this node." : "The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.");
 }
 
 static gboolean linux_tor_mutation_idle_v13(App *app, char **reason) {
@@ -64,6 +99,7 @@ static gboolean linux_tor_mutation_idle_v13(App *app, char **reason) {
 
 static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
     if (state == NULL) return;
+    g_clear_pointer(&state->capabilities, json_node_free);
     Buffer out = {0};
     char *err = NULL;
     GString *summary = g_string_new("");
@@ -76,6 +112,7 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
         if (items == NULL) {
             g_string_assign(summary, "Tor transport capability response is unavailable.");
         } else {
+            state->capabilities = copy_public_source_value_v24(root);
             for (guint i = 0; i < json_array_get_length(items); i++) {
                 JsonObject *item = json_array_get_object_element(items, i);
                 if (item == NULL) continue;
@@ -84,8 +121,9 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
                 const char *reason = obj_string(item, "reason");
                 gboolean supported = !json_object_has_member(item, "supported") || json_object_get_boolean_member(item, "supported");
                 gboolean strict = json_object_has_member(item, "strict_kill_switch") && json_object_get_boolean_member(item, "strict_kill_switch");
+                gboolean router_strict = external_path_flag_v4(item, "strict_router_entry_kill_switch");
                 if (summary->len) g_string_append_c(summary, '\n');
-                g_string_append_printf(summary, "%s — %s • strict kill switch %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "supported" : "not currently safe");
+                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : router_strict ? "with a saved Local Router entry" : "unavailable for this transport");
                 if (description[0]) g_string_append_printf(summary, "\n  %s", description);
                 if (reason[0]) g_string_append_printf(summary, "\n  Reason: %s", reason);
             }
@@ -98,16 +136,19 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
     free(out.data);
 }
 
-static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, char **validation_error) {
+static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, char **validation_error) {
     if (validation_error != NULL) *validation_error = NULL;
     const char *name = gtk_entry_get_text(GTK_ENTRY(state->name));
     const char *transport = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->transport));
     const char *kill = gtk_combo_box_get_active_id(GTK_COMBO_BOX(state->kill));
     const char *update_id = NULL;
+    JsonObject *profile = NULL;
+    JsonObject *caps = state->capabilities != NULL && JSON_NODE_HOLDS_OBJECT(state->capabilities) ? json_node_get_object(state->capabilities) : NULL;
     if (state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected))) {
-        update_id = active_router_id(state->app);
-        if (update_id == NULL || update_id[0] == '\0') {
-            if (validation_error != NULL) *validation_error = g_strdup("Select the Tor node you want to update before opening this dialog.");
+        profile = linux_tor_update_profile_v13(state);
+        update_id = external_path_string_v4(profile, "id");
+        if (profile == NULL || !external_path_flag_v4(caps, "profile_update_source_preconditions")) {
+            if (validation_error != NULL) *validation_error = g_strdup("Open this dialog with a Tor node selected and a controller that supports captured updates.");
             return NULL;
         }
     }
@@ -126,16 +167,31 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, char **validation_e
         g_ptr_array_unref(bridges);
         return NULL;
     }
-    if (transport == NULL || kill == NULL) {
+    if (transport == NULL || kill == NULL || (g_strcmp0(kill, "off") != 0 && g_strcmp0(kill, "on-connect") != 0 && g_strcmp0(kill, "always") != 0)) {
         if (validation_error != NULL) *validation_error = g_strdup("Choose a Tor transport and kill-switch policy.");
         g_ptr_array_unref(bridges);
         return NULL;
     }
 
+    JsonNode *transport_node = caps != NULL && json_object_has_member(caps, "transports") ? json_object_get_member(caps, "transports") : NULL;
+    JsonArray *transports = transport_node != NULL && JSON_NODE_HOLDS_ARRAY(transport_node) ? json_node_get_array(transport_node) : NULL;
+    JsonObject *capability = NULL; guint matches = 0;
+    for (guint i = 0; transports != NULL && i < json_array_get_length(transports); i++) {
+        JsonNode *item = json_array_get_element(transports, i);
+        JsonObject *row = item != NULL && JSON_NODE_HOLDS_OBJECT(item) ? json_node_get_object(item) : NULL;
+        if (g_strcmp0(external_path_string_v4(row, "id"), transport) == 0) { capability = row; matches++; }
+    }
+    gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && bridges->len == 1;
+    gboolean router = profile != NULL && linux_tor_router_path_v13(state, profile) && external_path_flag_v4(capability, "strict_router_entry_kill_switch");
+    if (matches != 1 || (g_strcmp0(kill, "off") != 0 && !direct && !router)) {
+        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "This bridge selection needs a saved Local Router entry for strict protection. Save a new Direct node with Kill switch Off, then configure its entry before enabling protection in Settings.");
+        g_ptr_array_unref(bridges); return NULL;
+    }
+
     JsonBuilder *builder = json_builder_new();
     json_builder_begin_object(builder);
     if (update_id != NULL) {
-        json_builder_set_member_name(builder, "id");
+        json_builder_set_member_name(builder, "profile_id");
         json_builder_add_string_value(builder, update_id);
     }
     json_builder_set_member_name(builder, "name");
@@ -157,12 +213,26 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, char **validation_e
     json_node_free(root);
     g_object_unref(builder);
     g_ptr_array_unref(bridges);
+    if (update_id != NULL) {
+        char *captured = external_captured_body_v24(payload, state->opened, current, validation_error);
+        g_free(payload);
+        if (captured == NULL) return NULL;
+        g_autoptr(JsonNode) captured_node = parse_json(captured); g_free(captured);
+        JsonObject *captured_object = json_node_get_object(captured_node);
+        json_object_remove_member(captured_object, "profile_id");
+        json_object_set_string_member(captured_object, "id", update_id);
+        generator = json_generator_new(); json_generator_set_root(generator, captured_node);
+        payload = json_generator_to_data(generator, NULL); g_object_unref(generator);
+    }
     return payload;
 }
 
 static gboolean linux_tor_save_v13(LinuxTorBridgeV13 *state) {
     char *validation = NULL;
-    char *payload = linux_tor_payload_v13(state, &validation);
+    if (!linux_tor_mutation_idle_v13(state->app, &validation)) {
+        linux_tor_status_v13(state, validation != NULL ? validation : "Disconnect before updating Tor bridges."); g_free(validation); return FALSE;
+    }
+    char *payload = linux_tor_payload_v13(state, NULL, &validation);
     if (payload == NULL) {
         linux_tor_status_v13(state, validation != NULL ? validation : "Invalid Tor bridge form.");
         g_free(validation);
@@ -170,6 +240,16 @@ static gboolean linux_tor_save_v13(LinuxTorBridgeV13 *state) {
     }
     Buffer out = {0};
     char *err = NULL;
+    if (state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected))) {
+        gboolean read = api_request("/api/nodes", "GET", NULL, 5000, &out, &err);
+        g_autoptr(JsonNode) current = read ? parse_json(out.data) : NULL;
+        free(out.data); out = (Buffer){0}; g_free(err); err = NULL;
+        g_free(payload); payload = NULL;
+        if (current != NULL) payload = linux_tor_payload_v13(state, current, &validation);
+        if (payload == NULL) {
+            linux_tor_status_v13(state, validation != NULL ? validation : "The current node catalog is unavailable. Nothing was saved."); g_free(validation); return FALSE;
+        }
+    }
     gboolean ok = api_request("/api/tor-bridge/import", "POST", payload, 25000, &out, &err);
     g_free(payload);
     if (!ok) {
@@ -203,6 +283,11 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
 
     LinuxTorBridgeV13 state = {0};
     state.app = app;
+    JsonNode *displayed = app->window != NULL ? g_object_get_data(G_OBJECT(app->window), "router-vpn-source-catalog-v24") : NULL;
+    state.opened = displayed != NULL ? copy_public_source_value_v24(displayed) : NULL;
+    if (state.opened != NULL && JSON_NODE_HOLDS_OBJECT(state.opened) && g_strcmp0(external_source_selection_v24(json_node_get_object(state.opened)), active_router_id(app)) != 0) {
+        append_diag(app, "Refresh the displayed node selection before opening Tor bridge controls."); json_node_free(state.opened); return;
+    }
     state.dialog = gtk_dialog_new_with_buttons(
         "Tor censorship circumvention", GTK_WINDOW(app->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT,
@@ -227,8 +312,11 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     state.name = gtk_entry_new();
     gtk_entry_set_placeholder_text(GTK_ENTRY(state.name), "Node name (optional)");
     gtk_box_pack_start(GTK_BOX(box), state.name, FALSE, FALSE, 0);
-    state.update_selected = gtk_check_button_new_with_label("Update currently selected Tor node (paste replacement bridge lines below)");
-    gtk_widget_set_tooltip_text(state.update_selected, "The selected node ID is sent only when checked. The controller refuses to replace a non-Tor node. Existing private bridge lines are never read back into this form.");
+    JsonObject *captured_profile = linux_tor_update_profile_v13(&state);
+    g_autofree char *update_label = captured_profile != NULL ? g_strdup_printf("Update %s (paste replacement bridge lines below)", external_path_string_v4(captured_profile, "name")) : g_strdup("Update the Tor node selected when this dialog opened");
+    state.update_selected = gtk_check_button_new_with_label(update_label);
+    gtk_widget_set_sensitive(state.update_selected, captured_profile != NULL);
+    gtk_widget_set_tooltip_text(state.update_selected, "Updates retain the displayed Tor node and entry revisions. Reopen this dialog after changing or relinking either node. Paste replacement bridge lines; existing private lines are never read back.");
     gtk_box_pack_start(GTK_BOX(box), state.update_selected, FALSE, FALSE, 0);
 
     GtkWidget *row = gtk_box_new(GTK_ORIENTATION_HORIZONTAL, 8);
@@ -259,7 +347,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_container_add(GTK_CONTAINER(scroll), state.lines);
     gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
 
-    GtkWidget *safety = gtk_label_new("Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Profile data cannot inject ClientTransportPlugin commands, executable paths, or arbitrary torrc directives. Dynamic CDN/STUN/WebRTC paths require Kill switch Off until Router VPN can own their process-scoped bootstrap egress.");
+    GtkWidget *safety = gtk_label_new("Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Dynamic transports use a saved Local Router entry for strict protection. Save new Direct nodes with Kill switch Off, then configure their entry before enabling protection in Settings.");
     gtk_label_set_line_wrap(GTK_LABEL(safety), TRUE);
     gtk_label_set_xalign(GTK_LABEL(safety), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), safety, FALSE, FALSE, 0);
@@ -272,6 +360,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_label_set_line_wrap(GTK_LABEL(state.status), TRUE);
     gtk_label_set_xalign(GTK_LABEL(state.status), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), state.status, FALSE, FALSE, 0);
+    g_signal_connect(state.update_selected, "toggled", G_CALLBACK(linux_tor_update_changed_v13), &state);
 
     gtk_box_pack_start(GTK_BOX(content), box, TRUE, TRUE, 0);
     gtk_widget_show_all(state.dialog);
@@ -289,4 +378,6 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
         break;
     }
     gtk_widget_destroy(state.dialog);
+    g_clear_pointer(&state.opened, json_node_free);
+    g_clear_pointer(&state.capabilities, json_node_free);
 }

@@ -13,6 +13,11 @@ on:
       - 'client/native-multihop-windows.ps1'
       - 'client/native-openvpn-windows.ps1'
       - 'client/RouterVPN-Windows-TorBridge.ps1'
+      - 'client/test-windows-tor-bridge-update.ps1'
+      - 'client/macos/macos-tor-bridge-ui-transform.py'
+      - 'client/macos/test-tor-bridge-update.swift'
+      - 'client/linux/routervpn-tor-bridge-v13.inc'
+      - 'client/linux/test-tor-bridge-update.c'
       - 'client/RouterVPN-Windows-SpeedLab.ps1'
       - 'client/test-windows-speed-lab-paths.ps1'
       - 'client/macos/RouterVPNMacSpeedLab*.swift'
@@ -37,6 +42,7 @@ on:
       - 'deploy/test_sing_packet_preparation.py'
       - 'deploy/test_desktop_amnezia_runtime.py'
       - 'deploy/test_desktop_amnezia_forms.py'
+      - 'deploy/test_desktop_tor_bridge_forms.py'
       - 'deploy/test_desktop_speed_lab_forms.py'
       - 'deploy/test_macos_speed_lab_transport.py'
       - '.github/workflows/desktop-amnezia-runtime.yml'
@@ -72,6 +78,14 @@ jobs:
         run: |
           set -o pipefail
           python3 deploy/test_desktop_speed_lab_forms.py 2>&1 | tee "$RUNNER_TEMP/desktop-speed-lab-forms.log"
+      - name: Execute captured Tor bridge updates and the actual importer
+        shell: bash
+        run: |
+          set -o pipefail
+          python3 deploy/test_desktop_tor_bridge_forms.py 2>&1 | tee "$RUNNER_TEMP/desktop-tor-forms.log"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            python3 deploy/test_desktop_tor_bridge_forms.py --shell pwsh.exe 2>&1 | tee "$RUNNER_TEMP/desktop-tor-forms-pwsh.log"
+          fi
       - name: Verify actual macOS Speed Lab cancellation and ownership
         if: runner.os == 'macOS'
         shell: bash
@@ -91,6 +105,8 @@ jobs:
           path: |
             ${{ runner.temp }}/desktop-amnezia-runtime.log
             ${{ runner.temp }}/desktop-amnezia-forms.log
+            ${{ runner.temp }}/desktop-tor-forms.log
+            ${{ runner.temp }}/desktop-tor-forms-pwsh.log
             ${{ runner.temp }}/desktop-speed-lab-forms.log
             ${{ runner.temp }}/macos-speed-lab-transport.log
           if-no-files-found: error

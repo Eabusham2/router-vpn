@@ -25,9 +25,54 @@ if class_marker not in text:
     if text.count(extension_anchor) < 1:
         raise SystemExit("macOS ProductWindowController extension anchor missing")
     tor_class = r'''
+func torBridgeUpdateProfile(_ opened: [String: Any]) -> [String: Any]? {
+    guard let id = opened["selected_id"] as? String, !id.isEmpty,
+          let profiles = opened["profiles"] as? [[String: Any]] else { return nil }
+    let rows = profiles.filter { $0["id"] as? String == id }
+    guard rows.count == 1, rows[0]["node_kind"] as? String == "external",
+          (rows[0]["external"] as? [String: Any])?["protocol"] as? String == "tor-bridge" else { return nil }
+    return rows[0]
+}
+
+func torBridgeHasRouterPath(_ opened: [String: Any], profile: [String: Any]) -> Bool {
+    guard profile["multihop_enabled"] as? Bool == true, let id = profile["id"] as? String,
+          profile["multihop_exit_id"] as? String == id, let entry = profile["multihop_entry_id"] as? String,
+          !entry.isEmpty, entry != id, ["", "local"].contains(profile["multihop_execution"] as? String ?? ""),
+          let profiles = opened["profiles"] as? [[String: Any]] else { return false }
+    let rows = profiles.filter { $0["id"] as? String == entry }
+    return rows.count == 1 && ["", "router-vpn"].contains(rows[0]["node_kind"] as? String ?? "router-vpn") && rows[0]["external"] == nil
+}
+
+func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: Bool,
+                         capabilities: [String: Any], current: [String: Any]? = nil) throws -> [String: Any] {
+    func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.TorEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    guard let kill = body["kill_switch_policy"] as? String, ["off", "on-connect", "always"].contains(kill) else { throw fail("Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.") }
+    var result = body
+    var router = false
+    if update {
+        guard let version = capabilities["profile_update_source_preconditions"] as? NSNumber,
+              CFGetTypeID(version) == CFBooleanGetTypeID(), version.boolValue else { throw fail("Update the local controller before editing this captured Tor node.") }
+        guard let profile = torBridgeUpdateProfile(opened), let id = profile["id"] as? String else { throw fail("Open Tor bridges with the Tor node you want to update selected.") }
+        let capture = try externalCapturedBody(["profile_id": id], opened: opened, current: current)
+        result["id"] = id; result["expected_selected_node_id"] = capture["expected_selected_node_id"]
+        result["expected_profile_tokens"] = capture["expected_profile_tokens"]
+        router = torBridgeHasRouterPath(opened, profile: profile)
+    }
+    let rows = (capabilities["transports"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == body["transport"] as? String }
+    guard rows.count == 1 else { throw fail("Refresh Tor transport support before saving.") }
+    let direct = rows[0]["strict_kill_switch"] as? Bool == true && (body["bridges"] as? [String])?.count == 1
+    router = router && rows[0]["strict_router_entry_kill_switch"] as? Bool == true
+    guard body["kill_switch_policy"] as? String == "off" || direct || router else {
+        throw fail("This bridge selection needs a saved Local Router entry for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.")
+    }
+    return result
+}
+
 private final class RouterVPNTorBridgeBuilder: NSWindowController {
     private weak var productOwner: ProductWindowController?
     private let api: ProductAPI
+    private let opened: [String: Any]
+    private let updateSelected = NSButton(checkboxWithTitle: "Update the Tor node selected when this dialog opened", target: nil, action: nil)
     private let nameField = NSTextField(string: "")
     private let transportPopup = NSPopUpButton(frame: .zero, pullsDown: false)
     private let killSwitchPopup = NSPopUpButton(frame: .zero, pullsDown: false)
@@ -35,11 +80,15 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
     private let capabilityText = NSTextField(wrappingLabelWithString: "Checking Tor transport support…")
     private let status = NSTextField(wrappingLabelWithString: "")
     private var capabilities: [String: [String: Any]] = [:]
+    private var capabilityRoot: [String: Any] = [:]
     private let transportIDs = ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom"]
 
     init(owner: ProductWindowController, api: ProductAPI) {
         productOwner = owner
         self.api = api
+        let selection: [String: Any] = ["selected_id": owner.selectedNodeID() ?? "", "profiles": owner.profiles]
+        if let bytes = try? JSONSerialization.data(withJSONObject: selection), let copy = try? JSONSerialization.jsonObject(with: bytes) as? [String: Any] { opened = copy }
+        else { opened = [:] }
         let panel = NSPanel(contentRect: NSRect(x: 0, y: 0, width: 720, height: 640), styleMask: [.titled, .closable, .resizable], backing: .buffered, defer: false)
         panel.title = "Tor censorship circumvention"
         panel.minSize = NSSize(width: 600, height: 520)
@@ -64,11 +113,17 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         intro.textColor = .secondaryLabelColor
         root.addArrangedSubview(intro)
 
+        updateSelected.isEnabled = torBridgeUpdateProfile(opened) != nil
+        if let profile = torBridgeUpdateProfile(opened) { updateSelected.title = "Update \(profile["name"] as? String ?? "selected Tor node") (paste replacement bridge lines)" }
+        updateSelected.target = self; updateSelected.action = #selector(updateSelectionChanged)
+        root.addArrangedSubview(updateSelected)
+
         nameField.placeholderString = "Node name (optional)"
         root.addArrangedSubview(nameField)
         transportPopup.addItems(withTitles: ["obfs4", "meek", "Snowflake", "WebTunnel", "Auto / Custom"])
         transportPopup.target = self; transportPopup.action = #selector(transportChanged)
         killSwitchPopup.addItems(withTitles: ["Kill switch Off", "On connect", "Always / strict"])
+        killSwitchPopup.target = self; killSwitchPopup.action = #selector(transportChanged)
         let grid = NSGridView(views: [[NSTextField(labelWithString: "Transport"), transportPopup], [NSTextField(labelWithString: "Kill switch"), killSwitchPopup]])
         grid.rowSpacing = 6; grid.columnSpacing = 10
         root.addArrangedSubview(grid)
@@ -96,7 +151,10 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
     }
 
     private func selectedTransport() -> String { transportIDs[max(0, min(transportPopup.indexOfSelectedItem, transportIDs.count - 1))] }
-    private func selectedKillSwitch() -> String { ["off", "on-connect", "always"][max(0, min(killSwitchPopup.indexOfSelectedItem, 2))] }
+    private func selectedKillSwitch() -> String {
+        let policies = ["off", "on-connect", "always"]
+        return policies.indices.contains(killSwitchPopup.indexOfSelectedItem) ? policies[killSwitchPopup.indexOfSelectedItem] : ""
+    }
 
     private func refreshCapabilities() {
         DispatchQueue.global(qos: .utility).async { [weak self] in
@@ -105,7 +163,7 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
                 guard let root = try self.api.json("/api/tor-bridge/capabilities", timeout: 8) as? [String: Any], let rows = root["transports"] as? [[String: Any]] else { throw NSError(domain: "RouterVPNMac", code: 41, userInfo: [NSLocalizedDescriptionKey: "Tor capability response is invalid"]) }
                 var mapped: [String: [String: Any]] = [:]
                 for row in rows { if let id = row["id"] as? String { mapped[id] = row } }
-                DispatchQueue.main.async { self.capabilities = mapped; self.renderCapability() }
+                DispatchQueue.main.async { self.capabilities = mapped; self.capabilityRoot = root; self.renderCapability() }
             } catch {
                 DispatchQueue.main.async { self.capabilityText.stringValue = "Tor support check failed: \(error.localizedDescription)" }
             }
@@ -117,18 +175,31 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         guard let row = capabilities[id] else { capabilityText.stringValue = "Support details unavailable for \(id)."; return }
         let supported = row["supported"] as? Bool ?? false
         let strict = row["strict_kill_switch"] as? Bool ?? false
+        let routerStrict = row["strict_router_entry_kill_switch"] as? Bool ?? false
         let description = row["description"] as? String ?? ""
         let reason = row["reason"] as? String ?? ""
-        capabilityText.stringValue = "\(supported ? "Available" : "Unavailable") • Strict kill switch \(strict ? "supported for this path" : "not currently safe")\n\(description)\(reason.isEmpty ? "" : "\nReason: \(reason)")"
-        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "This transport has dynamic CDN/STUN/WebRTC/bootstrap egress. Choose Kill switch Off until Router VPN has process-scoped PT firewall ownership." }
+        let protection = strict ? "Direct with one fixed bridge" : (routerStrict ? "with a saved Local Router entry" : "unavailable for this transport")
+        capabilityText.stringValue = "\(supported ? "Available" : "Unavailable") • Strict protection \(protection)\n\(description)\(reason.isEmpty ? "" : "\nReason: \(reason)")"
+        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires the saved Local Router entry. The complete captured path is checked when you save." }
         else { status.stringValue = "" }
     }
 
     @objc private func transportChanged() { renderCapability() }
+    @objc private func updateSelectionChanged() {
+        if updateSelected.state == .on {
+            let profile = torBridgeUpdateProfile(opened)
+            let policy = profile?["kill_switch_policy"] as? String ?? ""
+            killSwitchPopup.selectItem(at: ["off", "on-connect", "always"].firstIndex(of: policy) ?? -1)
+            if let name = profile?["name"] as? String { nameField.stringValue = name }
+        } else { killSwitchPopup.selectItem(at: 0) }
+        renderCapability()
+        if selectedKillSwitch().isEmpty { status.stringValue = "The saved kill-switch policy is unavailable. Choose a policy explicitly before saving." }
+    }
     @objc private func refreshSupport() { refreshCapabilities() }
     @objc private func closePanel() { close() }
 
     @objc private func save() {
+        guard productOwner?.ensureMutationIdle("saving a Tor bridge node") == true else { status.stringValue = "Disconnect before adding or updating Tor bridge nodes."; return }
         let lines = bridgeText.string.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
         guard !lines.isEmpty else { status.stringValue = "Paste at least one Tor bridge line."; return }
         let transport = selectedTransport(), kill = selectedKillSwitch()
@@ -136,15 +207,20 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
             status.stringValue = "This Mac cannot run \(transport) yet: \(row["reason"] as? String ?? "required Tor helper is missing")"
             return
         }
-        if let row = capabilities[transport], (row["strict_kill_switch"] as? Bool) != true, kill != "off" {
-            status.stringValue = "Dynamic Tor transports require Kill switch Off until process-scoped PT egress filtering is implemented."
-            return
-        }
-        let body: [String: Any] = ["name": nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "transport": transport, "bridges": lines, "kill_switch_policy": kill]
+        let body: [String: Any]
+        let updating = updateSelected.state == .on
+        do { body = try torBridgeImportBody(["name": nameField.stringValue.trimmingCharacters(in: .whitespacesAndNewlines), "transport": transport, "bridges": lines, "kill_switch_policy": kill], opened: opened, update: updating, capabilities: capabilityRoot) }
+        catch { status.stringValue = error.localizedDescription; return }
         status.stringValue = "Validating and saving Tor node…"
         DispatchQueue.global(qos: .userInitiated).async { [weak self] in
             guard let self else { return }
             do {
+                guard let owner = self.productOwner else { throw NSError(domain: "RouterVPN.TorEdit", code: 3) }
+                try owner.requireMutationIdle("saving a Tor bridge node")
+                if updating {
+                    guard let current = try self.api.json("/api/nodes", timeout: 5) as? [String: Any] else { throw NSError(domain: "RouterVPN.TorEdit", code: 2) }
+                    try externalValidateCapturedBody(body, current: current)
+                }
                 let data = try self.api.request("/api/tor-bridge/import", method: "POST", body: body, timeout: 20)
                 let message = String(data: data, encoding: .utf8) ?? "Tor node saved"
                 DispatchQueue.main.async { self.status.stringValue = message; self.productOwner?.refreshAll() }
@@ -163,7 +239,7 @@ if method_marker not in text:
     method_anchor = "    @objc func openUnifiedNodes() {"
     if text.count(method_anchor) != 1:
         raise SystemExit("macOS openUnifiedNodes anchor drifted")
-    method = '''    @objc func openTorBridgeBuilder() {\n        let builder = RouterVPNTorBridgeBuilder(owner: self, api: api)\n        retainUnifiedController(builder)\n        builder.showWindow(nil)\n        builder.window?.center()\n        builder.window?.makeKeyAndOrderFront(nil)\n        NSApp.activate(ignoringOtherApps: true)\n    }\n\n'''
+    method = '''    @objc func openTorBridgeBuilder() {\n        guard ensureMutationIdle("opening Tor bridge controls") else { return }\n        let builder = RouterVPNTorBridgeBuilder(owner: self, api: api)\n        retainUnifiedController(builder)\n        builder.showWindow(nil)\n        builder.window?.center()\n        builder.window?.makeKeyAndOrderFront(nil)\n        NSApp.activate(ignoringOtherApps: true)\n    }\n\n'''
     text = text.replace(method_anchor, method + method_anchor, 1)
 
 required = (
@@ -174,7 +250,7 @@ required = (
     '"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"',
     'Snowflake uses brokers plus short-lived volunteer WebRTC proxies',
     'choose Custom TCP, DoT, DoH or Rescue in DNS',
-    'Dynamic Tor transports require Kill switch Off',
+    'Strict protection requires the saved Local Router entry',
 )
 for marker in required:
     if marker not in text:
