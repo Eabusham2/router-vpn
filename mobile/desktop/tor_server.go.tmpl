@@ -1,0 +1,186 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type ServerTorOptions struct {
+	EntryTag     string `json:"entry_tag"`
+	EntryProfile string `json:"entry_profile"`
+	ServerSource string `json:"server_source"`
+	SessionID    string `json:"session_id"`
+}
+
+func RegisterServerTor(registry *outbound.Registry) {
+	outbound.Register[ServerTorOptions](registry, mobiletor.ServerTorClientType, NewServerTorOutbound)
+}
+
+// ServerTorOutbound is the final native TCP path in the same Box as the TUN.
+// Its only sockets belong to ServerTorClient and the exact captured entry. No
+// local listener, Tor child, physical fallback or server-wide route is created.
+type ServerTorOutbound struct {
+	outbound.Adapter
+	ctx         context.Context
+	options     ServerTorOptions
+	policy      *mobiletor.ServerTorPolicy
+	entry       *mobiletor.PredecessorProof
+	mu          sync.Mutex
+	bound       bool
+	client      *mobiletor.ServerTorClient
+	metadata    mobiletor.DesktopBridgeMetadata
+	dataCurrent func() bool
+}
+
+func NewServerTorOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options ServerTorOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != mobiletor.ProfileOutboundTag || options.EntryTag == "" || options.EntryTag == tag || !networkSessionID.MatchString(options.SessionID) {
+		return nil, errors.New("Tor Server requires its explicit native entry and final tags")
+	}
+	entry, err := mobiletor.NewPredecessorProof(options.EntryProfile)
+	if err != nil {
+		return nil, err
+	}
+	policy, err := mobiletor.NewServerTorPolicy(options.ServerSource, entry.NodeID())
+	if err != nil {
+		return nil, err
+	}
+	return &ServerTorOutbound{Adapter: outbound.NewAdapter(mobiletor.ServerTorClientType, tag, []string{"tcp"}, []string{options.EntryTag}), ctx: ctx, options: options, policy: policy, entry: entry}, nil
+}
+
+// Bind is admission from the fully started Box after the native graph, TUN and
+// observer have been proved identical. The cleanup witness deliberately checks
+// that retained physical/entry owner, not the cancellable client data session.
+func (o *ServerTorOutbound) Bind(parent context.Context, policy *mobiletor.DesktopBridgePolicy, captured adapter.Outbound, current, dataCurrent func() bool) error {
+	if o == nil || parent == nil || parent.Err() != nil || policy == nil || policy.ServerPolicy() == nil || policy.Predecessor() == nil || !policy.Predecessor().IsRouter() || captured == nil || current == nil || dataCurrent == nil || !current() || !dataCurrent() {
+		return errors.New("Tor Server native admission is unavailable")
+	}
+	meta := policy.Metadata()
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	if manager == nil {
+		return errors.New("Tor Server native outbound manager is unavailable")
+	}
+	entry, found := manager.Outbound(o.options.EntryTag)
+	final, finalFound := manager.Outbound(o.Tag())
+	if !found || entry != captured || !finalFound || final != o || meta.Execution != "server" || meta.EntryTag != o.options.EntryTag || meta.SessionID != o.options.SessionID ||
+		policy.Predecessor().Profile() != o.options.EntryProfile || policy.ServerPolicy().Source() != o.options.ServerSource || meta.ServerSourceSHA256 != o.policy.SourceSHA256() || meta.ServerDNSPolicySHA256 != o.policy.DNSPolicySHA256() {
+		return errors.New("Tor Server native policy or exact entry object changed")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.bound || o.ctx.Err() != nil {
+		return errors.New("Tor Server native owner was already bound or retired")
+	}
+	o.bound = true
+	client, err := mobiletor.NewServerTorClient(parent, o.policy, o.entry, meta.SessionID, func(ctx context.Context, network, address string) (net.Conn, error) {
+		// Shared client accepts only the captured private origin/front here.
+		// Recheck exact manager objects after late native dials as well.
+		before, exists := manager.Outbound(o.options.EntryTag)
+		if ctx == nil || ctx.Err() != nil || network != "tcp" || !exists || before != captured || !current() {
+			return nil, net.ErrClosed
+		}
+		connection, err := captured.DialContext(ctx, network, M.ParseSocksaddr(address))
+		after, exists := manager.Outbound(o.options.EntryTag)
+		if !exists || after != captured || !current() {
+			return connection, net.ErrClosed
+		}
+		return connection, err
+	}, current)
+	if err != nil {
+		return err
+	}
+	o.client, o.metadata, o.dataCurrent = client, meta, dataCurrent
+	return nil
+}
+
+func (o *ServerTorOutbound) captured() *mobiletor.ServerTorClient {
+	if o == nil {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.client
+}
+func (o *ServerTorOutbound) Metadata() mobiletor.DesktopBridgeMetadata {
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	return o.metadata
+}
+func (o *ServerTorOutbound) Configure(ctx context.Context, listeners map[string]string) error {
+	if ctx == nil || ctx.Err() != nil || o.captured() == nil || len(listeners) != 0 {
+		return errors.New("Tor Server cannot configure local PT listeners")
+	}
+	return nil
+}
+func (o *ServerTorOutbound) EnableNetwork(ctx context.Context) error {
+	client := o.captured()
+	if client == nil {
+		return net.ErrClosed
+	}
+	return client.Acquire(ctx)
+}
+func (o *ServerTorOutbound) WaitBootstrap(ctx context.Context) (mobiletor.Bootstrap, error) {
+	client := o.captured()
+	if client == nil {
+		return mobiletor.Bootstrap{}, net.ErrClosed
+	}
+	receipt, err := client.Wait(ctx)
+	return mobiletor.Bootstrap{Progress: receipt.Bootstrap, CircuitEstablished: receipt.IsTor && receipt.TrafficAllowed}, err
+}
+func (o *ServerTorOutbound) Verify(ctx context.Context) (mobiletor.Bootstrap, error) {
+	client := o.captured()
+	if client == nil {
+		return mobiletor.Bootstrap{}, net.ErrClosed
+	}
+	receipt, err := client.Status(ctx)
+	return mobiletor.Bootstrap{Progress: receipt.Bootstrap, CircuitEstablished: receipt.IsTor && receipt.TrafficAllowed}, err
+}
+func (o *ServerTorOutbound) Current() bool {
+	client := o.captured()
+	return client != nil && client.Current()
+}
+func (o *ServerTorOutbound) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeEntryProof, error) {
+	client := o.captured()
+	if client == nil {
+		return nil, net.ErrClosed
+	}
+	return client.ProveEntry(ctx)
+}
+func (o *ServerTorOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	client := o.captured()
+	if client == nil || !destination.IsValid() || destination.Port == 0 || network != "tcp" || !o.dataCurrent() {
+		return nil, net.ErrClosed
+	}
+	connection, err := client.DialContext(ctx, network, destination.String())
+	if err != nil || !o.dataCurrent() {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, net.ErrClosed
+	}
+	return connection, nil
+}
+func (*ServerTorOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("Tor Server transports TCP only")
+}
+func (o *ServerTorOutbound) CloseLease(ctx context.Context) error {
+	client := o.captured()
+	if client == nil {
+		return nil
+	}
+	return client.Close(ctx)
+}
+func (o *ServerTorOutbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	return o.CloseLease(ctx)
+}

@@ -42,7 +42,7 @@ func (n *routerVPNTorNative) MTUTransitions() <-chan routerVPNTorMTUTransitionRe
 }
 
 func (n *routerVPNTorNative) LifetimeCurrent() bool {
-	if n == nil || n.ctx.Err() != nil || n.process.exited() {
+	if n == nil || n.ctx.Err() != nil || n.processExited() {
 		return false
 	}
 	n.mu.Lock()

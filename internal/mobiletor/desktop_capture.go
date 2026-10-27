@@ -74,6 +74,21 @@ func NewDesktopBridgeCaptureWithPredecessor(profile, sessionID, isolationSecret,
 	return newDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir, predecessor)
 }
 
+// NewDesktopServerTorCapture owns the same immutable launch inputs without
+// authorizing any local Tor executable. Schema 2 can only be reconstructed from
+// an explicit Server selection and its complete private Router predecessor.
+func NewDesktopServerTorCapture(profile, sessionID, isolationSecret, targetOS, runtimeDir string, predecessor *DesktopPredecessor) (*DesktopBridgeInputs, error) {
+	if predecessor == nil || !predecessor.IsRouter() {
+		return nil, errors.New("Tor Server launch requires its captured private Router entry")
+	}
+	entry := predecessor.Capture()
+	raw, err := json.Marshal(DesktopBridgeCapture{Schema: 2, SessionID: sessionID, IsolationSecret: isolationSecret, TargetOS: targetOS, Predecessor: &entry})
+	if err != nil {
+		return nil, err
+	}
+	return DecodeDesktopBridgeCapture(profile, string(raw), runtimeDir)
+}
+
 func newDesktopBridgeCapture(profile, sessionID, isolationSecret, targetOS, torBinary, runtimeDir string, predecessor *DesktopPredecessor) (*DesktopBridgeInputs, error) {
 	capture := DesktopBridgeCapture{Schema: 1, SessionID: sessionID, IsolationSecret: isolationSecret, TargetOS: targetOS, TorBinary: torBinary}
 	if predecessor != nil {
@@ -115,11 +130,15 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 		}
 	}
 	var capture DesktopBridgeCapture
-	if json.Unmarshal([]byte(rawCapture), &capture) != nil || capture.Schema != 1 || !desktopHex(capture.SessionID, 16) || !desktopHex(capture.IsolationSecret, 32) {
+	if json.Unmarshal([]byte(rawCapture), &capture) != nil || (capture.Schema != 1 && capture.Schema != 2) || !desktopHex(capture.SessionID, 16) || !desktopHex(capture.IsolationSecret, 32) {
 		return nil, errors.New("desktop Tor capture has an invalid schema or session identity")
 	}
-	if err := desktopCapturePath(capture.TorBinary, false); err != nil {
-		return nil, err
+	if capture.Schema == 1 {
+		if err := desktopCapturePath(capture.TorBinary, false); err != nil {
+			return nil, err
+		}
+	} else if capture.TorBinary != "" || predecessor == nil || !predecessor.IsRouter() {
+		return nil, errors.New("Tor Server capture cannot own a local executable or ordinary entry")
 	}
 	if err := desktopCapturePath(runtimeDir, true); err != nil {
 		return nil, err
@@ -127,7 +146,12 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 	if capture.TorBinary == runtimeDir {
 		return nil, errors.New("desktop Tor executable cannot be its runtime directory")
 	}
-	policy, err := newDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
+	var policy *DesktopBridgePolicy
+	if capture.Schema == 2 {
+		policy, err = NewDesktopServerTorPolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
+	} else {
+		policy, err = newDesktopBridgePolicy(profile, capture.SessionID, capture.IsolationSecret, capture.TargetOS, predecessor)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -146,6 +170,11 @@ func DecodeDesktopBridgeCapture(profile, rawCapture, runtimeDir string) (*Deskto
 		// neither a bootstrap proof nor an unbounded private workspace payload.
 		"Log notice stdout",
 	}, "\n") + "\n"
+	if capture.Schema == 2 {
+		// Keep the nonempty immutable-file contract, without a single local
+		// Tor directive, cookie location, listener or process instruction.
+		torrc = "\n"
+	}
 	input := &DesktopBridgeInputs{capture: capture, policy: policy, json: rawCapture, torrc: torrc, dir: runtimeDir}
 	input.digests = DesktopBridgeInputDigests{
 		SourceSHA256: policy.SourceSHA256(), ProfileSHA256: desktopDigest([]byte(profile)), CaptureSHA256: desktopDigest([]byte(rawCapture)),

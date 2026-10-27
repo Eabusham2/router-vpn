@@ -41,17 +41,18 @@ import (
 // service are the actual prepared shipping implementations. No public address
 // or Tor exit is contacted by this fixture.
 type desktopTorBoxSOCKS struct {
-	listener     net.Listener
-	mu           sync.Mutex
-	closing      bool
-	connections  map[net.Conn]bool
-	workers      sync.WaitGroup
-	dnsCalls     atomic.Int32
-	proofCalls   atomic.Int32
-	badDNS       atomic.Bool
-	proofEntered chan struct{}
-	proofRelease chan struct{}
-	proofOnce    sync.Once
+	listener                       net.Listener
+	mu                             sync.Mutex
+	closing                        bool
+	connections                    map[net.Conn]bool
+	workers                        sync.WaitGroup
+	dnsCalls                       atomic.Int32
+	proofCalls                     atomic.Int32
+	badDNS                         atomic.Bool
+	proofEntered                   chan struct{}
+	proofRelease                   chan struct{}
+	proofOnce                      sync.Once
+	serverUsername, serverPassword string
 }
 
 func desktopTorBoxWriteDNSReply(peer *mDNS.Conn, answer *mDNS.Msg) error {
@@ -147,7 +148,11 @@ func (s *desktopTorBoxSOCKS) serve(connection net.Conn) error {
 	if _, err := io.ReadFull(connection, password); err != nil {
 		return err
 	}
-	if string(username) != desktopTorBoxSession || string(password) != desktopTorBoxIsolation {
+	expectedUsername, expectedPassword := desktopTorBoxSession, desktopTorBoxIsolation
+	if s.serverUsername != "" {
+		expectedUsername, expectedPassword = s.serverUsername, s.serverPassword
+	}
+	if string(username) != expectedUsername || string(password) != expectedPassword {
 		return errors.New("native outbound used another session isolation")
 	}
 	if _, err := connection.Write([]byte{1, 0}); err != nil {

@@ -35,7 +35,7 @@ func TestDesktopBridgeDNSSelectionMatchesTheNativeCapturedGraph(t *testing.T) {
 
 func TestDesktopBridgeDNSRejectsAnotherPrivateEntryAndKeepsIdleHomeUnresolved(t *testing.T) {
 	entry, _ := desktopEntryFixture(t, "wg", "", nil)
-	for _, fault := range []string{"wrong-entry", "wrong-exit", "same-node", "missing-entry", "direct-entry", "server", "compare", "no-token", "public-api", "different-home", "public-home", "unpaired-home", "malformed-entry"} {
+	for _, fault := range []string{"wrong-entry", "wrong-exit", "same-node", "missing-entry", "direct-entry", "server-no-entry", "compare", "no-token", "public-api", "different-home", "public-home", "unpaired-home", "malformed-entry"} {
 		t.Run(fault, func(t *testing.T) {
 			exit := desktopEntryExit(entry)
 			exit["dns_mode"], exit["dns_protocol"], exit["dns_host"] = "home", "udp", "10.80.0.53"
@@ -51,7 +51,9 @@ func TestDesktopBridgeDNSRejectsAnotherPrivateEntryAndKeepsIdleHomeUnresolved(t 
 				entryJSON = ""
 			case "direct-entry":
 				exit["multihop_enabled"] = false
-			case "server", "compare":
+			case "server-no-entry":
+				exit["multihop_execution"], entryJSON = "server", ""
+			case "compare":
 				exit["multihop_execution"] = fault
 			case "no-token":
 				entryJSON = strings.Replace(entryJSON, "entry-private-token", "", 1)

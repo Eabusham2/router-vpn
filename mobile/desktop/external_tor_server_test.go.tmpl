@@ -1,0 +1,125 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"path/filepath"
+	"runtime"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing/service"
+)
+
+func routerVPNNewServerTorFileFixture(t *testing.T) *routerVPNTorFileFixture {
+	t.Helper()
+	entry := routerVPNTorEntryFileCapture(t)
+	f := routerVPNNewTorPredecessorFileFixture(t, entry)
+	var profile map[string]any
+	if json.Unmarshal([]byte(f.inputs.Policy().Profile()), &profile) != nil {
+		t.Fatal("invalid private fixture")
+	}
+	profile["multihop_execution"] = "server"
+	raw, _ := json.Marshal(profile)
+	inputs, err := mobiletor.NewDesktopServerTorCapture(string(raw), routerVPNTorTestSession, routerVPNTorTestIsolation, runtime.GOOS, f.directory, entry)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(f.binary); err != nil {
+		t.Fatal(err)
+	}
+	f.binary, f.inputs = "", inputs
+	for name, value := range map[string]string{"tor-profile.json": string(raw), "tor-capture.json": inputs.JSON(), "torrc": inputs.Torrc(), "tor-defaults": inputs.Defaults(), "sing-box.json": inputs.Policy().Config()} {
+		if err := os.WriteFile(filepath.Join(f.directory, name), []byte(value), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	d := inputs.Digests()
+	f.environment = map[string]string{"HOMEVPN_TOR_SESSION": routerVPNTorTestSession, "HOMEVPN_TOR_SOURCE_SHA256": d.SourceSHA256, "HOMEVPN_TOR_PROFILE_SHA256": d.ProfileSHA256, "HOMEVPN_TOR_CAPTURE_SHA256": d.CaptureSHA256, "HOMEVPN_TOR_TORRC_SHA256": d.TorrcSHA256, "HOMEVPN_TOR_DEFAULTS_SHA256": d.DefaultsSHA256, "HOMEVPN_TOR_CONFIG_SHA256": d.ConfigSHA256}
+	return f
+}
+
+func TestRouterVPNDesktopTorServerCommandAdmitsNoLocalExecutable(t *testing.T) {
+	f := routerVPNNewServerTorFileFixture(t)
+	owner := routerVPNNewTorCommandFixture(t, f, false)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	called := false
+	err := routerVPNRunTor(ctx, f.directory, routerVPNTorTestSession, "", f.getenv, func(_ context.Context, files *routerVPNTorFiles, binary *routerVPNTorBinary) (routerVPNTorOwner, error) {
+		called = true
+		if binary != nil || files.inputs.Policy().Metadata().Execution != "server" || files.inputs.Capture().Schema != 2 || files.inputs.Capture().TorBinary != "" {
+			t.Fatal("Server command acquired a local Tor executable")
+		}
+		cancel()
+		return owner, nil
+	})
+	if !called || err != nil {
+		t.Fatal("explicit Server command could not complete owned cancellation", called, err)
+	}
+	if owner.base.closes.Load() == 0 {
+		t.Fatal("Server command omitted exact cleanup")
+	}
+}
+
+func TestRouterVPNDesktopTorServerNativeCancelRetainsBoxForLeaseCleanup(t *testing.T) {
+	f := routerVPNNewServerTorFileFixture(t)
+	files := f.open(t)
+	owner, err := routerVPNNewTorNative(include.Context(context.Background()), files, nil)
+	if err != nil || owner == nil {
+		t.Fatal("Server actual native construction failed", err)
+	}
+	native := owner.(*routerVPNTorNative)
+	if native.process != nil || native.box == nil || native.boxCancel == nil {
+		t.Fatal("Server constructed a local Tor process or lost retained Box ownership")
+	}
+	manager := service.FromContext[adapter.ServiceManager](native.ctx)
+	if manager == nil {
+		t.Fatal("Server Box service manager missing")
+	}
+	raw, ok := manager.Get(routervpndesktoppt.NetworkOwnerTag)
+	observer, valid := raw.(*routervpndesktoppt.NetworkOwner)
+	if !ok || !valid {
+		t.Fatal("Server physical observer missing")
+	}
+	native.Cancel()
+	meta := files.inputs.Policy().Metadata()
+	if native.ctx.Err() == nil || !observer.Matches(meta.SessionID, meta.SourceSHA256) {
+		t.Fatal("data Cancel destroyed the physical entry before exact lease cleanup")
+	}
+	if native.Start() == nil {
+		t.Fatal("cancelled Server constructor started native resources")
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	if err := native.Close(ctx); err != nil {
+		t.Fatal("unused Server native Box did not close", err)
+	}
+	if observer.Matches(meta.SessionID, meta.SourceSHA256) {
+		t.Fatal("acknowledged native Close left retained Box live")
+	}
+}
+
+func TestRouterVPNDesktopTorServerRejectsLocalBinaryAuthorityBeforeFactory(t *testing.T) {
+	for _, withPath := range []bool{false, true} {
+		f := routerVPNNewServerTorFileFixture(t)
+		path := ""
+		if withPath {
+			path = filepath.Join(f.directory, "unowned-tor")
+		} else {
+			f.environment["HOMEVPN_TOR_BINARY_SHA256"] = routerVPNTorTestIsolation
+		}
+		called := false
+		err := routerVPNRunTor(context.Background(), f.directory, routerVPNTorTestSession, path, f.getenv, func(context.Context, *routerVPNTorFiles, *routerVPNTorBinary) (routerVPNTorOwner, error) {
+			called = true
+			return nil, nil
+		})
+		if err == nil || called {
+			t.Fatal("Server accepted local binary authority", withPath)
+		}
+	}
+}

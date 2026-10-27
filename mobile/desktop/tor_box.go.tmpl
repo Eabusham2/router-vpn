@@ -44,6 +44,7 @@ type RouterVPNDesktopTor struct {
 	engine                      *routerVPNExternalNativeEngine
 	network                     *routervpndesktoppt.NetworkOwner
 	pt                          *routervpndesktoppt.Owner
+	server                      *routervpndesktoppt.ServerTorOutbound
 	tun                         routerVPNDesktopTorTUN
 	name                        string
 	index, mtu                  int
@@ -114,6 +115,23 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		return nil, errors.New("desktop Tor native interface does not match its selected MTU")
 	}
 	owner.tun, owner.name, owner.index, owner.mtu = tun, name, index, mtu
+	if policy.ServerPolicy() != nil {
+		server, ok := engine.routes[meta.FinalTag].(*routervpndesktoppt.ServerTorOutbound)
+		if !ok || server == nil || meta.Execution != "server" {
+			return nil, errors.New("Tor Server requires its actual native leased-server outbound")
+		}
+		// Data retirement must not destroy the retained entry needed for an
+		// exact authenticated DELETE. This witness never calls server.Current
+		// or readerLifetimeCurrent; a physical reset still revokes it.
+		if err := server.Bind(ctx, policy, engine.routes[meta.EntryTag], owner.serverEntryCurrent, owner.currentNative); err != nil {
+			return nil, err
+		}
+		owner.server = server
+		if !owner.currentNative() {
+			return nil, errors.New("Tor Server capture retired during admission")
+		}
+		return owner, nil
+	}
 	plan, err := policy.Plan()
 	if err != nil {
 		return nil, err
@@ -141,6 +159,42 @@ func (r *RouterVPNDesktopTor) currentNative() bool {
 	return r.readerLifetimeCurrent() && r.engine != nil && r.engine.Identity() != ""
 }
 
+// Server control and the command's bounded liveness check must stay usable
+// while a native MTU transaction owns engine.mu. Every retained dependency is
+// immutable; only the TUN changes under that lock. Checking its managers here
+// proves the same entry without recursing into Server client state or waiting
+// for the TUN transaction whose admission the command must acknowledge.
+func (r *RouterVPNDesktopTor) serverEntryCurrent() bool {
+	if r == nil || r.network == nil || !r.network.Current() || r.engine == nil || r.engine.box == nil || r.engine.box.ctx.Err() != nil {
+		return false
+	}
+	e := r.engine
+	select {
+	case <-e.box.done:
+		return false
+	default:
+	}
+	for tag, owner := range e.owners {
+		current, ok := e.box.outbound.Outbound(tag)
+		if !ok || current != owner {
+			return false
+		}
+	}
+	for tag, owner := range e.dns {
+		current, ok := e.box.dnsTransport.Transport(tag)
+		if !ok || current != owner {
+			return false
+		}
+	}
+	for tag, owner := range e.services {
+		current, ok := e.box.service.Get(tag)
+		if !ok || current != owner {
+			return false
+		}
+	}
+	return true
+}
+
 // The TUN calls this during its serialized replacement while the engine
 // identity lock is held. Keep it independent of that lock: full graph identity
 // is checked on both sides of the exact native transaction. A real network
@@ -150,10 +204,17 @@ func (r *RouterVPNDesktopTor) readerLifetimeCurrent() bool {
 }
 
 func (r *RouterVPNDesktopTor) Start(session *mobiletor.DesktopBridgeSession) error {
-	if session == nil {
+	if session == nil || r == nil || r.server != nil {
 		return errors.New("desktop Tor requires the authenticated standalone child")
 	}
 	return r.start(session)
+}
+
+func (r *RouterVPNDesktopTor) StartServer() error {
+	if r == nil || r.server == nil || r.policy.ServerPolicy() == nil {
+		return errors.New("Tor Server native owner is unavailable")
+	}
+	return r.start(r.server)
 }
 
 func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure error) {
@@ -175,6 +236,22 @@ func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure
 			r.Cancel()
 		}
 	}()
+	if r.server != nil {
+		if session != r.server || r.pt != nil {
+			return errors.New("Tor Server cannot adopt a local child or PT owner")
+		}
+		if err := session.Configure(r.ctx, nil); err != nil {
+			return err
+		}
+		if err := session.EnableNetwork(r.ctx); err != nil {
+			return err
+		}
+		r.started.Store(true)
+		if !r.live() {
+			return errors.New("Tor Server lease admission completed after retirement")
+		}
+		return nil
+	}
 	// The same native entry object carries private authentication and every PT
 	// socket. No Tor listener is configured or network enabled before it proves
 	// the captured Router origin and credential through that encrypted route.
@@ -207,7 +284,7 @@ func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure
 }
 
 func (r *RouterVPNDesktopTor) live() bool {
-	if !r.currentNative() || !r.started.Load() || r.pt == nil || !r.pt.Current() {
+	if !r.currentNative() || !r.started.Load() || r.server == nil && (r.pt == nil || !r.pt.Current()) {
 		return false
 	}
 	// started publishes this immutable session after the sole Start call has
@@ -255,7 +332,11 @@ func (r *RouterVPNDesktopTor) run(prove func(context.Context, string, mobiletor.
 	var entryProof *mobiletor.DesktopBridgeEntryProof
 	if r.policy.Predecessor() != nil {
 		var err error
-		entryProof, err = r.pt.ProvePredecessor(ctx)
+		if r.server != nil {
+			entryProof, err = r.server.ProvePredecessor(ctx)
+		} else {
+			entryProof, err = r.pt.ProvePredecessor(ctx)
+		}
 		if err != nil {
 			return result, err
 		}
@@ -425,6 +506,11 @@ func (r *RouterVPNDesktopTor) Close(ctx context.Context) error {
 	}
 	if r.pt != nil {
 		if err := r.pt.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if r.server != nil {
+		if err := r.server.CloseLease(ctx); err != nil {
 			return err
 		}
 	}

@@ -170,6 +170,8 @@ func newDesktopTorBoxCapturedFixture(t *testing.T, edit func(map[string]any), pr
 	var policy *mobiletor.DesktopBridgePolicy
 	if predecessor == nil {
 		policy, err = mobiletor.NewDesktopBridgePolicy(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS)
+	} else if profile["multihop_execution"] == "server" {
+		policy, err = mobiletor.NewDesktopServerTorPolicy(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS, predecessor)
 	} else {
 		policy, err = mobiletor.NewDesktopBridgePolicyWithPredecessor(string(raw), desktopTorBoxSession, desktopTorBoxIsolation, runtime.GOOS, predecessor)
 	}
@@ -187,6 +189,7 @@ func newDesktopTorBoxCapturedFixture(t *testing.T, edit func(map[string]any), pr
 	})
 	outbounds := outbound.NewRegistry()
 	socks.RegisterOutbound(outbounds)
+	routervpndesktoppt.RegisterServerTor(outbounds)
 	shadowsocks.RegisterOutbound(outbounds)
 	for _, register := range registrations {
 		register(outbounds)

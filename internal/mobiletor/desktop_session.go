@@ -31,7 +31,7 @@ type DesktopBridgeSession struct {
 }
 
 func NewDesktopBridgeSession(owner *DesktopControl, policy *DesktopBridgePolicy) (*DesktopBridgeSession, error) {
-	if owner == nil || owner.control == nil || owner.pid <= 0 || policy == nil || !desktopHex(policy.SourceSHA256(), 32) || policy.metadata.ConfigSHA256 != desktopDigest([]byte(policy.config)) {
+	if owner == nil || owner.control == nil || owner.pid <= 0 || policy == nil || policy.ServerPolicy() != nil || policy.metadata.Execution != "" || !desktopHex(policy.SourceSHA256(), 32) || policy.metadata.ConfigSHA256 != desktopDigest([]byte(policy.config)) {
 		return nil, errors.New("desktop Tor session requires its authenticated child and immutable policy")
 	}
 	plan, err := policy.Plan()

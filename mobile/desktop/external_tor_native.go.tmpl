@@ -30,6 +30,7 @@ type routerVPNTorNative struct {
 	mu              sync.Mutex
 	ctx             context.Context
 	cancel          context.CancelFunc
+	boxCancel       context.CancelFunc
 	files           *routerVPNTorFiles
 	process         *routerVPNTorProcess
 	box             *box.Box
@@ -43,7 +44,7 @@ type routerVPNTorNative struct {
 }
 
 func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary *routerVPNTorBinary) (routerVPNTorOwner, error) {
-	if ctx == nil || files == nil || binary == nil || files.current() != nil {
+	if ctx == nil || files == nil || files.current() != nil || (files.inputs.Policy().ServerPolicy() == nil) != (binary != nil) {
 		return nil, routerVPNTorFailure
 	}
 	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(files.inputs.Policy().Config()))
@@ -58,14 +59,23 @@ func routerVPNNewTorNative(ctx context.Context, files *routerVPNTorFiles, binary
 			return nil, routerVPNTorFailure
 		}
 	}
-	process, err := routerVPNNewTorProcess(files, binary)
-	if err != nil {
-		cancel()
-		return nil, routerVPNTorFailure
+	var process *routerVPNTorProcess
+	if files.inputs.Policy().ServerPolicy() == nil {
+		process, err = routerVPNNewTorProcess(files, binary)
+		if err != nil {
+			cancel()
+			return nil, routerVPNTorFailure
+		}
 	}
 	n := &routerVPNTorNative{ctx: owned, cancel: cancel, files: files, process: process, transitions: make(chan routerVPNTorMTUTransitionRequest)}
 	n.stage.Store("starting")
-	n.box, err = box.New(box.Options{Context: owned, Options: options})
+	boxContext := owned
+	if files.inputs.Policy().ServerPolicy() != nil {
+		// Keep the actual entry alive after data cancellation until the exact
+		// owned lease DELETE is acknowledged. No replacement Box is created.
+		boxContext, n.boxCancel = context.WithCancel(context.WithoutCancel(owned))
+	}
+	n.box, err = box.New(box.Options{Context: boxContext, Options: options})
 	if err != nil {
 		for _, partial := range routerVPNExternalConstructed(owned) {
 			if closer, ok := partial.(io.Closer); ok {
@@ -82,13 +92,15 @@ func (n *routerVPNTorNative) Start() error {
 		return routerVPNTorFailure
 	}
 	n.stage.Store("authenticating")
-	if err := n.process.launch(n.ctx); err != nil {
-		return routerVPNTorFailure
+	if n.process != nil {
+		if err := n.process.launch(n.ctx); err != nil {
+			return routerVPNTorFailure
+		}
+		if err := n.process.authenticate(n.ctx); err != nil {
+			return routerVPNTorFailure
+		}
 	}
-	if err := n.process.authenticate(n.ctx); err != nil {
-		return routerVPNTorFailure
-	}
-	if n.ctx.Err() != nil || n.process.exited() || n.files.current() != nil {
+	if n.ctx.Err() != nil || n.processExited() || n.files.current() != nil {
 		return routerVPNTorFailure
 	}
 	n.stage.Store("starting-tun")
@@ -102,12 +114,17 @@ func (n *routerVPNTorNative) Start() error {
 	n.mu.Lock()
 	n.tor = tor
 	n.mu.Unlock()
-	if n.ctx.Err() != nil || n.process.exited() {
+	if n.ctx.Err() != nil || n.processExited() {
 		tor.Cancel()
 		return routerVPNTorFailure
 	}
 	n.stage.Store("starting-transports")
-	if err := tor.Start(n.process.session); err != nil {
+	if n.process == nil {
+		err = tor.StartServer()
+	} else {
+		err = tor.Start(n.process.session)
+	}
+	if err != nil {
 		return routerVPNTorFailure
 	}
 	n.stage.Store("bootstrapping")
@@ -118,7 +135,7 @@ func (n *routerVPNTorNative) Run() (mobiletor.DesktopBridgeProof, error) {
 	n.mu.Lock()
 	tor := n.tor
 	n.mu.Unlock()
-	if tor == nil || n.ctx.Err() != nil || n.process.exited() {
+	if tor == nil || n.ctx.Err() != nil || n.processExited() {
 		return mobiletor.DesktopBridgeProof{}, routerVPNTorFailure
 	}
 	n.stage.Store("proving")
@@ -148,13 +165,17 @@ func (n *routerVPNTorNative) Cancel() {
 }
 
 func (n *routerVPNTorNative) Healthy() bool {
-	if n == nil || n.ctx.Err() != nil || n.process.exited() {
+	if n == nil || n.ctx.Err() != nil || n.processExited() {
 		return false
 	}
 	n.mu.Lock()
 	tor, closed := n.tor, n.boxClosed
 	n.mu.Unlock()
 	return !closed && tor != nil && tor.Healthy()
+}
+
+func (n *routerVPNTorNative) processExited() bool {
+	return n.process != nil && n.process.exited()
 }
 func (n *routerVPNTorNative) VerifyCurrentPath(ctx context.Context) error {
 	if ctx == nil || ctx.Err() != nil || !n.Healthy() || n.files.current() != nil {
@@ -195,8 +216,10 @@ func (n *routerVPNTorNative) Close(ctx context.Context) error {
 		return routerVPNTorFailure
 	}
 	n.Cancel()
-	if err := n.process.close(ctx); err != nil {
-		return routerVPNTorFailure
+	if n.process != nil {
+		if err := n.process.close(ctx); err != nil {
+			return routerVPNTorFailure
+		}
 	}
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -228,8 +251,13 @@ func (n *routerVPNTorNative) Close(ctx context.Context) error {
 	if n.boxCloseFailure != nil {
 		return routerVPNTorFailure
 	}
-	if err := n.process.cleanup(); err != nil {
-		return routerVPNTorFailure
+	if n.process != nil {
+		if err := n.process.cleanup(); err != nil {
+			return routerVPNTorFailure
+		}
+	}
+	if n.boxCancel != nil {
+		n.boxCancel()
 	}
 	n.stage.Store("closed")
 	return nil

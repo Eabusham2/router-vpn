@@ -91,7 +91,7 @@ func (n *routerVPNTorNative) DesktopMTU() (*routerVPNDesktopMTU, error) {
 	if n.mtu != nil {
 		return n.mtu, nil
 	}
-	if n.ctx.Err() != nil || n.process.exited() || n.tor == nil || !n.tor.Healthy() || n.box == nil || n.boxClosed {
+	if n.ctx.Err() != nil || n.processExited() || n.tor == nil || !n.tor.Healthy() || n.box == nil || n.boxClosed {
 		return nil, routerVPNTorFailure
 	}
 	lease, err := n.tor.ClaimMTU()

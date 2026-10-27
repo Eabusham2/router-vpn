@@ -91,12 +91,19 @@ func routerVPNRunTor(parent context.Context, directory, session, binaryPath stri
 	if parent.Err() != nil || files.stopRequested(session, metadata.SourceSHA256) {
 		return finish()
 	}
-	binary, err := routerVPNCaptureTorBinary(binaryPath, getenv("HOMEVPN_TOR_BINARY_SHA256"))
-	if err != nil {
-		// Admission and all source bytes are valid; no native constructor or
-		// child launch has occurred. This is a bounded no-work acknowledgement.
-		_ = finish()
-		return routerVPNTorFailure
+	var binary *routerVPNTorBinary
+	if files.inputs.Policy().ServerPolicy() != nil {
+		if binaryPath != "" || getenv("HOMEVPN_TOR_BINARY_SHA256") != "" {
+			_ = finish()
+			return routerVPNTorFailure
+		}
+	} else {
+		binary, err = routerVPNCaptureTorBinary(binaryPath, getenv("HOMEVPN_TOR_BINARY_SHA256"))
+		if err != nil {
+			// No native constructor or child launch has occurred.
+			_ = finish()
+			return routerVPNTorFailure
+		}
 	}
 	ctx := globalCtx
 	if ctx == nil {

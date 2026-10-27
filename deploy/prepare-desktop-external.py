@@ -38,7 +38,8 @@ PURE = ('common', 'mobiletor', 'awgpolicy', 'nativeopenvpn')
 PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
-                'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl')
+                'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
+                'tor_server.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
@@ -46,6 +47,7 @@ BOX_TEMPLATES = {
     'tor_box_external_test.go.tmpl': 'routervpn_desktop_tor_box_external_test.go',
     'tor_box_mtu.go.tmpl': 'routervpn_desktop_tor_box_mtu.go',
     'tor_box_mtu_test.go.tmpl': 'routervpn_desktop_tor_box_mtu_test.go',
+    'tor_server_box_test.go.tmpl': 'routervpn_desktop_tor_server_box_test.go',
 }
 ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',
@@ -178,6 +180,15 @@ def pt_registry_source(source):
     end = source.index('\n}\n', start)
     if registered not in source[start:end]:
         raise ValueError('Desktop Tor network observer must belong to the service registry')
+    registered = '\troutervpndesktoppt.RegisterServerTor(registry)'
+    marker = 'routervpndesktoppt.RegisterServerTor'
+    if marker in source and (source.count(marker) != 1 or source.count(registered) != 1):
+        raise ValueError('Desktop Tor Server outbound registration differs')
+    source = TOR.insert_once(source, '\tsocks.RegisterOutbound(registry)', registered)
+    start = source.index('func OutboundRegistry() *outbound.Registry {')
+    end = source.index('\n}\n', start)
+    if registered not in source[start:end]:
+        raise ValueError('Desktop Tor Server must belong to the outbound registry')
     return source.encode()
 
 

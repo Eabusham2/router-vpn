@@ -18,6 +18,7 @@ type DesktopBridgePolicy struct {
 	metadata       DesktopBridgeMetadata
 	bridges        []string
 	predecessor    *DesktopPredecessor
+	server         *ServerTorPolicy
 }
 
 type DesktopBridgeDNS struct {
@@ -32,34 +33,37 @@ type DesktopBridgeDNS struct {
 // Metadata records requested policy, never a measured path MTU or successful
 // DNS/Tor proof. Secrets remain exclusively in the private source/configuration.
 type DesktopBridgeMetadata struct {
-	Schema            int                  `json:"schema"`
-	NodeID            string               `json:"node_id"`
-	SessionID         string               `json:"session_id"`
-	SourceSHA256      string               `json:"source_sha256"`
-	ConfigSHA256      string               `json:"config_sha256"`
-	TargetOS          string               `json:"target_os"`
-	FinalTag          string               `json:"final_tag"`
-	TUNTag            string               `json:"tun_tag"`
-	InterfaceName     string               `json:"interface_name,omitempty"`
-	SocksPort         int                  `json:"socks_port"`
-	DNS               DesktopBridgeDNS     `json:"dns"`
-	BootstrapDNSTag   string               `json:"bootstrap_dns_tag"`
-	IPv6Mode          string               `json:"ipv6_mode"`
-	HomeLANAccess     bool                 `json:"home_lan_access"`
-	KillSwitchPolicy  string               `json:"kill_switch_policy"`
-	MTUPolicy         string               `json:"mtu_policy"`
-	ConfiguredMTU     int                  `json:"configured_mtu"`
-	JumboTUN          bool                 `json:"jumbo_tun"`
-	EntryID           string               `json:"entry_id,omitempty"`
-	EntryMode         string               `json:"entry_mode,omitempty"`
-	EntryTag          string               `json:"entry_tag,omitempty"`
-	EntrySHA256       string               `json:"entry_sha256,omitempty"`
-	EntryProofKind    PredecessorProofKind `json:"entry_proof_kind,omitempty"`
-	EntryAssetsSHA256 string               `json:"entry_assets_sha256,omitempty"`
-	EntryMTUPolicy    string               `json:"entry_mtu_policy,omitempty"`
-	EntryFixedMTU     int                  `json:"entry_fixed_mtu,omitempty"`
-	EntryJumboTUN     bool                 `json:"entry_jumbo_tun,omitempty"`
-	DNSDetour         string               `json:"dns_detour,omitempty"`
+	Schema                int                  `json:"schema"`
+	NodeID                string               `json:"node_id"`
+	SessionID             string               `json:"session_id"`
+	SourceSHA256          string               `json:"source_sha256"`
+	ConfigSHA256          string               `json:"config_sha256"`
+	TargetOS              string               `json:"target_os"`
+	FinalTag              string               `json:"final_tag"`
+	TUNTag                string               `json:"tun_tag"`
+	InterfaceName         string               `json:"interface_name,omitempty"`
+	SocksPort             int                  `json:"socks_port"`
+	DNS                   DesktopBridgeDNS     `json:"dns"`
+	BootstrapDNSTag       string               `json:"bootstrap_dns_tag"`
+	IPv6Mode              string               `json:"ipv6_mode"`
+	HomeLANAccess         bool                 `json:"home_lan_access"`
+	KillSwitchPolicy      string               `json:"kill_switch_policy"`
+	MTUPolicy             string               `json:"mtu_policy"`
+	ConfiguredMTU         int                  `json:"configured_mtu"`
+	JumboTUN              bool                 `json:"jumbo_tun"`
+	EntryID               string               `json:"entry_id,omitempty"`
+	EntryMode             string               `json:"entry_mode,omitempty"`
+	EntryTag              string               `json:"entry_tag,omitempty"`
+	EntrySHA256           string               `json:"entry_sha256,omitempty"`
+	EntryProofKind        PredecessorProofKind `json:"entry_proof_kind,omitempty"`
+	EntryAssetsSHA256     string               `json:"entry_assets_sha256,omitempty"`
+	EntryMTUPolicy        string               `json:"entry_mtu_policy,omitempty"`
+	EntryFixedMTU         int                  `json:"entry_fixed_mtu,omitempty"`
+	EntryJumboTUN         bool                 `json:"entry_jumbo_tun,omitempty"`
+	DNSDetour             string               `json:"dns_detour,omitempty"`
+	Execution             string               `json:"execution,omitempty"`
+	ServerSourceSHA256    string               `json:"server_source_sha256,omitempty"`
+	ServerDNSPolicySHA256 string               `json:"server_dns_policy_sha256,omitempty"`
 }
 
 // AllowMTUOptimization describes authority over the single interface, not a
@@ -106,6 +110,7 @@ func (p *DesktopBridgePolicy) SourceSHA256() string             { return p.metad
 func (p *DesktopBridgePolicy) Metadata() DesktopBridgeMetadata  { return p.metadata }
 func (p *DesktopBridgePolicy) Profile() string                  { return p.source }
 func (p *DesktopBridgePolicy) Predecessor() *DesktopPredecessor { return p.predecessor }
+func (p *DesktopBridgePolicy) ServerPolicy() *ServerTorPolicy   { return p.server }
 func (p *DesktopBridgePolicy) Plan() (Plan, error) {
 	return NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), p.bridges...)})
 }
@@ -165,6 +170,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	profile, plan, socksPort, err := desktopBridgeProfile(source)
 	if err != nil {
 		return nil, err
+	}
+	if profileString(profile, "multihop_execution") == "server" {
+		return nil, errors.New("Tor Server requires its dedicated leased-server compiler")
 	}
 	if (profile["multihop_enabled"] == true) != (predecessor != nil) {
 		return nil, errors.New("desktop Tor graph requires the exact captured Router-entry selection")
@@ -361,6 +369,9 @@ func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
 	if err != nil {
 		return nil, Plan{}, 0, err
 	}
+	if profileString(profile, "multihop_execution") == "server" && !desktopBridgeSavedRouterSelection(profile) {
+		return nil, Plan{}, 0, errors.New("saved Tor Server requires its explicit private entry and Tor exit selection")
+	}
 	for _, key := range []string{"kill_switch", "multihop_enabled", "jumbo_tun", "daita_enabled", "home_lan_access"} {
 		if raw, exists := profile[key]; exists {
 			if _, ok := raw.(bool); !ok {
@@ -408,14 +419,15 @@ func desktopBridgeDirectProtection(plan Plan) bool {
 	return len(plan.Bridges) == 1 && plan.Bridges[0].Transport == "obfs4"
 }
 
-// Idle editors can retain a Local Router choice without opening a connection.
+// Idle editors can retain a Local or Server Router choice without a connection.
 // This shape check is never a proof: the compiler requires the actual complete
 // predecessor, and the native owner requires its authenticated entry receipt.
 func desktopBridgeSavedRouterSelection(profile map[string]any) bool {
 	entry, exit, id := profileString(profile, "multihop_entry_id"), profileString(profile, "multihop_exit_id"), profileString(profile, "id")
 	execution := profileString(profile, "multihop_execution")
 	return profile["multihop_enabled"] == true && profileIdentifier.MatchString(entry) &&
-		entry != id && exit == id && (execution == "" || execution == "local")
+		entry != id && exit == id && (execution == "" || execution == "local" || execution == "server" &&
+		profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) && profile["multihop_exit_mode"] == "tor-bridge")
 }
 
 func desktopHex(value string, bytes int) bool {

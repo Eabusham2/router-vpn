@@ -75,13 +75,13 @@ func mustProtectionObject(t *testing.T, value any) any {
 func TestDesktopBridgeStrictDynamicProtectionRejectsUnownedSelection(t *testing.T) {
 	entry, _ := desktopEntryFixture(t, "shadowsocks", "", nil)
 	for name, edit := range map[string]func(map[string]any){
-		"direct":        func(p map[string]any) { p["multihop_enabled"] = false },
-		"entry missing": func(p map[string]any) { delete(p, "multihop_entry_id") },
-		"same node":     func(p map[string]any) { p["multihop_entry_id"] = p["id"] },
-		"wrong exit":    func(p map[string]any) { p["multihop_exit_id"] = "other-tor" },
-		"server":        func(p map[string]any) { p["multihop_execution"] = "server" },
-		"compare":       func(p map[string]any) { p["multihop_execution"] = "auto" },
-		"typed":         func(p map[string]any) { p["multihop_enabled"] = "true" },
+		"direct":                    func(p map[string]any) { p["multihop_enabled"] = false },
+		"entry missing":             func(p map[string]any) { delete(p, "multihop_entry_id") },
+		"same node":                 func(p map[string]any) { p["multihop_entry_id"] = p["id"] },
+		"wrong exit":                func(p map[string]any) { p["multihop_exit_id"] = "other-tor" },
+		"server without entry mode": func(p map[string]any) { p["multihop_execution"] = "server"; delete(p, "multihop_entry_mode") },
+		"compare":                   func(p map[string]any) { p["multihop_execution"] = "auto" },
+		"typed":                     func(p map[string]any) { p["multihop_enabled"] = "true" },
 	} {
 		t.Run(name, func(t *testing.T) {
 			p := desktopEntryExit(entry)

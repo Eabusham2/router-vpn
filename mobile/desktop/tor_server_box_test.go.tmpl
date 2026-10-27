@@ -1,0 +1,350 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+// This fixture keeps the shipping Box, native Server outbound, SS2022 entry,
+// selected DNS router and owned HTTP/SOCKS client. Only the private lease worker
+// and external Tor Project origin are doubled; no public network is contacted.
+type desktopTorServerFixture struct {
+	*desktopTorBoxFixture
+	entry                  *desktopTorBoxEntryServer
+	mu                     sync.Mutex
+	lease                  multihoprelay.TorLease
+	sequence               uint64
+	methods                []string
+	deleteFailed           bool
+	wrongSource            bool
+	putEntered, putRelease chan struct{}
+	putOnce                sync.Once
+	beforeCatalog          func()
+}
+
+func newDesktopTorServerFixture(t *testing.T, home, snowflake bool) *desktopTorServerFixture {
+	t.Helper()
+	entry := desktopTorBoxEntryFixture(t)
+	encrypted := newDesktopTorBoxEntryServer(t)
+	f := &desktopTorServerFixture{entry: encrypted}
+	f.desktopTorBoxFixture = newDesktopTorBoxCapturedFixture(t, func(p map[string]any) {
+		p["multihop_enabled"], p["multihop_entry_id"], p["multihop_exit_id"] = true, entry.ID(), p["id"]
+		p["multihop_entry_mode"], p["multihop_exit_mode"], p["multihop_execution"] = entry.Mode(), "tor-bridge", "server"
+		if home {
+			p["dns_mode"], p["dns_host"] = "home", "10.80.0.53"
+		}
+		if snowflake {
+			bridge := p["external"].(map[string]any)["tor_bridge"].(map[string]any)
+			bridge["transport"], bridge["bridges"] = "custom", []string{"snowflake 192.0.2.3:80 1111111111111111111111111111111111111111 fingerprint=1111111111111111111111111111111111111111 url=https://broker.example/ front=front.example ice=stun:stun.example:3478"}
+		}
+	}, entry, encrypted.register(t))
+	f.socks.serverUsername, f.socks.serverPassword = strings.Repeat("c", 48), strings.Repeat("d", 48)
+	encrypted.mu.Lock()
+	encrypted.ordinaryProof = f.handle
+	encrypted.mu.Unlock()
+	return f
+}
+
+func (f *desktopTorServerFixture) handle(conn net.Conn, destination M.Metadata) (bool, error) {
+	if destination.Destination.String() == "10.80.0.1:26240" {
+		return true, f.socks.serve(conn)
+	}
+	if destination.Destination.String() != "10.80.0.1:8787" {
+		return false, nil
+	}
+	request, err := http.ReadRequest(bufio.NewReader(conn))
+	if err != nil {
+		return true, err
+	}
+	defer request.Body.Close()
+	if request.Host != "10.80.0.1:8787" || request.Header.Get("Authorization") != "Bearer private-entry-token" {
+		return true, errors.New("server request lost captured private credentials")
+	}
+	write := func(status int, value any) error {
+		raw, _ := json.Marshal(value)
+		_, err := fmt.Fprintf(conn, "HTTP/1.1 %d Fixture\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, len(raw), raw)
+		return err
+	}
+	if request.Method == "GET" && request.URL.String() == "/health" {
+		f.entry.proofCalls.Add(1)
+		node := strings.Repeat("a", 64)
+		if f.entry.wrongNode.Load() {
+			node = strings.Repeat("f", 64)
+		}
+		return true, write(200, map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"})
+	}
+	if request.URL.String() != "/api/multihop/tor/lease" {
+		return true, errors.New("server request escaped captured API path")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.methods = append(f.methods, request.Method)
+	policy := f.policy.ServerPolicy()
+	source := multihoprelay.TorExitSource{ID: policy.ID(), Mode: policy.Mode(), SourceSHA256: policy.SourceSHA256(), DNSPolicySHA256: policy.DNSPolicySHA256()}
+	if request.Method == "GET" {
+		if f.beforeCatalog != nil {
+			f.beforeCatalog()
+		}
+		if f.wrongSource {
+			source.SourceSHA256 = strings.Repeat("f", 64)
+		}
+		return true, write(200, map[string]any{"node_id": strings.Repeat("a", 64), "challenge": multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("b", 64), Peer: "10.80.0.2", ExpiresAt: time.Now().Add(time.Minute).Unix()}, "sources": []multihoprelay.TorExitSource{source}})
+	}
+	var fields map[string]json.RawMessage
+	if json.NewDecoder(io.LimitReader(request.Body, 4097)).Decode(&fields) != nil {
+		return true, errors.New("invalid server lease request")
+	}
+	var nonce string
+	_ = json.Unmarshal(fields["status_nonce"], &nonce)
+	delete(fields, "status_nonce")
+	raw, _ := json.Marshal(fields)
+	var captured multihoprelay.TorRequest
+	if json.Unmarshal(raw, &captured) != nil {
+		return true, errors.New("invalid server lease fields")
+	}
+	if f.lease.OwnerID != "" && f.lease.Request != captured {
+		return true, errors.New("server request adopted another lease")
+	}
+	switch request.Method {
+	case "PUT":
+		if f.lease.OwnerID == "" {
+			registry, _ := json.Marshal(struct {
+				Node   string                      `json:"node_id"`
+				Source multihoprelay.TorExitSource `json:"source"`
+			}{strings.Repeat("a", 64), source})
+			digest := sha256.Sum256(registry)
+			f.lease = multihoprelay.TorLease{Request: captured, NodeID: strings.Repeat("a", 64), OwnerID: strings.Repeat("e", 64), Host: "10.80.0.1", Port: 26240, Username: f.socks.serverUsername, Password: f.socks.serverPassword, RegistrySHA256: hex.EncodeToString(digest[:]), DNSPolicySHA256: policy.DNSPolicySHA256(), Phase: multihoprelay.TorPending, BootstrapDeadline: time.Now().Add(multihoprelay.TorBootstrapLimit)}
+		}
+		f.lease.ExpiresAt = time.Now().Add(time.Minute)
+		if f.putEntered != nil {
+			f.putOnce.Do(func() { close(f.putEntered) })
+			release := f.putRelease
+			f.mu.Unlock()
+			<-release
+			f.mu.Lock()
+		}
+		return true, write(200, f.lease)
+	case "POST":
+		f.sequence++
+		f.lease.Phase = multihoprelay.TorReady
+		capture := multihoprelay.TorCapture{Schema: 1, Request: captured, Source: source, RegistrySHA256: f.lease.RegistrySHA256, OwnerID: f.lease.OwnerID, Peer: captured.Peer, Host: f.lease.Host, Port: f.lease.Port, Username: f.lease.Username, Password: f.lease.Password, BootstrapDeadline: f.lease.BootstrapDeadline}
+		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}
+		return true, write(200, multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: receipt})
+	case "DELETE":
+		if f.deleteFailed {
+			return true, write(503, map[string]any{"error": "owned cleanup pending"})
+		}
+		return true, write(200, map[string]any{"node_id": strings.Repeat("a", 64), "session_id": captured.SessionID, "stopped": true})
+	default:
+		return true, errors.New("unexpected server lease method")
+	}
+}
+
+func TestRouterVPNDesktopTorServerUsesNativeEntrySOCKSDNSAndClientProof(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		for _, snowflake := range []bool{false, true} {
+			t.Run(fmt.Sprintf("home=%t/snowflake=%t", home, snowflake), func(t *testing.T) {
+				f := newDesktopTorServerFixture(t, home, snowflake)
+				owner := f.capture(t)
+				if owner.pt != nil || owner.server == nil || len(f.options.Inbounds) != 1 {
+					t.Fatal("Server acquired local PT or a second TUN")
+				}
+				if err := owner.StartServer(); err != nil {
+					t.Fatal(err)
+				}
+				selectedDNS := func() bool {
+					if home {
+						return f.entry.dnsCalls.Load() > 0
+					}
+					return f.socks.dnsCalls.Load() > 0
+				}
+				receipt, err := owner.run(f.proverAfterDNS(t, selectedDNS))
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !owner.Healthy() || receipt.Policy.Execution != "server" || receipt.Policy.SocksPort != 0 || receipt.Proof.IP != "198.51.100.18" || !receipt.Proof.IsTor || !receipt.Proof.DNSProven || receipt.EntryProof == nil || f.entry.proofCalls.Load() != 2 || f.entry.bridgeCalls.Load() != 0 || f.child.configured.Load() != 0 || f.socks.proofCalls.Load() != 1 {
+					t.Fatal("Server receipt substituted a server proof/local child or lost selected client path")
+				}
+				if err := owner.VerifyCurrentPath(t.Context()); err != nil {
+					t.Fatal(err)
+				}
+				if err := owner.Close(t.Context()); err != nil {
+					t.Fatal("exact Server lease cleanup after data retirement", err)
+				}
+				f.mu.Lock()
+				methods := strings.Join(f.methods, ",")
+				f.mu.Unlock()
+				if !strings.HasPrefix(methods, "GET,PUT,POST,POST") || !strings.HasSuffix(methods, ",DELETE") || owner.Healthy() {
+					t.Fatal("Server lifecycle did not retain exact proof/control ownership", methods)
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorServerRejectsForeignEntrySourceDNSAndPlaintextProof(t *testing.T) {
+	for _, fault := range []string{"wrong-node", "wrong-source", "dns", "public-proof"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopTorServerFixture(t, false, false)
+			if fault == "wrong-node" {
+				f.entry.wrongNode.Store(true)
+			}
+			if fault == "wrong-source" {
+				f.wrongSource = true
+			}
+			if fault == "dns" {
+				f.socks.badDNS.Store(true)
+			}
+			owner := f.capture(t)
+			err := owner.StartServer()
+			if err == nil {
+				if fault == "public-proof" {
+					_, err = owner.Run()
+				} else {
+					_, err = owner.run(f.prover(t))
+				}
+			}
+			if err == nil || owner.Healthy() {
+				t.Fatal("invalid Server path became Connected", fault)
+			}
+			if fault == "wrong-node" || fault == "wrong-source" {
+				f.mu.Lock()
+				methods := strings.Join(f.methods, ",")
+				f.mu.Unlock()
+				if strings.Contains(methods, "PUT") || f.socks.proofCalls.Load() != 0 {
+					t.Fatal("foreign Server identity acquired a lease or proof path")
+				}
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorServerCancelRetainsExactEntryUntilDeleteAcknowledged(t *testing.T) {
+	f := newDesktopTorServerFixture(t, false, false)
+	owner := f.capture(t)
+	if err := owner.StartServer(); err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.deleteFailed = true
+	f.mu.Unlock()
+	t.Cleanup(func() { f.mu.Lock(); f.deleteFailed = false; f.mu.Unlock() })
+	owner.Cancel()
+	if owner.Healthy() || owner.LifetimeCurrent() {
+		t.Fatal("cancellation retained data authority")
+	}
+	if err := owner.Close(t.Context()); err == nil {
+		t.Fatal("failed DELETE became a cleanup receipt")
+	}
+	if !owner.network.Current() || owner.engine.Identity() == "" {
+		t.Fatal("data Cancel destroyed the exact cleanup entry")
+	}
+	f.mu.Lock()
+	f.deleteFailed = false
+	f.mu.Unlock()
+	if err := owner.Close(t.Context()); err != nil {
+		t.Fatal("retry lost the owned DELETE", err)
+	}
+	f.mu.Lock()
+	methods := strings.Join(f.methods, ",")
+	f.mu.Unlock()
+	if !strings.HasSuffix(methods, "DELETE,DELETE") {
+		t.Fatal("cleanup did not retry the same lease", methods)
+	}
+}
+
+func TestRouterVPNDesktopTorServerCancelsDispatchedAcquireAndDeletesWithoutAdoptingLateReply(t *testing.T) {
+	f := newDesktopTorServerFixture(t, false, false)
+	f.putEntered, f.putRelease = make(chan struct{}), make(chan struct{})
+	var release sync.Once
+	t.Cleanup(func() { release.Do(func() { close(f.putRelease) }) })
+	owner := f.capture(t)
+	done := make(chan error, 1)
+	go func() { done <- owner.StartServer() }()
+	select {
+	case <-f.putEntered:
+	case <-time.After(3 * time.Second):
+		t.Fatal("native acquire did not enter captured Router")
+	}
+	owner.Cancel()
+	select {
+	case err := <-done:
+		if err == nil {
+			t.Fatal("cancelled dispatched lease was adopted")
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("cancel did not close captured request")
+	}
+	// DELETE uses the recorded request even though the PUT reply was lost.
+	if err := owner.Close(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	release.Do(func() { close(f.putRelease) })
+	if owner.Healthy() {
+		t.Fatal("late lease response revived the cancelled owner")
+	}
+	f.mu.Lock()
+	methods := strings.Join(f.methods, ",")
+	f.mu.Unlock()
+	if methods != "GET,PUT,DELETE" {
+		t.Fatal("cancelled lease control escaped ownership", methods)
+	}
+}
+
+func TestRouterVPNDesktopTorServerLivenessDoesNotWaitForNativeMTUReader(t *testing.T) {
+	f := newDesktopTorServerFixture(t, false, false)
+	owner := f.capture(t)
+	if err := owner.StartServer(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := owner.run(f.prover(t)); err != nil {
+		t.Fatal(err)
+	}
+	owner.engine.mu.Lock()
+	done := make(chan bool, 1)
+	go func() { done <- owner.LifetimeCurrent() }()
+	select {
+	case current := <-done:
+		owner.engine.mu.Unlock()
+		if !current {
+			t.Fatal("held TUN reader retired the Server lifetime")
+		}
+	case <-time.After(time.Second):
+		owner.engine.mu.Unlock()
+		<-done
+		t.Fatal("Server lifetime waited for native MTU transaction and could deadlock transition admission")
+	}
+}
+
+func TestRouterVPNDesktopTorServerRealResetCannotAdoptLateCatalog(t *testing.T) {
+	f := newDesktopTorServerFixture(t, false, false)
+	owner := f.capture(t)
+	f.beforeCatalog = func() { owner.network.InterfaceUpdated(context.Background()) }
+	if err := owner.StartServer(); err == nil || owner.Healthy() {
+		t.Fatal("same-fingerprint real reset adopted late Server catalog")
+	}
+	if err := owner.Close(t.Context()); err != nil {
+		t.Fatal("unacquired retired Server did not drain", err)
+	}
+	f.mu.Lock()
+	methods := strings.Join(f.methods, ",")
+	f.mu.Unlock()
+	if methods != "GET" {
+		t.Fatal("reset sent an unowned PUT or DELETE", methods)
+	}
+}
