@@ -1,18 +1,18 @@
 param([string]$Root=(Split-Path $PSScriptRoot -Parent),[Parameter(Mandatory=$true)][string]$Catalog)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
-$Source=Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-TorBridge.ps1') -Raw
+$Source=Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-TorBridge.ps1') -Raw -Encoding UTF8
 $Ast=[ScriptBlock]::Create($Source).Ast
 $Bodies=@($Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.StringConstantExpressionAst] -and $Node.Value.StartsWith('function TestUnifiedExternalMutationIdle')},$true))
 if($Bodies.Count-ne1){throw 'Shipping external source functions moved.'}
 . ([ScriptBlock]::Create($Bodies[0].Value))
-$Unified=Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1') -Raw
+$Unified=Get-Content -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1') -Raw -Encoding UTF8
 $Block=[regex]::Match($Unified,'(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')
 if(-not$Block.Success){throw 'Shipping unified functions moved.'}
 $Lookup=@([ScriptBlock]::Create($Block.Groups[1].Value).Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.FunctionDefinitionAst] -and $Node.Name-eq'UnifiedSelectedProfile'},$true))
 if($Lookup.Count-ne1){throw 'Shipping selected profile lookup moved.'}
 . ([ScriptBlock]::Create($Lookup[0].Extent.Text))
-$Baseline=Get-Content -Raw -LiteralPath $Catalog|ConvertFrom-Json
+$Baseline=Get-Content -Raw -LiteralPath $Catalog -Encoding UTF8|ConvertFrom-Json
 function Clone($Object){return ($Object|ConvertTo-Json -Depth 32|ConvertFrom-Json)}
 function Check([bool]$Value,[string]$Message){if(-not$Value){throw $Message};$script:Checks++}
 $script:Checks=0;$script:Current=$null;$script:OnCapability=$null;$script:Reads=0
