@@ -139,6 +139,31 @@ func externalEntryMode(captured: [String: Any], entry: [String: Any]?, selected:
     return mode
 }
 
+func externalSavedEntryMode(captured: [String: Any], profiles: [[String: Any]], modes: [[String: Any]]) throws -> String {
+    func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
+    let mode = captured["multihop_entry_mode"] as? String ?? ""
+    if mode.isEmpty { return "" }
+    let entryID = captured["multihop_entry_id"] as? String ?? ""
+    if captured["multihop_enabled"] as? Bool == true, !entryID.isEmpty {
+        let entries = profiles.filter { $0["id"] as? String == entryID }
+        guard entries.count == 1 else { throw fail("The saved entry is missing or ambiguous. Refresh the node list.") }
+        let entry = entries[0], kind = entry["node_kind"] as? String ?? "router-vpn"
+        if kind == "external" {
+            let protocolID = (entry["external"] as? [String: Any])?["protocol"] as? String ?? ""
+            guard (captured["external"] as? [String: Any])?["protocol"] as? String == "tor-bridge",
+                  ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolID), mode == protocolID else {
+                throw fail("The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.")
+            }
+            // This popup configures Router modes; the captured external node
+            // keeps its own protocol and source token while it is disabled.
+            return ""
+        }
+        guard (kind.isEmpty || kind == "router-vpn"), entry["external"] == nil else { throw fail("The saved entry has an inconsistent node identity.") }
+    }
+    guard modes.filter({ $0["id"] as? String == mode }).count == 1 else { throw fail("The saved Router entry mode is missing from the current native catalog.") }
+    return mode
+}
+
 func externalPathConnectBody(captured: [String: Any], entryID: String, execution: String, direct: Bool,
     current: [[String: Any]], entryMode: String? = nil, entryModes: [[String: Any]] = []) throws -> [String: Any] {
     func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.ExternalNode", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
@@ -273,10 +298,7 @@ extension ProductWindowController {
                 appendHelp("The native Router entry mode catalog is unavailable."); return
             }
             try externalRequireSourceCapability(capabilities)
-            let savedMode = captured["multihop_entry_mode"] as? String ?? ""
-            guard savedMode.isEmpty || entryModes.filter({ $0["id"] as? String == savedMode }).count == 1 else {
-                appendHelp("The saved Router entry mode is missing from the current native catalog."); return
-            }
+            let savedMode = try externalSavedEntryMode(captured: captured, profiles: catalog, modes: entryModes)
             let ids = [""] + choices.map { $0["id"] as? String ?? "" }
             let entry = NSPopUpButton(frame: .zero, pullsDown: false)
             populateIdentityPopup(entry, names: ["Direct — no entry"] + choices.map { $0["display_name"] as? String ?? $0["name"] as? String ?? "Node" }, ids: ids)

@@ -273,6 +273,25 @@ int main(int argc,char **argv){
     body=external_path_mode_body_v4(captured,mode_current,"ordinary","local",FALSE,"",entry_modes,&error);check(body!=NULL,"External entry failed with disabled Router mode");root=parse_json(body);check(!json_object_has_member(json_node_get_object(root),"entry_mode"),"External entry retained Router mode");json_node_free(root);g_free(body);count++;
     json_object_set_string_member(json_array_get_object_element(mode_nodes,2),"multihop_entry_mode","hysteria2");
     body=external_path_mode_body_v4(captured,mode_current,"entry","local",FALSE,"wg",entry_modes,&error);check(body==NULL,"Changed saved entry mode owner accepted");g_free(error);error=NULL;count++;
+    for(guint pi=0;pi<G_N_ELEMENTS(eligible);pi++){
+        char *saved_json=g_strdup_printf("{\"profiles\":[{\"id\":\"saved-tor\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"tor-bridge\"},\"multihop_enabled\":true,\"multihop_entry_id\":\"ordinary\",\"multihop_entry_mode\":\"%s\"},{\"id\":\"ordinary\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\"}}]}",eligible[pi],eligible[pi]);
+        JsonNode *saved_root=parse_json(saved_json);g_free(saved_json);JsonArray *saved_profiles=json_object_get_array_member(json_node_get_object(saved_root),"profiles");
+        JsonObject *tor=json_array_get_object_element(saved_profiles,0),*lower=json_array_get_object_element(saved_profiles,1);
+        char *restored_mode=external_saved_entry_mode_v4(tor,saved_profiles,entry_modes,&error);
+        check(restored_mode!=NULL&&restored_mode[0]=='\0',error?error:"Saved ordinary Tor entry was replaced by a Router mode");
+        body=external_path_mode_body_v4(tor,saved_root,"ordinary","local",FALSE,restored_mode,entry_modes,&error);check(body!=NULL,error?error:"Reopened Tor path failed");
+        root=parse_json(body);obj=json_node_get_object(root);check(!json_object_has_member(obj,"entry_mode")&&g_strcmp0(obj_string(obj,"entry_id"),"ordinary")==0,"Reopened Tor path replaced its imported entry");json_node_free(root);g_free(body);g_free(restored_mode);
+        JsonArray *missing=json_array_new();json_array_add_object_element(missing,json_object_ref(tor));
+        restored_mode=external_saved_entry_mode_v4(tor,missing,entry_modes,&error);check(restored_mode==NULL,"Missing saved ordinary entry accepted");g_free(error);error=NULL;json_array_unref(missing);
+        json_array_add_object_element(saved_profiles,json_object_ref(lower));restored_mode=external_saved_entry_mode_v4(tor,saved_profiles,entry_modes,&error);check(restored_mode==NULL,"Ambiguous saved ordinary entry accepted");g_free(error);error=NULL;json_array_remove_element(saved_profiles,2);
+        json_object_set_string_member(tor,"multihop_entry_mode","wg");restored_mode=external_saved_entry_mode_v4(tor,saved_profiles,entry_modes,&error);check(restored_mode==NULL,"Raw imported Tor protocol was replaced by a Router alias");g_free(error);error=NULL;count+=5;
+        const char *bad[]={"future"," WireGuard","tor-bridge"};
+        for(guint bi=0;pi==0&&bi<G_N_ELEMENTS(bad);bi++){
+            json_object_set_string_member(tor,"multihop_entry_mode",bad[bi]);json_object_set_string_member(json_object_get_object_member(lower,"external"),"protocol",bad[bi]);
+            restored_mode=external_saved_entry_mode_v4(tor,saved_profiles,entry_modes,&error);check(restored_mode==NULL,"Unknown saved Tor predecessor accepted");g_free(error);error=NULL;count++;
+        }
+        json_node_free(saved_root);
+    }
     json_node_free(mode_current);json_node_free(mode_catalog);json_node_free(source_root);
     json_node_free(captured_node);
     App app={.window=gtk_window_new(GTK_WINDOW_TOPLEVEL)};LinuxUnifiedV8 dispatch={.app=&app,.multihop=gtk_check_button_new(),.mode=gtk_combo_box_text_new(),.node=gtk_combo_box_text_new()};

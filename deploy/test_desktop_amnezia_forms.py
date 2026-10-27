@@ -32,6 +32,7 @@ def block(source, marker):
 
 def swift_form(directory):
     source = (ROOT/'client/macos/RouterVPNMacExternalNode.swift').read_text()
+    assert 'let savedMode = try externalSavedEntryMode(captured: captured, profiles: catalog, modes: entryModes)' in block(source, '    func showExternalPath(')
     helper = source[source.index('// Keep the provider'):source.index('extension ProductWindowController')]
     csv = block(source, 'private func externalCSV(')
     fields = block(source, 'if selected == "wireguard" || selected == "amneziawg"')
@@ -349,6 +350,27 @@ let directMode = try externalPathConnectBody(captured: captured, entryID: "", ex
 check(directMode["entry_mode"] == nil, "Direct retained disabled Router mode"); count += 1
 let ordinaryMode = try externalPathConnectBody(captured: captured, entryID: "ordinary", execution: "local", direct: false, current: [captured, ordinary], entryMode: "", entryModes: entryModes)
 check(ordinaryMode["entry_mode"] == nil, "External entry retained disabled Router mode"); count += 1
+for protocolID in ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"] {
+    var tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": "tor-bridge"],
+        "multihop_enabled": true, "multihop_entry_id": "ordinary", "multihop_entry_mode": protocolID]
+    let lower: [String: Any] = ["id": "ordinary", "node_kind": "external", "external": ["protocol": protocolID]]
+    let restoredMode = try externalSavedEntryMode(captured: tor, profiles: [tor, lower], modes: entryModes)
+    check(restoredMode.isEmpty, "Saved ordinary Tor entry was replaced by a Router mode")
+    let body = try externalPathConnectBody(captured: tor, entryID: "ordinary", execution: "local", direct: false,
+        current: [tor, lower], entryMode: restoredMode, entryModes: entryModes)
+    check(body["entry_mode"] == nil && body["entry_id"] as? String == "ordinary", "Reopened Tor path replaced its imported entry")
+    check(rejects { _ = try externalSavedEntryMode(captured: tor, profiles: [tor], modes: entryModes) }, "Missing saved ordinary entry accepted")
+    check(rejects { _ = try externalSavedEntryMode(captured: tor, profiles: [tor, lower, lower], modes: entryModes) }, "Ambiguous saved ordinary entry accepted")
+    tor["multihop_entry_mode"] = "wg"
+    check(rejects { _ = try externalSavedEntryMode(captured: tor, profiles: [tor, lower], modes: entryModes) }, "Raw imported Tor protocol was replaced by a Router alias")
+    count += 5
+}
+for bad in ["future", " WireGuard", "tor-bridge"] {
+    let tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": "tor-bridge"],
+        "multihop_enabled": true, "multihop_entry_id": "ordinary", "multihop_entry_mode": bad]
+    let lower: [String: Any] = ["id": "ordinary", "node_kind": "external", "external": ["protocol": bad]]
+    check(rejects { _ = try externalSavedEntryMode(captured: tor, profiles: [tor, lower], modes: entryModes) }, "Unknown saved Tor predecessor accepted"); count += 1
+}
 var changedModeOwner = captured; changedModeOwner["multihop_entry_mode"] = "hysteria2"
 check(rejects { _ = try externalPathConnectBody(captured: captured, entryID: "entry", execution: "local", direct: false, current: [changedModeOwner, entryModeNode], entryMode: "wg", entryModes: entryModes) }, "Changed saved entry mode owner accepted"); count += 1
 final class NSMenuItem { let title: String; var representedObject: Any?; init(title: String, action: Any?, keyEquivalent: String) { self.title = title } }
@@ -432,8 +454,11 @@ def linux_form(directory):
     flags = subprocess.check_output(['pkg-config', '--cflags', '--libs', 'gtk+-3.0', 'json-glib-1.0'], text=True).split()
     binary = directory/'gtk-form'
     product = (ROOT/'client/linux/routervpn-gtk-product-v4.c').read_text()
+    dialog = block(product, 'static void linux_external_path_dialog_v4(')
+    assert 'external_saved_entry_mode_v4(captured,profiles,entry_modes,&saved_mode_error)' in dialog
+    assert 'gtk_combo_box_set_active_id(GTK_COMBO_BOX(entry_mode),saved_mode)' in dialog
     helpers = block(product, 'static const char *external_saved_execution_v4(') + '\n' + block(product, 'static char *json_external_hop_body(')
-    for marker in ('static const char *external_path_string_v4(', 'static gboolean external_path_flag_v4(', 'static JsonObject *external_path_object_v4(', 'static char *external_path_current_body_v4(', 'static char *external_entry_mode_v4(', 'static char *external_path_mode_body_v4('):
+    for marker in ('static const char *external_path_string_v4(', 'static gboolean external_path_flag_v4(', 'static JsonObject *external_path_object_v4(', 'static char *external_path_current_body_v4(', 'static char *external_entry_mode_v4(', 'static char *external_saved_entry_mode_v4(', 'static char *external_path_mode_body_v4('):
         helpers += '\n' + block(product, marker)
     helpers += '\n' + block((ROOT/'client/linux/routervpn-gtk-product.c').read_text(), 'static JsonNode *copy_public_source_value_v24(')
     helpers += '\n' + (ROOT/'client/linux/routervpn-external-source-v24.inc').read_text()

@@ -290,6 +290,36 @@ static char *external_entry_mode_v4(JsonObject *captured,JsonObject *entry,const
     return g_strdup(mode);
 }
 
+static char *external_saved_entry_mode_v4(JsonObject *captured,JsonArray *profiles,JsonArray *modes,char **error) {
+    const char *mode=external_path_string_v4(captured,"multihop_entry_mode"),*message=NULL;
+    if(!mode[0])return g_strdup("");
+    const char *entry_id=external_path_string_v4(captured,"multihop_entry_id");
+    if(external_path_flag_v4(captured,"multihop_enabled")&&entry_id[0]){
+        JsonObject *entry=NULL;guint matches=0;
+        for(guint i=0;profiles!=NULL&&i<json_array_get_length(profiles);i++){
+            JsonNode *item=json_array_get_element(profiles,i);
+            if(item!=NULL&&JSON_NODE_HOLDS_OBJECT(item)&&g_strcmp0(external_path_string_v4(json_node_get_object(item),"id"),entry_id)==0){entry=json_node_get_object(item);matches++;}
+        }
+        if(matches!=1)message="The saved entry is missing or ambiguous. Refresh the node list.";
+        const char *kind=external_path_string_v4(entry,"node_kind");JsonObject *external=external_path_object_v4(entry,"external");
+        if(message==NULL&&g_strcmp0(kind,"external")==0){
+            const char *protocol=external_path_string_v4(external,"protocol");
+            const char *supported[]={"wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"};gboolean valid=FALSE;
+            for(guint i=0;i<G_N_ELEMENTS(supported);i++)if(g_strcmp0(protocol,supported[i])==0)valid=TRUE;
+            if(valid&&g_strcmp0(mode,protocol)==0&&g_strcmp0(external_path_string_v4(external_path_object_v4(captured,"external"),"protocol"),"tor-bridge")==0)return g_strdup("");
+            message="The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.";
+        }else if(message==NULL&&((kind[0]&&g_strcmp0(kind,"router-vpn")!=0)||external!=NULL))message="The saved entry has an inconsistent node identity.";
+    }
+    guint matches=0;
+    for(guint i=0;message==NULL&&modes!=NULL&&i<json_array_get_length(modes);i++){
+        JsonNode *item=json_array_get_element(modes,i);
+        if(item!=NULL&&JSON_NODE_HOLDS_OBJECT(item)&&g_strcmp0(external_path_string_v4(json_node_get_object(item),"id"),mode)==0)matches++;
+    }
+    if(message==NULL&&matches!=1)message="The saved Router entry mode is missing from the current native catalog.";
+    if(message!=NULL){if(error!=NULL)*error=g_strdup(message);return NULL;}
+    return g_strdup(mode);
+}
+
 static char *external_path_mode_body_v4(JsonObject *captured,JsonNode *current,const char *entry_id,const char *execution,gboolean direct,const char *entry_mode,JsonArray *entry_modes,char **error) {
     char *body=external_path_current_body_v4(captured,current,entry_id,execution,direct,error);
     if(body==NULL)return NULL;
@@ -347,6 +377,9 @@ static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
     JsonArray *entry_modes=mode_list!=NULL&&JSON_NODE_HOLDS_ARRAY(mode_list)?json_node_get_array(mode_list):NULL;
     if(!external_path_flag_v4(capabilities,"profile_source_preconditions")){append_diag(app,"Update the local controller before connecting this captured external path.");json_node_free(root);return;}
     if(entry_modes==NULL){append_diag(app,"The native Router entry mode catalog is invalid.");json_node_free(root);return;}
+    g_autofree char *saved_mode_error=NULL;
+    g_autofree char *saved_mode=external_saved_entry_mode_v4(captured,profiles,entry_modes,&saved_mode_error);
+    if(saved_mode==NULL){append_diag(app,saved_mode_error!=NULL?saved_mode_error:"The saved entry mode is invalid.");json_node_free(root);return;}
     JsonObject *external=json_object_has_member(captured,"external")?json_object_get_object_member(captured,"external"):NULL;
     gboolean has_probe=external!=NULL&&json_object_has_member(external,"has_response_probe")&&json_object_get_boolean_member(external,"has_response_probe");
     GtkWidget *dialog=gtk_dialog_new_with_buttons("External path",GTK_WINDOW(app->window),GTK_DIALOG_MODAL|GTK_DIALOG_DESTROY_WITH_PARENT,"Cancel",GTK_RESPONSE_CANCEL,"Connect selected path",GTK_RESPONSE_ACCEPT,NULL);
@@ -365,7 +398,7 @@ static void linux_external_path_dialog_v4(App *app, gboolean require_entry) {
         JsonObject *mode=json_node_get_object(item);const char *id=external_path_string_v4(mode,"id"),*name=external_path_string_v4(mode,"name");
         if(id[0])gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(entry_mode),id,name[0]?name:id);
     }
-    if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(entry_mode),external_path_string_v4(captured,"multihop_entry_mode"))){append_diag(app,"The saved Router entry mode is missing from the current native catalog.");gtk_widget_destroy(dialog);json_node_free(root);return;}
+    if(!gtk_combo_box_set_active_id(GTK_COMBO_BOX(entry_mode),saved_mode)){append_diag(app,"The saved Router entry mode is missing from the current native catalog.");gtk_widget_destroy(dialog);json_node_free(root);return;}
     LinuxExternalEntryModeV4 mode_state={.profiles=profiles,.mode=entry_mode,.execution=execution};
     g_signal_connect(entry,"changed",G_CALLBACK(external_entry_changed_v4),&mode_state);external_entry_changed_v4(GTK_COMBO_BOX(entry),&mode_state);
     GtkWidget *mode_note=gtk_label_new("The exact selected mode and the entry node's saved Start Layer are used. Compatibility and path proof are checked before Connected.");gtk_label_set_line_wrap(GTK_LABEL(mode_note),TRUE);gtk_label_set_xalign(GTK_LABEL(mode_note),0.0f);

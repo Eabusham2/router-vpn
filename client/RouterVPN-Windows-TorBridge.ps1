@@ -135,6 +135,30 @@ function GetUnifiedExternalEntryMode($Captured,$Entry,[string]$Selected,$Modes){
     if($Found.Count -ne 1){throw 'Choose an exact Router entry mode from the current native catalog.'}
     return $Mode
 }
+function GetUnifiedExternalSavedEntryMode($Captured,$Profiles,$Modes){
+    $Mode=[string](ExternalPublicValue $Captured 'multihop_entry_mode')
+    if(-not $Mode){return ''}
+    $EntryID=[string](ExternalPublicValue $Captured 'multihop_entry_id')
+    if((ExternalPublicValue $Captured 'multihop_enabled' $false) -ceq $true -and $EntryID){
+        $Entries=@($Profiles|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $EntryID})
+        if($Entries.Count -ne 1){throw 'The saved entry is missing or ambiguous. Refresh the node list.'}
+        $Entry=$Entries[0];$Kind=[string](ExternalPublicValue $Entry 'node_kind' 'router-vpn')
+        $External=ExternalPublicValue $Entry 'external' $null
+        if($Kind -ceq 'external'){
+            $Protocol=[string](ExternalPublicValue $External 'protocol')
+            if((ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'protocol') -cne 'tor-bridge' -or
+               $Protocol -cnotin @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn') -or $Mode -cne $Protocol){
+                throw 'The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.'
+            }
+            # The Router-only popup stays disabled. The captured entry token
+            # retains the imported protocol; it is never replaced by a base.
+            return ''
+        }
+        if(($Kind -and $Kind -cne 'router-vpn') -or $null-ne$External){throw 'The saved entry has an inconsistent node identity.'}
+    }
+    if(@($Modes|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $Mode}).Count -ne 1){throw 'The saved Router entry mode is missing from the current native catalog.'}
+    return $Mode
+}
 function NewUnifiedExternalPathBody($Captured,[string]$EntryID,[string]$Execution,[bool]$Direct,$Current,$EntryMode=$null,$EntryModes=@()){
     $ID=[string](ExternalPublicValue $Captured 'id')
     $Matches=@($Current|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
@@ -196,8 +220,7 @@ function ShowUnifiedExternalPath([string]$ProfileID='',[bool]$RequireEntry=$fals
         $Capabilities=Api '/api/external-profile/capabilities' -Timeout 5
         AssertUnifiedExternalSourceCapability $Capabilities
         $EntryModes=@(ExternalPublicValue $Capabilities 'router_vpn_entry_modes' @())
-        $SavedMode=[string](ExternalPublicValue $Captured 'multihop_entry_mode')
-        if($SavedMode -and @($EntryModes|Where-Object{[string]$_.id -ceq $SavedMode}).Count -ne 1){throw 'The saved Router entry mode is missing from the current native catalog.'}
+        $SavedMode=GetUnifiedExternalSavedEntryMode $Captured @($Store.profiles) $EntryModes
         $SavedEntry=if([bool](ExternalPublicValue $Captured 'multihop_enabled' $false)){[string](ExternalPublicValue $Captured 'multihop_entry_id')}else{''}
         [xml]$PathX=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="External path" Width="650" Height="560" MinHeight="450" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF"><ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">

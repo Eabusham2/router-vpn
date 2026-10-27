@@ -315,6 +315,32 @@ $Entry.SelectedValue='';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialo
 $EntryMode.SelectedValue='';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -ne $Dialog.Tag -and -not $Dialog.Tag.ContainsKey('entry_mode')) 'Direct retained a disabled Router entry mode.';$Count++
 $Entry.SelectedValue='external-entry';$Dialog.Tag=$null;& $ConfirmPath;Check ($null -ne $Dialog.Tag -and -not $Dialog.Tag.ContainsKey('entry_mode')) 'External entry retained a disabled Router entry mode.';$Count++
 $Entry.SelectedValue='entry';$EntryMode.SelectedValue='wg';$Fresh=$Captured|ConvertTo-Json -Depth 6|ConvertFrom-Json;$Fresh.multihop_entry_mode='hysteria2';$script:CurrentPathCatalog=@($Fresh,$Choices[1]);$Dialog.Tag=$null;& $ConfirmPath;Check ($null -eq $Dialog.Tag) 'Changed saved entry-mode owner was accepted.';$Count++;$script:CurrentPathCatalog=$null
+$RestoreMode=@($Shipping.Ast.FindAll({param($Node)$Node -is [System.Management.Automation.Language.AssignmentStatementAst] -and $Node.Left.Extent.Text -ceq '$SavedMode'},$true))
+Check ($RestoreMode.Count -eq 1) 'Saved external entry restoration changed.'
+$RestoreSavedMode=[ScriptBlock]::Create($RestoreMode[0].Extent.Text)
+$PriorCaptured=$Captured;$PriorStore=$Store
+foreach($ProtocolID in @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
+    $Captured=[pscustomobject]@{id='saved-tor';node_kind='external';external=[pscustomobject]@{protocol='tor-bridge'};multihop_enabled=$true;multihop_entry_id='ordinary';multihop_entry_mode=$ProtocolID}
+    $Lower=[pscustomobject]@{id='ordinary';node_kind='external';external=[pscustomobject]@{protocol=$ProtocolID}}
+    $Store=[pscustomobject]@{profiles=@($Captured,$Lower)}
+    . $RestoreSavedMode
+    Check ($SavedMode -ceq '') 'Saved ordinary Tor entry was replaced by a Router mode.'
+    $Reopened=NewUnifiedExternalPathBody $Captured 'ordinary' 'local' $false $Store.profiles $SavedMode $EntryModes
+    Check (-not $Reopened.ContainsKey('entry_mode') -and $Reopened.entry_id -ceq 'ordinary') 'Reopened Tor path replaced its imported entry.'
+    foreach($BadProfiles in @(@($Captured),@($Captured,$Lower,$Lower))){
+        $Rejected=$false;try{[void](GetUnifiedExternalSavedEntryMode $Captured $BadProfiles $EntryModes)}catch{$Rejected=$true}
+        Check $Rejected 'Missing or ambiguous saved ordinary entry accepted.'
+    }
+    $Captured.multihop_entry_mode='wg';$Rejected=$false
+    try{[void](GetUnifiedExternalSavedEntryMode $Captured $Store.profiles $EntryModes)}catch{$Rejected=$true}
+    Check $Rejected 'Raw imported Tor protocol was replaced by a Router alias.';$Count+=5
+}
+foreach($Bad in @('future',' WireGuard','tor-bridge')){
+    $Captured.multihop_entry_mode=$Bad;$Lower.external.protocol=$Bad;$Rejected=$false
+    try{[void](GetUnifiedExternalSavedEntryMode $Captured $Store.profiles $EntryModes)}catch{$Rejected=$true}
+    Check $Rejected 'Unknown saved Tor predecessor accepted.';$Count++
+}
+$Captured=$PriorCaptured;$Store=$PriorStore
 $UnifiedSource=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1')
 $UnifiedBlock=[regex]::Match($UnifiedSource, '(?ms)^    \$extraState = @''\r?\n(.*?)\r?\n''@')
 Check $UnifiedBlock.Success 'Shipping primary Connect source missing.'
