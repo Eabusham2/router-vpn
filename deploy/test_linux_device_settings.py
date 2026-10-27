@@ -31,7 +31,13 @@ def main():
     settings = (ROOT / "client/linux/routervpn-profile-settings-v1.inc").read_text(encoding="utf-8")
     assert 'DEVICE_INC="$ROOT/client/linux/routervpn-device-settings-v1.inc"' in build
     assert '#include "routervpn-device-settings-v1.inc"\\n#include "routervpn-profile-settings-v1.inc"' in build
-    assert '"$DNS_INC" "$SHUTDOWN_INC" "$DEVICE_INC"' in build
+    # Validate the shipped manifest and copy loop independently. Other native
+    # includes can sit between these dependencies without removing any of them.
+    shipped = build.split("SHIPPED=(", 1)[1].split(")", 1)[0]
+    copied = build.split("for source in ", 1)[1].split("; do", 1)[0]
+    for variable in ("DNS_INC", "SHUTDOWN_INC", "EXTERNAL_SOURCE_INC", "DEVICE_INC"):
+        assert shlex.split(shipped).count("$" + variable) == 1, "Shipped source missing or duplicated: " + variable
+        assert shlex.split(copied).count("$" + variable) == 1, "Copied source missing or duplicated: " + variable
     callback = settings.split("static void on_profile_settings_v7(", 1)[1]
     assert callback.index("linux_device_settings_open_v1(app)") < callback.index('api_request("/api/profile/settings"')
     variants = {
