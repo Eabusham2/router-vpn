@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"router-vpn/internal/common"
 )
 
 func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
@@ -15,33 +18,36 @@ func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
-	a, _, _ := torBridgeUpdateSourceFixture(t)
-	response := httptest.NewRecorder()
-	a.listPublicNodes(response, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
-	if response.Code != http.StatusOK || response.Header().Get("cache-control") != "no-store" {
-		t.Fatal("Tor editor catalog did not use the actual private-source projection")
-	}
-	for _, secret := range []string{"cert=", "private-token", "api_token", "private_key"} {
-		if strings.Contains(response.Body.String(), secret) {
-			t.Fatal("Tor form catalog exposed source credentials", secret)
+	for _, execution := range []string{"local", "server"} {
+		a, _, _ := torBridgeFormSourceFixture(t, execution)
+		response := httptest.NewRecorder()
+		a.listPublicNodes(response, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
+		if response.Code != http.StatusOK || response.Header().Get("cache-control") != "no-store" {
+			t.Fatal("Tor editor catalog did not use the actual private-source projection")
+		}
+		for _, secret := range []string{"cert=", "private-token", "api_token", "private_key"} {
+			if strings.Contains(response.Body.String(), secret) {
+				t.Fatal("Tor form catalog exposed source credentials", secret)
+			}
+		}
+		if err := os.WriteFile(filepath.Join(directory, torBridgeFormFile(execution, "source-catalog.json")), response.Body.Bytes(), 0600); err != nil {
+			t.Fatal(err)
+		}
+		// Separate actual projections include the execution-bound revision and
+		// the saved Always policy. Native editors must not fabricate either.
+		a.profiles.Profiles[0].KillSwitchPolicy = "always"
+		a.profiles.Profiles[0].KillSwitch = true
+		response = httptest.NewRecorder()
+		a.listPublicNodes(response, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
+		if response.Code != http.StatusOK {
+			t.Fatal("saved Always source projection failed")
+		}
+		if err := os.WriteFile(filepath.Join(directory, torBridgeFormFile(execution, "always-source-catalog.json")), response.Body.Bytes(), 0600); err != nil {
+			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(directory, "tor-update-source-catalog.json"), response.Body.Bytes(), 0600); err != nil {
-		t.Fatal(err)
-	}
-	// The unchanged-protection callback receives a separate real projection,
-	// including the revision token of the saved Always policy.
-	a.profiles.Profiles[0].KillSwitchPolicy = "always"
-	a.profiles.Profiles[0].KillSwitch = true
-	response = httptest.NewRecorder()
-	a.listPublicNodes(response, httptest.NewRequest(http.MethodGet, "/api/nodes", nil))
-	if response.Code != http.StatusOK {
-		t.Fatal("saved Always source projection failed")
-	}
-	if err := os.WriteFile(filepath.Join(directory, "tor-update-always-source-catalog.json"), response.Body.Bytes(), 0600); err != nil {
-		t.Fatal(err)
-	}
-	response = httptest.NewRecorder()
+	a, _, _ := torBridgeFormSourceFixture(t, "local")
+	response := httptest.NewRecorder()
 	a.torBridgeCapabilities(response, httptest.NewRequest(http.MethodGet, "/api/tor-bridge/capabilities", nil))
 	var capability map[string]any
 	if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &capability) != nil || capability["profile_update_source_preconditions"] != true {
@@ -88,51 +94,99 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
-	t.Run("unchanged-saved-protection", func(t *testing.T) {
-		a, old, entry := torBridgeUpdateSourceFixture(t)
-		old.KillSwitchPolicy, old.KillSwitch = "always", true
-		a.profiles.Profiles[0] = old
-		raw, err := os.ReadFile(filepath.Join(directory, "tor-update-preserved-protection.json"))
-		if err != nil {
-			t.Fatal(err)
-		}
-		var request torBridgeImportRequest
-		if json.Unmarshal(raw, &request) != nil || request.KillSwitchPolicy != "always" || request.Name != old.Name || len(request.ExpectedProfileTokens) != 2 {
-			t.Fatal("actual checkbox and Save did not preserve the saved protection/name/source")
-		}
-		checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), "snowflake", "always")
-	})
-	for transport := range torBridgeUpdateInputLines() {
-		for _, kill := range []string{"off", "on-connect", "always"} {
-			t.Run(transport+"/"+kill, func(t *testing.T) {
-				a, old, entry := torBridgeUpdateSourceFixture(t)
-				raw, err := os.ReadFile(filepath.Join(directory, "tor-update-"+transport+"-"+kill+".json"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				var q torBridgeImportRequest
-				if err = json.Unmarshal(raw, &q); err != nil {
-					t.Fatal("actual native bridge form is not the shipping API contract", err)
-				}
-				if q.ID != old.ID || q.Transport != transport || q.KillSwitchPolicy != kill || q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID != old.ID || len(q.ExpectedProfileTokens) != 2 {
-					t.Fatal("native editor omitted or changed its captured target, protection or source revisions")
-				}
-				if err = a.validateExternalProfileExpectedProfiles(q.expectedProfiles(), old); err != nil {
-					t.Fatal("native editor body cannot pass the actual source guard", err)
-				}
-				checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), transport, kill)
-				for _, relinked := range []string{"tor-edit", "entry"} {
-					replaced, _, _ := torBridgeUpdateSourceFixture(t)
-					if relinked == "entry" {
-						replaced.profiles.Profiles[1].APIToken = "replacement-private-entry-token"
-					} else {
-						replaced.profiles.Profiles[0].External.TorBridge.Bridges = []string{strings.Replace(torImportObfs4Bridge, "203.0.113.44", "203.0.113.45", 1)}
+	for _, execution := range []string{"local", "server"} {
+		t.Run(execution+"/unchanged-saved-protection", func(t *testing.T) {
+			a, old, entry := torBridgeFormSourceFixture(t, execution)
+			old.KillSwitchPolicy, old.KillSwitch = "always", true
+			a.profiles.Profiles[0] = old
+			raw, err := os.ReadFile(filepath.Join(directory, torBridgeFormFile(execution, "preserved-protection.json")))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var request torBridgeImportRequest
+			if json.Unmarshal(raw, &request) != nil || request.KillSwitchPolicy != "always" || request.Name != old.Name || len(request.ExpectedProfileTokens) != 2 {
+				t.Fatal("actual checkbox and Save did not preserve the saved protection/name/source")
+			}
+			checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), "snowflake", "always")
+			checkTorFormPersistedPath(t, a, old, entry)
+		})
+		for transport := range torBridgeUpdateInputLines() {
+			for _, kill := range []string{"off", "on-connect", "always"} {
+				t.Run(execution+"/"+transport+"/"+kill, func(t *testing.T) {
+					a, old, entry := torBridgeFormSourceFixture(t, execution)
+					raw, err := os.ReadFile(filepath.Join(directory, torBridgeFormFile(execution, transport+"-"+kill+".json")))
+					if err != nil {
+						t.Fatal(err)
 					}
-					if response := postTorBridgeUpdate(replaced, raw); response.Code != http.StatusConflict {
-						t.Fatal("native editor adopted a relinked source", relinked, response.Code, response.Body.String())
+					var q torBridgeImportRequest
+					if err = json.Unmarshal(raw, &q); err != nil {
+						t.Fatal("actual native bridge form is not the shipping API contract", err)
 					}
-				}
-			})
+					if q.ID != old.ID || q.Transport != transport || q.KillSwitchPolicy != kill || q.ExpectedSelectedNodeID == nil || *q.ExpectedSelectedNodeID != old.ID || len(q.ExpectedProfileTokens) != 2 {
+						t.Fatal("native editor omitted or changed its captured target, protection or source revisions")
+					}
+					if err = a.validateExternalProfileExpectedProfiles(q.expectedProfiles(), old); err != nil {
+						t.Fatal("native editor body cannot pass the actual source guard", err)
+					}
+					checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), transport, kill)
+					checkTorFormPersistedPath(t, a, old, entry)
+					for _, relinked := range []string{"tor-edit", "entry", "execution"} {
+						replaced, _, _ := torBridgeFormSourceFixture(t, execution)
+						if relinked == "entry" {
+							replaced.profiles.Profiles[1].APIToken = "replacement-private-entry-token"
+						} else if relinked == "execution" {
+							replaced.profiles.Profiles[0].MultihopExecution = "server"
+							if execution == "server" {
+								replaced.profiles.Profiles[0].MultihopExecution = "local"
+							}
+						} else {
+							replaced.profiles.Profiles[0].External.TorBridge.Bridges = []string{strings.Replace(torImportObfs4Bridge, "203.0.113.44", "203.0.113.45", 1)}
+						}
+						if response := postTorBridgeUpdate(replaced, raw); response.Code != http.StatusConflict {
+							t.Fatal("native editor adopted a relinked source", relinked, response.Code, response.Body.String())
+						}
+					}
+				})
+			}
 		}
+	}
+}
+
+func torBridgeFormSourceFixture(t *testing.T, execution string) (*app, common.RouterProfile, common.RouterProfile) {
+	t.Helper()
+	a, old, entry := torBridgeUpdateSourceFixture(t)
+	if execution != "local" && execution != "server" {
+		t.Fatal("form fixture requires an explicit supported execution")
+	}
+	old.MultihopExecution = execution
+	a.profiles.Profiles[0] = cloneRouterProfile(old)
+	return a, old, entry
+}
+
+func torBridgeFormFile(execution, suffix string) string {
+	prefix := "tor-update-"
+	if execution == "server" {
+		prefix += "server-"
+	}
+	return prefix + suffix
+}
+
+func checkTorFormPersistedPath(t *testing.T, a *app, old, entry common.RouterProfile) {
+	t.Helper()
+	raw, err := os.ReadFile(a.cfg.ProfilesFile)
+	var stored common.RouterProfileStore
+	if err != nil || json.Unmarshal(raw, &stored) != nil || len(stored.Profiles) != 2 {
+		t.Fatal("native form did not commit its complete private profile store")
+	}
+	selected := stored.Profiles[0]
+	if selected.MultihopExecution != old.MultihopExecution || selected.MultihopEntryID != old.MultihopEntryID ||
+		selected.DNSMode != old.DNSMode || selected.DNSProtocol != old.DNSProtocol || selected.DNSHost != old.DNSHost ||
+		selected.DNSPort != old.DNSPort || selected.DNSServerName != old.DNSServerName || selected.DNSPath != old.DNSPath {
+		t.Fatal("native bridge Save changed the persisted execution, entry or selected DNS")
+	}
+	actual, _ := json.Marshal(stored.Profiles[1])
+	expected, _ := json.Marshal(entry)
+	if !bytes.Equal(actual, expected) {
+		t.Fatal("native bridge Save changed the persisted private Router entry or credentials")
 	}
 }

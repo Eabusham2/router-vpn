@@ -37,7 +37,7 @@ func torBridgeUpdateProfile(_ opened: [String: Any]) -> [String: Any]? {
 func torBridgeHasRouterPath(_ opened: [String: Any], profile: [String: Any]) -> Bool {
     guard profile["multihop_enabled"] as? Bool == true, let id = profile["id"] as? String,
           profile["multihop_exit_id"] as? String == id, let entry = profile["multihop_entry_id"] as? String,
-          !entry.isEmpty, entry != id, ["", "local"].contains(profile["multihop_execution"] as? String ?? ""),
+          !entry.isEmpty, entry != id, ["", "local", "server"].contains(profile["multihop_execution"] as? String ?? ""),
           let profiles = opened["profiles"] as? [[String: Any]] else { return false }
     let rows = profiles.filter { $0["id"] as? String == entry }
     return rows.count == 1 && ["", "router-vpn"].contains(rows[0]["node_kind"] as? String ?? "router-vpn") && rows[0]["external"] == nil
@@ -57,13 +57,17 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
         result["id"] = id; result["expected_selected_node_id"] = capture["expected_selected_node_id"]
         result["expected_profile_tokens"] = capture["expected_profile_tokens"]
         router = torBridgeHasRouterPath(opened, profile: profile)
+        let execution = profile["multihop_execution"] as? String ?? ""
+        guard ["", "local", "server"].contains(execution), execution != "server" || router else {
+            throw fail("Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.")
+        }
     }
     let rows = (capabilities["transports"] as? [[String: Any]] ?? []).filter { $0["id"] as? String == body["transport"] as? String }
     guard rows.count == 1 else { throw fail("Refresh Tor transport support before saving.") }
     let direct = rows[0]["strict_kill_switch"] as? Bool == true && (body["bridges"] as? [String])?.count == 1
     router = router && rows[0]["strict_router_entry_kill_switch"] as? Bool == true
     guard body["kill_switch_policy"] as? String == "off" || direct || router else {
-        throw fail("This bridge selection needs a saved Local Router entry for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.")
+        throw fail("This bridge selection needs a saved Router entry using Local or Server execution for strict protection. For a new Direct node, choose Kill switch Off, then configure its entry before enabling protection in Settings.")
     }
     return result
 }
@@ -178,9 +182,9 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         let routerStrict = row["strict_router_entry_kill_switch"] as? Bool ?? false
         let description = row["description"] as? String ?? ""
         let reason = row["reason"] as? String ?? ""
-        let protection = strict ? "Direct with one fixed bridge" : (routerStrict ? "with a saved Local Router entry" : "unavailable for this transport")
+        let protection = strict ? "Direct with one fixed bridge" : (routerStrict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport")
         capabilityText.stringValue = "\(supported ? "Available" : "Unavailable") • Strict protection \(protection)\n\(description)\(reason.isEmpty ? "" : "\nReason: \(reason)")"
-        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires the saved Local Router entry. The complete captured path is checked when you save." }
+        if !strict && killSwitchPopup.indexOfSelectedItem != 0 { status.stringValue = "Strict protection requires a saved Router entry using Local or Server execution. The complete captured path is checked when you save." }
         else { status.stringValue = "" }
     }
 
@@ -250,7 +254,7 @@ required = (
     '"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"',
     'Snowflake uses brokers plus short-lived volunteer WebRTC proxies',
     'choose Custom TCP, DoT, DoH or Rescue in DNS',
-    'Strict protection requires the saved Local Router entry',
+    'Strict protection requires a saved Router entry using Local or Server execution',
 )
 for marker in required:
     if marker not in text:

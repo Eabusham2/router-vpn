@@ -48,7 +48,10 @@ var checks = 0
 func check(_ value: @autoclosure () -> Bool, _ message: String) { checks += 1; if !value() { fatalError(message) } }
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 func object(_ name: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name))) as! [String: Any] }
-let catalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
+let localCatalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
+for execution in ["local", "server"] {
+let filePrefix = execution == "server" ? "server-" : ""
+let catalog = try object("tor-update-\(filePrefix)source-catalog.json")
 for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated() {
     for (killIndex, kill) in ["off", "on-connect", "always"].enumerated() {
         let owner = Owner(catalog), api = ProductAPI(catalog)
@@ -62,18 +65,18 @@ for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated()
         check((body["expected_profile_tokens"] as? [String: String])?.count == 2, "Entry/source identity dropped")
         check(body["transport"] as? String == id && body["kill_switch_policy"] as? String == kill, "Transport/protection changed")
         for key in ["profile_id", "entry_id", "entry_mode", "direct", "execution", "api_token", "dns_mode"] { check(body[key] == nil, "Copied unrelated field "+key) }
-        try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(id)-\(kill).json"))
+        try JSONSerialization.data(withJSONObject: body, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(filePrefix)\(id)-\(kill).json"))
     }
 }
-let always = try object("tor-update-always-source-catalog.json")
+let always = try object("tor-update-\(filePrefix)always-source-catalog.json")
 let alwaysOwner = Owner(always), alwaysAPI = ProductAPI(always)
 let saved = Form(owner: alwaysOwner, api: alwaysAPI, capabilities: caps)
 saved.updateSelectionChanged()
 check(saved.killSwitchPopup.indexOfSelectedItem == 2 && saved.nameField.stringValue == "Captured Tor exit", "Update checkbox did not load saved Always and name")
 saved.transportPopup.indexOfSelectedItem = 2; saved.bridgeText.string = (lines["snowflake"] as! [String]).joined(separator: "\n")
 saved.save(); check(alwaysAPI.saved?["kill_switch_policy"] as? String == "always", "Actual Save lost untouched saved Always protection")
-try JSONSerialization.data(withJSONObject: alwaysAPI.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-preserved-protection.json"))
-for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "server-path", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy"] {
+try JSONSerialization.data(withJSONObject: alwaysAPI.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(filePrefix)preserved-protection.json"))
+for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "compare-path", "server-direct", "server-external-entry", "compare-off", "server-direct-off", "server-external-off", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy"] {
     var opened = catalog, current = catalog, capability = caps
     var profiles = opened["profiles"] as! [[String: Any]]
     switch fault {
@@ -82,7 +85,9 @@ for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplica
     case "missing-entry": current["profiles"] = [profiles[0]]
     case "duplicate-exit": current["profiles"] = profiles + [profiles[0]]
     case "entry-is-external": profiles[1]["node_kind"] = "external"; opened["profiles"] = profiles; current = opened
-    case "server-path": profiles[0]["multihop_execution"] = "server"; opened["profiles"] = profiles; current = opened
+    case "compare-path", "compare-off": profiles[0]["multihop_execution"] = "auto"; opened["profiles"] = profiles; current = opened
+    case "server-direct", "server-direct-off": profiles[0]["multihop_execution"] = "server"; profiles[0]["multihop_enabled"] = false; opened["profiles"] = profiles; current = opened
+    case "server-external-entry", "server-external-off": profiles[0]["multihop_execution"] = "server"; profiles[1]["node_kind"] = "external"; opened["profiles"] = profiles; current = opened
     case "old-controller": capability["profile_update_source_preconditions"] = false
     case "missing-token": profiles[0]["profile_token"] = ""; opened["profiles"] = profiles; current = opened
     case "invalid-saved-policy": profiles[0]["kill_switch_policy"] = "unexpected"; opened["profiles"] = profiles; current = opened
@@ -94,11 +99,12 @@ for fault in ["selected", "exit-token", "entry-token", "missing-entry", "duplica
     if fault == "busy" { owner.busy = true }
     if fault == "retired-owner" { active.productOwner = nil }
     if fault == "display-mutated" { owner.profiles[1]["profile_token"] = String(repeating: "b", count: 64); api.current["profiles"] = owner.profiles }
-    active.transportPopup.indexOfSelectedItem = 2; active.killSwitchPopup.indexOfSelectedItem = 2; active.bridgeText.string = (lines["snowflake"] as! [String]).joined(separator: "\n")
+    active.transportPopup.indexOfSelectedItem = fault.hasSuffix("-off") ? 0 : 2; active.killSwitchPopup.indexOfSelectedItem = fault.hasSuffix("-off") ? 0 : 2; active.bridgeText.string = (lines[fault.hasSuffix("-off") ? "obfs4" : "snowflake"] as! [String]).joined(separator: "\n")
     if fault == "invalid-saved-policy" || fault == "missing-saved-policy" { active.updateSelectionChanged(); check(active.killSwitchPopup.indexOfSelectedItem == -1, "Missing/invalid policy became Off") }
     active.save(); check(api.saved == nil, "Tor update adopted "+fault)
 }
-let owner = Owner(catalog), api = ProductAPI(catalog)
+}
+let owner = Owner(localCatalog), api = ProductAPI(localCatalog)
 let newForm = Form(owner: owner, api: api, capabilities: caps); newForm.updateSelected.state = .off; newForm.transportPopup.indexOfSelectedItem = 2
 newForm.bridgeText.string = (lines["snowflake"] as! [String]).joined(separator: "\n"); newForm.killSwitchPopup.indexOfSelectedItem = 2
 newForm.save(); check(api.saved == nil, "Direct dynamic transport borrowed Router authority")

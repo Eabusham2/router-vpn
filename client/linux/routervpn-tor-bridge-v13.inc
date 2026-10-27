@@ -30,7 +30,7 @@ static gboolean linux_tor_router_path_v13(LinuxTorBridgeV13 *state, JsonObject *
     const char *id = external_path_string_v4(profile, "id"), *entry_id = external_path_string_v4(profile, "multihop_entry_id");
     const char *execution = external_path_string_v4(profile, "multihop_execution");
     if (!external_path_flag_v4(profile, "multihop_enabled") || !entry_id[0] || g_strcmp0(id, entry_id) == 0 ||
-        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0)) return FALSE;
+        g_strcmp0(id, external_path_string_v4(profile, "multihop_exit_id")) != 0 || (execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0)) return FALSE;
     JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
     JsonObject *entry = external_source_profile_v24(store, entry_id);
     const char *kind = external_path_string_v4(entry, "node_kind");
@@ -123,7 +123,7 @@ static void linux_tor_refresh_caps_v13(LinuxTorBridgeV13 *state) {
                 gboolean strict = json_object_has_member(item, "strict_kill_switch") && json_object_get_boolean_member(item, "strict_kill_switch");
                 gboolean router_strict = external_path_flag_v4(item, "strict_router_entry_kill_switch");
                 if (summary->len) g_string_append_c(summary, '\n');
-                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : router_strict ? "with a saved Local Router entry" : "unavailable for this transport");
+                g_string_append_printf(summary, "%s — %s • strict protection %s", id[0] ? id : "unknown", supported ? "available" : "unavailable", strict ? "Direct with one fixed bridge" : router_strict ? "with a saved Router entry using Local or Server execution" : "unavailable for this transport");
                 if (description[0]) g_string_append_printf(summary, "\n  %s", description);
                 if (reason[0]) g_string_append_printf(summary, "\n  Reason: %s", reason);
             }
@@ -182,9 +182,16 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
         if (g_strcmp0(external_path_string_v4(row, "id"), transport) == 0) { capability = row; matches++; }
     }
     gboolean direct = external_path_flag_v4(capability, "strict_kill_switch") && bridges->len == 1;
-    gboolean router = profile != NULL && linux_tor_router_path_v13(state, profile) && external_path_flag_v4(capability, "strict_router_entry_kill_switch");
+    gboolean router_path = profile != NULL && linux_tor_router_path_v13(state, profile);
+    const char *execution = external_path_string_v4(profile, "multihop_execution");
+    if (profile != NULL && ((execution[0] && g_strcmp0(execution, "local") != 0 && g_strcmp0(execution, "server") != 0) ||
+                            (g_strcmp0(execution, "server") == 0 && !router_path))) {
+        if (validation_error != NULL) *validation_error = g_strdup("Tor bridge updates require Local execution or explicit Server execution through a saved Router entry. Compare both requires separate measured candidate paths.");
+        g_ptr_array_unref(bridges); return NULL;
+    }
+    gboolean router = router_path && external_path_flag_v4(capability, "strict_router_entry_kill_switch");
     if (matches != 1 || (g_strcmp0(kill, "off") != 0 && !direct && !router)) {
-        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "This bridge selection needs a saved Local Router entry for strict protection. Save a new Direct node with Kill switch Off, then configure its entry before enabling protection in Settings.");
+        if (validation_error != NULL) *validation_error = g_strdup(matches != 1 ? "Refresh Tor transport support before saving." : "This bridge selection needs a saved Router entry using Local or Server execution for strict protection. Save a new Direct node with Kill switch Off, then configure its entry before enabling protection in Settings.");
         g_ptr_array_unref(bridges); return NULL;
     }
 
@@ -347,7 +354,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_container_add(GTK_CONTAINER(scroll), state.lines);
     gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
 
-    GtkWidget *safety = gtk_label_new("Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Dynamic transports use a saved Local Router entry for strict protection. Save new Direct nodes with Kill switch Off, then configure their entry before enabling protection in Settings.");
+    GtkWidget *safety = gtk_label_new("Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Dynamic transports use a saved Router entry with Local or Server execution for strict protection. Save new Direct nodes with Kill switch Off, then configure their entry before enabling protection in Settings.");
     gtk_label_set_line_wrap(GTK_LABEL(safety), TRUE);
     gtk_label_set_xalign(GTK_LABEL(safety), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), safety, FALSE, FALSE, 0);

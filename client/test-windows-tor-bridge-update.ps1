@@ -59,6 +59,11 @@ function Api($Path,$Method='GET',$Body=$null,$Timeout=0){
 function Log($Message){}
 function RefreshProduct{}
 function Control($ID){if($ID-cne'UnifiedNodeCombo'){throw 'Unexpected rendered control'};return $script:Rendered}
+$LocalRaw=$Raw
+foreach($Execution in @('local','server')){
+    $FilePrefix=if($Execution-ceq'server'){'server-'}else{''}
+    $Raw=Get-Content -Raw (Join-Path $Output ('tor-update-'+$FilePrefix+'source-catalog.json'))
+    $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json
 foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel')){
     foreach($Policy in @('off','on-connect','always')){
         $Transport.SelectedIndex=@('obfs4','meek_lite','snowflake','webtunnel').IndexOf($ID);$Kill.SelectedIndex=@('off','on-connect','always').IndexOf($Policy);$Lines.Text=$InputLines.$ID-join"`n"
@@ -67,17 +72,17 @@ foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel')){
         Check ($Saved.id-ceq'tor-edit'-and$Saved.expected_selected_node_id-ceq'tor-edit'-and$Saved.expected_profile_tokens.Count-eq2) 'Update lost captured Tor and entry identities'
         Check ($Saved.transport-ceq$ID-and$Saved.kill_switch_policy-ceq$Policy-and-not$Button.IsEnabled) 'Update changed selection or allowed stale repeated Save'
         foreach($Forbidden in @('profile_id','entry_id','entry_mode','direct','execution','api_token','dns_mode')){Check (-not$Saved.ContainsKey($Forbidden)) ('Bridge form copied unrelated setting '+$Forbidden)}
-        [IO.File]::WriteAllText((Join-Path $Output ('tor-update-'+$ID+'-'+$Policy+'.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+        [IO.File]::WriteAllText((Join-Path $Output ('tor-update-'+$FilePrefix+$ID+'-'+$Policy+'.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
     }
 }
-$AlwaysRaw=Get-Content -Raw (Join-Path $Output 'tor-update-always-source-catalog.json')
+$AlwaysRaw=Get-Content -Raw (Join-Path $Output ('tor-update-'+$FilePrefix+'always-source-catalog.json'))
 $Opened=$AlwaysRaw|ConvertFrom-Json;$script:Current=$AlwaysRaw|ConvertFrom-Json;$Kill.SelectedIndex=0
 &$SelectUpdate
 Check ($Kill.SelectedIndex-eq2-and$Name.Text-ceq'Captured Tor exit') 'Update checkbox did not load the saved Always policy and name'
 $Transport.SelectedIndex=2;$Lines.Text=$InputLines.snowflake-join"`n";$script:Saved=$null;$Button.IsEnabled=$true;&$Save
 Check ($null-ne$Saved-and$Saved.kill_switch_policy-ceq'always') ('Actual Save lost untouched saved protection: '+$Status.Text)
-[IO.File]::WriteAllText((Join-Path $Output 'tor-update-preserved-protection.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
-foreach($Fault in @('selected','exit-token','entry-token','missing-entry','duplicate-exit','entry-is-external','server-path','old-controller','missing-token','busy','display-mutated','invalid-saved-policy','missing-saved-policy')){
+[IO.File]::WriteAllText((Join-Path $Output ('tor-update-'+$FilePrefix+'preserved-protection.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
+foreach($Fault in @('selected','exit-token','entry-token','missing-entry','duplicate-exit','entry-is-external','compare-path','server-direct','server-external-entry','compare-off','server-direct-off','server-external-off','old-controller','missing-token','busy','display-mutated','invalid-saved-policy','missing-saved-policy')){
     $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json;$Support.Root=$Capabilities;$script:Busy=$false
     $Kill.SelectedIndex=2
     switch($Fault){
@@ -87,7 +92,12 @@ foreach($Fault in @('selected','exit-token','entry-token','missing-entry','dupli
         'missing-entry'{$script:Current.profiles=@($script:Current.profiles[0])}
         'duplicate-exit'{$script:Current.profiles+=@($script:Current.profiles[0])}
         'entry-is-external'{$Opened.profiles[1].node_kind='external';$script:Current=$Opened}
-        'server-path'{$Opened.profiles[0].multihop_execution='server';$script:Current=$Opened}
+        'compare-path'{$Opened.profiles[0].multihop_execution='auto';$script:Current=$Opened}
+        'server-direct'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
+        'server-external-entry'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[1].node_kind='external';$script:Current=$Opened}
+        'compare-off'{$Opened.profiles[0].multihop_execution='auto';$script:Current=$Opened}
+        'server-direct-off'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[0].multihop_enabled=$false;$script:Current=$Opened}
+        'server-external-off'{$Opened.profiles[0].multihop_execution='server';$Opened.profiles[1].node_kind='external';$script:Current=$Opened}
         'old-controller'{$Support.Root=@{profile_update_source_preconditions=$false;transports=$Capabilities.transports}}
         'missing-token'{$Opened.profiles[0].profile_token='';$script:Current=$Opened}
         'busy'{$script:Busy=$true}
@@ -95,8 +105,11 @@ foreach($Fault in @('selected','exit-token','entry-token','missing-entry','dupli
         'invalid-saved-policy'{$Opened.profiles[0].kill_switch_policy='unexpected';&$SelectUpdate;Check ($Kill.SelectedIndex-eq-1) 'Invalid saved policy silently became Off'}
         'missing-saved-policy'{$Opened.profiles[0].PSObject.Properties.Remove('kill_switch_policy');&$SelectUpdate;Check ($Kill.SelectedIndex-eq-1) 'Missing saved policy silently became Off'}
     }
+    if($Fault.EndsWith('-off')){$Kill.SelectedIndex=0;$Transport.SelectedIndex=0;$Lines.Text=$InputLines.obfs4-join"`n"}else{$Transport.SelectedIndex=2;$Lines.Text=$InputLines.snowflake-join"`n"}
     $script:Saved=$null;$Button.IsEnabled=$true;&$Save;Check ($null-eq$Saved) ('Tor update adopted '+$Fault)
 }
+}
+$Raw=$LocalRaw
 $script:Busy=$false;$Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json;$Support.Root=$Capabilities
 $Update.IsChecked=$false;$Kill.SelectedIndex=2;$Transport.SelectedIndex=2;$Lines.Text=$InputLines.snowflake-join"`n"
 $script:Saved=$null;&$Save;Check ($null-eq$Saved) 'New Direct dynamic transport borrowed Router protection'

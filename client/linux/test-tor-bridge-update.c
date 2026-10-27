@@ -13,7 +13,7 @@ static guint checks, posts, node_reads, status_reads, refreshes, diagnostics, di
 static gboolean idle = TRUE, unavailable_nodes = FALSE, refuse_post = FALSE;
 static char *last_body;
 static JsonNode *source_catalog, *source_always, *source_capabilities, *source_lines, *current_catalog, *capabilities;
-static const char *directory;
+static const char *directory, *source_prefix;
 static App *active_app;
 
 static void check(gboolean okay, const char *message) {
@@ -178,8 +178,15 @@ static void reset_fixture(App *app, const char *fault) {
     if (g_strcmp0(fault, "invalid-saved-kill") == 0) json_object_set_string_member(profile, "kill_switch_policy", "unavailable-policy");
     if (g_strcmp0(fault, "missing-saved-kill") == 0) json_object_remove_member(profile, "kill_switch_policy");
     if (g_strcmp0(fault, "direct-strict") == 0) json_object_set_boolean_member(profile, "multihop_enabled", FALSE);
-    if (g_strcmp0(fault, "server-strict") == 0) json_object_set_string_member(profile, "multihop_execution", "server");
-    if (g_strcmp0(fault, "external-entry-strict") == 0) {
+    if (g_strcmp0(fault, "compare-strict") == 0 || g_strcmp0(fault, "compare-off") == 0)
+        json_object_set_string_member(profile, "multihop_execution", "auto");
+    if (g_strcmp0(fault, "server-direct-strict") == 0 || g_strcmp0(fault, "server-direct-off") == 0) {
+        json_object_set_string_member(profile, "multihop_execution", "server");
+        json_object_set_boolean_member(profile, "multihop_enabled", FALSE);
+    }
+    gboolean server_external = g_strcmp0(fault, "server-external-strict") == 0 || g_strcmp0(fault, "server-external-off") == 0;
+    if (server_external) json_object_set_string_member(profile, "multihop_execution", "server");
+    if (g_strcmp0(fault, "external-entry-strict") == 0 || server_external) {
         JsonObject *entry = node_in(displayed, "entry"), *external = json_object_new();
         json_object_set_string_member(entry, "node_kind", "external"); json_object_set_string_member(external, "protocol", "socks5");
         json_object_set_object_member(entry, "external", external);
@@ -227,7 +234,7 @@ static void run_trial(App *app, const char *transport, const char *kill, gboolea
     if (expect_post && !refuse_post) verify_post(&trial);
     else check(trial.finished && posts == (refuse_post ? 1u : 0u) && refreshes == 0, "cancelled/rejected modal escaped its owned callback");
     if (emit) {
-        char *name = g_strcmp0(fault, "saved-always") == 0 ? g_strdup("tor-update-preserved-protection.json") : g_strdup_printf("tor-update-%s-%s.json", transport, kill);
+        char *name = g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
         char *path = g_build_filename(directory, name, NULL);
         check(g_file_set_contents(path, last_body, -1, NULL) && g_chmod(path, 0600) == 0, "actual callback payload could not be saved privately");
         g_free(path); g_free(name);
@@ -241,24 +248,33 @@ static JsonNode *read_fixture(const char *name) {
 }
 int main(int argc, char **argv) {
     gtk_init(&argc, &argv); check(argc == 2, "expected private Go fixture directory"); directory = argv[1];
-    source_catalog = read_fixture("tor-update-source-catalog.json"); source_capabilities = read_fixture("tor-update-capabilities.json"); source_lines = read_fixture("tor-update-input-lines.json");
-    source_always = read_fixture("tor-update-always-source-catalog.json");
+    source_capabilities = read_fixture("tor-update-capabilities.json"); source_lines = read_fixture("tor-update-input-lines.json");
     check(strstr(obj_string(json_node_get_object(source_capabilities), "test_fixture_runtime_availability"), "simulated") != NULL, "UI fixture must label simulated runtime availability");
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "tor-edit"}; active_app = &app;
     const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel"}, *kills[] = {"off", "on-connect", "always"};
+    for (guint execution = 0; execution < 2; execution++) {
+    source_prefix = execution ? "server-" : "";
+    source_catalog = read_fixture(execution ? "tor-update-server-source-catalog.json" : "tor-update-source-catalog.json");
+    source_always = read_fixture(execution ? "tor-update-server-always-source-catalog.json" : "tor-update-always-source-catalog.json");
+    check(g_strcmp0(obj_string(node_in(source_catalog, "tor-edit"), "multihop_execution"), execution ? "server" : "local") == 0,
+          "native editor did not receive the actual execution-bound Go source catalog");
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) for (guint k = 0; k < G_N_ELEMENTS(kills); k++)
         run_trial(&app, transports[t], kills[k], TRUE, "none", TRUE, FALSE, TRUE);
     run_trial(&app, "snowflake", NULL, TRUE, "saved-always", TRUE, FALSE, TRUE);
     run_trial(&app, "snowflake", NULL, TRUE, "invalid-saved-kill", FALSE, FALSE, FALSE);
     run_trial(&app, "snowflake", NULL, TRUE, "missing-saved-kill", FALSE, FALSE, FALSE);
-    const char *failures[] = {"stale-exit", "stale-entry", "missing-exit", "missing-entry", "selected", "duplicate-entry", "mutated-rendered", "busy-after-open", "nodes-unavailable", "missing-token", "no-capability", "empty-lines", "direct-strict", "server-strict", "external-entry-strict", "controller-refusal"};
+    const char *failures[] = {"stale-exit", "stale-entry", "missing-exit", "missing-entry", "selected", "duplicate-entry", "mutated-rendered", "busy-after-open", "nodes-unavailable", "missing-token", "no-capability", "empty-lines", "direct-strict", "compare-strict", "external-entry-strict", "server-direct-strict", "server-external-strict", "controller-refusal"};
     for (guint i = 0; i < G_N_ELEMENTS(failures); i++) run_trial(&app, "snowflake", "always", TRUE, failures[i], FALSE, FALSE, FALSE);
+    const char *unprotected[] = {"compare-off", "server-direct-off", "server-external-off"};
+    for (guint i = 0; i < G_N_ELEMENTS(unprotected); i++) run_trial(&app, "obfs4", "off", TRUE, unprotected[i], FALSE, FALSE, FALSE);
     run_trial(&app, "snowflake", "always", TRUE, "cancel", FALSE, TRUE, FALSE);
     for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, FALSE);
     reset_fixture(&app, "initial-busy"); idle = FALSE; guint before = dialogs;
     on_linux_tor_bridge_v13(NULL, &app); check(dialogs == before && posts == 0 && status_reads == 1 && diagnostics == 1, "busy application opened a Tor mutation dialog");
+    json_node_free(source_catalog); json_node_free(source_always);
+    }
     gtk_widget_destroy(app.window); g_clear_pointer(&last_body, g_free);
-    json_node_free(source_catalog); json_node_free(source_always); json_node_free(source_capabilities); json_node_free(source_lines); json_node_free(current_catalog); json_node_free(capabilities);
+    json_node_free(source_capabilities); json_node_free(source_lines); json_node_free(current_catalog); json_node_free(capabilities);
     g_print("Actual GTK Tor dialog/Update/Save/Cancel callbacks: %u checks across %u dialogs PASS\n", checks, dialogs);
     return 0;
 }

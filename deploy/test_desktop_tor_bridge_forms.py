@@ -12,6 +12,7 @@ from test_desktop_amnezia_forms import block
 
 ROOT = Path(__file__).resolve().parents[1]
 CATALOG_FILES = ('tor-update-source-catalog.json', 'tor-update-always-source-catalog.json',
+                 'tor-update-server-source-catalog.json', 'tor-update-server-always-source-catalog.json',
                  'tor-update-capabilities.json', 'tor-update-input-lines.json')
 
 
@@ -104,8 +105,7 @@ def linux_form(directory):
         assert shipping.count(original) == 1, name + ' must change exactly one shipping callback guard'
         negative = directory / ('negative-' + name)
         negative.mkdir()
-        for filename in ('tor-update-source-catalog.json', 'tor-update-always-source-catalog.json',
-                         'tor-update-capabilities.json', 'tor-update-input-lines.json'):
+        for filename in CATALOG_FILES:
             shutil.copyfile(directory / filename, negative / filename)
         changed_source, changed_binary = negative / 'tor-form.c', negative / 'tor-form'
         changed_source.write_text(rendered.replace(include, shipping.replace(original, replacement)))
