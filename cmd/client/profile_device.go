@@ -18,7 +18,8 @@ import (
 )
 
 // Imported nodes share device policy without acquiring the Router-only base,
-// Start Layer, forwarding or padding fields from a disabled settings form.
+// Start Layer or forwarding fields from a disabled settings form. Tor Server
+// cover traffic has a separate captured capability and atomic preference pair.
 type profileDeviceSettings struct {
 	ProfileID             string `json:"profile_id"`
 	ProfileToken          string `json:"profile_token"`
@@ -33,6 +34,10 @@ type profileDeviceSettings struct {
 	ManualMTU             int    `json:"manual_mtu"`
 	JumboTUN              bool   `json:"jumbo_tun"`
 	JumboTUNSupported     bool   `json:"jumbo_tun_supported"`
+	DAITAEnabled          bool   `json:"daita_enabled"`
+	DAITARateKbps         int    `json:"daita_rate_kbps"`
+	TorCoverSupported     bool   `json:"tor_cover_supported"`
+	TorCoverNote          string `json:"tor_cover_note"`
 	EffectiveMTU          int    `json:"effective_mtu"`
 	MTUSource             string `json:"mtu_source"`
 	StartupMode           string `json:"startup_mode"`
@@ -49,6 +54,8 @@ type profileDeviceRequest struct {
 	MTUPolicy        *string `json:"mtu_policy"`
 	ManualMTU        *int    `json:"manual_mtu"`
 	JumboTUN         *bool   `json:"jumbo_tun,omitempty"`
+	DAITAEnabled     *bool   `json:"daita_enabled,omitempty"`
+	DAITARateKbps    *int    `json:"daita_rate_kbps,omitempty"`
 	StartupMode      *string `json:"startup_mode,omitempty"`
 	AutoConnect      *bool   `json:"auto_connect,omitempty"`
 }
@@ -84,8 +91,8 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 			return false, "Tor entry device settings require the exact saved Local or Server entry, exit and native mode."
 		case !profile.MultihopEnabled && desktopTorExecution(profile.MultihopExecution) != "local":
 			return false, "Direct Tor device settings require Local execution."
-		case profile.DAITAEnabled:
-			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
+		case profile.DAITAEnabled && desktopTorExecution(profile.MultihopExecution) != "server":
+			return false, "Tor common device settings cannot discard saved padding; outgoing Tor cover traffic requires Server execution through a captured private Router entry."
 		default:
 			return true, ""
 		}
@@ -114,6 +121,19 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 func profileDeviceJumboSupported(profile common.RouterProfile) bool {
 	supported, _ := externalDevicePolicySupport(profile)
 	return supported && profile.External != nil && desktopTorProtocol(profile.External.Protocol)
+}
+
+func profileDeviceTorCoverSelection(profile common.RouterProfile) bool {
+	return profile.External != nil && desktopTorProtocol(profile.External.Protocol) &&
+		profile.MultihopEnabled && profile.MultihopExecution == "server"
+}
+
+func profileDeviceTorCoverSupported(profile, entry common.RouterProfile) bool {
+	if !profileDeviceTorCoverSelection(profile) {
+		return false
+	}
+	supported, _ := externalDevicePolicySupportForPath(profile, entry)
+	return supported
 }
 
 func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.RouterProfile) {
@@ -154,6 +174,11 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 			note = "Save while disconnected. Tor Jumbo configures a 9000-byte virtual interface; it does not force 9000-byte packets onto the underlying network. Auto and Retest do not change that interface while Jumbo is selected. Fixed MTU must also be 9000. The saved Auto or Default preference is retained for when Jumbo is turned off. DNS, credentials and graph selection are preserved."
 		}
 	}
+	coverSupported := profileDeviceTorCoverSupported(profile, entry)
+	coverNote := "Outgoing Tor cover traffic requires Tor Server execution through a captured private Router entry. Saved cover preferences are preserved while unavailable."
+	if coverSupported {
+		coverNote = "Outgoing Tor cover traffic adds bounded relay cells from the selected server. It is not bidirectional DAITA. Budget: 32–192 kbit/s; 0 keeps the native default of 192. Saving is a preference; the authenticated server source and fresh cover receipt must still be proved on Connect."
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(profileDeviceSettings{
@@ -163,6 +188,8 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		HomeLANAccess: profile.HomeLANAccess, KillSwitchPolicy: kill,
 		IPv6Mode: ipv6, MTUPolicy: mtu, ManualMTU: manual,
 		JumboTUN: profile.JumboTUN, JumboTUNSupported: supported && profileDeviceJumboSupported(profile),
+		DAITAEnabled: profile.DAITAEnabled, DAITARateKbps: profile.DAITARateKbps,
+		TorCoverSupported: coverSupported, TorCoverNote: coverNote,
 		EffectiveMTU: profile.EffectiveMTU, MTUSource: profile.EffectiveMTUSource,
 		StartupMode: startup, AutoConnect: profile.AutoConnect,
 		Note: note,
@@ -196,6 +223,20 @@ func applyProfileDeviceSettings(profile common.RouterProfile, request profileDev
 			return profile, errors.New("this captured device editor cannot change Jumbo for the selected native path")
 		}
 		updated.JumboTUN = *request.JumboTUN
+	}
+	if (request.DAITAEnabled == nil) != (request.DAITARateKbps == nil) {
+		return profile, errors.New("daita_enabled and daita_rate_kbps must be supplied together")
+	}
+	if request.DAITAEnabled != nil {
+		rate := *request.DAITARateKbps
+		if rate != 0 && (rate < mobiletor.PaddingMinRateKbps || rate > mobiletor.PaddingMaxRateKbps) {
+			return profile, errors.New("outgoing Tor cover budget must be 0 or 32..192 kbit/s")
+		}
+		changed := *request.DAITAEnabled != profile.DAITAEnabled || rate != profile.DAITARateKbps
+		if changed && !profileDeviceTorCoverSelection(profile) {
+			return profile, errors.New("this captured device editor can change outgoing Tor cover traffic only for a saved Server path")
+		}
+		updated.DAITAEnabled, updated.DAITARateKbps = *request.DAITAEnabled, rate
 	}
 	switch updated.MTUPolicy {
 	case "auto", "default":
@@ -254,6 +295,8 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 			MultihopEnabled: profile.MultihopEnabled, MultihopEntryID: profile.MultihopEntryID,
 			MultihopExitID: profile.MultihopExitID, MultihopEntryMode: profile.MultihopEntryMode,
 			MultihopExecution: profile.MultihopExecution,
+			DAITAEnabled:      profile.DAITAEnabled, DAITARateKbps: profile.DAITARateKbps,
+			DAITAHost: profile.DAITAHost, DAITAPort: profile.DAITAPort,
 		}
 		source, err := desktopTorRuntimePolicyJSON(captured)
 		if err != nil {
@@ -378,6 +421,23 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	if value, present := fields["daita_enabled"]; present {
+		if _, valid := value.(bool); !valid {
+			http.Error(w, "daita_enabled must be a boolean when supplied", http.StatusBadRequest)
+			return
+		}
+	}
+	if value, present := fields["daita_rate_kbps"]; present {
+		number, valid := value.(json.Number)
+		if !valid {
+			http.Error(w, "daita_rate_kbps must be a whole number when supplied", http.StatusBadRequest)
+			return
+		}
+		if _, err := number.Int64(); err != nil {
+			http.Error(w, "daita_rate_kbps must be a whole number when supplied", http.StatusBadRequest)
+			return
+		}
+	}
 	decoder := json.NewDecoder(bytes.NewReader(raw))
 	decoder.DisallowUnknownFields()
 	if err := decoder.Decode(&request); err != nil {
@@ -420,6 +480,9 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 	updated.IPv6Mode = validated.IPv6Mode
 	updated.MTUPolicy, updated.ManualMTU = validated.MTUPolicy, validated.ManualMTU
 	updated.JumboTUN = validated.JumboTUN
+	if request.DAITAEnabled != nil {
+		updated.DAITAEnabled, updated.DAITARateKbps = validated.DAITAEnabled, validated.DAITARateKbps
+	}
 	if request.StartupMode != nil {
 		updated.StartupMode, updated.AutoConnect = validated.StartupMode, validated.AutoConnect
 	}
