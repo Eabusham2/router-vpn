@@ -1,11 +1,39 @@
 # Current implementation status
 
-Updated October 26, 2026 (UTC). This file describes committed source
+Updated October 27, 2026 (UTC). This file describes committed source
 and remaining delivery work. The binding scope is [REQUIREMENTS-RECONCILED.md](REQUIREMENTS-RECONCILED.md).
 Source tests, native configuration tests and older releases do not establish
 completion of the current commit's packages, physical devices or deployment.
 
 ## Current continuation
+
+The October 27 continuation started at `936516e5`, preserving the newer source
+and pending work instead of restoring the historical `745b3e41` release. Its
+separate [evidence ledger](CONTINUATION-EVIDENCE-2026-10-27.md) records original
+source recovery limits, each verified push, focused tests and unfinished
+source/live obligations. The complete original requirement transcripts were
+not retrieved; their scope remains binding.
+
+Ordinary external entries now reach desktop Local Tor through the public
+Connect path, complete-profile persistence, Startup Last, bridge/settings
+updates and Speed Lab restoration (`3c125deb`). WireGuard, AmneziaWG, SOCKS5,
+HTTP CONNECT, HTTPS CONNECT, Shadowsocks, Hysteria2 and the supported OpenVPN
+profile subset retain their exact imported transport and typed proof. Complete
+native transport validation precedes admission. Their saved paths also reopen
+in the Windows, AppKit and GTK dialogs without replacing their raw protocol
+with a Router-only mode (`02ddd025`). The existing source-token, selected-DNS,
+MTU and lifecycle checks remain; ordinary proof cannot authorize private
+Router policy. Strict protection on these ordinary predecessors, Tor
+Server/Compare, and exit-side Tor padding remain separate unfinished work.
+
+The native parser matrices now run in separate processes with the same existing
+180-second per-process deadline (`c81d0930`). Source jobs select Go 1.26.3 for
+the stable `testing/synctest` lease tests (`f3eb9ffc`). The GTK dependency gate
+tracks its actual source/copy lists (`2bdd2c66`), and macOS temporary-path and
+Windows PowerShell array fixtures retain their original privacy and relink
+negative cases (`548f9d24`). These changes do not certify a current all-platform
+release or physical-device behavior. The separately reproduced native startup
+network/power callback race is not closed by these fixture corrections.
 
 The PQ controller now separates its five-second connection admission bound
 from the lifetime of an admitted native socket. Successful Xray/Hysteria/gVisor
@@ -383,7 +411,7 @@ Box tests cover these boundaries, while physical TUN and network acceptance
 remain separate. Virtual capacity does not assert 9000-byte packets on the
 underlying network. Captured Router-entry Local Tor graphs now preserve their
 private entry, selected DNS transport and independent native ownership. Tor
-Server/Compare, ordinary external predecessors, exit-side desktop Tor padding
+Server/Compare, exit-side desktop Tor padding
 and Direct dynamic-bridge strict protection remain requirements to implement.
 
 The Tor server lease prerequisite now has a separate asynchronous lifecycle
@@ -429,9 +457,10 @@ negative controls. The native Tor Box now reconstructs that typed ordinary
 predecessor, proves its expected public address through the captured encrypted
 lower and carries PT and selected DNS through it. Native six-trial SS2022/TLS/
 obfs4/DNS traffic and Router regressions pass, with altered source, proof kind,
-physical tuple and ignored proof rejected. This native integration does not yet
-advertise public Connect: desktop host capture and Speed Lab restoration still
-need adoption. Windows and Unix launch wrappers now validate the distinct
+physical tuple and ignored proof rejected. Desktop host capture, public
+Connect and Speed Lab restoration were subsequently adopted in `3c125deb`;
+the current continuation above records that boundary. Windows and Unix launch
+wrappers validate the distinct
 schema-2 source/proof envelope and exact physical tuples before protection;
 the native compiler independently rebuilds the complete graph. SOCKS/HTTP Snowflake UDP needs its own bounded
 association; ordinary proof never borrows private Home or Router protection.

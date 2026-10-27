@@ -80,10 +80,16 @@ underlay PMTU measurement. Selected control-profile protection and the physical
 entry's firewall exception remain captured. The exit's selected DNS policy
 continues to govern the path.
 
-The compatible Router VPN graph family remains distinct from the broader
-external-node graph catalog. Retained native multihop uses its actual supported
-WG/AWG entry and Shadowsocks/Hysteria2 exit combinations. A graph accepted by
-one external-node API is not evidence of every Router-to-Router protocol pair.
+The compatible Router VPN graph family remains distinct from the external-node
+catalog. The retained compiler uses `NodeMultihopEntryModes()` and
+`NodeMultihopExitModes()` in `internal/mobilemultihop`, currently 19 raw modes
+each, including packet, proxy, PQ and complete composite/MAX graphs.
+`TestNativeEntryMultihopLocalServerCaptureMatrix` exercises those exact catalogs
+with all three Start Layers and Local/Server retention. The retained-graph
+restoration tests require the system-TUN MTU to be the only changed setting;
+the entry, exit, DNS, proof lanes and protection remain captured. Constructor
+coverage does not establish every physical pair or a current native package,
+and an accepted external-node graph does not expand this Router catalog.
 
 ## Cancellation, Auto and Speed Lab
 
