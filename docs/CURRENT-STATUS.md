@@ -24,8 +24,8 @@ in the Windows, AppKit and GTK dialogs without replacing their raw protocol
 with a Router-only mode (`02ddd025`). The existing source-token, selected-DNS,
 MTU and lifecycle checks remain; ordinary proof cannot authorize private
 Router policy. Strict protection now retains independently checked physical
-egress for those ordinary entries (`c88a2f0c`). Tor Compare, Apple Server host
-adoption and enabled Tor padding remain separate unfinished work.
+egress for those ordinary entries (`c88a2f0c`). Tor Compare and enabled Tor
+padding remain separate unfinished work.
 
 Desktop private Router entry → Tor bridge Server now reaches the real isolated
 server worker through authenticated source discovery and an owned private lease.
@@ -49,8 +49,16 @@ new cleanup sockets have a bounded eight-second, source-checked physical owner.
 Data stays cancelled throughout. The Android Java/Go gate covers 342 Server and
 348 Local graphs; actual native parsing of all 690 remains wired to CI and was
 not run locally because the required verified Tor DSO/LLVM 21 is unavailable.
-Apple host integration, current APK/IPA packages and physical devices remain
-separate evidence. The continuation ledger records focused host tests and limits.
+Apple now adopts the same Server owner inside its existing PacketTunnel Box
+(`27ec75bb`). Cancel revokes data before joining hop, DNS and MTU operations;
+the captured entry and physical network monitor stay alive until the exact
+lease acknowledges DELETE. Failed cleanup retains that owner for retry and
+blocks replacement. Complete profiles, Startup Last and Speed Lab retain the
+proved Local/Server choice. Actual Swift 6 lifecycle gates and the Java/Swift
+to Go profile compilers pass; Apple exports 342 Server and 348 Local graphs.
+The complete 690-graph native parser run, current APK/IPA packages, Xcode
+packaging and physical devices remain separate evidence. The continuation
+ledger records the precise host tests and limits.
 
 The native parser matrices now run in separate processes with the same existing
 180-second per-process deadline (`c81d0930`). Source jobs select Go 1.26.3 for
@@ -61,6 +69,18 @@ negative cases (`548f9d24`). These changes do not certify a current all-platform
 release or physical-device behavior. The separate native startup network/power
 callback race was subsequently fixed in `078d4ef3`, with real resets still
 retiring the captured owner and executable native race controls preserved.
+The Tor virtual-clock test files now declare their required Go 1.25 language
+version while the supported default toolchain remains Go 1.26.3 (`e5804875`).
+The actual lease/HTTP race suites and the native Xray `go vet` package set pass.
+Android's ordinary external-policy fixture also follows the five-argument Tor
+preparation boundary, retaining its rejection behavior; 1,311 executable
+Java/Go checks pass. Current exact-SHA Actions remain unfinished, with the last
+published prerelease still targeting `745b3e41`.
+Android's shared multihop race gate now uses the same seven bounded phases as
+native Xray. The complete inventory remains selected exactly once, and every
+phase retains its 180-second limit. The monolithic diagnostic passed in
+336.789 seconds, explaining the former five-minute package deadline failure;
+the complete phased run and the retained relay/AWG race suites pass.
 
 The PQ controller now separates its five-second connection admission bound
 from the lifetime of an admitted native socket. Successful Xray/Hysteria/gVisor
@@ -438,7 +458,7 @@ Box tests cover these boundaries, while physical TUN and network acceptance
 remain separate. Virtual capacity does not assert 9000-byte packets on the
 underlying network. Captured Router-entry Local Tor graphs now preserve their
 private entry, selected DNS transport and independent native ownership. Tor
-Compare, mobile Server adoption, exit-side desktop Tor padding
+Compare, exit-side desktop Tor padding
 and Direct dynamic-bridge strict protection remain requirements to implement.
 
 The Tor server lease prerequisite now has a separate asynchronous lifecycle

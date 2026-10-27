@@ -13,6 +13,7 @@ on:
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
+      - 'deploy/test_mobile_multihop_groups.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -35,6 +36,7 @@ on:
       - 'android/test_android_pq_selection.py'
       - 'android/test_android_max_selection.py'
       - 'android/test_android_naive_multihop.py'
+      - 'deploy/test_mobile_multihop_groups.py'
       - 'android/app/src/main/java/com/eabusham/routervpn/AndroidNativeMAXProfile.java'
       - 'internal/mobilepq/**'
       - 'internal/mobilemultihop/**'
@@ -71,7 +73,8 @@ jobs:
           python3 android/test_android_pq_selection.py
           python3 android/test_android_max_selection.py
           python3 android/test_android_naive_multihop.py
-          # The complete expanded graph matrix takes almost two minutes even
-          # on the pinned toolchain. Keep every case and a bounded race run;
-          # the former 120-second package limit killed active graph checks.
-          go test -race -count=1 -timeout=5m ./internal/mobilemultihop ./internal/multihoprelay ./internal/awgpolicy
+          # Use the same complete, disjoint phases as the native Xray gate.
+          # Every discovered graph and lifecycle test runs exactly once;
+          # each phase retains its existing 180-second race deadline.
+          python3 deploy/test_mobile_multihop_groups.py
+          go test -race -count=1 -timeout=5m ./internal/multihoprelay ./internal/awgpolicy
