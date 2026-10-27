@@ -116,88 +116,102 @@ func nativeEntryMAXAssets(t *testing.T, entry common.RouterProfile, mode string)
 	return files
 }
 
-func TestNativeEntryMultihopLocalServerCaptureMatrix(t *testing.T) {
+// Each Start Layer keeps the complete dynamic entry/exit Cartesian matrix.
+// Separate top-level tests let native release gates bound each parser matrix
+// independently without filtering out entries or weakening their assertions.
+func TestNativeEntryMultihopLocalServerCaptureMatrixOff(t *testing.T) {
+	nativeEntryMultihopLocalServerCaptureMatrix(t, "off")
+}
+
+func TestNativeEntryMultihopLocalServerCaptureMatrixAES(t *testing.T) {
+	nativeEntryMultihopLocalServerCaptureMatrix(t, "aes-256-gcm")
+}
+
+func TestNativeEntryMultihopLocalServerCaptureMatrixAESXOR(t *testing.T) {
+	nativeEntryMultihopLocalServerCaptureMatrix(t, "aes-256-gcm+xor-whitening")
+}
+
+func nativeEntryMultihopLocalServerCaptureMatrix(t *testing.T, layer string) {
+	t.Helper()
 	count := 0
 	exits := mobilemultihop.NodeMultihopExitModes()
 	for entryIndex, mode := range mobilemultihop.NodeMultihopEntryModes() {
-		for _, layer := range []string{"off", "aes-256-gcm", "aes-256-gcm+xor-whitening"} {
-			t.Run(mode+"/"+layer, func(t *testing.T) {
-				root, selected := nativeEntryMultihopFixture(t, mode, layer)
-				selected, err := captureNativeMultihopSelection(context.Background(), root, selected, exits, nil)
-				if err != nil || selected.Native == nil || len(selected.Native.configs) != len(exits) {
-					if selected.Native != nil {
-						t.Fatal("entry could not retain the complete exit catalog", selected.Native.failures, err)
+		t.Run(mode, func(t *testing.T) {
+			root, selected := nativeEntryMultihopFixture(t, mode, layer)
+			selected, err := captureNativeMultihopSelection(context.Background(), root, selected, exits, nil)
+			if err != nil || selected.Native == nil || len(selected.Native.configs) != len(exits) {
+				if selected.Native != nil {
+					t.Fatal("entry could not retain the complete exit catalog", selected.Native.failures, err)
+				}
+				t.Fatal(err)
+			}
+			if selected.EntryMode != mode || selected.Native.entryMode != mode || selected.Base != desktopExternalEntryBase(mode) {
+				t.Fatal("capture changed the raw entry family")
+			}
+			if mobilemultihop.MAXMode(mode) {
+				for _, asset := range selected.Native.assets {
+					if asset.id == selected.Entry.ID && asset.mode == "shadowsocks" {
+						t.Fatal("complete MAX captured an unrelated additional Start Layer")
 					}
+				}
+			}
+			for exitIndex, exitMode := range exits {
+				selected.ExitMode = exitMode
+				local, err := compileRetainedNativeMultihopLaunch(selected, nil)
+				if err != nil {
 					t.Fatal(err)
 				}
-				if selected.EntryMode != mode || selected.Native.entryMode != mode || selected.Base != desktopExternalEntryBase(mode) {
-					t.Fatal("capture changed the raw entry family")
+				_, descriptor := executionFixture()
+				descriptor.Lease.ExitMode = exitMode
+				if layer != "off" {
+					descriptor.Lease.ExitStartLayer = layer
 				}
-				if mobilemultihop.MAXMode(mode) {
-					for _, asset := range selected.Native.assets {
-						if asset.id == selected.Entry.ID && asset.mode == "shadowsocks" {
-							t.Fatal("complete MAX captured an unrelated additional Start Layer")
+				server, err := compileRetainedNativeMultihopLaunch(selected, &descriptor)
+				if err != nil {
+					t.Fatal(mode, exitMode, err)
+				}
+				before := retainedGraph(t, local.config)
+				after := retainedGraph(t, server.config)
+				_, beforeEntry, err := nativeMultihopEntrySnapshot(before, selected.Native.entryOwners)
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, afterEntry, err := nativeMultihopEntrySnapshot(after, selected.Native.entryOwners)
+				if err != nil || !bytes.Equal(beforeEntry, afterEntry) {
+					t.Fatal("Server replaced an entry engine/resolver/performance owner", err)
+				}
+				clear(beforeEntry)
+				clear(afterEntry)
+				for _, field := range []string{"inbounds", "services"} {
+					if !reflect.DeepEqual(before[field], after[field]) {
+						t.Fatal("Server changed protected interface/MTU or cover policy", field)
+					}
+				}
+				for _, launch := range []*desktopNodeLaunch{local, server} {
+					meta := retainedGraph(t, launch.metadata)
+					if meta["entry_mode"] != mode || meta["base"] != desktopExternalEntryBase(mode) || meta["graph_source_sha256"] != selected.Native.source || launch.endpoint != selected.Entry.Endpoint {
+						t.Fatal("native receipt or physical whitelist lost captured entry identity")
+					}
+					// Every entry/layer and every exit family reaches the real
+					// parser without duplicating the full Cartesian process matrix.
+					if binary := os.Getenv("ROUTERVPN_VIA_ENTRY_NATIVE_CLI"); binary != "" && exitIndex == entryIndex%len(exits) {
+						dir := t.TempDir()
+						path := filepath.Join(dir, "native-entry.json")
+						if err := os.WriteFile(path, launch.config, 0600); err != nil {
+							t.Fatal(err)
+						}
+						command := exec.Command(binary, "check", "-c", path, "-D", dir)
+						command.Env = nativeLibraryEnvironment(os.Environ(), filepath.Dir(binary))
+						if output, err := command.CombinedOutput(); err != nil {
+							t.Fatal("actual native parser rejected expanded entry", mode, exitMode, err, string(output))
 						}
 					}
 				}
-				for exitIndex, exitMode := range exits {
-					selected.ExitMode = exitMode
-					local, err := compileRetainedNativeMultihopLaunch(selected, nil)
-					if err != nil {
-						t.Fatal(err)
-					}
-					_, descriptor := executionFixture()
-					descriptor.Lease.ExitMode = exitMode
-					if layer != "off" {
-						descriptor.Lease.ExitStartLayer = layer
-					}
-					server, err := compileRetainedNativeMultihopLaunch(selected, &descriptor)
-					if err != nil {
-						t.Fatal(mode, exitMode, err)
-					}
-					before := retainedGraph(t, local.config)
-					after := retainedGraph(t, server.config)
-					_, beforeEntry, err := nativeMultihopEntrySnapshot(before, selected.Native.entryOwners)
-					if err != nil {
-						t.Fatal(err)
-					}
-					_, afterEntry, err := nativeMultihopEntrySnapshot(after, selected.Native.entryOwners)
-					if err != nil || !bytes.Equal(beforeEntry, afterEntry) {
-						t.Fatal("Server replaced an entry engine/resolver/performance owner", err)
-					}
-					clear(beforeEntry)
-					clear(afterEntry)
-					for _, field := range []string{"inbounds", "services"} {
-						if !reflect.DeepEqual(before[field], after[field]) {
-							t.Fatal("Server changed protected interface/MTU or cover policy", field)
-						}
-					}
-					for _, launch := range []*desktopNodeLaunch{local, server} {
-						meta := retainedGraph(t, launch.metadata)
-						if meta["entry_mode"] != mode || meta["base"] != desktopExternalEntryBase(mode) || meta["graph_source_sha256"] != selected.Native.source || launch.endpoint != selected.Entry.Endpoint {
-							t.Fatal("native receipt or physical whitelist lost captured entry identity")
-						}
-						// Every entry/layer and every exit family reaches the real
-						// parser without duplicating the full Cartesian process matrix.
-						if binary := os.Getenv("ROUTERVPN_VIA_ENTRY_NATIVE_CLI"); binary != "" && exitIndex == entryIndex%len(exits) {
-							dir := t.TempDir()
-							path := filepath.Join(dir, "native-entry.json")
-							if err := os.WriteFile(path, launch.config, 0600); err != nil {
-								t.Fatal(err)
-							}
-							command := exec.Command(binary, "check", "-c", path, "-D", dir)
-							command.Env = nativeLibraryEnvironment(os.Environ(), filepath.Dir(binary))
-							if output, err := command.CombinedOutput(); err != nil {
-								t.Fatal("actual native parser rejected expanded entry", mode, exitMode, err, string(output))
-							}
-						}
-					}
-					count += 2
-				}
-			})
-		}
+				count += 2
+			}
+		})
 	}
-	if count != 2*3*len(mobilemultihop.NodeMultihopEntryModes())*len(exits) {
+	if count != 2*len(mobilemultihop.NodeMultihopEntryModes())*len(exits) {
 		t.Fatal("missing captured Local/Server entry composition", count)
 	}
 }

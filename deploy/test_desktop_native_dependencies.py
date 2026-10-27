@@ -56,6 +56,38 @@ class NativeCapturePartition(unittest.TestCase):
             with self.subTest(discovered=discovered), self.assertRaises(RuntimeError):
                 CAPTURE.native_capture_groups(discovered)
 
+    def test_expanded_entry_matrices_keep_all_start_layers_and_one_test_owner(self):
+        names = sorted({name for path in (ROOT/'cmd/client').glob('*_test.go')
+                        for name in re.findall(r'^func (Test\w+)\(t \*testing\.T\)', path.read_text(), re.M)
+                        if re.match(CAPTURE.NATIVE_ENTRY_SELECTOR, name)})
+        groups, total = CAPTURE.native_entry_groups('\n'.join(names))
+        self.assertEqual(total, len(names))
+        owners = {name: [] for name in names}
+        for index, (_, include, exclude) in enumerate(groups):
+            for name in names:
+                if re.match(include, name) and (exclude is None or not re.match(exclude, name)):
+                    owners[name].append(index)
+        self.assertTrue(all(len(value) == 1 for value in owners.values()))
+        isolated = (*CAPTURE.NATIVE_ENTRY_MATRIX_NAMES, CAPTURE.NATIVE_ENTRY_TRAFFIC_NAME)
+        self.assertEqual(len({owners[name][0] for name in isolated}), 4)
+        for name in isolated:
+            self.assertEqual(sum(value == owners[name] for value in owners.values()), 1)
+        source = (ROOT/'cmd/client/multihop_native_expanded_entry_test.go').read_text()
+        for suffix, layer in (('Off', 'off'), ('AES', 'aes-256-gcm'), ('AESXOR', 'aes-256-gcm+xor-whitening')):
+            self.assertRegex(source, re.escape('func TestNativeEntryMultihopLocalServerCaptureMatrix'+suffix+'(t *testing.T) {') +
+                             r'\s*nativeEntryMultihopLocalServerCaptureMatrix\(t, "' + re.escape(layer) + r'"\)\s*}')
+
+    def test_expanded_entry_discovery_rejects_missing_repeated_and_unassigned_matrices(self):
+        names = [*CAPTURE.NATIVE_ENTRY_MATRIX_NAMES, CAPTURE.NATIVE_ENTRY_TRAFFIC_NAME,
+                 'TestNativeEntryMultihopCapturedSourcesAndProofOwnership']
+        for removed in names:
+            with self.subTest(removed=removed), self.assertRaises(RuntimeError):
+                CAPTURE.native_entry_groups('\n'.join(name for name in names if name != removed))
+        for discovered in ('', '\n'.join(names+names[:1]), '\n'.join(names+['TestUnrelated']),
+                           '\n'.join(names+['TestNativeEntryMultihopLocalServerCaptureMatrixFuture'])):
+            with self.subTest(discovered=discovered), self.assertRaises(RuntimeError):
+                CAPTURE.native_entry_groups(discovered)
+
 
 class NativeBuildDiagnostics(unittest.TestCase):
     def test_real_failed_child_preserves_failure_and_both_output_streams(self):

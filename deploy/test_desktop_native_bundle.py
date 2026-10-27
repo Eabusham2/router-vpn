@@ -26,6 +26,13 @@ NATIVE_TRAFFIC_NAMES = (
     'TestNativeMultihopWGNaiveEncryptedLoopback',
     'TestNativeMultihopWGWireGuardEncryptedLoopback',
 )
+NATIVE_ENTRY_SELECTOR = '^TestNativeEntryMultihop'
+NATIVE_ENTRY_MATRIX_NAMES = (
+    'TestNativeEntryMultihopLocalServerCaptureMatrixOff',
+    'TestNativeEntryMultihopLocalServerCaptureMatrixAES',
+    'TestNativeEntryMultihopLocalServerCaptureMatrixAESXOR',
+)
+NATIVE_ENTRY_TRAFFIC_NAME = 'TestNativeEntryMultihopProxyEncryptedLoopback'
 
 
 def native_capture_groups(discovered):
@@ -57,6 +64,36 @@ def native_capture_groups(discovered):
             counts[name] += 1
     if any(count != 1 for count in counts.values()):
         raise RuntimeError('Native capture partition omitted or duplicated an actual test')
+    return groups, len(names)
+
+
+def native_entry_groups(discovered):
+    """Keep every expanded entry test once, with each full layer matrix bounded."""
+    names = [line.strip() for line in discovered.splitlines() if line.startswith('Test')]
+    if not names or len(names) != len(set(names)) or any(
+            re.fullmatch(r'[A-Za-z0-9_]+', name) is None or
+            re.match(NATIVE_ENTRY_SELECTOR, name) is None for name in names):
+        raise RuntimeError('Native entry test discovery is empty or ambiguous')
+    matrices = {name for name in names if name.startswith('TestNativeEntryMultihopLocalServerCaptureMatrix')}
+    if matrices != set(NATIVE_ENTRY_MATRIX_NAMES) or NATIVE_ENTRY_TRAFFIC_NAME not in names:
+        raise RuntimeError('Native entry layer matrix or encrypted-traffic coverage disappeared or changed')
+    exact = lambda selected: '^(' + '|'.join(re.escape(name) for name in selected) + ')$'
+    groups = tuple((label + ' complete entry/exit Local/Server parser matrix', exact((name,)), None)
+                   for label, name in zip(('Off', 'AES', 'AES+XOR'), NATIVE_ENTRY_MATRIX_NAMES)) + (
+        ('expanded entry policy, source, proof and restoration ownership', NATIVE_ENTRY_SELECTOR,
+         exact((*NATIVE_ENTRY_MATRIX_NAMES, NATIVE_ENTRY_TRAFFIC_NAME))),
+        ('encrypted SS/HY2/Naive Local/Server TCP and UDP paths', exact((NATIVE_ENTRY_TRAFFIC_NAME,)), None),
+    )
+    counts = {name: 0 for name in names}
+    for _, include, exclude in groups:
+        selected = [name for name in names if re.match(include, name) and
+                    (exclude is None or not re.match(exclude, name))]
+        if not selected:
+            raise RuntimeError('Native entry partition selected no actual tests')
+        for name in selected:
+            counts[name] += 1
+    if any(count != 1 for count in counts.values()):
+        raise RuntimeError('Native entry partition omitted or duplicated an actual test')
     return groups, len(names)
 
 
@@ -145,11 +182,21 @@ def test(bundle, target):
         print(f'All {total} original native capture/ownership/traffic tests executed exactly once with unchanged per-test assertions', flush=True)
         # Every additional entry preserves its full engine/DNS/cover closure
         # through the same shipping capture and Server transformation. Keep
-        # this new matrix bounded independently of the established groups.
-        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=240s',
-                        './cmd/client', '-run', '^TestNativeEntryMultihop'],
-                       cwd=ROOT, env=env, check=True, timeout=360)
-        print('Complete native runtime passed exact 19-mode entry capture/parser and retained-owner checks, plus SS/HY2/Naive encrypted Local/Server TCP and UDP', flush=True)
+        # each complete layer matrix, guard group and encrypted traffic bounded
+        # independently. Dynamic discovery prevents a platform-only or future
+        # entry test from silently disappearing during partitioning.
+        discovered = subprocess.check_output(
+            ['go', 'test', *race, './cmd/client', '-list', NATIVE_ENTRY_SELECTOR],
+            cwd=ROOT, env=env, text=True, timeout=300)
+        groups, total = native_entry_groups(discovered)
+        for label, include, exclude in groups:
+            command = ['go', 'test', *race, '-count=1', '-timeout=240s',
+                       './cmd/client', '-run', include]
+            if exclude is not None:
+                command += ['-skip', exclude]
+            subprocess.run(command, cwd=ROOT, env=env, check=True, timeout=360)
+            print('Complete native runtime passed ' + label, flush=True)
+        print(f'All {total} expanded entry tests executed exactly once, retaining every entry/exit, Start Layer and Local/Server combination', flush=True)
         # Complete MAX retains mandatory PQ, SS2022 and outer owners. Its host
         # capture/Server substitution and retained identity checks form a new
         # bounded phase; the established native phases keep their old budgets.
