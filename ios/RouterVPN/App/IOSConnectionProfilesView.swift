@@ -34,6 +34,9 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
     var mtuPolicy: String
     var manualMTU: Int
     var daitaEnabled: Bool = false
+    // nil denotes a legacy snapshot. New snapshots capture zero for an unset
+    // rate so Load restores the default choice instead of a later saved rate.
+    var daitaRateKbps: Int? = nil
     var jumboTUN: Bool = false
     var startupMode: String
     var autoConnect: Bool
@@ -53,7 +56,7 @@ private struct IOSConnectionSafePreferences: Codable, Hashable {
 
     enum CodingKeys: String, CodingKey {
         case homeLANAccess, homeLANCIDRs, killSwitch, killSwitchPolicy, ipv6Mode, baseTunnel, baseFallback, startLayer
-        case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, jumboTUN
+        case autoRequireEncrypted, autoRequireObfuscation, mtuPolicy, manualMTU, startupMode, autoConnect, daitaEnabled, daitaRateKbps, jumboTUN
         case dnsMode, dnsProtocol, dnsHost, dnsPort, dnsServerName, dnsPath, dnsBootstrap
         case multihopEnabled, multihopEntryMode, multihopEntryID, multihopExitID, multihopExitMode, multihopExecution
     }
@@ -75,6 +78,7 @@ private extension IOSConnectionSafePreferences {
         mtuPolicy = try c.decodeIfPresent(String.self, forKey: .mtuPolicy) ?? "auto"
         manualMTU = try c.decodeIfPresent(Int.self, forKey: .manualMTU) ?? 0
         daitaEnabled = try c.decodeIfPresent(Bool.self, forKey: .daitaEnabled) ?? false
+        daitaRateKbps = try c.decodeIfPresent(Int.self, forKey: .daitaRateKbps)
         jumboTUN = try c.decodeIfPresent(Bool.self, forKey: .jumboTUN) ?? false
         startupMode = try c.decodeIfPresent(String.self, forKey: .startupMode) ?? "smart-auto"
         autoConnect = try c.decodeIfPresent(Bool.self, forKey: .autoConnect) ?? false
@@ -218,6 +222,7 @@ private enum IOSConnectionProfileStore {
                 mtuPolicy: (selected.mtuPolicy ?? "auto").lowercased(),
                 manualMTU: selected.manualMTU ?? 0,
                 daitaEnabled: selected.daitaEnabled ?? false,
+                daitaRateKbps: selected.daitaRateKbps ?? 0,
                 jumboTUN: selected.jumboTUN ?? false,
                 startupMode: (selected.startupMode ?? "smart-auto").lowercased(),
                 autoConnect: selected.autoConnect ?? false,
@@ -348,6 +353,7 @@ private enum IOSConnectionProfileStore {
         profile.mtuPolicy = prefs.mtuPolicy
         profile.manualMTU = prefs.manualMTU
         profile.daitaEnabled = prefs.daitaEnabled
+        if let rate = prefs.daitaRateKbps { profile.daitaRateKbps = rate }
         profile.jumboTUN = prefs.jumboTUN
         profile.startupMode = prefs.startupMode
         profile.autoConnect = prefs.autoConnect
@@ -445,6 +451,9 @@ private enum IOSConnectionProfileStore {
 
     private static func validatePreferences(_ value: IOSConnectionSafePreferences, external: Bool = false, tor: Bool = false) throws -> IOSConnectionSafePreferences {
         var p = value
+        if tor, let rate = p.daitaRateKbps, rate != 0 && !(32...192).contains(rate) {
+            throw issue("Connection profile Tor cover rate must be 0 or 32–192 kbps.")
+        }
         if let ranges = p.homeLANCIDRs {
             guard ranges.count <= 32, ranges.allSatisfy({ !$0.isEmpty && $0.utf8.count <= 64 && !$0.unicodeScalars.contains(where: { $0.value < 0x21 || $0.value == 0x7f }) }) else {
                 throw issue("Connection profile contains invalid saved LAN ranges.")

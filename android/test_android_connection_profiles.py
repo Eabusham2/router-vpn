@@ -236,6 +236,22 @@ public final class ConnectionProfilesHarness {
    ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution)&&surface.connection.entry.id.equals(f.first.id),"map Connect replaced the saved Tor execution");
   }
  }
+ static void torPaddingProfiles(Path root)throws Exception{
+  for(boolean enabled:new boolean[]{false,true})for(int rate:new int[]{0,32,64,192}){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-b");exit.torPolicy.put("daita_enabled",enabled).put("daita_rate_kbps",rate);f.exits.save(exit);
+   f.store.selectExternalPath(exit,f.first,"hysteria2","server");var saved=f.store.add("Bounded outgoing cover");JSONObject policy=f.row().getJSONObject("external_policy");
+   check(policy.getBoolean("daita_enabled")==enabled&&policy.getInt("daita_rate_kbps")==rate,"Add lost enabled or dormant Tor cover rate");
+   exit.torPolicy.put("daita_enabled",!enabled).put("daita_rate_kbps",96);f.exits.save(exit);f.otherSelection();f.store.load(saved.id);
+   var path=f.store.currentExternalPath(exit.id);check(path.execution.equals("server")&&path.entry.id.equals(f.first.id)&&path.exit.torPolicy.getBoolean("daita_enabled")==enabled&&path.exit.torPolicy.getInt("daita_rate_kbps")==rate,"Load changed exact cover policy or private Server path");
+   f.store.update(saved.id,"Retained cover");check(f.row().getJSONObject("external_policy").getInt("daita_rate_kbps")==rate&&f.store.list().size()==1,"Update discarded the selected cover rate");
+   String before=AndroidStandardExitStore.snapshot(f.exits.get(exit.id));f.store.delete(saved.id);check(f.store.list().isEmpty()&&AndroidStandardExitStore.snapshot(f.exits.get(exit.id)).equals(before),"Delete removed the node-owned cover policy");
+  }
+  for(String fault:new String[]{"enabled-type","rate-type","rate-small","rate-large"}){
+   Fixture f=new Fixture(root);var exit=f.exits.get("external-b");exit.torPolicy.put("daita_enabled",true).put("daita_rate_kbps",64);f.exits.save(exit);f.store.selectExternalPath(exit,f.first,"hysteria2","server");var saved=f.store.add("Valid cover");JSONObject row=f.row(),policy=row.getJSONObject("external_policy");
+   if(fault.equals("enabled-type"))policy.put("daita_enabled","true");else if(fault.equals("rate-type"))policy.put("daita_rate_kbps","64");else policy.put("daita_rate_kbps",fault.equals("rate-small")?31:193);
+   f.row(row);State before=new State(f);rejected(()->f.store.load(saved.id),fault);before.same(f,"invalid cover restore must be transactional");
+  }
+ }
  static void mappedOpenVPNProfiles(Path root)throws Exception{
   for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening")){
   String variable=layer.equals("off")?"ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE":layer.equals("aes-256-gcm")?"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE":"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE";JSONObject source=new JSONObject(Files.readString(Path.of(System.getenv(variable)))).getJSONObject("external"),inline=source.getJSONObject("openvpn");
@@ -379,7 +395,7 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);torPaddingProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

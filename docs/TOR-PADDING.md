@@ -29,9 +29,9 @@ its own protocol version.
 The native extension and package evidence are prerequisites. A native host must
 also capture the selected policy, bind it to its exact session and source,
 require this capability from its real owned Tor runtime, and start and renew it
-only after the required selected-path and DNS proofs. Until that host adoption
-is complete, the shared profile compiler continues rejecting enabled padding.
-The extension alone does not close the all-platform padding requirement.
+only after the required selected-path and DNS proofs. Local runtime compilation
+continues rejecting enabled padding until its host adoption is complete. The
+extension alone does not close the all-platform padding requirement.
 
 The standalone server worker now has an owned activation path. Its optional
 private source `padding` object captures `enabled` and `rate_kbps`; the source
@@ -49,6 +49,32 @@ existing data sockets when the last receipt expires even if no new status
 response arrives. They reject unrequested cover when the saved selection is Off.
 These server primitives do not enable a client UI path by themselves; the
 corresponding client compiler and host must preserve and prove that policy.
+
+### Mobile Server capture
+
+The Android and Apple Server compilers retain the exact saved `daita_enabled`
+and `daita_rate_kbps` fields in the final native owner and canonical private
+server source. These existing profile field names select outgoing Tor cover;
+they do not change its direction or accounting. Enabled with an omitted or zero
+rate selects 192 kbit/s. Off preserves a dormant zero or 32–192 kbit/s choice.
+The operator must provision a source with the matching selection and source
+hash before the client can acquire a lease.
+
+Idle validation permits saving a typed, bounded cover request before choosing
+an entry. It produces no runnable graph. Connection compilation admits it only
+for explicit Server execution with the complete captured private Router entry.
+The single mobile VPN owns that entry, the authenticated lease, selected DNS,
+client exit proof and cover receipt. Local, direct Server, ordinary external
+predecessors and Compare do not acquire cover authority through this path.
+
+The shared device-policy builder uses a separate Off template while preparing
+the graph; its Local Tor owner is replaced before the graph reaches a runtime.
+The final Server owner retains the original enabled source, and MTU authority
+rejects another saved rate. Android node/profile stores and Apple node import,
+runtime handoff and Add/Load/Update/Delete preserve the selected rate without
+copying private Router sink credentials. Legacy Apple connection profiles that
+omitted a rate retain the linked node's value; new profiles explicitly capture
+zero when the saved rate was unset.
 
 ## Budget and path ownership
 
@@ -144,6 +170,15 @@ the actual encrypted cells and decrypts them using three distinct Tor relay
 crypto contexts, requiring that only the final hop recognize a stream-zero,
 zero-length DROP. This is an offline execution test, not public-network or
 physical-device acceptance.
+
+The mobile Server regression runs the shipping compiler, actual native Box,
+encrypted SS2022 entry, authenticated lease/SOCKS client, selected DNS and TLS
+exit verifier. Its remote server and OS TUN are explicit fixture boundaries.
+Missing, wrong-rate, empty-counter and expired cover receipts cannot admit a
+stream, and a changed generation during renewal closes an existing stream while
+retaining its exact private cleanup path. Separate shipping Swift/Java graph
+and saved-profile fixtures exercise the platform capture and restoration paths.
+These checks do not establish public Tor or physical-device acceptance.
 
 The tests exercise both link-cell sizes, aggregate budgets across multiple
 circuits, delayed timers, renewals without extra credit, stale owners and

@@ -43,7 +43,7 @@ func CompileServerProfileWithPredecessor(profile, session, entryConfig, entryPro
 
 func NewMobileServerTorPolicy(options MobileServerTorOptions) (*MobileServerTorPolicy, error) {
 	failure := errors.New("mobile Tor Server requires its complete captured private entry and explicit Server selection")
-	profile, bridges, err := capturedTorProfile(options.Profile)
+	profile, bridges, err := capturedTorProfileValues(options.Profile)
 	if err != nil || !profileIdentifier.MatchString(options.SessionID) || options.EntryConfig == "" || options.EntryProfile == "" ||
 		profile["multihop_enabled"] != true || profileString(profile, "multihop_execution") != "server" {
 		return nil, failure
@@ -58,10 +58,12 @@ func NewMobileServerTorPolicy(options MobileServerTorOptions) (*MobileServerTorP
 	}
 	// The common compiler supplies the same DNS, IPv6, LAN, protection and MTU
 	// policy. This data-only intermediate is never handed to a Local runtime.
-	profile["multihop_execution"] = "local"
 	normalizeMobileServerDNSMode(profile)
-	localSource, _ := json.Marshal(profile)
-	compiled, err := CompileProfileWithPredecessor(string(localSource), options.SessionID, options.EntryConfig, options.EntryProfile)
+	localSource, err := mobileServerLocalTemplate(profile)
+	if err != nil {
+		return nil, err
+	}
+	compiled, err := CompileProfileWithPredecessor(localSource, options.SessionID, options.EntryConfig, options.EntryProfile)
 	if err != nil {
 		return nil, err
 	}
@@ -164,4 +166,23 @@ func normalizeMobileServerDNSMode(profile map[string]any) {
 	case "dot", "doh", "doh3":
 		profile["dns_mode"], profile["dns_protocol"] = "custom", mode
 	}
+}
+
+// mobileServerLocalTemplate borrows only the shared device/DNS graph builder.
+// This intermediate never runs: its Local Tor outbound is replaced by the
+// Server owner carrying the exact original source, including enabled cover.
+// Keeping this copy separate prevents template preparation from changing the
+// canonical operator source or a later MTU proof's selected cover policy.
+func mobileServerLocalTemplate(profile map[string]any) (string, error) {
+	local := make(map[string]any, len(profile))
+	for key, value := range profile {
+		local[key] = value
+	}
+	local["multihop_execution"] = "local"
+	if local["daita_enabled"] == true {
+		local["daita_enabled"] = false
+	}
+	normalizeMobileServerDNSMode(local)
+	encoded, err := json.Marshal(local)
+	return string(encoded), err
 }

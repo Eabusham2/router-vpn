@@ -38,7 +38,9 @@ extension Tests {
   return profile
  }
  @MainActor static func serverVerify(_ kind:String,_ mode:String,_ layer:String,_ maximum:[String:Any],_ composite:[String:Any])throws {
-  let selected=try serverSelection(kind,mode),source=try root(mode,layer,maximum,composite),owner=ProviderPreparation()
+  var selected=try serverSelection(kind,mode)
+  selected["daita_enabled"]=true;selected["daita_rate_kbps"]=64
+  let source=try root(mode,layer,maximum,composite),owner=ProviderPreparation()
   let entry=(source["routerProfiles"] as! [[String:Any]])[0],baseline=try owner.entry(source,mode)
   let provider:[String:Any]=["tor_entry_bundle":try json(source),"tor_entry_mode":mode]
   owner.restoredMultihopExecution="server"
@@ -48,6 +50,8 @@ extension Tests {
   try check("fresh Server UUID and explicit execution",UUID(uuidString:sid) != nil && sessions.insert(sid).inserted && runtime.torExecution=="server" && owner.multihopExecutionSource?.requested=="server")
   try check("Server keeps exact compiled policy and private entry",runtime.torProfileJSON==selectedBefore && runtime.torPredecessorProfile==text(entry))
   try check("Server final carries only exact source inputs",Set(out.keys)==Set(["type","tag","profile","session_id","entry_config","entry_profile"]) && out["type"] as? String=="routervpn-server-tor" && out["session_id"] as? String==sid && out["profile"] as? String==selectedBefore && out["entry_profile"] as? String==text(entry) && out["entry_config"] as? String==String(decoding:baseline["sing-box.json"]!,as:UTF8.self))
+  let cover=try object(Data((out["profile"] as! String).utf8))
+  try check("Server native source retains selected cover and nondefault rate",cover["daita_enabled"] as? Bool==true && cover["daita_rate_kbps"] as? Int==64)
   let outputs=graph["outbounds"] as! [[String:Any]],tun=(graph["inbounds"] as! [[String:Any]])
   try check("Server retains exactly one system TUN and one owner",tun.count==1 && tun[0]["type"] as? String=="tun" && tun[0]["mtu"] as? Int==1380 && tun[0]["auto_route"] as? Bool==true && tun[0]["strict_route"] as? Bool==true && outputs.filter{$0["type"] as? String=="routervpn-server-tor"}.count==1 && !outputs.contains{$0["type"] as? String=="routervpn-tor"})
   try check("Server preserves strict protection and dynamic exit",prepared.strict && runtime.expectedPublicIP.isEmpty && (graph["route"] as! [String:Any])["final"] as? String=="routervpn-tor-exit")
@@ -98,7 +102,7 @@ extension Tests {
    let owner=ProviderPreparation();owner.restoredMultihopExecution=restored
    reject("Server cannot adopt another restored execution"){_ = try owner.prepare(provider:provider,selectedProfile:selected,strict:true)}
   }
-  for fault in ["compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding","padding-type"] {
+  for fault in ["compare","missing-entry","ordinary-entry","wrong-entry-id","entry-proof","wrong-exit-mode","wrong-exit-id","fixed-conflict","padding-local","padding-type","padding-rate-type","padding-rate-small","padding-rate-large"] {
    var changed=selected,changedSource=source,changedEntry=entry,changedProvider=provider
    switch fault {
    case "compare":changed["multihop_execution"]="auto"
@@ -109,7 +113,10 @@ extension Tests {
    case "wrong-exit-mode":changed["multihop_exit_mode"]="tor"
    case "wrong-exit-id":changed["multihop_exit_id"]="another-exit"
    case "fixed-conflict":changed["manual_mtu"]=1390
-   case "padding":changed["daita_enabled"]=true
+   case "padding-local":changed["multihop_execution"]="local";changed["daita_enabled"]=true;changed["daita_rate_kbps"]=64
+   case "padding-rate-type":changed["daita_enabled"]=true;changed["daita_rate_kbps"]="64"
+   case "padding-rate-small":changed["daita_enabled"]=true;changed["daita_rate_kbps"]=31
+   case "padding-rate-large":changed["daita_enabled"]=true;changed["daita_rate_kbps"]=193
    default:changed["daita_enabled"]="false"
    }
    if ["ordinary-entry","wrong-entry-id","entry-proof"].contains(fault) {changedSource["routerProfiles"]=[changedEntry];changedProvider["tor_entry_bundle"]=try json(changedSource)}

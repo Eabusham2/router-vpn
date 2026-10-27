@@ -291,7 +291,11 @@ final class IOSNodeBundleStore {
                 profile.socksPassword = ""
                 profile.daitaHost = nil
                 profile.daitaPort = nil
-                profile.daitaRateKbps = nil
+                // Tor cover is owned by its captured circuit, with no Router
+                // sink address. Preserve its selected rate through relinking.
+                if !["tor", "tor-bridge"].contains(profile.external?.protocolName ?? "") {
+                    profile.daitaRateKbps = nil
+                }
                 profile.baseTunnel = nil
                 profile.baseFallback = nil
                 profile.pathProbeURL = nil

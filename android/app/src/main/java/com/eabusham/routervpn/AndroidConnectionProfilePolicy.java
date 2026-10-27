@@ -8,7 +8,7 @@ import java.util.Iterator;
 /** Bounded, non-secret choices saved by connection profiles, never runtime proof. */
 final class AndroidConnectionProfilePolicy {
     private static final String[] EXTERNAL={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","fastest_dns_host","fastest_dns_latency_ms","dns_results","dns_bootstrap","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","start_layer","kill_switch","kill_switch_policy"};
-    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","jumbo_tun","kill_switch","kill_switch_policy"};
+    private static final String[] TOR={"dns_mode","dns_protocol","dns_host","dns_port","dns_server_name","dns_path","ipv6_mode","home_lan_access","home_lan_cidrs","mtu_policy","manual_mtu","jumbo_tun","kill_switch","kill_switch_policy","daita_enabled","daita_rate_kbps"};
 
     static JSONObject router(JSONObject source,String[] keys)throws Exception{return checked(source,keys,false,false);}
     static JSONObject external(JSONObject source,String protocol)throws Exception{
@@ -31,6 +31,10 @@ final class AndroidConnectionProfilePolicy {
                 if(!(value instanceof Boolean))throw new IllegalArgumentException("Saved "+key+" must be On or Off.");
             }else if("dns_port".equals(key))integer(value,0,65535,key);
             else if("manual_mtu".equals(key))integer(value,0,9000,key);
+            else if("daita_rate_kbps".equals(key)){
+                integer(value,0,192,key);
+                if(((Number)value).intValue()!=0&&((Number)value).intValue()<32)throw new IllegalArgumentException("Saved Tor cover rate must be 0 or 32–192 kbps.");
+            }
             else if("fastest_dns_latency_ms".equals(key))number(value,key);
             else if("home_lan_cidrs".equals(key))strings(value,64,128,key);
             else if("dns_results".equals(key))dnsResults(value);

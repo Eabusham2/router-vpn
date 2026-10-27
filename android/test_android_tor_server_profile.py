@@ -27,7 +27,7 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
  static void server(Path dir,String mode,String layer,String kind,String dns,String certificate)throws Exception{
   Path app=Files.createTempDirectory(dir,"server-");Context context=new Context(app.toFile());
   JSONObject source=entry(mode,layer,certificate);File file=save(dir,source);byte[] entryBefore=Files.readAllBytes(file.toPath());
-  AndroidStandardExitStore.Entry selected=tor(kind,dns);String exitBefore=AndroidStandardExitStore.snapshot(selected);
+  AndroidStandardExitStore.Entry selected=tor(kind,dns);selected.torPolicy.put("daita_enabled",true).put("daita_rate_kbps",64);String exitBefore=AndroidStandardExitStore.snapshot(selected);
   NativeSingBoxController.SessionInfo prepared=new AndroidStandardExitController(context).prepare(file,selected,mode,"server","server");
   Path folder=app.resolve("layered-sessions").resolve(prepared.sessionId);
   String config=Files.readString(folder.resolve("sing-box.json"));String metadata=Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE));
@@ -35,6 +35,9 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   check(AndroidTorProfile.execution(capture).equals("server")&&capture.getJSONObject("tor_profile").getString("multihop_execution").equals("server"),"Server capture became Local");
   check(out.getString("type").equals("routervpn-server-tor")&&out.length()==6&&!out.has("detour")&&!out.has("bridges"),"Server installed an independent Local Tor owner");
   check(out.getString("session_id").equals(prepared.sessionId)&&same(new JSONObject(out.getString("profile")),capture.getJSONObject("tor_profile")),"Server source/session mismatch");
+  check(capture.getJSONObject("tor_profile").getBoolean("daita_enabled")&&capture.getJSONObject("tor_profile").getInt("daita_rate_kbps")==64,"Server capture discarded the saved cover choice");
+  AndroidStandardExitStore.Entry reopened=AndroidStandardExitStore.copy(selected);
+  check(reopened.torPolicy.getBoolean("daita_enabled")&&reopened.torPolicy.getInt("daita_rate_kbps")==64,"saved node roundtrip discarded native cover policy");
   check(same(new JSONObject(out.getString("entry_profile")),profile(source))&&same(capture.getJSONObject("predecessor_profile"),profile(source)),"Server borrowed another private entry credential");
   check(out.getString("entry_config").equals(io.nekohasekai.libbox.Libbox.lastTorPredecessor),"Server changed captured entry graph bytes");
   check(capture.getString("predecessor_config_sha256").equals(AndroidTorProfile.digest(out.getString("entry_config").getBytes(StandardCharsets.UTF_8))),"Server lost entry graph identity");
@@ -59,6 +62,18 @@ T.HARNESS = T.HARNESS[:T.HARNESS.index(" public static void main(")] + r'''
   rejection(()->controller.prepare(file,e,"shadowsocks","auto","server"),"Compare without two independent measurements");
   rejection(()->controller.prepare(null,e,"shadowsocks","server",""),"Server without private entry");
   check(sessions(app)==0,"rejected execution staged a session");
+  for(String fault:new String[]{"local-padding","direct-padding","compare-padding","enabled-type","rate-type","rate-small","rate-large"}){
+   AndroidStandardExitStore.Entry cover=tor("obfs4","tcp");cover.torPolicy.put("daita_enabled",true).put("daita_rate_kbps",64);
+   if(fault.equals("enabled-type"))cover.torPolicy.put("daita_enabled","true");
+   if(fault.equals("rate-type"))cover.torPolicy.put("daita_rate_kbps","64");
+   if(fault.equals("rate-small"))cover.torPolicy.put("daita_rate_kbps",31);
+   if(fault.equals("rate-large"))cover.torPolicy.put("daita_rate_kbps",193);
+   String execution=fault.equals("local-padding")?"local":fault.equals("compare-padding")?"auto":"server";
+   File entryFile=fault.equals("direct-padding")?null:file;
+   String captured=AndroidStandardExitStore.snapshot(cover);
+   rejection(()->controller.prepare(entryFile,cover,"shadowsocks",execution,""),fault);
+   check(captured.equals(AndroidStandardExitStore.snapshot(cover))&&sessions(app)==0,"failed cover selection changed saved policy or staged a session");
+  }
   NativeSingBoxController.SessionInfo info=controller.prepare(file,e,"shadowsocks","server","");Path folder=app.resolve("layered-sessions").resolve(info.sessionId);
   String raw=Files.readString(folder.resolve("sing-box.json")),metaRaw=Files.readString(folder.resolve(AndroidTorProfile.SESSION_FILE));
   for(String fault:new String[]{"local","auto","null","missing-execution","missing-entry","profile-execution","source","entry-profile","entry-config","extra-option","local-owner","duplicate-owner","session"}){

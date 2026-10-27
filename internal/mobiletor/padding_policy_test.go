@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestTorPaddingPolicyRejectsUnimplementedOrMalformedRequest(t *testing.T) {
+func TestTorPaddingPolicyRejectsLocalRuntimeOrMalformedRequest(t *testing.T) {
 	cases := []struct {
 		name   string
 		values map[string]any
@@ -43,8 +43,12 @@ func TestTorPaddingPolicyRejectsUnimplementedOrMalformedRequest(t *testing.T) {
 						t.Fatal("Tor compiler returned an unpadded runnable graph for the captured request", err)
 					}
 				}
-				if err := ValidateProfile(source); err == nil || !strings.Contains(err.Error(), "padding") {
-					t.Fatal("idle Tor validation silently accepted unavailable or malformed padding", err)
+				if err := ValidateProfile(source); strings.HasPrefix(test.name, "requested-") {
+					if err != nil {
+						t.Fatal("idle Tor validation discarded a bounded Server cover selection", err)
+					}
+				} else if err == nil || !strings.Contains(err.Error(), "padding") {
+					t.Fatal("idle Tor validation silently accepted malformed padding", err)
 				}
 				entry := torHomeEntry()
 				torHomePair(profile, entry)

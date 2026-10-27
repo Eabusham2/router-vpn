@@ -315,7 +315,9 @@ extension RouterVPNModel {
         runtimeProfile.socksPassword = ""
         runtimeProfile.daitaHost = nil
         runtimeProfile.daitaPort = nil
-        runtimeProfile.daitaRateKbps = nil
+        if !["tor", "tor-bridge"].contains(runtimeProfile.external?.protocolName ?? "") {
+            runtimeProfile.daitaRateKbps = nil
+        }
         runtimeProfile.baseTunnel = nil
         runtimeProfile.baseFallback = nil
         runtimeProfile.pathProbeURL = nil

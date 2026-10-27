@@ -22,7 +22,8 @@ final class AndroidTorProfile {
     static final String[] TRANSPORTS = {"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"};
     private static final Set<String> POLICY = new HashSet<>(Arrays.asList(
             "dns_mode", "dns_protocol", "dns_host", "dns_port", "dns_server_name", "dns_path",
-            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu", "jumbo_tun", "kill_switch", "kill_switch_policy"));
+            "ipv6_mode", "home_lan_access", "home_lan_cidrs", "mtu_policy", "manual_mtu", "jumbo_tun", "kill_switch", "kill_switch_policy",
+            "daita_enabled", "daita_rate_kbps"));
 
     static boolean isTor(String protocol) { return "tor".equals(protocol) || "tor-bridge".equals(protocol); }
 
@@ -115,7 +116,7 @@ final class AndroidTorProfile {
         }
         String captured = profile(exit).toString();
         if (captured.getBytes(StandardCharsets.UTF_8).length > MAX_METADATA) throw new IllegalArgumentException("Tor profile is too large.");
-        // A Home-default draft can be stored before an entry is selected.
+        // A Home-default or bounded Server-cover draft can be stored before an entry is selected.
         // This validates its exact policy without inventing a runnable graph;
         // prepare still requires the complete captured entry and live proof.
         Libbox.routerValidateTorProfile(captured);

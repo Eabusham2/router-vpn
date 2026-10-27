@@ -39,10 +39,12 @@ func CompileProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, pred
 }
 
 // ValidateProfile checks an idle saved node without claiming a runnable graph
-// or replacing its unresolved Home default with a public resolver. Connection
-// compilation and live proof remain mandatory after the entry is captured.
+// or replacing its unresolved Home default with a public resolver. A bounded
+// cover selection can be saved for Server execution before choosing its entry;
+// Local compilation still rejects it. Connection compilation and live proof
+// remain mandatory after the private entry is captured.
 func ValidateProfile(profileJSON string) error {
-	profile, _, err := capturedTorProfile(profileJSON)
+	profile, _, err := capturedTorProfileValues(profileJSON)
 	if err != nil {
 		return err
 	}
@@ -62,11 +64,25 @@ func ValidateProfile(profileJSON string) error {
 }
 
 func capturedTorProfile(profileJSON string) (map[string]any, []string, error) {
+	profile, bridges, err := capturedTorProfileValues(profileJSON)
+	if err != nil {
+		return nil, nil, err
+	}
+	if err := validateTorPaddingPolicy(profile); err != nil {
+		return nil, nil, err
+	}
+	return profile, bridges, nil
+}
+
+// capturedTorProfileValues validates saved fields without granting runtime
+// cover authority. Only idle validation and the separately captured private
+// Server compiler may use it; Local/Desktop owners retain the guarded wrapper.
+func capturedTorProfileValues(profileJSON string) (map[string]any, []string, error) {
 	profile, err := profileObject(profileJSON, 256*1024)
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
 		return nil, nil, errors.New("Tor requires one frozen external node profile")
 	}
-	if err := validateTorPaddingPolicy(profile); err != nil {
+	if _, _, err := capturedTorPaddingPolicy(profile); err != nil {
 		return nil, nil, err
 	}
 	for _, key := range []string{"start_layer", "dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "ipv6_mode", "mtu_policy", "multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode", "multihop_execution"} {

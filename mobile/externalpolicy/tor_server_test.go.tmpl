@@ -81,6 +81,7 @@ type mobileServerNativeFixture struct {
 	sequence                                                uint64
 	methods                                                 []string
 	badNode, badSource, badDNS, badTLS, badAuth, failDelete atomic.Bool
+	badPadding                                              atomic.Int32
 	allowPending                                            atomic.Bool
 	entryQueries, exitQueries, publicChecks, dataStreams    atomic.Int32
 	putEntered, putRelease                                  chan struct{}
@@ -110,7 +111,7 @@ func mobileServerNativeRoots(t *testing.T) tls.Certificate {
 	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
 }
 
-func newMobileServerNativeFixture(t *testing.T, certificate tls.Certificate, mode string, home bool, changeGraph func(map[string]any)) *mobileServerNativeFixture {
+func newMobileServerNativeFixture(t *testing.T, certificate tls.Certificate, mode string, home bool, changeGraph func(map[string]any), paddingRate ...int) *mobileServerNativeFixture {
 	t.Helper()
 	f := &mobileServerNativeFixture{certificate: certificate, connections: make(map[net.Conn]bool)}
 	listener, err := net.Listen("tcp4", "127.0.0.1:0")
@@ -183,6 +184,9 @@ func newMobileServerNativeFixture(t *testing.T, certificate tls.Certificate, mod
 	}
 	profile := map[string]any{"id": "mobile-tor", "node_kind": "external", "external": external, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "9.9.9.9", "dns_port": 53,
 		"home_lan_access": false, "ipv6_mode": "off", "mtu_policy": "auto", "multihop_enabled": true, "multihop_entry_id": "private-entry", "multihop_exit_id": "mobile-tor", "multihop_entry_mode": "ss", "multihop_exit_mode": external["protocol"], "multihop_execution": "server"}
+	if len(paddingRate) == 1 && paddingRate[0] != 0 {
+		profile["daita_enabled"], profile["daita_rate_kbps"] = true, paddingRate[0]
+	}
 	if home {
 		profile["dns_mode"], profile["dns_host"] = "home", "10.77.0.53"
 	}
@@ -358,6 +362,25 @@ func (f *mobileServerNativeFixture) api(connection net.Conn) error {
 		f.lease.Phase = multihoprelay.TorReady
 		capture := multihoprelay.TorCapture{Schema: 1, Request: captured, Source: source, RegistrySHA256: f.lease.RegistrySHA256, OwnerID: f.lease.OwnerID, Peer: captured.Peer, Host: f.lease.Host, Port: f.lease.Port, Username: f.lease.Username, Password: f.lease.Password, BootstrapDeadline: f.lease.BootstrapDeadline}
 		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}
+		if padding := policy.Padding(); padding.Enabled {
+			// The remote worker is the explicit fixture boundary. Native Tor C
+			// accounting is proved separately by its encoder/child/image gates.
+			receipt.Padding = &multihoprelay.TorPaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", Generation: 1,
+				RateKbps: padding.RateKbps, ChannelCells: f.sequence * 100, ChannelBytes: f.sequence * 100 * 514,
+				ObservedAt: receipt.HeartbeatAt, ExpiresAt: receipt.HeartbeatAt + 10000}
+			switch f.badPadding.Load() {
+			case 1:
+				receipt.Padding = nil
+			case 2:
+				receipt.Padding.RateKbps = 96
+			case 3:
+				receipt.Padding.ChannelCells, receipt.Padding.ChannelBytes = 0, 0
+			case 4:
+				receipt.Padding.ExpiresAt = receipt.HeartbeatAt - 1
+			case 5:
+				receipt.Padding.Generation++
+			}
+		}
 		return write(200, multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: receipt})
 	case "DELETE":
 		if f.failDelete.Load() {
@@ -511,60 +534,65 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 	}
 	for _, mode := range []string{"tor", "tor-bridge", "snowflake"} {
 		for _, home := range []bool{false, true} {
-			t.Run(fmt.Sprintf("%s/home=%t", mode, home), func(t *testing.T) {
-				f := newMobileServerNativeFixture(t, certificate, mode, home, nil)
-				request := f.request(t)
-				if f.methodCount("GET") != 0 || f.methodCount("PUT") != 0 {
-					t.Fatal("construction or CreateProof acquired a lease")
-				}
-				if connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443")); err == nil || connection != nil {
-					t.Fatal("application data passed before client proof")
-				}
-				raw, err := request.Run()
-				var proof mobiletor.Proof
-				if err != nil || json.Unmarshal([]byte(raw), &proof) != nil || !proof.IsTor || !proof.DNSProven || proof.SessionID != mobileServerNativeSession || !request.Healthy() {
-					t.Fatal("actual native client proof failed", raw, err)
-				}
-				if f.publicChecks.Load() != 1 || home && (f.entryQueries.Load() == 0 || f.exitQueries.Load() != 0) || !home && (f.exitQueries.Load() == 0 || f.entryQueries.Load() != 0) {
-					t.Fatal("client proof or selected DNS used another path")
-				}
-				connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443"))
-				if err != nil {
-					t.Fatal(err)
-				}
-				payload := bytes.Repeat([]byte("SS2022, owned server SOCKS, captured mobile session;"), 32)
-				_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
-				_, err = connection.Write(payload)
-				actual := make([]byte, len(payload))
-				_, readErr := io.ReadFull(connection, actual)
-				connection.Close()
-				if err != nil || readErr != nil || !bytes.Equal(payload, actual) {
-					t.Fatal("real native data path changed payload", err, readErr)
-				}
-				lease, err := f.box.RouterVPNTorClaimMTU(request, f.policy.Config(), f.policy.Options().Profile)
-				if err != nil {
-					t.Fatal("proved Server graph lost MTU authority", err)
-				}
-				lease.Close()
-				if _, err := f.owner.ListenPacket(context.Background(), M.ParseSocksaddr("8.8.8.8:53")); err == nil {
-					t.Fatal("TCP Tor invented UDP support")
-				}
-				request.Cancel()
-				if request.Healthy() {
-					t.Fatal("canceled request stayed healthy")
-				}
-				if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
-					t.Fatal("data cancellation lost exact lease cleanup", err)
-				}
-				if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
-					t.Fatal("cleanup retry changed or repeated an acknowledged lease", err)
-				}
-			})
+			for _, paddingRate := range []int{0, 64} {
+				t.Run(fmt.Sprintf("%s/home=%t/padding=%d", mode, home, paddingRate), func(t *testing.T) {
+					f := newMobileServerNativeFixture(t, certificate, mode, home, nil, paddingRate)
+					if f.policy.ServerPolicy().Padding().Enabled != (paddingRate != 0) || f.policy.ServerPolicy().Padding().RateKbps != paddingRate {
+						t.Fatal("native constructor changed the selected cover source")
+					}
+					request := f.request(t)
+					if f.methodCount("GET") != 0 || f.methodCount("PUT") != 0 {
+						t.Fatal("construction or CreateProof acquired a lease")
+					}
+					if connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443")); err == nil || connection != nil {
+						t.Fatal("application data passed before client proof")
+					}
+					raw, err := request.Run()
+					var proof mobiletor.Proof
+					if err != nil || json.Unmarshal([]byte(raw), &proof) != nil || !proof.IsTor || !proof.DNSProven || proof.SessionID != mobileServerNativeSession || !request.Healthy() {
+						t.Fatal("actual native client proof failed", raw, err)
+					}
+					if f.publicChecks.Load() != 1 || home && (f.entryQueries.Load() == 0 || f.exitQueries.Load() != 0) || !home && (f.exitQueries.Load() == 0 || f.entryQueries.Load() != 0) {
+						t.Fatal("client proof or selected DNS used another path")
+					}
+					connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443"))
+					if err != nil {
+						t.Fatal(err)
+					}
+					payload := bytes.Repeat([]byte("SS2022, owned server SOCKS, captured mobile session;"), 32)
+					_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+					_, err = connection.Write(payload)
+					actual := make([]byte, len(payload))
+					_, readErr := io.ReadFull(connection, actual)
+					connection.Close()
+					if err != nil || readErr != nil || !bytes.Equal(payload, actual) {
+						t.Fatal("real native data path changed payload", err, readErr)
+					}
+					lease, err := f.box.RouterVPNTorClaimMTU(request, f.policy.Config(), f.policy.Options().Profile)
+					if err != nil {
+						t.Fatal("proved Server graph lost MTU authority", err)
+					}
+					lease.Close()
+					if _, err := f.owner.ListenPacket(context.Background(), M.ParseSocksaddr("8.8.8.8:53")); err == nil {
+						t.Fatal("TCP Tor invented UDP support")
+					}
+					request.Cancel()
+					if request.Healthy() {
+						t.Fatal("canceled request stayed healthy")
+					}
+					if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+						t.Fatal("data cancellation lost exact lease cleanup", err)
+					}
+					if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+						t.Fatal("cleanup retry changed or repeated an acknowledged lease", err)
+					}
+				})
+			}
 		}
 	}
-	for _, failure := range []string{"node", "source", "dns", "tls", "socks"} {
+	for _, failure := range []string{"node", "source", "dns", "tls", "socks", "padding-missing", "padding-rate", "padding-counter", "padding-expired"} {
 		t.Run("reject/"+failure, func(t *testing.T) {
-			f := newMobileServerNativeFixture(t, certificate, "tor", false, nil)
+			f := newMobileServerNativeFixture(t, certificate, "tor", false, nil, 64)
 			switch failure {
 			case "node":
 				f.badNode.Store(true)
@@ -576,6 +604,14 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 				f.badTLS.Store(true)
 			case "socks":
 				f.badAuth.Store(true)
+			case "padding-missing":
+				f.badPadding.Store(1)
+			case "padding-rate":
+				f.badPadding.Store(2)
+			case "padding-counter":
+				f.badPadding.Store(3)
+			case "padding-expired":
+				f.badPadding.Store(4)
 			}
 			request := f.request(t)
 			raw, err := request.Run()
@@ -588,8 +624,36 @@ func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
 			if failure == "dns" && f.publicChecks.Load() == 0 {
 				t.Fatal("fixture never traversed the real public TLS proof")
 			}
+			if strings.HasPrefix(failure, "padding-") && (f.publicChecks.Load() != 0 || f.dataStreams.Load() != 0) {
+				t.Fatal("invalid cover receipt admitted a client stream")
+			}
 		})
 	}
+	t.Run("padding-renewal-revokes-existing-native-data", func(t *testing.T) {
+		f := newMobileServerNativeFixture(t, certificate, "tor-bridge", true, nil, 64)
+		request := f.request(t)
+		if _, err := request.Run(); err != nil {
+			t.Fatal(err)
+		}
+		connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer connection.Close()
+		f.badPadding.Store(5)
+		_ = connection.SetReadDeadline(time.Now().Add(5 * time.Second))
+		var byte [1]byte
+		_, err = connection.Read(byte[:])
+		if timeout, ok := err.(net.Error); ok && timeout.Timeout() {
+			t.Fatal("cover failure did not close the existing native stream", err)
+		}
+		if err == nil || request.Healthy() || f.methodCount("POST") < 2 {
+			t.Fatal("changed native cover generation retained existing data", err)
+		}
+		if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+			t.Fatal("cover failure lost its exact private entry cleanup", err)
+		}
+	})
 	t.Run("exact-runtime-source", func(t *testing.T) {
 		f := newMobileServerNativeFixture(t, certificate, "tor", false, func(graph map[string]any) { graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1420 })
 		if request, err := f.box.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, mobileServerNativeSession, f.policy.Options().EntryProfile); err == nil || request != nil {

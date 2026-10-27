@@ -41,11 +41,11 @@ func ServerMTUAuthority(config, profileJSON, session string, predecessor *Predec
 	if string(canonical) != policy.Config() {
 		return "", failure
 	}
-	supplied, _, err := capturedTorProfile(profileJSON)
+	supplied, _, err := capturedTorProfileValues(profileJSON)
 	if err != nil {
 		return "", failure
 	}
-	expected, _, err := capturedTorProfile(options.Profile)
+	expected, _, err := capturedTorProfileValues(options.Profile)
 	if err != nil {
 		return "", failure
 	}
@@ -54,14 +54,15 @@ func ServerMTUAuthority(config, profileJSON, session string, predecessor *Predec
 	if suppliedDigest != expectedDigest {
 		return "", failure
 	}
-	expected["multihop_execution"] = "local"
-	normalizeMobileServerDNSMode(expected)
-	localSource, _ := json.Marshal(expected)
-	localConfig, err := CompileProfileWithPredecessor(string(localSource), session, options.EntryConfig, options.EntryProfile)
+	localSource, err := mobileServerLocalTemplate(expected)
 	if err != nil {
 		return "", err
 	}
-	authority, err := MTUAuthorityWithPredecessor(localConfig, string(localSource), session, predecessor)
+	localConfig, err := CompileProfileWithPredecessor(localSource, session, options.EntryConfig, options.EntryProfile)
+	if err != nil {
+		return "", err
+	}
+	authority, err := MTUAuthorityWithPredecessor(localConfig, localSource, session, predecessor)
 	if err != nil {
 		return "", err
 	}

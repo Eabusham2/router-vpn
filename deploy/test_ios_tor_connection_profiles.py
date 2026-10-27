@@ -89,6 +89,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
  // SHIPPING_APPLY
  // SHIPPING_LEGACY_MODES
  // SHIPPING_GRAPH
+ // SHIPPING_RUNTIME
 }
 @MainActor private final class ProfileActions {
  let model:RouterVPNModel
@@ -165,18 +166,23 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    var p=try profile(transport)
    if dns != "custom"{p.dnsMode=dns;p.dnsProtocol=dns=="dot" ? "tls":dns=="doh" ? "https":"udp";p.dnsHost=dns=="home" ? "192.168.50.133":"9.9.9.9";p.dnsPort=dns=="home" ? 5353:4443;p.dnsServerName="resolver.example.test";p.dnsPath="/saved-query"}
    p.mtuPolicy=mtu=="jumbo" ? "auto":mtu;p.manualMTU=mtu=="fixed" ? 1380:0;p.jumboTUN=mtu=="jumbo"
+   p.daitaEnabled=execution=="server";p.daitaRateKbps=execution=="server" ? 64:192
    if dns=="home" || execution != "direct"{graph(&p,execution=="server" ? "server":"local")}
    let model=try reset(p),actions=ProfileActions(model),nodeWrites=IOSNodeBundleStore.shared.writes
+   let runtime=try JSONDecoder().decode(ClientBundle.self,from:model.externalRuntimeBundleData(source:model.bundle!,profile:model.selectedNodeProfile!))
+   try check("linked node and runtime handoff preserve exact cover without Router sink",model.selectedNodeProfile?.daitaEnabled==p.daitaEnabled && model.selectedNodeProfile?.daitaRateKbps==p.daitaRateKbps && runtime.routerProfiles[0].daitaEnabled==p.daitaEnabled && runtime.routerProfiles[0].daitaRateKbps==p.daitaRateKbps && runtime.routerProfiles[0].daitaHost==nil && runtime.routerProfiles[0].daitaPort==nil)
    actions.name="Whole Tor path";actions.add()
    try check("visible Add captures complete Tor preferences",actions.profiles.count==1 && actions.selectedID != nil && actions.status.hasPrefix("Added"))
    let saved=actions.profiles[0],captured=saved.preferences!,originalStore=IOSPrivateJSONStore.bytes!
    try check("Tor snapshot binds dynamic identity",saved.nodeID==p.id && saved.externalProtocol==p.external!.protocolName && saved.externalPublicIP=="" && saved.mode=="external" && saved.customLayers.isEmpty)
    try check("snapshot preserves Tor choices",captured.dnsMode==p.dnsMode && captured.dnsProtocol==p.dnsProtocol && captured.dnsHost==p.dnsHost && captured.dnsPort==p.dnsPort && captured.dnsServerName==p.dnsServerName && captured.dnsPath==p.dnsPath && captured.mtuPolicy==p.mtuPolicy && captured.manualMTU==p.manualMTU && captured.jumboTUN==p.jumboTUN && captured.homeLANCIDRs==p.homeLANCIDRs && captured.killSwitchPolicy==p.killSwitchPolicy && captured.ipv6Mode==p.ipv6Mode && captured.startupMode==p.startupMode && captured.autoConnect==p.autoConnect)
    try check("snapshot preserves Tor execution and exact graph",captured.multihopExecution==(p.multihopExecution ?? "local") && captured.multihopEnabled==(p.multihopEnabled ?? false) && captured.multihopEntryID==p.multihopEntryID && captured.multihopEntryMode==(p.multihopEntryMode ?? "wg") && captured.multihopExitID==p.multihopExitID && captured.multihopExitMode==p.multihopExitMode)
+   try check("snapshot preserves complete native cover policy",captured.daitaEnabled==p.daitaEnabled && captured.daitaRateKbps==p.daitaRateKbps)
    let clear=String(decoding:originalStore,as:UTF8.self)
    for secret in ["NEVER_COPY_ENTRY_TOKEN","NEVER_COPY_NODE_ASSET","tor_bridge","cert=","bridge.example.test","webtunnel.example.test","broker.example.test","private_key","effective_mtu"]{try check("profile omits private or historical material "+secret,!clear.contains(secret))}
    try check("Add cannot change node or previous Router selection",IOSNodeBundleStore.shared.writes==nodeWrites && UserDefaults.standard.string(forKey:iosConnectionModeKey)=="custom:unrelated")
    var changed=p;changed.homeLANAccess=true;changed.homeLANCIDRs=["10.0.0.0/8"];changed.ipv6Mode="on";changed.killSwitch=false;changed.killSwitchPolicy="off";changed.mtuPolicy="auto";changed.manualMTU=0;changed.jumboTUN=false;changed.startupMode="manual";changed.autoConnect=false;changed.dnsMode="rescue";changed.dnsHost="1.1.1.1";changed.multihopEnabled=false;changed.multihopExecution=execution=="local" ? "server":"local"
+   changed.daitaEnabled = !(p.daitaEnabled ?? false);changed.daitaRateKbps=96
    if let lines=p.external?.torBridge?.bridges{changed.external?.torBridge?.bridges=lines.map{$0.replacingOccurrences(of:"198.51.100.9",with:"198.51.100.10")}}
    try replaceLinked(changed);try selectOther(model)
    let other=IOSNodeBundleStore.shared.records["bundle-other-tor"],entry=IOSNodeBundleStore.shared.records["router-"+String(repeating:"a",count:64)]
@@ -184,6 +190,7 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    try check("visible Load restores exact policy",actions.status.hasPrefix("Loaded") && model.selectedNodeProfile?.id==p.id)
    let restored=try IOSConnectionProfileStore.snapshot(model:model,name:"Readback")
    try check("all captured Tor preferences restored",restored.preferences==captured)
+   try check("Load restores exact enabled and dormant rates",model.selectedNodeProfile?.daitaEnabled==p.daitaEnabled && model.selectedNodeProfile?.daitaRateKbps==p.daitaRateKbps)
    if p.multihopEnabled==true {
     let restoredEntry=try model.iosMultihopEntryBundle(for:model.bundle!)
     try check("restored execution retains its separate private entry",restoredEntry.selectedRouterID==entryID && restoredEntry.apiToken=="NEVER_COPY_ENTRY_TOKEN" && model.selectedNodeProfile?.multihopExecution==p.multihopExecution)
@@ -219,9 +226,21 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
    try check("Load restores unresolved Home and default LAN ranges",model.selectedNodeProfile?.dnsMode=="home" && model.selectedNodeProfile?.dnsHost=="" && model.selectedNodeProfile?.homeLANCIDRs==[] && !model.connected)
   }
+  for legacy in [false,true] {
+   var p=try profile();p.daitaRateKbps=nil
+   let model=try reset(p),saved=try IOSConnectionProfileStore.add(model:model,name:"Unset cover")
+   try check("new snapshot distinguishes unset rate from legacy omission",saved.preferences?.daitaRateKbps==0)
+   if legacy {
+    var envelope=try object(IOSPrivateJSONStore.bytes!),rows=envelope["profiles"] as! [[String:Any]],prefs=rows[0]["preferences"] as! [String:Any]
+    prefs.removeValue(forKey:"daitaRateKbps");rows[0]["preferences"]=prefs;envelope["profiles"]=rows;IOSPrivateJSONStore.bytes=try JSONSerialization.data(withJSONObject:envelope)
+   }
+   p.daitaRateKbps=96;try replaceLinked(p)
+   _=try IOSConnectionProfileStore.load(model:model,id:saved.id)
+   try check("unset restores default while legacy retains unrecorded rate",model.selectedNodeProfile?.daitaRateKbps==(legacy ? 96:0))
+  }
  }
  static func nativeRejections()throws {
-  for fault in ["fixed-ip","other-owner","bridge-port","bridge-malformed","custom-udp","doh3","resolver-hostname","dns-bootstrap","ipv6","jumbo-fixed","lan-range","start-layer"] {
+  for fault in ["fixed-ip","other-owner","bridge-port","bridge-malformed","custom-udp","doh3","resolver-hostname","dns-bootstrap","ipv6","jumbo-fixed","lan-range","start-layer","cover-small","cover-large"] {
    var p=try profile("obfs4")
    switch fault {
    case "fixed-ip":p.external?.expectedPublicIP="203.0.113.8"
@@ -236,6 +255,8 @@ func testError(_ text:String)->NSError{NSError(domain:"TorConnectionProfiles",co
    case "jumbo-fixed":p.jumboTUN=true
    case "lan-range":p.homeLANCIDRs=["0.0.0.0/0"]
    case "start-layer":p.startLayer="aes-256-gcm"
+   case "cover-small":p.daitaRateKbps=31
+   case "cover-large":p.daitaRateKbps=193
    default:break
    }
    let model=try reset(profile("obfs4"));model.bundle=bundle(p)
@@ -348,6 +369,7 @@ def main():
     store = view[:view.index('@MainActor\nstruct IOSConnectionProfilesView:')].replace('import SwiftUI\n', '')
     node = (APP / 'IOSNodeBundleStore.swift').read_text()
     model = (APP / 'RouterVPNModel.swift').read_text()
+    external = (APP / 'RouterVPNModelExternal.swift').read_text()
     multihop = (APP / 'IOSMultihopView.swift').read_text()
     callbacks = view[view.index('@MainActor\nstruct IOSConnectionProfilesView:'):]
     actions = '\n'.join(member(callbacks, 'private func '+name+'(') for name in ['refresh','add','load','update','delete'])
@@ -362,6 +384,7 @@ def main():
     source = source.replace(' // SHIPPING_GRAPH', '\n'.join(member(multihop, signature) for signature in [
         '    func iosMultihopEntryBundle(', '    private func iosOrdinaryExternalEntryBundle(', '    private func iosMultihopError(']))
     source = source.replace(' // SHIPPING_ACTIONS', actions)
+    source = source.replace(' // SHIPPING_RUNTIME', member(external, '    func externalRuntimeBundleData('))
     with tempfile.TemporaryDirectory(prefix='.ios-tor-profiles-go-', dir=ROOT) as go_dir, tempfile.TemporaryDirectory(prefix='ios-tor-connections-') as temporary:
         work = Path(temporary)
         compiler_source = Path(go_dir) / 'main.go'; compiler_source.write_text(T.GO)
