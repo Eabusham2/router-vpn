@@ -45,7 +45,8 @@ final class AndroidPrivateFileStore {
 }
 final class AndroidTorProfile {
  static boolean isTor(String s){return "tor".equals(s)||"tor-bridge".equals(s);}static void validate(AndroidStandardExitStore.Entry e){throw new IllegalArgumentException("Tor boundary");}
- static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m){throw new IllegalArgumentException("Tor boundary");}
+ static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m){return prepare(c,f,e,m,"local");}
+ static NativeSingBoxController.SessionInfo prepare(android.content.Context c,java.io.File f,AndroidStandardExitStore.Entry e,String m,String execution){throw new IllegalArgumentException("Tor boundary");}
  static String strictText(byte[] b)throws Exception{return java.nio.charset.StandardCharsets.UTF_8.newDecoder().onMalformedInput(java.nio.charset.CodingErrorAction.REPORT).decode(java.nio.ByteBuffer.wrap(b)).toString();}
  static String digest(byte[] b)throws Exception{StringBuilder s=new StringBuilder();for(byte x:java.security.MessageDigest.getInstance("SHA-256").digest(b))s.append(String.format(java.util.Locale.ROOT,"%02x",x&255));return s.toString();}
 }
