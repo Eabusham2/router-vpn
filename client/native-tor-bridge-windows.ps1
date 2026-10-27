@@ -3,7 +3,7 @@ param(
   [Parameter(Mandatory=$true)][string]$RuntimeDir,
   [Parameter(Mandatory=$true)][string]$BridgeEndpoint,
   [Parameter(Mandatory=$true)][ValidateRange(1024,65535)][int]$SocksPort,
-  [Parameter(Mandatory=$true)][string]$TorBinary,
+  [string]$TorBinary='',
   [Parameter(Mandatory=$true)][string]$NativeBinary,
   [ValidateSet('router-vpn-tor')][string]$TunnelAlias='router-vpn-tor'
 )
@@ -19,7 +19,7 @@ if(-not $RuntimeDir.StartsWith($RunRoot.TrimEnd('\','/')+[IO.Path]::DirectorySep
 $Session=[string]$env:HOMEVPN_TOR_SESSION
 if([string]$env:HOMEVPN_STANDARD_ENGINE -cne 'native' -or $Session -cnotmatch '^[a-f0-9]{32}$'){throw 'Tor requires its captured native session.'}
 if([string]$env:HOMEVPN_PROFILE_ID -cnotmatch '^[A-Za-z0-9_-]{1,64}$' -or [string]$env:HOMEVPN_POLICY_PROFILE_ID -cnotmatch '^[A-Za-z0-9_-]{1,64}$'){throw 'Tor requires both captured physical and policy profile IDs.'}
-foreach($name in @('HOMEVPN_TOR_SOURCE_SHA256','HOMEVPN_TOR_PROFILE_SHA256','HOMEVPN_TOR_CAPTURE_SHA256','HOMEVPN_TOR_TORRC_SHA256','HOMEVPN_TOR_DEFAULTS_SHA256','HOMEVPN_TOR_CONFIG_SHA256','HOMEVPN_TOR_BINARY_SHA256')){
+foreach($name in @('HOMEVPN_TOR_SOURCE_SHA256','HOMEVPN_TOR_PROFILE_SHA256','HOMEVPN_TOR_CAPTURE_SHA256','HOMEVPN_TOR_TORRC_SHA256','HOMEVPN_TOR_DEFAULTS_SHA256','HOMEVPN_TOR_CONFIG_SHA256')){
   if([Environment]::GetEnvironmentVariable($name,'Process') -cnotmatch '^[a-f0-9]{64}$'){throw 'Tor launch is missing an exact input digest.'}
 }
 # Native drain and private deletion belong to the exact Go controller owner.
@@ -76,12 +76,27 @@ function Get-RouterVPNTorCaptureIdentity {
   $fields=@($capture.PSObject.Properties.Name)
   $predecessor=$capture.PSObject.Properties['predecessor']
   $viaEntry=$null -ne $predecessor
+  $server=$capture.schema -eq 2
   $expectedCount=if($viaEntry){6}else{5}
   if($fields.Count -ne $expectedCount -or @($fields|Where-Object{$required -cnotcontains $_ -and $_ -cne 'predecessor'}).Count -ne 0 -or
-     ($capture.schema -isnot [int] -and $capture.schema -isnot [long]) -or $capture.schema -ne 1 -or [string]$capture.session_id -cne $Session -or
+     ($capture.schema -isnot [int] -and $capture.schema -isnot [long]) -or $capture.schema -notin @(1,2) -or [string]$capture.session_id -cne $Session -or
      [string]$capture.isolation_secret -cnotmatch '^[a-f0-9]{64}$' -or
-     [string]$capture.target_os -cne 'windows' -or [string]$capture.tor_binary -cne $TorBinary -or
+     [string]$capture.target_os -cne 'windows' -or $capture.tor_binary -isnot [string] -or [string]$capture.tor_binary -cne $TorBinary -or
      $profile.id -isnot [string] -or [string]$profile.id -cne $policyID){throw 'Tor private inputs belong to another captured policy owner.'}
+  if($server){
+    if(-not $viaEntry -or $TorBinary -or [string]$CapturedEnvironment['HOMEVPN_TOR_BINARY_SHA256'] -or
+       [string]$profile.multihop_execution -cne 'server'){throw 'Server Tor acquired a local child or lost its explicit captured execution.'}
+    foreach($name in @('torrc','tor-defaults')){
+      $path=Join-Path $RuntimeDir $name
+      Assert-RouterVPNNoReparseAncestors $path
+      $digestName=if($name -ceq 'torrc'){'HOMEVPN_TOR_TORRC_SHA256'}else{'HOMEVPN_TOR_DEFAULTS_SHA256'}
+      $newline='01ba4719c80b6fe911b091a7c05124b64eeece964e09c058ef8f9805daca546b'
+      if([string]$CapturedEnvironment[$digestName] -cne $newline -or
+         (Get-RouterVPNPrivateFileSHA256 $path 'Captured empty Server Tor input' 1) -cne $newline){throw 'Server Tor input contains an unowned local configuration.'}
+    }
+  }elseif(-not [IO.Path]::IsPathRooted($TorBinary) -or [string]$CapturedEnvironment['HOMEVPN_TOR_BINARY_SHA256'] -cnotmatch '^[a-f0-9]{64}$'){
+    throw 'Local Tor lost its captured executable identity.'
+  }
   $enabled=$profile.PSObject.Properties['multihop_enabled']
   $entry=$null
   if($viaEntry){
@@ -100,10 +115,10 @@ function Get-RouterVPNTorCaptureIdentity {
        $null -eq $enabled -or -not ($enabled.Value -is [bool]) -or -not $enabled.Value -or
        [string]$profile.multihop_entry_id -cne $physicalID -or [string]$profile.multihop_exit_id -cne $policyID -or
        [string]$profile.multihop_entry_mode -cne [string]$entry.entry_mode -or [string]$profile.multihop_exit_mode -cne 'tor-bridge'){
-      throw 'Tor predecessor does not match the captured Local entry and exit.'
+      throw 'Tor predecessor does not match the captured entry and exit.'
     }
     if($externalEntry){
-      if($entry.entry_kind -isnot [string] -or $entry.entry_kind -cne 'external-public-ip' -or
+      if($server -or $entry.entry_kind -isnot [string] -or $entry.entry_kind -cne 'external-public-ip' -or
          $entry.source_config -isnot [pscustomobject] -or @($entry.source_config.PSObject.Properties).Count -eq 0 -or
          [string]$entry.profile.node_kind -cne 'external' -or $entry.profile.external -isnot [pscustomobject] -or
          $entry.profile.external.protocol -isnot [string] -or $entry.profile.external.protocol -cne $entry.entry_mode -or
@@ -124,7 +139,8 @@ function Get-RouterVPNTorCaptureIdentity {
       throw 'Router proof schema cannot admit an ordinary Tor predecessor.'
     }
     $execution=$profile.PSObject.Properties['multihop_execution']
-    if($null -ne $execution -and [string]$execution.Value -cnotin @('','local')){throw 'Tor Router predecessor requires the saved Local execution.'}
+    $choices=if($server){@('server')}else{@('','local')}
+    if($null -ne $execution -and [string]$execution.Value -cnotin $choices){throw 'Tor predecessor requires its exact captured execution.'}
   }elseif($captured.length -gt 16384 -or $physicalID -cne $policyID -or
           ($null -ne $enabled -and (-not ($enabled.Value -is [bool]) -or $enabled.Value))){throw 'Direct Tor capture has another owner or exceeds its direct bound.'}
   $endpoint=[string]$CapturedEnvironment['HOMEVPN_ENDPOINT']
@@ -184,10 +200,33 @@ function Get-RouterVPNTorCaptureIdentity {
   }elseif($null -ne $projection -or $hasArrays -or [string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION']){
     throw 'Direct Tor acquired an unowned physical predecessor projection.'
   }
+  # The raw graph and its observer must share this captured source before any
+  # firewall exception is installed. Native check validates graph syntax; the
+  # independent native launch still reconstructs its complete private policy.
+  $graphCapture=& $read 'sing-box.json' 'HOMEVPN_TOR_CONFIG_SHA256' 4194304
+  $graph=$graphCapture.value
+  $sourceSHA=[string]$CapturedEnvironment['HOMEVPN_TOR_SOURCE_SHA256']
+  if($graph -isnot [pscustomobject] -or @($graph.PSObject.Properties.Name) -cnotcontains 'services' -or
+     $graph.services -isnot [Array] -or $sourceSHA -cnotmatch '^[a-f0-9]{64}$'){
+    throw 'Tor graph lost its captured native network identity.'
+  }
+  $observers=@($graph.services|Where-Object{
+    $_ -is [pscustomobject] -and @($_.PSObject.Properties.Name) -ccontains 'type' -and
+    $_.type -is [string] -and $_.type -ceq 'routervpn-desktop-tor-network'
+  })
+  if($observers.Count -ne 1){throw 'Tor graph requires exactly one captured native network owner.'}
+  $observer=$observers[0]
+  $observerFields=@($observer.PSObject.Properties.Name)
+  if($observerFields.Count -ne 4 -or @($observerFields|Where-Object{@('type','tag','session_id','source_sha256') -cnotcontains $_}).Count -ne 0 -or
+     $observer.tag -isnot [string] -or $observer.tag -cne 'routervpn-tor-physical' -or
+     $observer.session_id -isnot [string] -or $observer.session_id -cne $Session -or
+     $observer.source_sha256 -isnot [string] -or $observer.source_sha256 -cne $sourceSHA){
+    throw 'Tor graph belongs to another captured native network owner.'
+  }
   # The controller and native compiler validate the complete entry graph.
   # This envelope binds the firewall handoff to that same immutable capture;
   # it never substitutes the Tor bridge or private proof/DNS destination.
-  return [pscustomobject]@{endpoint=$endpoint;via_entry=$viaEntry;entry_id=$physicalID;policy_id=$policyID;capture=$capture;profile=$profile;egress=$egress;endpoints=$addresses}
+  return [pscustomobject]@{endpoint=$endpoint;via_entry=$viaEntry;server=$server;entry_id=$physicalID;policy_id=$policyID;capture=$capture;profile=$profile;egress=$egress;endpoints=$addresses}
 }
 function Invoke-RouterVPNTorOwnedNative {
   param(
@@ -202,7 +241,9 @@ function Invoke-RouterVPNTorOwnedNative {
       $LaunchState.StartAttempted=$true
       $LaunchState.NoNativeChild=$false
       # The initial thread stays suspended until its exact Job is assigned.
-      $owned=Start-RouterVPNPrivateJob -FilePath $NativeBinary -ArgumentList @('routervpn-tor','--runtime-dir',$RuntimeDir,'--session',$Session,'--tor-binary',$TorBinary) -WorkingDirectory $RuntimeDir -Environment $CapturedEnvironment
+      $arguments=@('routervpn-tor','--runtime-dir',$RuntimeDir,'--session',$Session)
+      if($TorBinary){$arguments+=@('--tor-binary',$TorBinary)}
+      $owned=Start-RouterVPNPrivateJob -FilePath $NativeBinary -ArgumentList $arguments -WorkingDirectory $RuntimeDir -Environment $CapturedEnvironment
     }catch{
       $launchFailure=$_.Exception
       while($null -ne $launchFailure.InnerException){$launchFailure=$launchFailure.InnerException}
@@ -322,7 +363,9 @@ function Write-RouterVPNTorPrelaunchFailure {
 $CapturedEnvironment=Get-RouterVPNTorNativeEnvironment ([Environment]::GetEnvironmentVariables('Process'))
 $LaunchState=@{StartAttempted=$false;NoNativeChild=$true;NoChildFailure=$false}
 try{
-  foreach($file in @($KillSwitch,$JobHelper,$Selector,$TorBinary,$NativeBinary)){
+  $helpers=@($KillSwitch,$JobHelper,$Selector,$NativeBinary)
+  if($TorBinary){$helpers+=@($TorBinary)}
+  foreach($file in $helpers){
     Assert-RouterVPNNoReparseAncestors $file
     if(-not(Test-Path -LiteralPath $file -PathType Leaf)){throw 'Tor native helper is missing.'}
   }
@@ -336,9 +379,11 @@ try{
     if(-not(Test-Path -LiteralPath $file -PathType Leaf)){throw 'Captured Tor native input is missing.'}
   }
   $PhysicalCapture=Get-RouterVPNTorCaptureIdentity -RuntimeDir $RuntimeDir -Session $Session -TorBinary $TorBinary -BridgeEndpoint $BridgeEndpoint -CapturedEnvironment $CapturedEnvironment
-  $info=Get-Item -LiteralPath $TorBinary -Force
-  if($info.Length -le 0 -or $info.Length -gt 402653184){throw 'Captured standalone Tor executable exceeds its bound.'}
-  if((Get-FileHash -LiteralPath $TorBinary -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$env:HOMEVPN_TOR_BINARY_SHA256){throw 'Standalone Tor bytes changed after capture.'}
+  if(-not $PhysicalCapture.server){
+    $info=Get-Item -LiteralPath $TorBinary -Force
+    if($info.Length -le 0 -or $info.Length -gt 402653184){throw 'Captured standalone Tor executable exceeds its bound.'}
+    if((Get-FileHash -LiteralPath $TorBinary -Algorithm SHA256).Hash.ToLowerInvariant() -cne [string]$env:HOMEVPN_TOR_BINARY_SHA256){throw 'Standalone Tor bytes changed after capture.'}
+  }
   & $NativeBinary routervpn-tor --help | Out-Null
   if($LASTEXITCODE -ne 0){throw 'Native Tor command is unavailable.'}
   & $NativeBinary check -D $RuntimeDir -c (Join-Path $RuntimeDir 'sing-box.json') | Out-Null

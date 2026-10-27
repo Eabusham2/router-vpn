@@ -102,7 +102,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		return
 	}
 	if driver.capability == nil {
-		driver.capability = torBridgeRuntimeCapability
+		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
 	}
 	cap := driver.capability()
 	if !cap.Supported {
@@ -273,6 +273,9 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		entryID, entryMode = selection.predecessor.entry.ID, selection.predecessor.mode
 		route = "client full-device TUN -> captured Router " + entryMode + " entry -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
 	}
+	if policy.MultihopExecution == "server" {
+		route = "client full-device TUN -> captured Router " + entryMode + " entry -> authenticated private Server lease -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
+	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
 	_ = json.NewEncoder(w).Encode(map[string]any{
@@ -285,7 +288,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		"direct":            selection.predecessor == nil,
 		"entry_id":          entryID,
 		"entry_mode":        entryMode,
-		"execution":         "local",
+		"execution":         desktopTorExecution(retainedProof.Policy.Execution),
 		"choice_saved":      true,
 		"actual_public_ip":  actualIP,
 		"actual_exit_proof": "tor-project-is-tor-passed",

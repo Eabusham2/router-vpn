@@ -12,44 +12,54 @@ import (
 )
 
 func TestDesktopTorEntryDNSSettingsPreserveExactPrivateNodeAndTransport(t *testing.T) {
-	for _, transport := range []string{"udp", "tcp", "tls", "https", "h3"} {
-		t.Run(transport, func(t *testing.T) {
-			a, _, _ := desktopTorEntryFixture(t, "198.51.100.8")
-			before := cloneRouterProfileStore(a.profiles)
-			snapshot := dnsPolicySnapshotForTest(t, a)
-			request := dnsPolicyRequest{Mode: "home", Protocol: transport, Port: 5353, ServerName: "adguard.home.example", Path: "/private-query?node=one"}
-			w := postDNSPolicyForTest(a, bytes.NewReader(dnsPolicyBodyForTest(t, snapshot, request)))
-			if w.Code != http.StatusOK {
-				t.Fatal("captured Router Home DNS was rejected", w.Code, w.Body.String())
-			}
-			profile, entry := a.profiles.Profiles[0], a.profiles.Profiles[1]
-			if !reflect.DeepEqual(entry, before.Profiles[1]) || !reflect.DeepEqual(profile.External, before.Profiles[0].External) || profile.AdGuardIPv4 != before.Profiles[0].AdGuardIPv4 || profile.APIToken != "" || profile.DNSHost != entry.AdGuardIPv4 || profile.DNSProtocol != transport || profile.DNSPort != 5353 {
-				t.Fatal("Home editor changed private owners or the selected transport")
-			}
-			policy, err := externalDNSPolicyForPath(profile, entry, false)
-			if err != nil {
-				t.Fatal(err)
-			}
-			captured, err := captureDesktopTorPredecessor(a, profile, nil)
-			if err != nil {
-				t.Fatal(err)
-			}
-			prepared, err := stageDesktopTorInputsWithPredecessor(clientRoot(a), policy, profile, installFakeExecutable(t, t.TempDir(), "tor"), installFakeExecutable(t, t.TempDir(), "native"), captured)
-			if err != nil {
-				t.Fatal("saved DNS does not compile in the shipping graph", err)
-			}
-			t.Cleanup(func() { _ = prepared.Launch.directoryRoot.Close() })
-			metadata := prepared.Launch.tor.expected
-			selected, _, _, err := desktopDNSExpectedEndpoints(prepared.Launch)
-			if err != nil || metadata.DNS.Transport != transport || metadata.DNS.Address != entry.AdGuardIPv4 || metadata.DNS.Port != 5353 || metadata.DNSDetour != metadata.EntryTag || selected.Route != metadata.EntryTag || selected.RouteLabel != "Selected DNS via captured Router entry" {
-				t.Fatal("saved/compiled/measured Home DNS diverged", metadata.DNS, selected, err)
-			}
-		})
+	for _, execution := range []string{"local", "server"} {
+		for _, transport := range []string{"udp", "tcp", "tls", "https", "h3"} {
+			t.Run(execution+"/"+transport, func(t *testing.T) {
+				a, _, _ := desktopTorEntryFixture(t, "198.51.100.8")
+				a.profiles.Profiles[0].MultihopExecution = execution
+				before := cloneRouterProfileStore(a.profiles)
+				snapshot := dnsPolicySnapshotForTest(t, a)
+				request := dnsPolicyRequest{Mode: "home", Protocol: transport, Port: 5353, ServerName: "adguard.home.example", Path: "/private-query?node=one"}
+				w := postDNSPolicyForTest(a, bytes.NewReader(dnsPolicyBodyForTest(t, snapshot, request)))
+				if w.Code != http.StatusOK {
+					t.Fatal("captured Router Home DNS was rejected", w.Code, w.Body.String())
+				}
+				profile, entry := a.profiles.Profiles[0], a.profiles.Profiles[1]
+				if !reflect.DeepEqual(entry, before.Profiles[1]) || !reflect.DeepEqual(profile.External, before.Profiles[0].External) || profile.AdGuardIPv4 != before.Profiles[0].AdGuardIPv4 || profile.APIToken != "" || profile.DNSHost != entry.AdGuardIPv4 || profile.DNSProtocol != transport || profile.DNSPort != 5353 {
+					t.Fatal("Home editor changed private owners or the selected transport")
+				}
+				policy, err := externalDNSPolicyForPath(profile, entry, false)
+				if err != nil {
+					t.Fatal(err)
+				}
+				captured, err := captureDesktopTorPredecessor(a, profile, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				binary := ""
+				if execution == "local" {
+					binary = installFakeExecutable(t, t.TempDir(), "tor")
+				}
+				prepared, err := stageDesktopTorInputsWithPredecessor(clientRoot(a), policy, profile, binary, installFakeExecutable(t, t.TempDir(), "native"), captured)
+				if err != nil {
+					t.Fatal("saved DNS does not compile in the shipping graph", err)
+				}
+				t.Cleanup(func() { _ = prepared.Launch.directoryRoot.Close() })
+				metadata := prepared.Launch.tor.expected
+				if desktopTorExecution(metadata.Execution) != execution || profile.MultihopExecution != execution {
+					t.Fatal("DNS edit lost captured execution")
+				}
+				selected, _, _, err := desktopDNSExpectedEndpoints(prepared.Launch)
+				if err != nil || metadata.DNS.Transport != transport || metadata.DNS.Address != entry.AdGuardIPv4 || metadata.DNS.Port != 5353 || metadata.DNSDetour != metadata.EntryTag || selected.Route != metadata.EntryTag || selected.RouteLabel != "Selected DNS via captured Router entry" {
+					t.Fatal("saved/compiled/measured Home DNS diverged", metadata.DNS, selected, err)
+				}
+			})
+		}
 	}
 }
 
 func TestDesktopTorEntryDNSSettingsRejectStalePrivateSelection(t *testing.T) {
-	for _, fault := range []string{"missing-entry", "wrong-entry", "wrong-exit", "credentials", "different-home", "public-home", "stale-editor", "server", "compare"} {
+	for _, fault := range []string{"missing-entry", "wrong-entry", "wrong-exit", "credentials", "different-home", "public-home", "stale-editor", "server-ordinary", "compare"} {
 		t.Run(fault, func(t *testing.T) {
 			a, _, _ := desktopTorEntryFixture(t, "198.51.100.8")
 			request := dnsPolicyRequest{Mode: "home", Protocol: "udp"}
@@ -69,8 +79,11 @@ func TestDesktopTorEntryDNSSettingsRejectStalePrivateSelection(t *testing.T) {
 				request.Host = "1.1.1.1"
 			case "stale-editor":
 				a.profiles.Profiles[1].AdGuardIPv4 = "192.168.55.53"
-			case "server", "compare":
-				a.profiles.Profiles[0].MultihopExecution = fault
+			case "server-ordinary":
+				a.profiles.Profiles[0].MultihopExecution = "server"
+				a.profiles.Profiles[1].NodeKind = "external"
+			case "compare":
+				a.profiles.Profiles[0].MultihopExecution = "auto"
 			}
 			if fault != "stale-editor" {
 				snapshot = dnsPolicySnapshotForTest(t, a)

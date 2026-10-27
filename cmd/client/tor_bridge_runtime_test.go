@@ -106,7 +106,7 @@ func TestTorBridgeLauncherRequiresNativeProofAndExactOwner(t *testing.T) {
 		t.Fatal(err)
 	}
 	source := string(raw)
-	for _, marker := range []string{"HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_BINARY_SHA256", "router_vpn_standard_engine", "kill-switch-platform.py", "exec \"$NATIVE_BIN\" routervpn-tor", "--runtime-dir \"$RUNTIME_DIR\"", "--session \"$HOMEVPN_TOR_SESSION\"", "--tor-binary \"$TOR_BIN\""} {
+	for _, marker := range []string{"HOMEVPN_TOR_SESSION", "tor-prelaunch-witness.py\" --validate", "router_vpn_standard_engine", "kill-switch-platform.py", "exec \"$NATIVE_BIN\" routervpn-tor", "--runtime-dir \"$RUNTIME_DIR\"", "--session \"$HOMEVPN_TOR_SESSION\"", "--tor-binary \"$TOR_BIN\""} {
 		if !strings.Contains(source, marker) {
 			t.Fatal("native Tor launcher lost captured ownership", marker)
 		}
@@ -115,6 +115,15 @@ func TestTorBridgeLauncherRequiresNativeProofAndExactOwner(t *testing.T) {
 		if strings.Contains(source, bad) {
 			t.Fatal("launcher regained an unowned process or cleanup path", bad)
 		}
+	}
+	// Local executable identity and Server's explicit absence are validated
+	// together in the same capture reader before protection is applied. Server
+	// must not acquire a fake binary digest merely to satisfy the shell loop.
+	witness, err := os.ReadFile("../../modes/tor-prelaunch-witness.py")
+	if err != nil || !strings.Contains(string(witness), "HOMEVPN_TOR_BINARY_SHA256") ||
+		!strings.Contains(string(witness), `capture["tor_binary"] != tor_binary`) ||
+		strings.Index(source, "--validate") > strings.Index(source, `kill-switch-platform.py" apply`) {
+		t.Fatal("Tor launch lost its execution-specific immutable capture admission", err)
 	}
 }
 

@@ -23,15 +23,14 @@ type torBridgeTransportCapability struct {
 
 func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	rows := []torBridgeTransportCapability{
-		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic into random-looking traffic and resists active probing; one literal obfs4 bridge supports strict Direct protection, and a captured Local Router entry also protects multiple bridges."},
-		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection requires a captured Local Router entry; its HTTPS and DNS use that proved entry. Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection requires a captured Local Router entry for broker HTTPS, DNS, STUN and WebRTC traffic. Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Makes Tor traffic resemble ordinary HTTPS. Strict protection requires a captured Local Router entry for its HTTPS and DNS; Direct dynamic egress still requires Kill Switch Off."},
-		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Accepts validated obfs4, meek, Snowflake and WebTunnel bridge lines, including mixed families. Strict protection requires a captured Local Router entry unless the selection is one fixed obfs4 bridge; arbitrary torrc directives and executables are rejected."},
+		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic into random-looking traffic and resists active probing; one literal obfs4 bridge supports strict Direct protection, and a captured Local or Server Router entry also protects multiple bridges."},
+		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection requires a captured Local or Server Router entry; its HTTPS and DNS use that proved entry. Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection requires a captured Local or Server Router entry for broker HTTPS, DNS, STUN and WebRTC traffic. Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "webtunnel", Name: "WebTunnel", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Makes Tor traffic resemble ordinary HTTPS. Strict protection requires a captured Local or Server Router entry for its HTTPS and DNS; Direct dynamic egress still requires Kill Switch Off."},
+		{ID: "custom", Name: "Auto / Custom Tor bridges", Implemented: true, StrictRouterEntryKillSwitch: true, Description: "Accepts validated obfs4, meek, Snowflake and WebTunnel bridge lines, including mixed families. Strict protection requires a captured Local or Server Router entry unless the selection is one fixed obfs4 bridge; arbitrary torrc directives and executables are rejected."},
 	}
 
-	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	cap := torBridgeRuntimeCapabilityForRoot(root)
+	cap := torBridgeRuntimeCapability()
 	if !cap.Supported {
 		for i := range rows {
 			rows[i].Reason = cap.Reason
@@ -49,7 +48,7 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 // The saved profile still needs exact grammar and policy validation.
 func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExitCapability {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
-	cap := torBridgeRuntimeCapabilityForRoot(root)
+	cap := torBridgeRuntimeCapabilityForExecution(root, profile.MultihopExecution)
 	if !cap.Supported {
 		return cap
 	}
@@ -67,12 +66,20 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 	}
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	cap := torBridgeRuntimeCapabilityForRoot(root)
+	server := torBridgeRuntimeCapabilityForExecution(root, "server")
+	available, reason := cap.Supported || server.Supported, cap.Reason
+	if available {
+		reason = ""
+	}
 	helperExecution := "native helpers"
 	if runtime.GOOS == "windows" {
 		var err error
 		helperExecution, err = windowsTorHostCompatibility()
 		if err != nil {
 			helperExecution = "unavailable"
+			if server.Supported {
+				helperExecution = "native Server execution"
+			}
 		}
 	}
 	w.Header().Set("content-type", "application/json")
@@ -83,17 +90,19 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 		"platform":                            runtime.GOOS,
 		"helper_execution":                    helperExecution,
 		"implemented":                         cap.Implemented,
-		"supported":                           cap.Supported,
-		"reason":                              cap.Reason,
+		"supported":                           available,
+		"reason":                              reason,
 		"direct_full_device":                  cap.Supported,
-		"upstream_hop":                        cap.Supported,
-		"router_vpn_entry_hop":                cap.Supported,
-		"router_entry_strict_kill_switch":     cap.Supported,
+		"upstream_hop":                        available,
+		"router_vpn_entry_hop":                available,
+		"router_entry_strict_kill_switch":     available,
 		"profile_update_source_preconditions": true,
 		"router_vpn_entry_modes":              a.externalRouterEntryModes(),
-		"external_entry_hop":                  false,
+		"external_entry_hop":                  cap.Supported,
 		"local_execution":                     cap.Supported,
-		"server_execution":                    false,
+		"server_execution":                    server.Supported,
+		"server_execution_reason":             server.Reason,
+		"server_requires_paired_source":       true,
 		"compare_execution":                   false,
 		"dynamic_exit":                        true,
 		"transports":                          torBridgeTransportCapabilities(),

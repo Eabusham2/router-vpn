@@ -123,15 +123,24 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
             raise ValueError("native launch inputs require exact JSON objects")
         required = {"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
         via_entry = "predecessor" in capture
+        server = capture.get("schema") == 2
         if (set(capture) != required | ({"predecessor"} if via_entry else set())
-                or type(capture.get("schema")) is not int or capture["schema"] != 1
+                or type(capture.get("schema")) is not int or capture["schema"] not in {1, 2}
                 or capture.get("session_id") != session or profile.get("id") != policy
                 or type(capture.get("isolation_secret")) is not str
                 or not re.fullmatch(r"[a-f0-9]{64}", capture["isolation_secret"])
                 or capture.get("target_os") != ("darwin" if sys.platform == "darwin" else "linux")
-                or type(capture.get("tor_binary")) is not str or not os.path.isabs(capture["tor_binary"])
+                or type(capture.get("tor_binary")) is not str
                 or tor_binary is not None and capture["tor_binary"] != tor_binary):
             raise ValueError("private capture belongs to another launch owner")
+        if server:
+            if (not via_entry or capture["tor_binary"] or os.environ.get("HOMEVPN_TOR_BINARY_SHA256")
+                    or profile.get("multihop_execution") != "server"
+                    or inputs["torrc"] != b"\n" or inputs["tor-defaults"] != b"\n"):
+                raise ValueError("Server Tor acquired a local child or lost its explicit captured execution")
+        elif (not os.path.isabs(capture["tor_binary"])
+              or not re.fullmatch(r"[a-f0-9]{64}", os.environ.get("HOMEVPN_TOR_BINARY_SHA256", ""))):
+            raise ValueError("Local Tor lost its captured executable identity")
         endpoint = physical_address(os.environ.get("HOMEVPN_ENDPOINT", ""))
         if via_entry:
             entry = capture["predecessor"]
@@ -149,12 +158,13 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
                     or physical == policy or profile.get("multihop_enabled") is not True
                     or profile.get("multihop_entry_id") != physical or profile.get("multihop_exit_id") != policy
                     or profile.get("multihop_entry_mode") != entry["entry_mode"]
-                    or profile.get("multihop_exit_mode") != "tor-bridge" or profile.get("multihop_execution", "") not in {"", "local"}
+                    or profile.get("multihop_exit_mode") != "tor-bridge"
+                    or profile.get("multihop_execution", "") not in ({"server"} if server else {"", "local"})
                     or os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session):
-                raise ValueError("predecessor differs from the captured Local selection")
+                raise ValueError("predecessor differs from the captured execution")
             if external_entry:
                 external = entry["profile"].get("external")
-                if (entry["entry_kind"] != "external-public-ip" or type(entry["source_config"]) is not dict
+                if (server or entry["entry_kind"] != "external-public-ip" or type(entry["source_config"]) is not dict
                         or not entry["source_config"] or entry["profile"].get("node_kind") != "external"
                         or type(external) is not dict or external.get("protocol") != entry["entry_mode"]
                         or entry["entry_mode"] not in {"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"}

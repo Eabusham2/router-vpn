@@ -523,7 +523,7 @@ need(
 )
 need(
     "modes/native-tor-bridge.sh",
-    "HOMEVPN_TOR_SESSION", "HOMEVPN_TOR_BINARY_SHA256", "router_vpn_standard_engine",
+    "HOMEVPN_TOR_SESSION", 'tor-prelaunch-witness.py" --validate', "router_vpn_standard_engine",
     'cleanup-private-runtime.py" verify-dir', 'python3 "$SCRIPT_DIR/kill-switch-platform.py" apply',
     'exec "$NATIVE_BIN" routervpn-tor', '--session "$HOMEVPN_TOR_SESSION"', '--tor-binary "$TOR_BIN"',
     "tor_prelaunch_failed", "tor-prelaunch-witness.py", "shopt -s execfail",
@@ -532,6 +532,8 @@ need(
     "modes/tor-prelaunch-witness.py",
     '"prelaunch-failed.json"', '"no_native_process": True', "os.O_EXCL",
     "regular_at", "verify_directory", "os.path.samestat", "os.fsync",
+    "HOMEVPN_TOR_BINARY_SHA256", 'capture["tor_binary"] != tor_binary',
+    'capture["schema"] not in {1, 2}', 'profile.get("multihop_execution") != "server"',
 )
 for path in ("modes/native-tor-bridge.sh", "client/native-tor-bridge-windows.ps1"):
     forbid(path, "Bootstrapped 100%", "HOMEVPN_TOR_PT_BINARY", "HOMEVPN_TOR_PLUGIN_TRANSPORTS")

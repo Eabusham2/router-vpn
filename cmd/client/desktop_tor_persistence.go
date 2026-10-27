@@ -66,11 +66,12 @@ func desktopTorSavedChoiceProfile(current common.RouterProfile, selection *deskt
 		return common.RouterProfile{}, errors.New("Tor saved choice lost its captured private source")
 	}
 	policy, entry, expected := selection.policy, selection.predecessor, launch.tor.expected
-	if policy.MultihopExecution != "local" || policy.MultihopEnabled != (entry != nil) || expected.NodeID != current.ID {
+	execution := desktopTorExecution(expected.Execution)
+	if execution == "" || desktopTorExecution(policy.MultihopExecution) != execution || execution == "server" && (entry == nil || entry.native == nil || !entry.native.IsRouter()) || policy.MultihopEnabled != (entry != nil) || expected.NodeID != current.ID {
 		return common.RouterProfile{}, errors.New("Tor saved choice differs from its proved native execution")
 	}
 	updated := cloneRouterProfile(current)
-	updated.MultihopEnabled, updated.MultihopExecution = entry != nil, "local"
+	updated.MultihopEnabled, updated.MultihopExecution = entry != nil, execution
 	updated.MultihopEntryID, updated.MultihopExitID, updated.MultihopEntryMode = "", "", ""
 	if entry == nil {
 		if expected.EntryID != "" || expected.EntryMode != "" || policy.MultihopEntryID != "" || policy.MultihopExitID != "" || policy.MultihopEntryMode != "" {
@@ -142,7 +143,7 @@ func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *des
 	}
 	choice := &desktopTorCommittedChoice{profileToken: desktopTorSourceIdentityToken(updated), nodeID: updated.ID, sessionID: launch.tor.expected.SessionID, sourceSHA256: launch.tor.expected.SourceSHA256}
 	launch.tor.committedChoice.Store(choice)
-	last := &startupExternalSelection{Protocol: "tor-bridge", Direct: entry.ID == "", SourceToken: source, Execution: "local", EntryMode: mode}
+	last := &startupExternalSelection{Protocol: "tor-bridge", Direct: entry.ID == "", SourceToken: source, Execution: desktopTorExecution(launch.tor.expected.Execution), EntryMode: mode}
 	if entry.ID != "" {
 		last.EntryID, last.EntryToken = entry.ID, startupExternalProfileToken(entry)
 	}

@@ -154,7 +154,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 				if err != nil {
 					return speedLabPathIdentity{}, speedLabPath{}, err
 				}
-				identity.Tor, identity.TorSession, identity.Execution = launch, proof.SessionID, "local"
+				identity.Tor, identity.TorSession, identity.Execution = launch, proof.SessionID, desktopTorExecution(proof.Policy.Execution)
 				identity.TorEntry = launch.tor.predecessor
 				if entry := identity.TorEntry; entry != nil {
 					path.EntryID, path.EntryName, path.EntryMode = entry.entry.ID, entry.entry.Name, entry.mode
@@ -166,7 +166,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 						return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab Router entry disappeared")
 					}
 				}
-				path.Execution, path.ExitID, path.ExitName = "local", profile.ID, profile.Name
+				path.Execution, path.ExitID, path.ExitName = identity.Execution, profile.ID, profile.Name
 				path.StartedAt = launch.tor.started
 				path.Description = "actual captured Tor bridge path with owned Tor exit, selected DNS and interface proof"
 			} else {
@@ -262,7 +262,7 @@ func validateSpeedLabIdentity(a *app, identity speedLabPathIdentity) error {
 		if err != nil {
 			return err
 		}
-		if identity.TorSession == "" || proof.SessionID != identity.TorSession || identity.Execution != "local" {
+		if identity.TorSession == "" || proof.SessionID != identity.TorSession || identity.Execution == "" || identity.Execution != desktopTorExecution(proof.Policy.Execution) {
 			return errors.New("Speed Lab result belongs to a different Tor execution")
 		}
 	}

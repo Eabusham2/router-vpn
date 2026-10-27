@@ -19,6 +19,19 @@ type desktopTorSelection struct {
 	predecessor  *desktopTorPredecessorCapture
 }
 
+// Empty execution is the historical Local capture. Server is always explicit;
+// a Compare preference has no proved Tor winner and cannot be restored as one.
+func desktopTorExecution(value string) string {
+	switch value {
+	case "", "local":
+		return "local"
+	case "server":
+		return "server"
+	default:
+		return ""
+	}
+}
+
 func captureDesktopTorSelection(a *app, profile common.RouterProfile, q externalProfileConnectRequest, lookup applexray.Lookup) (*desktopTorSelection, error) {
 	if a == nil || profile.ID == "" || strings.TrimSpace(q.ProfileID) != profile.ID {
 		return nil, errors.New("Tor selection requires its exact captured external node")
@@ -58,15 +71,15 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 	if err != nil {
 		return nil, err
 	}
-	if execution != "local" {
-		return nil, errors.New("Tor Server and Compare require their authenticated execution and last-node measurement owners; the selected choice cannot be replaced by Local")
+	if desktopTorExecution(execution) == "" || direct && execution != "local" {
+		return nil, errors.New("Tor Compare requires distinct owned last-node and external measurements; Direct Tor requires Local execution")
 	}
 	policy, err := externalRuntimePolicy(profile)
 	if err != nil {
 		return nil, err
 	}
 	policy.MultihopEnabled, policy.MultihopEntryID, policy.MultihopExitID = !direct, "", ""
-	policy.MultihopEntryMode, policy.MultihopExecution = "", "local"
+	policy.MultihopEntryMode, policy.MultihopExecution = "", execution
 	selection := &desktopTorSelection{profile: profile, policy: policy, profileToken: desktopTorSourceIdentityToken(profile)}
 	entry := common.RouterProfile{}
 	if !direct {
@@ -79,7 +92,10 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		entry = cloneRouterProfile(entry)
 		a.mu.Unlock()
 		if !found {
-			return nil, errors.New("Tor Local entry must be a linked node with its complete native transport")
+			return nil, errors.New("Tor entry must be a linked node with its complete native transport")
+		}
+		if execution == "server" && (entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
+			return nil, errors.New("Tor Server requires an authenticated private Router entry with the exact paired Tor source")
 		}
 		mode, err := desktopTorEntryMode(profile, entry, q.EntryMode, base)
 		if err != nil {

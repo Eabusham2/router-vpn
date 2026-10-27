@@ -131,8 +131,12 @@ def captured_tor_dns_policy() -> None:
     function("cmd/client/dns_policy_external.go", "capturedTorBridgeDNS",
              "profile = cloneRouterProfile(profile)",
              "desktopTorEntryMode(profile, entry,", "profile.MultihopEntryMode = mode",
-             "json.Marshal(profile)", "json.Marshal(entry)",
+             "desktopTorRuntimePolicyJSON(profile)", "json.Marshal(entry)",
              "return mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)")
+    function("cmd/client/desktop_tor_prepare.go", "desktopTorRuntimePolicyJSON",
+             "json.Marshal(runtimeWire(policy))", 'fields["home_lan_access"]',
+             'policy.External.Protocol == "tor-bridge"',
+             'fields["multihop_exit_mode"], _ = json.Marshal(policy.External.Protocol)')
     function("cmd/client/external_profile_connect.go", "externalDNSPolicyForPath",
              'case "tor-bridge":', "direct && entry.ID !=", '!direct && entry.ID == ""',
              "_, err = capturedTorBridgeDNS(policy, entry, false)",

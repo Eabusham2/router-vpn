@@ -60,7 +60,11 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 	native := installFakeExecutable(t, t.TempDir(), "native")
 	f.driver.capability = func() standardExitCapability { return standardExitCapability{Supported: true} }
 	f.driver.runtime = func(root string, policy, original common.RouterProfile, entry *desktopTorPredecessorCapture) (torBridgeRuntime, error) {
-		prepared, err := stageDesktopTorInputsWithPredecessor(root, policy, original, tor, native, entry)
+		binary := tor
+		if policy.MultihopExecution == "server" {
+			binary = ""
+		}
+		prepared, err := stageDesktopTorInputsWithPredecessor(root, policy, original, binary, native, entry)
 		f.launch = prepared.Launch
 		return prepared, err
 	}
@@ -150,9 +154,38 @@ func (f *desktopTorConnectFixture) request(t *testing.T, request externalProfile
 	return w
 }
 
+func TestDesktopTorRetainedExecutionCannotSubstituteCapturedChoice(t *testing.T) {
+	for _, test := range []struct {
+		name, saved, requested, retained string
+		direct                           bool
+	}{
+		{"server-for-local", "local", "", "server", false},
+		{"local-for-server", "server", "", "local", false},
+		{"compare-is-not-a-winner", "server", "", "auto", false},
+		{"server-for-direct", "server", "", "server", true},
+		{"explicit-local-cannot-use-server", "server", "local", "server", false},
+		{"explicit-server-cannot-use-local", "local", "server", "local", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			f := newDesktopTorConnectFixture(t)
+			f.a.profiles.Profiles[0].MultihopExecution = test.saved
+			before := cloneRouterProfileStore(f.a.profiles)
+			q := externalProfileConnectRequest{ProfileID: before.Profiles[0].ID, Execution: test.requested}
+			if test.direct {
+				q.Direct = &test.direct
+			}
+			response := httptest.NewRecorder()
+			f.a.externalProfileConnectOwned(response, q, test.retained, nil, externalConnectRuntime{tor: f.driver})
+			if response.Code != http.StatusConflict || !strings.Contains(response.Body.String(), "retained Tor execution differs") || f.launch != nil || f.preflight != 0 || f.commands != 0 || !reflect.DeepEqual(before, f.a.profiles) {
+				t.Fatal("unmatched retained execution reached native preparation or changed the saved path", response.Code, response.Body.String())
+			}
+		})
+	}
+}
+
 func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *testing.T) {
 	for _, route := range []string{"tor", "external"} {
-		for _, path := range []string{"saved-router", "saved-router-auto", "explicit-router", "explicit-router-auto", "direct-override", "direct-auto", "home-router"} {
+		for _, path := range []string{"saved-router", "saved-router-auto", "explicit-router", "explicit-router-auto", "direct-override", "direct-auto", "home-router", "saved-server", "explicit-server", "home-server"} {
 			t.Run(route+"/"+path, func(t *testing.T) {
 				f := newDesktopTorConnectFixture(t)
 				f.unified = route == "external"
@@ -171,7 +204,16 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 					direct := true
 					q.Direct = &direct
 				}
-				if path == "home-router" {
+				wantExecution := "local"
+				if strings.HasSuffix(path, "server") {
+					wantExecution = "server"
+					if strings.HasPrefix(path, "explicit") {
+						q.Execution = "server"
+					} else {
+						profile.MultihopExecution = "server"
+					}
+				}
+				if strings.HasPrefix(path, "home-") {
 					profile.DNSMode, profile.DNSHost, profile.DNSProtocol, profile.DNSPort = "home", "", "https", 8443
 					profile.DNSServerName, profile.DNSPath = "home-resolver.example.test", "/owned-dns-query"
 				}
@@ -183,7 +225,7 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 				}
 				original, entrySource := desktopTorSourceIdentityToken(*profile), cloneRouterProfile(f.a.profiles.Profiles[1])
 				wantSaved := cloneRouterProfile(*profile)
-				wantSaved.MultihopEnabled, wantSaved.MultihopExecution = wantEntry, "local"
+				wantSaved.MultihopEnabled, wantSaved.MultihopExecution = wantEntry, wantExecution
 				wantSaved.MultihopEntryID, wantSaved.MultihopExitID, wantSaved.MultihopEntryMode = "", "", ""
 				if wantEntry {
 					wantSaved.MultihopEntryID, wantSaved.MultihopExitID, wantSaved.MultihopEntryMode = entrySource.ID, profile.ID, "wg"
@@ -198,7 +240,7 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 					EntryMode string `json:"entry_mode"`
 					Execution string `json:"execution"`
 				}
-				if json.Unmarshal(response.Body.Bytes(), &reply) != nil || reply.Direct == wantEntry || reply.Execution != "local" ||
+				if json.Unmarshal(response.Body.Bytes(), &reply) != nil || reply.Direct == wantEntry || reply.Execution != wantExecution ||
 					wantEntry && (reply.EntryID != entrySource.ID || reply.EntryMode != "wg") || !wantEntry && (reply.EntryID != "" || reply.EntryMode != "") {
 					t.Fatal("public response lost the requested path", response.Body.String())
 				}
@@ -213,12 +255,19 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 				if got, ok := activeDNSRuntimeIdentities.Load(f.a); !ok || got.(activeDNSRuntimeIdentity).Config != filepath.Join(f.launch.directory, "sing-box.json") {
 					t.Fatal("admitted Tor runtime did not publish its own DNS configuration")
 				}
+				if wantExecution == "server" {
+					raw, err := readDesktopRuntimeFile(f.launch, "tor-capture.json", desktopTorInputLimit("tor-capture.json"))
+					var capture mobiletor.DesktopBridgeCapture
+					if err != nil || json.Unmarshal(raw, &capture) != nil || capture.Schema != 2 || capture.TorBinary != "" || f.launch.tor.expected.Execution != "server" || f.launch.tor.expected.SocksPort != 0 || len(f.launch.tor.expected.ServerSourceSHA256) != 64 || len(f.launch.tor.expected.ServerDNSPolicySHA256) != 64 {
+						t.Fatal("Server selection borrowed a local Tor child or lost its exact private source", err)
+					}
+				}
 				observed := observedConnection{Connected: true, Phase: "connected", Mode: "external-node", RuntimeMode: f.launch.mode, RouterID: current.ID, Profile: current}
 				proof := proveSelectedDNSWithLookup(context.Background(), f.a, observed, f.launch.mode, func(context.Context, string) ([]string, error) {
 					t.Fatal("public Tor connection escaped to the ordinary DNS resolver")
 					return nil, nil
 				})
-				if proof.Status != "passed" || path == "home-router" && f.launch.tor.expected.DNS.Address != entrySource.AdGuardIPv4 {
+				if proof.Status != "passed" || strings.HasPrefix(path, "home-") && f.launch.tor.expected.DNS.Address != entrySource.AdGuardIPv4 {
 					t.Fatal("public Connect lost its selected DNS path", proof)
 				}
 				if err := f.a.stopModeWithIntent(true); err != nil {
@@ -233,7 +282,7 @@ func TestDesktopTorPublicConnectCapturesDirectSavedAndExplicitRouterPath(t *test
 }
 
 func TestDesktopTorPublicConnectRejectsSelectionBeforePreparation(t *testing.T) {
-	for _, fault := range []string{"direct-entry", "direct-mode", "direct-wg-base", "unknown-base", "unknown-mode", "server", "compare", "missing-entry", "same-node", "external-entry", "wrong-saved-exit", "stale-token"} {
+	for _, fault := range []string{"direct-entry", "direct-mode", "direct-wg-base", "unknown-base", "unknown-mode", "server-direct", "server-ordinary", "compare", "missing-entry", "same-node", "external-entry", "wrong-saved-exit", "stale-token"} {
 		t.Run(fault, func(t *testing.T) {
 			f := newDesktopTorConnectFixture(t)
 			profile := &f.a.profiles.Profiles[0]
@@ -255,8 +304,13 @@ func TestDesktopTorPublicConnectRejectsSelectionBeforePreparation(t *testing.T) 
 				q.Base = "guess"
 			case "unknown-mode":
 				q.EntryMode = "guess"
-			case "server":
+			case "server-direct":
 				q.Execution = "server"
+				direct := true
+				q.Direct = &direct
+			case "server-ordinary":
+				q.Execution = "server"
+				f.a.profiles.Profiles[1].NodeKind = "external"
 			case "compare":
 				q.Execution = "auto"
 			case "missing-entry":

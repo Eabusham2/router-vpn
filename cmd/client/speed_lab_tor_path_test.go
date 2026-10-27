@@ -84,25 +84,33 @@ func connectSpeedLabTorPrior(t *testing.T, f *desktopTorConnectFixture, direct b
 }
 
 func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) {
-	for _, prior := range []string{"direct-override", "saved-router", "home-router"} {
-		for _, temporary := range []string{"direct", "router"} {
-			if prior == "home-router" && temporary == "direct" {
+	for _, prior := range []string{"direct-override", "saved-router", "home-router", "saved-server", "home-server"} {
+		for _, temporary := range []string{"direct", "router", "server"} {
+			if strings.HasPrefix(prior, "home-") && temporary == "direct" {
 				continue
 			}
 			t.Run(prior+"/"+temporary, func(t *testing.T) {
 				f := speedLabTorPipelineFixture(t)
-				if prior == "home-router" {
+				if strings.HasPrefix(prior, "home-") {
 					f.a.mu.Lock()
 					p := &f.a.profiles.Profiles[0]
 					p.DNSMode, p.DNSHost, p.DNSProtocol, p.DNSPort = "home", "", "https", 8443
 					p.DNSServerName, p.DNSPath = "private-home.example.test", "/private-query"
 					f.a.mu.Unlock()
 				}
+				if strings.HasSuffix(prior, "server") {
+					f.a.mu.Lock()
+					f.a.profiles.Profiles[0].MultihopExecution = "server"
+					f.a.mu.Unlock()
+				}
 				previous := connectSpeedLabTorPrior(t, f, prior == "direct-override")
 				oldDNS, _ := activeDNSRuntimeIdentities.Load(f.a)
 				q := speedLabRequest{Scope: "temporary", Topology: "external", NodeID: previous.profileID, Base: "auto", Execution: "local"}
-				if temporary == "router" {
+				if temporary != "direct" {
 					q.EntryID, q.EntryMode = "captured", "wg"
+				}
+				if temporary == "server" {
+					q.Execution = "server"
 				}
 				_, snapshot, finish, err := f.a.beginSpeedLabTemporaryOperationExpected(&q)
 				if err != nil {
@@ -132,7 +140,7 @@ func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) 
 					t.Fatal(err)
 				}
 				trial := f.launch
-				if path.Execution != "local" || path.ExternalProtocol != "tor-bridge" || (path.EntryID != "") != (temporary == "router") || trial.tor.expected.SessionID == previous.tor.expected.SessionID {
+				if path.Execution != q.Execution || path.ExternalProtocol != "tor-bridge" || (path.EntryID != "") != (temporary != "direct") || trial.tor.expected.SessionID == previous.tor.expected.SessionID {
 					t.Fatal("temporary public dispatcher lost the exact requested native path", path)
 				}
 				identity, observedPath, err := captureSpeedLabIdentity(f.a)
@@ -157,7 +165,7 @@ func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) 
 				if restored == trial || restored.tor.expected.SessionID == previous.tor.expected.SessionID || restored.tor.expected.SessionID == trial.tor.expected.SessionID || restored.tor.predecessor != snapshot.Plan.tor.selection.predecessor {
 					t.Fatal("restoration reused a session or reselected its captured entry")
 				}
-				if restored.tor.expected.EntryID != previous.tor.expected.EntryID || restored.tor.expected.EntryMode != previous.tor.expected.EntryMode || restored.tor.expected.EntryAssetsSHA256 != previous.tor.expected.EntryAssetsSHA256 || restored.tor.expected.DNS != previous.tor.expected.DNS || restored.tor.expected.DNSDetour != previous.tor.expected.DNSDetour || !desktopNodeProcessExited(previous) || !desktopNodeProcessExited(trial) {
+				if restored.tor.expected.EntryID != previous.tor.expected.EntryID || restored.tor.expected.EntryMode != previous.tor.expected.EntryMode || restored.tor.expected.EntryAssetsSHA256 != previous.tor.expected.EntryAssetsSHA256 || restored.tor.expected.Execution != previous.tor.expected.Execution || restored.tor.expected.ServerSourceSHA256 != previous.tor.expected.ServerSourceSHA256 || restored.tor.expected.ServerDNSPolicySHA256 != previous.tor.expected.ServerDNSPolicySHA256 || restored.tor.expected.DNS != previous.tor.expected.DNS || restored.tor.expected.DNSDetour != previous.tor.expected.DNSDetour || !desktopNodeProcessExited(previous) || !desktopNodeProcessExited(trial) {
 					t.Fatal("restored Tor path changed private source/DNS or left an earlier process alive")
 				}
 				f.a.mu.Lock()

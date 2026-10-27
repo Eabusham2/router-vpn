@@ -122,6 +122,47 @@ func TestProfileDeviceTorUnresolvedHomeDoesNotAcquireResolverOrRuntime(t *testin
 	}
 }
 
+func TestProfileDeviceTorServerPolicyReachesCapturedNativePreparation(t *testing.T) {
+	for _, mtu := range []string{"auto", "manual"} {
+		t.Run(mtu, func(t *testing.T) {
+			a, _, _ := desktopTorEntryFixture(t, "198.51.100.8")
+			a.profiles.Profiles[0].MultihopExecution = "server"
+			before := cloneRouterProfileStore(a.profiles)
+			capture := getDeviceSettingsForTest(t, a)
+			if !capture.DevicePolicySupported {
+				t.Fatal("saved Server path lost device settings", capture.DevicePolicyReason)
+			}
+			q := deviceSettingsRequestForTest(t, capture, mtu)
+			q["home_lan_access"], q["ipv6_mode"], q["kill_switch_policy"] = false, "off", "always"
+			response := postDeviceSettingsForTest(a, bytes.NewReader(deviceSettingsBodyForTest(t, q)))
+			if response.Code != http.StatusOK {
+				t.Fatal("saved Server device policy was rejected", response.Code, response.Body.String())
+			}
+			profile := a.profiles.Profiles[0]
+			if profile.MultihopExecution != "server" || !reflect.DeepEqual(profile.External, before.Profiles[0].External) || !reflect.DeepEqual(before.Profiles[1], a.profiles.Profiles[1]) {
+				t.Fatal("device edit substituted saved execution or private credentials")
+			}
+			entry, err := captureDesktopTorPredecessor(a, profile, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			prepared, err := stageDesktopTorInputsWithPredecessor(clientRoot(a), profile, profile, "", installFakeExecutable(t, t.TempDir(), "native"), entry)
+			if err != nil {
+				t.Fatal("saved Server device policy did not reach native preparation", err)
+			}
+			t.Cleanup(func() { _ = cleanupDesktopTorLaunch(prepared.Launch); _ = prepared.Launch.directoryRoot.Close() })
+			meta := prepared.Launch.tor.expected
+			wantMTU := 1280
+			if mtu == "manual" {
+				wantMTU = 1320
+			}
+			if meta.Execution != "server" || meta.ConfiguredMTU != wantMTU || meta.MTUPolicy != mtu || meta.IPv6Mode != "off" || meta.HomeLANAccess || meta.KillSwitchPolicy != "always" || len(meta.ServerDNSPolicySHA256) != 64 || len(meta.ServerSourceSHA256) != 64 || a.cmd != nil || a.state.Connected {
+				t.Fatal("Server native capture lost exact device policy or invented proof", meta)
+			}
+		})
+	}
+}
+
 func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) {
 	plans := map[string][]string{
 		"obfs4":     {clientTorBridge},
@@ -152,13 +193,13 @@ func TestProfileDeviceTorStrictPolicyUsesActualCapturedBridgePlan(t *testing.T) 
 }
 
 func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
-	for _, option := range []string{"Server Router-entry", "missing Router-entry", "external Router-entry", "padding"} {
+	for _, option := range []string{"Compare Router-entry", "missing Router-entry", "external Router-entry", "padding"} {
 		t.Run(option, func(t *testing.T) {
 			a := deviceSettingsTestApp(t, "tor-bridge", option != "padding")
 			a.profiles.Profiles[3].DAITAEnabled = option == "padding"
 			switch option {
-			case "Server Router-entry":
-				a.profiles.Profiles[3].MultihopExecution = "server"
+			case "Compare Router-entry":
+				a.profiles.Profiles[3].MultihopExecution = "auto"
 			case "missing Router-entry":
 				a.profiles.Profiles[3].MultihopEntryID = "missing-router"
 			case "external Router-entry":
@@ -168,7 +209,7 @@ func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
 			before := cloneRouterProfileStore(a.profiles)
 			capture := getDeviceSettingsForTest(t, a)
 			label := map[string]string{
-				"Server Router-entry":   "exact saved Local entry",
+				"Compare Router-entry":  "exact saved Local or Server entry",
 				"missing Router-entry":  "same linked node",
 				"external Router-entry": "complete imported transport and public identity",
 				"padding":               "padding",

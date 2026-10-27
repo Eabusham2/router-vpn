@@ -73,8 +73,8 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 	if a == nil || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.MultihopExitID != profile.ID || !validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID {
 		return nil, errors.New("desktop Tor requires the exact saved entry and exit references")
 	}
-	if profile.MultihopExecution != "" && profile.MultihopExecution != "local" {
-		return nil, errors.New("desktop Tor Server and Compare require their authenticated execution owners; the saved choice cannot be replaced by Local")
+	if desktopTorExecution(profile.MultihopExecution) == "" {
+		return nil, errors.New("desktop Tor Compare requires its distinct measured candidate paths; the saved choice cannot be replaced by Local")
 	}
 	a.mu.Lock()
 	entry, found := a.profileByIDLocked(profile.MultihopEntryID)
@@ -88,6 +88,9 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 		return nil, err
 	}
 	if entry.External != nil {
+		if profile.MultihopExecution == "server" {
+			return nil, errors.New("Tor Server requires a private Router entry; an ordinary public-address proof cannot authorize a server lease")
+		}
 		captured, err := compileDesktopTorExternalPredecessor(a.connectionOperationContextOrBackground(), entry, profile, mode, lookup)
 		if err != nil {
 			return nil, err

@@ -1,4 +1,4 @@
-param([string]$SourceRoot=(Split-Path -Parent $PSScriptRoot))
+param([string]$SourceRoot=(Split-Path -Parent $PSScriptRoot),[switch]$ServerOnly)
 $ErrorActionPreference='Stop'
 Set-StrictMode -Version Latest
 $script:Checks=0
@@ -103,7 +103,9 @@ function Start-RouterVPNPrivateJob {
   param($FilePath,[string[]]$ArgumentList,$WorkingDirectory,$Environment)
   $script:Trace.Add('start')
   Check ($FilePath -ceq $script:ExpectedNativeBinary -and $WorkingDirectory -ceq $script:ExpectedRuntime) 'The wrapper changed its captured executable or runtime.'
-  Check (($ArgumentList -join '|') -ceq ('routervpn-tor|--runtime-dir|'+$script:ExpectedRuntime+'|--session|'+('a'*32)+'|--tor-binary|'+$script:ExpectedTorBinary)) 'The wrapper changed the exact native CLI arguments.'
+  $expectedArguments=@('routervpn-tor','--runtime-dir',$script:ExpectedRuntime,'--session',('a'*32))
+  if($script:ExpectedTorBinary){$expectedArguments+=@('--tor-binary',$script:ExpectedTorBinary)}
+  Check (($ArgumentList -join '|') -ceq ($expectedArguments -join '|')) 'The wrapper changed the exact native CLI arguments.'
   Check ([object]::ReferenceEquals($Environment,$script:CapturedEnvironment)) 'The native call used another environment instead of the captured snapshot.'
   if($null -ne $script:LaunchError){throw $script:LaunchError}
   return $script:ExpectedOwner
@@ -223,6 +225,9 @@ foreach($pair in @(
   $mainSource=$mainSource.Replace($pair[0],$pair[1])
 }
 $script:MainDispatch=[scriptblock]::Create($mainSource)
+# Keep the actual top-level parameter declaration for Server calls. Omitting
+# -TorBinary must bind its shipping default and must not prompt for a package.
+$script:ServerMainDispatch=[scriptblock]::Create($tree.ParamBlock.Extent.Text+"`n"+$mainSource)
 function Get-FixtureWindowsIdentity{return [pscustomobject]@{owned=$true}}
 function Get-FixtureWindowsPrincipal($Identity){
   Check $Identity.owned 'The elevation fixture received another identity.'
@@ -280,7 +285,7 @@ if($global:TorWitnessFailure -ceq ('firewall-'+$Action)){$global:LASTEXITCODE=23
     $environment[$digests[$entry.Key]]=(Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash.ToLowerInvariant()
   }
   $environment['HOMEVPN_TOR_BINARY_SHA256']=(Get-FileHash -LiteralPath $tor -Algorithm SHA256).Hash.ToLowerInvariant()
-  return [pscustomobject]@{Root=$root;Runtime=$runtime;Native=$native;Tor=$tor;Job=$job;Selector=$selector;Kill=$kill;Bridge='198.51.100.1';Environment=$environment;Content=$content;Digests=$digests}
+  return [pscustomobject]@{Root=$root;Runtime=$runtime;Native=$native;Tor=$tor;LaunchTorBinary=$tor;Job=$job;Selector=$selector;Kill=$kill;Bridge='198.51.100.1';Environment=$environment;Content=$content;Digests=$digests}
 }
 function Set-WitnessContent($Fixture,[string]$Name,[string]$Value){
   $Fixture.Content[$Name]=$Value
@@ -299,6 +304,21 @@ function New-ExternalWitnessFixture([string]$Protocol='shadowsocks'){
   $profile.multihop_entry_mode=$Protocol
   Set-WitnessContent $fixture 'tor-capture.json' ($capture|ConvertTo-Json -Depth 16 -Compress)
   Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  return $fixture
+}
+function New-ServerWitnessFixture {
+  $fixture=New-WitnessFixture -ViaEntry
+  $capture=$fixture.Content['tor-capture.json']|ConvertFrom-Json
+  $capture.schema=2;$capture.tor_binary=''
+  $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+  $profile.multihop_execution='server'
+  $fixture.Environment['HOMEVPN_TOR_BINARY_SHA256']=''
+  Set-WitnessContent $fixture 'tor-capture.json' ($capture|ConvertTo-Json -Depth 16 -Compress)
+  Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  Set-WitnessContent $fixture 'torrc' "`n"
+  Set-WitnessContent $fixture 'tor-defaults' "`n"
+  Remove-Item -LiteralPath $fixture.Tor
+  $fixture.Tor='';$fixture.LaunchTorBinary=''
   return $fixture
 }
 function Invoke-WitnessWriter($Fixture,$State,[string]$Action='up'){
@@ -320,8 +340,9 @@ function Check-Witness($Fixture,[bool]$Expected,[string]$Message){
   Check (-not(Test-Path -LiteralPath (Join-Path $Fixture.Runtime 'stopped.json'))) 'The wrapper forged a native stopped receipt.'
   Check (-not($global:TorWitnessFirewall -contains 'release')) 'A prelaunch failure released captured protection.'
 }
-function Assert-MainWitness([string]$Failure,[bool]$Expected,[bool]$ViaEntry=$false,[string]$ExternalMode=''){
-  $fixture=if($ExternalMode){New-ExternalWitnessFixture $ExternalMode}else{New-WitnessFixture -ViaEntry:$ViaEntry}
+function Assert-MainWitness([string]$Failure,[bool]$Expected,[bool]$ViaEntry=$false,[string]$ExternalMode='',
+                            [switch]$Server,$CapturedFixture=$null,[switch]$RejectCapture){
+  $fixture=if($null -ne $CapturedFixture){$CapturedFixture}elseif($Server){New-ServerWitnessFixture}elseif($ExternalMode){New-ExternalWitnessFixture $ExternalMode}else{New-WitnessFixture -ViaEntry:$ViaEntry}
   if($Failure -eq 'capture-port'){$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON'].Replace('"port":51820','"port":443')}
   if($Failure -eq 'capture-network'){$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON'].Replace('"network":"udp"','"network":"tcp"')}
   if($Failure -eq 'capture-proof-kind'){
@@ -353,12 +374,24 @@ function Assert-MainWitness([string]$Failure,[bool]$Expected,[bool]$ViaEntry=$fa
   $oldBinary=[Environment]::GetEnvironmentVariable('HOMEVPN_TOR_BINARY_SHA256','Process')
   [Environment]::SetEnvironmentVariable('HOMEVPN_TOR_BINARY_SHA256',$fixture.Environment['HOMEVPN_TOR_BINARY_SHA256'],'Process')
   $errorObject=$null
-  try{try{& $script:MainDispatch}catch{$errorObject=Unwrap $_}}finally{[Environment]::SetEnvironmentVariable('HOMEVPN_TOR_BINARY_SHA256',$oldBinary,'Process')}
-  Check (($null -ne $errorObject) -eq ($Failure -ne 'normal')) 'The outer launch/catch lost its original success or failure.'
+  try{
+    try{
+      if($Server){
+        $arguments=@{Action='up';RuntimeDir=$fixture.Runtime;BridgeEndpoint=$fixture.Bridge;SocksPort=19475;NativeBinary=$fixture.Native}
+        if($fixture.LaunchTorBinary){$arguments['TorBinary']=$fixture.LaunchTorBinary}
+        & $script:ServerMainDispatch @arguments
+      }else{& $script:MainDispatch}
+    }catch{$errorObject=Unwrap $_}
+  }finally{[Environment]::SetEnvironmentVariable('HOMEVPN_TOR_BINARY_SHA256',$oldBinary,'Process')}
+  Check (($null -ne $errorObject) -eq ($Failure -ne 'normal' -or $RejectCapture)) 'The outer launch/catch lost its original success or failure.'
   if($Failure -eq 'witness-tamper-helper'){Check ($errorObject.Message -ceq 'Tor native helper is missing.') 'A rejected witness replaced the original launch error.'}
   Check-Witness $fixture $Expected ('Wrong no-native witness eligibility for '+$Failure)
-  if($Failure -in @('capture-port','capture-network','capture-proof-kind')){Check ($global:TorWitnessFirewall.Count -eq 0 -and -not $LaunchState.StartAttempted) 'A changed physical tuple or proof owner reached protection or native admission.'}
-  if($Failure -in @('typed-created','typed-recovery','typed-recovery-no-child','untyped','native-error','normal')){Check ($LaunchState.StartAttempted -and -not $LaunchState.NoNativeChild) 'A possible native child retained no-child authority.'}
+  if($RejectCapture -or $Failure -in @('capture-port','capture-network','capture-proof-kind')){Check ($global:TorWitnessFirewall.Count -eq 0 -and -not $LaunchState.StartAttempted) 'A changed physical tuple or proof owner reached protection or native admission.'}
+  if(-not $RejectCapture -and $Failure -in @('typed-created','typed-recovery','typed-recovery-no-child','untyped','native-error','normal')){Check ($LaunchState.StartAttempted -and -not $LaunchState.NoNativeChild) 'A possible native child retained no-child authority.'}
+  if($Server -and -not $RejectCapture -and $Failure -eq 'normal'){
+    Check (($global:TorWitnessFirewall -join ',') -ceq 'check,prepare') 'Server native admission did not retain its exact protection order.'
+    Check ($script:Joined -and ($script:Trace -join ',') -ceq 'start,wait,wait,close') 'Server wrapper did not retain and join its exact native owner.'
+  }
 }
 function Assert-TamperedWitness {
   $fixture=New-WitnessFixture
@@ -375,6 +408,77 @@ function Assert-CaptureRejected($Fixture,[string]$Name){
   Check ($null -ne $failure) ('Unowned Tor physical capture was accepted: '+$Name)
   $failure=$null;try{Invoke-WitnessWriter $Fixture (Fresh-WitnessState)}catch{$failure=Unwrap $_}
   Check ($null -ne $failure -and -not(Test-Path -LiteralPath (Join-Path $Fixture.Runtime 'prelaunch-failed.json'))) ('Invalid physical capture obtained a no-native witness: '+$Name)
+}
+function Assert-ServerPhysicalCapture {
+  $fixture=New-ServerWitnessFixture
+  $identity=Read-CapturedIdentity $fixture
+  Check ($identity.server -and $identity.via_entry -and $identity.capture.schema -eq 2 -and
+         $identity.capture.tor_binary -ceq '' -and $identity.capture.predecessor.profile.node_kind -ceq 'router-vpn' -and
+         $identity.profile.multihop_execution -ceq 'server' -and $identity.endpoint -ceq '203.0.113.20') 'Server capture lost its explicit private Router lease identity.'
+  Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture
+  foreach($fault in @('local-schema','local-execution','missing-execution','compare-execution','ordinary-entry','direct',
+      'capture-binary','argument-binary','null-binary','binary-hash','torrc','defaults','empty-torrc','source','projection','profile-digest','capture-digest','graph-digest')){
+    $fixture=if($fault -eq 'local-schema'){New-WitnessFixture -ViaEntry}else{New-ServerWitnessFixture}
+    $capture=$fixture.Content['tor-capture.json']|ConvertFrom-Json
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    $profile.multihop_execution='server'
+    switch($fault){
+      'local-execution'{$profile.multihop_execution='local'}
+      'missing-execution'{$profile.PSObject.Properties.Remove('multihop_execution')}
+      'compare-execution'{$profile.multihop_execution='auto'}
+      'ordinary-entry'{
+        $capture.predecessor=[pscustomobject]@{schema=2;entry_kind='external-public-ip';entry_mode='shadowsocks';assets_sha256=('f'*64)
+          profile=[pscustomobject]@{id='captured-router-entry';node_kind='external';external=[pscustomobject]@{protocol='shadowsocks';expected_public_ip='8.8.8.8'}}
+          config=[pscustomobject]@{route=[pscustomobject]@{final='external-exit'}};source_config=[pscustomobject]@{route=[pscustomobject]@{final='external-exit'}}}
+        $profile.multihop_entry_mode='shadowsocks'
+      }
+      'direct'{
+        $capture.PSObject.Properties.Remove('predecessor')
+        foreach($key in @('multihop_entry_id','multihop_exit_id','multihop_entry_mode','multihop_exit_mode','desktop_physical_egress')){$profile.PSObject.Properties.Remove($key)}
+        $profile.multihop_enabled=$false
+        $fixture.Environment['HOMEVPN_PROFILE_ID']='captured-tor-node';$fixture.Environment['HOMEVPN_ENDPOINT']=$fixture.Bridge
+        foreach($key in @('HOMEVPN_NATIVE_ENDPOINTS_JSON','HOMEVPN_NATIVE_EGRESS_JSON','HOMEVPN_EXTERNAL_SESSION')){$fixture.Environment.Remove($key)}
+      }
+      'capture-binary'{$capture.tor_binary=$fixture.Native}
+      'argument-binary'{$fixture.LaunchTorBinary=$fixture.Native}
+      'null-binary'{$capture.tor_binary=$null}
+      'binary-hash'{$fixture.Environment['HOMEVPN_TOR_BINARY_SHA256']='d'*64}
+      'torrc'{Set-WitnessContent $fixture 'torrc' "DisableNetwork 1`n"}
+      'defaults'{Set-WitnessContent $fixture 'tor-defaults' "DisableNetwork 1`n"}
+      'empty-torrc'{Set-WitnessContent $fixture 'torrc' ''}
+      'source'{$fixture.Environment['HOMEVPN_TOR_SOURCE_SHA256']='d'*64}
+      'projection'{$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON']=$fixture.Environment['HOMEVPN_NATIVE_EGRESS_JSON'].Replace('"port":51820','"port":443')}
+    }
+    Set-WitnessContent $fixture 'tor-capture.json' ($capture|ConvertTo-Json -Depth 16 -Compress)
+    Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+    if($fault -eq 'profile-digest'){$fixture.Environment['HOMEVPN_TOR_PROFILE_SHA256']='d'*64}
+    if($fault -eq 'capture-digest'){$fixture.Environment['HOMEVPN_TOR_CAPTURE_SHA256']='d'*64}
+    if($fault -eq 'graph-digest'){$fixture.Environment['HOMEVPN_TOR_CONFIG_SHA256']='d'*64}
+    try{
+      Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture -RejectCapture
+      if($fault -ne 'argument-binary'){Assert-CaptureRejected $fixture ('server-'+$fault)}
+    }catch{throw ('Server capture case '+$fault+': '+(Unwrap $_).Message)}
+  }
+  foreach($failure in @('helper','help','graph','firewall-check','firewall-prepare','typed-no-child')){Assert-MainWitness -Failure $failure -Expected $true -Server}
+  foreach($failure in @('typed-created','typed-recovery','typed-recovery-no-child','untyped','native-error','normal','witness-tamper-helper')){Assert-MainWitness -Failure $failure -Expected $false -Server}
+  # These are the two observed production defects. Execute each removal in
+  # memory and require the same pre-firewall rejection test to detect it.
+  foreach($defect in @('null-binary','source')){
+    $fixture=New-ServerWitnessFixture
+    if($defect -eq 'null-binary'){
+      $capture=$fixture.Content['tor-capture.json']|ConvertFrom-Json;$capture.tor_binary=$null
+      Set-WitnessContent $fixture 'tor-capture.json' ($capture|ConvertTo-Json -Depth 16 -Compress)
+      $changed=$captureSource.Replace('$capture.tor_binary -isnot [string] -or ','')
+    }else{
+      $fixture.Environment['HOMEVPN_TOR_SOURCE_SHA256']='d'*64
+      $changed=$captureSource.Replace('$observer.source_sha256 -cne $sourceSHA','$false')
+    }
+    Check ($changed -cne $captureSource) ('Server defect control did not reach its actual admission guard: '+$defect)
+    . ([scriptblock]::Create($changed))
+    try{
+      Detect-Defect {Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture -RejectCapture} 'The outer launch/catch lost its original success or failure.'
+    }finally{. ([scriptblock]::Create($captureSource))}
+  }
 }
 function Assert-ExternalPhysicalCapture {
   foreach($mode in @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
@@ -556,8 +660,12 @@ function Assert-PhysicalCapture {
 }
 try{
   $global:TorWitnessFirewall=New-Object 'System.Collections.Generic.List[string]'
-  Assert-PhysicalCapture
-  Assert-ExternalPhysicalCapture
+  if(-not $ServerOnly){
+    Assert-PhysicalCapture
+    Assert-ExternalPhysicalCapture
+  }
+  Assert-ServerPhysicalCapture
+  if(-not $ServerOnly){
   foreach($failure in @('helper','help','graph','firewall-check','firewall-prepare','typed-no-child')){Assert-MainWitness $failure $true}
   foreach($failure in @('typed-created','typed-recovery','typed-recovery-no-child','untyped','native-error','normal','witness-tamper-helper')){Assert-MainWitness $failure $false}
   foreach($failure in @('helper','help','graph','firewall-check','firewall-prepare','typed-no-child')){Assert-MainWitness $failure $true $true}
@@ -662,7 +770,9 @@ try{
   $script:MainDispatch=[scriptblock]::Create($changed)
   Detect-Defect {Assert-MainWitness 'normal' $false $true} 'The outer launch/catch lost its original success or failure.'
   $script:MainDispatch=[scriptblock]::Create($mainSource)
+  }
 }finally{
   if(Test-Path -LiteralPath $script:WitnessBase){Remove-Item -LiteralPath $script:WitnessBase -Recurse -Force}
 }
-Write-Output ("Windows Tor wrapper lifecycle checks passed: {0}; actual shipping dispatch/environment/exception/finally, typed Router and ordinary external entry captures, exact physical tuples, bounded native-call doubles, exclusive prelaunch witnesses, and ten executable defect controls. Windows Job kernel behavior is covered separately." -f $script:Checks)
+$scope=if($ServerOnly){'Server schema 2'}else{'full Local and Server'}
+Write-Output ("Windows Tor wrapper lifecycle checks passed: {0}; {1} suite, shipping parameter/dispatch/environment/exception/finally, exact private Router and source identity, physical tuples, bounded native-call doubles, exclusive prelaunch witnesses, and executable defect controls. Windows Job kernel behavior is covered separately." -f $script:Checks,$scope)

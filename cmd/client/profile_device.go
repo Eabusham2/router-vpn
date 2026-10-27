@@ -79,9 +79,11 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		// native predecessor and authenticates it before any PT can start.
 		switch {
 		case profile.MultihopEnabled && (!validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID ||
-			profile.MultihopExitID != profile.ID || profile.MultihopExecution != "" && profile.MultihopExecution != "local" ||
+			profile.MultihopExitID != profile.ID || desktopTorExecution(profile.MultihopExecution) == "" ||
 			profile.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(profile.MultihopEntryMode) && !desktopExternalNativeProtocol(profile.MultihopEntryMode)):
-			return false, "Tor entry device settings require the exact saved Local entry, exit and native mode."
+			return false, "Tor entry device settings require the exact saved Local or Server entry, exit and native mode."
+		case !profile.MultihopEnabled && desktopTorExecution(profile.MultihopExecution) != "local":
+			return false, "Direct Tor device settings require Local execution."
 		case profile.DAITAEnabled:
 			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
 		default:
@@ -98,6 +100,9 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled {
 		if entry.ID != profile.MultihopEntryID {
 			return false, "Tor entry device settings require the same linked node; reopen Settings after relinking it."
+		}
+		if profile.MultihopExecution == "server" && (entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
+			return false, "Tor Server device settings require the captured private Router entry."
 		}
 		if _, err := desktopTorEntryMode(profile, entry, "", ""); err != nil {
 			return false, err.Error()
@@ -238,7 +243,6 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 		// Tor parser. Idle Home may remain unresolved; this never grants a
 		// runnable resolver, modifies bridge credentials, or reuses MTU history.
 		// Display/measurement floats are deliberately outside this projection.
-		type wireProfile common.RouterProfile
 		captured := common.RouterProfile{
 			ID: profile.ID, NodeKind: profile.NodeKind, External: profile.External,
 			NodeProofID: profile.NodeProofID, RouterAPI: profile.RouterAPI, APIToken: profile.APIToken,
@@ -251,7 +255,7 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 			MultihopExitID: profile.MultihopExitID, MultihopEntryMode: profile.MultihopEntryMode,
 			MultihopExecution: profile.MultihopExecution,
 		}
-		source, err := json.Marshal(wireProfile(captured))
+		source, err := desktopTorRuntimePolicyJSON(captured)
 		if err != nil {
 			return errors.New("could not capture Tor device policy")
 		}

@@ -87,7 +87,10 @@ else:
     for key, name in expected["digest_files"].items():
         if digest(pathlib.Path(expected["runtime"]) / name) != expected["env"][key]:
             event("native-rejected"); sys.exit(52)
-    if digest(expected["tor"]) != expected["env"]["HOMEVPN_TOR_BINARY_SHA256"]:
+    if expected["server"]:
+        if "--tor-binary" in sys.argv or os.environ.get("HOMEVPN_TOR_BINARY_SHA256"):
+            event("native-rejected"); sys.exit(53)
+    elif digest(expected["tor"]) != expected["env"]["HOMEVPN_TOR_BINARY_SHA256"]:
         event("native-rejected"); sys.exit(53)
     event("native-started")
     if os.environ.get("FIXTURE_SIGNAL") == "term": os.kill(os.getpid(), signal.SIGTERM)
@@ -171,11 +174,12 @@ class Fixture:
         })
         self.env.update({key: sha(self.runtime / name) for key, name in DIGEST_FILES.items()})
         self.native_argv = ["routervpn-tor", "--runtime-dir", str(self.runtime), "--session", "a" * 32, "--tor-binary", str(self.tor)]
+        self.tor_argument = str(self.tor)
         self.expected = {
             "package": str(self.package), "native": str(self.native), "native_sha256": sha(self.native),
             "runtime": str(self.runtime), "tor": str(self.tor), "endpoint": self.endpoint,
             "native_argv": self.native_argv, "env": {key: self.env[key] for key in OBSERVED_ENV},
-            "observed_env": OBSERVED_ENV, "digest_keys": DIGEST_KEYS, "digest_files": DIGEST_FILES,
+            "observed_env": OBSERVED_ENV, "digest_keys": DIGEST_KEYS, "digest_files": DIGEST_FILES, "server": False,
         }
         self.expected_path.write_text(json.dumps(self.expected), encoding="utf-8")
 
@@ -225,8 +229,25 @@ class Fixture:
         self.set_input("tor-capture.json", capture)
         self.set_input("tor-profile.json", profile)
 
+    def server_entry(self) -> None:
+        self.router_entry()
+        capture = json.loads(self.inputs["tor-capture.json"])
+        capture["schema"], capture["tor_binary"] = 2, ""
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile["multihop_execution"] = "server"
+        self.env["HOMEVPN_TOR_BINARY_SHA256"] = ""
+        self.tor_argument = ""
+        self.native_argv = ["routervpn-tor", "--runtime-dir", str(self.runtime), "--session", "a" * 32]
+        self.expected.update({"server": True, "native_argv": self.native_argv})
+        self.set_input("tor-capture.json", capture)
+        self.set_input("tor-profile.json", profile)
+        self.set_input("torrc", "\n")
+        self.set_input("tor-defaults", "\n")
+        # Server must reach the native lease owner with no local Tor package.
+        self.tor.unlink()
+
     def run(self, action: str = "up", *, updates: dict[str, str | None] | None = None,
-            runtime: Path | None = None, native: Path | None = None) -> tuple[subprocess.CompletedProcess, list[dict], int]:
+            runtime: Path | None = None, native: Path | None = None, tor: str | None = None) -> tuple[subprocess.CompletedProcess, list[dict], int]:
         if self.events.exists():
             self.events.unlink()
         # A repeated test invocation has a new failed wrapper owner. Product
@@ -240,7 +261,7 @@ class Fixture:
                 environment.pop(key, None)
             else:
                 environment[key] = value
-        arguments = ["bash", str(self.wrapper), action, str(runtime or self.runtime), self.endpoint, "19475", str(self.tor), str(native or self.native)]
+        arguments = ["bash", str(self.wrapper), action, str(runtime or self.runtime), self.endpoint, "19475", self.tor_argument if tor is None else tor, str(native or self.native)]
         before = snapshot(self.private)
         process = subprocess.Popen(arguments, cwd=self.private, env=environment, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
         try:
@@ -450,6 +471,85 @@ class UnixTorWrapper(unittest.TestCase):
         self.fixture.router_entry()
         self.assert_success()
         self.assertNotEqual(self.fixture.env["HOMEVPN_ENDPOINT"], self.fixture.endpoint)
+
+    def test_server_exec_uses_blank_fifth_argument_without_a_local_tor_package(self):
+        self.fixture.server_entry()
+        self.assertFalse(self.fixture.tor.exists())
+        self.assert_success()
+        result, events, _ = self.fixture.run("check")
+        self.assertEqual(result.args[6], "", "Server launch shifted the native executable into the Tor argument.")
+        self.assertEqual(result.args[7], str(self.fixture.native))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual([entry["kind"] for entry in events], ["verify", "help", "config"])
+        self.assertEqual(self.fixture.native_argv, ["routervpn-tor", "--runtime-dir", str(self.fixture.runtime), "--session", "a" * 32])
+
+    def test_server_rejects_schema_execution_child_and_source_substitution_before_protection(self):
+        faults = ("local-schema", "local-execution", "missing-execution", "compare-execution", "ordinary-entry", "direct",
+                  "capture-binary", "argument-binary", "null-binary", "binary-hash", "torrc", "defaults", "empty-torrc",
+                  "source", "projection", "profile-digest", "capture-digest", "graph-digest")
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="routervpn-tor-server-reject-") as directory:
+                fixture = Fixture(Path(directory))
+                if fault == "local-schema":
+                    fixture.router_entry()
+                else:
+                    fixture.server_entry()
+                capture = json.loads(fixture.inputs["tor-capture.json"])
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                profile["multihop_execution"] = "server"
+                if fault == "local-execution": profile["multihop_execution"] = "local"
+                elif fault == "missing-execution": del profile["multihop_execution"]
+                elif fault == "compare-execution": profile["multihop_execution"] = "auto"
+                elif fault == "ordinary-entry":
+                    capture["predecessor"] = {"schema": 2, "entry_kind": "external-public-ip", "entry_mode": "shadowsocks",
+                                              "assets_sha256": "f" * 64, "profile": {"id": "captured-entry", "node_kind": "external",
+                                              "external": {"protocol": "shadowsocks", "expected_public_ip": "8.8.8.8"}},
+                                              "config": {"route": {"final": "external-exit"}}, "source_config": {"route": {"final": "external-exit"}}}
+                    profile["multihop_entry_mode"] = "shadowsocks"
+                elif fault == "direct":
+                    del capture["predecessor"]
+                    for key in ("multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode", "desktop_physical_egress"):
+                        del profile[key]
+                    profile["multihop_enabled"] = False
+                    fixture.env.update({"HOMEVPN_PROFILE_ID": "captured-node", "HOMEVPN_ENDPOINT": fixture.endpoint,
+                                        "HOMEVPN_NATIVE_ENDPOINTS_JSON": "", "HOMEVPN_NATIVE_EGRESS_JSON": "", "HOMEVPN_EXTERNAL_SESSION": ""})
+                elif fault == "capture-binary": capture["tor_binary"] = str(fixture.native)
+                elif fault == "null-binary": capture["tor_binary"] = None
+                elif fault == "binary-hash": fixture.env["HOMEVPN_TOR_BINARY_SHA256"] = "d" * 64
+                elif fault == "torrc": fixture.set_input("torrc", "DisableNetwork 1\n")
+                elif fault == "defaults": fixture.set_input("tor-defaults", "DisableNetwork 1\n")
+                elif fault == "empty-torrc": fixture.set_input("torrc", "")
+                elif fault == "source": fixture.env["HOMEVPN_TOR_SOURCE_SHA256"] = "d" * 64
+                elif fault == "projection": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"].replace('"port":51820', '"port":443')
+                fixture.set_input("tor-capture.json", capture)
+                fixture.set_input("tor-profile.json", profile)
+                if fault.endswith("-digest"):
+                    key = {"profile-digest": "HOMEVPN_TOR_PROFILE_SHA256", "capture-digest": "HOMEVPN_TOR_CAPTURE_SHA256", "graph-digest": "HOMEVPN_TOR_CONFIG_SHA256"}[fault]
+                    fixture.env[key] = "d" * 64
+                result, events, _ = fixture.run(tor=str(fixture.native) if fault == "argument-binary" else None)
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertEqual(events, [], "Invalid Server capture reached verification, protection or native admission: " + fault)
+                # A rejected invocation argument still leaves a valid untouched
+                # capture for the EXIT trap's no-native-work witness.
+                if fault != "argument-binary":
+                    self.assertFalse((fixture.runtime / "prelaunch-failed.json").exists(), "Invalid Server inputs obtained no-native authority: " + fault)
+
+    def test_server_preflight_failures_retain_inputs_and_native_exit_cannot_claim_no_work(self):
+        self.fixture.server_entry()
+        for failure, expected in (("verify", ["verify"]), ("help", ["verify", "help"]),
+                                  ("config", ["verify", "help", "config"]), ("protect", ["verify", "help", "config", "protect"])):
+            with self.subTest(failure=failure):
+                result, events, _ = self.fixture.run(updates={"FIXTURE_FAIL": failure})
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual([entry["kind"] for entry in events], expected)
+                self.assertTrue((self.fixture.runtime / "prelaunch-failed.json").is_file())
+        for updates, expected in (({"FIXTURE_NATIVE_EXIT": "67"}, 67), ({"FIXTURE_SIGNAL": "term"}, -signal.SIGTERM)):
+            with self.subTest(updates=updates):
+                result, events, process_id = self.fixture.run(updates=updates)
+                self.assertEqual(result.returncode, expected)
+                self.assertEqual(events[-1]["pid"], process_id)
+                self.assertFalse((self.fixture.runtime / "prelaunch-failed.json").exists())
+                self.assertFalse((self.fixture.runtime / "stopped.json").exists())
 
     def test_external_entry_preserves_typed_proof_and_exact_physical_owner(self):
         for protocol in ("wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"):

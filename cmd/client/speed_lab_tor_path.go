@@ -107,7 +107,7 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 		return nil, err
 	}
 	if driver.capability == nil {
-		driver.capability = torBridgeRuntimeCapability
+		driver.capability = func() standardExitCapability { return desktopTorPolicyRuntimeCapability(selection.policy) }
 	}
 	if capability := driver.capability(); !capability.Supported {
 		return nil, errors.New(capability.Reason)
@@ -196,7 +196,7 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	if _, err := waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond); err != nil {
 		return path, err
 	}
-	path = speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: profile.ID, NodeName: profile.Name, ExitID: profile.ID, ExitName: profile.Name, RuntimeMode: "external-tor-bridge", LogicalMode: "external-node", Base: base, ExternalProtocol: "tor-bridge", Execution: "local", StartedAt: launch.tor.started, Description: "temporary captured Tor path with fresh dynamic exit, selected DNS and native interface proof"}
+	path = speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: profile.ID, NodeName: profile.Name, ExitID: profile.ID, ExitName: profile.Name, RuntimeMode: "external-tor-bridge", LogicalMode: "external-node", Base: base, ExternalProtocol: "tor-bridge", Execution: desktopTorExecution(launch.tor.expected.Execution), StartedAt: launch.tor.started, Description: "temporary captured Tor path with fresh dynamic exit, selected DNS and native interface proof"}
 	if entry := selection.predecessor; entry != nil {
 		path.EntryID, path.EntryName, path.EntryMode = entry.entry.ID, entry.entry.Name, entry.mode
 	}

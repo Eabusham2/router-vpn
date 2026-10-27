@@ -38,10 +38,13 @@ func desktopTorProfileRequest(t *testing.T, f *desktopTorConnectFixture, route s
 }
 
 func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T) {
-	for _, direct := range []bool{true, false} {
-		name := "explicit-router"
+	for _, execution := range []string{"direct", "local", "server"} {
+		direct := execution == "direct"
+		wantExecution := execution
+		name := "explicit-router-" + execution
 		if direct {
 			name = "direct-overrides-saved-router"
+			wantExecution = "local"
 		}
 		t.Run(name, func(t *testing.T) {
 			f := speedLabTorPipelineFixture(t)
@@ -55,7 +58,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 			original, entry := cloneRouterProfile(*p), cloneRouterProfile(f.a.profiles.Profiles[1])
 			q := externalProfileConnectRequest{ProfileID: p.ID, Base: "auto", Direct: &direct}
 			if !direct {
-				q.EntryID, q.EntryMode = entry.ID, "wg"
+				q.EntryID, q.EntryMode, q.Execution = entry.ID, "wg", execution
 			}
 			response := f.request(t, q)
 			if response.Code != http.StatusOK || !strings.Contains(response.Body.String(), `"choice_saved":true`) {
@@ -65,7 +68,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 			f.a.mu.Lock()
 			stored := cloneRouterProfile(f.a.profiles.Profiles[0])
 			f.a.mu.Unlock()
-			if stored.MultihopEnabled == direct || stored.MultihopExecution != "local" || !reflect.DeepEqual(stored.External, original.External) || !reflect.DeepEqual(f.a.profiles.Profiles[1], entry) {
+			if stored.MultihopEnabled == direct || stored.MultihopExecution != wantExecution || !reflect.DeepEqual(stored.External, original.External) || !reflect.DeepEqual(f.a.profiles.Profiles[1], entry) {
 				t.Fatal("saved choice lost its exact path or copied private source")
 			}
 			if direct && (stored.MultihopEntryID != "" || stored.MultihopExitID != "" || stored.MultihopEntryMode != "") || !direct && (stored.MultihopEntryID != entry.ID || stored.MultihopExitID != stored.ID || stored.MultihopEntryMode != "wg") {
@@ -86,7 +89,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 				t.Fatal("disk and admitted saved graph differ")
 			}
 			last, err := f.a.loadStartupSelection()
-			if err != nil || last.External == nil || last.External.Direct != direct || last.External.EntryID != stored.MultihopEntryID || last.External.EntryMode != stored.MultihopEntryMode || last.External.Execution != "local" || last.ProfileToken != startupExternalProfileToken(stored) || last.RuntimeMode != "external-tor-bridge" {
+			if err != nil || last.External == nil || last.External.Direct != direct || last.External.EntryID != stored.MultihopEntryID || last.External.EntryMode != stored.MultihopEntryMode || last.External.Execution != wantExecution || last.ProfileToken != startupExternalProfileToken(stored) || last.RuntimeMode != "external-tor-bridge" {
 				t.Fatal("Startup Last lost its proved choice", err)
 			}
 			lastBytes, err := os.ReadFile(f.a.cfg.StateFile)
@@ -106,7 +109,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 				t.Fatal("saved path could not be captured for Startup Last", err)
 			}
 			f.a.applyCapturedStartupPolicy(context.Background(), capture, externalConnectRuntime{tor: f.driver})
-			if !f.a.state.Connected || f.launch == first || f.launch.tor.expected.SessionID == first.tor.expected.SessionID || f.launch.tor.expected.EntryID != first.tor.expected.EntryID || f.launch.tor.expected.EntryMode != first.tor.expected.EntryMode || f.launch.tor.expected.DNS != first.tor.expected.DNS {
+			if !f.a.state.Connected || f.launch == first || f.launch.tor.expected.SessionID == first.tor.expected.SessionID || f.launch.tor.expected.EntryID != first.tor.expected.EntryID || f.launch.tor.expected.EntryMode != first.tor.expected.EntryMode || f.launch.tor.expected.Execution != first.tor.expected.Execution || f.launch.tor.expected.DNS != first.tor.expected.DNS {
 				t.Fatal("Startup Last did not freshly prove the saved path")
 			}
 			if err := f.a.stopModeWithIntent(true); err != nil {
@@ -116,7 +119,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 			var record struct {
 				Profile connectionProfileRecord `json:"profile"`
 			}
-			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &record) != nil || record.Profile.External == nil || record.Profile.External.MultihopEnabled != stored.MultihopEnabled || record.Profile.External.MultihopEntryID != stored.MultihopEntryID || record.Profile.External.MultihopEntryMode != stored.MultihopEntryMode {
+			if response.Code != http.StatusOK || json.Unmarshal(response.Body.Bytes(), &record) != nil || record.Profile.External == nil || record.Profile.External.MultihopEnabled != stored.MultihopEnabled || record.Profile.External.MultihopEntryID != stored.MultihopEntryID || record.Profile.External.MultihopEntryMode != stored.MultihopEntryMode || record.Profile.External.MultihopExecution != wantExecution {
 				t.Fatal("complete profile did not capture the remembered Tor path", response.Code, response.Body.String())
 			}
 			f.a.mu.Lock()
@@ -131,7 +134,7 @@ func TestDesktopTorSavedChoiceDrivesStartupLastAndCompleteProfiles(t *testing.T)
 				t.Fatal("complete profile could not restore remembered path", response.Code, response.Body.String())
 			}
 			loaded := f.a.profiles.Profiles[0]
-			if loaded.MultihopEnabled != stored.MultihopEnabled || loaded.MultihopEntryID != stored.MultihopEntryID || loaded.MultihopEntryMode != stored.MultihopEntryMode || !reflect.DeepEqual(loaded.External, original.External) || f.a.state.Connected {
+			if loaded.MultihopEnabled != stored.MultihopEnabled || loaded.MultihopEntryID != stored.MultihopEntryID || loaded.MultihopEntryMode != stored.MultihopEntryMode || loaded.MultihopExecution != wantExecution || !reflect.DeepEqual(loaded.External, original.External) || f.a.state.Connected {
 				t.Fatal("complete profile load changed credentials or failed to restore choice")
 			}
 			response = desktopTorProfileRequest(t, f, "/api/connection-profile/delete", map[string]any{"id": record.Profile.ID})

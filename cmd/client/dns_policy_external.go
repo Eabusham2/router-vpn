@@ -213,7 +213,7 @@ func capturedTorBridgeDNS(profile, entry common.RouterProfile, idle bool) (mobil
 		}
 		profile.MultihopEntryMode = mode
 	}
-	raw, err := json.Marshal(profile)
+	raw, err := desktopTorRuntimePolicyJSON(profile)
 	if err != nil {
 		return mobiletor.DesktopBridgeDNS{}, errors.New("Tor DNS profile contains invalid saved values")
 	}

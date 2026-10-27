@@ -202,9 +202,13 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 	}
 
 	if externalProfile.External.Protocol == "tor-bridge" {
-		if retained != "" && retained != "local" {
-			http.Error(w, "retained Tor execution does not belong to the implemented Local path", http.StatusConflict)
-			return
+		if retained != "" {
+			direct := q.Direct != nil && *q.Direct || q.Direct == nil && q.EntryID == ""
+			selected, err := externalExecutionChoice(externalProfile, q.Execution, direct)
+			if err != nil || desktopTorExecution(retained) == "" || retained != selected {
+				http.Error(w, "retained Tor execution differs from the captured Local or Server selection", http.StatusConflict)
+				return
+			}
 		}
 		// Keep the exact request through Tor capture and native preflight. Its
 		// entry, Direct choice and source revisions must not be replaced by a

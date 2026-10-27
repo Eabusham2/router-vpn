@@ -56,6 +56,13 @@ type speedLabTorRestore struct {
 	selection    *desktopTorSelection
 }
 
+func (saved *speedLabTorRestore) execution() string {
+	if saved == nil || saved.selection == nil {
+		return ""
+	}
+	return desktopTorExecution(saved.selection.policy.MultihopExecution)
+}
+
 func speedLabTorPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
 	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "tor-bridge" {
 		return common.RouterProfile{}, errors.New("previous Tor connection has no captured external node")
@@ -69,7 +76,7 @@ func speedLabTorPolicy(profile common.RouterProfile) (common.RouterProfile, erro
 
 func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPathIdentity) (*speedLabTorRestore, error) {
 	launch := identity.Tor
-	if launch == nil || launch.tor == nil || launch.external != nil || launch.profileID != profile.ID || identity.Execution != "local" || identity.TorSession != launch.tor.expected.SessionID || liveMeasurementProfileToken(profile) != identity.ProfileToken {
+	if launch == nil || launch.tor == nil || launch.external != nil || launch.profileID != profile.ID || identity.Execution == "" || identity.Execution != desktopTorExecution(launch.tor.expected.Execution) || identity.TorSession != launch.tor.expected.SessionID || liveMeasurementProfileToken(profile) != identity.ProfileToken {
 		return nil, errors.New("previous Tor connection has another captured owner")
 	}
 	mtu, err := captureDesktopMTURestore(launch)
@@ -125,8 +132,8 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 
 func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.RouterProfile, error) {
 	saved := plan.tor
-	if saved == nil || plan.external != nil || plan.native != nil || plan.multihop != nil || plan.request.Topology != "external" || plan.request.NodeID != plan.profile.ID || plan.request.Execution != "local" || saved.profileToken == "" || liveMeasurementProfileToken(plan.profile) != saved.profileToken {
-		return common.RouterProfile{}, errors.New("previous Tor restore selection is not the captured local path")
+	if saved == nil || plan.external != nil || plan.native != nil || plan.multihop != nil || plan.request.Topology != "external" || plan.request.NodeID != plan.profile.ID || saved.execution() == "" || plan.request.Execution != saved.execution() || saved.profileToken == "" || liveMeasurementProfileToken(plan.profile) != saved.profileToken {
+		return common.RouterProfile{}, errors.New("previous Tor restore selection is not the captured proved execution")
 	}
 	if saved.network == "" || physicalNetworkIdentity() != saved.network {
 		return common.RouterProfile{}, errors.New("previous Tor restore belongs to a changed physical network")
@@ -145,7 +152,7 @@ func (a *app) speedLabTorRestoreProfile(plan speedLabRestorePlan) (common.Router
 }
 
 func (saved *speedLabTorRestore) selectionFor(a *app, profile common.RouterProfile, request speedLabRequest) (*desktopTorSelection, error) {
-	if saved == nil || saved.selection == nil || saved.profileToken != liveMeasurementProfileToken(profile) || saved.selection.profileToken != desktopTorSourceIdentityToken(profile) || saved.policyToken == "" || desktopTorSourceIdentityToken(saved.selection.policy) != saved.policyToken || request.Topology != "external" || request.Execution != "local" || request.Base != "" || request.Mode != "" || request.ExitMode != "" || request.ExitID != "" || request.NodeID != profile.ID {
+	if saved == nil || saved.selection == nil || saved.profileToken != liveMeasurementProfileToken(profile) || saved.selection.profileToken != desktopTorSourceIdentityToken(profile) || saved.policyToken == "" || desktopTorSourceIdentityToken(saved.selection.policy) != saved.policyToken || request.Topology != "external" || saved.execution() == "" || request.Execution != saved.execution() || request.Base != "" || request.Mode != "" || request.ExitMode != "" || request.ExitID != "" || request.NodeID != profile.ID {
 		return nil, errors.New("previous Tor restore would substitute its proved source, device or DNS policy")
 	}
 	entryID, mode := "", ""
@@ -498,7 +505,7 @@ func (a *app) speedLabCaptureRestorePlan(snapshot speedLabTemporarySnapshot) (sp
 				if err != nil {
 					return plan, err
 				}
-				plan.request.EntryID, plan.request.EntryMode, plan.request.Execution = "", "", "local"
+				plan.request.EntryID, plan.request.EntryMode, plan.request.Execution = "", "", plan.tor.execution()
 				if entry := plan.tor.selection.predecessor; entry != nil {
 					plan.request.EntryID, plan.request.EntryMode = entry.entry.ID, entry.mode
 				}

@@ -68,9 +68,13 @@ func prepareTorBridgeRuntime(root string, policy, profile common.RouterProfile) 
 }
 
 func prepareTorBridgeRuntimeWithPredecessor(root string, policy, profile common.RouterProfile, predecessor *desktopTorPredecessorCapture) (torBridgeRuntime, error) {
-	tor, err := desktopTorExecutable(root)
-	if err != nil {
-		return torBridgeRuntime{}, err
+	tor := ""
+	if policy.MultihopExecution != "server" {
+		var err error
+		tor, err = desktopTorExecutable(root)
+		if err != nil {
+			return torBridgeRuntime{}, err
+		}
 	}
 	native, err := verifyBundledNative(desktopAmneziaPackageRoot())
 	if err != nil {
@@ -103,9 +107,17 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	if !filepath.IsAbs(native) || filepath.Clean(native) != native {
 		return result, errors.New("Tor requires its exact native executable path")
 	}
-	torHash, err := captureDesktopTorExecutable(tor)
-	if err != nil {
-		return result, err
+	server := policy.MultihopExecution == "server"
+	torHash := ""
+	if server {
+		if tor != "" || predecessor == nil || predecessor.native == nil || !predecessor.native.IsRouter() {
+			return result, errors.New("Tor Server requires its captured private Router and no local Tor executable")
+		}
+	} else {
+		torHash, err = captureDesktopTorExecutable(tor)
+		if err != nil {
+			return result, err
+		}
 	}
 	policyCopy := cloneRouterProfile(policy)
 	if predecessor != nil {
@@ -163,6 +175,8 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 		_, err = mobiletor.NewDesktopBridgePolicy(string(profileRaw), session, isolation, runtime.GOOS)
 	} else if predecessor.native == nil || predecessor.entry.ID != predecessor.native.ID() || predecessor.assetsSHA256 != predecessor.native.AssetsSHA256() {
 		err = errors.New("Tor staging has an incomplete predecessor capture")
+	} else if server {
+		_, err = mobiletor.NewDesktopServerTorPolicy(string(profileRaw), session, isolation, runtime.GOOS, predecessor.native)
 	} else {
 		_, err = mobiletor.NewDesktopBridgePolicyWithPredecessor(string(profileRaw), session, isolation, runtime.GOOS, predecessor.native)
 	}
@@ -190,6 +204,8 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	var inputs *mobiletor.DesktopBridgeInputs
 	if predecessor == nil {
 		inputs, err = mobiletor.NewDesktopBridgeCapture(string(profileRaw), session, isolation, runtime.GOOS, tor, directory)
+	} else if server {
+		inputs, err = mobiletor.NewDesktopServerTorCapture(string(profileRaw), session, isolation, runtime.GOOS, directory, predecessor.native)
 	} else {
 		inputs, err = mobiletor.NewDesktopBridgeCaptureWithPredecessor(string(profileRaw), session, isolation, runtime.GOOS, tor, directory, predecessor.native)
 	}
@@ -229,6 +245,11 @@ func desktopTorRuntimePolicyJSON(policy common.RouterProfile) ([]byte, error) {
 		return nil, err
 	}
 	fields["home_lan_access"], _ = json.Marshal(policy.HomeLANAccess)
+	if policy.MultihopEnabled && policy.External != nil && policy.External.Protocol == "tor-bridge" {
+		// The durable RouterProfile stores the exit protocol inside External;
+		// the shared graph parser requires its explicit runtime projection.
+		fields["multihop_exit_mode"], _ = json.Marshal(policy.External.Protocol)
+	}
 	return json.Marshal(fields)
 }
 
@@ -429,7 +450,11 @@ func desktopTorRuntimeCommand(a *app, prepared torBridgeRuntime, environment []s
 		if err != nil {
 			return nil, err
 		}
-		cmd = exec.Command(powershell, "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", prepared.RuntimeDir, "-BridgeEndpoint", prepared.BridgeEndpoint, "-SocksPort", strconv.Itoa(prepared.SocksPort), "-TorBinary", prepared.TorBinary, "-NativeBinary", prepared.NativeBinary, "-TunnelAlias", "router-vpn-tor")
+		arguments := []string{"-NoProfile", "-ExecutionPolicy", "Bypass", "-File", helper, "-Action", "up", "-RuntimeDir", prepared.RuntimeDir, "-BridgeEndpoint", prepared.BridgeEndpoint, "-SocksPort", strconv.Itoa(prepared.SocksPort), "-NativeBinary", prepared.NativeBinary, "-TunnelAlias", "router-vpn-tor"}
+		if prepared.TorBinary != "" {
+			arguments = append(arguments, "-TorBinary", prepared.TorBinary)
+		}
+		cmd = exec.Command(powershell, arguments...)
 	} else {
 		helper := filepath.Join(a.cfg.ScriptsDir, "native-tor-bridge.sh")
 		if info, err := os.Lstat(helper); err != nil || !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {

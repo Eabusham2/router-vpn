@@ -84,7 +84,7 @@ func TestDesktopTorPredecessorCapturesOriginalAssetsAndLiteralLaunchCopy(t *test
 }
 
 func TestDesktopTorPredecessorRejectsRelinkCancellationAndUnownedSelection(t *testing.T) {
-	for _, fault := range []string{"server", "compare", "missing-entry", "same-node", "wrong-exit", "external-entry", "changed-source", "changed-profile", "cancelled", "invalid-source"} {
+	for _, fault := range []string{"server-ordinary", "compare", "missing-entry", "same-node", "wrong-exit", "external-entry", "changed-source", "changed-profile", "cancelled", "invalid-source"} {
 		t.Run(fault, func(t *testing.T) {
 			a, profile, files := desktopTorEntryFixture(t, "entry.example.test")
 			path := filepath.Join(clientRoot(a), "generated", "captured", "wg", "wg.conf")
@@ -93,8 +93,9 @@ func TestDesktopTorPredecessorRejectsRelinkCancellationAndUnownedSelection(t *te
 			a.connectionContext = ctx
 			calls := 0
 			switch fault {
-			case "server":
+			case "server-ordinary":
 				profile.MultihopExecution = "server"
+				a.profiles.Profiles[1].NodeKind = "external"
 			case "compare":
 				profile.MultihopExecution = "auto"
 			case "missing-entry":

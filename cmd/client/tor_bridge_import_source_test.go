@@ -142,16 +142,20 @@ func checkTorBridgePreservedUpdate(t *testing.T, a *app, old, entry common.Route
 }
 
 func TestTorBridgeImportCapturedRouterUpdatesPreserveGraphAndProtection(t *testing.T) {
-	for _, mode := range []string{"wg", "awg2-strong", "naive-h3", "max-quic-awg"} {
-		for transport := range torBridgeUpdateInputLines() {
-			for _, kill := range []string{"off", "on-connect", "always"} {
-				t.Run(mode+"/"+transport+"/"+kill, func(t *testing.T) {
-					a, old, entry := torBridgeUpdateSourceFixture(t)
-					a.profiles.Profiles[0].MultihopEntryMode = mode
-					old.MultihopEntryMode = mode
-					body := torBridgeUpdateBody(t, torBridgeCapturedUpdate(t, a, transport, kill))
-					checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, body), transport, kill)
-				})
+	for _, execution := range []string{"local", "server"} {
+		for _, mode := range []string{"wg", "awg2-strong", "naive-h3", "max-quic-awg"} {
+			for transport := range torBridgeUpdateInputLines() {
+				for _, kill := range []string{"off", "on-connect", "always"} {
+					t.Run(execution+"/"+mode+"/"+transport+"/"+kill, func(t *testing.T) {
+						a, old, entry := torBridgeUpdateSourceFixture(t)
+						a.profiles.Profiles[0].MultihopExecution = execution
+						old.MultihopExecution = execution
+						a.profiles.Profiles[0].MultihopEntryMode = mode
+						old.MultihopEntryMode = mode
+						body := torBridgeUpdateBody(t, torBridgeCapturedUpdate(t, a, transport, kill))
+						checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, body), transport, kill)
+					})
+				}
 			}
 		}
 	}
@@ -252,12 +256,14 @@ func TestTorBridgeImportSourceJSONRejectsAmbiguousDowngrades(t *testing.T) {
 }
 
 func TestTorBridgeImportSavedGraphCannotBeSubstituted(t *testing.T) {
-	for _, change := range []string{"server", "compare", "wrong-exit", "unknown-mode", "missing-entry", "external-entry"} {
+	for _, change := range []string{"server-ordinary", "compare", "wrong-exit", "unknown-mode", "missing-entry", "external-entry"} {
 		t.Run(change, func(t *testing.T) {
 			a, _, _ := torBridgeUpdateSourceFixture(t)
 			switch change {
-			case "server":
+			case "server-ordinary":
 				a.profiles.Profiles[0].MultihopExecution = "server"
+				a.profiles.Profiles[1].NodeKind = "external"
+				a.profiles.Profiles[1].External = &common.ExternalNodeConfig{Protocol: "socks5"}
 			case "compare":
 				a.profiles.Profiles[0].MultihopExecution = "auto"
 			case "wrong-exit":

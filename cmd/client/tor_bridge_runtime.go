@@ -67,10 +67,20 @@ func desktopTorExecutable(root string) (string, error) {
 }
 
 func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
+	return torBridgeRuntimeCapabilityForExecution(root, "local")
+}
+
+func torBridgeRuntimeCapabilityForExecution(root, execution string) standardExitCapability {
 	cap := standardExitCapability{Protocol: "tor-bridge", Implemented: true}
-	if _, err := desktopTorExecutable(root); err != nil {
-		cap.Reason = err.Error()
+	if desktopTorExecution(execution) == "" || runtime.GOOS != "windows" && runtime.GOOS != "darwin" && runtime.GOOS != "linux" {
+		cap.Reason = "Tor requires a supported native desktop execution owner"
 		return cap
+	}
+	if execution != "server" {
+		if _, err := desktopTorExecutable(root); err != nil {
+			cap.Reason = err.Error()
+			return cap
+		}
 	}
 	if _, err := verifyBundledNative(desktopAmneziaPackageRoot()); err != nil {
 		cap.Reason = "the verified Router VPN native engine is required for Tor transports: " + err.Error()
@@ -80,8 +90,20 @@ func torBridgeRuntimeCapabilityForRoot(root string) standardExitCapability {
 	return cap
 }
 
+func desktopTorPolicyRuntimeCapability(policy common.RouterProfile) standardExitCapability {
+	return torBridgeRuntimeCapabilityForExecution(filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")), policy.MultihopExecution)
+}
+
 func torBridgeRuntimeCapability() standardExitCapability {
-	return torBridgeRuntimeCapabilityForRoot(filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client")))
+	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
+	local := torBridgeRuntimeCapabilityForRoot(root)
+	if local.Supported {
+		return local
+	}
+	if server := torBridgeRuntimeCapabilityForExecution(root, "server"); server.Supported {
+		return server
+	}
+	return local
 }
 
 func torRuntimeBridgeTransports(cfg common.ExternalTorBridgeConfig) ([]string, string, error) {
