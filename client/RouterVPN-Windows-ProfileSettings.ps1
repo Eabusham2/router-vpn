@@ -33,6 +33,13 @@ function global:Assert-RouterVPNProfileDeviceCapture {
        ($null -ne $jumbo -and ($jumbo.Value -isnot [bool] -or $jumboSupport.Value -isnot [bool]))){
         throw 'The captured Jumbo capability is incomplete or invalid. Reopen Settings.'
     }
+    $cover=$Captured.PSObject.Properties['daita_enabled'];$rate=$Captured.PSObject.Properties['daita_rate_kbps'];$coverSupport=$Captured.PSObject.Properties['tor_cover_supported']
+    $coverFields=@($cover,$rate,$coverSupport|Where-Object{$null-ne$_}).Count
+    if($coverFields-ne0-and($coverFields-ne3-or$cover.Value-isnot[bool]-or$coverSupport.Value-isnot[bool]-or
+       ($rate.Value-isnot[int]-and$rate.Value-isnot[long])-or($rate.Value-ne0-and($rate.Value-lt32-or$rate.Value-gt192))-or
+       ($coverSupport.Value-and([string]$Captured.protocol-cnotin@('tor','tor-bridge')-or-not$Captured.device_policy_supported)))){
+        throw 'The captured outgoing Tor cover policy is incomplete or invalid. Reopen Settings.'
+    }
 }
 
 function global:Get-RouterVPNProfileDevice {
@@ -43,7 +50,7 @@ function global:Get-RouterVPNProfileDevice {
 }
 
 function global:New-RouterVPNProfileDevicePayload {
-    param($Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN)
+    param($Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN,$DAITAEnabled,$DAITARateKbps)
     Assert-RouterVPNProfileDeviceCapture -Captured $Captured -DisplayedProfileID $DisplayedProfileID
     if(-not $Captured.device_policy_supported){throw 'This node cannot apply common device settings through its native runtime.'}
     if($HomeLANAccess -isnot [bool]){throw 'LAN access must be an explicit Boolean.'}
@@ -71,6 +78,20 @@ function global:New-RouterVPNProfileDevicePayload {
     }
     $body=@{profile_id=$DisplayedProfileID;profile_token=[string]$Captured.profile_token;home_lan_access=$HomeLANAccess;kill_switch_policy=$KillSwitchPolicy;ipv6_mode=$IPv6Mode;mtu_policy=$MTUPolicy;manual_mtu=$manualValue}
     if($jumboChanged){$body.jumbo_tun=$JumboTUN}
+    $hasCover=$PSBoundParameters.ContainsKey('DAITAEnabled');$hasRate=$PSBoundParameters.ContainsKey('DAITARateKbps')
+    if($hasCover-ne$hasRate){throw 'Outgoing Tor cover On/Off and budget must be edited together.'}
+    if($hasCover){
+        $capturedCover=$Captured.PSObject.Properties['daita_enabled'];$capturedRate=$Captured.PSObject.Properties['daita_rate_kbps'];$coverSupport=$Captured.PSObject.Properties['tor_cover_supported']
+        if($null-eq$capturedCover-or$null-eq$capturedRate-or$null-eq$coverSupport-or$DAITAEnabled-isnot[bool]-or
+           ($DAITARateKbps-isnot[string]-and$DAITARateKbps-isnot[int]-and$DAITARateKbps-isnot[long])-or[string]$DAITARateKbps-cnotmatch'\A[0-9]{1,3}\z'){
+            throw 'Outgoing Tor cover requires an explicit On/Off choice and a whole budget: 0 or 32–192 kbit/s.'
+        }
+        $coverRate=[int]$DAITARateKbps
+        if($coverRate-ne0-and($coverRate-lt32-or$coverRate-gt192)){throw 'Outgoing Tor cover budget must be 0 or 32–192 kbit/s.'}
+        $coverChanged=$DAITAEnabled-ne$capturedCover.Value-or$coverRate-ne$capturedRate.Value
+        if($coverChanged-and-not$coverSupport.Value){throw 'This captured path cannot change outgoing Tor cover traffic. Use a saved Server path through a private Router entry.'}
+        if($coverChanged){$body.daita_enabled=$DAITAEnabled;$body.daita_rate_kbps=$coverRate}
+    }
     $hasMode=$PSBoundParameters.ContainsKey('StartupMode');$hasAutomatic=$PSBoundParameters.ContainsKey('AutoConnect')
     if($hasMode -ne $hasAutomatic){throw 'Startup mode and auto-connect must be edited together.'}
     if($hasMode){
@@ -91,7 +112,7 @@ function global:New-RouterVPNProfileDevicePayload {
 }
 
 function global:Save-RouterVPNProfileDevice {
-    param([string]$BaseUrl,$Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN)
+    param([string]$BaseUrl,$Captured,[string]$DisplayedProfileID,$HomeLANAccess,[string]$KillSwitchPolicy,[string]$IPv6Mode,[string]$MTUPolicy,$ManualMTU,$StartupMode,$AutoConnect,$JumboTUN,$DAITAEnabled,$DAITARateKbps)
     $arguments=@{};foreach($key in $PSBoundParameters.Keys){if($key -cne 'BaseUrl'){$arguments[$key]=$PSBoundParameters[$key]}}
     $body=New-RouterVPNProfileDevicePayload @arguments
     if(Test-RouterVPNConnectionProfileBusy -BaseUrl $BaseUrl){throw 'Disconnect Router VPN before saving device settings.'}
@@ -114,6 +135,14 @@ function global:Save-RouterVPNProfileDevice {
         if($null -eq $savedJumbo -or $savedJumbo.Value -ne $expectedJumbo){throw 'The controller did not confirm the captured Jumbo setting.'}
     }
     if($body.ContainsKey('jumbo_tun') -and -not $saved.jumbo_tun_supported){throw 'The controller did not confirm native Jumbo support.'}
+    if($null-ne$Captured.PSObject.Properties['daita_enabled']){
+        $expectedCover=if($body.ContainsKey('daita_enabled')){$body.daita_enabled}else{$Captured.daita_enabled}
+        $expectedRate=if($body.ContainsKey('daita_rate_kbps')){$body.daita_rate_kbps}else{$Captured.daita_rate_kbps}
+        if($null-eq$saved.PSObject.Properties['daita_enabled']-or$saved.daita_enabled-ne$expectedCover-or$saved.daita_rate_kbps-ne$expectedRate-or
+           ($body.ContainsKey('daita_enabled')-and-not$saved.tor_cover_supported)){
+            throw 'The controller did not confirm the captured outgoing Tor cover choice and budget.'
+        }
+    }
     return $saved
 }
 
@@ -251,6 +280,11 @@ function global:Show-RouterVPNProfileSettingsDialog {
 </StackPanel>
 <TextBlock Text="MTU policy"/><ComboBox Name="MTUPolicy" Margin="0,3,0,5"><ComboBoxItem Content="Auto — default" Tag="auto"/><ComboBoxItem Content="Fixed / manual" Tag="manual"/><ComboBoxItem Content="Runtime default" Tag="default"/></ComboBox><TextBox Name="ManualMTU" Margin="0,0,0,5" ToolTip="Fixed MTU 576–9000; ignored for Auto/Runtime default"/><TextBlock Name="Effective" TextWrapping="Wrap" FontSize="11" Foreground="#A8B6D5" Margin="0,0,0,10"/>
 <CheckBox Name="Jumbo" Content="Jumbo virtual interface (9000)" Margin="0,5"/>
+<StackPanel Name="TorCoverSettings" Visibility="Collapsed">
+<CheckBox Name="TorCover" Content="Outgoing Tor cover traffic" Margin="0,5"/>
+<TextBlock Text="Cover budget (kbit/s): 32–192; 0 keeps the default 192"/><TextBox Name="TorCoverRate" Text="0" Margin="0,3,0,5"/>
+<TextBlock Name="TorCoverNote" TextWrapping="Wrap" Foreground="#A8B6D5" FontSize="11" Margin="0,0,0,10"/>
+</StackPanel>
 <StackPanel Name="RouterFeatureSettings">
 <CheckBox Name="DAITA" Content="DAITA-like traffic padding (bounded; supported modes only)" Margin="0,5"/><CheckBox Name="Socks" Content="Enable private in-tunnel SOCKS5 utility" Margin="0,5"/>
 <StackPanel Orientation="Horizontal" Margin="0,4,0,10"><Button Name="Forwarding" Content="Port forwarding / Protected DMZ…" Padding="10,6"/></StackPanel>
@@ -295,6 +329,14 @@ function global:Show-RouterVPNProfileSettingsDialog {
         $nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported
         $settingsSave.IsEnabled=[bool]$externalDevice.device_policy_supported -or $null -ne $externalStartup
         $settingsNote.Text=if($externalDevice.device_policy_supported){[string]$externalDevice.note}else{[string]$externalDevice.device_policy_reason}
+        if([string]$externalDevice.protocol-cin@('tor','tor-bridge')-and$null-ne$externalDevice.PSObject.Properties['daita_enabled']){
+            $dialog.FindName('TorCoverSettings').Visibility='Visible'
+            $dialog.FindName('TorCover').IsChecked=[bool]$externalDevice.daita_enabled
+            $dialog.FindName('TorCoverRate').Text=[string]$externalDevice.daita_rate_kbps
+            $dialog.FindName('TorCover').IsEnabled=[bool]$externalDevice.tor_cover_supported-and[bool]$externalDevice.device_policy_supported
+            $dialog.FindName('TorCoverRate').IsEnabled=$dialog.FindName('TorCover').IsEnabled
+            $dialog.FindName('TorCoverNote').Text=[string]$externalDevice.tor_cover_note
+        }
     }
     $startupCapture=if($null -ne $externalStartup){$externalStartup}else{$externalDevice}
     if($null -ne $startupCapture){
@@ -340,6 +382,10 @@ function global:Show-RouterVPNProfileSettingsDialog {
     if($null -ne $externalDevice -and $externalDevice.device_policy_supported){
         $externalManual=if([string]$mtuPolicy.SelectedItem.Tag -ceq 'manual'){$manual.Text.Trim()}else{0}
         $jumboArguments=@{};if($null -ne $externalDevice.PSObject.Properties['jumbo_tun']){$jumboArguments.JumboTUN=[bool]$jumbo.IsChecked}
+        if([string]$externalDevice.protocol-cin@('tor','tor-bridge')-and$null-ne$externalDevice.PSObject.Properties['daita_enabled']){
+            $jumboArguments.DAITAEnabled=[bool]$dialog.FindName('TorCover').IsChecked
+            $jumboArguments.DAITARateKbps=$dialog.FindName('TorCoverRate').Text.Trim()
+        }
         return Save-RouterVPNProfileDevice @jumboArguments -BaseUrl $BaseUrl -Captured $externalDevice -DisplayedProfileID $DisplayedProfileID -HomeLANAccess ([bool]$lan.IsChecked) -KillSwitchPolicy ([string]$kill.SelectedItem.Tag) -IPv6Mode ([string]$ipv6.SelectedItem.Tag) -MTUPolicy ([string]$mtuPolicy.SelectedItem.Tag) -ManualMTU $externalManual -StartupMode ([string]$startup.SelectedItem.Tag) -AutoConnect ([bool]$autoConnect.IsChecked)
     }
     if($null -ne $externalStartup){

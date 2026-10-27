@@ -17,6 +17,10 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
     let manualMTU: Int
     let jumboTUN: Bool?
     let jumboTUNSupported: Bool?
+    let daitaEnabled: Bool?
+    let daitaRateKbps: Int?
+    let torCoverSupported: Bool?
+    let torCoverNote: String?
     let effectiveMTU: Int?
     let mtuSource: String?
     let startupMode: String
@@ -30,6 +34,8 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         case killSwitchPolicy = "kill_switch_policy", ipv6Mode = "ipv6_mode", mtuPolicy = "mtu_policy"
         case manualMTU = "manual_mtu", effectiveMTU = "effective_mtu", mtuSource = "mtu_source"
         case jumboTUN = "jumbo_tun", jumboTUNSupported = "jumbo_tun_supported"
+        case daitaEnabled = "daita_enabled", daitaRateKbps = "daita_rate_kbps"
+        case torCoverSupported = "tor_cover_supported", torCoverNote = "tor_cover_note"
         case startupMode = "startup_mode", autoConnect = "auto_connect"
         case note
     }
@@ -48,6 +54,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         let object = try JSONSerialization.jsonObject(with: data) as? [String: Any]
         let hasJumbo = object?["jumbo_tun"] != nil
         let hasJumboSupport = object?["jumbo_tun_supported"] != nil
+        let coverFields = ["daita_enabled", "daita_rate_kbps", "tor_cover_supported"].filter { object?[$0] != nil }.count
         guard !displayedProfileID.isEmpty, value.profileID == displayedProfileID,
               validToken(value.profileToken), value.nodeKind == "external", !value.protocolName.isEmpty,
               ["off", "on-connect", "always"].contains(value.killSwitchPolicy),
@@ -56,7 +63,10 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
               ["auto", "smart-auto", "last", "manual"].contains(value.startupMode),
               (value.mtuPolicy == "manual" ? (1280...9000).contains(value.manualMTU) : value.manualMTU == 0),
               hasJumbo == hasJumboSupport,
-              !hasJumbo || (value.jumboTUN != nil && value.jumboTUNSupported != nil) else {
+              !hasJumbo || (value.jumboTUN != nil && value.jumboTUNSupported != nil),
+              coverFields == 0 || (coverFields == 3 && value.daitaEnabled != nil && value.torCoverSupported != nil &&
+                  value.daitaRateKbps.map { $0 == 0 || (32...192).contains($0) } == true),
+              value.torCoverSupported != true || (value.isTor && value.devicePolicySupported) else {
             throw issue("The selected node or its device policy changed. Reopen Settings.")
         }
         return value
@@ -65,6 +75,7 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
     // Imported nodes use their saved protocol/graph for both historical AUTO
     // spellings. Displaying that alias must not rewrite the stored preference.
     var displayedStartup: String { startupMode == "smart-auto" ? "auto" : startupMode }
+    var isTor: Bool { protocolName == "tor" || protocolName == "tor-bridge" }
 
     struct Edits: Sendable {
         var homeLANAccess: Bool
@@ -75,6 +86,8 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         var startupMode: String
         var autoConnect: Bool
         var jumboTUN: Bool? = nil
+        var daitaEnabled: Bool? = nil
+        var daitaRateKbpsText: String? = nil
     }
 
     func saveData(displayedProfileID: String, edits: Edits) throws -> Data {
@@ -121,6 +134,22 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
         if let changed = edits.jumboTUN, changed != jumboTUN {
             body["jumbo_tun"] = changed
         }
+        guard (edits.daitaEnabled != nil) == (edits.daitaRateKbpsText != nil) else {
+            throw Self.issue("Outgoing Tor cover On/Off and budget must be edited together.")
+        }
+        if let enabled = edits.daitaEnabled, let rateText = edits.daitaRateKbpsText {
+            let text = rateText.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let capturedEnabled = daitaEnabled, let capturedRate = daitaRateKbps,
+                  (1...3).contains(text.utf8.count), text.utf8.allSatisfy({ (48...57).contains($0) }),
+                  let rate = Int(text), rate == 0 || (32...192).contains(rate) else {
+                throw Self.issue("Outgoing Tor cover requires an explicit On/Off choice and a whole budget: 0 or 32–192 kbit/s.")
+            }
+            let changed = enabled != capturedEnabled || rate != capturedRate
+            guard !changed || torCoverSupported == true else {
+                throw Self.issue("This captured path cannot change outgoing Tor cover traffic. Use a saved Server path through a private Router entry.")
+            }
+            if changed { body["daita_enabled"] = enabled; body["daita_rate_kbps"] = rate }
+        }
         return try JSONSerialization.data(withJSONObject: body)
     }
 
@@ -152,7 +181,10 @@ struct MacProfileDeviceSettings: Decodable, Sendable {
               saved.startupMode == (request?["startup_mode"] as? String ?? startupMode),
               saved.autoConnect == (request?["auto_connect"] as? Bool ?? autoConnect),
               jumboTUN == nil || saved.jumboTUN == (request?["jumbo_tun"] as? Bool ?? jumboTUN),
-              request?["jumbo_tun"] == nil || saved.jumboTUNSupported == true else {
+              request?["jumbo_tun"] == nil || saved.jumboTUNSupported == true,
+              daitaEnabled == nil || (saved.daitaEnabled == (request?["daita_enabled"] as? Bool ?? daitaEnabled) &&
+                  saved.daitaRateKbps == (request?["daita_rate_kbps"] as? Int ?? daitaRateKbps)),
+              request?["daita_enabled"] == nil || saved.torCoverSupported == true else {
             throw Self.issue("The controller did not confirm the captured device settings. Refresh Settings before retrying.")
         }
     }

@@ -101,6 +101,8 @@ func saved(_ override: [String: Any] = [:]) -> [String: Any] {
         "mtu_policy": "auto", "manual_mtu": 0, "effective_mtu": 1392, "mtu_source": "historical path",
         "startup_mode": "smart-auto", "auto_connect": false,
         "external": ["password": "must-never-copy"], "jumbo_tun": false, "jumbo_tun_supported": false,
+        "daita_enabled": false, "daita_rate_kbps": 0, "tor_cover_supported": false,
+        "tor_cover_note": "Outgoing Tor cells only; Connect requires a fresh server receipt.",
         "dns_mode": "home", "entry_id": "independent-entry", "start_layer": "private-policy"
     ]
     result.merge(override) { _, current in current }
@@ -110,7 +112,9 @@ func edited(_ capture: MacProfileDeviceSettings) -> MacProfileDeviceSettings.Edi
     MacProfileDeviceSettings.Edits(homeLANAccess: capture.homeLANAccess,
         killSwitchPolicy: capture.killSwitchPolicy, ipv6Mode: capture.ipv6Mode,
         mtuPolicy: capture.mtuPolicy, manualMTUText: String(capture.manualMTU),
-        startupMode: capture.displayedStartup, autoConnect: capture.autoConnect, jumboTUN: capture.jumboTUN)
+        startupMode: capture.displayedStartup, autoConnect: capture.autoConnect, jumboTUN: capture.jumboTUN,
+        daitaEnabled: capture.isTor ? capture.daitaEnabled : nil,
+        daitaRateKbpsText: capture.isTor ? capture.daitaRateKbps.map(String.init) : nil)
 }
 func echo(_ body: Data, original: [String: Any] = saved()) -> Data {
     var response = original
@@ -333,12 +337,72 @@ do {
         rejects("Partial Jumbo capability was accepted") { _ = try MacProfileDeviceSettings.capture(data(partial), displayedProfileID:fixtureID) }
     }
 }
+for proto in ["tor","tor-bridge"] {
+    for initial in [false,true] { for initialRate in [0,32,64,192] {
+        let original = saved(["protocol":proto,"daita_enabled":initial,"daita_rate_kbps":initialRate,"tor_cover_supported":true])
+        let tor = try MacProfileDeviceSettings.capture(data(original), displayedProfileID:fixtureID)
+        for selected in [false,true] { for rate in [0,32,64,192] {
+            var values = edited(tor); values.daitaEnabled = selected; values.daitaRateKbpsText = String(rate)
+            let body = object(try tor.saveData(displayedProfileID:fixtureID, edits:values))
+            let changed = selected != initial || rate != initialRate
+            check(Set(body.keys) == (changed ? keys.union(["daita_enabled","daita_rate_kbps"]) : keys), "Cover pair lost explicit edit ownership")
+            if changed { check(body["daita_enabled"] as? Bool == selected && body["daita_rate_kbps"] as? Int == rate, "Cover flag or exact dormant budget was replaced") }
+            try tor.save(edits:values, displayedProfileID:{fixtureID}, readStatus:{data(idleState)}, persist:{echo($0,original:original)})
+        } }
+    } }
+}
+do {
+    let original = saved(["protocol":"tor","daita_rate_kbps":64,"tor_cover_supported":true])
+    let tor = try MacProfileDeviceSettings.capture(data(original), displayedProfileID:fixtureID)
+    for rate in ["", "31", "193", "-1", "64.0", "6.4e1", "+64", "６４"] {
+        var values = edited(tor); values.daitaEnabled = true; values.daitaRateKbpsText = rate
+        rejects("Invalid cover budget was accepted") { _ = try tor.saveData(displayedProfileID:fixtureID, edits:values) }
+    }
+    for missingFlag in [false,true] {
+        var values = edited(tor)
+        if missingFlag { values.daitaEnabled = nil } else { values.daitaRateKbpsText = nil }
+        rejects("Incomplete cover edit was accepted") { _ = try tor.saveData(displayedProfileID:fixtureID, edits:values) }
+    }
+    let local = try MacProfileDeviceSettings.capture(data(saved(["protocol":"tor","daita_rate_kbps":64])), displayedProfileID:fixtureID)
+    check(Set(object(try local.saveData(displayedProfileID:fixtureID, edits:edited(local))).keys) == keys, "Unchanged unsupported cover invented a write")
+    for flag in [false,true] {
+        var values = edited(local); values.daitaEnabled = flag; values.daitaRateKbpsText = flag ? "64" : "32"
+        rejects("Unsupported path changed outgoing cover") { _ = try local.saveData(displayedProfileID:fixtureID, edits:values) }
+    }
+    for field in ["daita_enabled","daita_rate_kbps","tor_cover_supported"] {
+        var partial = original; partial.removeValue(forKey:field)
+        rejects("Partial cover capture was accepted") { _ = try MacProfileDeviceSettings.capture(data(partial), displayedProfileID:fixtureID) }
+    }
+    var legacy = saved(["protocol":"tor"])
+    for field in ["daita_enabled","daita_rate_kbps","tor_cover_supported"] { legacy.removeValue(forKey:field) }
+    let old = try MacProfileDeviceSettings.capture(data(legacy), displayedProfileID:fixtureID)
+    check(Set(object(try old.saveData(displayedProfileID:fixtureID, edits:edited(old))).keys) == keys, "Legacy capture invented cover settings")
+    var changed = edited(tor); changed.daitaEnabled = true
+    for field in ["daita_enabled","daita_rate_kbps","tor_cover_supported"] {
+        rejects("Unconfirmed cover was announced as saved") {
+            try tor.save(edits:changed, displayedProfileID:{fixtureID}, readStatus:{data(idleState)}, persist:{
+                var response = object(echo($0,original:original)); response[field] = field == "daita_rate_kbps" ? 192 : false
+                return data(response)
+            })
+        }
+    }
+    var omitted = edited(tor); omitted.daitaEnabled = nil; omitted.daitaRateKbpsText = nil
+    rejects("Omitted cover budget changed without confirmation") {
+        try tor.save(edits:omitted, displayedProfileID:{fixtureID}, readStatus:{data(idleState)}, persist:{
+            var response = object(echo($0,original:original)); response["daita_rate_kbps"] = 192; return data(response)
+        })
+    }
+}
 let invalidCaptures: [[String:Any]] = [
     ["profile_id":"foreign"], ["profile_token":"short"], ["profile_token":String(repeating:"G",count:64)],
     ["node_kind":"router-vpn"], ["device_policy_supported":"true"], ["home_lan_access":"false"],
     ["auto_connect":1], ["manual_mtu":"1280"], ["mtu_policy":"fixed"], ["startup_mode":"unknown"],
     ["ipv6_mode":"maybe"], ["kill_switch_policy":"maybe"], ["manual_mtu":1392],
     ["jumbo_tun":"true"], ["jumbo_tun_supported":1], ["jumbo_tun":NSNull(),"jumbo_tun_supported":NSNull()],
+    ["daita_enabled":"true"], ["daita_enabled":1], ["daita_enabled":NSNull()], ["daita_rate_kbps":"64"],
+    ["daita_rate_kbps":true], ["daita_rate_kbps":NSNull()], ["daita_rate_kbps":31], ["daita_rate_kbps":193],
+    ["daita_rate_kbps":64.5], ["tor_cover_supported":true], ["tor_cover_supported":NSNull()],
+    ["protocol":"tor","tor_cover_supported":true,"device_policy_supported":false],
     ["mtu_policy":"manual","manual_mtu":1279], ["mtu_policy":"manual","manual_mtu":9001]
 ]
 for override in invalidCaptures {
@@ -409,6 +473,13 @@ func manual(_ alert: NSAlert) -> NSTextField {
     }
     fatalError("device fixture: Missing fixed MTU field")
 }
+func coverRate(_ alert: NSAlert) -> NSTextField {
+    for row in descendants(alert.accessoryView!).compactMap({$0 as? NSStackView}) {
+        if (row.arrangedSubviews.first as? NSTextField)?.stringValue.hasPrefix("Cover budget (kbit/s):") == true,
+           let result = row.arrangedSubviews.last as? NSTextField { return result }
+    }
+    fatalError("device fixture: Missing outgoing cover budget field")
+}
 func choose(_ popup: NSPopUpButton, _ id: String) {
     guard let index = popup.items.firstIndex(where:{$0.representedObject as? String == id}) else {
         fatalError("device fixture: Missing policy choice " + id)
@@ -436,7 +507,9 @@ func inspectCommon(_ alert: NSAlert, editable: Bool) {
     for title in ["WG / AWG base","Start layer"] {
         check(!popup(alert,title).isEnabled, "Imported node enabled a Router-only control")
     }
-    for title in ["DAITA-like traffic padding (bounded; supported modes only)","Jumbo virtual interface (9000)","Private in-tunnel SOCKS5 utility"] {
+    let coverTitle = descendants(alert.accessoryView!).compactMap{$0 as? NSButton}.contains{$0.title == "Outgoing Tor cover traffic"}
+        ? "Outgoing Tor cover traffic" : "DAITA-like traffic padding (bounded; supported modes only)"
+    for title in [coverTitle,"Jumbo virtual interface (9000)","Private in-tunnel SOCKS5 utility"] {
         check(!button(alert,title).isEnabled, "Imported node enabled unsupported Router-only mutation")
     }
 }
@@ -519,6 +592,42 @@ for initial in [false,true] {
         check(body["jumbo_tun"] as? Bool == !initial && Set(body.keys) == keys.union(["jumbo_tun"]), "Real Jumbo toggle missed its narrow atomic payload")
         check(body["mtu_policy"] as? String == policy && body["manual_mtu"] as? Int == (policy == "manual" ? 9000 : 0), "Real Jumbo control changed MTU choice")
     }
+}
+for proto in ["tor","tor-bridge"] {
+    for initial in [false,true] { for initialRate in [0,32,64,192] {
+        for selected in [false,true] { for rate in [0,32,64,192] {
+            let api = ProductAPI()
+            api.device = saved(["protocol":proto,"daita_enabled":initial,"daita_rate_kbps":initialRate,"tor_cover_supported":true])
+            let owner = runEditor(api) { alert,_ in
+                let cover = button(alert,"Outgoing Tor cover traffic"), budget = coverRate(alert)
+                check(cover.isEnabled && budget.isEnabled, "Real cover form lost captured capability")
+                check((cover.state == .on) == initial && budget.stringValue == String(initialRate), "Real cover form replaced the saved flag or budget")
+                check(descendants(alert.accessoryView!).compactMap{$0 as? NSTextField}.contains{$0.stringValue == api.device["tor_cover_note"] as? String}, "Real cover form lost captured receipt boundary")
+                cover.state = selected ? .on : .off; budget.stringValue = String(rate)
+                return .alertFirstButtonReturn
+            }
+            check(owner.error.isEmpty && api.writes.count == 1 && api.writes[0].0 == "/api/profile/device", "Real cover Save lost its owned atomic route")
+            let body = object(api.writes[0].1), changed = selected != initial || rate != initialRate
+            check(Set(body.keys) == (changed ? keys.union(["daita_enabled","daita_rate_kbps"]) : keys), "Real cover Save copied unrelated fields or rewrote an untouched pair")
+            check(body["profile_token"] as? String == fixtureToken, "Real cover Save lost captured entry ownership")
+            if changed { check(body["daita_enabled"] as? Bool == selected && body["daita_rate_kbps"] as? Int == rate, "Real cover controls did not reach the exact atomic pair") }
+        } }
+    } }
+}
+for defect in ["unsupported","budget","unavailable","busy"] {
+    let api = ProductAPI()
+    api.device = saved(["protocol":"tor","daita_enabled":defect == "unavailable","daita_rate_kbps":64,
+        "tor_cover_supported":defect == "budget" || defect == "busy","device_policy_supported":defect != "unavailable"])
+    if defect == "busy" { api.onStatus = {_ in data(["connected":true,"phase":"connected"])} }
+    let owner = runEditor(api) { alert,_ in
+        let cover = button(alert,"Outgoing Tor cover traffic"), budget = coverRate(alert)
+        check(cover.isEnabled == (defect == "budget") && budget.isEnabled == (defect == "budget"), "Real cover form ignored unsupported/busy ownership")
+        check((cover.state == .on) == (defect == "unavailable") && budget.stringValue == "64", "Unsupported cover state was silently reset")
+        if defect == "unavailable" || defect == "busy" { return .alertSecondButtonReturn }
+        cover.state = .on; if defect == "budget" { budget.stringValue = "31" }
+        return .alertFirstButtonReturn
+    }
+    check(api.writes.isEmpty && ((defect == "unavailable" || defect == "busy") || !owner.error.isEmpty), "Real invalid cover edit reached persistence")
 }
 for conflict in ["fixed","unsupported"] {
     let api = ProductAPI(); api.device = saved(["protocol":"tor-bridge","jumbo_tun_supported":conflict != "unsupported"])
@@ -657,6 +766,12 @@ def executable(negative=True):
         exercise("shipping")
         if negative:
             variants = (
+                ("cover-capability", "model", "guard !changed || torCoverSupported == true else", "guard true else"),
+                ("cover-bounds", "model", "let rate = Int(text), rate == 0 || (32...192).contains(rate) else", "let rate = Int(text) else"),
+                ("cover-dormant-budget", "model", 'body["daita_rate_kbps"] = rate', 'body["daita_rate_kbps"] = 192'),
+                ("cover-form", "settings", "if torCoverKnown { daita.isEnabled = supportsDeviceSettings && capturedDevice?.torCoverSupported == true && !settingsMutationBusy }", "if torCoverKnown { daita.isEnabled = false }"),
+                ("cover-captured-flag", "settings", "settings.daitaEnabled = capturedDevice.daitaEnabled ?? false", "settings.daitaEnabled = false"),
+                ("cover-captured-budget", "settings", 'NSTextField(string: capturedDevice?.daitaRateKbps.map(String.init) ?? "0")', 'NSTextField(string: "192")'),
                 ("fresh-idle", "model", "try Self.requireIdle(readStatus())", "_ = try readStatus()"),
                 ("jumbo-capability", "model", "guard jumboTUNSupported == true, jumboTUN != nil else", "guard jumboTUN != nil else"),
                 ("jumbo-fixed-conflict", "model", 'guard selectedJumbo != true || edits.mtuPolicy != "manual" || fixed == 9000 else', "guard true else"),

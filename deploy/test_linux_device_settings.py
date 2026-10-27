@@ -41,6 +41,12 @@ def main():
     callback = settings.split("static void on_profile_settings_v7(", 1)[1]
     assert callback.index("linux_device_settings_open_v1(app)") < callback.index('api_request("/api/profile/settings"')
     variants = {
+        "cover-capability": ('if (cover_changed && (!s->cover_known || !s->cover_supported))', 'if (FALSE && (!s->cover_known || !s->cover_supported))'),
+        "cover-bounds": ('return *value == 0 || (*value >= 32 && *value <= 192);', 'return TRUE;'),
+        "cover-dormant-budget": ('json_object_set_int_member(o, "daita_rate_kbps", cover_rate);', 'json_object_set_int_member(o, "daita_rate_kbps", 192);'),
+        "cover-form": ('gtk_widget_set_sensitive(s->cover, supported && s->idle && cover_supported);', 'gtk_widget_set_sensitive(s->cover, supported && s->idle);'),
+        "cover-captured-flag": ('gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->cover), cover);', 'gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->cover), FALSE);'),
+        "cover-confirmation": ('(cover != s->initial_cover || cover_rate != s->initial_cover_rate)', '(cover != s->initial_cover)'),
         "jumbo-capability": ('if (jumbo_changed && (!s->jumbo_known || !s->jumbo_supported))', 'if (FALSE && (!s->jumbo_known || !s->jumbo_supported))'),
         "jumbo-fixed-conflict": ('if (jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000)', 'if (FALSE && jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000)'),
         "jumbo-explicit-edit": ('if (jumbo_changed) json_object_set_boolean_member(o, "jumbo_tun", jumbo);', 'if (s->jumbo_known) json_object_set_boolean_member(o, "jumbo_tun", jumbo);'),

@@ -53,6 +53,11 @@ def main():
     for name in ("DAITA", "Socks", "Forwarding"):
         if controls[name] not in list(controls["RouterFeatureSettings"].iter()):
             raise AssertionError("Router-only feature escaped its container: " + name)
+    for name in ("TorCover", "TorCoverRate", "TorCoverNote"):
+        if controls[name] not in list(controls["TorCoverSettings"].iter()) or controls[name] in list(controls["RouterFeatureSettings"].iter()):
+            raise AssertionError("Tor cover escaped its captured device group: " + name)
+    if controls["TorCover"].attrib.get("Content") != "Outgoing Tor cover traffic":
+        raise AssertionError("Tor cover was mislabeled as bidirectional DAITA")
     if controls["Jumbo"] in list(controls["RouterFeatureSettings"].iter()) or controls["Jumbo"].attrib.get("Content") != "Jumbo virtual interface (9000)":
         raise AssertionError("Captured native Jumbo control is hidden or mislabeled")
     for name in ("Startup", "AutoConnect"):
@@ -65,6 +70,10 @@ def main():
     if args.shipping_only:
         return
     mutations = [
+        ("cover-capability", "helper", "if($coverChanged-and-not$coverSupport.Value)", "if($false-and-not$coverSupport.Value)", "CONTROL unsupported path changed cover traffic"),
+        ("cover-bounds", "helper", "if($coverRate-ne0-and($coverRate-lt32-or$coverRate-gt192))", "if($false)", "CONTROL invalid cover budget was accepted"),
+        ("cover-dormant-budget", "helper", "$body.daita_rate_kbps=$coverRate", "$body.daita_rate_kbps=192", "CONTROL cover flag or exact dormant budget was replaced"),
+        ("cover-confirmation", "helper", "$saved.daita_rate_kbps-ne$expectedRate", "$false", "CONTROL unconfirmed cover announced success daita_rate_kbps"),
         ("jumbo-capability", "helper", "if($jumboChanged -and ($null -eq $jumboSupport -or -not $jumboSupport.Value))", "if($false -and ($null -eq $jumboSupport -or -not $jumboSupport.Value))", "CONTROL unsupported Jumbo changed"),
         ("jumbo-fixed-conflict", "helper", "if($selectedJumbo -eq $true -and $MTUPolicy -ceq 'manual' -and $manualValue -ne 9000)", "if($false)", "CONTROL Jumbo accepted conflicting Fixed MTU"),
         ("jumbo-explicit-edit", "helper", "if($jumboChanged){$body.jumbo_tun=$JumboTUN}", "if($null -ne $jumboCapture){$body.jumbo_tun=$selectedJumbo}", "CONTROL device payload copied unrelated or private fields"),
@@ -90,6 +99,7 @@ def main():
         # prefix. Keep the actual form mutation and require its own assertion.
         mutations.append(("unsupported-form", "helper", "$nodeSettings.IsEnabled=[bool]$externalDevice.device_policy_supported", "$nodeSettings.IsEnabled=$true", "CONTROL unsupported WPF form"))
         mutations.append(("jumbo-form", "helper", "$jumbo.IsEnabled=$null -ne $jumboSupport -and [bool]$jumboSupport.Value -and [bool]$externalDevice.device_policy_supported", "$jumbo.IsEnabled=$false", "CONTROL native Jumbo capability was not enforced by form"))
+        mutations.append(("cover-form", "helper", "$dialog.FindName('TorCover').IsEnabled=[bool]$externalDevice.tor_cover_supported-and[bool]$externalDevice.device_policy_supported", "$dialog.FindName('TorCover').IsEnabled=$false", "CONTROL native cover capability was not enforced by form"))
     with tempfile.TemporaryDirectory(prefix="routervpn-windows-device-") as temp:
         for name, kind, old, new, rejection in mutations:
             variant = replace_once(source if kind == "helper" else shell_source, old, new)

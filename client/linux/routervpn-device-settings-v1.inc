@@ -3,9 +3,12 @@
 typedef struct {
     App *app;
     GtkWidget *dialog, *message, *lan, *kill, *ipv6, *mtu, *manual, *jumbo, *startup, *automatic;
+    GtkWidget *cover, *cover_rate;
     char *profile, *token, *initial_startup, *original_startup;
     gboolean supported, idle, initial_automatic;
     gboolean jumbo_known, jumbo_supported, initial_jumbo;
+    gboolean cover_known, cover_supported, initial_cover;
+    gint64 initial_cover_rate;
 } LinuxDeviceSettingsV1;
 
 static const char *linux_device_string_v1(JsonObject *o, const char *name) {
@@ -70,6 +73,26 @@ static gboolean linux_device_fixed_v1(const char *text, gint64 *value) {
     *value = g_ascii_strtoll(text, NULL, 10);
     return *value >= 1280 && *value <= 9000;
 }
+static gboolean linux_device_cover_rate_v1(const char *text, gint64 *value) {
+    if (text == NULL || !text[0] || strlen(text) > 3) return FALSE;
+    for (const char *p = text; *p; p++) if (!g_ascii_isdigit(*p)) return FALSE;
+    *value = g_ascii_strtoll(text, NULL, 10);
+    return *value == 0 || (*value >= 32 && *value <= 192);
+}
+static gboolean linux_device_cover_capture_v1(JsonObject *o, gboolean *known, gboolean *enabled, gint64 *rate, gboolean *supported) {
+    gboolean has_enabled = o != NULL && json_object_has_member(o, "daita_enabled");
+    gboolean has_rate = o != NULL && json_object_has_member(o, "daita_rate_kbps");
+    gboolean has_support = o != NULL && json_object_has_member(o, "tor_cover_supported");
+    *known = has_enabled;
+    if (!has_enabled && !has_rate && !has_support) return TRUE;
+    if (!has_enabled || !has_rate || !has_support ||
+        !linux_device_bool_v1(o, "daita_enabled", enabled) || !linux_device_integer_v1(o, "daita_rate_kbps", rate) ||
+        !linux_device_bool_v1(o, "tor_cover_supported", supported) || (*rate != 0 && (*rate < 32 || *rate > 192))) return FALSE;
+    const char *protocol = linux_device_string_v1(o, "protocol");
+    gboolean device = FALSE;
+    return !*supported || ((g_strcmp0(protocol, "tor") == 0 || g_strcmp0(protocol, "tor-bridge") == 0) &&
+        linux_device_bool_v1(o, "device_policy_supported", &device) && device);
+}
 static char *linux_device_payload_v1(LinuxDeviceSettingsV1 *s) {
     const char *kill = gtk_combo_box_get_active_id(GTK_COMBO_BOX(s->kill));
     const char *ipv6 = gtk_combo_box_get_active_id(GTK_COMBO_BOX(s->ipv6));
@@ -98,6 +121,15 @@ static char *linux_device_payload_v1(LinuxDeviceSettingsV1 *s) {
     if (jumbo && g_strcmp0(mtu, "manual") == 0 && manual != 9000) {
         linux_device_message_v1(s, "Jumbo uses a 9000-byte virtual interface. Choose Fixed 9000 or disable Jumbo; no MTU choice was changed."); return NULL;
     }
+    gboolean cover = gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(s->cover));
+    gint64 cover_rate = 0;
+    if (!linux_device_cover_rate_v1(gtk_entry_get_text(GTK_ENTRY(s->cover_rate)), &cover_rate)) {
+        linux_device_message_v1(s, "Outgoing Tor cover budget must be a whole number: 0 or 32–192 kbit/s."); return NULL;
+    }
+    gboolean cover_changed = cover != s->initial_cover || cover_rate != s->initial_cover_rate;
+    if (cover_changed && (!s->cover_known || !s->cover_supported)) {
+        linux_device_message_v1(s, "This captured path cannot change outgoing Tor cover traffic. Use a saved Server path through a private Router entry."); return NULL;
+    }
     JsonObject *o = json_object_new();
     json_object_set_string_member(o, "profile_id", s->profile);
     json_object_set_string_member(o, "profile_token", s->token);
@@ -107,6 +139,10 @@ static char *linux_device_payload_v1(LinuxDeviceSettingsV1 *s) {
     json_object_set_string_member(o, "mtu_policy", mtu);
     json_object_set_int_member(o, "manual_mtu", manual);
     if (jumbo_changed) json_object_set_boolean_member(o, "jumbo_tun", jumbo);
+    if (cover_changed) {
+        json_object_set_boolean_member(o, "daita_enabled", cover);
+        json_object_set_int_member(o, "daita_rate_kbps", cover_rate);
+    }
     // An unchanged display alias (SMART AUTO -> Saved connection) cannot
     // rewrite the source's startup choice during a device-only edit.
     if (g_strcmp0(startup, s->initial_startup) != 0 || automatic != s->initial_automatic) {
@@ -148,6 +184,12 @@ static gboolean linux_device_confirm_v1(LinuxDeviceSettingsV1 *s, const char *bo
             (!linux_device_bool_v1(saved, "jumbo_tun", &jumbo) || !linux_device_bool_v1(saved, "jumbo_tun_supported", &jumbo_supported)))) valid = FALSE;
         if (s->jumbo_known && (!has_jumbo || (!json_object_has_member(request, "jumbo_tun") && jumbo != s->initial_jumbo))) valid = FALSE;
         if (json_object_has_member(request, "jumbo_tun") && !jumbo_supported) valid = FALSE;
+        gboolean cover_known = FALSE, cover = FALSE, cover_supported = FALSE;
+        gint64 cover_rate = 0;
+        if (!linux_device_cover_capture_v1(saved, &cover_known, &cover, &cover_rate, &cover_supported)) valid = FALSE;
+        if (s->cover_known && (!cover_known || (!json_object_has_member(request, "daita_enabled") &&
+            (cover != s->initial_cover || cover_rate != s->initial_cover_rate)))) valid = FALSE;
+        if (json_object_has_member(request, "daita_enabled") && !cover_supported) valid = FALSE;
     }
     if (sent != NULL) json_node_free(sent);
     if (received != NULL) json_node_free(received);
@@ -177,6 +219,8 @@ static gboolean linux_device_save_v1(LinuxDeviceSettingsV1 *s) {
 }
 static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonObject *captured, const char *expected) {
     gboolean lan, automatic, supported, jumbo = FALSE, jumbo_supported = FALSE;
+    gboolean cover_known = FALSE, cover = FALSE, cover_supported = FALSE;
+    gint64 cover_rate = 0;
     gint64 manual;
     const char *profile = linux_device_string_v1(captured, "profile_id");
     const char *token = linux_device_string_v1(captured, "profile_token");
@@ -201,11 +245,13 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
         !linux_device_choice_v1(startup, linux_device_startup_ids_v1, G_N_ELEMENTS(linux_device_startup_ids_v1)) ||
         (g_strcmp0(mtu, "manual") == 0 ? manual < 1280 || manual > 9000 : manual != 0) ||
         has_jumbo != has_jumbo_support || (has_jumbo &&
-        (!linux_device_bool_v1(captured, "jumbo_tun", &jumbo) || !linux_device_bool_v1(captured, "jumbo_tun_supported", &jumbo_supported)))) return FALSE;
+        (!linux_device_bool_v1(captured, "jumbo_tun", &jumbo) || !linux_device_bool_v1(captured, "jumbo_tun_supported", &jumbo_supported))) ||
+        !linux_device_cover_capture_v1(captured, &cover_known, &cover, &cover_rate, &cover_supported)) return FALSE;
     s->app = app; s->profile = g_strdup(profile); s->token = g_strdup(token);
     s->initial_startup = g_strdup(startup); s->initial_automatic = automatic;
     s->original_startup = g_strdup(original_startup);
     s->jumbo_known = has_jumbo; s->jumbo_supported = jumbo_supported; s->initial_jumbo = jumbo;
+    s->cover_known = cover_known; s->cover_supported = cover_supported; s->initial_cover = cover; s->initial_cover_rate = cover_rate;
     s->supported = supported; s->idle = !routervpn_mutation_busy(app);
     s->dialog = gtk_dialog_new_with_buttons("Imported node settings", GTK_WINDOW(app->window),
         GTK_DIALOG_MODAL | GTK_DIALOG_DESTROY_WITH_PARENT, "Cancel", GTK_RESPONSE_CANCEL,
@@ -241,6 +287,25 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->jumbo), jumbo);
     gtk_widget_set_sensitive(s->jumbo, supported && s->idle && jumbo_supported);
     gtk_box_pack_start(GTK_BOX(box), s->jumbo, FALSE, FALSE, 0);
+    GtkWidget *cover_box = gtk_box_new(GTK_ORIENTATION_VERTICAL, 6);
+    gtk_box_pack_start(GTK_BOX(box), cover_box, FALSE, FALSE, 0);
+    s->cover = gtk_check_button_new_with_label("Outgoing Tor cover traffic");
+    gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->cover), cover);
+    gtk_widget_set_sensitive(s->cover, supported && s->idle && cover_supported);
+    gtk_box_pack_start(GTK_BOX(cover_box), s->cover, FALSE, FALSE, 0);
+    GtkWidget *cover_label = gtk_label_new("Cover budget (kbit/s): 32–192; 0 keeps the default 192");
+    gtk_label_set_xalign(GTK_LABEL(cover_label), 0.0f);
+    gtk_box_pack_start(GTK_BOX(cover_box), cover_label, FALSE, FALSE, 0);
+    s->cover_rate = gtk_entry_new();
+    char *rate_text = g_strdup_printf("%" G_GINT64_FORMAT, cover_rate);
+    gtk_entry_set_text(GTK_ENTRY(s->cover_rate), rate_text); g_free(rate_text);
+    gtk_widget_set_sensitive(s->cover_rate, supported && s->idle && cover_supported);
+    gtk_box_pack_start(GTK_BOX(cover_box), s->cover_rate, FALSE, FALSE, 0);
+    const char *cover_note = linux_device_string_v1(captured, "tor_cover_note");
+    GtkWidget *cover_detail = gtk_label_new(cover_note != NULL ? cover_note : "Outgoing cover is a saved preference. Connect must prove the selected server and its live cover receipt.");
+    gtk_label_set_xalign(GTK_LABEL(cover_detail), 0.0f); gtk_label_set_line_wrap(GTK_LABEL(cover_detail), TRUE);
+    gtk_label_set_max_width_chars(GTK_LABEL(cover_detail), 65);
+    gtk_box_pack_start(GTK_BOX(cover_box), cover_detail, FALSE, FALSE, 0);
     s->automatic = gtk_check_button_new_with_label("Auto-connect when Router VPN starts");
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(s->automatic), automatic);
     gtk_box_pack_start(GTK_BOX(box), s->automatic, FALSE, FALSE, 0);
@@ -267,7 +332,10 @@ static gboolean linux_device_build_v1(LinuxDeviceSettingsV1 *s, App *app, JsonOb
     linux_device_mtu_changed_v1(GTK_COMBO_BOX(s->mtu), s);
     linux_device_startup_changed_v1(GTK_COMBO_BOX(s->startup), s);
     g_object_set_data(G_OBJECT(s->dialog), "router-vpn-device-settings-v1", s);
-    gtk_widget_show_all(s->dialog); return TRUE;
+    gtk_widget_show_all(s->dialog);
+    const char *protocol = linux_device_string_v1(captured, "protocol");
+    if (!cover_known || (g_strcmp0(protocol, "tor") != 0 && g_strcmp0(protocol, "tor-bridge") != 0)) gtk_widget_hide(cover_box);
+    return TRUE;
 }
 static void linux_device_clear_v1(LinuxDeviceSettingsV1 *s) {
     if (s->dialog != NULL) { gtk_widget_destroy(s->dialog); g_object_unref(s->dialog); }

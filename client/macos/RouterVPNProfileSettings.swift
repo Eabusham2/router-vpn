@@ -372,6 +372,7 @@ extension ProductWindowController {
                 settings.mtuPolicy = capturedDevice.mtuPolicy
                 settings.manualMTU = capturedDevice.manualMTU
                 settings.jumboTUN = capturedDevice.jumboTUN ?? false
+                settings.daitaEnabled = capturedDevice.daitaEnabled ?? false
                 settings.effectiveMTU = capturedDevice.effectiveMTU
                 settings.effectiveMTUSource = capturedDevice.mtuSource
                 if supportsDeviceSettings {
@@ -443,7 +444,16 @@ extension ProductWindowController {
                 let manual = NSTextField(string: (settings.manualMTU ?? 0) > 0 ? String(settings.manualMTU!) : ""); mtuRow.addArrangedSubview(manual); form.addArrangedSubview(mtuRow)
                 let effective = NSTextField(wrappingLabelWithString: "Last recorded interface MTU: \((settings.effectiveMTU ?? 0) > 0 ? String(settings.effectiveMTU!) : "not recorded yet") • \(settings.effectiveMTUSource ?? "historical interface readback")")
                 effective.textColor = .secondaryLabelColor; effective.font = .systemFont(ofSize: 11); form.addArrangedSubview(effective)
-                let daita = check("DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
+                let torCoverKnown = capturedDevice?.isTor == true && capturedDevice?.daitaEnabled != nil
+                let daita = check(torCoverKnown ? "Outgoing Tor cover traffic" : "DAITA-like traffic padding (bounded; supported modes only)", value: settings.daitaEnabled)
+                let torCoverRate = NSTextField(string: capturedDevice?.daitaRateKbps.map(String.init) ?? "0")
+                if torCoverKnown {
+                    let coverRow = NSStackView(); coverRow.orientation = .horizontal; coverRow.spacing = 8
+                    coverRow.addArrangedSubview(NSTextField(labelWithString: "Cover budget (kbit/s): 32–192; 0 uses 192"))
+                    coverRow.addArrangedSubview(torCoverRate); form.addArrangedSubview(coverRow)
+                    let coverNote = NSTextField(wrappingLabelWithString: capturedDevice?.torCoverNote ?? "Outgoing cover is a saved preference. Connect must prove the selected server and its live cover receipt.")
+                    coverNote.textColor = .secondaryLabelColor; coverNote.font = .systemFont(ofSize: 11); form.addArrangedSubview(coverNote)
+                }
                 let jumbo = check(capturedDevice != nil ? "Jumbo virtual interface (9000)" : "Jumbo TUN / jumbo packet mode (compatible paths only)", value: settings.jumboTUN)
                 let socks = check("Private in-tunnel SOCKS5 utility", value: settings.socksEnabled)
                 let startupValues = importedSettings
@@ -458,6 +468,8 @@ extension ProductWindowController {
                 form.addArrangedSubview(connectionProfiles.root)
                 let routerPreferenceViews: [NSControl] = [base, fallback, autoEncrypted, autoObfuscated, startLayer, daita, socks, forwarding]
                 routerPreferenceViews.forEach { $0.isEnabled = supportsNodeSettings && !settingsMutationBusy }
+                if torCoverKnown { daita.isEnabled = supportsDeviceSettings && capturedDevice?.torCoverSupported == true && !settingsMutationBusy }
+                torCoverRate.isEnabled = torCoverKnown && daita.isEnabled
                 jumbo.isEnabled = (supportsNodeSettings || supportsDeviceSettings && capturedDevice?.jumboTUNSupported == true) && !settingsMutationBusy
                 let commonPreferenceViews: [NSControl] = [lan, kill, ipv6, mtu]
                 commonPreferenceViews.forEach { $0.isEnabled = supportsCommonSettings && !settingsMutationBusy }
@@ -496,7 +508,9 @@ extension ProductWindowController {
                             killSwitchPolicy: settings.killSwitchPolicy, ipv6Mode: settings.ipv6Mode,
                             mtuPolicy: settings.mtuPolicy, manualMTUText: manual.stringValue,
                             startupMode: settings.startupMode, autoConnect: settings.autoConnect,
-                            jumboTUN: capturedDevice.jumboTUN == nil ? nil : settings.jumboTUN)
+                            jumboTUN: capturedDevice.jumboTUN == nil ? nil : settings.jumboTUN,
+                            daitaEnabled: torCoverKnown ? settings.daitaEnabled : nil,
+                            daitaRateKbpsText: torCoverKnown ? torCoverRate.stringValue : nil)
                         do { _ = try capturedDevice.saveData(displayedProfileID: displayedProfileID, edits: edits); deviceEdits = edits }
                         catch { validationError = error.localizedDescription }
                     }
