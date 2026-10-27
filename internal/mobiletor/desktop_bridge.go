@@ -367,7 +367,15 @@ func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
 		return nil, Plan{}, 0, errors.New("desktop Tor SOCKS port is invalid or reserved")
 	}
 	normalized, _ := json.Marshal(profile)
-	profile, bridges, err := capturedTorProfile(string(normalized))
+	var bridges []string
+	if profileString(profile, "multihop_execution") == "server" && desktopBridgeSavedRouterSelection(profile) {
+		// Idle validation and DNS selection may retain Server cover intent.
+		// Only the dedicated Server factory can build this execution; it binds
+		// the full private predecessor and actual bounded cover receipts.
+		profile, bridges, err = capturedTorProfileValues(string(normalized))
+	} else {
+		profile, bridges, err = capturedTorProfile(string(normalized))
+	}
 	if err != nil {
 		return nil, Plan{}, 0, err
 	}

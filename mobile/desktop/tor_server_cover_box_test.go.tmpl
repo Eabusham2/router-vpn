@@ -1,0 +1,79 @@
+package box
+
+import (
+	"fmt"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+)
+
+func TestRouterVPNDesktopTorServerCoverUsesActualNativeReceiptBoundary(t *testing.T) {
+	for _, home := range []bool{false, true} {
+		for _, mode := range []string{"tor", "obfs4", "snowflake"} {
+			t.Run(fmt.Sprintf("home=%t/%s", home, mode), func(t *testing.T) {
+				f := newDesktopTorServerPolicyFixture(t, home, mode == "snowflake", mode == "tor", func(p map[string]any) {
+					p["daita_enabled"], p["daita_rate_kbps"] = true, 64
+				})
+				owner := f.capture(t)
+				if err := owner.StartServer(); err != nil {
+					t.Fatal(err)
+				}
+				selected := func() bool { return f.socks.dnsCalls.Load() > 0 }
+				if home {
+					selected = func() bool { return f.entry.dnsCalls.Load() > 0 }
+				}
+				proof, err := owner.run(f.proverAfterDNS(t, selected))
+				if err != nil || !owner.Healthy() || !proof.Proof.DNSProven || proof.Policy.Execution != "server" || f.socks.proofCalls.Load() != 1 || f.child.configured.Load() != 0 {
+					t.Fatal("cover selected a local child, lost selected DNS or skipped client path proof", err)
+				}
+				if err := owner.VerifyCurrentPath(t.Context()); err != nil {
+					t.Fatal("fresh actual Server receipt rejected", err)
+				}
+				f.mu.Lock()
+				f.paddingMutation = func(r *multihoprelay.TorReceipt) { r.Padding.Generation++ }
+				f.mu.Unlock()
+				if err := owner.VerifyCurrentPath(t.Context()); err == nil || owner.Healthy() {
+					t.Fatal("replacement cover generation retained desktop data authority")
+				}
+				if err := owner.Close(t.Context()); err != nil {
+					t.Fatal("cover retirement lost exact Server cleanup entry", err)
+				}
+				f.mu.Lock()
+				methods := strings.Join(f.methods, ",")
+				f.mu.Unlock()
+				if !strings.HasSuffix(methods, ",DELETE") {
+					t.Fatal("cover failure failed to delete its owned Server lease")
+				}
+			})
+		}
+	}
+}
+
+func TestRouterVPNDesktopTorServerCoverRejectsInvalidReceiptBeforeClientProof(t *testing.T) {
+	for name, change := range map[string]func(*multihoprelay.TorReceipt){
+		"missing":       func(r *multihoprelay.TorReceipt) { r.Padding = nil },
+		"wrong-rate":    func(r *multihoprelay.TorReceipt) { r.Padding.RateKbps = 192 },
+		"empty-channel": func(r *multihoprelay.TorReceipt) { r.Padding.ChannelCells, r.Padding.ChannelBytes = 0, 0 },
+		"stale":         func(r *multihoprelay.TorReceipt) { r.Padding.ObservedAt -= 6000 },
+		"expired":       func(r *multihoprelay.TorReceipt) { r.Padding.ExpiresAt = r.HeartbeatAt - 1 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newDesktopTorServerPolicyFixture(t, false, false, true, func(p map[string]any) {
+				p["daita_enabled"], p["daita_rate_kbps"] = true, 64
+			})
+			f.paddingMutation = change
+			owner := f.capture(t)
+			err := owner.StartServer()
+			if err == nil {
+				_, err = owner.run(f.prover(t))
+			}
+			if err == nil || owner.Healthy() || f.socks.proofCalls.Load() != 0 {
+				t.Fatal("invalid cover receipt reached client Tor proof or data readiness", err)
+			}
+			if err := owner.Close(t.Context()); err != nil {
+				t.Fatal("invalid cover lost exact lease cleanup", err)
+			}
+		})
+	}
+}

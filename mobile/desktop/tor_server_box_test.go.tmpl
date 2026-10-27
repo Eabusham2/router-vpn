@@ -35,9 +35,14 @@ type desktopTorServerFixture struct {
 	putEntered, putRelease chan struct{}
 	putOnce                sync.Once
 	beforeCatalog          func()
+	paddingMutation        func(*multihoprelay.TorReceipt)
 }
 
 func newDesktopTorServerFixture(t *testing.T, home, snowflake bool, plain ...bool) *desktopTorServerFixture {
+	return newDesktopTorServerPolicyFixture(t, home, snowflake, len(plain) == 1 && plain[0], nil)
+}
+
+func newDesktopTorServerPolicyFixture(t *testing.T, home, snowflake, plain bool, selection func(map[string]any)) *desktopTorServerFixture {
 	t.Helper()
 	entry := desktopTorBoxEntryFixture(t)
 	encrypted := newDesktopTorBoxEntryServer(t)
@@ -52,11 +57,14 @@ func newDesktopTorServerFixture(t *testing.T, home, snowflake bool, plain ...boo
 			bridge := p["external"].(map[string]any)["tor_bridge"].(map[string]any)
 			bridge["transport"], bridge["bridges"] = "custom", []string{"snowflake 192.0.2.3:80 1111111111111111111111111111111111111111 fingerprint=1111111111111111111111111111111111111111 url=https://broker.example/ front=front.example ice=stun:stun.example:3478"}
 		}
-		if len(plain) == 1 && plain[0] {
+		if plain {
 			if snowflake {
 				t.Fatal("plain Server fixture cannot discard Snowflake")
 			}
 			p["external"], p["multihop_exit_mode"] = map[string]any{"protocol": "tor"}, "tor"
+		}
+		if selection != nil {
+			selection(p)
 		}
 	}, entry, encrypted.register(t))
 	f.socks.serverUsername, f.socks.serverPassword = strings.Repeat("c", 48), strings.Repeat("d", 48)
@@ -150,6 +158,13 @@ func (f *desktopTorServerFixture) handle(conn net.Conn, destination M.Metadata) 
 		f.lease.Phase = multihoprelay.TorReady
 		capture := multihoprelay.TorCapture{Schema: 1, Request: captured, Source: source, RegistrySHA256: f.lease.RegistrySHA256, OwnerID: f.lease.OwnerID, Peer: captured.Peer, Host: f.lease.Host, Port: f.lease.Port, Username: f.lease.Username, Password: f.lease.Password, BootstrapDeadline: f.lease.BootstrapDeadline}
 		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}
+		if policy.Padding().Enabled {
+			receipt.Padding = &multihoprelay.TorPaddingReceipt{Direction: "outgoing", Accounting: "tor-link-cell", Generation: 1, RateKbps: policy.Padding().RateKbps,
+				ChannelCells: f.sequence, ChannelBytes: f.sequence * 514, ObservedAt: receipt.HeartbeatAt, ExpiresAt: receipt.HeartbeatAt + 4000}
+		}
+		if f.paddingMutation != nil {
+			f.paddingMutation(&receipt)
+		}
 		return true, write(200, multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: receipt})
 	case "DELETE":
 		if f.deleteFailed {

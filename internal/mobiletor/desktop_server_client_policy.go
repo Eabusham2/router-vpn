@@ -14,6 +14,17 @@ func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, pred
 	if err != nil || predecessor == nil || !predecessor.IsRouter() || profileString(profile, "multihop_execution") != "server" || profile["multihop_enabled"] != true || profileString(profile, "multihop_entry_id") != predecessor.ID() || profileString(profile, "multihop_exit_id") != profileString(profile, "id") {
 		return nil, errors.New("Tor Server requires its exact captured private Router entry and saved execution")
 	}
+	padding, hasPadding, err := capturedTorPaddingPolicy(profile)
+	if err != nil {
+		return nil, err
+	}
+	// This separate map is only a non-running template for the TUN and entry.
+	// The final graph replaces its SOCKS leaf with the leased Server owner,
+	// whose canonical source and authenticated receipts enforce the original
+	// padding selection. Local runtime admission remains guarded separately.
+	if hasPadding {
+		profile["daita_enabled"] = false
+	}
 	profile["multihop_execution"] = "local"
 	normalizeDesktopServerDNSMode(profile)
 	lowered, _ := json.Marshal(profile)
@@ -21,7 +32,7 @@ func NewDesktopServerTorPolicy(source, session, isolation, targetOS string, pred
 	if err != nil {
 		return nil, err
 	}
-	server, err := desktopServerTorSource(policy)
+	server, err := desktopServerTorSource(policy, padding, hasPadding)
 	if err != nil {
 		return nil, err
 	}
@@ -125,11 +136,14 @@ func normalizeDesktopServerDNSMode(profile map[string]any) {
 	}
 }
 
-func desktopServerTorSource(policy *DesktopBridgePolicy) (*ServerTorPolicy, error) {
+func desktopServerTorSource(policy *DesktopBridgePolicy, padding TorPaddingPolicy, hasPadding bool) (*ServerTorPolicy, error) {
 	if policy == nil || policy.predecessor == nil || !policy.predecessor.IsRouter() {
 		return nil, errServerTorClient
 	}
 	source := map[string]any{"schema": 1, "id": policy.metadata.NodeID, "entry_node_id": policy.predecessor.proof.node, "mode": policy.Mode(), "dns": policy.metadata.DNS}
+	if hasPadding {
+		source["padding"] = padding
+	}
 	if policy.Mode() == "tor-bridge" {
 		plan, err := policy.Plan()
 		if err != nil {

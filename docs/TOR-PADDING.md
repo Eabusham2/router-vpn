@@ -76,6 +76,28 @@ copying private Router sink credentials. Legacy Apple connection profiles that
 omitted a rate retain the linked node's value; new profiles explicitly capture
 zero when the saved rate was unset.
 
+### Desktop Server capture
+
+Windows, macOS and Linux Server compilation preserves the same bounded cover
+selection in the canonical source and the actual leased-server outbound. The
+private entry, selected DNS, complete original profile and padding selection
+remain bound by the native configuration and source identities. Reconstructing
+a capture with another rate produces different profile, configuration and
+source digests; it cannot reuse the prior runtime proof.
+
+The desktop native Box requires the selected rate and a valid positive cover
+receipt during Server readiness, before its own Tor exit proof. Missing,
+wrong-rate, empty-counter, stale or expired receipts fail admission. A changed
+generation retires data authority while preserving the original entry for
+authenticated lease deletion. Native regression tests execute that composition
+with an encrypted entry and explicit remote-server/TUN fixtures; they do not
+claim a public Tor connection or physical-device acceptance.
+
+The controller's public connection and complete-profile save/load paths retain
+the exact enabled and dormant rates. Visible native settings controls and Local
+desktop cover activation have their own delivery gates; this Server compiler
+does not make an unpatched Local Tor binary capable of cover generation.
+
 ## Budget and path ownership
 
 | Property | Enforced contract |
