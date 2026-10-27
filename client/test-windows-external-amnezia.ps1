@@ -240,8 +240,13 @@ $RequireEntry=$false;$Dialog.Tag=$null;& $ConfirmPath;Check ($null -ne $Dialog.T
 # The real confirmation callback must reject a same-ID credential relink.
 $Entry.SelectedValue='captured-entry';$Execution.SelectedItem.Tag='local'
 foreach($TargetID in @('captured-exit','captured-entry')){
-    $Fresh=@($Store.profiles|ConvertTo-Json -Depth 16|ConvertFrom-Json)
-    ($Fresh|Where-Object{$_.id -ceq $TargetID}).profile_token='d'*64
+    # Windows PowerShell retains a top-level JSON array as one pipeline item.
+    # Clone the containing store so both shells expose the same profile rows.
+    $FreshStore=$Store|ConvertTo-Json -Depth 16|ConvertFrom-Json
+    $Fresh=@($FreshStore.profiles)
+    $Relinked=@($Fresh|Where-Object{$_.id -ceq $TargetID})
+    Check ($Relinked.Count -eq 1) ('Relink fixture must capture exactly one source: '+$TargetID)
+    $Relinked[0].profile_token='d'*64
     $script:CurrentPathCatalog=$Fresh;$Dialog.Tag=$null;& $ConfirmPath
     Check ($null -eq $Dialog.Tag) ('Changed private source was accepted: '+$TargetID);$Count++
 }

@@ -58,7 +58,14 @@ func torBridgeUpdateSourceFixture(t *testing.T) (*app, common.RouterProfile, com
 			t.Fatal(err)
 		}
 	}
-	a := torImportTestApp(t, filepath.Join(t.TempDir(), "profiles.json"))
+	// macOS may place test directories below the /var -> /private/var alias.
+	// Resolve only this fixture-owned root; production private stores must still
+	// reject symlink components in the path they are given.
+	root, err := filepath.EvalSymlinks(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := torImportTestApp(t, filepath.Join(root, "profiles.json"))
 	a.profiles.SelectedID = old.ID
 	a.state.RouterID = old.ID
 	a.profiles.Profiles = []common.RouterProfile{old, entry}
