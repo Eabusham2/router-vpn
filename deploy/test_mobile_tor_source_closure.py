@@ -51,7 +51,7 @@ def main():
             raise AssertionError('Mobile Tor changed the shared lease validator: '+source.name)
     result = compile_sources(content, args.go,
                              '^Test(TorProfilePreservesSavedResolverAndDynamicSession|'
-                             'PredecessorFingerprintBindsCompleteCapturedEntry|TorJumbo|MobileServerTor|ServerTorRetained)')
+                             'PredecessorFingerprintBindsCompleteCapturedEntry|TorJumbo|MobileServerTor|ServerTorRetained|PaddingControl|PaddingLease)')
     if result.returncode:
         raise RuntimeError('Actual mobile Tor generated closure failed:\n'+result.stdout)
     print(result.stdout.strip())
