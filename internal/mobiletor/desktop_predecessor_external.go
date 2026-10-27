@@ -9,6 +9,7 @@ import (
 	"net"
 	"strings"
 
+	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
 )
 
@@ -41,33 +42,54 @@ type ExternalPredecessorProof struct {
 	mtu                                  torMTUPreferences
 }
 
-func NewExternalPredecessorProof(profileJSON, configJSON string) (*ExternalPredecessorProof, error) {
+// This validates only an idle source identity. It cannot produce a proof,
+// compiled graph, private Router authority, or permission to start a transport.
+func desktopExternalPredecessorProfile(profileJSON string) (map[string]any, string, string, error) {
 	failure := errors.New("Tor external predecessor requires one exact ordinary profile and native transport")
 	profile, err := profileObject(profileJSON, 4<<20)
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
-		return nil, failure
+		return nil, "", "", failure
 	}
 	for _, key := range []string{"node_proof_id", "router_api", "api_token"} {
 		if value, exists := profile[key]; exists && value != "" && value != nil {
-			return nil, errors.New("ordinary Tor predecessor cannot borrow private Router control identity")
+			return nil, "", "", errors.New("ordinary Tor predecessor cannot borrow private Router control identity")
 		}
 	}
 	external, ok := profile["external"].(map[string]any)
 	if !ok {
-		return nil, failure
+		return nil, "", "", failure
 	}
 	protocol, expected := profileString(external, "protocol"), profileString(external, "expected_public_ip")
+	switch protocol {
+	case "wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn":
+	default:
+		return nil, "", "", failure
+	}
+	if normalized, err := common.NormalizeExpectedPublicIP(expected); err != nil || normalized != expected {
+		return nil, "", "", errors.New("ordinary Tor predecessor lost its exact public-address proof identity")
+	}
 	protocolField := strings.ReplaceAll(protocol, "-", "_")
+	if block, ok := external[protocolField].(map[string]any); !ok || len(block) == 0 {
+		return nil, "", "", failure
+	}
 	for key := range external {
 		switch key {
 		case protocolField, "protocol", "expected_public_ip", "response_probe", "start_layer", "server_peer", "openvpn_pairing", "openvpn_response_probes", "openvpn_start_layers":
 		default:
-			return nil, errors.New("ordinary Tor predecessor contains another transport owner")
+			return nil, "", "", errors.New("ordinary Tor predecessor contains another transport owner")
 		}
+	}
+	return profile, protocol, expected, nil
+}
+
+func NewExternalPredecessorProof(profileJSON, configJSON string) (*ExternalPredecessorProof, error) {
+	profile, protocol, expected, err := desktopExternalPredecessorProfile(profileJSON)
+	if err != nil {
+		return nil, err
 	}
 	graph, err := profileObject(configJSON, 4<<20)
 	if err != nil {
-		return nil, failure
+		return nil, errors.New("Tor external predecessor requires its exact original transport graph")
 	}
 	profileBytes, _ := json.Marshal(profile)
 	configBytes, _ := json.Marshal(graph)

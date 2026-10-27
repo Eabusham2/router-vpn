@@ -18,12 +18,23 @@ func SelectDesktopBridgeDNS(source, entryJSON string, idle bool) (DesktopBridgeD
 	}
 	var entry map[string]any
 	if entryJSON != "" {
-		entry, err = profileObject(entryJSON, 256<<10)
+		entry, err = profileObject(entryJSON, 4<<20)
 		if err != nil {
 			return DesktopBridgeDNS{}, err
 		}
-		if _, err = NewPredecessorProof(entryJSON); err != nil {
-			return DesktopBridgeDNS{}, err
+		if entry["node_kind"] == "external" {
+			// Idle DNS editing binds an ordinary source identity without
+			// manufacturing a Router proof. Connect separately captures and
+			// recompiles the full native graph before proving this provider.
+			var protocol string
+			entry, protocol, _, err = desktopExternalPredecessorProfile(entryJSON)
+			if err != nil || profile["multihop_entry_mode"] != protocol {
+				return DesktopBridgeDNS{}, errors.New("Tor DNS requires its exact ordinary predecessor protocol and public identity")
+			}
+		} else {
+			if _, err = NewPredecessorProof(entryJSON); err != nil {
+				return DesktopBridgeDNS{}, err
+			}
 		}
 		if profile["multihop_entry_id"] != entry["id"] || profile["multihop_exit_id"] != profile["id"] || entry["id"] == profile["id"] ||
 			!profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) ||
