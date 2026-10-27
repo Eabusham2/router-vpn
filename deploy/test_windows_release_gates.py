@@ -42,6 +42,13 @@ PACKAGE_FILES = (
     "client/test-windows-home-dns.ps1",
     "client/test-windows-dns-measurement.ps1",
 )
+WORKSPACE_SCOPES = (
+    ('^TestDesktopRuntimeWorkspace', ''),
+    ('^TestDesktopDNS', ''),
+    ('^TestDesktopTorMTU', ''),
+    ('^TestDesktopTor', '^TestDesktopTorMTU'),
+    ('^TestSpeedLab', ''),
+)
 
 
 def run_packaged(package: Path, shell: str, load=importlib.import_module) -> None:
@@ -102,7 +109,13 @@ def check_workspace_gate(job: str) -> None:
     if job.count(marker) != 1:
         raise AssertionError("Windows captured cleanup gate is missing or duplicated")
     gate = job.split(marker, 1)[1].split("      - ", 1)[0]
-    if "shell: pwsh" not in gate or "& go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab)'" not in gate:
+    scopes = tuple(re.findall(r"@\{ Run = '([^']*)'; Skip = '([^']*)' \}", gate))
+    required = (
+        "shell: pwsh", "foreach ($scope in $scopes) {",
+        "$arguments = @('test', '-v', '-count=1', '-timeout=180s', './cmd/client', '-run', $scope.Run)",
+        "if ($scope.Skip) { $arguments += @('-skip', $scope.Skip) }", "& go @arguments",
+    )
+    if scopes != WORKSPACE_SCOPES or any(value not in gate for value in required):
         raise AssertionError("Windows cleanup gate omitted live-handle or captured child tests")
     if "if ($LASTEXITCODE -ne 0) { throw" not in gate or re.search(r"(?m)^        (?:if|continue-on-error):", gate):
         raise AssertionError("Windows cleanup gate no longer blocks a failed native test")
@@ -296,7 +309,11 @@ class WindowsReleaseGateTests(unittest.TestCase):
         workflow = (REPOSITORY / ".github/workflows/windows-native-contract.yml").read_text(encoding="utf-8")
         job = workflow_job(workflow, "native-windows")
         check_workspace_gate(job)
-        for old, new in (("DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab", "DesktopTor"), ("DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab", "DesktopRuntimeWorkspace"), ("& go test -v -count=1 -timeout=180s", "& go test -v -count=1 -timeout=180s -run '^$'")):
+        for old, new in (("Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
+                         ("Run = '^TestSpeedLab'", "Run = '^$'"),
+                         ("Skip = '^TestDesktopTorMTU'", "Skip = '^TestDesktopTor'"),
+                         ("'-timeout=180s'", "'-timeout=600s'"),
+                         ("& go @arguments", "& go test -run '^$'")):
             with self.subTest(new=new), self.assertRaises(AssertionError):
                 check_workspace_gate(job.replace(old, new, 1))
 
@@ -344,7 +361,7 @@ class WindowsReleaseGateTests(unittest.TestCase):
         candidate = (REPOSITORY / ".github/workflows/release-candidate.yml").read_text(encoding="utf-8")
         build_all = (REPOSITORY / ".github/workflows/build-all.yml").read_text(encoding="utf-8")
         variants = (
-            ("cleanup", "DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab", "DesktopTor"),
+            ("cleanup", "Run = '^TestDesktopRuntimeWorkspace'", "Run = '^TestDesktopTor'"),
             ("unix", "python3 deploy/test_desktop_tor_unix_wrapper.py", "true # omitted Unix ownership"),
             ("controller", "run: go test ./...", "run: go test -run '^$' ./..."),
             ("matrix", "{arch: arm64, runner: windows-11-arm}", "{arch: other, runner: windows-latest}"),

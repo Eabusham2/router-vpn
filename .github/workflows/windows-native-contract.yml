@@ -215,8 +215,21 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = 'Stop'
-          & go test -v -count=1 -timeout=180s ./cmd/client -run '^Test(DesktopRuntimeWorkspace|DesktopTor|DesktopDNS|SpeedLab)'
-          if ($LASTEXITCODE -ne 0) { throw 'Windows captured workspace or Tor child cleanup failed' }
+          # Keep every existing test and its deadlines. The growing lifecycle
+          # matrices must not consume one shared package timeout.
+          $scopes = @(
+            @{ Run = '^TestDesktopRuntimeWorkspace'; Skip = '' },
+            @{ Run = '^TestDesktopDNS'; Skip = '' },
+            @{ Run = '^TestDesktopTorMTU'; Skip = '' },
+            @{ Run = '^TestDesktopTor'; Skip = '^TestDesktopTorMTU' },
+            @{ Run = '^TestSpeedLab'; Skip = '' }
+          )
+          foreach ($scope in $scopes) {
+            $arguments = @('test', '-v', '-count=1', '-timeout=180s', './cmd/client', '-run', $scope.Run)
+            if ($scope.Skip) { $arguments += @('-skip', $scope.Skip) }
+            & go @arguments
+            if ($LASTEXITCODE -ne 0) { throw "Windows captured workspace or Tor child cleanup failed: $($scope.Run)" }
+          }
       - name: Standalone runtime verifier startup isolation
         shell: pwsh
         run: |
