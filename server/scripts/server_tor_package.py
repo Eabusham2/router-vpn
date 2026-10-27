@@ -26,7 +26,10 @@ PACKAGE = 'share/router-vpn/tor'
 EXECUTABLE = 'bin/routervpn-tor'
 TARGETS = {'linux/amd64': 62, 'linux/arm64': 183}
 BUILD_INPUTS = frozenset(('deploy/build-server-tor.py', 'deploy/build-mobile-tor-package.py',
-                          'server/scripts/server_tor_package.py', 'mobile/torpack/sources.json'))
+                          'server/scripts/server_tor_package.py', 'mobile/torpack/sources.json',
+                          'deploy/apply-tor-padding.py', 'mobile/tor/padding-source-lock.json',
+                          'mobile/tor/padding-integration.patch', 'mobile/tor/routervpn_padding.c',
+                          'mobile/tor/routervpn_padding.h', 'mobile/tor/test_routervpn_padding.c'))
 STATIC_DEPENDENCIES = frozenset(('libssl.a', 'libcrypto.a', 'libevent.a', 'libz.a'))
 SERVER_KEY = b'Tor safe cookie authentication server-to-controller hash'
 CLIENT_KEY = b'Tor safe cookie authentication controller-to-server hash'
@@ -132,7 +135,8 @@ def elf_identity(data, target):
 
 
 def expected_files(source_lock):
-    paths = {EXECUTABLE, PACKAGE + '/sources.json', PACKAGE + '/verify.py'}
+    paths = {EXECUTABLE, PACKAGE + '/sources.json', PACKAGE + '/verify.py',
+             PACKAGE + '/padding-source-lock.json'}
     for name, record in source_lock['sources'].items():
         paths.update(PACKAGE + '/licenses/' + name + '-' + Path(path).name for path in record['licenses'])
     return paths
@@ -142,7 +146,9 @@ def offline_receipt():
     return {'scope': 'offline-disabled-network-control', 'version': VERSION,
             'safecookie': True, 'incorrect_authentication_rejected': True,
             'process_and_listener_identity': True, 'disabled_network_retained': True,
-            'pt_socket_configuration': True, 'owning_controller_exit': True}
+            'pt_socket_configuration': True, 'owning_controller_exit': True,
+            'owned_padding_capability': True, 'padding_rejected_while_disabled': True,
+            'padding_without_owner_rejected': True}
 
 
 def valid_hash(value):
@@ -175,6 +181,27 @@ def verify(prefix, target, source_root=None):
     combined = b''.join(name.encode() + b'\0' + checksum.encode() + b'\0' for name, checksum in sorted(inputs.items()))
     if digest(combined) != record['build_inputs_sha256']:
         raise ValueError('Standalone Tor build input digest mismatch')
+    raw_padding, _ = read_regular(prefix, PACKAGE + '/padding-source-lock.json', 64 * 1024)
+    padding_lock = json_object(raw_padding)
+    padding = record.get('padding_extension')
+    expected_padding = dict(version=1, direction='outgoing',
+                            tor_commit=source_lock['sources']['tor']['commit'],
+                            source_lock_sha256=digest(raw_padding),
+                            patch_sha256=inputs['mobile/tor/padding-integration.patch'])
+    if (not isinstance(padding, dict) or type(padding.get('version')) is not int or
+            padding != expected_padding or record.get('padding_native_tests') is not True or
+            inputs['mobile/tor/padding-source-lock.json'] != digest(raw_padding) or
+            type(padding_lock.get('schema')) is not int or padding_lock.get('schema') != 1 or
+            type(padding_lock.get('version')) is not int or padding_lock.get('version') != 1 or
+            padding_lock.get('tor_commit') != expected_padding['tor_commit'] or
+            padding_lock.get('patch_sha256') != expected_padding['patch_sha256'] or
+            not isinstance(padding_lock.get('copies'), dict) or len(padding_lock['copies']) != 3):
+        raise ValueError('Standalone Tor outgoing padding receipt is incomplete')
+    for name in ('routervpn_padding.c', 'routervpn_padding.h', 'test_routervpn_padding.c'):
+        path = 'mobile/tor/' + name
+        entry = padding_lock.get('copies', {}).get(path)
+        if not isinstance(entry, dict) or entry.get('sha256') != inputs[path]:
+            raise ValueError('Standalone Tor padding source receipt changed')
     dependencies = record.get('static_dependencies')
     if not isinstance(dependencies, dict) or set(dependencies) != STATIC_DEPENDENCIES or any(not valid_hash(checksum) for checksum in dependencies.values()):
         raise ValueError('Standalone Tor static dependency receipt is incomplete')
@@ -335,6 +362,8 @@ def offline_self_test(binary, target):
                     wrong.close()
                 owner = Control(control_path)
                 owner.authenticate(cookie_path)
+                if owner.command('ROUTERVPN_PADDING INFO') != ['551 Padding requires the owning controller']:
+                    raise ValueError('Standalone Tor padding accepted a non-owning controller')
                 info = owner.success('GETINFO process/pid net/listeners/control net/listeners/socks net/listeners/dns net/listeners/trans traffic/read traffic/written')
                 expected = {'250-process/pid=' + str(process.pid), '250-net/listeners/control=' + json.dumps('unix:' + str(control_path)),
                             '250-net/listeners/socks=', '250-net/listeners/dns=', '250-net/listeners/trans=',
@@ -350,6 +379,17 @@ def offline_self_test(binary, target):
                               '250-Bridge=obfs4 192.0.2.1:443', '250 DisableNetwork=1']:
                     raise ValueError('Standalone Tor did not retain the owned PT socket configuration')
                 owner.success('TAKEOWNERSHIP')
+                capability = owner.success('ROUTERVPN_PADDING INFO')
+                if capability != ['250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 '
+                                  'default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 '
+                                  'accounting=tor-link-cell username_hex_lengths=32,64 '
+                                  'password_hex_length=64 generation_highwater=0']:
+                    raise ValueError('Standalone Tor does not contain the exact owned padding capability')
+                start = 'ROUTERVPN_PADDING START ' + 'a' * 64 + ' ' + 'b' * 64 + ' 1 192 10000 ' + 'c' * 64 + ' ' + 'd' * 64
+                if owner.command(start) != ['551 Padding start is stale or unavailable']:
+                    raise ValueError('Standalone Tor padding ignored disabled networking')
+                if owner.success('ROUTERVPN_PADDING INFO') != capability or owner.success('GETCONF DisableNetwork') != ['250 DisableNetwork=1']:
+                    raise ValueError('Standalone Tor padding changed the disabled owner')
                 owner.close()
                 owner = None
                 if process.wait(timeout=5) != 0:

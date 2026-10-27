@@ -112,6 +112,16 @@ def package_checks(prefix, target, source_root, temporary):
                 'offline control receipt is incomplete')
     receipt('fabricated network proof', lambda value: value['offline_self_test'].update(scope='public-tor-circuit'),
             'offline control receipt is incomplete')
+    for replacement in (None, {}, {'version': 1}, {'version': True}):
+        receipt('missing native padding capability', lambda value, data=replacement: value.update(padding_extension=data),
+                'outgoing padding receipt is incomplete')
+    for replacement in (False, 1, 'true'):
+        receipt('fabricated native cell tests', lambda value, data=replacement: value.update(padding_native_tests=data),
+                'outgoing padding receipt is incomplete')
+        receipt('fabricated native capability proof', lambda value, data=replacement: value['offline_self_test'].update(owned_padding_capability=data),
+                'offline control receipt is incomplete')
+    receipt('changed outgoing scope', lambda value: value['padding_extension'].update(direction='bidirectional'),
+            'outgoing padding receipt is incomplete')
 
     def unrelated_input(value):
         value['build_inputs'] = {'foreign/build.py': '0' * 64}

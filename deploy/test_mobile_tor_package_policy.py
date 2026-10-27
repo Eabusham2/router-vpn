@@ -41,6 +41,7 @@ def refresh(output, kind):
         for name, checksum in sorted(files.items()) if name != 'SHA256SUMS'))
     record = dict(schema=1, platform=kind, abi=1, mobile_session_proof=False,
                   source_sha256=PACKAGE.source_digest(), source_lock=PACKAGE.lock(),
+                  padding_extension=PACKAGE.PADDING.receipt(),
                   files=PACKAGE.tree_files(output), toolchains={'policy-fixture': 'no mobile compiler claim'},
                   pt_notices={relative: PACKAGE.sha(path) for relative, path in PACKAGE.notice_sources().items()})
     (output / 'source.json').write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
@@ -130,6 +131,9 @@ def package_checks(root, licenses):
     negative('host-test', 'changed PT notice', lambda out: (out / 'notices/mobile/torpt/internal/meeklite/LICENSE').write_text('wrong notice'))
     negative('host-test', 'stale source digest', lambda out: change_json(out / 'source.json', lambda record: record.update(source_sha256='0' * 64)), False)
     negative('host-test', 'fabricated mobile protection claim', lambda out: change_json(out / 'source.json', lambda record: record.update(mobile_session_proof=True)), False)
+    for data in (None, {'version': True}, {'version': 1, 'direction': 'bidirectional'}):
+        negative('host-test', 'missing or fabricated native cover receipt',
+                 lambda out, value=data: change_json(out / 'source.json', lambda record: record.update(padding_extension=value)), False)
     negative('host-test', 'changed portable checksum list', lambda out: (out / 'SHA256SUMS').write_text(''), False)
     negative('android', 'missing 32-bit Android ABI', lambda out: (out / 'jni/armeabi-v7a/libroutervpn_tor.so').unlink())
     negative('android', 'foreign native Go payload', lambda out: (out / 'jni/arm64-v8a/libgojni.so').write_text('second runtime'))
@@ -194,7 +198,8 @@ def patch_checks(root, cache):
     pin = source_lock['sources']['tor']
     archive = cache / ('tor-' + pin['commit'] + '.tar.gz')
     assert PACKAGE.sha(archive) == pin['archive_sha256']
-    names = ['src/lib/evloop/workqueue.c', *source_lock['embedded_process_sha256']]
+    names = ['src/lib/evloop/workqueue.c', *source_lock['embedded_process_sha256'],
+             *PACKAGE.PADDING.lock()['files']]
     with tarfile.open(archive) as source:
         originals = {name: source.extractfile('tor-' + pin['commit'] + '/' + name).read() for name in names}
 
@@ -205,6 +210,7 @@ def patch_checks(root, cache):
 
     output = root / 'pinned-tor-patch'; original(output)
     PACKAGE.patch_source(output, source_lock)
+    PACKAGE.PADDING.verify(output)
     for name, record in source_lock['embedded_process_sha256'].items():
         assert PACKAGE.sha(output / name) == record['patched']
     passed()
@@ -213,6 +219,18 @@ def patch_checks(root, cache):
         with (output / name).open('ab') as stream:
             stream.write(b'\n/* unowned source mutation */\n')
         reject(lambda: PACKAGE.patch_source(output, source_lock), 'changed pinned worker/process/config source')
+    for index, record in enumerate(PACKAGE.PADDING.lock()['copies'].values()):
+        modified = root / ('changed-padding-copy-' + str(index))
+        shutil.copytree(root / 'pinned-tor-patch', modified)
+        with (modified / record['target']).open('ab') as stream:
+            stream.write(b'\n/* changed owned extension */\n')
+        reject(lambda: PACKAGE.PADDING.verify(modified), 'changed owned padding source')
+    linked = root / 'linked-padding-source'
+    shutil.copytree(root / 'pinned-tor-patch', linked)
+    source_file = linked / 'src/feature/control/routervpn_padding.c'
+    source_file.unlink()
+    source_file.symlink_to(root / 'pinned-tor-patch/src/feature/control/routervpn_padding.c')
+    reject(lambda: PACKAGE.PADDING.verify(linked), 'linked padding source')
 
 
 ELF_SOURCE = r'''

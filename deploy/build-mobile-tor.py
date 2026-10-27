@@ -9,6 +9,7 @@ must be integrated before Android/iOS can advertise Tor capability.
 from pathlib import Path
 import argparse
 import hashlib
+import importlib.util
 import json
 import os
 import resource
@@ -24,6 +25,9 @@ TOR_COMMIT = '4a522a3ca491c6c04d4a44cb006b92101c42efc1'
 TOR_REPOSITORY = 'https://github.com/bitmold/tor.git'
 WORKQUEUE_ORIGINAL = 'e005bd4e9acdcc80b8c0bd260f4b6412a1327424101005c0fa6a989b54600931'
 WORKQUEUE_PATCHED = '030f0a8a38cfab563e2854cef8dfa97c47d3ebdc1ba2b7302f1f2ad936a0ee95'
+_padding_spec = importlib.util.spec_from_file_location('routervpn_native_padding', ROOT / 'deploy/apply-tor-padding.py')
+PADDING = importlib.util.module_from_spec(_padding_spec)
+_padding_spec.loader.exec_module(PADDING)
 CONFIGURE = [
     '--enable-pic', '--disable-jni', '--disable-module-relay',
     '--disable-module-dirauth', '--disable-module-pow', '--disable-asciidoc',
@@ -151,19 +155,25 @@ def main():
     compiler = shlex.split(env.get('CC', 'cc'))
     if not args.negative_control:
         patch_workqueue(source)
+        PADDING.apply(source)
     run(['./autogen.sh'], source, env, output / 'autogen.log')
     run(['./configure'] + CONFIGURE, source, env, output / 'configure.log')
     run(['make', '-j' + str(args.jobs), 'libtor.a'], source, env, output / 'make.log', 900)
     if args.negative_control:
         negative_control(source, output, compiler, flags, env)
         patch_workqueue(source)
+        PADDING.apply(source)
+        run(['./autogen.sh'], source, env, output / 'autogen-patched.log')
+        run(['./configure'] + CONFIGURE, source, env, output / 'configure-patched.log')
         run(['make', '-j' + str(args.jobs), 'libtor.a'], source, env, output / 'make-patched.log', 900)
+    PADDING.verify(source)
     binary = compile_fixture(source, output, compiler, flags, 'native_host_test', env)
     run_scenarios(binary, output, env)
     if not args.sanitize:
         go_control(source, output, env, args.go)
     shutil.copyfile(source / 'LICENSE', output / 'Tor-LICENSE.txt')
-    inputs = [Path(__file__).resolve()] + [p for p in sorted(SOURCE.iterdir()) if p.is_file()]
+    inputs = sorted(set([Path(__file__).resolve(), ROOT / 'mobile/torpack/sources.json',
+                        *PADDING.inputs(), *[p for p in sorted(SOURCE.iterdir()) if p.is_file()]]))
     inputs += sorted((ROOT / 'internal/mobiletor').glob('*.go'))
     inputs += sorted((ROOT / 'internal/common').glob('*.go'))
     inputs += sorted((ROOT / 'internal/nativeopenvpn').glob('*.go'))
@@ -171,6 +181,7 @@ def main():
         'scope': 'offline-native-lifecycle-and-control', 'mobile_capability_enabled': False,
         'tor_repository': TOR_REPOSITORY, 'tor_commit': TOR_COMMIT,
         'workqueue_original_sha256': WORKQUEUE_ORIGINAL, 'workqueue_patched_sha256': WORKQUEUE_PATCHED,
+        'padding_extension': PADDING.verify(source),
         'sanitizers': ['address', 'undefined', 'leak'] if args.sanitize else [],
         'negative_control_verified': args.negative_control,
         'go_control_verified': not args.sanitize,

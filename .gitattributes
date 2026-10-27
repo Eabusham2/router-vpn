@@ -16,3 +16,6 @@
 *.so -text
 *.dll -text
 *.exe -text
+# Unified patch context prefixes preserve upstream blank and tabbed lines.
+# The patch applier verifies both upstream and resulting source hashes.
+mobile/tor/padding-integration.patch whitespace=-blank-at-eol,-space-before-tab

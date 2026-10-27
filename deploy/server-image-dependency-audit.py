@@ -68,6 +68,8 @@ agent = docs["deploy/router-agent.Dockerfile"]
 for required in (
     "FROM alpine:3.22 AS standalone-tor-build",
     "COPY mobile/torpack/sources.json /src/mobile/torpack/",
+    "deploy/apply-tor-padding.py /src/deploy/",
+    "mobile/tor/padding-integration.patch mobile/tor/padding-source-lock.json /src/mobile/tor/",
     "python3 /src/deploy/build-server-tor.py --output /tor-package",
     "python3 /src/deploy/test_server_tor_package.py --prefix /tor-package",
     'COPY --from=standalone-tor-build /tor-package/bin/routervpn-tor /usr/local/bin/routervpn-tor',
@@ -80,6 +82,10 @@ for required in (
     'python3 /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local --platform "linux/${TARGETARCH}" --offline-self-test',
 ):
     assert required in agent, f"standalone server Tor image gate missing: {required}"
+tor_builder = (ROOT / 'deploy/build-server-tor.py').read_text()
+assert "PADDING.apply(source['tor'])" in tor_builder
+assert "'routervpn_padding/..', 'relaycrypt/..', 'cellqueue/..'" in tor_builder
+assert "PADDING.verify(source['tor'])" in tor_builder
 preflight = (ROOT / '.github/workflows/arm64-portainer-preflight.yml').read_text()
 for required in (
     'docker run --rm --network none --platform linux/arm64',

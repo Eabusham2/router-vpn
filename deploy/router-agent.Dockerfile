@@ -23,9 +23,10 @@ FROM alpine:3.22 AS standalone-tor-build
 ARG TARGETARCH
 RUN apk add --no-cache build-base linux-headers autoconf automake libtool perl pkgconf python3 ca-certificates
 WORKDIR /src
-COPY deploy/build-server-tor.py deploy/build-mobile-tor-package.py deploy/test_server_tor_package.py /src/deploy/
+COPY deploy/build-server-tor.py deploy/build-mobile-tor-package.py deploy/test_server_tor_package.py deploy/apply-tor-padding.py /src/deploy/
 COPY server/scripts/server_tor_package.py /src/server/scripts/
 COPY mobile/torpack/sources.json /src/mobile/torpack/
+COPY mobile/tor/routervpn_padding.c mobile/tor/routervpn_padding.h mobile/tor/test_routervpn_padding.c mobile/tor/padding-integration.patch mobile/tor/padding-source-lock.json /src/mobile/tor/
 RUN python3 /src/deploy/build-server-tor.py --output /tor-package --work /tor-build --cache /tor-sources --platform "linux/${TARGETARCH}" --jobs 2 \
  && python3 /src/deploy/test_server_tor_package.py --prefix /tor-package --platform "linux/${TARGETARCH}" --source-root /src \
  && rm -rf /tor-build /tor-sources

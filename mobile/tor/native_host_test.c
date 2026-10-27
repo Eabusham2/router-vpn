@@ -30,7 +30,7 @@ static void command(int fd, const char *text, const char *expected) {
             char *end = strstr(line, "\r\n");
             if (!end) break;
             if (end - line >= 4 && line[3] == ' ') {
-                assert(memcmp(line, "250 ", 4) == 0);
+                assert(memcmp(line, expected, 3) == 0);
                 complete = 1;
             }
             line = end + 2;
@@ -78,6 +78,10 @@ static void close_final(uint64_t handle) {
 static void verify_idle(int fd) {
     command(fd, "SETCONF DisableNetwork=1 SocksPort=0 UseBridges=0 Bridge ClientTransportPlugin\r\n", "250 OK\r\n");
     command(fd, "SIGNAL CLEARDNSCACHE\r\n", "250 OK\r\n");
+    command(fd, "ROUTERVPN_PADDING INFO\r\n",
+        "250 version=1 direction=outgoing min_rate_kbps=32 max_rate_kbps=192 default_rate_kbps=192 max_ttl_ms=10000 max_pending_cells=1 accounting=tor-link-cell username_hex_lengths=32,64 password_hex_length=64 generation_highwater=0\r\n");
+    command(fd, "ROUTERVPN_PADDING START aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb 1 192 10000 cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd\r\n",
+        "551 Padding start is stale or unavailable\r\n");
     command(fd, "GETCONF DisableNetwork SocksPort UseBridges Bridge ClientTransportPlugin\r\n",
         "250-DisableNetwork=1\r\n250-SocksPort=0\r\n250-UseBridges=0\r\n250-Bridge\r\n250 ClientTransportPlugin\r\n");
     command(fd, "GETINFO orconn-status circuit-status stream-status address-mappings/cache net/listeners/or net/listeners/extor net/listeners/dir net/listeners/socks net/listeners/trans net/listeners/natd net/listeners/httptunnel net/listeners/dns net/listeners/control net/listeners/metrics\r\n",

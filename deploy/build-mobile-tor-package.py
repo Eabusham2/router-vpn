@@ -41,6 +41,9 @@ APPLE = (
 APPLE_SLICES = {'ios-arm64': (['arm64'], False), 'ios-arm64_x86_64-simulator': (['arm64', 'x86_64'], True)}
 FRAMEWORK_MODULE = 'framework module RouterVPNTor {\n umbrella header "routervpn_tor_host.h"\n export *\n}\n'
 FORBIDDEN_IMPORTS = {'fork', 'vfork', 'execve', 'execv', 'execvp', 'execl', 'execlp', 'posix_spawn', 'posix_spawnp', 'popen', 'system'}
+_padding_spec = importlib.util.spec_from_file_location('routervpn_tor_padding', ROOT / 'deploy/apply-tor-padding.py')
+PADDING = importlib.util.module_from_spec(_padding_spec)
+_padding_spec.loader.exec_module(PADDING)
 
 
 def sha(path):
@@ -79,7 +82,7 @@ def lock():
 def inputs():
     return [Path(__file__).resolve(), SOURCE / 'sources.json', SOURCE / 'embedded-process.patch',
             HOST / 'routervpn_tor_host.c', HOST / 'routervpn_tor_host.h', HOST / 'workqueue-lifecycle.patch',
-            ROOT / 'deploy/build-mobile-tor.py', *notice_sources().values()]
+            ROOT / 'deploy/build-mobile-tor.py', *PADDING.inputs(), *notice_sources().values()]
 
 
 def notice_sources():
@@ -201,6 +204,7 @@ def patch_source(source, source_lock):
     for name, record in records.items():
         if sha(source / name) != record['patched']:
             raise ValueError('Native mobile subprocess patch checksum mismatch')
+    PADDING.apply(source)
     return host_build.CONFIGURE
 
 
@@ -520,6 +524,9 @@ def verify(output, kind, *, binaries=True, ndk=None):
         raise ValueError('Native Tor package layout omits or adds an unowned artifact')
     if record['abi'] != 1 or record['mobile_session_proof'] is not False:
         raise ValueError('C library provenance cannot assert a protected mobile Tor session')
+    padding = record.get('padding_extension')
+    if not isinstance(padding, dict) or type(padding.get('version')) is not int or padding != PADDING.receipt():
+        raise ValueError('Native Tor package omits its exact outgoing cover extension')
     for name, dependency in source_lock['sources'].items():
         for relative, checksum in dependency['licenses'].items():
             if record['files'].get('licenses/' + name + '-' + Path(relative).name) != checksum:
@@ -635,6 +642,7 @@ def build(kind, output, cache, jobs, ndk=None):
         for target in targets:
             print('Building pinned native Tor C dependencies:', target['name'], flush=True)
             directory, sources, env, compiler, libraries = compile_dependencies(target, work, archives, source_lock, jobs, ndk)
+            PADDING.verify(sources['tor'])
             binary = link_library(target, stage, directory, sources, env, compiler, libraries)
             if kind == 'ios':
                 verify_macho(binary, [target['arch']], target['sdk'] == 'iphonesimulator')
@@ -663,6 +671,7 @@ def build(kind, output, cache, jobs, ndk=None):
         (stage / 'SHA256SUMS').write_text(''.join(checksum + '  ' + name + '\n' for name, checksum in sorted(files.items())))
         record = dict(schema=1, platform=kind, abi=1, mobile_session_proof=False, source_sha256=captured_digest,
                       source_lock=source_lock, toolchains=toolchains, files=tree_files(stage),
+                      padding_extension=PADDING.receipt(),
                       pt_notices={relative: sha(path) for relative, path in notice_sources().items()})
         (stage / 'source.json').write_text(json.dumps(record, sort_keys=True, indent=2) + '\n')
         verify(stage, kind, ndk=ndk)

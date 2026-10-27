@@ -1,0 +1,195 @@
+--- a/src/core/or/cell_queue_st.h
++++ b/src/core/or/cell_queue_st.h
+@@ -19,6 +19,8 @@
+   /** Next cell queued on this circuit. */
+   TOR_SIMPLEQ_ENTRY(packed_cell_t) next;
+   char body[CELL_MAX_NETWORK_SIZE]; /**< Cell as packed for network. */
++  /* Main-loop-only cover receipt. Never serialized into body. */
++  uint64_t routervpn_padding_generation;
+   uint32_t inserted_timestamp; /**< Time (in timestamp units) when this cell
+                                 * was inserted */
+ };
+--- a/src/core/or/channel.c
++++ b/src/core/or/channel.c
+@@ -69,6 +69,7 @@
+ #include "core/or/connection_or.h" /* For var_cell_free() */
+ #include "core/or/dos.h"
+ #include "core/or/relay.h"
++#include "feature/control/routervpn_padding.h"
+ #include "core/or/scheduler.h"
+ #include "feature/client/entrynodes.h"
+ #include "core/mainloop/netstatus.h"
+@@ -1508,6 +1509,7 @@
+   if (chan->write_packed_cell(chan, cell) < 0) {
+     goto done;
+   }
++  routervpn_padding_cell_written(cell, cell_bytes);
+   /* Timestamp for transmission */
+   channel_timestamp_xmit(chan);
+   /* Update the counter */
+--- a/src/core/or/relay.c
++++ b/src/core/or/relay.c
+@@ -78,6 +78,7 @@
+ #include "core/or/policies.h"
+ #include "core/or/reasons.h"
+ #include "core/or/relay.h"
++#include "feature/control/routervpn_padding.h"
+ #include "core/crypto/relay_crypto.h"
+ #include "feature/rend/rendcommon.h"
+ #include "feature/nodelist/describe.h"
+@@ -652,6 +653,8 @@
+     cell_direction = CELL_DIRECTION_IN;
+   }
+ 
++  routervpn_padding_cell_created(circ, relay_command, &cell);
++
+   log_debug(LD_OR,"delivering %d cell %s.", relay_command,
+             cell_direction == CELL_DIRECTION_OUT ? "forward" : "backward");
+ 
+@@ -2686,6 +2689,7 @@
+ static inline void
+ packed_cell_free_unchecked(packed_cell_t *cell)
+ {
++  routervpn_padding_cell_freed(cell);
+   --total_cells_allocated;
+   tor_free(cell);
+ }
+@@ -2760,6 +2764,7 @@
+   copy->inserted_timestamp = monotime_coarse_get_stamp();
+ 
+   cell_queue_append(queue, copy);
++  routervpn_padding_cell_queued(cell, copy, wide_circ_ids);
+ }
+ 
+ /** Initialize <b>queue</b> as an empty cell queue. */
+--- a/src/feature/control/control.c
++++ b/src/feature/control/control.c
+@@ -46,6 +46,7 @@
+ #include "feature/control/control.h"
+ #include "feature/control/control_auth.h"
+ #include "feature/control/control_cmd.h"
++#include "feature/control/routervpn_padding.h"
+ #include "feature/control/control_events.h"
+ #include "feature/control/control_proto.h"
+ #include "feature/hs/hs_common.h"
+@@ -232,6 +233,7 @@
+ {
+   tor_assert(conn);
+ 
++  routervpn_padding_owner_closed(conn);
+   conn->event_mask = 0;
+   control_update_global_event_mask();
+ 
+@@ -621,6 +623,7 @@
+ void
+ control_free_all(void)
+ {
++  routervpn_padding_free_all();
+   control_auth_free_all();
+   control_events_free_all();
+   control_cmd_free_all();
+--- a/src/feature/control/control_cmd.c
++++ b/src/feature/control/control_cmd.c
+@@ -28,6 +28,7 @@
+ #include "feature/control/control.h"
+ #include "feature/control/control_auth.h"
+ #include "feature/control/control_cmd.h"
++#include "feature/control/routervpn_padding.h"
+ #include "feature/control/control_hs.h"
+ #include "feature/control/control_events.h"
+ #include "feature/control/control_getinfo.h"
+@@ -486,6 +487,18 @@
+   return 0;
+ }
+ 
++static const control_cmd_syntax_t routervpn_padding_syntax = {
++  .min_args = 1,
++  .max_args = 8,
++};
++
++static int
++handle_control_routervpn_padding(control_connection_t *conn,
++                                const control_cmd_args_t *args)
++{
++  return routervpn_padding_command(conn, args);
++}
++
+ static const control_cmd_syntax_t takeownership_syntax = {
+   .max_args = UINT_MAX, // This should probably become zero. XXXXX
+ };
+@@ -522,6 +535,7 @@
+ {
+   (void)args;
+ 
++  routervpn_padding_owner_closed(conn);
+   conn->is_owning_control_connection = 0;
+ 
+   log_info(LD_CONTROL, "Control connection %d has dropped ownership of this "
+@@ -2176,6 +2190,7 @@
+   ONE_LINE(saveconf, 0),
+   ONE_LINE(signal, 0),
+   ONE_LINE(takeownership, 0),
++  ONE_LINE(routervpn_padding, CMD_FL_WIPE),
+   ONE_LINE(dropownership, 0),
+   ONE_LINE(mapaddress, 0),
+   ONE_LINE(getinfo, 0),
+@@ -2233,6 +2248,11 @@
+   } else {
+     if (BUG(err))
+       tor_free(err);
++    /* A configuration/lifecycle operation retires captured cover before
++     * the operation or its reply. Re-enabling needs a new proved generation. */
++    if (!strcmp(def->name, "setconf") || !strcmp(def->name, "resetconf") ||
++        !strcmp(def->name, "+loadconf") || !strcmp(def->name, "signal"))
++      routervpn_padding_invalidate();
+     if (def->handler(conn, parsed_args))
+       rv = 0;
+ 
+--- a/src/feature/control/include.am
++++ b/src/feature/control/include.am
+@@ -10,6 +10,7 @@
+ 	src/feature/control/control_auth.c	\
+ 	src/feature/control/control_bootstrap.c	\
+ 	src/feature/control/control_cmd.c	\
++	src/feature/control/routervpn_padding.c	\
+ 	src/feature/control/control_hs.c	\
+ 	src/feature/control/control_events.c	\
+ 	src/feature/control/control_fmt.c	\
+@@ -27,6 +28,7 @@
+ 	src/feature/control/control.h			\
+ 	src/feature/control/control_auth.h		\
+ 	src/feature/control/control_cmd.h		\
++	src/feature/control/routervpn_padding.h		\
+ 	src/feature/control/control_hs.h		\
+ 	src/feature/control/control_cmd_args_st.h	\
+ 	src/feature/control/control_connection_st.h	\
+--- a/src/test/include.am
++++ b/src/test/include.am
+@@ -141,6 +141,7 @@
+ 	src/test/test_channel.c \
+ 	src/test/test_channelpadding.c \
+ 	src/test/test_circuitpadding.c \
++	src/test/test_routervpn_padding.c \
+ 	src/test/test_channeltls.c \
+ 	src/test/test_checkdir.c \
+ 	src/test/test_circuitlist.c \
+--- a/src/test/test.c
++++ b/src/test/test.c
+@@ -601,6 +601,7 @@
+   { "checkdir/", checkdir_tests },
+   { "circuitbuild/", circuitbuild_tests },
+   { "circuitpadding/", circuitpadding_tests },
++  { "routervpn_padding/", routervpn_padding_tests },
+   { "circuitlist/", circuitlist_tests },
+   { "circuitmux/", circuitmux_tests },
+   { "circuitmux_ewma/", circuitmux_ewma_tests },
+--- a/src/test/test.h
++++ b/src/test/test.h
+@@ -97,6 +97,7 @@
+ extern struct testcase_t channel_tests[];
+ extern struct testcase_t channelpadding_tests[];
+ extern struct testcase_t circuitpadding_tests[];
++extern struct testcase_t routervpn_padding_tests[];
+ extern struct testcase_t channeltls_tests[];
+ extern struct testcase_t checkdir_tests[];
+ extern struct testcase_t circuitbuild_tests[];

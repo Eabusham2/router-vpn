@@ -29,17 +29,18 @@ def load(name, path):
 
 ARCHIVES = load('server_tor_pinned_archives', ROOT / 'deploy/build-mobile-tor-package.py')
 VERIFY = load('server_tor_package', ROOT / 'server/scripts/server_tor_package.py')
+PADDING = ARCHIVES.PADDING
 CONFIGURE = [
     '--disable-module-relay', '--disable-module-dirauth', '--disable-module-pow',
     '--disable-asciidoc', '--disable-manpage', '--disable-html-manual',
-    '--disable-system-torrc', '--disable-unittests', '--disable-systemd',
+    '--disable-system-torrc', '--disable-systemd',
     '--disable-lzma', '--disable-zstd', '--enable-static-tor',
 ]
 
 
 def inputs():
     return [Path(__file__).resolve(), ROOT / 'deploy/build-mobile-tor-package.py',
-            ROOT / 'server/scripts/server_tor_package.py', LOCK]
+            ROOT / 'server/scripts/server_tor_package.py', LOCK, *PADDING.inputs()]
 
 
 def source_inputs():
@@ -126,7 +127,10 @@ def compile_sources(work, source, target, jobs):
     run(['./autogen.sh'], directory=source['tor'], env=env, log=work / 'tor-autogen.log')
     run(['./configure', *CONFIGURE, '--with-openssl-dir=' + str(prefix), '--with-libevent-dir=' + str(prefix),
          '--with-zlib-dir=' + str(prefix)], directory=source['tor'], env=env, log=work / 'tor-configure.log')
-    run(['make', '-j' + str(jobs), 'src/app/tor'], directory=source['tor'], env=env, log=work / 'tor-build.log')
+    run(['make', '-j' + str(jobs), 'src/app/tor', 'src/test/test'], directory=source['tor'], env=env, log=work / 'tor-build.log')
+    run(['./src/test/test', 'routervpn_padding/..', 'relaycrypt/..', 'cellqueue/..'],
+        directory=source['tor'], env=env, log=work / 'tor-padding-native-tests.log', timeout=30)
+    PADDING.verify(source['tor'])
     binary = source['tor'] / 'src/app/tor'
     if binary.is_symlink() or not binary.is_file():
         raise ValueError('Standalone Tor build did not produce the owned executable')
@@ -142,6 +146,7 @@ def package(binary, source, work, stage, target, lock, libraries, env):
     share = stage / VERIFY.PACKAGE
     (share / 'licenses').mkdir(parents=True)
     shutil.copyfile(LOCK, share / 'sources.json')
+    shutil.copyfile(PADDING.LOCK, share / 'padding-source-lock.json')
     shutil.copyfile(ROOT / 'server/scripts/server_tor_package.py', share / 'verify.py')
     for name, record in lock['sources'].items():
         for relative in record['licenses']:
@@ -153,6 +158,7 @@ def package(binary, source, work, stage, target, lock, libraries, env):
                   source_lock_sha256=VERIFY.SOURCE_LOCK_SHA256, build_inputs_sha256=source_digest,
                   build_inputs=source_records, sources=lock['sources'],
                   process_source_sha256=unpatched_process(source['tor'], lock),
+                  padding_extension=PADDING.verify(source['tor']), padding_native_tests=True,
                   embedded_process_patches=False, dependency_linkage='static', static_dependencies=libraries,
                   executable=dict(path=VERIFY.EXECUTABLE, sha256=ARCHIVES.sha(destination),
                                   size=destination.stat().st_size, **VERIFY.elf_identity(destination.read_bytes(), target)),
@@ -193,6 +199,7 @@ def build(output, work, cache, target, jobs):
         archive = ARCHIVES.fetch(name, entry, Path(cache))
         source[name] = ARCHIVES.extract(archive, entry, work / name)
     unpatched_process(source['tor'], lock)
+    PADDING.apply(source['tor'])
     binary, libraries, env = compile_sources(work, source, target, jobs)
     if source_inputs() != initial_inputs:
         raise ValueError('Standalone Tor build inputs changed during compilation')
