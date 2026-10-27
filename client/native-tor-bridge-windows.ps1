@@ -86,17 +86,42 @@ function Get-RouterVPNTorCaptureIdentity {
   $entry=$null
   if($viaEntry){
     $entry=$predecessor.Value
-    if($null -eq $entry -or $entry -is [string] -or $entry -is [Array]){throw 'Tor Router predecessor is not an exact captured object.'}
+    if($entry -isnot [pscustomobject] -or
+       ($entry.schema -isnot [int] -and $entry.schema -isnot [long]) -or $entry.schema -notin @(1,2)){throw 'Tor predecessor has no supported captured proof schema.'}
+    $externalEntry=$entry.schema -eq 2
+    $allowedEntryFields=@('schema','entry_mode','profile','config','assets_sha256')
+    if($externalEntry){$allowedEntryFields+=@('entry_kind','source_config')}
     $entryFields=@($entry.PSObject.Properties.Name)
-    if($entryFields.Count -ne 5 -or @($entryFields|Where-Object{@('schema','entry_mode','profile','config','assets_sha256') -cnotcontains $_}).Count -ne 0 -or
-       ($entry.schema -isnot [int] -and $entry.schema -isnot [long]) -or $entry.schema -ne 1 -or [string]$entry.assets_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
-       [string]$entry.entry_mode -cnotmatch '^[a-z0-9-]{1,32}$' -or $null -eq $entry.profile -or $null -eq $entry.config -or
-       $entry.profile -is [string] -or $entry.profile -is [Array] -or $entry.config -is [string] -or $entry.config -is [Array] -or
-       $entry.profile.id -isnot [string] -or [string]$entry.profile.id -cne $physicalID -or [string]$entry.profile.node_kind -cne 'router-vpn' -or $physicalID -ceq $policyID -or
+    if($entryFields.Count -ne $allowedEntryFields.Count -or @($entryFields|Where-Object{$allowedEntryFields -cnotcontains $_}).Count -ne 0 -or
+       $entry.assets_sha256 -isnot [string] -or $entry.assets_sha256 -cnotmatch '^[a-f0-9]{64}$' -or
+       $entry.entry_mode -isnot [string] -or $entry.entry_mode -cnotmatch '^[a-z0-9-]{1,32}$' -or
+       $entry.profile -isnot [pscustomobject] -or $entry.config -isnot [pscustomobject] -or
+       $entry.profile.id -isnot [string] -or [string]$entry.profile.id -cne $physicalID -or $physicalID -ceq $policyID -or
        $null -eq $enabled -or -not ($enabled.Value -is [bool]) -or -not $enabled.Value -or
        [string]$profile.multihop_entry_id -cne $physicalID -or [string]$profile.multihop_exit_id -cne $policyID -or
        [string]$profile.multihop_entry_mode -cne [string]$entry.entry_mode -or [string]$profile.multihop_exit_mode -cne 'tor-bridge'){
-      throw 'Tor Router predecessor does not match the captured Local entry and exit.'
+      throw 'Tor predecessor does not match the captured Local entry and exit.'
+    }
+    if($externalEntry){
+      if($entry.entry_kind -isnot [string] -or $entry.entry_kind -cne 'external-public-ip' -or
+         $entry.source_config -isnot [pscustomobject] -or @($entry.source_config.PSObject.Properties).Count -eq 0 -or
+         [string]$entry.profile.node_kind -cne 'external' -or $entry.profile.external -isnot [pscustomobject] -or
+         $entry.profile.external.protocol -isnot [string] -or $entry.profile.external.protocol -cne $entry.entry_mode -or
+         $entry.entry_mode -cnotin @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
+        throw 'Ordinary Tor predecessor borrowed another proof authority or lost its original graph.'
+      }
+      foreach($key in @('node_proof_id','router_api','api_token')){
+        $identity=$entry.profile.PSObject.Properties[$key]
+        if($null -ne $identity -and $null -ne $identity.Value -and ($identity.Value -isnot [string] -or $identity.Value -cne '')){throw 'Ordinary Tor predecessor borrowed private Router control identity.'}
+      }
+      $expectedAddress=$entry.profile.external.PSObject.Properties['expected_public_ip']
+      $expectedIP=$null
+      if($null -eq $expectedAddress -or $expectedAddress.Value -isnot [string] -or
+         -not [Net.IPAddress]::TryParse($expectedAddress.Value,[ref]$expectedIP) -or $expectedIP.ToString() -cne $expectedAddress.Value -or
+         [Net.IPAddress]::IsLoopback($expectedIP) -or $expectedIP.Equals([Net.IPAddress]::Any) -or $expectedIP.Equals([Net.IPAddress]::IPv6Any) -or
+         $expectedIP.Equals([Net.IPAddress]::Broadcast) -or $expectedIP.IsIPv6Multicast -or $expectedIP.IsIPv6LinkLocal -or $expectedIP.IsIPv4MappedToIPv6){throw 'Ordinary Tor predecessor lost its captured public-address proof.'}
+    }elseif([string]$entry.profile.node_kind -cne 'router-vpn'){
+      throw 'Router proof schema cannot admit an ordinary Tor predecessor.'
     }
     $execution=$profile.PSObject.Properties['multihop_execution']
     if($null -ne $execution -and [string]$execution.Value -cnotin @('','local')){throw 'Tor Router predecessor requires the saved Local execution.'}

@@ -423,8 +423,10 @@ predecessor, proves its expected public address through the captured encrypted
 lower and carries PT and selected DNS through it. Native six-trial SS2022/TLS/
 obfs4/DNS traffic and Router regressions pass, with altered source, proof kind,
 physical tuple and ignored proof rejected. This native integration does not yet
-advertise public Connect: desktop host capture, wrappers and Speed Lab
-restoration still need adoption. SOCKS/HTTP Snowflake UDP needs its own bounded
+advertise public Connect: desktop host capture and Speed Lab restoration still
+need adoption. Windows and Unix launch wrappers now validate the distinct
+schema-2 source/proof envelope and exact physical tuples before protection;
+the native compiler independently rebuilds the complete graph. SOCKS/HTTP Snowflake UDP needs its own bounded
 association; ordinary proof never borrows private Home or Router protection.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private

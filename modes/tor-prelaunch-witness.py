@@ -135,18 +135,34 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
         endpoint = physical_address(os.environ.get("HOMEVPN_ENDPOINT", ""))
         if via_entry:
             entry = capture["predecessor"]
-            if (type(entry) is not dict or set(entry) != {"schema", "entry_mode", "profile", "config", "assets_sha256"}
-                    or type(entry.get("schema")) is not int or entry["schema"] != 1
+            if type(entry) is not dict or type(entry.get("schema")) is not int or entry["schema"] not in {1, 2}:
+                raise ValueError("predecessor has no supported captured proof schema")
+            external_entry = entry["schema"] == 2
+            entry_fields = {"schema", "entry_mode", "profile", "config", "assets_sha256"}
+            if external_entry:
+                entry_fields |= {"entry_kind", "source_config"}
+            if (set(entry) != entry_fields
                     or type(entry.get("entry_mode")) is not str or not re.fullmatch(r"[a-z0-9-]{1,32}", entry["entry_mode"])
                     or type(entry.get("assets_sha256")) is not str or not re.fullmatch(r"[a-f0-9]{64}", entry["assets_sha256"])
                     or type(entry.get("profile")) is not dict or type(entry.get("config")) is not dict
-                    or entry["profile"].get("id") != physical or entry["profile"].get("node_kind") != "router-vpn"
+                    or entry["profile"].get("id") != physical
                     or physical == policy or profile.get("multihop_enabled") is not True
                     or profile.get("multihop_entry_id") != physical or profile.get("multihop_exit_id") != policy
                     or profile.get("multihop_entry_mode") != entry["entry_mode"]
                     or profile.get("multihop_exit_mode") != "tor-bridge" or profile.get("multihop_execution", "") not in {"", "local"}
                     or os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session):
-                raise ValueError("Router predecessor differs from the captured Local selection")
+                raise ValueError("predecessor differs from the captured Local selection")
+            if external_entry:
+                external = entry["profile"].get("external")
+                if (entry["entry_kind"] != "external-public-ip" or type(entry["source_config"]) is not dict
+                        or not entry["source_config"] or entry["profile"].get("node_kind") != "external"
+                        or type(external) is not dict or external.get("protocol") != entry["entry_mode"]
+                        or entry["entry_mode"] not in {"wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"}
+                        or any(entry["profile"].get(key) not in {None, ""} for key in ("node_proof_id", "router_api", "api_token"))):
+                    raise ValueError("ordinary predecessor borrowed another proof authority or lost its original graph")
+                physical_address(external.get("expected_public_ip"))
+            elif entry["profile"].get("node_kind") != "router-vpn":
+                raise ValueError("Router proof schema cannot admit an ordinary predecessor")
             address_raw = os.environ.get("HOMEVPN_NATIVE_ENDPOINTS_JSON", "")
             egress_raw = os.environ.get("HOMEVPN_NATIVE_EGRESS_JSON", "")
             if len(address_raw) > 1024 or len(egress_raw) > 4096:

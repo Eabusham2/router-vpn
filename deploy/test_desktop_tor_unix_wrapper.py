@@ -211,6 +211,20 @@ class Fixture:
         self.set_input("tor-profile.json", profile)
         self.set_input("tor-capture.json", capture)
 
+    def external_entry(self, protocol: str = "shadowsocks") -> None:
+        self.router_entry()
+        capture = json.loads(self.inputs["tor-capture.json"])
+        predecessor = capture["predecessor"]
+        predecessor.update({"schema": 2, "entry_kind": "external-public-ip", "entry_mode": protocol,
+                            "profile": {"id": "captured-entry", "node_kind": "external",
+                                        "external": {"protocol": protocol, "expected_public_ip": "8.8.8.8"}},
+                            "source_config": {"route": {"final": "external-exit"}},
+                            "config": {"route": {"final": "external-exit"}}})
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile["multihop_entry_mode"] = protocol
+        self.set_input("tor-capture.json", capture)
+        self.set_input("tor-profile.json", profile)
+
     def run(self, action: str = "up", *, updates: dict[str, str | None] | None = None,
             runtime: Path | None = None, native: Path | None = None) -> tuple[subprocess.CompletedProcess, list[dict], int]:
         if self.events.exists():
@@ -436,6 +450,75 @@ class UnixTorWrapper(unittest.TestCase):
         self.fixture.router_entry()
         self.assert_success()
         self.assertNotEqual(self.fixture.env["HOMEVPN_ENDPOINT"], self.fixture.endpoint)
+
+    def test_external_entry_preserves_typed_proof_and_exact_physical_owner(self):
+        for protocol in ("wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"):
+            with self.subTest(protocol=protocol), tempfile.TemporaryDirectory(prefix="routervpn-tor-external-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.external_entry(protocol)
+                self.assert_success(fixture)
+                self.assertNotEqual(fixture.env["HOMEVPN_ENDPOINT"], fixture.endpoint)
+
+    def test_external_entry_rejects_foreign_schema_or_proof_before_protection(self):
+        faults = ("router-schema", "unknown-schema", "typed-schema", "proof-kind", "missing-kind", "null-kind", "node-kind",
+                  "source-missing", "source-null", "source-array", "source-empty", "source-boolean", "config-boolean",
+                  "entry-id", "protocol", "unsupported-protocol", "external-null", "external-array", "public-ip", "public-ip-mapped",
+                  "router-api", "router-token", "router-id", "extra-field", "port", "network", "order", "source-digest")
+        for fault in faults:
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="routervpn-tor-external-reject-") as directory:
+                fixture = Fixture(Path(directory))
+                fixture.external_entry()
+                capture = json.loads(fixture.inputs["tor-capture.json"])
+                entry = capture["predecessor"]
+                if fault == "router-schema": entry["schema"] = 1
+                elif fault == "unknown-schema": entry["schema"] = 3
+                elif fault == "typed-schema": entry["schema"] = "2"
+                elif fault == "proof-kind": entry["entry_kind"] = "router-private-agent"
+                elif fault == "missing-kind": del entry["entry_kind"]
+                elif fault == "null-kind": entry["entry_kind"] = None
+                elif fault == "node-kind": entry["profile"]["node_kind"] = "router-vpn"
+                elif fault == "source-missing": del entry["source_config"]
+                elif fault == "source-null": entry["source_config"] = None
+                elif fault == "source-array": entry["source_config"] = []
+                elif fault == "source-empty": entry["source_config"] = {}
+                elif fault == "source-boolean": entry["source_config"] = True
+                elif fault == "config-boolean": entry["config"] = True
+                elif fault == "entry-id": entry["profile"]["id"] = "foreign-entry"
+                elif fault == "protocol": entry["profile"]["external"]["protocol"] = "hysteria2"
+                elif fault == "unsupported-protocol": entry["profile"]["external"]["protocol"] = entry["entry_mode"] = "foreign"
+                elif fault == "external-null": entry["profile"]["external"] = None
+                elif fault == "external-array": entry["profile"]["external"] = []
+                elif fault == "public-ip": entry["profile"]["external"]["expected_public_ip"] = "provider.example"
+                elif fault == "public-ip-mapped": entry["profile"]["external"]["expected_public_ip"] = "::ffff:8.8.8.8"
+                elif fault == "router-api": entry["profile"]["router_api"] = "https://192.0.2.8"
+                elif fault == "router-token": entry["profile"]["api_token"] = "foreign"
+                elif fault == "router-id": entry["profile"]["node_proof_id"] = "f" * 64
+                elif fault == "extra-field": entry["foreign"] = True
+                elif fault == "port": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"].replace('"port":51820', '"port":443')
+                elif fault == "network": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"].replace('"network":"udp"', '"network":"tcp"')
+                elif fault == "order": fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"] = json.dumps(list(reversed(json.loads(fixture.env["HOMEVPN_NATIVE_EGRESS_JSON"]))), separators=(",", ":"))
+                elif fault == "source-digest": fixture.env["HOMEVPN_TOR_SOURCE_SHA256"] = "d" * 64
+                fixture.set_input("tor-capture.json", capture)
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0, fault)
+                self.assertEqual(events, [], "Invalid ordinary entry reached preparation or protection: " + fault)
+
+    def test_external_proof_kind_guard_is_required_before_firewall_handoff(self):
+        self.fixture.external_entry()
+        capture = json.loads(self.fixture.inputs["tor-capture.json"])
+        capture["predecessor"]["entry_kind"] = "router-private-agent"
+        self.fixture.set_input("tor-capture.json", capture)
+        result, events, _ = self.fixture.run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, [])
+        verifier = self.fixture.scripts / "tor-prelaunch-witness.py"
+        original = verifier.read_text()
+        changed = original.replace('entry["entry_kind"] != "external-public-ip"', 'False')
+        self.assertNotEqual(changed, original)
+        verifier.write_text(changed)
+        result, events, _ = self.fixture.run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("protect", [item["kind"] for item in events], "Removed proof-kind guard did not expose the intended defect.")
 
     def test_router_entry_rejects_changed_physical_projection_before_protection(self):
         faults = ("port", "network", "extra", "missing", "order", "host", "physical-id", "policy-id", "session",
