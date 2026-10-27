@@ -262,7 +262,7 @@ $global:LASTEXITCODE=0
 if($global:TorWitnessFailure -ceq ('firewall-'+$Action)){$global:LASTEXITCODE=23}
 '@)
   $captureValue=[ordered]@{schema=1;session_id=('a'*32);isolation_secret=('b'*64);target_os='windows';tor_binary=$tor}
-  $profileValue=[ordered]@{id='captured-tor-node'}
+  $profileValue=[ordered]@{id='captured-tor-node';external=[ordered]@{protocol='tor-bridge'}}
   if($ViaEntry){
     $captureValue['predecessor']=[ordered]@{schema=1;entry_mode='wg';profile=[ordered]@{id='captured-router-entry';node_kind='router-vpn';node_proof_id=('e'*64)};config=[ordered]@{route=[ordered]@{final='entry-wg'}};assets_sha256=('f'*64)}
     $profileValue['multihop_enabled']=$true;$profileValue['multihop_entry_id']='captured-router-entry';$profileValue['multihop_exit_id']='captured-tor-node'
@@ -480,6 +480,49 @@ function Assert-ServerPhysicalCapture {
     }finally{. ([scriptblock]::Create($captureSource))}
   }
 }
+function Assert-PlainPhysicalCapture {
+  foreach($path in @('direct','router','ordinary','server')){
+    $fixture=switch($path){
+      'router'{New-WitnessFixture -ViaEntry}
+      'ordinary'{New-ExternalWitnessFixture}
+      'server'{New-ServerWitnessFixture}
+      default{New-WitnessFixture}
+    }
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    $profile.external=[pscustomobject]@{protocol='tor'}
+    $fixture.Bridge=''
+    if($path -ceq 'direct'){
+      $profile|Add-Member -NotePropertyName 'kill_switch_policy' -NotePropertyValue 'off'
+      $profile|Add-Member -NotePropertyName 'kill_switch' -NotePropertyValue $false
+      $fixture.Environment['HOMEVPN_ENDPOINT']=''
+    }else{$profile.multihop_exit_mode='tor'}
+    Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+    $identity=Read-CapturedIdentity $fixture
+    Check ($identity.profile.external.protocol -ceq 'tor' -and ($identity.via_entry -eq ($path -cne 'direct'))) 'Plain Tor lost its exact direct/predecessor identity.'
+    Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture
+  }
+  foreach($fault in @('endpoint','strict','typed-kill','bridge','unknown-protocol','exit-mode','server-mode')){
+    $fixture=if($fault -ceq 'server-mode'){New-ServerWitnessFixture}elseif($fault -ceq 'exit-mode'){New-WitnessFixture -ViaEntry}else{New-WitnessFixture}
+    $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+    $profile.external=[pscustomobject]@{protocol='tor'}
+    $fixture.Bridge=''
+    if($fault -notin @('exit-mode','server-mode')){
+      $fixture.Environment['HOMEVPN_ENDPOINT']=''
+      $profile|Add-Member -NotePropertyName 'kill_switch_policy' -NotePropertyValue 'off'
+      $profile|Add-Member -NotePropertyName 'kill_switch' -NotePropertyValue $false
+    }
+    switch($fault){
+      'endpoint'{$fixture.Environment['HOMEVPN_ENDPOINT']='203.0.113.44'}
+      'strict'{$profile.kill_switch_policy='always'}
+      'typed-kill'{$profile.kill_switch='false'}
+      'bridge'{$profile.external|Add-Member -NotePropertyName 'tor_bridge' -NotePropertyValue ([pscustomobject]@{bridges=@('private bridge')})}
+      'unknown-protocol'{$profile.external.protocol='socks5'}
+    }
+    Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+    Assert-CaptureRejected $fixture ('plain-'+$fault)
+    Assert-MainWitness -Failure 'normal' -Expected $false -Server -CapturedFixture $fixture -RejectCapture
+  }
+}
 function Assert-ExternalPhysicalCapture {
   foreach($mode in @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
     $fixture=New-ExternalWitnessFixture $mode
@@ -665,6 +708,19 @@ try{
     Assert-ExternalPhysicalCapture
   }
   Assert-ServerPhysicalCapture
+  Assert-PlainPhysicalCapture
+  $changed=$captureSource.Replace("`$killPolicy.Value -cne 'off'",'$false')
+  Check ($changed -cne $captureSource) 'The plain Direct policy mutation missed its shipping protection guard.'
+  . ([scriptblock]::Create($changed))
+  $fixture=New-WitnessFixture
+  $fixture.Bridge='';$fixture.Environment['HOMEVPN_ENDPOINT']=''
+  $profile=$fixture.Content['tor-profile.json']|ConvertFrom-Json
+  $profile.external=[pscustomobject]@{protocol='tor'}
+  $profile|Add-Member -NotePropertyName 'kill_switch_policy' -NotePropertyValue 'always'
+  $profile|Add-Member -NotePropertyName 'kill_switch' -NotePropertyValue $false
+  Set-WitnessContent $fixture 'tor-profile.json' ($profile|ConvertTo-Json -Depth 16 -Compress)
+  Detect-Defect {Assert-CaptureRejected $fixture 'plain-direct-policy'} 'Unowned Tor physical capture was accepted: plain-direct-policy'
+  . ([scriptblock]::Create($captureSource))
   if(-not $ServerOnly){
   foreach($failure in @('helper','help','graph','firewall-check','firewall-prepare','typed-no-child')){Assert-MainWitness $failure $true}
   foreach($failure in @('typed-created','typed-recovery','typed-recovery-no-child','untyped','native-error','normal','witness-tamper-helper')){Assert-MainWitness $failure $false}

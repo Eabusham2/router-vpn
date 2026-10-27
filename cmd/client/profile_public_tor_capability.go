@@ -8,7 +8,7 @@ import "router-vpn/internal/common"
 // Snowflake/WebTunnel node as runnable merely because the broad Tor family has
 // some supported transport.
 func publicCapabilityForProfile(p common.RouterProfile, caps []standardExitCapability) (standardExitCapability, bool) {
-	if p.External != nil && normalizeStandardExitProtocol(p.External.Protocol) == "tor-bridge" {
+	if p.External != nil && desktopTorProtocol(normalizeStandardExitProtocol(p.External.Protocol)) {
 		return torBridgeProfileRuntimeCapability(p), true
 	}
 	return publicCapabilityForProtocol(caps, func() string {

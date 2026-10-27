@@ -64,7 +64,7 @@ func (saved *speedLabTorRestore) execution() string {
 }
 
 func speedLabTorPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
-	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "tor-bridge" {
+	if profile.NodeKind != "external" || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
 		return common.RouterProfile{}, errors.New("previous Tor connection has no captured external node")
 	}
 	policy, err := externalRuntimePolicy(profile)
@@ -123,7 +123,7 @@ func captureSpeedLabTorRestore(profile common.RouterProfile, identity speedLabPa
 	}
 	type runtimeWire common.RouterProfile
 	var captured runtimeWire
-	if json.Unmarshal(raw, &captured) != nil || captured.ID != profile.ID || captured.External == nil || captured.External.Protocol != "tor-bridge" || launch.tor.sourceIdentityToken() != desktopTorSourceIdentityToken(profile) {
+	if json.Unmarshal(raw, &captured) != nil || captured.ID != profile.ID || captured.External == nil || !desktopTorProtocol(captured.External.Protocol) || launch.tor.sourceIdentityToken() != desktopTorSourceIdentityToken(profile) {
 		return nil, errors.New("previous Tor policy differs from its captured private source")
 	}
 	selection := &desktopTorSelection{profile: cloneRouterProfile(profile), policy: cloneRouterProfile(common.RouterProfile(captured)), profileToken: launch.tor.sourceIdentityToken(), predecessor: launch.tor.predecessor}

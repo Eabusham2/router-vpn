@@ -168,11 +168,11 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 	a.cmd = cmd
 	a.state.Mode = "external-node"
 	a.state.LogicalMode = "external-node"
-	a.state.RuntimeMode = "external-tor-bridge"
+	a.state.RuntimeMode = prelaunch.workspace.mode
 	a.state.Base = sessionBase
 	a.state.RouterID = profile.ID
 	a.state.Connected = false
-	a.state.Phase = "tor-bridge:bootstrapping"
+	a.state.Phase = profile.External.Protocol + ":bootstrapping"
 	a.state.LastError = ""
 	a.mu.Unlock()
 	if err = check(); err != nil {
@@ -188,7 +188,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 
 	a.mu.Lock()
 	if a.cmd == cmd {
-		a.state.Phase = "tor-bridge:proving-exit"
+		a.state.Phase = profile.External.Protocol + ":proving-exit"
 	}
 	a.mu.Unlock()
 	actualIP, proofErr := a.proveTorBridgeExit()
@@ -207,7 +207,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		a.mu.Lock()
 		a.state.Mode = "external-node"
 		a.state.LogicalMode = "external-node"
-		a.state.RuntimeMode = "external-tor-bridge"
+		a.state.RuntimeMode = prelaunch.workspace.mode
 		a.state.Base = sessionBase
 		a.state.RouterID = profile.ID
 		a.state.Connected = false
@@ -263,18 +263,22 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 	a.monitorDesktopTorRuntime(prelaunch.workspace)
 	a.startDesktopExternalAutomaticMTU(prelaunch.workspace)
 
-	transport := strings.TrimSpace(policy.External.TorBridge.Transport)
-	if transport == "" {
-		transport = "custom"
+	transport, transportPath := "tor", "authenticated native guard proxy"
+	if policy.External.TorBridge != nil {
+		transport = strings.TrimSpace(policy.External.TorBridge.Transport)
+		if transport == "" {
+			transport = "custom"
+		}
+		transportPath = transport + " circumvention transport"
 	}
 	entryID, entryMode := "", ""
-	route := "client full-device TUN -> local Tor SOCKS -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
+	route := "client full-device TUN -> local Tor SOCKS -> " + transportPath + " -> Tor circuit -> dynamic Tor exit -> Internet"
 	if selection.predecessor != nil {
 		entryID, entryMode = selection.predecessor.entry.ID, selection.predecessor.mode
-		route = "client full-device TUN -> captured Router " + entryMode + " entry -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
+		route = "client full-device TUN -> captured Router " + entryMode + " entry -> " + transportPath + " -> Tor circuit -> dynamic Tor exit -> Internet"
 	}
 	if policy.MultihopExecution == "server" {
-		route = "client full-device TUN -> captured Router " + entryMode + " entry -> authenticated private Server lease -> " + transport + " circumvention transport -> Tor circuit -> dynamic Tor exit -> Internet"
+		route = "client full-device TUN -> captured Router " + entryMode + " entry -> authenticated private Server lease -> " + transportPath + " -> Tor circuit -> dynamic Tor exit -> Internet"
 	}
 	w.Header().Set("content-type", "application/json")
 	w.Header().Set("cache-control", "no-store")
@@ -283,7 +287,7 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		"mode":              "external-node",
 		"profile_id":        profile.ID,
 		"profile_name":      profile.Name,
-		"protocol":          "tor-bridge",
+		"protocol":          profile.External.Protocol,
 		"tor_transport":     transport,
 		"direct":            selection.predecessor == nil,
 		"entry_id":          entryID,

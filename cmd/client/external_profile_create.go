@@ -178,7 +178,7 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 	// URL-shaped input contributes only its hostname; malformed bare host/path/
 	// query/userinfo text fails before the profile store is changed.
 	var host string
-	if protocol != "openvpn" && protocol != "tor-bridge" {
+	if protocol != "openvpn" && !desktopTorProtocol(protocol) {
 		var err error
 		host, err = normalizeEndpoint(q.Server)
 		if err != nil {
@@ -228,7 +228,7 @@ func externalProfileFromCreateRequest(q externalProfileCreateRequest) (common.Ro
 			return common.RouterProfile{}, err
 		}
 		p.External.OpenVPN = q.OpenVPN
-	case "tor-bridge":
+	case "tor", "tor-bridge":
 		return common.RouterProfile{}, errors.New("Tor bridges use the dedicated censorship-circumvention builder")
 	default:
 		return common.RouterProfile{}, errors.New("unsupported external node protocol")

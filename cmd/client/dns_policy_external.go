@@ -150,7 +150,7 @@ func validateDesktopExternalDNSPolicy(profile, entry common.RouterProfile) error
 	if profile.NodeKind != "external" || profile.External == nil {
 		return errors.New("external DNS has no captured private protocol")
 	}
-	if profile.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(profile.External.Protocol) {
 		_, err := capturedTorBridgeDNS(profile, entry, true)
 		return err
 	}

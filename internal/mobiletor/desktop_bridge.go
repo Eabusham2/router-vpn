@@ -7,12 +7,13 @@ import (
 	"router-vpn/internal/common"
 )
 
-// DesktopBridgePolicy describes one captured standalone Tor bridge connection.
+// DesktopBridgePolicy describes one captured plain Tor or Tor bridge connection.
 // It opens no listener, launches no process and grants no connection proof. Its
 // SOCKS outbound is usable only after the native owner authenticates its exact
-// Tor child and binds the bridge plan to that owner's in-process PT listeners.
+// Tor child and binds the selected guard proxy or in-process PT listeners.
 type DesktopBridgePolicy struct {
 	config, source string
+	mode           string
 	metadata       DesktopBridgeMetadata
 	bridges        []string
 	predecessor    *DesktopPredecessor
@@ -103,7 +104,11 @@ func (p *DesktopBridgePolicy) Metadata() DesktopBridgeMetadata  { return p.metad
 func (p *DesktopBridgePolicy) Profile() string                  { return p.source }
 func (p *DesktopBridgePolicy) Predecessor() *DesktopPredecessor { return p.predecessor }
 func (p *DesktopBridgePolicy) ServerPolicy() *ServerTorPolicy   { return p.server }
+func (p *DesktopBridgePolicy) Mode() string                     { return p.mode }
 func (p *DesktopBridgePolicy) Plan() (Plan, error) {
+	if p.mode != "tor-bridge" {
+		return Plan{}, errors.New("plain desktop Tor has no bridge plan")
+	}
 	return NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: append([]string(nil), p.bridges...)})
 }
 
@@ -145,7 +150,7 @@ func applyDesktopTorJumboPolicy(tun, profile map[string]any) error {
 	return nil
 }
 
-// NewDesktopBridgePolicy compiles the exact saved direct bridge selection. The
+// NewDesktopBridgePolicy compiles the exact saved direct Tor selection. The
 // same resolver is separately captured for PT bootstrap on the native physical
 // underlay and for application DNS through Tor. Neither uses host-default DNS.
 func NewDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string) (*DesktopBridgePolicy, error) {
@@ -329,7 +334,7 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	for i, bridge := range plan.Bridges {
 		bridges[i] = bridge.Line
 	}
-	return &DesktopBridgePolicy{source: source, config: string(encoded), metadata: metadata, bridges: bridges, predecessor: predecessor}, nil
+	return &DesktopBridgePolicy{source: source, config: string(encoded), mode: profile["external"].(map[string]any)["protocol"].(string), metadata: metadata, bridges: bridges, predecessor: predecessor}, nil
 }
 
 func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
@@ -338,26 +343,29 @@ func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
 		return nil, Plan{}, 0, err
 	}
 	external, ok := profile["external"].(map[string]any)
-	if !ok || external["protocol"] != "tor-bridge" {
-		return nil, Plan{}, 0, errors.New("desktop bridge policy requires its exact external Tor bridge profile")
+	if !ok || external["protocol"] != "tor-bridge" && external["protocol"] != "tor" {
+		return nil, Plan{}, 0, errors.New("desktop Tor policy requires its exact external Tor profile")
 	}
-	block, ok := external["tor_bridge"].(map[string]any)
-	if !ok {
-		return nil, Plan{}, 0, errors.New("desktop Tor bridge selection is missing")
-	}
-	port, err := profileInteger(block, "socks_port", 0)
-	if err != nil {
-		return nil, Plan{}, 0, errors.New("desktop Tor SOCKS port requires an integer")
-	}
-	if port == 0 {
-		port = common.ExternalTorDefaultSocksPort
+	port := common.ExternalTorDefaultSocksPort
+	if external["protocol"] == "tor-bridge" {
+		block, ok := external["tor_bridge"].(map[string]any)
+		if !ok {
+			return nil, Plan{}, 0, errors.New("desktop Tor bridge selection is missing")
+		}
+		port, err = profileInteger(block, "socks_port", 0)
+		if err != nil {
+			return nil, Plan{}, 0, errors.New("desktop Tor SOCKS port requires an integer")
+		}
+		if port == 0 {
+			port = common.ExternalTorDefaultSocksPort
+		}
+		// The mobile parser owns an automatic listener. Remove only that field
+		// from this copy and retain the original source for exact identity.
+		delete(block, "socks_port")
 	}
 	if port < 1024 || port > 65535 || port == 1098 || port == 1099 || port == 8788 {
 		return nil, Plan{}, 0, errors.New("desktop Tor SOCKS port is invalid or reserved")
 	}
-	// The mobile parser owns an automatic listener. Remove only that field from
-	// this private decoded copy and retain the exact original source for identity.
-	delete(block, "socks_port")
 	normalized, _ := json.Marshal(profile)
 	profile, bridges, err := capturedTorProfile(string(normalized))
 	if err != nil {
@@ -378,9 +386,12 @@ func desktopBridgeProfile(source string) (map[string]any, Plan, int, error) {
 	if _, exists := profile["home_lan_access"]; !exists {
 		profile["home_lan_access"] = false
 	}
-	plan, err := NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: bridges})
-	if err != nil {
-		return nil, Plan{}, 0, err
+	plan := Plan{}
+	if external["protocol"] == "tor-bridge" {
+		plan, err = NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: bridges})
+		if err != nil {
+			return nil, Plan{}, 0, err
+		}
 	}
 	if _, err := desktopBridgeKillPolicy(profile, plan); err != nil {
 		return nil, Plan{}, 0, err
@@ -419,9 +430,13 @@ func desktopBridgeDirectProtection(plan Plan) bool {
 func desktopBridgeSavedRouterSelection(profile map[string]any) bool {
 	entry, exit, id := profileString(profile, "multihop_entry_id"), profileString(profile, "multihop_exit_id"), profileString(profile, "id")
 	execution := profileString(profile, "multihop_execution")
+	external, ok := profile["external"].(map[string]any)
+	if !ok || external["protocol"] != "tor" && external["protocol"] != "tor-bridge" {
+		return false
+	}
 	return profile["multihop_enabled"] == true && profileIdentifier.MatchString(entry) &&
 		entry != id && exit == id && (execution == "" || execution == "local" || execution == "server" &&
-		profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) && profile["multihop_exit_mode"] == "tor-bridge")
+		profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) && profile["multihop_exit_mode"] == external["protocol"])
 }
 
 func desktopHex(value string, bytes int) bool { return capturedHex(value, bytes) }

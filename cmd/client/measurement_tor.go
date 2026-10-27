@@ -13,7 +13,7 @@ type desktopTorMeasurementBinding struct {
 }
 
 func captureDesktopTorMeasurementBinding(a *app, st state) (*desktopTorMeasurementBinding, error) {
-	if st.Mode != "external-node" || st.RuntimeMode != "external-tor-bridge" {
+	if st.Mode != "external-node" || !desktopTorRuntimeID(st.RuntimeMode) {
 		return nil, nil
 	}
 	if a == nil {
@@ -45,7 +45,7 @@ func (bound *desktopTorMeasurementBinding) currentLocked(a *app) error {
 	}
 	launch, owner := bound.launch, bound.launch.tor
 	registered, found := desktopNodeOwners.Load(a)
-	if !found || registered != launch || launch.external != nil || launch.command == nil || launch.command.Process == nil || a.cmd != launch.command || launch.mode != "external-tor-bridge" || owner.predecessor != bound.predecessor {
+	if !found || registered != launch || launch.external != nil || launch.command == nil || launch.command.Process == nil || a.cmd != launch.command || !desktopTorRuntimeID(launch.mode) || owner.predecessor != bound.predecessor {
 		return errors.New("Tor measurement native process or predecessor changed")
 	}
 	expected := owner.expected
@@ -53,7 +53,7 @@ func (bound *desktopTorMeasurementBinding) currentLocked(a *app) error {
 		return errors.New("Tor measurement source, session or physical network changed")
 	}
 	profile, exists := a.profileByIDLocked(launch.profileID)
-	if !exists || desktopTorSourceIdentityToken(profile) != bound.profileToken || owner.entryCurrentLocked(a) != nil {
+	if !exists || desktopTorProfileRuntime(profile) != launch.mode || desktopTorSourceIdentityToken(profile) != bound.profileToken || owner.entryCurrentLocked(a) != nil {
 		return errors.New("Tor measurement captured node policy or credentials changed")
 	}
 	if entry := bound.predecessor; entry != nil {

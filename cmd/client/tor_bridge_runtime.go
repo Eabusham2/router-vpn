@@ -25,6 +25,21 @@ type torBridgeRuntime struct {
 	Launch           *desktopNodeLaunch
 }
 
+func desktopTorProtocol(protocol string) bool {
+	return protocol == "tor" || protocol == "tor-bridge"
+}
+
+func desktopTorRuntimeID(mode string) bool {
+	return mode == "external-tor" || mode == "external-tor-bridge"
+}
+
+func desktopTorProfileRuntime(profile common.RouterProfile) string {
+	if profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
+		return ""
+	}
+	return "external-" + profile.External.Protocol
+}
+
 func safeExecutable(name string) (string, error) {
 	path, err := exec.LookPath(name)
 	if err != nil || strings.TrimSpace(path) == "" {
@@ -154,8 +169,16 @@ func torBridgeProfile(profile common.RouterProfile) (common.RouterProfile, commo
 	if err := common.NormalizeRouterProfile(&profile); err != nil {
 		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", err
 	}
-	if profile.NodeKind != "external" || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.External.TorBridge == nil {
-		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", errors.New("profile is not a Tor bridge node")
+	if profile.NodeKind != "external" || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", errors.New("profile is not a Tor node")
+	}
+	if profile.External.Protocol == "tor" {
+		// Plain Tor has no fixed guard endpoint or bridge credentials. The
+		// owned native proxy selects actual guards inside the captured path.
+		return profile, common.ExternalTorBridgeConfig{Transport: "tor", SocksPort: common.ExternalTorDefaultSocksPort}, nil, "", nil
+	}
+	if profile.External.TorBridge == nil {
+		return common.RouterProfile{}, common.ExternalTorBridgeConfig{}, nil, "", errors.New("Tor bridge node lost its bridge selection")
 	}
 	cfg := *profile.External.TorBridge
 	cfg.Bridges = append([]string(nil), profile.External.TorBridge.Bridges...)

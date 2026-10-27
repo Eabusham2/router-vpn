@@ -1,7 +1,7 @@
 param(
   [Parameter(Mandatory=$true)][ValidateSet('check','up','down')][string]$Action,
   [Parameter(Mandatory=$true)][string]$RuntimeDir,
-  [Parameter(Mandatory=$true)][string]$BridgeEndpoint,
+  [Parameter(Mandatory=$true)][AllowEmptyString()][string]$BridgeEndpoint,
   [Parameter(Mandatory=$true)][ValidateRange(1024,65535)][int]$SocksPort,
   [string]$TorBinary='',
   [Parameter(Mandatory=$true)][string]$NativeBinary,
@@ -72,6 +72,11 @@ function Get-RouterVPNTorCaptureIdentity {
   $capture=$captured.value
   $profileCapture=& $read 'tor-profile.json' 'HOMEVPN_TOR_PROFILE_SHA256' 4194304
   $profile=$profileCapture.value
+  if($profile.external -isnot [pscustomobject] -or $profile.external.protocol -isnot [string] -or
+     $profile.external.protocol -cnotin @('tor','tor-bridge')){throw 'Tor launch lost its exact selected protocol.'}
+  $protocol=$profile.external.protocol
+  $bridgeSelection=$profile.external.PSObject.Properties['tor_bridge']
+  if($protocol -ceq 'tor' -and $null -ne $bridgeSelection -and $null -ne $bridgeSelection.Value){throw 'Plain Tor cannot discard a captured bridge selection.'}
   $required=@('schema','session_id','isolation_secret','target_os','tor_binary')
   $fields=@($capture.PSObject.Properties.Name)
   $predecessor=$capture.PSObject.Properties['predecessor']
@@ -114,7 +119,7 @@ function Get-RouterVPNTorCaptureIdentity {
        $entry.profile.id -isnot [string] -or [string]$entry.profile.id -cne $physicalID -or $physicalID -ceq $policyID -or
        $null -eq $enabled -or -not ($enabled.Value -is [bool]) -or -not $enabled.Value -or
        [string]$profile.multihop_entry_id -cne $physicalID -or [string]$profile.multihop_exit_id -cne $policyID -or
-       [string]$profile.multihop_entry_mode -cne [string]$entry.entry_mode -or [string]$profile.multihop_exit_mode -cne 'tor-bridge'){
+       [string]$profile.multihop_entry_mode -cne [string]$entry.entry_mode -or [string]$profile.multihop_exit_mode -cne $protocol){
       throw 'Tor predecessor does not match the captured entry and exit.'
     }
     if($externalEntry){
@@ -144,12 +149,19 @@ function Get-RouterVPNTorCaptureIdentity {
   }elseif($captured.length -gt 16384 -or $physicalID -cne $policyID -or
           ($null -ne $enabled -and (-not ($enabled.Value -is [bool]) -or $enabled.Value))){throw 'Direct Tor capture has another owner or exceeds its direct bound.'}
   $endpoint=[string]$CapturedEnvironment['HOMEVPN_ENDPOINT']
-  if([string]::IsNullOrWhiteSpace($endpoint) -or (-not $viaEntry -and $endpoint -cne $BridgeEndpoint)){throw 'Tor capture lost its actual physical endpoint.'}
+  $plainDirect=-not $viaEntry -and $protocol -ceq 'tor'
+  if($plainDirect){
+    $kill=$profile.PSObject.Properties['kill_switch']
+    $killPolicy=$profile.PSObject.Properties['kill_switch_policy']
+    if($endpoint -cne '' -or $BridgeEndpoint -cne '' -or $null -eq $killPolicy -or $killPolicy.Value -isnot [string] -or $killPolicy.Value -cne 'off' -or
+       ($null -ne $kill -and ($kill.Value -isnot [bool] -or $kill.Value))){throw 'Direct plain Tor requires explicit Off protection and no invented guard endpoint.'}
+  }elseif([string]::IsNullOrWhiteSpace($endpoint) -or (-not $viaEntry -and $endpoint -cne $BridgeEndpoint)){throw 'Tor capture lost its actual physical endpoint.'}
   $endpointRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_ENDPOINTS_JSON']
   $egressRaw=[string]$CapturedEnvironment['HOMEVPN_NATIVE_EGRESS_JSON']
   $hasArrays=$endpointRaw.Length -gt 0 -or $egressRaw.Length -gt 0
   if($viaEntry -and -not $hasArrays){throw 'Tor Router predecessor requires its exact physical egress tuples.'}
   $addresses=@($endpoint);$egress=@()
+  if($plainDirect){$addresses=@()}
   if($hasArrays){
     if([string]$CapturedEnvironment['HOMEVPN_EXTERNAL_SESSION'] -cne $Session -or $endpointRaw.Length -gt 1024 -or $egressRaw.Length -gt 4096 -or
        $endpointRaw -cnotmatch '\A\["[0-9a-f:.]+"(?:,"[0-9a-f:.]+")*\]\z'){throw 'Tor physical endpoints lost their exact captured session or encoding.'}
@@ -161,7 +173,7 @@ function Get-RouterVPNTorCaptureIdentity {
     $egress=@($parsed.egress)
     if($egress.Count -lt 1 -or $egress.Count -gt 16){throw 'Tor physical egress exceeds its captured tuple bound.'}
   }
-  if($addresses.Count -lt 1 -or $addresses.Count -gt 16 -or $addresses[0] -cne $endpoint){throw 'Tor physical endpoints changed their captured primary owner.'}
+  if(-not $plainDirect -and ($addresses.Count -lt 1 -or $addresses.Count -gt 16 -or $addresses[0] -cne $endpoint)){throw 'Tor physical endpoints changed their captured primary owner.'}
   $seen=@{}
   foreach($address in $addresses){
     $ip=$null

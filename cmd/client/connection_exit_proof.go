@@ -136,7 +136,7 @@ func proveExpectedPublicExit(ctx context.Context, client *http.Client, providers
 func (a *app) proveStandardExitForOperation(expected string) error {
 	if strings.TrimSpace(expected) == "" {
 		a.mu.Lock()
-		torRuntime := a.state.RuntimeMode == "external-tor-bridge" && a.state.Mode == "external-node"
+		torRuntime := desktopTorRuntimeID(a.state.RuntimeMode) && a.state.Mode == "external-node"
 		a.mu.Unlock()
 		if !torRuntime {
 			return errors.New("standard exit has no expected public exit IP")

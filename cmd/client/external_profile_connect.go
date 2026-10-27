@@ -109,7 +109,7 @@ func externalDNSPolicyForPath(policy, entry common.RouterProfile, direct bool) (
 	}
 	var err error
 	switch policy.External.Protocol {
-	case "tor-bridge":
+	case "tor", "tor-bridge":
 		if direct && entry.ID != "" || !direct && entry.ID == "" {
 			return common.RouterProfile{}, errors.New("Tor DNS entry differs from the requested path")
 		}
@@ -201,7 +201,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 		q.EntryID = externalProfile.MultihopEntryID
 	}
 
-	if externalProfile.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(externalProfile.External.Protocol) {
 		if retained != "" {
 			direct := q.Direct != nil && *q.Direct || q.Direct == nil && q.EntryID == ""
 			selected, err := externalExecutionChoice(externalProfile, q.Execution, direct)
@@ -283,7 +283,7 @@ func (a *app) externalProfileConnectOwned(w http.ResponseWriter, q externalProfi
 				return
 			}
 			policy.MultihopEntryMode = ""
-			if entry.External != nil && entry.External.Protocol == "tor-bridge" {
+			if entry.External != nil && desktopTorProtocol(entry.External.Protocol) {
 				http.Error(w, "Tor bridge is not yet supported as an upstream external entry hop; refusing an unproved nested Tor graph", http.StatusNotImplemented)
 				return
 			}

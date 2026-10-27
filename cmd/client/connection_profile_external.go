@@ -82,18 +82,18 @@ func (p connectionProfileExternalCapture) validate() error {
 		return errors.New("direct external profile cannot request server execution")
 	}
 	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode) &&
-		!(p.Protocol == "tor-bridge" && desktopExternalNativeProtocol(p.MultihopEntryMode))) {
+		!(desktopTorProtocol(p.Protocol) && desktopExternalNativeProtocol(p.MultihopEntryMode))) {
 		return errors.New("saved external entry requires its exact supported native transport")
 	}
 	if mode, err := common.NormalizeStartLayerMode(p.StartLayer); err != nil || p.StartLayer != "" && mode != p.StartLayer {
 		return errors.New("saved external Start Layer selection is invalid")
 	}
 	switch p.Protocol {
-	case "wireguard", "amneziawg", "openvpn", "shadowsocks", "socks5", "http-connect", "https-connect", "hysteria2", "tor-bridge":
+	case "wireguard", "amneziawg", "openvpn", "shadowsocks", "socks5", "http-connect", "https-connect", "hysteria2", "tor", "tor-bridge":
 	default:
 		return errors.New("saved external protocol is unsupported")
 	}
-	if p.Protocol != "tor-bridge" && net.ParseIP(p.ExpectedPublicIP) == nil {
+	if !desktopTorProtocol(p.Protocol) && net.ParseIP(p.ExpectedPublicIP) == nil {
 		return errors.New("saved external public identity is invalid")
 	}
 	if p.ExpectedPublicIP != "" && net.ParseIP(p.ExpectedPublicIP) == nil {

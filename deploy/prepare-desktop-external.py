@@ -39,7 +39,7 @@ PT_OWNER = 'routervpn-desktop-tor-source.json'
 PT_NAMESPACES = ('routervpn/torpt/', 'routervpn/desktoppt/')
 PT_TEMPLATES = ('tor_pt.go.tmpl', 'tor_pt_test.go.tmpl', 'tor_pt_entry_peers_test.go.tmpl',
                 'tor_pt_entry_traffic_test.go.tmpl', 'tor_network.go.tmpl', 'tor_network_test.go.tmpl',
-                'tor_server.go.tmpl')
+                'tor_server.go.tmpl', 'tor_plain_test.go.tmpl')
 BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
@@ -48,6 +48,7 @@ BOX_TEMPLATES = {
     'tor_box_mtu.go.tmpl': 'routervpn_desktop_tor_box_mtu.go',
     'tor_box_mtu_test.go.tmpl': 'routervpn_desktop_tor_box_mtu_test.go',
     'tor_server_box_test.go.tmpl': 'routervpn_desktop_tor_server_box_test.go',
+    'tor_plain_box_test.go.tmpl': 'routervpn_desktop_tor_plain_box_test.go',
 }
 ROUTE_TEMPLATES = {
     'tor_network_startup.go.tmpl': 'route/routervpn_desktop_tor_network_startup.go',

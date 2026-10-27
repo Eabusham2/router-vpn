@@ -147,7 +147,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 				return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime owner changed")
 			}
 			if launch.tor != nil {
-				if launch.external != nil || profile.External == nil || profile.External.Protocol != "tor-bridge" || st.RuntimeMode != "external-tor-bridge" {
+				if launch.external != nil || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) || !desktopTorRuntimeID(st.RuntimeMode) || launch.mode != st.RuntimeMode || desktopTorProfileRuntime(profile) != st.RuntimeMode {
 					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab owner belongs to a different path")
 				}
 				proof, err := a.readDesktopTorProof(launch)
@@ -168,9 +168,9 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 				}
 				path.Execution, path.ExitID, path.ExitName = identity.Execution, profile.ID, profile.Name
 				path.StartedAt = launch.tor.started
-				path.Description = "actual captured Tor bridge path with owned Tor exit, selected DNS and interface proof"
+				path.Description = "actual captured Tor path with owned Tor exit, selected DNS and interface proof"
 			} else {
-				if launch.external == nil || profile.External != nil && profile.External.Protocol == "tor-bridge" {
+				if launch.external == nil || profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 					return speedLabPathIdentity{}, speedLabPath{}, errors.New("active external Speed Lab runtime has no matching proof owner")
 				}
 				proof, err := a.readDesktopExternalProof(launch)
@@ -192,7 +192,7 @@ func captureSpeedLabIdentity(a *app) (speedLabPathIdentity, speedLabPath, error)
 					identity.EntryToken = liveMeasurementProfileToken(entry)
 				}
 			}
-		} else if profile.External != nil && profile.External.Protocol == "tor-bridge" {
+		} else if profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 			return speedLabPathIdentity{}, speedLabPath{}, errors.New("active Tor Speed Lab path has no captured native owner")
 		}
 	}
@@ -662,7 +662,7 @@ func (a *app) prepareSpeedLabExternalPathWithRuntime(q speedLabRequest, restored
 	if external.NodeKind != "external" || external.External == nil {
 		return nil, errors.New("temporary external Speed Lab path requires an external custom node")
 	}
-	if external.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(external.External.Protocol) {
 		if restored != nil {
 			return nil, errors.New("Tor restoration cannot borrow an ordinary external receipt")
 		}
@@ -769,7 +769,7 @@ func (a *app) startSpeedLabExternalPathCaptured(q speedLabRequest, restored *spe
 	if liveMeasurementProfileToken(external) != liveMeasurementProfileToken(prepared.profile) {
 		return speedLabPath{}, errors.New("temporary external profile changed after native preflight")
 	}
-	if external.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(external.External.Protocol) {
 		return a.startPreparedSpeedLabTorPath(q, external, prepared.tor)
 	}
 	policy, entry, exit, entryKind, direct, native := prepared.policy, prepared.entry, prepared.exit, prepared.entryKind, prepared.direct, prepared.native

@@ -32,15 +32,19 @@ func captureTorBridgePrelaunch(a *app, profileID, directory string, captured ...
 	}
 	if len(captured) == 1 {
 		workspace = captured[0]
-		if workspace == nil || workspace.tor == nil || workspace.directoryRoot == nil || workspace.profileID != profileID || workspace.directory != directory {
+		if workspace == nil || workspace.tor == nil || workspace.directoryRoot == nil || workspace.profileID != profileID || workspace.directory != directory || !desktopTorRuntimeID(workspace.mode) {
 			return nil, errors.New("Tor prelaunch capture has another node or workspace")
 		}
 		names = append(append([]string{}, desktopTorInputNames...), "tor-data")
 	} else if err := captureDesktopRuntimeDirectory(workspace, directory); err != nil {
 		return nil, err
 	}
+	runtimeID := "external-tor-bridge"
+	if workspace.tor != nil {
+		runtimeID = workspace.mode
+	}
 	owner := &torBridgePrelaunch{workspace: workspace, files: make(map[string]os.FileInfo), app: a,
-		dns: activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: "external-tor-bridge", Config: filepath.Join(directory, "sing-box.json")}}
+		dns: activeDNSRuntimeIdentity{ProfileID: profileID, RuntimeID: runtimeID, Config: filepath.Join(directory, "sing-box.json")}}
 	for _, name := range names {
 		info, err := workspace.directoryRoot.Lstat(name)
 		if err != nil || name == "tor-data" && !info.IsDir() || name != "tor-data" && !info.Mode().IsRegular() || info.Mode()&os.ModeSymlink != 0 {

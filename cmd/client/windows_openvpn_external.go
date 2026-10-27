@@ -38,7 +38,10 @@ func windowsOpenVPNRuntimeCapability() standardExitCapability {
 }
 
 func externalProfileProtocolCapabilities() []standardExitCapability {
-	caps := append(standardExitCapabilities(), torBridgeRuntimeCapability())
+	tor := torBridgeRuntimeCapability()
+	plain := tor
+	plain.Protocol = "tor"
+	caps := append(standardExitCapabilities(), tor, plain)
 	native := desktopNativeOpenVPNCapability()
 	for i := range caps {
 		if caps[i].Protocol == "openvpn" {

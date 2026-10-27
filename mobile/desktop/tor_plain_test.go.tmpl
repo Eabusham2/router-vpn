@@ -1,0 +1,116 @@
+package routervpndesktoppt
+
+import (
+	"context"
+	"errors"
+	"net"
+	"strings"
+	"testing"
+
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func TestRouterVPNDesktopTorPTPlainGuardOwnerRetainsNativeSourceAndDrain(t *testing.T) {
+	for _, fault := range []string{"close", "physical-reset", "resolver-replaced", "proxy-stopped"} {
+		t.Run(fault, func(t *testing.T) {
+			f := newDesktopPTFixture(t)
+			// Keep the existing explicit lower-dialer boundary. The Box suite
+			// separately exercises NewPlain with real native managers.
+			lower := dialer.NewResolveDialer(f.ctx, f.lower, false, "bootstrap", f.query, 0)
+			owner, err := captureOwner(f.ctx, mobiletor.Plan{}, f.options, f.active.Load, lower, nil, true)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { closeDesktopPT(t, owner) })
+			if owner.Current() || owner.bridges != nil || owner.proxy != nil || !owner.plain {
+				t.Fatal("plain capture opened or borrowed a transport before Start")
+			}
+			if _, err := owner.Proxy(); err == nil {
+				t.Fatal("unused plain capture exposed a guard owner")
+			}
+			if err := owner.Start(); err != nil {
+				t.Fatal(err)
+			}
+			proxy, err := owner.Proxy()
+			if err != nil || proxy == nil || owner.bridges != nil || !owner.Current() {
+				t.Fatal("plain capture did not own exactly its guard proxy", err)
+			}
+			if _, err := owner.Listeners(); err == nil {
+				t.Fatal("plain capture became a bridge listener map")
+			}
+			switch fault {
+			case "close":
+				closeDesktopPT(t, owner)
+			case "physical-reset":
+				f.active.Store(false)
+			case "resolver-replaced":
+				f.dns.replace("bootstrap", desktopPTRemote("bootstrap", "", "198.51.100.53"))
+			case "proxy-stopped":
+				if err := proxy.Close(context.Background()); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if fault == "proxy-stopped" {
+				if _, err := owner.Proxy(); err == nil {
+					t.Fatal("stopped plain guard proxy was borrowed again")
+				}
+			} else if owner.Current() {
+				t.Fatal("plain guard retained changed or closed native source")
+			}
+			closeDesktopPT(t, owner)
+			select {
+			case <-proxy.Done():
+			default:
+				t.Fatal("plain native cleanup acknowledged before proxy drained")
+			}
+			f.active.Store(true)
+			if owner.Start() == nil || owner.Current() {
+				t.Fatal("retired plain source revived")
+			}
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorPTPlainPredecessorProofPrecedesGuardListener(t *testing.T) {
+	for _, prove := range []bool{false, true} {
+		t.Run(map[bool]string{false: "unproved", true: "proved"}[prove], func(t *testing.T) {
+			f, entry, manager := desktopPTEntry(t)
+			f.lower.dial = func(_ context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+				if network == "tcp" && destination.String() == "10.80.0.1:8787" {
+					return desktopPTEntryReply(t, destination, strings.Repeat("a", 64)), nil
+				}
+				return nil, errors.New("fixture denies every unowned guard dial")
+			}
+			owner, err := NewPlain(f.ctx, *f.options.DomainResolver, entry, f.active.Load)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { closeDesktopPT(t, owner) })
+			if prove {
+				desktopPTProveEntry(t, owner, entry)
+			}
+			err = owner.Start()
+			if !prove {
+				if err == nil || owner.proxy != nil || owner.Current() {
+					t.Fatal("plain Tor opened guard access before private entry proof")
+				}
+				return
+			}
+			if err != nil || !owner.Current() {
+				t.Fatal("proved plain predecessor did not start", err)
+			}
+			manager.replace(nil)
+			if owner.Current() {
+				t.Fatal("plain Tor retained replaced encrypted predecessor")
+			}
+			closeDesktopPT(t, owner)
+		})
+	}
+	// An empty bridge plan remains invalid through the original bridge capture.
+	f := newDesktopPTFixture(t)
+	if _, err := newOwner(f.ctx, mobiletor.Plan{}, f.options, f.active.Load, f.lower); err == nil {
+		t.Fatal("bridge capture silently downgraded to plain Tor")
+	}
+}

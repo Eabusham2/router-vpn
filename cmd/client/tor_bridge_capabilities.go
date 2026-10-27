@@ -24,6 +24,7 @@ type torBridgeTransportCapability struct {
 
 func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 	rows := []torBridgeTransportCapability{
+		{ID: "tor", Name: "Plain Tor", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Uses ordinary Tor guard relays through the captured native TCP owner. Local supports Direct with Kill Switch Off or a proved Router/ordinary entry with strict protection. Server requires a paired private Router."},
 		{ID: "obfs4", Name: "obfs4", Implemented: true, StrictKillSwitch: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Obfuscates Tor bridge traffic and resists active probing. One literal bridge supports strict Direct protection. Multiple bridges can use a proved Router entry or a Local ordinary entry with its exact captured physical sockets."},
 		{ID: "meek_lite", Name: "meek", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Carries Tor through HTTPS/domain-fronting. Strict protection uses the proved Router or Local ordinary entry for HTTPS and DNS. Direct dynamic egress requires Kill Switch Off."},
 		{ID: "snowflake", Name: "Snowflake", Implemented: true, StrictRouterEntryKillSwitch: true, StrictExternalEntryKillSwitch: true, Description: "Uses a broker and short-lived WebRTC proxies. Strict protection carries HTTPS, DNS, STUN and WebRTC through a proved entry with bounded native UDP. Local SOCKS5 and HTTP CONNECT entries cannot provide that UDP authority. Direct dynamic egress requires Kill Switch Off."},
@@ -50,6 +51,9 @@ func torBridgeTransportCapabilities() []torBridgeTransportCapability {
 func torBridgeProfileRuntimeCapability(profile common.RouterProfile) standardExitCapability {
 	root := filepath.Clean(getenv("HOMEVPN_ROOT", "/opt/router-vpn-client"))
 	cap := torBridgeRuntimeCapabilityForExecution(root, profile.MultihopExecution)
+	if profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
+		cap.Protocol = profile.External.Protocol
+	}
 	if !cap.Supported {
 		return cap
 	}
@@ -88,6 +92,7 @@ func (a *app) torBridgeCapabilities(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"ok":                                  true,
 		"protocol":                            "tor-bridge",
+		"protocols":                           []string{"tor", "tor-bridge"},
 		"platform":                            runtime.GOOS,
 		"helper_execution":                    helperExecution,
 		"implemented":                         cap.Implemented,

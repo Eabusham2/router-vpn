@@ -48,7 +48,7 @@ func desktopTorOperationCurrentLocked(a *app, operation context.Context, selecte
 }
 
 func desktopTorChoiceRuntimeCurrentLocked(a *app, launch *desktopNodeLaunch) bool {
-	if launch == nil || launch.tor == nil || launch.command == nil || a.cmd != launch.command || a.state.Connected || a.state.RouterID != launch.profileID || a.state.Mode != "external-node" || a.state.LogicalMode != "external-node" || a.state.RuntimeMode != "external-tor-bridge" || launch.tor.network == "" || launch.tor.network != launch.tor.currentNetworkIdentity() {
+	if launch == nil || launch.tor == nil || launch.command == nil || a.cmd != launch.command || a.state.Connected || a.state.RouterID != launch.profileID || a.state.Mode != "external-node" || a.state.LogicalMode != "external-node" || !desktopTorRuntimeID(launch.mode) || a.state.RuntimeMode != launch.mode || launch.tor.network == "" || launch.tor.network != launch.tor.currentNetworkIdentity() {
 		return false
 	}
 	base := "tor"
@@ -143,12 +143,12 @@ func (a *app) commitDesktopTorChoice(selection *desktopTorSelection, launch *des
 	}
 	choice := &desktopTorCommittedChoice{profileToken: desktopTorSourceIdentityToken(updated), nodeID: updated.ID, sessionID: launch.tor.expected.SessionID, sourceSHA256: launch.tor.expected.SourceSHA256}
 	launch.tor.committedChoice.Store(choice)
-	last := &startupExternalSelection{Protocol: "tor-bridge", Direct: entry.ID == "", SourceToken: source, Execution: desktopTorExecution(launch.tor.expected.Execution), EntryMode: mode}
+	last := &startupExternalSelection{Protocol: updated.External.Protocol, Direct: entry.ID == "", SourceToken: source, Execution: desktopTorExecution(launch.tor.expected.Execution), EntryMode: mode}
 	if entry.ID != "" {
 		last.EntryID, last.EntryToken = entry.ID, startupExternalProfileToken(entry)
 	}
 	return &desktopTorChoiceAdoption{launch: launch, choice: choice, operation: operation, selected: selected,
-		startup: startupSelection{RouterID: updated.ID, RuntimeMode: "external-tor-bridge", LogicalMode: "external-node", Base: a.state.Base,
+		startup: startupSelection{RouterID: updated.ID, RuntimeMode: launch.mode, LogicalMode: "external-node", Base: a.state.Base,
 			ProfileToken: startupExternalProfileToken(updated), UpdatedAt: time.Now().UTC(), External: last}}, nil
 }
 

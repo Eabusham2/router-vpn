@@ -96,7 +96,7 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	if err != nil {
 		return result, err
 	}
-	if policy.ID != profile.ID || policy.External == nil || policy.External.Protocol != "tor-bridge" {
+	if policy.ID != profile.ID || policy.External == nil || policy.External.Protocol != profile.External.Protocol {
 		return result, errors.New("Tor policy belongs to another captured node")
 	}
 	expectedBridge, _ := json.Marshal(profile.External.TorBridge)
@@ -144,7 +144,7 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 		if predecessor.native == nil {
 			return result, errors.New("Tor physical policy has no captured predecessor graph")
 		}
-		plan, err := mobiletor.NewPlan(cfg)
+		plan, err := desktopTorTransportPlan(policyCopy)
 		if err != nil {
 			return result, err
 		}
@@ -191,7 +191,7 @@ func stageDesktopTorInputsWithPredecessor(root string, policy, profile common.Ro
 	if predecessor != nil {
 		physicalEndpoint = predecessor.endpoint
 	}
-	launch := &desktopNodeLaunch{root: root, profileID: profile.ID, policyProfileID: profile.ID, mode: "external-tor-bridge", endpoint: physicalEndpoint, tor: &desktopTorRuntime{profileToken: capturedToken, predecessor: predecessor, inputs: map[string]desktopTorInput{}}}
+	launch := &desktopNodeLaunch{root: root, profileID: profile.ID, policyProfileID: profile.ID, mode: desktopTorProfileRuntime(profile), endpoint: physicalEndpoint, tor: &desktopTorRuntime{profileToken: capturedToken, predecessor: predecessor, inputs: map[string]desktopTorInput{}}}
 	if err = captureDesktopRuntimeDirectory(launch, directory); err != nil {
 		return result, err
 	}
@@ -245,7 +245,7 @@ func desktopTorRuntimePolicyJSON(policy common.RouterProfile) ([]byte, error) {
 		return nil, err
 	}
 	fields["home_lan_access"], _ = json.Marshal(policy.HomeLANAccess)
-	if policy.MultihopEnabled && policy.External != nil && policy.External.Protocol == "tor-bridge" {
+	if policy.MultihopEnabled && policy.External != nil && desktopTorProtocol(policy.External.Protocol) {
 		// The durable RouterProfile stores the exit protocol inside External;
 		// the shared graph parser requires its explicit runtime projection.
 		fields["multihop_exit_mode"], _ = json.Marshal(policy.External.Protocol)
@@ -325,14 +325,29 @@ func desktopTorCapturedPhysicalEgress(launch *desktopNodeLaunch) ([]mobilemultih
 	var profile struct {
 		External *common.ExternalNodeConfig `json:"external"`
 	}
-	if json.Unmarshal(raw, &profile) != nil || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.External.TorBridge == nil {
-		return nil, errors.New("Tor physical egress has no owned PT plan")
+	if json.Unmarshal(raw, &profile) != nil || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) {
+		return nil, errors.New("Tor physical egress has no owned transport selection")
 	}
-	plan, err := mobiletor.NewPlan(*profile.External.TorBridge)
+	plan, err := desktopTorTransportPlan(common.RouterProfile{External: profile.External})
 	if err != nil {
 		return nil, err
 	}
 	return launch.tor.predecessor.native.PhysicalEgress(plan)
+}
+
+// An empty physical bridge plan is meaningful only for explicit plain Tor. It
+// requests TCP guard routing, never a missing or malformed bridge selection.
+func desktopTorTransportPlan(profile common.RouterProfile) (mobiletor.Plan, error) {
+	if profile.External == nil {
+		return mobiletor.Plan{}, errors.New("Tor transport has no captured source")
+	}
+	if profile.External.Protocol == "tor" && profile.External.TorBridge == nil {
+		return mobiletor.Plan{}, nil
+	}
+	if profile.External.Protocol != "tor-bridge" || profile.External.TorBridge == nil {
+		return mobiletor.Plan{}, errors.New("Tor transport lost its exact bridge selection")
+	}
+	return mobiletor.NewPlan(*profile.External.TorBridge)
 }
 
 func desktopTorLaunchEnvironment(base []string, root string, prepared torBridgeRuntime) ([]string, error) {

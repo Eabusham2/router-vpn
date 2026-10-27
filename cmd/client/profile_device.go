@@ -73,7 +73,7 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 	if desktopExternalNativeProtocol(profile.External.Protocol) {
 		return true, ""
 	}
-	if profile.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(profile.External.Protocol) {
 		// Entry settings belong to the same owned native Tor graph. The
 		// idle form preserves the saved choice; Connect still captures its full
 		// native predecessor and authenticates it before any PT can start.
@@ -97,7 +97,7 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 	if supported, reason := externalDevicePolicySupport(profile); !supported {
 		return supported, reason
 	}
-	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled {
+	if desktopTorProtocol(profile.External.Protocol) && profile.MultihopEnabled {
 		if entry.ID != profile.MultihopEntryID {
 			return false, "Tor entry device settings require the same linked node; reopen Settings after relinking it."
 		}
@@ -113,7 +113,7 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 
 func profileDeviceJumboSupported(profile common.RouterProfile) bool {
 	supported, _ := externalDevicePolicySupport(profile)
-	return supported && profile.External != nil && profile.External.Protocol == "tor-bridge"
+	return supported && profile.External != nil && desktopTorProtocol(profile.External.Protocol)
 }
 
 func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.RouterProfile) {
@@ -148,7 +148,7 @@ func writeProfileDeviceSettings(w http.ResponseWriter, profile, entry common.Rou
 		startup = "smart-auto"
 	}
 	note := "Save while disconnected. Fixed MTU is a requested interface value, not a measured path result. Effective MTU is historical; use Retest on the connected path. This edit preserves independent entry policy, DNS, credentials and graph selection."
-	if protocol == "tor-bridge" {
+	if desktopTorProtocol(protocol) {
 		note = "Save while disconnected. Tor Auto starts with a 1280-byte virtual interface, then compares HTTPS response time and download/upload performance at tested MTUs. Retest repeats those measurements with fresh Tor and DNS proof; Cancel waits for the previous interface value to be restored. Default keeps 1280; Fixed applies your interface value. Interface readback is not a UDP path-MTU measurement. DNS, credentials and graph selection are preserved."
 		if profile.JumboTUN {
 			note = "Save while disconnected. Tor Jumbo configures a 9000-byte virtual interface; it does not force 9000-byte packets onto the underlying network. Auto and Retest do not change that interface while Jumbo is selected. Fixed MTU must also be 9000. The saved Auto or Default preference is retained for when Jumbo is turned off. DNS, credentials and graph selection are preserved."
@@ -238,7 +238,7 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 	if supported, reason := externalDevicePolicySupport(profile); !supported {
 		return errors.New(reason)
 	}
-	if profile.External.Protocol == "tor-bridge" {
+	if desktopTorProtocol(profile.External.Protocol) {
 		// Pass the exact runtime preferences and private owners to the shipping
 		// Tor parser. Idle Home may remain unresolved; this never grants a
 		// runnable resolver, modifies bridge credentials, or reuses MTU history.
@@ -315,7 +315,7 @@ func validateExternalDeviceSettingsForPath(profile, entry common.RouterProfile) 
 	if supported, reason := externalDevicePolicySupportForPath(profile, entry); !supported {
 		return errors.New(reason)
 	}
-	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled && entry.External != nil {
+	if desktopTorProtocol(profile.External.Protocol) && profile.MultihopEnabled && entry.External != nil {
 		kill := profile.KillSwitchPolicy
 		if kill == "" {
 			kill = "off"
@@ -327,10 +327,7 @@ func validateExternalDeviceSettingsForPath(profile, entry common.RouterProfile) 
 			if err := validateExternalDeviceSettings(entry); err != nil {
 				return err
 			}
-			if profile.External.TorBridge == nil {
-				return errors.New("protected Tor path lost its saved bridge plan")
-			}
-			plan, err := mobiletor.NewPlan(*profile.External.TorBridge)
+			plan, err := desktopTorTransportPlan(profile)
 			if err != nil {
 				return err
 			}

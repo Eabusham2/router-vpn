@@ -40,7 +40,7 @@ func (a *app) speedLabOptions(w http.ResponseWriter, r *http.Request) {
 			protocol = p.External.Protocol
 		}
 		endpoint := p.Endpoint
-		if kind == "external" && strings.EqualFold(strings.TrimSpace(protocol), "tor-bridge") {
+		if kind == "external" && desktopTorProtocol(strings.ToLower(strings.TrimSpace(protocol))) {
 			endpoint = ""
 		}
 		node := map[string]any{

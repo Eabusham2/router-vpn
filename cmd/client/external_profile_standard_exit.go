@@ -93,6 +93,13 @@ func standardExitFromExternalProfile(profile common.RouterProfile) (standardExit
 			return standardExit{}, errors.New("external Hysteria2 block is missing")
 		}
 		exit.Server, exit.ServerPort, exit.Secret, exit.TLSServerName = h.Server, h.Port, h.Password, h.TLSServerName
+	case "tor":
+		if ext.TorBridge != nil || ext.ExpectedPublicIP != "" {
+			return standardExit{}, errors.New("plain Tor cannot borrow bridge credentials or a fixed public exit")
+		}
+		// This descriptor selects the owned Tor adapter. It has no fixed public
+		// endpoint and must never enter the ordinary fixed-exit runtime builder.
+		return exit, nil
 	case "tor-bridge":
 		if ext.TorBridge == nil {
 			return standardExit{}, errors.New("external Tor bridge block is missing")

@@ -10,7 +10,7 @@ import (
 )
 
 func torDNSObservation(s observedConnection, runtimeID string) bool {
-	return runtimeID == "external-tor-bridge" || s.Profile.External != nil && s.Profile.External.Protocol == "tor-bridge"
+	return desktopTorRuntimeID(runtimeID) || s.Profile.External != nil && desktopTorProtocol(s.Profile.External.Protocol)
 }
 
 // Tor's native receipt is issued only after the captured selected resolver and
@@ -27,7 +27,7 @@ func proveDesktopTorDNS(ctx context.Context, a *app, s observedConnection, runti
 	if ctx == nil || context.Cause(ctx) != nil || a == nil {
 		return fail(errors.New("selected Tor DNS proof has no live owner context"))
 	}
-	if runtimeID != "external-tor-bridge" || s.Mode != "external-node" || s.RuntimeMode != runtimeID || !s.Connected || s.Phase != "connected" || s.Profile.ID != s.RouterID || s.Profile.NodeKind != "external" || s.Profile.External == nil || s.Profile.External.Protocol != "tor-bridge" {
+	if !desktopTorRuntimeID(runtimeID) || s.Mode != "external-node" || s.RuntimeMode != runtimeID || desktopTorProfileRuntime(s.Profile) != runtimeID || !s.Connected || s.Phase != "connected" || s.Profile.ID != s.RouterID || s.Profile.NodeKind != "external" || s.Profile.External == nil || !desktopTorProtocol(s.Profile.External.Protocol) {
 		return fail(errors.New("selected Tor DNS observation has no matching connected path"))
 	}
 	launch := desktopExternalMTULaunch(a)

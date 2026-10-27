@@ -13,7 +13,7 @@ POLICY_PROFILE_ID=${HOMEVPN_POLICY_PROFILE_ID:-}
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 
 [[ "$ACTION" == check || "$ACTION" == up || "$ACTION" == down ]] || { echo 'usage: native-tor-bridge.sh check|up|down RUNTIME_DIR BRIDGE_IP SOCKS_PORT TOR_BIN NATIVE_BIN' >&2; exit 2; }
-[[ -n "$RUNTIME_DIR" && "$PROFILE_ID" =~ ^[A-Za-z0-9_-]{1,64}$ && "$POLICY_PROFILE_ID" =~ ^[A-Za-z0-9_-]{1,64}$ && -n "$BRIDGE_ENDPOINT" ]] || { echo 'Tor requires its captured private profile and endpoint' >&2; exit 2; }
+[[ -n "$RUNTIME_DIR" && "$PROFILE_ID" =~ ^[A-Za-z0-9_-]{1,64}$ && "$POLICY_PROFILE_ID" =~ ^[A-Za-z0-9_-]{1,64}$ ]] || { echo 'Tor requires its captured private profiles' >&2; exit 2; }
 [[ "$SOCKS_PORT" =~ ^[0-9]+$ ]] && (( SOCKS_PORT >= 1024 && SOCKS_PORT <= 65535 )) || { echo 'invalid captured Tor SOCKS port' >&2; exit 2; }
 [[ ${HOMEVPN_STANDARD_ENGINE:-} == native && ${HOMEVPN_TOR_SESSION:-} =~ ^[a-f0-9]{32}$ ]] || { echo 'Tor requires its captured native session' >&2; exit 2; }
 for field in HOMEVPN_TOR_SOURCE_SHA256 HOMEVPN_TOR_PROFILE_SHA256 HOMEVPN_TOR_CAPTURE_SHA256 HOMEVPN_TOR_TORRC_SHA256 HOMEVPN_TOR_DEFAULTS_SHA256 HOMEVPN_TOR_CONFIG_SHA256; do

@@ -84,6 +84,14 @@ func connectSpeedLabTorPrior(t *testing.T, f *desktopTorConnectFixture, direct b
 }
 
 func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) {
+	speedLabTorShippingPrepareStartAndRestoreExactNativePath(t, "tor-bridge")
+}
+
+func TestDesktopTorPlainSpeedLabRestoresProvedExecutionAndSource(t *testing.T) {
+	speedLabTorShippingPrepareStartAndRestoreExactNativePath(t, "tor")
+}
+
+func speedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T, protocol string) {
 	for _, prior := range []string{"direct-override", "saved-router", "home-router", "saved-server", "home-server"} {
 		for _, temporary := range []string{"direct", "router", "server"} {
 			if strings.HasPrefix(prior, "home-") && temporary == "direct" {
@@ -91,6 +99,11 @@ func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) 
 			}
 			t.Run(prior+"/"+temporary, func(t *testing.T) {
 				f := speedLabTorPipelineFixture(t)
+				if protocol == "tor" {
+					f.a.mu.Lock()
+					f.a.profiles.Profiles[0].External = &common.ExternalNodeConfig{Protocol: "tor"}
+					f.a.mu.Unlock()
+				}
 				if strings.HasPrefix(prior, "home-") {
 					f.a.mu.Lock()
 					p := &f.a.profiles.Profiles[0]
@@ -140,7 +153,7 @@ func TestSpeedLabTorShippingPrepareStartAndRestoreExactNativePath(t *testing.T) 
 					t.Fatal(err)
 				}
 				trial := f.launch
-				if path.Execution != q.Execution || path.ExternalProtocol != "tor-bridge" || (path.EntryID != "") != (temporary != "direct") || trial.tor.expected.SessionID == previous.tor.expected.SessionID {
+				if path.Execution != q.Execution || path.ExternalProtocol != protocol || (path.EntryID != "") != (temporary != "direct") || trial.tor.expected.SessionID == previous.tor.expected.SessionID {
 					t.Fatal("temporary public dispatcher lost the exact requested native path", path)
 				}
 				identity, observedPath, err := captureSpeedLabIdentity(f.a)

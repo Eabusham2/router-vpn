@@ -139,7 +139,7 @@ class Fixture:
             path.chmod(0o700)
         source_sha = hashlib.sha256(b"captured source identity").hexdigest()
         self.inputs = {
-            "tor-profile.json": '{"id":"captured-node","fixture":"private"}\n',
+            "tor-profile.json": '{"id":"captured-node","external":{"protocol":"tor-bridge"},"fixture":"private"}\n',
             "tor-capture.json": json.dumps({"schema": 1, "session_id": "a" * 32, "isolation_secret": "b" * 64,
                                            "target_os": "darwin" if sys.platform == "darwin" else "linux", "tor_binary": str(self.tor)}),
             "torrc": "DisableNetwork 1\nSocksPort 0\nUseBridges 0\n",
@@ -214,6 +214,17 @@ class Fixture:
                                   "config": {"route": {"final": "entry-wg"}}}
         self.set_input("tor-profile.json", profile)
         self.set_input("tor-capture.json", capture)
+
+    def plain_tor(self) -> None:
+        profile = json.loads(self.inputs["tor-profile.json"])
+        profile["external"] = {"protocol": "tor"}
+        self.endpoint = ""
+        if profile.get("multihop_enabled"):
+            profile["multihop_exit_mode"] = "tor"
+        else:
+            profile["kill_switch_policy"], profile["kill_switch"] = "off", False
+            self.env["HOMEVPN_ENDPOINT"] = ""
+        self.set_input("tor-profile.json", profile)
 
     def external_entry(self, protocol: str = "shadowsocks") -> None:
         self.router_entry()
@@ -316,6 +327,38 @@ class UnixTorWrapper(unittest.TestCase):
 
     def test_actual_exec_inputs_order_and_private_retention(self):
         self.assert_success()
+
+    def test_plain_tor_retains_empty_guard_or_exact_predecessor(self):
+        for path in ("direct", "router", "ordinary", "server"):
+            with self.subTest(path=path), tempfile.TemporaryDirectory(prefix="plain-tor-wrapper-") as directory:
+                fixture = Fixture(Path(directory))
+                if path == "router":
+                    fixture.router_entry()
+                elif path == "ordinary":
+                    fixture.external_entry()
+                elif path == "server":
+                    fixture.server_entry()
+                fixture.plain_tor()
+                self.assert_success(fixture)
+
+    def test_plain_tor_rejects_invented_endpoint_bridge_and_execution(self):
+        for fault in ("endpoint", "strict", "typed-kill", "bridge", "exit-mode", "unknown-protocol", "server-mode"):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory(prefix="plain-tor-rejection-") as directory:
+                fixture = Fixture(Path(directory))
+                if fault in {"exit-mode", "server-mode"}:
+                    fixture.server_entry() if fault == "server-mode" else fixture.router_entry()
+                fixture.plain_tor()
+                profile = json.loads(fixture.inputs["tor-profile.json"])
+                if fault == "endpoint": fixture.env["HOMEVPN_ENDPOINT"] = "203.0.113.44"
+                elif fault == "strict": profile["kill_switch_policy"] = "always"
+                elif fault == "typed-kill": profile["kill_switch"] = "false"
+                elif fault == "bridge": profile["external"]["tor_bridge"] = {"bridges": ["private bridge"]}
+                elif fault == "unknown-protocol": profile["external"]["protocol"] = "socks5"
+                else: profile["multihop_exit_mode"] = "tor-bridge"
+                fixture.set_input("tor-profile.json", profile)
+                result, events, _ = fixture.run()
+                self.assertNotEqual(result.returncode, 0)
+                self.assertFalse(any(e["kind"] in {"protect", "native-admission"} for e in events))
 
     def test_check_is_read_only_and_down_is_an_actual_noop(self):
         result, events, _ = self.fixture.run("check")
@@ -602,6 +645,23 @@ class UnixTorWrapper(unittest.TestCase):
                 result, events, _ = fixture.run()
                 self.assertNotEqual(result.returncode, 0, fault)
                 self.assertEqual(events, [], "Invalid ordinary entry reached preparation or protection: " + fault)
+
+    def test_plain_direct_policy_guard_is_required_before_firewall_handoff(self):
+        self.fixture.plain_tor()
+        profile = json.loads(self.fixture.inputs["tor-profile.json"])
+        profile["kill_switch_policy"] = "always"
+        self.fixture.set_input("tor-profile.json", profile)
+        result, events, _ = self.fixture.run()
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(events, [])
+        verifier = self.fixture.scripts / "tor-prelaunch-witness.py"
+        original = verifier.read_text()
+        guard = 'or profile.get("kill_switch_policy") != "off"'
+        self.assertEqual(original.count(guard), 1)
+        verifier.write_text(original.replace(guard, 'or False'))
+        result, events, _ = self.fixture.run()
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("protect", [item["kind"] for item in events], "Removed plain Direct policy guard did not expose the intended defective firewall handoff.")
 
     def test_external_proof_kind_guard_is_required_before_firewall_handoff(self):
         self.fixture.external_entry()

@@ -33,6 +33,8 @@ type Owner struct {
 	ctx           context.Context
 	cancel        context.CancelFunc
 	plan          mobiletor.Plan
+	plain         bool
+	proxy         *mobiletor.TCPProxy
 	lower         N.Dialer
 	network       *torNetworkCapture
 	upstream      *torUpstreamCapture
@@ -59,7 +61,7 @@ type Owner struct {
 // would route back into the TUN. The explicit resolver is captured with all
 // native query options and checked for Tor cycles before PT admission.
 func New(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, current func() bool) (*Owner, error) {
-	return newNativeOwner(ctx, plan, resolver, nil, current)
+	return newNativeOwner(ctx, plan, resolver, nil, current, false)
 }
 
 // NewWithPredecessor captures the same complete typed entry already matched
@@ -69,10 +71,20 @@ func NewWithPredecessor(ctx context.Context, plan mobiletor.Plan, resolver optio
 	if predecessor == nil || predecessor.Kind() == "" || predecessor.Tag() == "" || predecessor.Tag() == mobiletor.ProfileOutboundTag {
 		return nil, errors.New("desktop Tor PT requires its exact captured predecessor proof owner")
 	}
-	return newNativeOwner(ctx, plan, resolver, predecessor, current)
+	return newNativeOwner(ctx, plan, resolver, predecessor, current, false)
 }
 
-func newNativeOwner(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool) (*Owner, error) {
+// NewPlain captures guard relay TCP into the same physical or proved predecessor
+// graph. Its authenticated proxy owns every guard socket; the Tor process never
+// receives an unrestricted native dialer or a caller-supplied proxy binding.
+func NewPlain(ctx context.Context, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool) (*Owner, error) {
+	if predecessor != nil && (predecessor.Kind() == "" || predecessor.Tag() == "" || predecessor.Tag() == mobiletor.ProfileOutboundTag) {
+		return nil, errors.New("plain desktop Tor requires its exact captured predecessor")
+	}
+	return newNativeOwner(ctx, mobiletor.Plan{}, resolver, predecessor, current, true)
+}
+
+func newNativeOwner(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool, plain bool) (*Owner, error) {
 	if ctx == nil || ctx.Err() != nil || current == nil || !current() || resolver.Server == "" {
 		return nil, errors.New("desktop Tor PT requires the exact live native physical owner and explicit bootstrap DNS")
 	}
@@ -97,7 +109,7 @@ func newNativeOwner(ctx context.Context, plan mobiletor.Plan, resolver option.Do
 	if err != nil {
 		return nil, errors.New("desktop Tor physical native dialer could not be captured")
 	}
-	return newCapturedOwner(ctx, plan, options, current, lower, predecessor)
+	return captureOwner(ctx, plan, options, current, lower, predecessor, plain)
 }
 
 // This internal constructor shares the shipping capture/ownership path with
@@ -107,6 +119,10 @@ func newOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOpt
 }
 
 func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer, predecessor *mobiletor.DesktopPredecessor) (*Owner, error) {
+	return captureOwner(ctx, plan, options, current, lower, predecessor, false)
+}
+
+func captureOwner(ctx context.Context, plan mobiletor.Plan, options option.DialerOptions, current func() bool, lower N.Dialer, predecessor *mobiletor.DesktopPredecessor, plain bool) (*Owner, error) {
 	if ctx == nil || ctx.Err() != nil || current == nil || !current() || lower == nil || options.DomainResolver == nil || options.DomainResolver.Server == "" ||
 		(predecessor == nil && options.Detour != "") || (predecessor != nil && options.Detour != predecessor.Tag()) {
 		return nil, errors.New("desktop Tor PT physical capture is missing or retired")
@@ -115,9 +131,17 @@ func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.D
 	for i, bridge := range plan.Bridges {
 		lines[i] = bridge.Line
 	}
-	verified, err := mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: lines})
-	if err != nil {
-		return nil, err
+	verified := mobiletor.Plan{}
+	if plain {
+		if len(lines) != 0 {
+			return nil, errors.New("plain desktop Tor cannot discard a captured bridge plan")
+		}
+	} else {
+		var err error
+		verified, err = mobiletor.NewPlan(common.ExternalTorBridgeConfig{Transport: "custom", Bridges: lines})
+		if err != nil {
+			return nil, err
+		}
 	}
 	owned, cancel := context.WithCancel(ctx)
 	upstream, err := captureTorUpstream(owned, mobiletor.ProfileOutboundTag, options.Detour)
@@ -150,7 +174,7 @@ func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.D
 		cancel()
 		return nil, err
 	}
-	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, lower: lower, network: capture, upstream: upstream, entry: predecessor, options: network, physical: current,
+	owner := &Owner{ctx: owned, cancel: cancel, plan: verified, plain: plain, lower: lower, network: capture, upstream: upstream, entry: predecessor, options: network, physical: current,
 		startDone: make(chan struct{}), watchDone: make(chan struct{}), entryJoined: make(chan struct{})}
 	owner.options.Resolve = owner.resolve
 	if predecessor != nil {
@@ -227,19 +251,34 @@ func (o *Owner) Start() error {
 		close(o.watchDone)
 		return errors.New("desktop Tor PT cannot start before its captured entry is proved")
 	}
-	bridges, err := torpt.StartWithNetwork(o.ctx, o.plan, o.dial, o.packets, o.options)
-	if err != nil {
-		o.retire()
-		close(o.watchDone)
-		return err
+	var stopping <-chan struct{}
+	if o.plain {
+		proxy, err := mobiletor.StartTCPProxy(o.ctx, o.dial)
+		if err != nil {
+			o.retire()
+			close(o.watchDone)
+			return err
+		}
+		o.mu.Lock()
+		o.proxy = proxy
+		o.mu.Unlock()
+		stopping = proxy.Stopping()
+	} else {
+		bridges, err := torpt.StartWithNetwork(o.ctx, o.plan, o.dial, o.packets, o.options)
+		if err != nil {
+			o.retire()
+			close(o.watchDone)
+			return err
+		}
+		o.mu.Lock()
+		o.bridges = bridges
+		o.mu.Unlock()
+		stopping = bridges.Stopping()
 	}
-	o.mu.Lock()
-	o.bridges = bridges
-	o.mu.Unlock()
 	go func() {
 		defer close(o.watchDone)
 		select {
-		case <-bridges.Stopping():
+		case <-stopping:
 			o.retire()
 		case <-o.ctx.Done():
 		}
@@ -254,8 +293,27 @@ func (o *Owner) Start() error {
 	return nil
 }
 
+// Proxy is the owned object, never a client-facing address or credentials.
+func (o *Owner) Proxy() (*mobiletor.TCPProxy, error) {
+	if !o.Current() || !o.plain {
+		return nil, errors.New("plain desktop Tor guard proxy has no live captured owner")
+	}
+	o.mu.Lock()
+	proxy := o.proxy
+	o.mu.Unlock()
+	if proxy == nil || !o.Current() {
+		return nil, errors.New("plain desktop Tor guard proxy changed its capture")
+	}
+	select {
+	case <-proxy.Stopping():
+		return nil, errors.New("plain desktop Tor guard proxy is stopping")
+	default:
+		return proxy, nil
+	}
+}
+
 func (o *Owner) Listeners() (map[string]string, error) {
-	if !o.Current() {
+	if !o.Current() || o.plain {
 		return nil, errors.New("desktop Tor PT listeners belong to a retired capture")
 	}
 	o.mu.Lock()
@@ -424,8 +482,13 @@ func (o *Owner) Close(ctx context.Context) error {
 		return ctx.Err()
 	}
 	o.mu.Lock()
-	bridges := o.bridges
+	bridges, proxy := o.bridges, o.proxy
 	o.mu.Unlock()
+	if proxy != nil {
+		if err := proxy.Close(ctx); err != nil {
+			return err
+		}
+	}
 	if bridges != nil {
 		if err := bridges.Close(ctx); err != nil {
 			return err

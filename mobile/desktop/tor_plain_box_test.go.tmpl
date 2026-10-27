@@ -1,0 +1,70 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+// Only the Tor control socket is doubled. Box construction, native managers,
+// selected resolver, physical observer, proxy creation and teardown are real.
+type desktopTorPlainBoxChild struct {
+	*desktopTorBoxChild
+	proxy *mobiletor.TCPProxy
+}
+
+func (s *desktopTorPlainBoxChild) ConfigurePlain(ctx context.Context, proxy *mobiletor.TCPProxy) error {
+	if proxy == nil || s.proxy != nil || ctx.Err() != nil {
+		return errors.New("plain fixture lost its sole captured proxy")
+	}
+	s.proxy = proxy
+	s.configured.Add(1)
+	return nil
+}
+
+func TestRouterVPNDesktopTorPlainBoxCannotUseBridgeChildOrLoseGuardOwner(t *testing.T) {
+	for _, correct := range []bool{false, true} {
+		t.Run(map[bool]string{false: "bridge-child", true: "plain-child"}[correct], func(t *testing.T) {
+			f := newDesktopTorBoxFixture(t, func(p map[string]any) { p["external"] = map[string]any{"protocol": "tor"} })
+			owner := f.capture(t)
+			if f.policy.Mode() != "tor" || owner.pt == nil || owner.server != nil {
+				t.Fatal("plain source selected another native owner")
+			}
+			plain := &desktopTorPlainBoxChild{desktopTorBoxChild: f.child}
+			var child routerVPNDesktopTorSession = f.child
+			if correct {
+				child = plain
+			}
+			err := owner.start(child)
+			if !correct {
+				if err == nil || owner.live() || f.child.configured.Load() != 0 {
+					t.Fatal("plain native path accepted bridge-only controller")
+				}
+				return
+			}
+			if err != nil || !owner.live() || plain.proxy == nil || plain.configured.Load() != 1 {
+				t.Fatal("plain native path lost guard configuration order", err)
+			}
+			proxy, err := owner.pt.Proxy()
+			if err != nil || proxy != plain.proxy {
+				t.Fatal("plain controller received another proxy owner", err)
+			}
+			if owner.Healthy() {
+				t.Fatal("plain guard admission claimed public Tor/DNS proof")
+			}
+			if err := owner.Close(context.Background()); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case <-plain.proxy.Done():
+			default:
+				t.Fatal("plain Box cleanup omitted guard proxy drain")
+			}
+			if owner.live() {
+				t.Fatal("closed plain native path retained liveness")
+			}
+		})
+	}
+}

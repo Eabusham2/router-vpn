@@ -37,7 +37,7 @@ type desktopTorServerFixture struct {
 	beforeCatalog          func()
 }
 
-func newDesktopTorServerFixture(t *testing.T, home, snowflake bool) *desktopTorServerFixture {
+func newDesktopTorServerFixture(t *testing.T, home, snowflake bool, plain ...bool) *desktopTorServerFixture {
 	t.Helper()
 	entry := desktopTorBoxEntryFixture(t)
 	encrypted := newDesktopTorBoxEntryServer(t)
@@ -51,6 +51,12 @@ func newDesktopTorServerFixture(t *testing.T, home, snowflake bool) *desktopTorS
 		if snowflake {
 			bridge := p["external"].(map[string]any)["tor_bridge"].(map[string]any)
 			bridge["transport"], bridge["bridges"] = "custom", []string{"snowflake 192.0.2.3:80 1111111111111111111111111111111111111111 fingerprint=1111111111111111111111111111111111111111 url=https://broker.example/ front=front.example ice=stun:stun.example:3478"}
+		}
+		if len(plain) == 1 && plain[0] {
+			if snowflake {
+				t.Fatal("plain Server fixture cannot discard Snowflake")
+			}
+			p["external"], p["multihop_exit_mode"] = map[string]any{"protocol": "tor"}, "tor"
 		}
 	}, entry, encrypted.register(t))
 	f.socks.serverUsername, f.socks.serverPassword = strings.Repeat("c", 48), strings.Repeat("d", 48)
@@ -157,9 +163,9 @@ func (f *desktopTorServerFixture) handle(conn net.Conn, destination M.Metadata) 
 
 func TestRouterVPNDesktopTorServerUsesNativeEntrySOCKSDNSAndClientProof(t *testing.T) {
 	for _, home := range []bool{false, true} {
-		for _, snowflake := range []bool{false, true} {
-			t.Run(fmt.Sprintf("home=%t/snowflake=%t", home, snowflake), func(t *testing.T) {
-				f := newDesktopTorServerFixture(t, home, snowflake)
+		for _, transport := range []string{"obfs4", "snowflake", "tor"} {
+			t.Run(fmt.Sprintf("home=%t/transport=%s", home, transport), func(t *testing.T) {
+				f := newDesktopTorServerFixture(t, home, transport == "snowflake", transport == "tor")
 				owner := f.capture(t)
 				if owner.pt != nil || owner.server == nil || len(f.options.Inbounds) != 1 {
 					t.Fatal("Server acquired local PT or a second TUN")

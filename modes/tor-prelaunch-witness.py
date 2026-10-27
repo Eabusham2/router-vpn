@@ -121,6 +121,12 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
         graph = exact_json(inputs["sing-box.json"])
         if type(profile) is not dict or type(capture) is not dict or type(graph) is not dict:
             raise ValueError("native launch inputs require exact JSON objects")
+        external = profile.get("external")
+        if type(external) is not dict or external.get("protocol") not in {"tor", "tor-bridge"}:
+            raise ValueError("native Tor launch lost its exact selected protocol")
+        protocol = external["protocol"]
+        if protocol == "tor" and external.get("tor_bridge") is not None:
+            raise ValueError("plain Tor cannot discard a captured bridge selection")
         required = {"schema", "session_id", "isolation_secret", "target_os", "tor_binary"}
         via_entry = "predecessor" in capture
         server = capture.get("schema") == 2
@@ -141,7 +147,14 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
         elif (not os.path.isabs(capture["tor_binary"])
               or not re.fullmatch(r"[a-f0-9]{64}", os.environ.get("HOMEVPN_TOR_BINARY_SHA256", ""))):
             raise ValueError("Local Tor lost its captured executable identity")
-        endpoint = physical_address(os.environ.get("HOMEVPN_ENDPOINT", ""))
+        endpoint = os.environ.get("HOMEVPN_ENDPOINT", "")
+        if not via_entry and protocol == "tor":
+            if (endpoint or bridge_endpoint not in {None, ""}
+                    or profile.get("kill_switch_policy") != "off"
+                    or profile.get("kill_switch", False) is not False):
+                raise ValueError("direct plain Tor requires explicit Off protection and no invented guard endpoint")
+        else:
+            endpoint = physical_address(endpoint)
         if via_entry:
             entry = capture["predecessor"]
             if type(entry) is not dict or type(entry.get("schema")) is not int or entry["schema"] not in {1, 2}:
@@ -158,7 +171,7 @@ def validate_launch(target: str, bridge_endpoint: str | None = None, tor_binary:
                     or physical == policy or profile.get("multihop_enabled") is not True
                     or profile.get("multihop_entry_id") != physical or profile.get("multihop_exit_id") != policy
                     or profile.get("multihop_entry_mode") != entry["entry_mode"]
-                    or profile.get("multihop_exit_mode") != "tor-bridge"
+                    or profile.get("multihop_exit_mode") != protocol
                     or profile.get("multihop_execution", "") not in ({"server"} if server else {"", "local"})
                     or os.environ.get("HOMEVPN_EXTERNAL_SESSION") != session):
                 raise ValueError("predecessor differs from the captured execution")

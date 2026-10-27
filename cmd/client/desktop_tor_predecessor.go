@@ -70,7 +70,7 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 	if !profile.MultihopEnabled {
 		return nil, nil
 	}
-	if a == nil || profile.External == nil || profile.External.Protocol != "tor-bridge" || profile.MultihopExitID != profile.ID || !validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID {
+	if a == nil || profile.External == nil || !desktopTorProtocol(profile.External.Protocol) || profile.MultihopExitID != profile.ID || !validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID {
 		return nil, errors.New("desktop Tor requires the exact saved entry and exit references")
 	}
 	if desktopTorExecution(profile.MultihopExecution) == "" {

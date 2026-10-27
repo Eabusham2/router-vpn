@@ -296,7 +296,7 @@ func writeStandardExitRuntime(root string, cfg map[string]any) (string, string, 
 }
 
 func nativeStandardExitCommand(a *app, control, entry common.RouterProfile, exit standardExit, direct bool) (*exec.Cmd, error) {
-	if exit.Protocol == "tor-bridge" {
+	if desktopTorProtocol(exit.Protocol) {
 		// The fixed-exit store excludes Tor. External Connect and Speed Lab
 		// dispatch it to the owned adapter with dynamic Tor proof before reaching
 		// this builder; a generic command must never discard its workspace owner.

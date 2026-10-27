@@ -167,7 +167,7 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	a.mu.Lock()
 	a.cmd = command
 	a.state.Connected, a.state.Phase, a.state.LastError = false, "speed-lab:external:proving-tor", ""
-	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode, a.state.Base, a.state.RouterID = "external-node", "external-node", "external-tor-bridge", base, profile.ID
+	a.state.Mode, a.state.LogicalMode, a.state.RuntimeMode, a.state.Base, a.state.RouterID = "external-node", "external-node", launch.mode, base, profile.ID
 	a.mu.Unlock()
 	if err := a.speedLabOwnRuntime(command); err != nil {
 		return path, err
@@ -196,7 +196,7 @@ func (a *app) startPreparedSpeedLabTorPath(q speedLabRequest, profile common.Rou
 	if _, err := waitForSpeedLabConnectedIdentity(a, 2500*time.Millisecond); err != nil {
 		return path, err
 	}
-	path = speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: profile.ID, NodeName: profile.Name, ExitID: profile.ID, ExitName: profile.Name, RuntimeMode: "external-tor-bridge", LogicalMode: "external-node", Base: base, ExternalProtocol: "tor-bridge", Execution: desktopTorExecution(launch.tor.expected.Execution), StartedAt: launch.tor.started, Description: "temporary captured Tor path with fresh dynamic exit, selected DNS and native interface proof"}
+	path = speedLabPath{Scope: "temporary", Topology: "external", Temporary: true, NodeID: profile.ID, NodeName: profile.Name, ExitID: profile.ID, ExitName: profile.Name, RuntimeMode: launch.mode, LogicalMode: "external-node", Base: base, ExternalProtocol: profile.External.Protocol, Execution: desktopTorExecution(launch.tor.expected.Execution), StartedAt: launch.tor.started, Description: "temporary captured Tor path with fresh dynamic exit, selected DNS and native interface proof"}
 	if entry := selection.predecessor; entry != nil {
 		path.EntryID, path.EntryName, path.EntryMode = entry.entry.ID, entry.entry.Name, entry.mode
 	}

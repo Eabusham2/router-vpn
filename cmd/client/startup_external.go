@@ -61,7 +61,7 @@ func (a *app) captureStartupPolicy() (*startupPolicyCapture, error) {
 			return nil, errors.New("startup external path has invalid or missing entry/exit references")
 		}
 		capture.entry, capture.entryToken = entry, startupProfileToken(entry)
-		if p.External.Protocol == "tor-bridge" {
+		if desktopTorProtocol(p.External.Protocol) {
 			var err error
 			capture.entryMode, err = desktopTorEntryMode(p, entry, "", "")
 			if err != nil {

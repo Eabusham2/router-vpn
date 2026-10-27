@@ -132,18 +132,22 @@ func (s *Box) RouterVPNDesktopTorCreate(policy *mobiletor.DesktopBridgePolicy) (
 		}
 		return owner, nil
 	}
-	plan, err := policy.Plan()
-	if err != nil {
-		return nil, err
-	}
 	resolver := option.DomainResolveOptions{Server: meta.BootstrapDNSTag}
 	if meta.IPv6Mode == "off" {
 		resolver.Strategy = option.DomainStrategy(C.DomainStrategyIPv4Only)
 	}
-	if predecessor := policy.Predecessor(); predecessor != nil {
-		owner.pt, err = routervpndesktoppt.NewWithPredecessor(ctx, plan, resolver, predecessor, owner.currentNative)
+	if policy.Mode() == "tor" {
+		owner.pt, err = routervpndesktoppt.NewPlain(ctx, resolver, policy.Predecessor(), owner.currentNative)
 	} else {
-		owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+		plan, planErr := policy.Plan()
+		if planErr != nil {
+			return nil, planErr
+		}
+		if predecessor := policy.Predecessor(); predecessor != nil {
+			owner.pt, err = routervpndesktoppt.NewWithPredecessor(ctx, plan, resolver, predecessor, owner.currentNative)
+		} else {
+			owner.pt, err = routervpndesktoppt.New(ctx, plan, resolver, owner.currentNative)
+		}
 	}
 	if err != nil {
 		return nil, err
@@ -263,17 +267,33 @@ func (r *RouterVPNDesktopTor) start(session routerVPNDesktopTorSession) (failure
 	if err := r.pt.Start(); err != nil {
 		return err
 	}
-	listeners, err := r.pt.Listeners()
-	if err != nil {
-		return err
-	}
-	if err = session.Configure(r.ctx, listeners); err != nil {
-		return err
+	if r.policy.Mode() == "tor" {
+		plain, ok := session.(interface {
+			ConfigurePlain(context.Context, *mobiletor.TCPProxy) error
+		})
+		if !ok {
+			return errors.New("plain desktop Tor cannot use a bridge-only child controller")
+		}
+		proxy, err := r.pt.Proxy()
+		if err != nil {
+			return err
+		}
+		if err := plain.ConfigurePlain(r.ctx, proxy); err != nil {
+			return err
+		}
+	} else {
+		listeners, err := r.pt.Listeners()
+		if err != nil {
+			return err
+		}
+		if err := session.Configure(r.ctx, listeners); err != nil {
+			return err
+		}
 	}
 	if !r.currentNative() || !r.pt.Current() {
 		return errors.New("desktop Tor PT capture retired before network enable")
 	}
-	if err = session.EnableNetwork(r.ctx); err != nil {
+	if err := session.EnableNetwork(r.ctx); err != nil {
 		return err
 	}
 	r.started.Store(true)

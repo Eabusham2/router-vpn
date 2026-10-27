@@ -185,13 +185,13 @@ func writeDNSPolicy(w http.ResponseWriter, profile, entry common.RouterProfile) 
 	if externalDNSProfile(profile) {
 		response.NodeKind = "external"
 		response.Note = "The saved DNS policy belongs to this external node and its captured entry. It is applied on the next native connection, which still requires fresh DNS proof. Stored samples do not establish current-path performance."
-		if response.Mode == "rescue" && profile.External != nil && profile.External.Protocol != "tor-bridge" {
+		if response.Mode == "rescue" && profile.External != nil && !desktopTorProtocol(profile.External.Protocol) {
 			// Rescue is an explicit named preset in the shared runtime. Historical
 			// leftover custom fields must not mislabel the resolver it will use.
 			response.Protocol, response.Host, response.Port = "https", "1.1.1.1", 443
 			response.ServerName, response.Path = "cloudflare-dns.com", "/dns-query"
 		}
-		if (response.Mode == "home" || response.Mode == "") && profile.External != nil && profile.External.Protocol == "tor-bridge" {
+		if (response.Mode == "home" || response.Mode == "") && profile.External != nil && desktopTorProtocol(profile.External.Protocol) {
 			response.Note += " Home AdGuard uses the paired Router VPN entry. Direct Tor requires an explicit TCP, DoT or DoH resolver through its circuit."
 		} else if (response.Mode == "home" || response.Mode == "") && entry.ID == "" {
 			response.Note += " Home AdGuard needs a paired Router VPN entry before this path can connect; choose an explicit resolver for a direct external connection."

@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -230,7 +231,7 @@ func (a *app) readDesktopTorProgress(launch *desktopNodeLaunch) error {
 		return errors.New("Tor progress completed for a replacement connection")
 	}
 	if !a.state.Connected {
-		a.state.Phase = "tor-bridge:" + progress.Stage
+		a.state.Phase = strings.TrimPrefix(launch.mode, "external-") + ":" + progress.Stage
 	}
 	return nil
 }

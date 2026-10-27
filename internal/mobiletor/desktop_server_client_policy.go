@@ -129,16 +129,20 @@ func desktopServerTorSource(policy *DesktopBridgePolicy) (*ServerTorPolicy, erro
 	if policy == nil || policy.predecessor == nil || !policy.predecessor.IsRouter() {
 		return nil, errServerTorClient
 	}
-	plan, err := policy.Plan()
-	if err != nil {
-		return nil, err
+	source := map[string]any{"schema": 1, "id": policy.metadata.NodeID, "entry_node_id": policy.predecessor.proof.node, "mode": policy.Mode(), "dns": policy.metadata.DNS}
+	if policy.Mode() == "tor-bridge" {
+		plan, err := policy.Plan()
+		if err != nil {
+			return nil, err
+		}
+		bridges := make([]string, len(plan.Bridges))
+		for i, bridge := range plan.Bridges {
+			bridges[i] = bridge.Line
+		}
+		source["tor_bridge"] = map[string]any{"transport": "custom", "bridges": bridges}
+	} else if policy.Mode() != "tor" {
+		return nil, errServerTorClient
 	}
-	bridges := make([]string, len(plan.Bridges))
-	for i, bridge := range plan.Bridges {
-		bridges[i] = bridge.Line
-	}
-	source := map[string]any{"schema": 1, "id": policy.metadata.NodeID, "entry_node_id": policy.predecessor.proof.node, "mode": "tor-bridge",
-		"dns": policy.metadata.DNS, "tor_bridge": map[string]any{"transport": "custom", "bridges": bridges}}
 	if policy.metadata.DNS.Mode == "home" {
 		entry, err := profileObject(policy.predecessor.profile, 256<<10)
 		if err != nil {

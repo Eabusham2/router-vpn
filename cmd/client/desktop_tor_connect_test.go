@@ -99,10 +99,15 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 			// the controller rejects the changed source before process start.
 			raw, readErr := readDesktopRuntimeFile(launch, "tor-profile.json", desktopTorInputLimit("tor-profile.json"))
 			var staged common.RouterProfile
-			if readErr != nil || json.Unmarshal(raw, &staged) != nil || staged.External == nil || staged.External.TorBridge == nil {
+			if readErr != nil || json.Unmarshal(raw, &staged) != nil || staged.External == nil {
 				t.Fatal("fixture lost the staged Tor transport plan", readErr)
 			}
-			plan, planErr := mobiletor.NewPlan(*staged.External.TorBridge)
+			plan, planErr := mobiletor.Plan{}, error(nil)
+			if staged.External.Protocol == "tor-bridge" && staged.External.TorBridge != nil {
+				plan, planErr = mobiletor.NewPlan(*staged.External.TorBridge)
+			} else if staged.External.Protocol != "tor" || staged.External.TorBridge != nil {
+				t.Fatal("fixture changed plain or bridge transport identity")
+			}
 			want, err := entry.native.PhysicalEgress(plan)
 			var got []mobilemultihop.PhysicalEgress
 			if planErr != nil || err != nil || json.Unmarshal([]byte(vars["HOMEVPN_NATIVE_EGRESS_JSON"]), &got) != nil || !reflect.DeepEqual(want, got) ||

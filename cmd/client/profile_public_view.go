@@ -167,7 +167,7 @@ func publicProfileForCapabilities(p common.RouterProfile, caps []standardExitCap
 		if !out.RuntimeSupported {
 			out.DisplayName = baseName + " — unavailable: " + out.RuntimeReason
 		}
-		if strings.EqualFold(strings.TrimSpace(p.External.Protocol), "tor-bridge") {
+		if desktopTorProtocol(strings.ToLower(strings.TrimSpace(p.External.Protocol))) {
 			out.Endpoint = ""
 		}
 	}

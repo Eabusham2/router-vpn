@@ -75,13 +75,21 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 	}
 	q.Name = strings.TrimSpace(q.Name)
 	if q.Name == "" {
-		q.Name = "Tor " + strings.ReplaceAll(q.Transport, "_", " ")
+		q.Name = "Tor"
+		if q.Transport != "tor" {
+			q.Name += " " + strings.ReplaceAll(q.Transport, "_", " ")
+		}
 	}
 	if len(q.Name) > 120 || strings.ContainsAny(q.Name, "\r\n\x00") {
 		http.Error(w, "Tor profile name is unsafe or too long", http.StatusBadRequest)
 		return
 	}
-	if len(q.Bridges) < 1 || len(q.Bridges) > 8 {
+	plain := q.Transport == "tor"
+	if plain && (len(q.Bridges) != 0 || q.SocksPort != 0 && q.SocksPort != common.ExternalTorDefaultSocksPort) {
+		http.Error(w, "Plain Tor uses no bridges and its owned default SOCKS listener", http.StatusBadRequest)
+		return
+	}
+	if !plain && (len(q.Bridges) < 1 || len(q.Bridges) > 8) {
 		http.Error(w, "paste between one and eight Tor bridge lines", http.StatusBadRequest)
 		return
 	}
@@ -121,6 +129,9 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		Location:         strings.TrimSpace(q.Location),
 		Latitude:         q.Latitude,
 		Longitude:        q.Longitude,
+	}
+	if plain {
+		profile.External = &common.ExternalNodeConfig{Protocol: "tor"}
 	}
 	if profile.DNSMode == "" {
 		profile.DNSMode, profile.DNSProtocol, profile.DNSPort = "home", "udp", 53
@@ -328,7 +339,7 @@ func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.Ro
 		return false, nil
 	}
 	existing := a.profiles.Profiles[index]
-	if existing.NodeKind != "external" || existing.External == nil || strings.ToLower(strings.TrimSpace(existing.External.Protocol)) != "tor-bridge" {
+	if existing.NodeKind != "external" || existing.External == nil || !desktopTorProtocol(strings.ToLower(strings.TrimSpace(existing.External.Protocol))) {
 		return false, errors.New("profile id belongs to a non-Tor node; refusing replacement")
 	}
 	if err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil {
