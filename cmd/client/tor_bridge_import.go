@@ -238,6 +238,7 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 	next.AutoRequireEncrypted = existing.AutoRequireEncrypted
 	next.AutoRequireObfuscation = existing.AutoRequireObfuscation
 	next.DAITAEnabled = existing.DAITAEnabled
+	next.DAITARateKbps = existing.DAITARateKbps
 	next.JumboTUN = existing.JumboTUN
 	next.SocksEnabled = existing.SocksEnabled
 	next.MTUPolicy = existing.MTUPolicy

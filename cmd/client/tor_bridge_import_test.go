@@ -173,6 +173,7 @@ func TestTorBridgeImportUpdatePreservesUnrelatedSettingsAndClearsPathMeasurement
 	old.AutoConnect = true
 	old.AutoRequireEncrypted = true
 	old.AutoRequireObfuscation = true
+	old.DAITARateKbps = 64 // retain the dormant saved budget across bridge edits
 	old.MTUPolicy = "manual"
 	old.ManualMTU = 1280
 	old.DiagnosticsEnabled = true
@@ -221,6 +222,9 @@ func TestTorBridgeImportUpdatePreservesUnrelatedSettingsAndClearsPathMeasurement
 	p := a.profiles.Profiles[0]
 	if p.Name != old.Name || !p.HomeLANAccess || len(p.HomeLANCIDRs) != 1 || p.HomeLANCIDRs[0] != old.HomeLANCIDRs[0] || p.IPv6Mode != "off" || p.StartupMode != "smart-auto" || !p.AutoConnect || !p.AutoRequireEncrypted || !p.AutoRequireObfuscation {
 		t.Fatalf("Tor update reset ordinary connection preferences: %+v", p)
+	}
+	if p.DAITARateKbps != old.DAITARateKbps || p.DAITAEnabled != old.DAITAEnabled {
+		t.Fatal("Tor bridge edit lost its saved cover selection")
 	}
 	if p.MTUPolicy != "manual" || p.ManualMTU != 1280 || !p.DiagnosticsEnabled || p.DiagnosticsRetentionDays != 21 || !p.ShareDiagnostics || !p.TelemetryEnabled {
 		t.Fatalf("Tor update reset MTU/diagnostic preferences: %+v", p)

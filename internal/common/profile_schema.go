@@ -220,7 +220,11 @@ func hasLegacyInjectedExternalHomeDNS(p *RouterProfile) bool {
 func stripInjectedRouterDefaultsFromExternal(p *RouterProfile, legacyHomeDNS bool) error {
 	if strings.TrimSpace(p.NodeProofID) != "" || strings.TrimSpace(p.APIToken) != "" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
 	if v := strings.TrimSpace(p.RouterAPI); v != "" && v != "http://10.77.0.1:8787" { return fmt.Errorf("external node cannot contain Router VPN proof/admin credentials") }
-	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.DAITARateKbps = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil
+	p.RouterAPI = ""; p.NodeProofID = ""; p.APIToken = ""; p.AdGuardIPv4 = ""; p.AdGuardIPv6 = ""; p.SocksHost = ""; p.SocksPort = 0; p.SocksUsername = ""; p.SocksPassword = ""; p.DAITAHost = ""; p.DAITAPort = 0; p.BaseTunnel = ""; p.BaseFallback = false; p.CustomLayers = nil
+	// Tor's bounded relay-cell rate is a saved policy, not a private Router
+	// UDP endpoint. Retain it through import/save; the existing numeric check
+	// below and the actual native host separately validate and admit it.
+	if p.External == nil || (p.External.Protocol != "tor" && p.External.Protocol != "tor-bridge") { p.DAITARateKbps = 0 }
 	if p.PathProbeURL == "http://10.77.0.1:8787/health" { p.PathProbeURL = "" }
 	if legacyHomeDNS { p.DNSMode = ""; p.DNSHost = "" }
 	if p.DNSMode == "" { p.DNSProtocol = ""; p.DNSPort = 0; p.DNSServerName = ""; p.DNSPath = "" }
