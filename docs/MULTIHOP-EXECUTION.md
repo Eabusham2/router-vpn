@@ -93,6 +93,31 @@ exact readback of deletion; expiry removes abandoned sessions. A Linux agent
 crash terminates its owned child engines. Exit credentials remain in private
 operator files; they are not returned in capability or progress responses.
 
+## Desktop Tor bridge Server execution
+
+Desktop Windows, macOS and Linux now support an explicit Server selection for
+a Tor bridge exit behind a captured private Router entry. The client authenticates
+that entry and matches the exact paired bridge/source and selected-DNS hashes
+before acquiring a per-client lease. The final native outbound uses its private
+authenticated SOCKS front through that same encrypted entry. A Server capture
+contains no local Tor executable or PT listener. The same native graph owns the
+TUN, IPv6/LAN policy, selected DNS and MTU.
+
+Server readiness is separate from client proof: the client verifies its selected
+DNS and Tor public-exit response through its own final path. Cancel immediately
+retires application traffic, then retains the exact entry for authenticated lease
+deletion. Failed deletion stays pending and can retry without borrowing a
+replacement connection. Startup Last, whole-connection profiles and Speed Lab
+restore the saved Server selection directly with fresh proof; they do not rerun
+Compare. Bridge edits preserve execution and invalidate stale editor captures.
+
+This implementation boundary is the desktop `tor-bridge` path. Mobile Server
+host adoption and plain-Tor desktop controls are separate work. Tor Compare still
+requires a distinct owned last-node measurement under the formula above; the
+dynamic exit-check response cannot be counted twice. Current native packages,
+private pairing/deployment and public-circuit/device acceptance require separate
+exact-SHA evidence.
+
 ## Provisioning a private server Tor source
 
 The same operator command can pair a **Tor** or **Tor bridge** source with the

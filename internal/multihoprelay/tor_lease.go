@@ -23,8 +23,8 @@ const (
 // front with forwarding disabled, and returns promptly. It must not bootstrap
 // Tor or retain the HTTP request context. Its context belongs to the lease and
 // remains live after successful startup, until retirement or native failure.
-// The shipping relayExecRunner intentionally does not implement this interface
-// until the real Tor worker, protected control channel and image are adopted.
+// The shipping relayTorExecRunner supplies the isolated worker and authenticated
+// control channel; the ordinary relayExecRunner cannot substitute Runner.Start.
 type TorRunner interface {
 	StartTor(context.Context, TorCapture) (TorProcess, error)
 }

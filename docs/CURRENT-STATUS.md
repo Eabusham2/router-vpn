@@ -23,8 +23,20 @@ native transport validation precedes admission. Their saved paths also reopen
 in the Windows, AppKit and GTK dialogs without replacing their raw protocol
 with a Router-only mode (`02ddd025`). The existing source-token, selected-DNS,
 MTU and lifecycle checks remain; ordinary proof cannot authorize private
-Router policy. Strict protection on these ordinary predecessors, Tor
-Server/Compare, and exit-side Tor padding remain separate unfinished work.
+Router policy. Strict protection on these ordinary predecessors, Tor Compare,
+mobile Server adoption and exit-side Tor padding remain separate unfinished work.
+
+Desktop private Router entry → Tor bridge Server now reaches the real isolated
+server worker through authenticated source discovery and an owned private lease.
+The canonical source provisioner preserves other registry entries and private
+files. The desktop native engine, public Connect, Startup Last, complete profiles,
+DNS/device edits, Speed Lab restoration and all three bridge editors retain the
+explicit Server choice, source and DNS policy (`a77a90a4` through `943d7462`).
+Server creates no local Tor child. Client selected-DNS and public-exit proof
+remain separate from server readiness. The frozen host source passed 796
+race-instrumented cases/subtests; actual native and Windows/POSIX wrapper tests
+also passed. Current packages, ARM64 image execution, private deployment and
+physical acceptance remain unproved by these local tests.
 
 The native parser matrices now run in separate processes with the same existing
 180-second per-process deadline (`c81d0930`). Source jobs select Go 1.26.3 for
@@ -32,8 +44,9 @@ the stable `testing/synctest` lease tests (`f3eb9ffc`). The GTK dependency gate
 tracks its actual source/copy lists (`2bdd2c66`), and macOS temporary-path and
 Windows PowerShell array fixtures retain their original privacy and relink
 negative cases (`548f9d24`). These changes do not certify a current all-platform
-release or physical-device behavior. The separately reproduced native startup
-network/power callback race is not closed by these fixture corrections.
+release or physical-device behavior. The separate native startup network/power
+callback race was subsequently fixed in `078d4ef3`, with real resets still
+retiring the captured owner and executable native race controls preserved.
 
 The PQ controller now separates its five-second connection admission bound
 from the lifetime of an admitted native socket. Successful Xray/Hysteria/gVisor
@@ -411,7 +424,7 @@ Box tests cover these boundaries, while physical TUN and network acceptance
 remain separate. Virtual capacity does not assert 9000-byte packets on the
 underlying network. Captured Router-entry Local Tor graphs now preserve their
 private entry, selected DNS transport and independent native ownership. Tor
-Server/Compare, exit-side desktop Tor padding
+Compare, mobile Server adoption, exit-side desktop Tor padding
 and Direct dynamic-bridge strict protection remain requirements to implement.
 
 The Tor server lease prerequisite now has a separate asynchronous lifecycle
@@ -419,9 +432,13 @@ with peer/session/source/DNS binding, a restart-bound acquisition challenge,
 absolute bootstrap deadline and final manager-owned Ready admission. Failed or
 retired workers retain their port until joined cleanup. Controlled worker and
 actual HTTP race tests cover cancellation, renewal, stale proof and replay.
-The production runner has no TorRunner implementation and does not advertise
-Tor; the real no-TUN worker, image and client Server path remain unfinished.
-No dynamic Tor proof is mislabeled as a last-node Compare measurement.
+The production runner now implements TorRunner with an isolated no-TUN worker
+and a pinned server-image package. Private source provisioning, authenticated
+discovery and the desktop Tor-bridge Server client are connected. The desktop
+still proves its own selected DNS and exit through the final native outbound;
+server readiness does not grant client Connected state. Mobile Server hosts,
+current packaged builds and deployment/device acceptance require their own
+evidence. No dynamic Tor proof is mislabeled as a last-node Compare measurement.
 
 Strict protection now permits validated dynamic Tor transports behind an
 independently captured Local Router predecessor. Their TCP, UDP and DNS use
