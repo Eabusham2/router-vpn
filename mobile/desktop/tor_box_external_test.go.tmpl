@@ -1,0 +1,224 @@
+package box
+
+import (
+	"bufio"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/tls"
+	"crypto/x509"
+	"encoding/base64"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+)
+
+func desktopTorOrdinaryCertificate(t *testing.T, ip string) (tls.Certificate, *x509.CertPool) {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ca := &x509.Certificate{SerialNumber: big.NewInt(1), IsCA: true, BasicConstraintsValid: true, KeyUsage: x509.KeyUsageCertSign,
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour)}
+	der, err := x509.CreateCertificate(rand.Reader, ca, ca, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	root, err := x509.ParseCertificate(der)
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(root)
+	leaf := &x509.Certificate{SerialNumber: big.NewInt(2), IPAddresses: []net.IP{net.ParseIP(ip)},
+		NotBefore: ca.NotBefore, NotAfter: ca.NotAfter, KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}}
+	leafDER, err := x509.CreateCertificate(rand.Reader, leaf, root, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return tls.Certificate{Certificate: [][]byte{leafDER, der}, PrivateKey: key}, pool
+}
+
+func desktopTorOrdinaryEntry(t *testing.T, password string) *mobiletor.DesktopPredecessor {
+	t.Helper()
+	profile := map[string]any{"id": "ordinary-entry", "node_kind": "external", "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "9.9.9.9", "dns_port": 5353,
+		"ipv6_mode": "off", "home_lan_access": false, "mtu_policy": "auto",
+		"external": map[string]any{"protocol": "shadowsocks", "expected_public_ip": "203.0.113.88", "shadowsocks": map[string]any{
+			"server": "192.0.2.44", "port": 443, "method": "2022-blake3-aes-256-gcm", "password": password}}}
+	graph := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "tun-in", "address": []string{"172.29.91.1/30", "fd29:91::1/126"}, "auto_route": true, "strict_route": true, "stack": "system", "mtu": 1280}},
+		"endpoints": []any{}, "outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "custom-exit", "server": "192.0.2.44", "server_port": 443,
+			"method": "2022-blake3-aes-256-gcm", "password": password}}, "route": map[string]any{"final": "custom-exit", "auto_detect_interface": true, "rules": []any{}}}
+	raw, _ := json.Marshal(profile)
+	source, _ := json.Marshal(graph)
+	entry, err := mobiletor.NewDesktopExternalPredecessor("shadowsocks", string(raw), string(source), strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return entry
+}
+
+// A dedicated child installs private test roots using the standard library's
+// documented fallback verifier. Production proof code still uses normal TLS
+// validation with a nil custom config. No host trust store or live endpoint is
+// changed. All plaintext targets below travel inside genuine native SS2022.
+func TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle(t *testing.T) {
+	const childFlag = "ROUTERVPN_TEST_TOR_ORDINARY_CHILD"
+	if os.Getenv(childFlag) != "1" {
+		binary, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
+		defer cancel()
+		command := exec.CommandContext(ctx, binary, "-test.run=^TestRouterVPNDesktopTorOrdinaryEntryPublicProofAndNativeLifecycle$", "-test.count=1", "-test.timeout=40s", "-test.v")
+		for _, value := range os.Environ() {
+			if !strings.HasPrefix(value, "GODEBUG=") && !strings.HasPrefix(value, childFlag+"=") {
+				command.Env = append(command.Env, value)
+			}
+		}
+		command.Env = append(command.Env, childFlag+"=1", "GODEBUG=x509usefallbackroots=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("actual native ordinary predecessor child failed: %v\n%s", err, output)
+		}
+		t.Log(string(output))
+		return
+	}
+	certificate, roots := desktopTorOrdinaryCertificate(t, "1.1.1.1")
+	wrongCertificate, _ := desktopTorOrdinaryCertificate(t, "1.1.1.1")
+	x509.SetFallbackRoots(roots)
+	for _, defect := range []string{"none", "wrong-ip", "wrong-certificate", "wrong-key", "cancel-pending-proof", "retire-pending-proof"} {
+		t.Run(defect, func(t *testing.T) {
+			server := newDesktopTorBoxEntryServer(t)
+			entered, release := make(chan struct{}), make(chan struct{})
+			var enteredOnce, releaseOnce sync.Once
+			free := func() { releaseOnce.Do(func() { close(release) }) }
+			t.Cleanup(free)
+			selectedCert := certificate
+			if defect == "wrong-certificate" {
+				selectedCert = wrongCertificate
+			}
+			server.mu.Lock()
+			server.ordinaryProof = func(conn net.Conn, metadata M.Metadata) (bool, error) {
+				if metadata.Destination.String() != "1.1.1.1:443" {
+					return false, nil
+				}
+				secure := tls.Server(conn, &tls.Config{Certificates: []tls.Certificate{selectedCert}, MinVersion: tls.VersionTLS12})
+				defer secure.Close()
+				request, err := http.ReadRequest(bufio.NewReader(secure))
+				if err != nil {
+					return true, err
+				}
+				if request.Method != "GET" || request.Host != "1.1.1.1" || request.URL.Path != "/cdn-cgi/trace" || len(request.URL.Query().Get("routervpn_proof")) != 32 || request.Header.Get("Authorization") != "" {
+					return true, errors.New("ordinary proof changed its exact public service, challenge or borrowed Router credentials")
+				}
+				enteredOnce.Do(func() { close(entered) })
+				if defect == "cancel-pending-proof" || defect == "retire-pending-proof" {
+					<-release
+				}
+				ip := "203.0.113.88"
+				if defect == "wrong-ip" {
+					ip = "203.0.113.99"
+				}
+				body := "fl=fixture\nip=" + ip + "\n"
+				server.proofCalls.Add(1)
+				_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+				return true, err
+			}
+			server.mu.Unlock()
+			key := "s"
+			if defect == "wrong-key" {
+				key = "x"
+			}
+			password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat(key, 32)))
+			entry := desktopTorOrdinaryEntry(t, password)
+			register := func(registry *outbound.Registry) {
+				outbound.Register[option.ShadowsocksOutboundOptions](registry, C.TypeShadowsocks, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+					if tag != entry.Tag() || options.Server != "192.0.2.44" || options.ServerPort != 443 || options.Password != password || options.Detour != "" {
+						return nil, errors.New("external test replaced captured native credentials or source")
+					}
+					address := netip.MustParseAddrPort(server.listener.Addr().String())
+					options.Server, options.ServerPort = address.Addr().String(), address.Port()
+					return shadowsocks.NewOutbound(ctx, router, logger, tag, options)
+				})
+			}
+			f := newDesktopTorBoxCapturedFixture(t, func(profile map[string]any) {
+				profile["kill_switch_policy"], profile["kill_switch"] = "off", false
+				profile["multihop_enabled"], profile["multihop_entry_id"], profile["multihop_exit_id"] = true, entry.ID(), profile["id"]
+				profile["multihop_entry_mode"], profile["multihop_exit_mode"], profile["multihop_execution"] = entry.Mode(), "tor-bridge", "local"
+				profile["external"].(map[string]any)["tor_bridge"].(map[string]any)["bridges"] = []string{server.bridgeLine}
+			}, entry, register)
+			f.child.configure = func(ctx context.Context, listeners map[string]string) error {
+				if server.proofCalls.Load() == 0 || len(listeners) != 1 || listeners["obfs4"] == "" {
+					return errors.New("PT activation preceded actual ordinary proof")
+				}
+				return desktopTorBoxEntryPTExchange(ctx, listeners["obfs4"], server.bridgeLine)
+			}
+			owner := f.capture(t)
+			result := make(chan error, 1)
+			go func() { result <- owner.start(f.child) }()
+			if defect == "cancel-pending-proof" || defect == "retire-pending-proof" {
+				select {
+				case <-entered:
+				case <-time.After(3 * time.Second):
+					t.Fatal("real encrypted public proof did not enter")
+				}
+				if defect == "retire-pending-proof" {
+					owner.network.InterfaceUpdated(context.Background())
+				} else {
+					closeDesktopTorBox(t, owner)
+				}
+				free()
+			}
+			var startErr error
+			select {
+			case startErr = <-result:
+			case <-time.After(20 * time.Second):
+				t.Fatal("native proof did not join its bounded admission")
+			}
+			if defect != "none" {
+				if startErr == nil || owner.Healthy() || f.child.configured.Load() != 0 || f.socks.proofCalls.Load() != 0 || server.bridgeCalls.Load() != 0 {
+					t.Fatal("failed or retired provider activated Tor", startErr)
+				}
+				closeDesktopTorBox(t, owner)
+				return
+			}
+			if startErr != nil {
+				t.Fatal(startErr)
+			}
+			receipt, err := owner.run(f.prover(t))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if receipt.EntryProof == nil || receipt.EntryProof.EntryKind != mobiletor.ExternalPredecessorProofKind || receipt.EntryProof.EntryID != entry.ID() || receipt.EntryProof.EntrySHA256 != entry.Fingerprint() ||
+				!receipt.Policy.ValidEntryProof(receipt.EntryProof, receipt.EntryProof.CheckedAt, time.Now()) || server.proofCalls.Load() != 2 || server.bridgeCalls.Load() != 1 || server.dnsCalls.Load() != 0 || f.socks.dnsCalls.Load() < 2 || !receipt.Proof.DNSProven || !owner.Healthy() {
+				t.Fatal("ordinary encrypted proof/PT/Tor DNS lost distinct ownership", receipt, server.proofCalls.Load(), server.bridgeCalls.Load(), f.socks.dnsCalls.Load())
+			}
+			closeDesktopTorBox(t, owner)
+			if owner.Healthy() {
+				t.Fatal("closed ordinary predecessor retained Connected authority")
+			}
+		})
+	}
+}

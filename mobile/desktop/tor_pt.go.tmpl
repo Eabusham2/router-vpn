@@ -62,12 +62,12 @@ func New(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolve
 	return newNativeOwner(ctx, plan, resolver, nil, current)
 }
 
-// NewWithPredecessor captures the same complete Router entry already matched
+// NewWithPredecessor captures the same complete typed entry already matched
 // to the started Box. It cannot substitute the default outbound or physical
 // route for the saved entry, and ProvePredecessor must succeed before Start.
 func NewWithPredecessor(ctx context.Context, plan mobiletor.Plan, resolver option.DomainResolveOptions, predecessor *mobiletor.DesktopPredecessor, current func() bool) (*Owner, error) {
-	if predecessor == nil || predecessor.Tag() == "" || predecessor.Tag() == mobiletor.ProfileOutboundTag {
-		return nil, errors.New("desktop Tor PT requires its exact captured Router predecessor")
+	if predecessor == nil || predecessor.Kind() == "" || predecessor.Tag() == "" || predecessor.Tag() == mobiletor.ProfileOutboundTag {
+		return nil, errors.New("desktop Tor PT requires its exact captured predecessor proof owner")
 	}
 	return newNativeOwner(ctx, plan, resolver, predecessor, current)
 }
@@ -172,11 +172,12 @@ func newCapturedOwner(ctx context.Context, plan mobiletor.Plan, options option.D
 
 func (o *Owner) Context() context.Context { return o.ctx }
 
-// ProvePredecessor authenticates only the immutable private Router origin.
+// ProvePredecessor executes the immutable capture's exact typed proof: private
+// Router authentication or the ordinary provider's routed public-address proof.
 // The proof worker and all late sockets remain owned until actual Close drain.
 func (o *Owner) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeEntryProof, error) {
 	if o == nil || ctx == nil || o.entry == nil || o.entryNetwork == nil {
-		return nil, errors.New("desktop Tor has no captured private predecessor proof")
+		return nil, errors.New("desktop Tor has no captured predecessor proof")
 	}
 	o.mu.Lock()
 	if o.closing || o.retired.Load() || o.ctx.Err() != nil || ctx.Err() != nil {
@@ -189,7 +190,7 @@ func (o *Owner) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeE
 	if err := o.current(); err != nil {
 		return nil, err
 	}
-	if err := o.entry.Proof().Prove(ctx, o.entryNetwork.DialContext); err != nil {
+	if err := o.entry.Prove(ctx, o.entryNetwork.DialContext); err != nil {
 		return nil, err
 	}
 	if ctx.Err() != nil || o.current() != nil {
@@ -201,7 +202,11 @@ func (o *Owner) ProvePredecessor(ctx context.Context) (*mobiletor.DesktopBridgeE
 	}
 	// Identity was already validated by the immutable source compiler. The
 	// receipt uses its non-secret profile identity, never a mutable UI label.
-	return &mobiletor.DesktopBridgeEntryProof{EntryID: o.entry.ID(), EntrySHA256: o.entry.Proof().Fingerprint(), CheckedAt: time.Now()}, nil
+	receipt := &mobiletor.DesktopBridgeEntryProof{EntryID: o.entry.ID(), EntrySHA256: o.entry.Fingerprint(), CheckedAt: time.Now()}
+	if o.entry.IsExternal() {
+		receipt.EntryKind = mobiletor.ExternalPredecessorProofKind
+	}
+	return receipt, nil
 }
 
 func (o *Owner) Start() error {
@@ -220,7 +225,7 @@ func (o *Owner) Start() error {
 	if o.entry != nil && !o.entryProved.Load() {
 		o.retire()
 		close(o.watchDone)
-		return errors.New("desktop Tor PT cannot start before its private Router entry is proved")
+		return errors.New("desktop Tor PT cannot start before its captured entry is proved")
 	}
 	bridges, err := torpt.StartWithNetwork(o.ctx, o.plan, o.dial, o.packets, o.options)
 	if err != nil {

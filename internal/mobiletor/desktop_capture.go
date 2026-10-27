@@ -51,6 +51,7 @@ func (i *DesktopBridgeInputs) Capture() DesktopBridgeCapture {
 		copy := *capture.Predecessor
 		copy.Profile = append(json.RawMessage(nil), copy.Profile...)
 		copy.Config = append(json.RawMessage(nil), copy.Config...)
+		copy.SourceConfig = append(json.RawMessage(nil), copy.SourceConfig...)
 		capture.Predecessor = &copy
 	}
 	return capture

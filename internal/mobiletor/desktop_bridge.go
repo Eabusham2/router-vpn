@@ -32,33 +32,34 @@ type DesktopBridgeDNS struct {
 // Metadata records requested policy, never a measured path MTU or successful
 // DNS/Tor proof. Secrets remain exclusively in the private source/configuration.
 type DesktopBridgeMetadata struct {
-	Schema            int              `json:"schema"`
-	NodeID            string           `json:"node_id"`
-	SessionID         string           `json:"session_id"`
-	SourceSHA256      string           `json:"source_sha256"`
-	ConfigSHA256      string           `json:"config_sha256"`
-	TargetOS          string           `json:"target_os"`
-	FinalTag          string           `json:"final_tag"`
-	TUNTag            string           `json:"tun_tag"`
-	InterfaceName     string           `json:"interface_name,omitempty"`
-	SocksPort         int              `json:"socks_port"`
-	DNS               DesktopBridgeDNS `json:"dns"`
-	BootstrapDNSTag   string           `json:"bootstrap_dns_tag"`
-	IPv6Mode          string           `json:"ipv6_mode"`
-	HomeLANAccess     bool             `json:"home_lan_access"`
-	KillSwitchPolicy  string           `json:"kill_switch_policy"`
-	MTUPolicy         string           `json:"mtu_policy"`
-	ConfiguredMTU     int              `json:"configured_mtu"`
-	JumboTUN          bool             `json:"jumbo_tun"`
-	EntryID           string           `json:"entry_id,omitempty"`
-	EntryMode         string           `json:"entry_mode,omitempty"`
-	EntryTag          string           `json:"entry_tag,omitempty"`
-	EntrySHA256       string           `json:"entry_sha256,omitempty"`
-	EntryAssetsSHA256 string           `json:"entry_assets_sha256,omitempty"`
-	EntryMTUPolicy    string           `json:"entry_mtu_policy,omitempty"`
-	EntryFixedMTU     int              `json:"entry_fixed_mtu,omitempty"`
-	EntryJumboTUN     bool             `json:"entry_jumbo_tun,omitempty"`
-	DNSDetour         string           `json:"dns_detour,omitempty"`
+	Schema            int                  `json:"schema"`
+	NodeID            string               `json:"node_id"`
+	SessionID         string               `json:"session_id"`
+	SourceSHA256      string               `json:"source_sha256"`
+	ConfigSHA256      string               `json:"config_sha256"`
+	TargetOS          string               `json:"target_os"`
+	FinalTag          string               `json:"final_tag"`
+	TUNTag            string               `json:"tun_tag"`
+	InterfaceName     string               `json:"interface_name,omitempty"`
+	SocksPort         int                  `json:"socks_port"`
+	DNS               DesktopBridgeDNS     `json:"dns"`
+	BootstrapDNSTag   string               `json:"bootstrap_dns_tag"`
+	IPv6Mode          string               `json:"ipv6_mode"`
+	HomeLANAccess     bool                 `json:"home_lan_access"`
+	KillSwitchPolicy  string               `json:"kill_switch_policy"`
+	MTUPolicy         string               `json:"mtu_policy"`
+	ConfiguredMTU     int                  `json:"configured_mtu"`
+	JumboTUN          bool                 `json:"jumbo_tun"`
+	EntryID           string               `json:"entry_id,omitempty"`
+	EntryMode         string               `json:"entry_mode,omitempty"`
+	EntryTag          string               `json:"entry_tag,omitempty"`
+	EntrySHA256       string               `json:"entry_sha256,omitempty"`
+	EntryProofKind    PredecessorProofKind `json:"entry_proof_kind,omitempty"`
+	EntryAssetsSHA256 string               `json:"entry_assets_sha256,omitempty"`
+	EntryMTUPolicy    string               `json:"entry_mtu_policy,omitempty"`
+	EntryFixedMTU     int                  `json:"entry_fixed_mtu,omitempty"`
+	EntryJumboTUN     bool                 `json:"entry_jumbo_tun,omitempty"`
+	DNSDetour         string               `json:"dns_detour,omitempty"`
 }
 
 // AllowMTUOptimization describes authority over the single interface, not a
@@ -168,6 +169,9 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if (profile["multihop_enabled"] == true) != (predecessor != nil) {
 		return nil, errors.New("desktop Tor graph requires the exact captured Router-entry selection")
 	}
+	if predecessor != nil && predecessor.entryProof() == nil {
+		return nil, errors.New("desktop Tor predecessor lost its typed proof authority")
+	}
 	// Saved entry identifiers are intent, not firewall authority. Dynamic PT
 	// protection is admitted only after the complete Router predecessor has
 	// been independently captured and validated. The native PT owner still
@@ -224,7 +228,7 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		for i, row := range rows {
 			outbound := row.(map[string]any)
 			if outbound["tag"] == ProfileOutboundTag {
-				if outbound["type"] != "routervpn-tor" || outbound["detour"] != predecessor.tag || outbound["entry_sha256"] != predecessor.proof.Fingerprint() {
+				if outbound["type"] != "routervpn-tor" || outbound["detour"] != predecessor.tag || outbound["entry_sha256"] != predecessor.Fingerprint() {
 					return nil, errors.New("desktop Tor Local compiler lost the exact predecessor")
 				}
 				rows[i] = socks
@@ -262,6 +266,10 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 	if predecessor != nil {
 		sourceBytes, _ = json.Marshal([]string{"routervpn-desktop-tor-predecessor-v1", source, sessionID, isolationSecret, targetOS,
 			predecessor.mode, predecessor.profile, predecessor.config, predecessor.assets})
+		if predecessor.IsExternal() {
+			sourceBytes, _ = json.Marshal([]string{"routervpn-desktop-tor-external-predecessor-v2", source, sessionID, isolationSecret, targetOS,
+				predecessor.mode, predecessor.profile, predecessor.external.source, predecessor.config, predecessor.assets, predecessor.Fingerprint()})
+		}
 	}
 	sourceSHA := desktopDigest(sourceBytes)
 	// This exact Box service retires the native physical/PT generation on
@@ -306,9 +314,13 @@ func newDesktopBridgePolicy(source, sessionID, isolationSecret, targetOS string,
 		DNS: dns, BootstrapDNSTag: bootstrapDNS, IPv6Mode: ipv6, HomeLANAccess: lan, KillSwitchPolicy: kill, MTUPolicy: mtuPolicy, ConfiguredMTU: mtu, JumboTUN: profile["jumbo_tun"] == true,
 	}
 	if predecessor != nil {
-		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.proof.id, predecessor.mode, predecessor.tag
-		metadata.EntrySHA256, metadata.EntryAssetsSHA256 = predecessor.proof.Fingerprint(), predecessor.assets
-		metadata.EntryMTUPolicy, metadata.EntryFixedMTU, metadata.EntryJumboTUN = predecessor.proof.mtu.policy, predecessor.proof.mtu.fixed, predecessor.proof.mtu.jumbo
+		metadata.EntryID, metadata.EntryMode, metadata.EntryTag = predecessor.ID(), predecessor.mode, predecessor.tag
+		metadata.EntrySHA256, metadata.EntryAssetsSHA256 = predecessor.Fingerprint(), predecessor.assets
+		mtu := predecessor.entryProof().capturedMTU()
+		metadata.EntryMTUPolicy, metadata.EntryFixedMTU, metadata.EntryJumboTUN = mtu.policy, mtu.fixed, mtu.jumbo
+		if predecessor.IsExternal() {
+			metadata.EntryProofKind = ExternalPredecessorProofKind
+		}
 		metadata.DNSDetour = profileString(selected, "detour")
 	}
 	bridges := make([]string, len(plan.Bridges))

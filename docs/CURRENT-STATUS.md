@@ -409,8 +409,14 @@ type from authenticated private Router proof and cannot authorize Home AdGuard
 or Router-only protection. The existing external proof also now gives TLS
 cancellation and the outer deadline one joined raw-socket close owner, fixing
 a duplicate close. Eleven new tests cover 66 cases, with five behavioral
-negative controls. Actual external-to-Tor host/native composition and its
-restoration remain unfinished; this primitive does not advertise that path.
+negative controls. The native Tor Box now reconstructs that typed ordinary
+predecessor, proves its expected public address through the captured encrypted
+lower and carries PT and selected DNS through it. Native six-trial SS2022/TLS/
+obfs4/DNS traffic and Router regressions pass, with altered source, proof kind,
+physical tuple and ignored proof rejected. This native integration does not yet
+advertise public Connect: desktop host capture, wrappers and Speed Lab
+restoration still need adoption. SOCKS/HTTP Snowflake UDP needs its own bounded
+association; ordinary proof never borrows private Home or Router protection.
 
 Router Home DNS now retains UDP, TCP, DoT, DoH or DoH3 with the exact private
 AdGuard address, port, TLS name and HTTPS path. The address must belong to the

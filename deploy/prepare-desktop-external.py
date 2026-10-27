@@ -43,6 +43,7 @@ BOX_TEMPLATES = {
     'tor_box.go.tmpl': 'routervpn_desktop_tor_box.go',
     'tor_box_test.go.tmpl': 'routervpn_desktop_tor_box_test.go',
     'tor_box_integration_test.go.tmpl': 'routervpn_desktop_tor_box_integration_test.go',
+    'tor_box_external_test.go.tmpl': 'routervpn_desktop_tor_box_external_test.go',
     'tor_box_mtu.go.tmpl': 'routervpn_desktop_tor_box_mtu.go',
     'tor_box_mtu_test.go.tmpl': 'routervpn_desktop_tor_box_mtu_test.go',
 }

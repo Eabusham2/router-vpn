@@ -1,12 +1,14 @@
 package mobilemultihop
 
 import (
+	"encoding/json"
 	"errors"
 	"net/netip"
 	"sort"
 
 	"router-vpn/internal/applexray"
 	"router-vpn/internal/nativecomposite"
+	"router-vpn/internal/nativeopenvpn"
 )
 
 // PhysicalEgress has the same wire shape as nativeopenvpn.LayerEgress. Each
@@ -28,6 +30,31 @@ func NodePhysicalEgress(mode, profileJSON, configJSON string) ([]PhysicalEgress,
 	if err := ValidateNodePredecessor(mode, profileJSON, configJSON); err != nil {
 		return nil, err
 	}
+	return compiledPhysicalEgress(configJSON, []string{"tcp", "udp"})
+}
+
+// DirectPhysicalEgress accepts only this already validated ordinary direct
+// policy. Callers must declare the actual payload transports they need. SOCKS
+// UDP relay negotiation is not a fixed server-port exception, and HTTP CONNECT
+// cannot gain datagram authority by being placed before another protocol.
+func (p *ExternalPolicy) DirectPhysicalEgress(networks []string) ([]PhysicalEgress, error) {
+	if p == nil || p.capture.Entry != nil || p.capture.EntryTag != "" || p.capture.Execution != nil || p.capture.PredecessorConfig != "" ||
+		len(networks) == 0 || len(networks) > 2 {
+		return nil, nodePhysicalEgressError
+	}
+	seen := map[string]bool{}
+	for _, network := range networks {
+		if network != "tcp" && network != "udp" || seen[network] {
+			return nil, nodePhysicalEgressError
+		}
+		seen[network] = true
+	}
+	return compiledPhysicalEgress(p.config, networks)
+}
+
+// Source constructors validate the complete graph before this private helper.
+// It never accepts an arbitrary caller's JSON as firewall authority.
+func compiledPhysicalEgress(configJSON string, networks []string) ([]PhysicalEgress, error) {
 	var graph map[string]any
 	if exactJSON([]byte(configJSON), &graph, 4<<20) != nil {
 		return nil, nodePhysicalEgressError
@@ -49,7 +76,7 @@ func NodePhysicalEgress(mode, profileJSON, configJSON string) ([]PhysicalEgress,
 		p.resolvers[predecessorText(server, "tag")] = server
 	}
 	final := predecessorText(graph["route"].(map[string]any), "final")
-	for _, network := range []string{"tcp", "udp"} {
+	for _, network := range networks {
 		if err := p.node(final, network); err != nil {
 			return nil, err
 		}
@@ -127,6 +154,19 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	// just the outer type label or an arbitrary recursively found address.
 	var sockets []PhysicalEgress
 	switch value["type"] {
+	case "socks", "http":
+		if payload != "tcp" || !externalPort(value["server_port"]) {
+			return nodePhysicalEgressError
+		}
+		sockets = append(sockets, PhysicalEgress{predecessorText(value, "server"), int(value["server_port"].(float64)), "tcp"})
+	case externalOpenVPNType:
+		remotes, err := nativeopenvpn.Remotes(value)
+		if err != nil {
+			return nodePhysicalEgressError
+		}
+		for _, remote := range remotes {
+			sockets = append(sockets, PhysicalEgress{remote.Host, remote.Port, remote.Network})
+		}
 	case "wireguard", AmneziaType, PQType:
 		peers, ok := value["peers"].([]any)
 		if !ok || len(peers) != 1 {
@@ -183,7 +223,7 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 			}
 		}
 		if detour := predecessorText(value, "detour"); detour != "" {
-			if err := p.node(detour, socket.Network); err != nil {
+			if err := p.through(detour, socket); err != nil {
 				return err
 			}
 		} else if err := p.add(socket.Host, float64(socket.Port), socket.Network); err != nil {
@@ -192,6 +232,45 @@ func (p *nodeEgressProjection) node(tag, payload string) error {
 	}
 	p.visited[key] = true
 	return nil
+}
+
+func (p *nodeEgressProjection) through(tag string, socket PhysicalEgress) error {
+	value := p.nodes[tag]
+	if value == nil {
+		return nodePhysicalEgressError
+	}
+	if value["type"] != nativeopenvpn.LayerMapType {
+		return p.node(tag, socket.Network)
+	}
+	// Every OpenVPN remote keeps its exact owned Start Layer; another remote
+	// or unrelated child cannot contribute a physical exception.
+	copy := predecessorCopy(value)
+	delete(copy, "type")
+	delete(copy, "tag")
+	raw, err := json.Marshal(copy)
+	var mapping nativeopenvpn.LayerMap
+	if err != nil || json.Unmarshal(raw, &mapping) != nil {
+		return nodePhysicalEgressError
+	}
+	found := false
+	for _, remote := range mapping.Remotes {
+		if remote.Host == socket.Host && remote.Port == socket.Port && remote.Network == socket.Network {
+			found = true
+			break
+		}
+	}
+	if !found {
+		return nodePhysicalEgressError
+	}
+	layer := mapping.Layers[socket.Host]
+	port := layer.Transport["server_port"]
+	if mapping.Mode == "aes-256-gcm+xor-whitening" {
+		port = float64(8389)
+	}
+	if mapping.Detour != "" {
+		return p.node(mapping.Detour, socket.Network)
+	}
+	return p.add(socket.Host, port, socket.Network)
 }
 
 func (p *nodeEgressProjection) resolve(value map[string]any) error {

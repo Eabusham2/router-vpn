@@ -418,6 +418,7 @@ type desktopTorBoxEntryServer struct {
 	wrongNode, badDNS                 atomic.Bool
 	bridgeLine                        string
 	wrapBridge                        func(net.Conn) (net.Conn, error)
+	ordinaryProof                     func(net.Conn, M.Metadata) (bool, error)
 }
 
 func newDesktopTorBoxEntryServer(t *testing.T) *desktopTorBoxEntryServer {
@@ -480,6 +481,14 @@ func newDesktopTorBoxEntryServer(t *testing.T) *desktopTorBoxEntryServer {
 	return s
 }
 func (s *desktopTorBoxEntryServer) NewConnection(_ context.Context, conn net.Conn, metadata M.Metadata) error {
+	s.mu.Lock()
+	ordinary := s.ordinaryProof
+	s.mu.Unlock()
+	if ordinary != nil {
+		if handled, err := ordinary(conn, metadata); handled {
+			return err
+		}
+	}
 	switch metadata.Destination.String() {
 	case "10.80.0.1:8787":
 		request, err := http.ReadRequest(bufio.NewReader(conn))

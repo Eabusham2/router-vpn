@@ -126,6 +126,10 @@ func capturedTorProfile(profileJSON string) (map[string]any, []string, error) {
 }
 
 func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool) (string, error) {
+	return compileProfileWithEntryProof(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON, captured, nil)
+}
+
+func compileProfileWithEntryProof(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string, captured bool, supplied capturedTorEntryProof) (string, error) {
 	if !profileIdentifier.MatchString(sessionID) {
 		return "", errors.New("Tor requires the captured connection session identity")
 	}
@@ -134,7 +138,10 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 		return "", err
 	}
 	var entry map[string]any
-	var entryProof *PredecessorProof
+	var entryProof capturedTorEntryProof
+	if supplied != nil && (!captured || predecessorJSON == "" || predecessorProfileJSON == "" || !supplied.matchesCapturedSource(predecessorProfileJSON, predecessorJSON)) {
+		return "", errors.New("Tor predecessor proof authority differs from its captured source")
+	}
 	if captured {
 		throughEntry, exists := profile["multihop_enabled"]
 		if exists && throughEntry != true && throughEntry != false {
@@ -145,17 +152,24 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 		}
 	}
 	if predecessorProfileJSON != "" {
-		entry, err = profileObject(predecessorProfileJSON, 256*1024)
+		limit := 256 * 1024
+		if supplied != nil && !supplied.privateRouter() {
+			limit = 4 << 20
+		}
+		entry, err = profileObject(predecessorProfileJSON, limit)
 		if err != nil {
 			return "", err
 		}
-		entryProof, err = NewPredecessorProof(predecessorProfileJSON)
-		if err != nil {
-			return "", err
+		entryProof = supplied
+		if entryProof == nil {
+			entryProof, err = NewPredecessorProof(predecessorProfileJSON)
+			if err != nil {
+				return "", err
+			}
 		}
 		external := profile["external"].(map[string]any)
 		if predecessorJSON == "" || profile["multihop_enabled"] != true ||
-			profile["multihop_entry_id"] != entry["id"] || profile["multihop_exit_id"] != profile["id"] ||
+			profile["multihop_entry_id"] != entry["id"] || profile["multihop_entry_id"] != entryProof.capturedID() || profile["multihop_exit_id"] != profile["id"] ||
 			profile["multihop_exit_mode"] != external["protocol"] || entry["id"] == profile["id"] ||
 			!profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) ||
 			(profileString(profile, "multihop_execution") != "" && profileString(profile, "multihop_execution") != "local") {
@@ -163,7 +177,7 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 		}
 	}
 
-	root, tun, predecessor, err := torPredecessor(predecessorJSON)
+	root, tun, predecessor, err := torPredecessorCaptured(predecessorJSON, entryProof != nil && !entryProof.privateRouter())
 	if err != nil {
 		return "", err
 	}
@@ -172,14 +186,15 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 		if err != nil {
 			return "", err
 		}
-		if err := compatibleTorMTUPreferences(exitMTU, entryProof.mtu); err != nil {
+		entryPolicy := entryProof.capturedMTU()
+		if err := compatibleTorMTUPreferences(exitMTU, entryPolicy); err != nil {
 			return "", err
 		}
 		_, _, entryMTU, err := torMTUInterface(root)
-		if err != nil || entryProof.mtu.jumbo && entryMTU != 9000 || entryProof.mtu.fixed != 0 && entryMTU != entryProof.mtu.fixed {
+		if err != nil || entryPolicy.jumbo && entryMTU != 9000 || entryPolicy.fixed != 0 && entryMTU != entryPolicy.fixed {
 			return "", errors.New("Tor predecessor interface differs from the captured entry MTU policy")
 		}
-		if entryMTU > 1500 && !entryProof.mtu.jumbo && entryProof.mtu.fixed == 0 {
+		if entryMTU > 1500 && !entryPolicy.jumbo && entryPolicy.fixed == 0 {
 			return "", errors.New("Tor predecessor large interface lacks a captured Jumbo or Fixed policy")
 		}
 	}
@@ -192,7 +207,7 @@ func compileProfile(profileJSON, sessionID, predecessorJSON, predecessorProfileJ
 	}
 	selected["tag"], selected["detour"] = profileDNS, ProfileOutboundTag
 	if home {
-		if predecessor == "" || entryProof == nil {
+		if predecessor == "" || entryProof == nil || !entryProof.privateRouter() {
 			return "", errors.New("Home AdGuard requires its captured private Router VPN entry")
 		}
 		selected["detour"] = predecessor
@@ -461,6 +476,10 @@ func torNaiveDNSPath(first, blocked string, resolvers, nodes map[string]map[stri
 }
 
 func torPredecessor(source string) (map[string]any, map[string]any, string, error) {
+	return torPredecessorCaptured(source, false)
+}
+
+func torPredecessorCaptured(source string, ordinaryExternal bool) (map[string]any, map[string]any, string, error) {
 	if source == "" {
 		tun := map[string]any{"type": "tun", "tag": "tun-in", "address": []any{"172.29.94.1/30", "fd29:94::1/126"}, "mtu": json.Number("1280"), "auto_route": true, "strict_route": true, "stack": "system"}
 		return map[string]any{"log": map[string]any{"level": "warn"}, "inbounds": []any{tun}, "endpoints": []any{}, "outbounds": []any{}, "route": map[string]any{"auto_detect_interface": true, "rules": []any{}}}, tun, "", nil
@@ -494,6 +513,11 @@ func torPredecessor(source string) (map[string]any, map[string]any, string, erro
 			seen[tag] = true
 			if tag == final {
 				switch outbound["type"] {
+				case "socks", "http":
+					if !ordinaryExternal || key != "outbounds" {
+						return nil, nil, "", failure
+					}
+					finalFound = true
 				case "routervpn-aes-xor":
 					if key != "outbounds" || !torAuthenticatedWhitening(outbound) {
 						return nil, nil, "", failure
@@ -604,6 +628,9 @@ func torSelectedDNS(profile, entry map[string]any, idle bool) (map[string]any, b
 	protocol := profileString(profile, "dns_protocol")
 	switch mode {
 	case "home":
+		if entry != nil && profileString(entry, "node_kind") != "router-vpn" {
+			return nil, true, errors.New("Home AdGuard requires its authenticated private Router entry; an ordinary external provider cannot acquire that DNS authority")
+		}
 		if entry == nil && !idle {
 			return nil, true, errors.New("Home AdGuard requires the exact paired Router VPN entry; choose that entry or explicitly select a reachable TCP, DoT or DoH resolver for direct Tor")
 		}

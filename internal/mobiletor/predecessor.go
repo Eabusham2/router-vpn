@@ -34,6 +34,25 @@ type PredecessorProof struct {
 	mtu         torMTUPreferences
 }
 
+// This closed native authority interface is implemented only by validated
+// private Router captures and the desktop ordinary-external capture. Public
+// callers cannot turn an arbitrary profile or reachability result into one.
+type capturedTorEntryProof interface {
+	Fingerprint() string
+	capturedID() string
+	capturedMTU() torMTUPreferences
+	privateRouter() bool
+	matchesCapturedSource(profileJSON, configJSON string) bool
+}
+
+func (p *PredecessorProof) capturedID() string             { return p.id }
+func (p *PredecessorProof) capturedMTU() torMTUPreferences { return p.mtu }
+func (p *PredecessorProof) privateRouter() bool            { return p != nil }
+func (p *PredecessorProof) matchesCapturedSource(profileJSON, _ string) bool {
+	other, err := NewPredecessorProof(profileJSON)
+	return p != nil && err == nil && other.Fingerprint() == p.Fingerprint()
+}
+
 func NewPredecessorProof(profileJSON string) (*PredecessorProof, error) {
 	failure := errors.New("Tor predecessor requires one captured private Router VPN node proof")
 	profile, err := profileObject(profileJSON, 256*1024)
