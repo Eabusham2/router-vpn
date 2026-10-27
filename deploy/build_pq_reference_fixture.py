@@ -35,14 +35,21 @@ COPIES = {**TRAFFIC.COPIES,
 
 def contained(core, relative):
     path = core/relative
-    if path.is_symlink() or not path.resolve().is_relative_to(core):
+    resolved = path.resolve()
+    # macOS exposes its temporary directory through /var -> /private/var.
+    # Compare both sides in the same namespace, while refusing a linked core
+    # itself or a linked source. Keep the captured destination canonical so a
+    # later change to an ancestor alias cannot redirect owned cleanup.
+    if core.is_symlink() or path.is_symlink() or not resolved.is_relative_to(core.resolve()):
         raise ValueError('PQ reference source escapes the captured core')
-    return path
+    return resolved
 
 
 def verify_sources(core):
-    if (core.is_symlink() or not core.is_dir() or
-            subprocess.check_output(['git', '-C', str(core), 'rev-parse', 'HEAD'], text=True).strip() != BUILD.PIN or
+    if core.is_symlink() or not core.is_dir():
+        raise ValueError('PQ reference requires the exact prepared pinned core')
+    core = core.resolve(strict=True)
+    if (subprocess.check_output(['git', '-C', str(core), 'rev-parse', 'HEAD'], text=True).strip() != BUILD.PIN or
             not (core/'go.mod').read_text().startswith('module github.com/sagernet/sing-box\n')):
         raise ValueError('PQ reference requires the exact prepared pinned core')
     sources = {**SERVER.COPIES,
@@ -68,6 +75,7 @@ def verify_sources(core):
         path = contained(core, 'experimental/libbox/routervpn/mobilepq/'+source.name)
         if not path.is_file() or path.read_text() != expected:
             raise ValueError('PQ reference shared protocol owner differs from this source')
+    return core
 
 
 @contextlib.contextmanager
@@ -163,7 +171,7 @@ def generate_keys(target, cache, keys):
 
 def build(core, pq, keys, output, target, cache, *, go='go', race=False):
     core, pq, keys, output, cache = (Path(path).absolute() for path in (core, pq, keys, output, cache))
-    verify_sources(core)
+    core = verify_sources(core)
     if output.exists() or output.is_symlink():
         raise ValueError('PQ reference executable output must be new')
     env = BUILD.environment(target, compiler=True)

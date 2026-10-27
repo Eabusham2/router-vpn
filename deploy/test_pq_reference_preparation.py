@@ -54,6 +54,81 @@ class PQReferencePreparation(unittest.TestCase):
                 self.assertEqual(path.read_text(), 'unrelated owner')
                 self.assertTrue(all(not (core/name).exists() for name in list(P.COPIES.values())[:-1]))
 
+    def test_ancestor_alias_keeps_copy_and_cleanup_with_the_captured_owner(self):
+        # Reproduce /var -> /private/var without requiring macOS. Retarget the
+        # ancestor after staging: cleanup still owns only the original files.
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            original, replacement = root/'physical', root/'replacement'
+            original.mkdir()
+            replacement.mkdir()
+            core = self.core(original)
+            foreign = self.core(replacement)
+            for relative in P.COPIES.values():
+                (foreign/relative).write_text('replacement owner')
+            alias = root/'var'
+            alias.symlink_to(original, target_is_directory=True)
+            with P.test_sources(alias/'core'):
+                for source, relative in P.COPIES.items():
+                    self.assertEqual((core/relative).read_bytes(), (ROOT/source).read_bytes())
+                alias.unlink()
+                alias.symlink_to(replacement, target_is_directory=True)
+            for relative in P.COPIES.values():
+                self.assertFalse((core/relative).exists())
+                self.assertEqual((foreign/relative).read_text(), 'replacement owner')
+
+    def test_linked_core_escaped_directory_and_adjacent_prefix_are_rejected(self):
+        for kind in ('core', 'directory', 'adjacent-prefix'):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                core = self.core(root)
+                foreign = root/'core-other'
+                foreign.mkdir()
+                sentinel = foreign/'source.go'
+                sentinel.write_text('foreign owner')
+                relative = 'source.go'
+                if kind == 'core':
+                    alias = root/'alias'
+                    alias.symlink_to(core, target_is_directory=True)
+                    core = alias
+                elif kind == 'directory':
+                    (core/'linked').symlink_to(foreign, target_is_directory=True)
+                    relative = 'linked/source.go'
+                else:
+                    relative = '../core-other/source.go'
+                with self.assertRaisesRegex(ValueError, 'escapes the captured core'):
+                    P.contained(core, relative)
+                self.assertEqual(sentinel.read_text(), 'foreign owner')
+
+    def test_exact_source_verification_captures_an_ancestor_alias(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            physical = root/'physical'
+            physical.mkdir()
+            core = self.core(physical)
+            (core/'go.mod').write_text('module github.com/sagernet/sing-box\n')
+            sources = {**P.SERVER.COPIES,
+                       'mobile/pq/endpoint.go.tmpl': 'protocol/routervpnpq/endpoint.go',
+                       'mobile/pq/wireguard_protocol.go.tmpl': 'protocol/wireguard/routervpn_pq.go',
+                       'mobile/pq/wireguard_transport.go.tmpl': 'transport/wireguard/routervpn_pq.go',
+                       'mobile/amnezia/endpoint.go.tmpl': 'protocol/routervpnamnezia/endpoint.go',
+                       'mobile/amnezia/pq_reference_fixture.go.tmpl': 'protocol/routervpnamnezia/pq_reference_fixture.go'}
+            for source, relative in sources.items():
+                destination = core/relative
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                raw = (ROOT/source).read_bytes()
+                destination.write_bytes(P.SERVER.C_TAG+raw if relative.endswith('.c') else raw)
+            P.BUILD.POLICY.AMNEZIA.prepare_policies(core)
+            alias = root/'var'
+            alias.symlink_to(physical, target_is_directory=True)
+            with mock.patch.object(P.subprocess, 'check_output', return_value=P.BUILD.PIN) as git:
+                self.assertEqual(P.verify_sources(alias/'core'), core.resolve())
+                self.assertEqual(git.call_args.args[0], ['git', '-C', str(core.resolve()), 'rev-parse', 'HEAD'])
+                path = core/'protocol/routervpnpq/endpoint.go'
+                path.write_bytes(path.read_bytes()+b'\n// foreign source\n')
+                with self.assertRaisesRegex(ValueError, 'exact shipping native factory'):
+                    P.verify_sources(alias/'core')
+
     def test_cleanup_does_not_delete_a_replacement_owner(self):
         with tempfile.TemporaryDirectory() as tmp:
             core = self.core(Path(tmp))
