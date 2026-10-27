@@ -327,20 +327,27 @@ func (m *Manager) validateTorRequest(peer netip.Addr, q TorRequest) error {
 	return nil
 }
 
-// TorChallenge shares the existing manager restart/peer-bound acquisition
-// contract. It exposes no private source and is unavailable with the shipping
-// runner until a genuine native Tor worker has been integrated.
+// TorChallenge shares the manager restart/peer-bound acquisition contract.
+// It never makes an ordinary Runner capable of executing a Tor source.
 func (m *Manager) TorChallenge(peer netip.Addr) (ExternalPacketChallenge, error) {
+	challenge, _, err := m.TorAvailable(peer)
+	return challenge, err
+}
+
+// TorAvailable captures the challenge and detached non-secret source references
+// in one registry read. Clients still need exact source/DNS digest agreement and
+// a fresh owned lease; discovery never starts a worker or grants traffic proof.
+func (m *Manager) TorAvailable(peer netip.Addr) (ExternalPacketChallenge, []TorExitSource, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	if _, ok := m.runner.(TorRunner); !ok || m.closed || len(m.cfg.TorExits) == 0 {
-		return ExternalPacketChallenge{}, ErrUnavailable
+		return ExternalPacketChallenge{}, nil, ErrUnavailable
 	}
 	challenge := ExternalPacketChallenge{Epoch: m.packetEpoch, Peer: PeerKey(peer), ExpiresAt: m.now().Add(packetAcquireLifetime).Unix()}
 	if !peer.IsPrivate() || challenge.Validate() != nil {
-		return ExternalPacketChallenge{}, ErrOwnership
+		return ExternalPacketChallenge{}, nil, ErrOwnership
 	}
-	return challenge, nil
+	return challenge, append([]TorExitSource(nil), m.cfg.TorExits...), nil
 }
 
 func (m *Manager) torSourceLocked(q TorRequest) (TorExitSource, error) {

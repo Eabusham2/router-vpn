@@ -139,6 +139,45 @@ func TestTorHTTPProductionWorkerAbsentAndUnadvertised(t *testing.T) {
 	}
 }
 
+func TestTorHTTPDiscoveryContainsOnlyAuthenticatedDetachedSourceReferences(t *testing.T) {
+	runner := &torHTTPRunner{}
+	s, mux, q := torHTTPFixture(t, runner)
+	defer s.relay.Close(context.Background())
+	for _, test := range []struct{ peer, token string }{{"10.77.0.2:1234", ""}, {"10.77.0.2:1234", "wrong"}, {"203.0.113.2:1234", s.cfg.Token}} {
+		w := torHTTPCall(mux, http.MethodGet, test.peer, test.token, "")
+		if w.Code != http.StatusForbidden || strings.Contains(w.Body.String(), q.SourceSHA256) || strings.Contains(w.Body.String(), q.ExitID) {
+			t.Fatal("unauthenticated or forwarded peer read source discovery", w.Code, w.Body.String())
+		}
+	}
+	w := torHTTPCall(mux, http.MethodGet, "10.77.0.2:1234", s.cfg.Token, "")
+	var response map[string]json.RawMessage
+	if w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &response) != nil || len(response) != 3 ||
+		w.Header().Get("Cache-Control") != "no-store" || len(runner.workers) != 0 {
+		t.Fatal("source discovery acquired traffic or returned an invalid envelope", w.Code, w.Body.String())
+	}
+	var node string
+	var challenge multihoprelay.ExternalPacketChallenge
+	var references []map[string]string
+	if json.Unmarshal(response["node_id"], &node) != nil || node != q.EntryNodeID ||
+		json.Unmarshal(response["challenge"], &challenge) != nil || challenge.Validate() != nil || challenge.Peer != q.Peer || challenge.Epoch != q.Epoch ||
+		json.Unmarshal(response["sources"], &references) != nil || len(references) != 1 || len(references[0]) != 4 {
+		t.Fatal("discovery lost exact node/challenge/source ownership", w.Body.String())
+	}
+	want := map[string]string{"id": q.ExitID, "mode": q.ExitMode, "source_sha256": q.SourceSHA256, "dns_policy_sha256": q.DNSPolicySHA256}
+	for key, value := range want {
+		if references[0][key] != value {
+			t.Fatal("discovery exposed an unrelated or private source field", key, w.Body.String())
+		}
+	}
+	if err := s.relay.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	w = torHTTPCall(mux, http.MethodGet, "10.77.0.2:1234", s.cfg.Token, "")
+	if w.Code != http.StatusServiceUnavailable || strings.Contains(w.Body.String(), q.SourceSHA256) {
+		t.Fatal("closed manager still exposed an acquirable source", w.Code, w.Body.String())
+	}
+}
+
 func TestTorHTTPLeasePendingReadyAndExactOwnedDelete(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		runner := &torHTTPRunner{}

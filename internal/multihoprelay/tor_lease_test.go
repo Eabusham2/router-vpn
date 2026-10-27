@@ -198,6 +198,9 @@ func TestTorLeaseAbsentWorkerNeverAdvertisesOrReserves(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if challenge, sources, err := m.TorAvailable(netip.MustParseAddr("10.77.0.2")); !errors.Is(err, ErrUnavailable) || challenge != (ExternalPacketChallenge{}) || sources != nil {
+		t.Fatal("private source references advertised without a native worker", challenge, sources, err)
+	}
 	for _, row := range m.Available() {
 		if torMode(row["exit_mode"]) {
 			t.Fatal("private source reference was advertised as a runtime capability")
@@ -219,6 +222,48 @@ func TestTorLeaseAbsentWorkerNeverAdvertisesOrReserves(t *testing.T) {
 		if _, err := New(bad, req().EntryNodeID, r); err == nil {
 			t.Fatal("invalid private source reference accepted")
 		}
+	}
+}
+
+func TestTorDiscoveryCapturesDetachedSourcesAndActualPeerWithoutAcquiring(t *testing.T) {
+	runner := &torFixtureRunner{}
+	m := torFixtureManager(t, runner)
+	peer := netip.MustParseAddr("10.77.0.2")
+	challenge, sources, err := m.TorAvailable(peer)
+	want := torFixtureConfig().TorExits[0]
+	if err != nil || challenge.Validate() != nil || challenge.Peer != peer.String() || challenge.Epoch != m.packetEpoch ||
+		len(sources) != 1 || sources[0] != want || len(m.leases) != 0 || len(m.torAttempts) != 0 || len(runner.workers) != 0 {
+		t.Fatal("discovery failed to capture source/peer or started a worker", challenge, sources, err)
+	}
+	sources[0].ID, sources[0].SourceSHA256 = "another-source", strings.Repeat("e", 64)
+	_, again, err := m.TorAvailable(peer)
+	if err != nil || len(again) != 1 || again[0] != want || m.cfg.TorExits[0] != want {
+		t.Fatal("caller changed private Tor registry through discovery", again, err)
+	}
+	for _, invalid := range []string{"203.0.113.4", "127.0.0.1", "0.0.0.0", "ff02::1", "fd77::2%eth0"} {
+		if c, refs, err := m.TorAvailable(netip.MustParseAddr(invalid)); !errors.Is(err, ErrOwnership) || c != (ExternalPacketChallenge{}) || refs != nil {
+			t.Fatal("invalid peer received source discovery", invalid, c, refs, err)
+		}
+	}
+	other, _, err := m.TorAvailable(netip.MustParseAddr("10.77.0.3"))
+	if err != nil || other.Epoch != challenge.Epoch || other.Peer != "10.77.0.3" {
+		t.Fatal("discovery reused another peer's challenge", other, err)
+	}
+	if err := m.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if c, refs, err := m.TorAvailable(peer); !errors.Is(err, ErrUnavailable) || c != (ExternalPacketChallenge{}) || refs != nil {
+		t.Fatal("closed manager retained discovery", c, refs, err)
+	}
+	config := torFixtureConfig()
+	config.TorExits = nil
+	empty, err := New(config, req().EntryNodeID, runner)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer empty.Close(context.Background())
+	if c, refs, err := empty.TorAvailable(peer); !errors.Is(err, ErrUnavailable) || c != (ExternalPacketChallenge{}) || refs != nil {
+		t.Fatal("unprovisioned native worker advertised Tor", c, refs, err)
 	}
 }
 

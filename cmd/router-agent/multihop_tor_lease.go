@@ -14,9 +14,9 @@ import (
 
 const multihopTorLeasePath = "/api/multihop/tor/lease"
 
-// This unadvertised endpoint exposes only the lifecycle contract. The shipping
-// relayExecRunner has no TorRunner implementation, so an installed server
-// cannot acquire a Tor lease until its actual native worker/image is adopted.
+// Source discovery and leases require both an authenticated actual tunnel peer
+// and an admitted native Tor runner. The catalog contains immutable references,
+// never private bridge material, arbitrary native configuration or traffic proof.
 func (s *server) multihopTorLease(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("Content-Type", "application/json")
@@ -40,12 +40,12 @@ func (s *server) multihopTorLease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if r.Method == http.MethodGet {
-		challenge, err := s.relay.TorChallenge(peer)
+		challenge, sources, err := s.relay.TorAvailable(peer)
 		if err != nil {
 			http.Error(w, "native Tor relay is unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": s.cfg.NodeID, "challenge": challenge})
+		_ = json.NewEncoder(w).Encode(map[string]any{"node_id": s.cfg.NodeID, "challenge": challenge, "sources": sources})
 		return
 	}
 	request, nonce, err := decodeTorRelayRequest(http.MaxBytesReader(w, r.Body, 4096), r.Method == http.MethodPost)
