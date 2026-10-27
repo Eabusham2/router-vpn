@@ -155,11 +155,25 @@ need(
     "LibboxRouterOpenVPNEndpoint",
     'endpoint["type"] as? String == "openvpn-client"',
     'endpoint["system"] as? Bool == false',
-    'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
+    'let capturedSource = String(decoding: source, as: UTF8.self)',
+    'LibboxRouterCompileTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
+    'LibboxRouterCompileServerTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
     'tor["session_id"] as? String == sessionID',
-    'tor["detour"] as? String == predecessorTag',
+    'let tor = outbounds.first(where: { $0["type"] as? String == (execution == "server" ? "routervpn-server-tor" : "routervpn-tor") })',
+    'guard Set(tor.keys) == Set(["type", "tag", "profile", "session_id", "entry_config", "entry_profile"])',
+    'tor["profile"] as? String == capturedSource',
+    'tor["entry_config"] as? String == predecessor', 'tor["entry_profile"] as? String == proofProfile',
+    '} else if tor["detour"] as? String != predecessorTag {',
+    'throw error("Tor compiler changed the captured predecessor route.")',
     'torPredecessorProfile: proofProfile',
+    'torProfileJSON: capturedSource', 'torExecution: throughEntry ? execution : nil',
     "must be a literal IP so setup cannot leak pre-tunnel DNS",
+)
+need(
+    "ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
+    "(runtime.policy?.executionRequested != nil || runtime.torExecution != nil) == (multihopExecutionSource != nil)",
+    "if runtime.torExecution != nil {", "try engine.bindTorExecutionSource(source)",
+    "self.currentPathProofGuard() === externalPathGuard",
 )
 need(
     "ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",

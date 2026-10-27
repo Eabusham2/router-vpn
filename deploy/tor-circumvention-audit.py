@@ -770,15 +770,24 @@ need(
     "current circuit exit verified",
 )
 need("ios/RouterVPN/PacketTunnel/RouterVPNExternalExit.swift",
-     'LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)',
+     'let capturedSource = String(decoding: source, as: UTF8.self)',
+     'LibboxRouterCompileTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
+     'LibboxRouterCompileServerTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)',
      "torPredecessorProfile: proofProfile",
-     "torProfileJSON: String(decoding: source, as: UTF8.self)",
-     'tor["session_id"] as? String == sessionID', 'tor["detour"] as? String == predecessorTag')
+     "torProfileJSON: capturedSource", "torExecution: throughEntry ? execution : nil",
+     'tor["session_id"] as? String == sessionID',
+     'let tor = outbounds.first(where: { $0["type"] as? String == (execution == "server" ? "routervpn-server-tor" : "routervpn-tor") })',
+     'guard Set(tor.keys) == Set(["type", "tag", "profile", "session_id", "entry_config", "entry_profile"])',
+     'tor["profile"] as? String == capturedSource',
+     'tor["entry_config"] as? String == predecessor', 'tor["entry_profile"] as? String == proofProfile',
+     '} else if tor["detour"] as? String != predecessorTag {',
+     'throw error("Tor compiler changed the captured predecessor route.")')
 need("ios/RouterVPN/PacketTunnel/PacketTunnelProvider.swift",
      'provider["tor_entry_bundle"]', "RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile,",
-     "restoredExecution: restoredMultihopExecution)", "(runtime.policy?.executionRequested != nil) == (multihopExecutionSource != nil)",
+     "restoredExecution: restoredMultihopExecution)", "(runtime.policy?.executionRequested != nil || runtime.torExecution != nil) == (multihopExecutionSource != nil)",
      "engine.proveTor(sessionID: sessionID, profile: profile, predecessorProfile: runtime.torPredecessorProfile",
-     "guard let profile = runtime.torProfileJSON", "engine.activateTorMTU()", "self.currentPathProofGuard() === externalPathGuard")
+     "guard let profile = runtime.torProfileJSON", "engine.activateTorMTU()", "self.currentPathProofGuard() === externalPathGuard",
+     "if runtime.torExecution != nil {", "try engine.bindTorExecutionSource(source)")
 need("ios/RouterVPN/PacketTunnel/RouterVPNLibboxEngine.swift",
      "LibboxRouterTorSetStateDirectory", "LibboxRouterTorCreateProofWithPredecessor", "TorProofDelivery",
      "LibboxRouterStrategyDNSProof(server", "request.healthy()", "request.cancel()",
