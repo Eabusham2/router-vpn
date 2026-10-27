@@ -207,7 +207,7 @@ func validateDesktopExternalDNSPolicy(profile, entry common.RouterProfile) error
 func capturedTorBridgeDNS(profile, entry common.RouterProfile, idle bool) (mobiletor.DesktopBridgeDNS, error) {
 	profile = cloneRouterProfile(profile)
 	if profile.MultihopEnabled && entry.ID != "" {
-		mode, err := desktopExternalEntryMode(profile, entry, "", "")
+		mode, err := desktopTorEntryMode(profile, entry, "", "")
 		if err != nil {
 			return mobiletor.DesktopBridgeDNS{}, err
 		}

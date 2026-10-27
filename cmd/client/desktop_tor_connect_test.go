@@ -17,6 +17,7 @@ import (
 
 	"router-vpn/internal/common"
 	"router-vpn/internal/mobilemultihop"
+	"router-vpn/internal/mobiletor"
 )
 
 type desktopTorConnectFixture struct {
@@ -89,11 +90,20 @@ func newDesktopTorConnectFixture(t *testing.T) *desktopTorConnectFixture {
 			t.Fatal("launch environment mixed policy or session owners")
 		}
 		if entry := launch.tor.predecessor; entry != nil {
-			want, err := mobilemultihop.NodePhysicalEgress(entry.mode, entry.native.Profile(), entry.native.Config())
+			// Admission may deliberately replace the saved profile. The wrapper
+			// must still carry only the immutable plan staged for this launch;
+			// the controller rejects the changed source before process start.
+			raw, readErr := readDesktopRuntimeFile(launch, "tor-profile.json", desktopTorInputLimit("tor-profile.json"))
+			var staged common.RouterProfile
+			if readErr != nil || json.Unmarshal(raw, &staged) != nil || staged.External == nil || staged.External.TorBridge == nil {
+				t.Fatal("fixture lost the staged Tor transport plan", readErr)
+			}
+			plan, planErr := mobiletor.NewPlan(*staged.External.TorBridge)
+			want, err := entry.native.PhysicalEgress(plan)
 			var got []mobilemultihop.PhysicalEgress
-			if err != nil || json.Unmarshal([]byte(vars["HOMEVPN_NATIVE_EGRESS_JSON"]), &got) != nil || !reflect.DeepEqual(want, got) ||
+			if planErr != nil || err != nil || json.Unmarshal([]byte(vars["HOMEVPN_NATIVE_EGRESS_JSON"]), &got) != nil || !reflect.DeepEqual(want, got) ||
 				vars["HOMEVPN_PROFILE_ID"] != entry.entry.ID || vars["HOMEVPN_EXTERNAL_SESSION"] != launch.tor.expected.SessionID {
-				t.Fatal("Router entry's captured physical firewall tuples did not reach the wrapper", vars, err)
+				t.Fatal("predecessor's captured physical firewall tuples did not reach the wrapper", got, want, planErr, err)
 			}
 		} else if vars["HOMEVPN_NATIVE_EGRESS_JSON"] != "" || vars["HOMEVPN_EXTERNAL_SESSION"] != "" {
 			t.Fatal("Direct borrowed a Router physical route")

@@ -92,7 +92,11 @@ func (a *app) torBridgeConnectSelectionOwned(w http.ResponseWriter, profile comm
 		http.Error(w, operationErr.Error(), http.StatusConflict)
 		return
 	}
-	selection, err := captureDesktopTorSelection(a, profile, q, nil)
+	lookup := driver.lookup
+	if lookup == nil {
+		lookup = desktopTorEndpointLookup
+	}
+	selection, err := captureDesktopTorSelection(a, profile, q, lookup)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

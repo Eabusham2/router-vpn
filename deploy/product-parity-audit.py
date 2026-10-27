@@ -130,7 +130,7 @@ def captured_tor_dns_policy() -> None:
              "mobilemultihop.ValidateExternalDNS(string(raw), entryJSON)")
     function("cmd/client/dns_policy_external.go", "capturedTorBridgeDNS",
              "profile = cloneRouterProfile(profile)",
-             "desktopExternalEntryMode(profile, entry,", "profile.MultihopEntryMode = mode",
+             "desktopTorEntryMode(profile, entry,", "profile.MultihopEntryMode = mode",
              "json.Marshal(profile)", "json.Marshal(entry)",
              "return mobiletor.SelectDesktopBridgeDNS(string(raw), entryJSON, idle)")
     function("cmd/client/external_profile_connect.go", "externalDNSPolicyForPath",
@@ -149,24 +149,42 @@ def captured_tor_dns_policy() -> None:
     selection = function("cmd/client/desktop_tor_selection.go", "captureDesktopTorSelection",
              "profile = cloneRouterProfile(profile)", "direct = *q.Direct",
              "entryID = profile.MultihopEntryID", "entry = cloneRouterProfile(entry)",
-             "desktopExternalEntryMode(profile, entry, q.EntryMode, base)",
+             "desktopTorEntryMode(profile, entry, q.EntryMode, base)",
              "captureDesktopTorPredecessor(a, policy, lookup)",
              "desktopTorSourceIdentityToken(entry) != selection.predecessor.profileToken",
-             "entry = selection.predecessor.entry",
              "policy, err = externalDNSPolicyForPath(policy, entry, direct)",
              "selection.policy = policy", "selection.current(a)")
     ordered(selection, "captureDesktopTorSelection",
             "policy, err = externalDNSPolicyForPath(policy, entry, direct)",
-            "if err != nil", "return nil, err", "selection.policy = policy")
+            "if err != nil", "return nil, err", "captureDesktopTorPredecessor(a, policy, lookup)",
+            "desktopTorSourceIdentityToken(entry) != selection.predecessor.profileToken",
+            "selection.policy = policy")
+    function("cmd/client/desktop_tor_predecessor_external.go", "desktopTorEntryMode",
+             "return desktopExternalEntryMode(control, entry, requested, base)",
+             'entry.NodeKind != "external"', "!desktopExternalNativeProtocol(entry.External.Protocol)",
+             "if _, err := standardExitFromExternalProfile(entry); err != nil",
+             'mode != "" && mode != entry.External.Protocol', "return entry.External.Protocol, nil")
+    external = function("cmd/client/desktop_tor_predecessor_external.go", "compileDesktopTorExternalPredecessor",
+             "source = cloneRouterProfile(source)", "runtimeProfile := cloneRouterProfile(source)",
+             "runtimeProfile.MultihopEnabled = false", "copyDNSPolicy(&runtimeProfile, policy)",
+             "standardExitFromExternalProfile(runtimeProfile)",
+             'compileDesktopExternalCaptured(ctx, runtimeProfile, common.RouterProfile{}, exit, true, "", nil, nil, lookup)',
+             "mobiletor.NewDesktopExternalPredecessor(mode, string(raw), string(launch.external.source), assets)",
+             "entry: source, profileToken: desktopTorSourceIdentityToken(source)")
+    ordered(external, "compileDesktopTorExternalPredecessor",
+            "copyDNSPolicy(&runtimeProfile, policy)", "standardExitFromExternalProfile(runtimeProfile)",
+            "compileDesktopExternalCaptured(", "mobiletor.NewDesktopExternalPredecessor(")
     connect = function("cmd/client/tor_bridge_routes.go", "torBridgeConnectSelectionOwned",
-             "selection, err := captureDesktopTorSelection(a, profile, q, nil)",
+             "lookup := driver.lookup", "if lookup == nil", "lookup = desktopTorEndpointLookup",
+             "selection, err := captureDesktopTorSelection(a, profile, q, lookup)",
              "http.Error(w, err.Error(), http.StatusBadRequest)",
              "policy := selection.policy",
              "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)",
              "selection.current(a)", "a.validateExternalProfileExpectedProfiles(q, profile)",
              "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.start(check)")
     ordered(connect, "torBridgeConnectSelectionOwned",
-            "captureDesktopTorSelection(a, profile, q, nil)",
+            "lookup := driver.lookup", "lookup = desktopTorEndpointLookup",
+            "captureDesktopTorSelection(a, profile, q, lookup)",
             "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)",
             "if err := check(); err != nil", "a.stopModeWithIntent(true)", "prelaunch.start(check)")
     function("cmd/client/desktop_tor_prepare.go", "prepareTorBridgeCommandWithRuntime",

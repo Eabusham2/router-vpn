@@ -98,7 +98,7 @@ func loadConnectionProfileSetupMeta(a *app) (connectionProfileSetupMetaStore, er
 		if _, err := normalizeConnectionProfileExitMode(meta.MultihopExitMode); err != nil {
 			return connectionProfileSetupMetaStore{}, err
 		}
-		if _, err := normalizeConnectionProfileEntryMode(meta.MultihopEntryMode); err != nil {
+		if _, err := normalizeConnectionProfileSetupEntryMode(meta.MultihopEntryMode); err != nil {
 			return connectionProfileSetupMetaStore{}, err
 		}
 	}
@@ -130,6 +130,17 @@ func normalizeConnectionProfileExitMode(value string) (string, error) {
 		return value, nil
 	}
 	return "", errors.New("multihop_exit_mode must identify a supported complete native exit transport")
+}
+
+// This metadata mirrors an already validated complete profile. Tor can retain
+// an ordinary imported entry's exact raw protocol here; the Router request and
+// preference decoders keep their separate Router-only mode contract. Load also
+// checks this mirror against the captured record before applying any policy.
+func normalizeConnectionProfileSetupEntryMode(value string) (string, error) {
+	if desktopExternalNativeProtocol(value) {
+		return value, nil
+	}
+	return normalizeConnectionProfileEntryMode(value)
 }
 
 func decodeConnectionProfileSetup(w http.ResponseWriter, r *http.Request, updating bool) (connectionProfileSetupRequest, error) {

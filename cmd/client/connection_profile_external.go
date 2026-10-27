@@ -81,8 +81,9 @@ func (p connectionProfileExternalCapture) validate() error {
 	if !p.MultihopEnabled && p.MultihopExecution != "" && p.MultihopExecution != "local" {
 		return errors.New("direct external profile cannot request server execution")
 	}
-	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode)) {
-		return errors.New("saved external entry requires an exact supported Router VPN mode")
+	if p.MultihopEntryMode != "" && (!p.MultihopEnabled || !mobilemultihop.NodeProfileMode(p.MultihopEntryMode) &&
+		!(p.Protocol == "tor-bridge" && desktopExternalNativeProtocol(p.MultihopEntryMode))) {
+		return errors.New("saved external entry requires its exact supported native transport")
 	}
 	if mode, err := common.NormalizeStartLayerMode(p.StartLayer); err != nil || p.StartLayer != "" && mode != p.StartLayer {
 		return errors.New("saved external Start Layer selection is invalid")

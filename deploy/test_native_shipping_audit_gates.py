@@ -293,12 +293,18 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
             ("cmd/client/external_profile_connect.go", "a.torBridgeConnectSelectionOwned(w, externalProfile, q, startup, driver.tor)", "a.torBridgeConnectOwned(w, externalProfile)"),
             ("cmd/client/desktop_tor_selection.go", "direct = *q.Direct", "direct = !profile.MultihopEnabled"),
             ("cmd/client/desktop_tor_selection.go", "entryID = profile.MultihopEntryID", "entryID = unrelatedEntryID"),
-            ("cmd/client/desktop_tor_selection.go", "desktopExternalEntryMode(profile, entry, q.EntryMode, base)", 'desktopExternalEntryMode(profile, entry, "", "")'),
+            ("cmd/client/desktop_tor_selection.go", "desktopTorEntryMode(profile, entry, q.EntryMode, base)", 'desktopTorEntryMode(profile, entry, "", "")'),
             ("cmd/client/desktop_tor_selection.go", "captureDesktopTorPredecessor(a, policy, lookup)", "unrelatedTorPredecessor(a, policy, lookup)"),
             ("cmd/client/desktop_tor_selection.go", "desktopTorSourceIdentityToken(entry) != selection.predecessor.profileToken", "false"),
             ("cmd/client/desktop_tor_selection.go", "policy, err = externalDNSPolicyForPath(policy, entry, direct)", "policy, err = externalDNSPolicyForPath(policy, common.RouterProfile{}, true)"),
             ("cmd/client/desktop_tor_selection.go", "policy, err = externalDNSPolicyForPath(policy, entry, direct)\n\tif err != nil {\n\t\treturn nil, err\n\t}", "policy, err = externalDNSPolicyForPath(policy, entry, direct)\n\terr = nil"),
-            ("cmd/client/tor_bridge_routes.go", "selection, err := captureDesktopTorSelection(a, profile, q, nil)", "selection, err := captureUnrelatedTorSelection(a, profile, q, nil)"),
+            ("cmd/client/desktop_tor_predecessor_external.go", "if _, err := standardExitFromExternalProfile(entry); err != nil", "if _, err := standardExit{}, error(nil); err != nil"),
+            ("cmd/client/desktop_tor_predecessor_external.go", 'mode != "" && mode != entry.External.Protocol', "false"),
+            ("cmd/client/desktop_tor_predecessor_external.go", "copyDNSPolicy(&runtimeProfile, policy)", "copyDNSPolicy(&runtimeProfile, source)"),
+            ("cmd/client/desktop_tor_predecessor_external.go", "entry: source, profileToken: desktopTorSourceIdentityToken(source)", "entry: runtimeProfile, profileToken: desktopTorSourceIdentityToken(runtimeProfile)"),
+            ("cmd/client/desktop_tor_predecessor_external.go", "mobiletor.NewDesktopExternalPredecessor(mode, string(raw), string(launch.external.source), assets)", "mobiletor.NewDesktopExternalPredecessor(mode, string(raw), string(launch.config), assets)"),
+            ("cmd/client/tor_bridge_routes.go", "lookup = desktopTorEndpointLookup", "lookup = nil"),
+            ("cmd/client/tor_bridge_routes.go", "selection, err := captureDesktopTorSelection(a, profile, q, lookup)", "selection, err := captureDesktopTorSelection(a, profile, q, nil)"),
             ("cmd/client/tor_bridge_routes.go", "prepareTorBridgeCommandWithRuntime(a, policy, profile, selection.predecessor, driver)", "prepareTorBridgeCommandWithRuntime(a, policy, profile, nil, driver)"),
             ("cmd/client/tor_bridge_routes.go", "a.validateExternalProfileExpectedProfiles(q, profile)", "unrelatedSourceCheck(q, profile)"),
             ("cmd/client/tor_bridge_routes.go", "if err := check(); err != nil {\n\t\tfailure := errors.Join(err, prelaunch.cleanup())", "if err := unrelatedCheck(); err != nil {\n\t\tfailure := errors.Join(err, prelaunch.cleanup())"),
@@ -330,6 +336,21 @@ class CapturedTorDNSAuditTests(unittest.TestCase):
                 changes[relative] = original.replace(before, after) + "\n// " + before + "\n"
                 scope["captured_tor_dns_policy"]()
                 self.assertTrue(errors, "Broken captured Tor DNS path passed the real product audit")
+        for relative, block, later in (
+            ("cmd/client/desktop_tor_selection.go",
+             "\tpolicy, err = externalDNSPolicyForPath(policy, entry, direct)\n\tif err != nil {\n\t\treturn nil, err\n\t}\n",
+             "\tselection.policy = policy"),
+            ("cmd/client/desktop_tor_predecessor_external.go",
+             "\tcopyDNSPolicy(&runtimeProfile, policy)\n", "\tif launch == nil"),
+        ):
+            with self.subTest(path=relative, reordered=block):
+                original = (ROOT / relative).read_text(encoding="utf-8")
+                self.assertEqual(original.count(block), 1)
+                self.assertEqual(original.count(later), 1)
+                changes.clear(); errors.clear()
+                changes[relative] = original.replace(block, "").replace(later, block + later)
+                scope["captured_tor_dns_policy"]()
+                self.assertTrue(errors, "DNS selection after ordinary transport compilation passed the real product audit")
 
 
 if __name__ == "__main__":

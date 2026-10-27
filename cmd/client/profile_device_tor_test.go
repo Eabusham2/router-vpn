@@ -167,10 +167,12 @@ func TestProfileDeviceTorUnsupportedGraphRemainsExplicit(t *testing.T) {
 			}
 			before := cloneRouterProfileStore(a.profiles)
 			capture := getDeviceSettingsForTest(t, a)
-			label := "Router-entry"
-			if option == "padding" {
-				label = option
-			}
+			label := map[string]string{
+				"Server Router-entry":   "exact saved Local entry",
+				"missing Router-entry":  "same linked node",
+				"external Router-entry": "complete imported transport and public identity",
+				"padding":               "padding",
+			}[option]
 			if capture.DevicePolicySupported || !strings.Contains(capture.DevicePolicyReason, label) {
 				t.Fatal("unsupported saved Tor graph acquired common device capability")
 			}

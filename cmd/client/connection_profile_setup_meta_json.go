@@ -54,7 +54,7 @@ func (m *connectionProfileSetupMeta) UnmarshalJSON(data []byte) error {
 		return err
 	}
 	decoded.MultihopExitMode = mode
-	decoded.MultihopEntryMode, err = normalizeConnectionProfileEntryMode(decoded.MultihopEntryMode)
+	decoded.MultihopEntryMode, err = normalizeConnectionProfileSetupEntryMode(decoded.MultihopEntryMode)
 	if err != nil {
 		return err
 	}

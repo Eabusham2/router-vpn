@@ -357,7 +357,7 @@ func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.Ro
 	if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported {
 		return false, errors.New(reason)
 	}
-	if err := validateExternalDeviceSettings(merged); err != nil {
+	if err := validateExternalDeviceSettingsForPath(merged, entry); err != nil {
 		return false, errors.New("updated Tor bridge policy differs from its captured native path: " + err.Error())
 	}
 	if r.Context().Err() != nil {

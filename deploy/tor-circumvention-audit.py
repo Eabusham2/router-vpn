@@ -249,7 +249,7 @@ def need_desktop_tor_import() -> None:
         linked_marker = "if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported"
         linked = go_contract_at(update, linked_marker)
         go_contract_at(go_contract_block(update, linked_marker), "return false, errors.New(reason)")
-        native_marker = "if err := validateExternalDeviceSettings(merged); err != nil"
+        native_marker = "if err := validateExternalDeviceSettingsForPath(merged, entry); err != nil"
         native = go_contract_at(update, native_marker)
         go_contract_at(go_contract_block(update, native_marker), "return false, errors.New(")
         previous = go_contract_at(update, "previousStore := cloneRouterProfileStore(a.profiles)")

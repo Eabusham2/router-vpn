@@ -50,7 +50,7 @@ func desktopTorFixtureProof(expected mobiletor.DesktopBridgeMetadata, now time.T
 		Proof:         mobiletor.Proof{SessionID: expected.SessionID, IP: "203.0.113.8", IsTor: true, DNSProven: true, CheckedAt: now.UTC()},
 		InterfaceName: name, InterfaceIndex: 99, EffectiveMTU: expected.ConfiguredMTU, Healthy: true, HeartbeatAt: now.UnixMilli()}
 	if expected.EntryID != "" {
-		proof.EntryProof = &mobiletor.DesktopBridgeEntryProof{EntryID: expected.EntryID, EntrySHA256: expected.EntrySHA256, CheckedAt: now.UTC()}
+		proof.EntryProof = &mobiletor.DesktopBridgeEntryProof{EntryID: expected.EntryID, EntrySHA256: expected.EntrySHA256, EntryKind: expected.EntryProofKind, CheckedAt: now.UTC()}
 	}
 	return proof
 }

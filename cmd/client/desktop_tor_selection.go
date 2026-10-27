@@ -78,14 +78,22 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		entry, found = a.profileByIDLocked(entryID)
 		entry = cloneRouterProfile(entry)
 		a.mu.Unlock()
-		if !found || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn" {
-			return nil, errors.New("Tor Local entry must be a linked Router node with its complete native transport")
+		if !found {
+			return nil, errors.New("Tor Local entry must be a linked node with its complete native transport")
 		}
-		mode, err := desktopExternalEntryMode(profile, entry, q.EntryMode, base)
+		mode, err := desktopTorEntryMode(profile, entry, q.EntryMode, base)
 		if err != nil {
 			return nil, err
 		}
 		policy.MultihopEntryID, policy.MultihopExitID, policy.MultihopEntryMode = entry.ID, profile.ID, mode
+	}
+	// Resolver selection belongs to this exact path before its ordinary lower
+	// transport is compiled. Home remains available only through a Router owner.
+	policy, err = externalDNSPolicyForPath(policy, entry, direct)
+	if err != nil {
+		return nil, err
+	}
+	if !direct {
 		selection.predecessor, err = captureDesktopTorPredecessor(a, policy, lookup)
 		if err != nil {
 			return nil, err
@@ -93,13 +101,8 @@ func captureDesktopTorSelection(a *app, profile common.RouterProfile, q external
 		// Capture came from the registry independently of the earlier policy
 		// read. Never combine its newer credentials with the prior entry data.
 		if selection.predecessor == nil || desktopTorSourceIdentityToken(entry) != selection.predecessor.profileToken {
-			return nil, errors.New("Tor Router entry changed during capture")
+			return nil, errors.New("Tor predecessor changed during capture")
 		}
-		entry = selection.predecessor.entry
-	}
-	policy, err = externalDNSPolicyForPath(policy, entry, direct)
-	if err != nil {
-		return nil, err
 	}
 	selection.policy = policy
 	if err := selection.current(a); err != nil {

@@ -364,7 +364,7 @@ class TorCapturedImportAuditTests(unittest.TestCase):
         self.reject(IMPORT, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {',
                     'if requestedKill != "off" && !strictLiteralObfs4 && false {')
         self.reject(IMPORT, "if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported {", "if supported, reason := true, \"\"; !supported {")
-        self.reject(IMPORT, "if err := validateExternalDeviceSettings(merged); err != nil {", "if err := error(nil); err != nil {")
+        self.reject(IMPORT, "if err := validateExternalDeviceSettingsForPath(merged, entry); err != nil {", "if err := error(nil); err != nil {")
         self.reject(IMPORT, "if matches != 1 {", "if matches < 1 {")
 
     def test_source_revision_and_identity_guards_must_precede_adoption(self):

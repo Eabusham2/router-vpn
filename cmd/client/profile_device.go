@@ -74,14 +74,14 @@ func externalDevicePolicySupport(profile common.RouterProfile) (bool, string) {
 		return true, ""
 	}
 	if profile.External.Protocol == "tor-bridge" {
-		// Router-entry settings belong to the same owned native Tor graph. The
+		// Entry settings belong to the same owned native Tor graph. The
 		// idle form preserves the saved choice; Connect still captures its full
 		// native predecessor and authenticates it before any PT can start.
 		switch {
 		case profile.MultihopEnabled && (!validProfileID(profile.MultihopEntryID) || profile.MultihopEntryID == profile.ID ||
 			profile.MultihopExitID != profile.ID || profile.MultihopExecution != "" && profile.MultihopExecution != "local" ||
-			profile.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(profile.MultihopEntryMode)):
-			return false, "Tor Router-entry device settings require the exact saved Local entry, exit and native mode."
+			profile.MultihopEntryMode != "" && !mobilemultihop.NodeMultihopEntryMode(profile.MultihopEntryMode) && !desktopExternalNativeProtocol(profile.MultihopEntryMode)):
+			return false, "Tor entry device settings require the exact saved Local entry, exit and native mode."
 		case profile.DAITAEnabled:
 			return false, "Tor common device settings cannot discard saved padding; its desktop runtime is not yet implemented."
 		default:
@@ -95,9 +95,13 @@ func externalDevicePolicySupportForPath(profile, entry common.RouterProfile) (bo
 	if supported, reason := externalDevicePolicySupport(profile); !supported {
 		return supported, reason
 	}
-	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled &&
-		(entry.ID != profile.MultihopEntryID || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn") {
-		return false, "Tor Router-entry device settings require the same linked Router node; reopen Settings after relinking it."
+	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled {
+		if entry.ID != profile.MultihopEntryID {
+			return false, "Tor entry device settings require the same linked node; reopen Settings after relinking it."
+		}
+		if _, err := desktopTorEntryMode(profile, entry, "", ""); err != nil {
+			return false, err.Error()
+		}
 	}
 	return true, ""
 }
@@ -300,6 +304,28 @@ func validateExternalDeviceSettings(profile common.RouterProfile) error {
 	return mobilemultihop.ValidateExternalTransport(string(source), string(capture))
 }
 
+// Idle intent cannot borrow Router-only protection from a generic external
+// entry ID. Keep this path-aware check after edits so an unsupported old draft
+// can still be corrected to Off without granting strict runtime authority.
+func validateExternalDeviceSettingsForPath(profile, entry common.RouterProfile) error {
+	if supported, reason := externalDevicePolicySupportForPath(profile, entry); !supported {
+		return errors.New(reason)
+	}
+	if profile.External.Protocol == "tor-bridge" && profile.MultihopEnabled && entry.External != nil {
+		kill := profile.KillSwitchPolicy
+		if kill == "" {
+			kill = "off"
+			if profile.KillSwitch {
+				kill = "on-connect"
+			}
+		}
+		if kill != "off" {
+			return errors.New("Tor through an ordinary external entry currently requires Kill Switch Off; strict entry protection requires its proved Router owner")
+		}
+	}
+	return validateExternalDeviceSettings(profile)
+}
+
 func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet && r.Method != http.MethodPost {
 		http.Error(w, "GET or POST only", http.StatusMethodNotAllowed)
@@ -358,6 +384,10 @@ func (a *app) profileDeviceSettings(w http.ResponseWriter, r *http.Request) {
 	}
 	validated, err := applyProfileDeviceSettings(profile, request)
 	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := validateExternalDeviceSettingsForPath(validated, entry); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}

@@ -80,12 +80,22 @@ func captureDesktopTorPredecessor(a *app, profile common.RouterProfile, lookup a
 	entry, found := a.profileByIDLocked(profile.MultihopEntryID)
 	entry = cloneRouterProfile(entry)
 	a.mu.Unlock()
-	if !found || entry.External != nil || entry.NodeKind != "" && entry.NodeKind != "router-vpn" {
-		return nil, errors.New("desktop Tor Local entry is not a linked Router node")
+	if !found {
+		return nil, errors.New("desktop Tor Local entry is not a linked node")
 	}
-	mode, err := desktopExternalEntryMode(profile, entry, "", "")
+	mode, err := desktopTorEntryMode(profile, entry, "", "")
 	if err != nil {
 		return nil, err
+	}
+	if entry.External != nil {
+		captured, err := compileDesktopTorExternalPredecessor(a.connectionOperationContextOrBackground(), entry, profile, mode, lookup)
+		if err != nil {
+			return nil, err
+		}
+		if err = captured.current(a); err != nil {
+			return nil, err
+		}
+		return captured, nil
 	}
 	files, err := readDesktopNodeAssets(clientRoot(a), entry.ID, mode)
 	if err != nil {
@@ -121,11 +131,11 @@ func (captured *desktopTorPredecessorCapture) currentLocked(a *app) error {
 		return nil
 	}
 	if a == nil || captured.native == nil || captured.profileToken == "" || captured.assetsSHA256 != captured.native.AssetsSHA256() || captured.entry.ID != captured.native.ID() || captured.mode != captured.native.Mode() {
-		return errors.New("Tor Router entry lost its immutable source owner")
+		return errors.New("Tor predecessor lost its immutable source owner")
 	}
 	entry, found := a.profileByIDLocked(captured.entry.ID)
 	if !found || desktopTorSourceIdentityToken(entry) != captured.profileToken {
-		return errors.New("Tor Router entry profile or credentials changed")
+		return errors.New("Tor predecessor profile or credentials changed")
 	}
 	return nil
 }
@@ -135,7 +145,7 @@ func (captured *desktopTorPredecessorCapture) current(a *app) error {
 		return nil
 	}
 	if a == nil {
-		return errors.New("Tor Router entry has no application owner")
+		return errors.New("Tor predecessor has no application owner")
 	}
 	a.mu.Lock()
 	err := captured.currentLocked(a)
@@ -145,7 +155,7 @@ func (captured *desktopTorPredecessorCapture) current(a *app) error {
 	}
 	assets, err := startupExternalSourceToken(a, captured.entry, captured.mode)
 	if err != nil || assets != captured.assetsSHA256 {
-		return errors.New("Tor Router entry private mode or Start Layer source changed")
+		return errors.New("Tor predecessor private mode or Start Layer source changed")
 	}
 	a.mu.Lock()
 	defer a.mu.Unlock()
@@ -160,12 +170,13 @@ func (owner *desktopTorRuntime) entryCurrentLocked(a *app) error {
 	meta := owner.expected
 	if meta.EntryID == "" {
 		if entry != nil {
-			return errors.New("direct Tor acquired an unrelated Router entry")
+			return errors.New("direct Tor acquired an unrelated predecessor")
 		}
 		return nil
 	}
-	if entry == nil || entry.native == nil || meta.EntryID != entry.entry.ID || meta.EntryMode != entry.mode || meta.EntryTag != entry.native.Tag() || meta.EntrySHA256 != entry.native.Proof().Fingerprint() || meta.EntryAssetsSHA256 != entry.assetsSHA256 {
-		return errors.New("Tor private entry no longer matches its native capture")
+	if entry == nil || entry.native == nil || meta.EntryID != entry.entry.ID || meta.EntryMode != entry.mode || meta.EntryTag != entry.native.Tag() || meta.EntrySHA256 != entry.native.Fingerprint() || meta.EntryAssetsSHA256 != entry.assetsSHA256 ||
+		entry.native.IsExternal() && meta.EntryProofKind != mobiletor.ExternalPredecessorProofKind || entry.native.IsRouter() && meta.EntryProofKind != "" && meta.EntryProofKind != mobiletor.RouterPredecessorProofKind {
+		return errors.New("Tor predecessor no longer matches its typed native capture")
 	}
 	return entry.currentLocked(a)
 }

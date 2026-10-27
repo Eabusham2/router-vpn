@@ -90,7 +90,11 @@ func (a *app) prepareSpeedLabTorPathWithRuntime(q speedLabRequest, profile commo
 	var selection *desktopTorSelection
 	var err error
 	if restored == nil {
-		selection, err = captureDesktopTorSelection(a, original, speedLabTorRequest(q, original), nil)
+		lookup := driver.lookup
+		if lookup == nil {
+			lookup = desktopTorEndpointLookup
+		}
+		selection, err = captureDesktopTorSelection(a, original, speedLabTorRequest(q, original), lookup)
 		if err == nil {
 			selection.policy = speedLabProfileOverrides(selection.policy, q)
 			selection.profile = cloneRouterProfile(profile)
