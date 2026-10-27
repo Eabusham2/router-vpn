@@ -19,6 +19,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          # Lease lifecycle tests use the stable testing/synctest API.
+          go-version: '1.26.3'
+          cache: false
       - name: Python syntax
         run: |
           python3 -m py_compile \
