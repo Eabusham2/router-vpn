@@ -7,6 +7,7 @@ Apple CI still compiles the real generated framework in the mandatory IPA job.
 """
 from pathlib import Path
 import importlib.util
+import os
 import platform
 import shutil
 import subprocess
@@ -34,6 +35,7 @@ public final class LibboxTestState: @unchecked Sendable {
     private var paddingCount: Int64 = 0
     private var server: LibboxCommandServer?
     private var setupPath = ""
+    private var setupPaths: [String] = []
     public func configure(block: Bool = false, fail: Bool = false) {
         lock.lock(); defer { lock.unlock() }
         self.block = block; self.fail = fail; plan = nil
@@ -57,8 +59,9 @@ public final class LibboxTestState: @unchecked Sendable {
     public func started() { lock.lock(); starts += 1; lock.unlock() }
     public func stopped() { lock.lock(); stops += 1; lock.unlock() }
     public func counts() -> (Int, Int) { lock.lock(); defer { lock.unlock() }; return (starts, stops) }
-    public func setup(_ path:String){lock.lock();setupPath=path;lock.unlock()}
+    public func setup(_ path:String){lock.lock();setupPath=path;setupPaths.append(path);lock.unlock()}
     public func directory()->String{lock.lock();defer{lock.unlock()};return setupPath}
+    public func directories()->[String]{lock.lock();defer{lock.unlock()};return setupPaths}
 }
 // Intentionally no Sendable conformance: these model generated Objective-C refs.
 public final class LibboxRouterMultihop {
@@ -113,6 +116,7 @@ public final class LibboxCommandServer {
     public func performanceFailure() -> String { lock.lock(); defer { lock.unlock() }; return paddingCount==0 || (active && !invalidated) ? "" : "fixture path invalidated" }
     public func configureStrategy(dns: Bool = false, close: Bool = false) { lock.lock(); failDNS=dns; failClose=close; lock.unlock() }
     public func strategyCalls() -> [String] { lock.lock(); defer { lock.unlock() }; return strategyEvents }
+    public func torCleanup(_ success:Bool) { lock.lock(); strategyEvents.append(success ? "tor-delete" : "tor-delete-failed"); lock.unlock() }
     public func captureConfiguration(_ text:String){lock.lock();configuration=text;lock.unlock()}
     public func capturedConfiguration()->String{lock.lock();defer{lock.unlock()};return configuration}
     public func strategy(_ operation: String, _ failure: UnsafeMutablePointer<NSError?>?) -> Bool {
@@ -198,8 +202,9 @@ public final class LibboxTorTestState: @unchecked Sendable {
     private var payload: String?
     private var request: LibboxRouterTorProofRequest?
     private var roots: [String] = []
-    public func configure(block: Bool = false, payload: String? = nil, nativeError: Bool = false) { lock.lock(); self.block=block; self.payload=payload; self.nativeError=nativeError; request=nil; lock.unlock() }
-    public func make(_ session: String) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload,nativeError); request=value; return value }
+    private var closeFailures = 0
+    public func configure(block: Bool = false, payload: String? = nil, nativeError: Bool = false, closeFailures:Int = 0) { lock.lock(); self.block=block; self.payload=payload; self.nativeError=nativeError; self.closeFailures=closeFailures; request=nil; lock.unlock() }
+    public func make(_ session: String, server:LibboxCommandServer) -> LibboxRouterTorProofRequest { lock.lock(); defer { lock.unlock() }; let value=LibboxRouterTorProofRequest(session,block,payload,nativeError,server,closeFailures); request=value; return value }
     public func current() -> LibboxRouterTorProofRequest? { lock.lock(); defer { lock.unlock() }; return request }
     public func saveRoot(_ path: String) { lock.lock(); roots.append(path); lock.unlock() }
     public func stateRoots() -> [String] { lock.lock(); defer { lock.unlock() }; return roots }
@@ -209,9 +214,11 @@ public final class LibboxRouterTorProofRequest {
     private let session: String, block: Bool, payload: String?, nativeError: Bool
     private let lock = NSLock()
     private var cancels = 0, proved = false
+    private let server:LibboxCommandServer
+    private var closeFailures:Int, closes=0, acknowledged=false, entryRetired=false
     private let release = DispatchSemaphore(value:0)
     public let entered = DispatchSemaphore(value:0)
-    init(_ session: String, _ block: Bool, _ payload: String?, _ nativeError: Bool) { self.session=session;self.block=block;self.payload=payload;self.nativeError=nativeError }
+    init(_ session: String, _ block: Bool, _ payload: String?, _ nativeError: Bool, _ server:LibboxCommandServer, _ closeFailures:Int) { self.session=session;self.block=block;self.payload=payload;self.nativeError=nativeError;self.server=server;self.closeFailures=closeFailures }
     // gobind v0.1.12: nonnull NSString plus NSErrorPointer, not Swift throws.
     public func run(_ failure: NSErrorPointer) -> String {
         entered.signal()
@@ -230,13 +237,25 @@ public final class LibboxRouterTorProofRequest {
     public func cancelCount() -> Int { lock.lock();defer {lock.unlock()};return cancels }
     public func healthy() -> Bool { lock.lock();defer{lock.unlock()};return cancels==0 && proved }
     public func dnsSession() -> String { session }
+    public func configureClose(failures:Int) { lock.lock();closeFailures=failures;lock.unlock() }
+    public func retireEntry() { lock.lock();entryRetired=true;lock.unlock() }
+    public func closeCount()->Int { lock.lock();defer{lock.unlock()};return closes }
+    public func close()throws {
+        cancel()
+        lock.lock();defer{lock.unlock()}
+        if acknowledged{return}
+        closes+=1
+        guard !entryRetired, !server.strategyCalls().contains("close") else {throw NSError(domain:"RetiredTorCleanupEntry",code:1)}
+        if closeFailures>0 {closeFailures-=1;server.torCleanup(false);throw NSError(domain:"PendingTorDelete",code:1)}
+        acknowledged=true;server.torCleanup(true)
+    }
 }
 public func LibboxRouterTorSetStateDirectory(_ path:String,_ failure:UnsafeMutablePointer<NSError?>?) {
     do { try FileManager.default.createDirectory(atPath:path,withIntermediateDirectories:true,attributes:[.posixPermissions:0o700]);LibboxTorTestState.shared.saveRoot(path) }
     catch { failure?.pointee=error as NSError }
 }
-public func LibboxRouterTorCreateProof(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
-public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ profile:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session) }
+public func LibboxRouterTorCreateProof(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session,server:server) }
+public func LibboxRouterTorCreateProofWithPredecessor(_ server:LibboxCommandServer,_ tag:String,_ session:String,_ profile:String,_ failure:UnsafeMutablePointer<NSError?>?) -> LibboxRouterTorProofRequest? { LibboxTorTestState.shared.make(session,server:server) }
 public final class LibboxExternalTestState: @unchecked Sendable {
     public static let shared = LibboxExternalTestState()
     private let lock = NSLock()
@@ -323,6 +342,7 @@ final class MTUPlatformDouble {
     private var server:LibboxCommandServer?
     private var failures=0,drained=false
     private(set) var closeSnapshots:[[String]]=[]
+    private(set) var cleanupSnapshots:[[String]]=[]
     func initialMeasurementHold(_ lease: String) throws {}
     func stop(){try? stopChecked()}
     func stopChecked()throws {
@@ -332,6 +352,12 @@ final class MTUPlatformDouble {
         drained=true
     }
     func invalidate() {}
+    func drainForTorCleanup()throws {
+        guard hasOwner,!drained else{return}
+        cleanupSnapshots.append(server?.strategyCalls() ?? [])
+        if failures>0{failures-=1;throw NSError(domain:"MTURetirementFixture",code:1)}
+        drained=true
+    }
     func activate(server: LibboxCommandServer, config: String, profile: String, onAbort: @escaping @Sendable (String) -> Void) { hasOwner = true;self.server=server;failures=MTUActivationFixture.shared.failures() }
     func activateExternal(server:LibboxCommandServer,proof:LibboxRouterExternalProofRequest,source:String,capture:String,onAbort:@escaping @Sendable(String)->Void)throws {
         guard proof.healthy() else{throw NSError(domain:"ExternalMTUFixture",code:1)}
@@ -635,6 +661,10 @@ final class CompletionState: @unchecked Sendable {
         let torProfile="{\"id\":\"captured-tor\",\"node_kind\":\"external\",\"mtu_policy\":\"auto\",\"external\":{\"protocol\":\"tor\"}}"
         let torConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\",\"mtu\":1380}],\"outbounds\":[{\"type\":\"routervpn-tor\",\"tag\":\"routervpn-tor-exit\",\"session_id\":\"tor-session\"}],\"route\":{\"final\":\"routervpn-tor-exit\"}}"
         let torFiles=["sing-box.json":Data(torConfig.utf8)]
+        let torServerConfig=torConfig.replacingOccurrences(of:"\"routervpn-tor\"",with:"\"routervpn-server-tor\"")
+        let torServerFiles=["sing-box.json":Data(torServerConfig.utf8)]
+        let torEntryProfile="{\"id\":\"entry\",\"node_kind\":\"router-vpn\"}"
+        let torServerProfile="{\"id\":\"captured-tor\",\"node_kind\":\"external\",\"mtu_policy\":\"auto\",\"multihop_enabled\":true,\"multihop_execution\":\"server\",\"multihop_entry_id\":\"entry\",\"multihop_entry_mode\":\"wg\",\"multihop_exit_id\":\"captured-tor\",\"multihop_exit_mode\":\"tor\",\"external\":{\"protocol\":\"tor\",\"expected_public_ip\":\"\"}}"
         let externalState=LibboxExternalTestState.shared
         let externalConfig="{\"inbounds\":[{\"type\":\"tun\",\"tag\":\"captured-tun\"}],\"outbounds\":[] }"
         let externalFiles=["sing-box.json":Data(externalConfig.utf8)]
@@ -723,7 +753,87 @@ final class CompletionState: @unchecked Sendable {
             owner.stop();Thread.sleep(forTimeInterval:0.04)
             check("late Tor success cannot reactivate retired session",done.values()==(1,cancelled ? 1 : 0) && provider.count()==0)
         }
-        check("Tor uses a stable private directory across new engine roots",Set(torState.stateRoots()).count==1 && torState.stateRoots().count>=2 && !torState.stateRoots()[0].contains("routervpn-libbox-"))
+        let privateRoot=URL(fileURLWithPath:torState.stateRoots()[0]).resolvingSymlinksInPath().path
+        check("Tor uses a stable private directory across new engine roots",Set(torState.stateRoots()).count==1 && torState.stateRoots().count>=2 && state.directories().allSatisfy{directory in
+            let runtime=URL(fileURLWithPath:directory).resolvingSymlinksInPath().path
+            return privateRoot != runtime && !privateRoot.hasPrefix(runtime+"/")
+        })
+        for selection in ["local","auto"] {
+            torState.configure()
+            let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider()),done=CompletionState()
+            try owner.start(files:torServerFiles,strict:true)
+            owner.proveTor(sessionID:UUID().uuidString,profile:torServerProfile.replacingOccurrences(of:"\"server\"",with:"\""+selection+"\""),predecessorProfile:torEntryProfile,completion:done.finish)
+            check("Server source cannot change its selected execution before proof",done.wait() && done.values()==(1,1) && torState.current()==nil)
+            owner.stop()
+        }
+        for action in ["stable","cancel-proof","delete-retry","reconnect-retry","mtu-retry","hop-retry","dns-retry","native-retry"] {
+            torState.configure(block:action=="cancel-proof",closeFailures:action=="delete-retry" ? 2:(action=="reconnect-retry" ? 1:0))
+            MTUActivationFixture.shared.configure(failures:action=="mtu-retry" ? 1:0)
+            let roots=torState.stateRoots().count,provider=PacketTunnelProvider()
+            var owner:RouterVPNLibboxEngine?=RouterVPNLibboxEngine(tunnel:provider)
+            try owner!.start(files:torServerFiles,strict:true)
+            let server=state.currentServer()!,directory=state.directory(),platform=MTUActivationFixture.shared.currentPlatform()!
+            check("Server never initializes a local Tor directory",torState.stateRoots().count==roots && server.capturedConfiguration()==torServerConfig)
+            let done=CompletionState();owner!.proveTor(sessionID:UUID().uuidString,profile:torServerProfile,predecessorProfile:torEntryProfile,completion:done.finish)
+            let request=torState.current()!
+            if action=="cancel-proof" {
+                check("Server native proof entered before cancel",request.entered.wait(timeout:.now()+2) == .success)
+            } else {
+                check("Server proves captured exit and selected DNS",done.wait() && done.values()==(1,0))
+                let profile=try JSONSerialization.jsonObject(with:Data(torServerProfile.utf8)) as! [String:Any]
+                let entry=try JSONSerialization.jsonObject(with:Data(torEntryProfile.utf8)) as! [String:Any]
+                let configuration:[String:Any]=["engine":"external-libbox","mode":"external-tor","bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"captured-tor","routerProfiles":[profile]]),"tor_entry_bundle":try JSONSerialization.data(withJSONObject:["selectedRouterID":"entry","routerProfiles":[entry]]),"tor_entry_mode":"wg"]
+                let source=try IOSMultihopExecution.Source(configuration:configuration){_ in String(repeating:"a",count:64)}
+                var refused=false;do{try owner!.bindTorExecutionSource(source)}catch{refused=true}
+                check("Tor execution cannot bind before measurement and MTU adoption",refused)
+                try owner!.enableExternalHopMeasurement(exitID:"captured-tor")
+                try owner!.enableExternalDNSMeasurement(exitID:"captured-tor")
+                try owner!.activateTorMTU();try owner!.bindTorExecutionSource(source)
+                let id=String(repeating:"d",count:32),receipt=owner!.multihopExecutionSnapshot(request:id)
+                let captured=try receipt.map{try IOSMultihopExecution.Capture.decode($0,source:source,request:id)}
+                check("actual proved Tor execution is retained for restoration",captured?.execution=="server")
+            }
+            if action=="hop-retry" {LibboxHopTestState.shared.current()!.configure(closeFails:true)}
+            if action=="dns-retry" {LibboxDNSTestState.shared.current()!.configure(hold:true)}
+            if action=="native-retry" {server.configureStrategy(close:true)}
+            let before=state.counts()
+            var failed=false;do{try owner!.stopCheckedForStrategy()}catch{failed=true}
+            check("Server cancellation cannot retain a data receipt",request.cancelCount()>0 && owner!.multihopExecutionSnapshot(request:String(repeating:"d",count:32))==nil)
+            if action=="delete-retry" || action=="reconnect-retry" {
+                check("pending DELETE keeps exact native Box and files",failed && state.counts()==before && !server.strategyCalls().contains("close") && FileManager.default.fileExists(atPath:directory))
+                check("pending DELETE preserves physical monitor until acknowledgment",platform.resets==0 && platform.mtu.closeSnapshots.isEmpty)
+                if action=="delete-retry" {
+                    let blocked=RouterVPNLibboxEngine(tunnel:provider)
+                    var rejected=false;do{try blocked.start(files:files,strict:false)}catch{rejected=true}
+                    check("unacknowledged old lease blocks a replacement owner",rejected && state.counts()==before)
+                    try owner!.stopCheckedForStrategy()
+                    check("same retained request retries DELETE",request.closeCount()==3)
+                } else {
+                    owner=nil
+                    torState.configure()
+                    let replacement=RouterVPNLibboxEngine(tunnel:provider)
+                    try replacement.start(files:files,strict:false)
+                    check("new start joins the retired exact lease before construction",request.closeCount()==2 && server.strategyCalls().last=="close")
+                    replacement.stop()
+                }
+            } else if ["mtu-retry","hop-retry","dns-retry"].contains(action) {
+                check("measurement drain precedes DELETE and keeps the exact entry",failed && state.counts()==before && request.closeCount()==0 && !server.strategyCalls().contains("close") && FileManager.default.fileExists(atPath:directory))
+                check("measurement drain cannot terminally retire the physical monitor",platform.resets==0 && platform.mtu.closeSnapshots.isEmpty)
+                if action=="hop-retry" {LibboxHopTestState.shared.current()!.configure(closeFails:false)}
+                if action=="dns-retry" {LibboxDNSTestState.shared.current()!.configure(hold:false)}
+                try owner!.stopCheckedForStrategy()
+                check("same measurement owner drains before the sole DELETE",request.closeCount()==1 && server.strategyCalls().filter{$0=="close"}.count==1)
+            } else if action=="native-retry" {
+                check("acknowledged lease retains a failed native Box drain",failed && request.closeCount()==1 && FileManager.default.fileExists(atPath:directory) && platform.resets==0)
+                server.configureStrategy()
+                try owner!.stopCheckedForStrategy()
+                check("native retry cannot DELETE an acknowledged lease again",request.closeCount()==1)
+            } else { check("Server teardown completed",!failed) }
+            let deletion=server.strategyCalls().firstIndex(of:"tor-delete"),closure=server.strategyCalls().firstIndex(of:"close")
+            check("Server DELETE precedes native Box closure",deletion != nil && closure != nil && deletion! < closure!)
+            check("successful Server close removes only owned runtime",!FileManager.default.fileExists(atPath:directory) && platform.resets==1)
+            if action=="cancel-proof" {check("late Server proof never reconnects",done.wait() && done.values()==(1,1))}
+        }
         for fails in [false,true] {
             torState.configure()
             let owner=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
@@ -925,7 +1035,22 @@ final class CompletionState: @unchecked Sendable {
             try replacement.start(files:files,strict:false);replacement.stop()
         }
         check("no mock native server survives successful shutdown", state.counts().0 == state.counts().1)
-        do {
+        if CommandLine.arguments.contains("--tor-server-physical-close") {
+            torState.configure()
+            var owner:RouterVPNLibboxEngine?=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            try owner!.start(files:torServerFiles,strict:true)
+            let done=CompletionState();owner!.proveTor(sessionID:UUID().uuidString,profile:torServerProfile,predecessorProfile:torEntryProfile,completion:done.finish)
+            check("physical reset fixture owns a proved Server lease",done.wait() && done.values()==(1,0))
+            let request=torState.current()!,server=state.currentServer()!,before=state.counts(),directory=state.directory()
+            weak var platform=MTUActivationFixture.shared.currentPlatform()
+            request.retireEntry()
+            var failed=false;do{try owner!.stopCheckedForStrategy()}catch{failed=true}
+            check("physical entry loss cannot borrow another route for DELETE",failed && request.closeCount()==1 && !server.strategyCalls().contains("close") && state.counts()==before)
+            owner=nil
+            let replacement=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
+            var refused=false;do{try replacement.start(files:files,strict:false)}catch{refused=true}
+            check("lost physical entry retains exact cleanup and blocks replacement",refused && request.closeCount()==2 && platform != nil && platform?.resets==0 && state.counts()==before && FileManager.default.fileExists(atPath:directory))
+        } else {
             torState.configure()
             var owner:RouterVPNLibboxEngine?=RouterVPNLibboxEngine(tunnel:PacketTunnelProvider())
             let external=CommandLine.arguments.contains("--external-close")
@@ -966,13 +1091,17 @@ def main():
         hop_types = (ROOT/'ios/RouterVPN/App/IOSHopMeasurements.swift').read_text().split('// HOP_RESULT_TYPES_BEGIN',1)[1].split('// HOP_RESULT_TYPES_END',1)[0]
         binding = tmp/'HopBinding.swift'; binding.write_text('import Foundation\n' + hop_types)
         lib = tmp/('libLibbox.dylib' if platform.system() == 'Darwin' else 'libLibbox.so')
+        environment = dict(os.environ)
+        if platform.system() != 'Darwin':
+            environment['XDG_DATA_HOME'] = str(tmp/'application-support')
         subprocess.run([swift,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(stub),
                         '-emit-module-path',str(tmp/'Libbox.swiftmodule'),'-o',str(lib)],check=True,timeout=60)
         args=[swift,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox','-Xlinker','-rpath','-Xlinker',str(tmp),str(ROOT/'ios/RouterVPN/App/IOSMultihopExecution.swift'),str(binding),str(ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNDNSMeasurementSession.swift')]
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(ENGINE),str(harness),'-o',str(tmp/'test')],check=True,timeout=90)
-        subprocess.run([str(tmp/'test')],check=True,timeout=25)
-        subprocess.run([str(tmp/'test'),'--external-close'],check=True,timeout=25)
-        subprocess.run([str(tmp/'test'),'--mtu-close'],check=True,timeout=25)
+        subprocess.run([str(tmp/'test')],env=environment,check=True,timeout=25)
+        subprocess.run([str(tmp/'test'),'--external-close'],env=environment,check=True,timeout=25)
+        subprocess.run([str(tmp/'test'),'--mtu-close'],env=environment,check=True,timeout=25)
+        subprocess.run([str(tmp/'test'),'--tor-server-physical-close'],env=environment,check=True,timeout=25)
         broken=tmp/'Broken.swift'
         text=ENGINE.read_text()
         foreign_cancel='            guard let probe = owners[id] else {'
@@ -980,9 +1109,23 @@ def main():
         broken.write_text(text.replace(foreign_cancel,
             '            if operation == "hop-measure-cancel", owners[id] == nil { owners.values.first?.cancel(request) }\n'+foreign_cancel))
         subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(tmp/'foreign-cancel')],check=True,timeout=90)
-        bad=subprocess.run([str(tmp/'foreign-cancel')],capture_output=True,text=True,timeout=25)
+        bad=subprocess.run([str(tmp/'foreign-cancel')],env=environment,capture_output=True,text=True,timeout=25)
         assert bad.returncode != 0 and 'FAIL: foreign request cannot cancel current work' in bad.stdout+bad.stderr, 'Foreign cancellation negative control did not fail at the ownership assertion'
         print('Negative control: a foreign cancellation reaching the native owner is rejected')
+        for label, before, after, expected in (
+            ('server-delete-required', '            try proof.close()', '            // missing exact lease DELETE', 'Server DELETE precedes native Box closure'),
+            ('server-delete-acknowledged', '            try proof.close()', '            try? proof.close()', 'pending DELETE keeps exact native Box and files'),
+            ('server-measurement-drain', '            if let drainFailure { throw drainFailure }', '            _ = drainFailure', 'measurement drain precedes DELETE and keeps the exact entry'),
+            ('server-retirement-blocks-replacement', '        try Self.torServerRetirement.requireAvailable()', '        // missing retired Server owner', 'unacknowledged old lease blocks a replacement owner'),
+            ('server-captured-execution', '              Self.torExecutionSelection(capturedProfile) == execution,', '              true,', 'Server source cannot change its selected execution before proof'),
+        ):
+            assert text.count(before)==1,label
+            broken.write_text(text.replace(before,after,1))
+            executable=tmp/label
+            subprocess.run(args+[str(ROOT/"ios/RouterVPN/App/IOSMultihopStartLayer.swift"),str(broken),str(harness),'-o',str(executable)],check=True,timeout=90)
+            bad=subprocess.run([str(executable)],env=environment,capture_output=True,text=True,timeout=25)
+            assert bad.returncode != 0 and 'FAIL: '+expected in bad.stdout+bad.stderr, label+': wrong negative boundary: '+(bad.stdout+bad.stderr)[-2000:]
+            print('Negative control rejected: '+label)
         seam='DispatchQueue.global(qos: .userInitiated).async { delivery.run() }'
         start=text.index('    func completeMultihopExecution(')
         end=text.index('    /// Only this delivery object',start)

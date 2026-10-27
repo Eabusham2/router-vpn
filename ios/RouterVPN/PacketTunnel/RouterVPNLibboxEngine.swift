@@ -25,12 +25,15 @@ final class RouterVPNLibboxEngine {
     private var permanentlyStopped = false
     private var stopInProgress = false
     private var torOwned = false
+    private var torExecution: String?
     private var torProofDelivery: TorProofDelivery?
     private var torHealth: DispatchSourceTimer?
+    private var pendingTorCleanup: TorServerCleanup?
     private var externalPolicy: RouterVPNExternalPolicy?
     private var externalProofDelivery: ExternalProofDelivery?
     private var externalHealth: DispatchSourceTimer?
     private static let torRetirement = NativeRuntimeRetirement(label: "Tor")
+    private static let torServerRetirement = TorServerRetirement()
     private static let externalRetirement = NativeRuntimeRetirement(label: "External VPN")
     private static let measurementRetirement = NativeRuntimeRetirement(label: "VPN measurement")
     private static let retiredMeasurements = RetiredHopMeasurements()
@@ -57,6 +60,7 @@ final class RouterVPNLibboxEngine {
 
     func start(files: [String: Data], strict: Bool, multihopMetadata: String?, entryStartLayerSource: String? = nil, exitStartLayerSource: String? = nil, externalPolicy: RouterVPNExternalPolicy? = nil) throws {
         try Self.torRetirement.requireAvailable()
+        try Self.torServerRetirement.requireAvailable()
         try Self.externalRetirement.requireAvailable()
         try Self.measurementRetirement.requireAvailable()
         let capturedLayer = try IOSMultihopStartLayer.requiredSource(metadata: multihopMetadata, source: entryStartLayerSource)
@@ -80,9 +84,10 @@ final class RouterVPNLibboxEngine {
         try RouterVPNPQFactory.install()
         guard externalPolicy == nil || (multihopMetadata == nil && entryStartLayerSource == nil && exitStartLayerSource == nil) else { throw error("External policy cannot replace another native graph owner") }
         var safeFiles = try validateAndInjectProof(files, externalPolicy: externalPolicy)
-        let tor = try prepareTorState(safeFiles)
+        let execution = try prepareTorState(safeFiles)
+        let tor = execution != nil
         guard !tor || multihopMetadata == nil else { throw error("Tor owns its complete native graph and cannot adopt another comparison controller") }
-        ownershipLock.lock(); torOwned = tor; ownershipLock.unlock()
+        ownershipLock.lock(); torOwned = tor; torExecution = execution; ownershipLock.unlock()
         if let multihopMetadata {
             guard let raw = safeFiles["sing-box.json"], let text = String(data: raw, encoding: .utf8) else { throw error("Missing multihop graph") }
             var failure: NSError?
@@ -143,6 +148,11 @@ final class RouterVPNLibboxEngine {
         ownershipLock.lock()
         if let expected, expected != ownershipGeneration { ownershipLock.unlock(); return nil }
         if permanentlyStopped {
+            if let cleanup = pendingTorCleanup, !stopInProgress {
+                stopInProgress = true
+                ownershipLock.unlock()
+                return finishTorCleanup(cleanup)
+            }
             let failure = nativeCloseFailure ?? (stopInProgress ? error("Native shutdown is still in progress") : nil)
             ownershipLock.unlock(); return failure
         }
@@ -152,6 +162,12 @@ final class RouterVPNLibboxEngine {
         let plan = multihop, owned = server, health = multihopHealth, directory = runtimeRoot, probe = hopMeasurement, paddingHealth = performanceHealth, torDelivery = torProofDelivery, capturedTor = torOwned, torHealth = self.torHealth
         let externalDelivery = externalProofDelivery, externalHealth = self.externalHealth, capturedExternal = externalPolicy != nil
         let dnsProbe = dnsMeasurement; dnsMeasurement = nil
+        var torCleanup: TorServerCleanup?
+        if let owned, let torDelivery, torDelivery.serverExecuted {
+            torCleanup = TorServerCleanup(server: owned, platform: platform, directory: directory, proof: torDelivery, measurement: probe, dns: dnsProbe)
+            pendingTorCleanup = torCleanup
+            Self.torServerRetirement.retain(torCleanup!)
+        }
         hopMeasurement = nil; multihop = nil; multihopExecutionSource = nil; server = nil; multihopHealth = nil; performanceHealth = nil; runtimeRoot = nil; configContent = ""; starting = false
         torProofDelivery = nil
         self.torHealth = nil
@@ -161,6 +177,15 @@ final class RouterVPNLibboxEngine {
         torHealth?.cancel()
         externalDelivery?.cancel()
         externalHealth?.cancel()
+        if let torCleanup {
+            health?.cancel(); paddingHealth?.cancel()
+            if let owned { LibboxRouterInvalidatePerformance(owned) }
+            if let probe { Self.retiredMeasurements.retain(probe, session: settingsEpoch) }
+            // Keep this platform's real NWPath monitor and private entry alive
+            // until its exact DELETE is acknowledged. Data/MTU invalidation
+            // does not authorize a new session or suppress physical resets.
+            return finishTorCleanup(torCleanup)
+        }
         var mtuCloseFailure: Error?
         do { try platform.mtu.stopChecked() } catch { mtuCloseFailure = error }
         let mtuOwned = platform.mtu.hasOwner
@@ -228,6 +253,97 @@ final class RouterVPNLibboxEngine {
         let result = nativeCloseFailure
         ownershipLock.unlock()
         return result
+    }
+
+    private func finishTorCleanup(_ cleanup: TorServerCleanup) -> Error? {
+        var failure: Error?
+        do { try cleanup.close(); Self.torServerRetirement.release(cleanup) }
+        catch { failure = error }
+        ownershipLock.lock()
+        if pendingTorCleanup === cleanup {
+            if failure == nil { pendingTorCleanup = nil }
+            nativeCloseFailure = failure
+        }
+        stopInProgress = false
+        ownershipLock.unlock()
+        return failure
+    }
+
+    /// Retains the exact native service, platform and proof after host selection
+    /// has retired. Its close operation never reads a replacement engine.
+    private final class TorServerCleanup: @unchecked Sendable {
+        private let lock = NSLock()
+        private let server: LibboxCommandServer
+        private let platform: RouterVPNLibboxPlatform
+        private let directory: URL?
+        private let proof: TorProofDelivery
+        private let measurement: LibboxRouterHopMeasurement?
+        private let dns: RouterVPNDNSMeasurementSession?
+        private var nativeClosed = false, resourcesClosed = false, complete = false
+        init(server: LibboxCommandServer, platform: RouterVPNLibboxPlatform, directory: URL?, proof: TorProofDelivery,
+             measurement: LibboxRouterHopMeasurement?, dns: RouterVPNDNSMeasurementSession?) {
+            self.server = server; self.platform = platform; self.directory = directory; self.proof = proof
+            self.measurement = measurement; self.dns = dns
+        }
+        func close() throws {
+            lock.lock(); defer { lock.unlock() }
+            if complete { return }
+            proof.cancel()
+            platform.mtu.invalidate()
+            measurement?.networkChanged(); dns?.networkChanged()
+            // Measurements return their retained sockets before the lease
+            // client joins data. A failed close stays reachable for retry.
+            var drainFailure: Error?
+            do { try measurement?.close() } catch { drainFailure = error }
+            do { try dns?.close() } catch { if drainFailure == nil { drainFailure = error } }
+            do { try platform.mtu.drainForTorCleanup() } catch { if drainFailure == nil { drainFailure = error } }
+            if let drainFailure { throw drainFailure }
+            try proof.close()
+
+            // DELETE was acknowledged. The physical owner may now stop; its
+            // terminal stop cannot prevent the cleanup that required it.
+            var mtuFailure: Error?
+            do { try platform.mtu.stopChecked() } catch { mtuFailure = error }
+            var nativeFailure: Error?
+            if !nativeClosed {
+                var failure: NSError?
+                let stopped = LibboxRouterStrategyCloseService(server, &failure)
+                if stopped && failure == nil { nativeClosed = true }
+                else { nativeFailure = failure ?? NSError(domain: "RouterVPN.TorCleanup", code: 1,
+                    userInfo: [NSLocalizedDescriptionKey: "The captured Tor Server runtime has not finished shutting down."]) }
+            }
+            var measurementFailure: Error?
+            do { try measurement?.close() } catch { measurementFailure = error }
+            do { try dns?.close() } catch { if measurementFailure == nil { measurementFailure = error } }
+            do { try platform.mtu.stopChecked(); mtuFailure = nil } catch { mtuFailure = error }
+            if let failure = nativeFailure ?? measurementFailure ?? mtuFailure { throw failure }
+            if !resourcesClosed {
+                server.close(); platform.reset(); resourcesClosed = true
+            }
+            if let directory, FileManager.default.fileExists(atPath: directory.path) {
+                try FileManager.default.removeItem(at: directory)
+            }
+            complete = true
+        }
+    }
+
+    private final class TorServerRetirement: @unchecked Sendable {
+        private let lock = NSLock()
+        private var pending: [TorServerCleanup] = []
+        func retain(_ cleanup: TorServerCleanup) {
+            lock.lock(); defer { lock.unlock() }
+            if !pending.contains(where: { $0 === cleanup }) { pending.append(cleanup) }
+        }
+        func release(_ cleanup: TorServerCleanup) {
+            lock.lock(); pending.removeAll(where: { $0 === cleanup }); lock.unlock()
+        }
+        func requireAvailable() throws {
+            lock.lock(); let captured = pending; lock.unlock()
+            for cleanup in captured {
+                try cleanup.close()
+                release(cleanup)
+            }
+        }
     }
 
     /// DNS and both node identities are proved by the captured native Box.
@@ -352,12 +468,15 @@ final class RouterVPNLibboxEngine {
         }
     }
 
-    private func prepareTorState(_ files: [String: Data]) throws -> Bool {
+    private func prepareTorState(_ files: [String: Data]) throws -> String? {
         guard let data = files["sing-box.json"],
               let root = try JSONSerialization.jsonObject(with: data) as? [String: Any] else { throw error("Missing captured native configuration") }
-        let tor = (root["outbounds"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "routervpn-tor" }
-        guard !tor.isEmpty else { return false }
+        let tor = (root["outbounds"] as? [[String: Any]] ?? []).filter { ["routervpn-tor", "routervpn-server-tor"].contains($0["type"] as? String ?? "") }
+        guard !tor.isEmpty else { return nil }
         guard tor.count == 1 else { throw error("A VPN session must own one Tor runtime") }
+        // Server owns its authenticated remote lease through this Box. It
+        // never initializes a local Tor state directory or native C process.
+        if tor[0]["type"] as? String == "routervpn-server-tor" { return "server" }
         let manager = FileManager.default
         guard let support = manager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first else { throw error("Private Tor state storage is unavailable") }
         try manager.createDirectory(at: support, withIntermediateDirectories: true, attributes: [.posixPermissions: 0o700])
@@ -369,14 +488,16 @@ final class RouterVPNLibboxEngine {
         if let failure { throw failure }
         var resources = URLResourceValues(); resources.isExcludedFromBackup = true
         try directory.setResourceValues(resources)
-        return true
+        return "local"
     }
 
     func proveTor(sessionID: String, profile: String, predecessorProfile: String? = nil, completion: @escaping (Error?) -> Void) {
         ownershipLock.lock()
-        guard let owned = server, torOwned, torProofDelivery == nil, !permanentlyStopped,
+        guard let owned = server, torOwned, let execution = torExecution, torProofDelivery == nil, !permanentlyStopped,
               !profile.isEmpty, profile.utf8.count <= 4 * 1024 * 1024,
-              (try? JSONSerialization.jsonObject(with: Data(profile.utf8))) is [String: Any] else {
+              let capturedProfile = try? JSONSerialization.jsonObject(with: Data(profile.utf8)) as? [String: Any],
+              Self.torExecutionSelection(capturedProfile) == execution,
+              execution != "server" || (capturedProfile["multihop_enabled"] as? Bool == true && predecessorProfile != nil) else {
             ownershipLock.unlock(); completion(error("Tor proof has no captured native session")); return
         }
         let generation = ownershipGeneration
@@ -389,10 +510,15 @@ final class RouterVPNLibboxEngine {
         }
         guard let request, failure == nil else { ownershipLock.unlock(); completion(failure ?? error("Tor proof could not capture its native owner")); return }
         let delivery = TorProofDelivery(owner: self, server: owned, generation: generation, sessionID: sessionID,
-            config: configContent, profile: profile, request: request, completion: completion)
+            config: configContent, profile: profile, predecessorProfile: predecessorProfile, execution: execution, request: request, completion: completion)
         torProofDelivery = delivery
         ownershipLock.unlock()
         DispatchQueue.global(qos: .userInitiated).async { delivery.run() }
+    }
+
+    private static func torExecutionSelection(_ profile: [String: Any]) -> String {
+        let selected = profile["multihop_execution"] as? String ?? "local"
+        return selected.isEmpty ? "local" : selected
     }
 
     // Only the locked delivery crosses Swift's Sendable boundary. Native Run
@@ -406,28 +532,62 @@ final class RouterVPNLibboxEngine {
         private let request: LibboxRouterTorProofRequest
         private let config: String
         private let profile: String
+        private let predecessorProfile: String?
+        private let execution: String
         private let lock = NSLock()
         private var callback: ((Error?) -> Void)?
         private var started = false
         private var cancelled = false
+        private var proved = false
         init(owner: RouterVPNLibboxEngine, server: LibboxCommandServer, generation: UUID, sessionID: String,
-             config: String, profile: String, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
+             config: String, profile: String, predecessorProfile: String?, execution: String, request: LibboxRouterTorProofRequest, completion: @escaping (Error?) -> Void) {
             self.owner = owner; self.server = server; self.generation = generation; self.sessionID = sessionID
             self.request = request; self.callback = completion
             self.config = config; self.profile = profile
+            self.predecessorProfile = predecessorProfile; self.execution = execution
         }
         private func current(_ owner: RouterVPNLibboxEngine) -> Bool {
             owner.ownershipLock.lock(); defer { owner.ownershipLock.unlock() }
             return owner.server === server && owner.ownershipGeneration == generation && owner.torProofDelivery === self && !owner.permanentlyStopped
         }
         private func finish(_ error: Error?) {
-            lock.lock(); let callback = self.callback; self.callback = nil; lock.unlock()
+            lock.lock()
+            if error == nil && !cancelled { proved = true }
+            let callback = self.callback; self.callback = nil
+            lock.unlock()
             callback?(error)
         }
         func cancel() {
-            lock.lock(); cancelled = true; lock.unlock()
+            lock.lock(); cancelled = true; proved = false; lock.unlock()
             request.cancel()
             finish(NSError(domain: "RouterVPN.Tor", code: 1, userInfo: [NSLocalizedDescriptionKey: "Tor connection was cancelled."]))
+        }
+        var serverExecuted: Bool { execution == "server" }
+        func close() throws {
+            cancel()
+            try request.close()
+        }
+        func provedExecution() -> String? {
+            guard let owner, current(owner), request.healthy() else { return nil }
+            lock.lock(); let valid = proved && !cancelled; lock.unlock()
+            return valid ? execution : nil
+        }
+        func matches(_ source: IOSMultihopExecution.Source) -> Bool {
+            guard source.requested == execution, provedExecution() == execution,
+                  let predecessorProfile,
+                  let entry = try? JSONSerialization.jsonObject(with: Data(predecessorProfile.utf8)) as? [String: Any],
+                  let selected = try? JSONSerialization.jsonObject(with: Data(profile.utf8)) as? [String: Any],
+                  selected["multihop_enabled"] as? Bool == true,
+                  selected["id"] as? String == source.exitID, entry["id"] as? String == source.entryID,
+                  entry["node_kind"] as? String == "router-vpn",
+                  selected["multihop_entry_id"] as? String == source.entryID,
+                  selected["multihop_exit_id"] as? String == source.exitID,
+                  selected["multihop_entry_mode"] as? String == source.entryMode,
+                  selected["multihop_exit_mode"] as? String == source.exitMode,
+                  RouterVPNLibboxEngine.torExecutionSelection(selected) == source.requested,
+                  let external = selected["external"] as? [String: Any], external["protocol"] as? String == source.exitMode,
+                  ["tor", "tor-bridge"].contains(source.exitMode) else { return false }
+            return true
         }
         func run() {
             lock.lock()
@@ -915,12 +1075,35 @@ final class RouterVPNLibboxEngine {
         multihopExecutionSource = source
     }
 
+    func bindTorExecutionSource(_ source: IOSMultihopExecution.Source) throws {
+        ownershipLock.lock()
+        let delivery = torProofDelivery, owned = server, generation = ownershipGeneration
+        let available = !permanentlyStopped && !starting && multihop == nil && externalPolicy == nil &&
+            hopMeasurement != nil && platform.mtu.hasOwner && multihopExecutionSource == nil
+        ownershipLock.unlock()
+        guard available, let delivery, let owned, delivery.matches(source) else { throw IOSMultihopExecution.issue() }
+        ownershipLock.lock(); defer { ownershipLock.unlock() }
+        guard generation == ownershipGeneration, server === owned, torProofDelivery === delivery,
+              !permanentlyStopped, hopMeasurement != nil, multihopExecutionSource == nil else { throw IOSMultihopExecution.issue() }
+        multihopExecutionSource = source
+    }
+
     func multihopExecutionSnapshot(request: String) -> Data? {
         ownershipLock.lock()
-        let source = multihopExecutionSource, plan = multihop, external = externalProofDelivery, owned = server, generation = ownershipGeneration
+        let source = multihopExecutionSource, plan = multihop, external = externalProofDelivery, tor = torProofDelivery, owned = server, generation = ownershipGeneration
         let available = !permanentlyStopped && !starting && hopMeasurement != nil
         ownershipLock.unlock()
         guard available, let source, let owned else { return nil }
+        if let tor {
+            guard plan == nil, external == nil, tor.matches(source), let execution = tor.provedExecution(),
+                  let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request) else { return nil }
+            ownershipLock.lock()
+            let current = ownershipGeneration == generation && server === owned && torProofDelivery === tor &&
+                multihopExecutionSource == source && !permanentlyStopped
+            ownershipLock.unlock()
+            guard current, tor.provedExecution() == execution else { return nil }
+            return try? capture.encoded()
+        }
         if let external {
             guard plan == nil, let execution = external.provedExecution(),
                   let capture = try? IOSMultihopExecution.Capture(source: source, execution: execution, session: settingsEpoch, request: request) else { return nil }
@@ -1008,7 +1191,7 @@ final class RouterVPNLibboxEngine {
             // Preserve exact compiler bytes and add no localhost bypass owner.
             return result
         }
-        let tor = (object["outbounds"] as? [[String: Any]] ?? []).filter { $0["type"] as? String == "routervpn-tor" }
+        let tor = (object["outbounds"] as? [[String: Any]] ?? []).filter { ["routervpn-tor", "routervpn-server-tor"].contains($0["type"] as? String ?? "") }
         if !tor.isEmpty {
             guard tor.count == 1, tor[0]["tag"] as? String == "routervpn-tor-exit",
                   (object["route"] as? [String: Any])?["final"] as? String == "routervpn-tor-exit",

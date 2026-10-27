@@ -147,6 +147,7 @@ struct RouterVPNExternalExitRuntime {
     var torSessionID: String? = nil
     var torPredecessorProfile: String? = nil
     var torProfileJSON: String? = nil
+    var torExecution: String? = nil
     var policy: RouterVPNExternalPolicy? = nil
 }
 
@@ -161,8 +162,12 @@ enum RouterVPNExternalExitBuilder {
         }
         let protocolName = string(external["protocol"]).lowercased()
         if protocolName == "tor" || protocolName == "tor-bridge" {
-            guard restoredExecution == nil else { throw error("Tor cannot adopt an external execution receipt.") }
             let throughEntry = profile["multihop_enabled"] as? Bool ?? false
+            let execution = string(profile["multihop_execution"]).isEmpty ? "local" : string(profile["multihop_execution"])
+            guard ["local", "server"].contains(execution), execution != "server" || throughEntry,
+                  restoredExecution == nil || (throughEntry && restoredExecution == execution) else {
+                throw error("Tor requires its saved Local or Server execution; the retained choice must match this exact path.")
+            }
             guard throughEntry == (predecessorProfile != nil), throughEntry == !predecessorFiles.isEmpty else { throw error("Tor entry graph does not match the frozen node selection.") }
             var predecessor = ""
             var predecessorTag: String?
@@ -170,7 +175,6 @@ enum RouterVPNExternalExitBuilder {
             if let predecessorProfile {
                 guard string(profile["multihop_exit_id"]) == string(profile["id"]),
                       string(profile["multihop_exit_mode"]) == protocolName,
-                      ["", "local"].contains(string(profile["multihop_execution"])),
                       string(profile["multihop_entry_id"]) == string(predecessorProfile["id"]),
                       predecessorProfile["node_kind"] as? String == "router-vpn",
                       string(predecessorProfile["node_proof_id"]).range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil,
@@ -191,23 +195,38 @@ enum RouterVPNExternalExitBuilder {
             }
             let sessionID = UUID().uuidString.lowercased()
             let source = try JSONSerialization.data(withJSONObject: profile, options: [.sortedKeys])
+            let capturedSource = String(decoding: source, as: UTF8.self)
             var failure: NSError?
-            let encoded = LibboxRouterCompileTorProfileWithPredecessor(String(decoding: source, as: UTF8.self), sessionID, predecessor, proofProfile ?? "", &failure)
+            let encoded: String
+            if execution == "server" {
+                encoded = LibboxRouterCompileServerTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)
+            } else {
+                encoded = LibboxRouterCompileTorProfileWithPredecessor(capturedSource, sessionID, predecessor, proofProfile ?? "", &failure)
+            }
             if let failure { throw failure }
             guard let data = encoded.data(using: .utf8), !data.isEmpty, data.count <= 4 * 1024 * 1024,
                   let config = try JSONSerialization.jsonObject(with: data) as? [String: Any],
                   let inbounds = config["inbounds"] as? [[String: Any]], inbounds.count == 1, inbounds[0]["type"] as? String == "tun",
                   let outbounds = config["outbounds"] as? [[String: Any]],
-                  outbounds.filter({ $0["type"] as? String == "routervpn-tor" }).count == 1,
-                  let tor = outbounds.first(where: { $0["type"] as? String == "routervpn-tor" }),
+                  outbounds.filter({ ["routervpn-tor", "routervpn-server-tor"].contains($0["type"] as? String ?? "") }).count == 1,
+                  let tor = outbounds.first(where: { $0["type"] as? String == (execution == "server" ? "routervpn-server-tor" : "routervpn-tor") }),
                   tor["tag"] as? String == "routervpn-tor-exit",
                   tor["session_id"] as? String == sessionID,
-                  tor["detour"] as? String == predecessorTag,
                   (config["route"] as? [String: Any])?["final"] as? String == "routervpn-tor-exit" else {
                 throw error("Tor compiler lost the selected session or final route.")
             }
+            if execution == "server" {
+                guard Set(tor.keys) == Set(["type", "tag", "profile", "session_id", "entry_config", "entry_profile"]),
+                      tor["profile"] as? String == capturedSource,
+                      tor["entry_config"] as? String == predecessor,
+                      tor["entry_profile"] as? String == proofProfile else {
+                    throw error("Tor Server compiler changed the captured profile or private entry.")
+                }
+            } else if tor["detour"] as? String != predecessorTag {
+                throw error("Tor compiler changed the captured predecessor route.")
+            }
             var files = predecessorFiles; files["sing-box.json"] = data
-            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: String(decoding: source, as: UTF8.self))
+            return RouterVPNExternalExitRuntime(protocolName: protocolName, expectedPublicIP: "", files: files, torSessionID: sessionID, torPredecessorProfile: proofProfile, torProfileJSON: capturedSource, torExecution: throughEntry ? execution : nil)
         }
         guard ordinaryProtocols.contains(protocolName) else {
             throw error("Unsupported iOS external protocol \(protocolName).")

@@ -23,8 +23,8 @@ extension RouterVPNModel {
             throw iosMultihopError("The saved multihop entry/exit is missing or no longer linked. Choose the graph again.")
         }
         if torExit {
-            guard (exit.multihopExecution ?? "local") == "local", exit.external?.expectedPublicIP.isEmpty == true else {
-                throw iosMultihopError("This saved Tor circuit must use its device-owned entry path and dynamic exit proof.")
+            guard ["local", "server"].contains(exit.multihopExecution ?? "local"), exit.external?.expectedPublicIP.isEmpty == true else {
+                throw iosMultihopError("This saved Tor circuit requires Local or Server execution and its dynamic exit proof.")
             }
         }
         let entryMode = exit.multihopEntryMode ?? "wg"
@@ -253,7 +253,16 @@ struct IOSMultihopView: View {
                     }
                     if let torExitProtocol {
                         LabeledContent("Exit transport", value: torExitProtocol == "tor" ? "Tor" : "Tor with saved bridges")
+                        Picker("Execution", selection: $execution) {
+                            Text("Local — Tor on this device").tag("local")
+                            Text("Server — Tor on entry node").tag("server")
+                            if !["local", "server"].contains(execution) {
+                                Text("Choose Local or Server").tag(execution)
+                            }
+                        }
                         Text("Tor connects through the selected entry. The app verifies that entry and the current Tor circuit before completing the connection. Tor carries TCP traffic; choose TCP, DoT or DoH for its exit DNS.")
+                            .font(.caption).foregroundStyle(.secondary)
+                        Text("Server requires matching Tor and DNS settings on your Router VPN entry.")
                             .font(.caption).foregroundStyle(.secondary)
                     } else if let ordinaryExitProtocol {
                         LabeledContent("Exit transport", value: ordinaryExitProtocol)
@@ -347,7 +356,7 @@ struct IOSMultihopView: View {
                     Text("Saving selects the exit node without connecting. The stronger kill-switch requirement of either node is used for the connection. Saved graph choices do not prove a live path.")
                         .font(.caption).foregroundStyle(.secondary)
                     Button("Save graph") {
-                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: torExitProtocol == nil ? execution : "local", entryMode: externalEntryProtocol ?? entryMode); dismiss() }
+                        do { try model.saveIOSMultihop(enabled: enabled, entryID: entryID, exitID: exitID, exitMode: torExitProtocol ?? ordinaryExitProtocol ?? exitMode, execution: execution, entryMode: externalEntryProtocol ?? entryMode); dismiss() }
                         catch { detail = error.localizedDescription }
                     }.disabled(model.profileMutationBlocked || viaEntry.running || (enabled && (entryID.isEmpty || exitID.isEmpty || entryID == exitID)))
                     if !detail.isEmpty { Text(detail).font(.caption) }

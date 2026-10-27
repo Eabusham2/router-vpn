@@ -26,18 +26,26 @@ REGISTRY = (b'package include\nimport (\n\t"github.com/sagernet/sing-box/protoco
             b'\troutervpntor.RegisterOutbound(registry)\n}\n')
 
 
-def populate(folder):
-    for name, (mode, layer, kind) in GATE.cases().items():
+def populate(folder, execution='local'):
+    for name, (mode, layer, kind) in GATE.cases(execution).items():
         entry = folder/name; entry.mkdir()
         (entry/'fixture.json').write_text(json.dumps(dict(mode=mode, layer=layer, transport=kind, session='captured-session')))
-        (entry/'sing-box.json').write_text(json.dumps({'outbounds': [{'type': 'routervpn-tor', 'session_id': 'captured-session'}]}))
+        owner = {'type': 'routervpn-tor', 'session_id': 'captured-session'}
+        if execution == 'server':
+            owner = dict(type='routervpn-server-tor', tag='routervpn-tor-exit', session_id='captured-session',
+                         profile='{}', entry_config='{}', entry_profile='{}')
+        (entry/'sing-box.json').write_text(json.dumps({'outbounds': [owner]}))
         if mode in ('naive-h2', 'naive-h3', 'hysteria2'):
             (entry/'trust.pem').write_text('exact test-only trust asset')
         if mode in ('reality-vision', 'reality-pq-vision', 'reality-xhttp'):
             (entry/'xray.json').write_text('{}')
-    report = dict(schema=1, graphs=348, home_dns_combinations=285, profile_policy_combinations=320, public_tor_traffic=False,
+    report = dict(schema=1, graphs=348 if execution == 'local' else 342,
+                  home_dns_combinations=285 if execution == 'local' else 5,
+                  profile_policy_combinations=320, public_tor_traffic=False,
                   native_handles='boundary doubles',
-                  sources={str(path.relative_to(ROOT)): GATE.sha(path) for path in GATE.host_sources()})
+                  sources={str(path.relative_to(ROOT)): GATE.sha(path) for path in GATE.host_sources(execution)})
+    if execution == 'server':
+        report['execution'] = execution
     (folder/'source-evidence.json').write_text(json.dumps(report))
 
 
@@ -99,6 +107,27 @@ class AppleTorNativeGate(unittest.TestCase):
         for source in (changed, REGISTRY+REGISTRY, REGISTRY.replace(b'routervpntor.RegisterOutbound', b'other.RegisterOutbound')):
             with self.assertRaises(ValueError): GATE.missing_tor_registry(source)
 
+    def test_server_matrix_rejects_local_owner_and_changed_private_inputs(self):
+        for fault in ('local', 'extra-owner', 'entry', 'option', 'source', 'execution', 'direct', 'session'):
+            with self.subTest(fault=fault), tempfile.TemporaryDirectory() as temporary:
+                folder = Path(temporary); populate(folder, 'server')
+                self.assertEqual(len(GATE.require_matrix(folder, 'server')), 793)
+                graph = folder/'wg-off-tor/sing-box.json'
+                body = json.loads(graph.read_text()); owner = body['outbounds'][0]
+                if fault == 'local': owner['type'] = 'routervpn-tor'
+                elif fault == 'extra-owner': body['outbounds'].append(dict(type='routervpn-tor', session_id='captured-session'))
+                elif fault == 'entry': owner['entry_profile'] = 'null'
+                elif fault == 'option': owner['detour'] = 'direct'
+                elif fault == 'session': owner['session_id'] = 'replacement'
+                elif fault == 'direct': (folder/'direct-off-tor').mkdir()
+                else:
+                    report = json.loads((folder/'source-evidence.json').read_text())
+                    if fault == 'source': del report['sources']['deploy/test_ios_tor_server_profile.py']
+                    else: report['execution'] = 'local'
+                    (folder/'source-evidence.json').write_text(json.dumps(report))
+                graph.write_text(json.dumps(body))
+                with self.assertRaises(ValueError): GATE.require_matrix(folder, 'server')
+
     def exercise(self, fault=''):
         with tempfile.TemporaryDirectory(prefix='apple-tor-gate-contract-') as temporary:
             root = Path(temporary); vendor = root/'vendor'; package = root/'package'
@@ -114,17 +143,20 @@ class AppleTorNativeGate(unittest.TestCase):
             def command(arguments, *, cwd, env, timeout, **kwargs):
                 self.assertGreater(timeout, 0)
                 calls.append(arguments)
-                if arguments[1] == str(GATE.FIXTURE):
+                if arguments[1] in (str(GATE.FIXTURE), str(GATE.SERVER_FIXTURE)):
+                    execution = 'server' if arguments[1] == str(GATE.SERVER_FIXTURE) else 'local'
                     self.assertTrue(kwargs['check'])
                     self.assertFalse(target.exists())
                     self.assertNotIn('CGO_LDFLAGS', env, 'C Tor flags leaked into ordinary host fixture generators')
-                    if fault == 'swift': raise subprocess.CalledProcessError(1, arguments)
+                    if fault == ('server-swift' if execution == 'server' else 'swift'): raise subprocess.CalledProcessError(1, arguments)
                     folder = Path(arguments[arguments.index('--output')+1]); folders.append(folder)
-                    populate(folder)
-                    if fault == 'short': (folder/'direct-off-tor/sing-box.json').unlink()
+                    populate(folder, execution)
+                    if fault == 'short' and execution == 'local': (folder/'direct-off-tor/sing-box.json').unlink()
+                    if fault == 'server-short' and execution == 'server': (folder/'wg-off-tor/sing-box.json').unlink()
                     return SimpleNamespace(returncode=0)
                 self.assertEqual(Path(cwd), vendor)
                 self.assertEqual(env['CGO_LDFLAGS'], 'verified-native-library-and-rpath')
+                self.assertTrue(Path(env['ROUTERVPN_IOS_TOR_SERVER_GRAPHS']).is_dir())
                 self.assertEqual(target.read_bytes(), GATE.TEMPLATE.read_bytes())
                 self.assertEqual(arguments[arguments.index('-tags')+1], GATE.TAGS)
                 self.assertIn('-mod=readonly', arguments)
@@ -139,7 +171,7 @@ class AppleTorNativeGate(unittest.TestCase):
                 else:
                     self.assertNotIn('-overlay', arguments)
                 failed = fault == ('negative' if missing else 'native')
-                names = sorted(GATE.cases())
+                names = sorted(GATE.native_cases())
                 if fault == 'skipped' and missing: names.pop()
                 for name in names:
                     kwargs['stdout'].write(json.dumps({'Action': 'pass', 'Test': GATE.TEST+'/'+name})+'\n')
@@ -163,14 +195,14 @@ class AppleTorNativeGate(unittest.TestCase):
             return len(calls)
 
     def test_actual_runner_requires_swift_then_both_native_passes(self):
-        self.assertEqual(self.exercise(), 3)
+        self.assertEqual(self.exercise(), 4)
 
     def test_source_and_host_failures_stop_before_native(self):
-        for fault, count in (('pin', 0), ('occupied', 0), ('swift', 1), ('short', 1)):
+        for fault, count in (('pin', 0), ('occupied', 0), ('swift', 1), ('short', 1), ('server-swift', 2), ('server-short', 2)):
             with self.subTest(fault=fault): self.assertEqual(self.exercise(fault), count)
 
     def test_native_failure_and_skipped_negative_are_fatal(self):
-        for fault, count in (('native', 2), ('negative', 3), ('skipped', 3)):
+        for fault, count in (('native', 3), ('negative', 4), ('skipped', 4)):
             with self.subTest(fault=fault): self.assertEqual(self.exercise(fault), count)
 
     def test_prepared_gate_rejects_stale_source_and_fake_c_loader(self):

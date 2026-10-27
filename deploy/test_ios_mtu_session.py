@@ -295,6 +295,21 @@ for external in [false,true] {
  try draining.stopChecked()
  check(FakeOS.closes==calls+1,"completed retirement closed an old native owner again")
 }
+for failFirst in [false,true] {
+ let cleanup=ready();FakeOS.newCloseFailures=failFirst ? 1:0
+ try cleanup.activateTor(server:LibboxCommandServer(),proof:LibboxRouterTorProofRequest(),config:"retained Server graph",profile:"{\"mtu_policy\":\"fixed\"}"){_ in}
+ weak var native=FakeOS.current;FakeOS.current=nil
+ if failFirst {
+  rejects("unacknowledged Tor measurement drain was accepted"){try cleanup.drainForTorCleanup()}
+  check(native?.closeCalls==1 && native?.closed==false && cleanup.captureMTU()==nil,"Tor cleanup lost the exact pending MTU owner")
+ }
+ try cleanup.drainForTorCleanup()
+ check(native==nil && cleanup.captureMTU()==nil,"Tor cleanup retained mutable measurement authority after drain")
+ check(!cleanup.observePhysicalPath(name:"en0",signature:"route-a"),"cleanup treated an unchanged NWPath as a new route")
+ check(cleanup.observePhysicalPath(name:"en0",signature:"route-after-cancel"),"Tor cleanup disabled physical reset observation before DELETE acknowledgment")
+ try cleanup.stopChecked()
+ check(!cleanup.observePhysicalPath(name:"en0",signature:"route-after-terminal-stop"),"terminal Tor cleanup left a physical monitor active")
+}
 for stoppedDuringFactory in [false,true] {for withError in [false,true] {
  // A returned native handle remains owned even if the factory simultaneously
  // reports failure, or Stop invalidates the session before the return.
@@ -422,13 +437,13 @@ TEST=TEST.replace(' // CAPTURED_OPENTUN',platform_method)
 with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
  tmp=Path(directory);(tmp/'Libbox.swift').write_text(STUB);(tmp/'main.swift').write_text(TEST)
  extension = 'dylib' if platform.system() == 'Darwin' else 'so'
- env={**os.environ,'XDG_DATA_HOME':str(tmp/'data'),'HOME':str(tmp/'home')}
+ env={**os.environ,'XDG_DATA_HOME':str(tmp/'data')}
  def run(args):subprocess.run(args,check=True,cwd=tmp,env=env,timeout=120)
  # Compile the real production owner, not a test copy or a source-marker audit.
  run([SWIFT,'-swift-version','6','-emit-module','-emit-library','-module-name','Libbox',str(tmp/'Libbox.swift'),'-o',str(tmp/('libLibbox.'+extension))])
  source=ROOT/'ios/RouterVPN/PacketTunnel/RouterVPNMTUSession.swift'
  run([SWIFT,'-swift-version','6','-I',str(tmp),'-L',str(tmp),'-lLibbox',str(source),str(tmp/'main.swift'),'-o',str(tmp/'test')])
- env['LD_LIBRARY_PATH']=str(tmp)
+ env['LD_LIBRARY_PATH']=str(tmp)+os.pathsep+env.get('LD_LIBRARY_PATH','')
  env['DYLD_LIBRARY_PATH']=str(tmp)
  run([str(tmp/'test')])
  # Reproduce the former loss of a returned owner after an unconfirmed Close.
@@ -446,6 +461,7 @@ with tempfile.TemporaryDirectory(prefix='routervpn-ios-mtu-') as directory:
   ('native-predecessor-authority','nativeTorAuthority ? next.autoRequested() : ','','inherited Tor capacity rewrote saved exit preference or entered Auto'),
   ('configured-retest-admission','guard optimizationAllowed else {','guard true else {','forbidden Tor Retest reached the native controller'),
   ('readback-display','if dead || actual == nil || !readbackMatches {','if dead {','mismatched Tor OS reader retained a configured capacity claim'),
+  ('cleanup-physical-monitor','func drainForTorCleanup() throws {\n        stateLock.lock()\n        invalid = true','func drainForTorCleanup() throws {\n        stateLock.lock()\n        stopped = true; invalid = true','Tor cleanup disabled physical reset observation before DELETE acknowledgment'),
  ):
   assert text.count(before)==1,label
   broken.write_text(text.replace(before,after,1))

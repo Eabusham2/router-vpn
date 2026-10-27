@@ -1194,7 +1194,7 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
         }
         let runtime = try RouterVPNExternalExitBuilder.build(profile: selectedProfile, predecessorFiles: entryFiles, predecessorProfile: entryProfile,
                                                             restoredExecution: restoredMultihopExecution)
-        guard (runtime.policy?.executionRequested != nil) == (multihopExecutionSource != nil) else {
+        guard (runtime.policy?.executionRequested != nil || runtime.torExecution != nil) == (multihopExecutionSource != nil) else {
             throw IOSMultihopExecution.issue()
         }
         let engine = RouterVPNLibboxEngine(tunnel: self); libboxEngine = engine
@@ -1256,6 +1256,13 @@ final class PacketTunnelProvider: NEPacketTunnelProvider {
                     try engine.activateTorMTU()
                     guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
                         throw self.tunnelError(57, "Tor path changed during MTU owner activation.")
+                    }
+                    if runtime.torExecution != nil {
+                        guard let source = self.multihopExecutionSource else { throw IOSMultihopExecution.issue() }
+                        try engine.bindTorExecutionSource(source)
+                        guard self.libboxEngine === engine, self.currentPathProofGuard() === externalPathGuard else {
+                            throw self.tunnelError(57, "Tor path changed during execution receipt activation.")
+                        }
                     }
                 }
             } catch {

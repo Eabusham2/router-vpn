@@ -66,7 +66,7 @@ final class LibboxCommandServer {
  func close(){released=true;Trace.shared.add("box-release")}
 }
 final class LibboxRouterMultihop {func healthy()->Bool{true};func progressJSON()->String{"{}"};func serverIdentityPinsJSON(_ error:inout NSError?)->String?{"{}"};func close()throws{}}
-final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")}}
+final class LibboxRouterHopMeasurement {func close()throws{Trace.shared.add("hop-close")};func networkChanged(){Trace.shared.add("hop-network")}}
 func LibboxRouterExternalCreateProof(_ server:LibboxCommandServer,_ source:String,_ capture:String,_ session:String,_ error:inout NSError?)->LibboxRouterExternalProofRequest? {
  server.request.source=source;server.request.capture=capture;server.request.session=session;return server.request
 }
@@ -91,6 +91,8 @@ struct RouterVPNExternalPolicy: Sendable {
 final class MTUBoundary {
  var hasOwner=false
  func stopChecked()throws{Trace.shared.add("mtu-close");hasOwner=false}
+ func invalidate(){Trace.shared.add("mtu-invalidate")}
+ func drainForTorCleanup()throws{try stopChecked()}
  func stop(){hasOwner=false}
  func activateExternal(server:LibboxCommandServer,proof:LibboxRouterExternalProofRequest,source:String,capture:String,failure:@escaping(String)->Void)throws {
   guard proof.healthy(),proof.source==source,proof.capture==capture else{throw FixtureFailure.error};hasOwner=true;Trace.shared.add("mtu-adopt")
@@ -106,7 +108,16 @@ final class PacketTunnelProvider {
 
 FIXTURE = r'''
     private final class RetiredHopMeasurements: @unchecked Sendable {func retain(_ probe:LibboxRouterHopMeasurement,session:String){}}
-    private final class TorProofDelivery {func cancel(){};func makeHopMeasurement(exitID:String)throws->LibboxRouterHopMeasurement{throw FixtureFailure.error}}
+    // Tor is never constructed by this ordinary external execution fixture.
+    // Its explicit boundary cannot grant a proof or a leased Server owner.
+    private final class TorProofDelivery {
+        let serverExecuted=false
+        func cancel(){}
+        func close()throws{throw FixtureFailure.error}
+        func provedExecution()->String?{nil}
+        func matches(_ source:IOSMultihopExecution.Source)->Bool{false}
+        func makeHopMeasurement(exitID:String)throws->LibboxRouterHopMeasurement{throw FixtureFailure.error}
+    }
     init(tunnel:PacketTunnelProvider,server:LibboxCommandServer,policy:RouterVPNExternalPolicy){
         self.tunnel=tunnel;self.server=server;self.externalPolicy=policy;self.platform=RouterVPNLibboxPlatform();self.settingsEpoch=UUID().uuidString;self.strategyOwned=false
     }

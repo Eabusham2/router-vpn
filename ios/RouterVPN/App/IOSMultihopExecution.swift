@@ -7,14 +7,24 @@ enum IOSMultihopExecution {
     static let launchKey = "routervpn_speed_lab_execution"
     static let startupLaunchKey = "routervpn_startup_execution"
 
-    /// Plain external Local has no selector/lease owner. Only the saved
-    /// Server/Compare family needs a proved runtime receipt for restoration.
+    /// Tor entry paths preserve their explicit Local/Server execution. Ordinary
+    /// external Local has no selector/lease owner; its Server/Compare family
+    /// retains the separately proved runtime winner.
     static func requiresCapture(configuration: [String: Any]) throws -> Bool {
         if configuration["engine"] as? String == "multihop-libbox" { return true }
         guard configuration["engine"] as? String == "external-libbox" else { return false }
         guard let data = configuration["bundle"] as? Data else { throw issue() }
         let selected = try Source.profile(data, kind: "external")
+        if let external = selected["external"] as? [String: Any], ["tor", "tor-bridge"].contains(external["protocol"] as? String ?? "") {
+            guard ["local", "server"].contains(torSelection(selected)) else { throw issue() }
+            return selected["multihop_enabled"] as? Bool == true
+        }
         return ["server", "auto"].contains(selected["multihop_execution"] as? String ?? "local")
+    }
+
+    private static func torSelection(_ profile: [String: Any]) -> String {
+        let execution = profile["multihop_execution"] as? String ?? "local"
+        return execution.isEmpty ? "local" : execution
     }
 
     struct Source: Codable, Equatable, Sendable {
@@ -33,12 +43,13 @@ enum IOSMultihopExecution {
 
         init(configuration: [String: Any], digest: (Data) -> String) throws {
             let external = configuration["engine"] as? String == "external-libbox"
-            let entryKey = external ? "external_entry_bundle" : "entryBundle"
             guard (external || configuration["engine"] as? String == "multihop-libbox"),
                   let bundle = configuration["bundle"] as? Data,
-                  let entry = configuration[entryKey] as? Data,
                   let raw = external ? configuration["mode"] as? String : (configuration["rawProfileID"] as? String ?? configuration["mode"] as? String) else { throw issue() }
             let exitProfile = try Self.profile(bundle, kind: external ? "external" : "router-vpn")
+            let tor = external && ["tor", "tor-bridge"].contains((exitProfile["external"] as? [String: Any])?["protocol"] as? String ?? "")
+            let entryKey = tor ? "tor_entry_bundle" : (external ? "external_entry_bundle" : "entryBundle")
+            guard let entry = configuration[entryKey] as? Data else { throw issue() }
             let entryProfile = try Self.profile(entry, kind: "router-vpn")
             guard exitProfile["multihop_enabled"] as? Bool == true,
                   let exitID = exitProfile["id"] as? String, let entryID = entryProfile["id"] as? String,
@@ -47,7 +58,16 @@ enum IOSMultihopExecution {
                   let exitMode = exitProfile["multihop_exit_mode"] as? String,
                   (external ? "external-" + exitMode : exitMode) == raw else { throw issue() }
             if external {
-                guard configuration["rawProfileID"] == nil, configuration["entryBundle"] == nil, configuration["tor_entry_bundle"] == nil,
+                guard configuration["rawProfileID"] == nil, configuration["entryBundle"] == nil else { throw issue() }
+                if tor {
+                    guard configuration["external_entry_bundle"] == nil, configuration["external_entry_mode"] == nil,
+                          configuration["tor_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
+                          ["local", "server"].contains(IOSMultihopExecution.torSelection(exitProfile)),
+                          ["tor", "tor-bridge"].contains(exitMode),
+                          let selected = exitProfile["external"] as? [String: Any], selected["protocol"] as? String == exitMode,
+                          selected["expected_public_ip"] as? String == "" else { throw issue() }
+                } else {
+                guard configuration["tor_entry_bundle"] == nil,
                       configuration["tor_entry_mode"] == nil,
                       configuration["external_entry_mode"] as? String == exitProfile["multihop_entry_mode"] as? String,
                       ["server", "auto"].contains(exitProfile["multihop_execution"] as? String ?? ""),
@@ -85,11 +105,13 @@ enum IOSMultihopExecution {
                           Set(["public_key", "addresses", "mtu"]).isSubset(of: Set(peer.keys)),
                           Set(peer.keys).isSubset(of: Set(["public_key", "addresses", "mtu", "persistent_keepalive_interval"])) else { throw issue() }
                 }
+                }
             }
             self.bundleSHA256 = digest(bundle); self.entrySHA256 = digest(entry)
             self.entryID = entryID; self.exitID = exitID
             self.entryMode = exitProfile["multihop_entry_mode"] as? String ?? "wg"
-            self.exitMode = exitMode; self.requested = exitProfile["multihop_execution"] as? String ?? "local"
+            self.exitMode = exitMode
+            self.requested = tor ? IOSMultihopExecution.torSelection(exitProfile) : (exitProfile["multihop_execution"] as? String ?? "local")
             guard valid else { throw issue() }
         }
 
@@ -97,7 +119,8 @@ enum IOSMultihopExecution {
             [bundleSHA256, entrySHA256].allSatisfy { $0.range(of: "^[0-9a-f]{64}$", options: .regularExpression) != nil } &&
             [entryID, exitID].allSatisfy { !$0.isEmpty && $0.utf8.count <= 128 && !$0.contains("\u{0}") } && entryID != exitID &&
             [entryMode, exitMode].allSatisfy { $0.range(of: "^[a-z0-9][a-z0-9-]{0,95}$", options: .regularExpression) != nil } &&
-            ["local", "server", "auto"].contains(requested)
+            ["local", "server", "auto"].contains(requested) &&
+            (!["tor", "tor-bridge"].contains(exitMode) || ["local", "server"].contains(requested))
         }
 
         fileprivate static func profile(_ data: Data, kind expected: String) throws -> [String: Any] {

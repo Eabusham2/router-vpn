@@ -43,7 +43,89 @@ SWIFT = r'''
   value["bundle"]=try JSONSerialization.data(withJSONObject:root,options:.sortedKeys)
   return value
  }
+ static func torConfiguration(_ requested:String,_ kind:String,_ entry:String="wg")throws->[String:Any]{
+  let base=try source(requested,entry,kind)
+  var root=try JSONSerialization.jsonObject(with:base["bundle"] as! Data) as! [String:Any]
+  var nodes=root["routerProfiles"] as! [[String:Any]],selected=nodes[0]
+  var ext:[String:Any]=["protocol":kind,"expected_public_ip":""]
+  if kind=="tor-bridge" {ext["tor_bridge"]=["transport":"obfs4","bridges":["obfs4 198.51.100.9:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=Y2VydA iat-mode=0"]]}
+  selected["node_kind"]="external";selected["external"]=ext;selected["dns_mode"]="home";selected["mtu_policy"]="fixed";selected["manual_mtu"]=1380
+  nodes[0]=selected;root["routerProfiles"]=nodes
+  return ["engine":"external-libbox","mode":"external-"+kind,"bundle":try JSONSerialization.data(withJSONObject:root,options:.sortedKeys),"tor_entry_bundle":base["entryBundle"]!,"tor_entry_mode":entry]
+ }
+ static func torExecutions()throws {
+  let session=UUID().uuidString,request=String(repeating:"c",count:32),hold=String(repeating:"d",count:32)
+  for kind in ["tor","tor-bridge"] {for requested in ["local","server"] {for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {
+   let config=try torConfiguration(requested,kind,entry),captured=try IOSMultihopExecution.Source(configuration:config,digest:digest)
+   let required=try IOSMultihopExecution.requiresCapture(configuration:config)
+   check("Tor entry Local and Server both retain execution ownership",required && captured.requested==requested && captured.entryMode==entry && captured.exitMode==kind)
+   let receipt=try IOSMultihopExecution.Capture(source:captured,execution:requested,session:session,request:request)
+   let bytes=try receipt.encoded(),text=String(decoding:bytes,as:UTF8.self)
+   let restored=try IOSMultihopExecution.restoredCapture(option:text as NSString,source:captured,mtuHold:hold)
+   check("Tor restoration keeps the exact chosen execution and source",restored==receipt && restored?.pins == .empty)
+   check("Tor receipt contains no node, bridge or resolver credentials",!text.contains("credential") && !text.contains("cert=") && !text.contains("dns_mode"))
+   reject("Tor fixed execution cannot downgrade or acquire Server"){_ = try IOSMultihopExecution.Capture(source:captured,execution:requested=="server" ? "local":"server",session:session,request:request)}
+   reject("Tor restoration still requires its captured MTU hold"){_ = try IOSMultihopExecution.restoredCapture(option:text as NSString,source:captured,mtuHold:"")}
+   let last=try IOSMultihopExecution.StartupChoice(source:captured,execution:requested)
+   let startup=try last.encoded(),cold=try IOSMultihopExecution.restoredStartupChoice(option:String(decoding:startup,as:UTF8.self) as NSString,source:captured)
+   check("Tor Startup Last preserves policy without inventing a live proof",cold==last && !String(decoding:startup,as:UTF8.self).contains("healthy"))
+   IOSPrivateJSONStore.value=nil
+   try IOSStartupLastChoice.record(configuration:config,receipt:receipt,digest:digest)
+   let remembered=try IOSStartupLastChoice.restored(configuration:config,digest:digest)
+   check("Tor durable Last retains source and execution with a new request",remembered?.source==captured && remembered?.execution==requested && remembered?.pins == .empty && remembered?.request != last.request)
+   for field in ["bundle","tor_entry_bundle"] {
+    var changed=config,body=try JSONSerialization.jsonObject(with:config[field] as! Data) as! [String:Any]
+    body["profiles"]=["private":"replacement credentials under the same labels"]
+    changed[field]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
+    let replacement=try IOSMultihopExecution.Source(configuration:changed,digest:digest)
+    reject("Tor live receipt cannot follow replaced private source "+field){_ = try IOSMultihopExecution.Capture.decode(bytes,source:replacement)}
+    reject("Tor startup receipt cannot follow replaced private source "+field){_ = try IOSMultihopExecution.StartupChoice.decode(startup,source:replacement)}
+    let stale=try IOSStartupLastChoice.restored(configuration:changed,digest:digest)
+    check("Tor durable Last ignores replaced source "+field,stale==nil)
+   }
+   for fault in ["missing-entry","ordinary-entry","wrong-mode","wrong-entry-mode","mixed-ordinary-entry","mixed-router-entry","fixed-exit","wrong-entry-id","wrong-exit-id","compare","disabled","duplicate-exit"] {
+    var changed=config,body=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any]
+    var nodes=body["routerProfiles"] as! [[String:Any]],selected=nodes[0]
+    switch fault {
+    case "missing-entry":changed.removeValue(forKey:"tor_entry_bundle")
+    case "ordinary-entry":
+     var lower=try JSONSerialization.jsonObject(with:config["tor_entry_bundle"] as! Data) as! [String:Any],profiles=lower["routerProfiles"] as! [[String:Any]]
+     profiles[0]["node_kind"]="external";lower["routerProfiles"]=profiles;changed["tor_entry_bundle"]=try JSONSerialization.data(withJSONObject:lower,options:.sortedKeys)
+    case "wrong-mode":changed["mode"]="external-shadowsocks"
+    case "wrong-entry-mode":changed["tor_entry_mode"]="foreign-mode"
+    case "mixed-ordinary-entry":changed["external_entry_bundle"]=config["tor_entry_bundle"]
+    case "mixed-router-entry":changed["entryBundle"]=config["tor_entry_bundle"]
+    case "fixed-exit":var ext=selected["external"] as! [String:Any];ext["expected_public_ip"]="203.0.113.9";selected["external"]=ext
+    case "wrong-entry-id":selected["multihop_entry_id"]="replacement-entry"
+    case "wrong-exit-id":selected["multihop_exit_id"]="replacement-exit"
+    case "compare":selected["multihop_execution"]="auto"
+    case "disabled":selected["multihop_enabled"]=false
+    default:nodes.append(selected)
+    }
+    nodes[0]=selected;body["routerProfiles"]=nodes;changed["bundle"]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
+    reject("Tor execution capture rejects "+fault){_ = try IOSMultihopExecution.Source(configuration:changed,digest:digest)}
+    if fault=="compare" {reject("Tor Compare cannot request a receipt"){_ = try IOSMultihopExecution.requiresCapture(configuration:changed)}}
+   }
+  }}}
+  for kind in ["tor","tor-bridge"] {
+   for omitted in [false,true] {
+    var legacy=try torConfiguration("",kind),body=try JSONSerialization.jsonObject(with:legacy["bundle"] as! Data) as! [String:Any],nodes=body["routerProfiles"] as! [[String:Any]]
+    if omitted {nodes[0].removeValue(forKey:"multihop_execution")}
+    body["routerProfiles"]=nodes;legacy["bundle"]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
+    let retained=try IOSMultihopExecution.Source(configuration:legacy,digest:digest),required=try IOSMultihopExecution.requiresCapture(configuration:legacy)
+    check("legacy empty or omitted Tor execution retains Local",required && retained.requested=="local")
+    reject("legacy Tor Local cannot acquire Server authority"){_ = try IOSMultihopExecution.Capture(source:retained,execution:"server",session:session,request:request)}
+   }
+   var config=try torConfiguration("local",kind),body=try JSONSerialization.jsonObject(with:config["bundle"] as! Data) as! [String:Any],nodes=body["routerProfiles"] as! [[String:Any]]
+   nodes[0]["multihop_enabled"]=false;body["routerProfiles"]=nodes;config["bundle"]=try JSONSerialization.data(withJSONObject:body,options:.sortedKeys)
+   config.removeValue(forKey:"tor_entry_bundle");config.removeValue(forKey:"tor_entry_mode")
+   let required=try IOSMultihopExecution.requiresCapture(configuration:config)
+   check("standalone Local Tor does not invent a predecessor receipt",!required)
+   reject("standalone Tor cannot borrow another entry receipt"){_ = try IOSMultihopExecution.Source(configuration:config,digest:digest)}
+  }
+ }
  static func main()throws{
+  try torExecutions()
   let session=UUID().uuidString,request=String(repeating:"d",count:32),hold=String(repeating:"e",count:32)
   for entry in ["wg","awg2-strong","reality-xhttp","max-quic-awg"] {for requested in ["local","server","auto"]{
    let config=try source(requested,entry),before=try IOSMultihopExecution.Source(configuration:config,digest:digest)

@@ -22,6 +22,11 @@ import tempfile
 ROOT = Path(__file__).resolve().parents[1]
 APP = ROOT / 'ios/RouterVPN/App'
 TUN = ROOT / 'ios/RouterVPN/PacketTunnel'
+EXTRA_EVIDENCE_SOURCES = ()
+GRAPH_EVIDENCE = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285,
+    'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144,
+    'mapped_openvpn_graphs': 171, 'mapped_openvpn_layer_graphs': 342, 'profile_policy_combinations': 320,
+    'public_tor_traffic': False, 'native_handles': 'boundary doubles'}
 
 
 def load(name, relative):
@@ -51,6 +56,8 @@ GO = replace_once(GO, ' case "compile":value,err=mobilemultihop.CompilePQProfile
  case "tor":value,err=mobiletor.CompileProfile(r.Config,r.Node,r.Source)
  case "tor-validate":err=mobiletor.ValidateProfile(r.Config);value="checked"
  case "tor-with-predecessor":value,err=mobiletor.CompileProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
+ case "tor-server-with-predecessor":value,err=mobiletor.CompileServerProfileWithPredecessor(r.Config,r.Node,r.Source,r.Policy)
+ case "tor-server-mtu-authority":var predecessor *mobiletor.PredecessorProof;predecessor,err=mobiletor.NewPredecessorProof(r.Source);if err==nil{value,err=mobiletor.ServerMTUAuthority(r.Config,r.Policy,r.Node,predecessor)}
  case "tor-mtu-authority":var predecessor *mobiletor.PredecessorProof;if r.Source!=""{predecessor,err=mobiletor.NewPredecessorProof(r.Source)};if err==nil{value,err=mobiletor.MTUAuthorityWithPredecessor(r.Config,r.Policy,r.Node,predecessor)}
  case "external-policy":value,err=mobilemultihop.CompileExternalPolicy(r.Config,r.Policy)
  case "external-validate-transport":err=mobilemultihop.ValidateExternalTransport(r.Config,r.Policy);value="checked"
@@ -105,6 +112,9 @@ public func LibboxRouterValidateTorProfile(_ profile:String,_ error:inout NSErro
 }
 public func LibboxRouterCompileTorProfileWithPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
  result(&error,["Op":"tor-with-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
+}
+public func LibboxRouterCompileServerTorProfileWithPredecessor(_ profile:String,_ session:String,_ predecessor:String,_ predecessorProfile:String,_ error:inout NSError?)->String {
+ result(&error,["Op":"tor-server-with-predecessor","Config":profile,"Node":session,"Source":predecessor,"Policy":predecessorProfile])
 }
 public func LibboxRouterCompileExternalPolicy(_ config:String,_ capture:String,_ error:inout NSError?)->String {
  result(&error,["Op":"external-policy","Config":config,"Policy":capture])
@@ -213,7 +223,7 @@ def provider_source():
     if external.count(boundary) != 1:
         raise ValueError('Tor engine boundary changed')
     external = external[:external.index(boundary)]
-    external = replace_once(external, 'private func startExternalLibbox(', 'func prepare(')
+    external = replace_once(external, 'private func startExternalLibbox(', 'func assemble(')
     external = replace_once(external, ', completionHandler: @escaping (Error?) -> Void) throws {', ') throws -> Prepared {')
     external += '        return Prepared(runtime: runtime, strict: effectiveStrict, predecessor: entryFiles, profile: entryProfile)\n    }\n'
     compilation = source[source.index('    private struct LibboxCompilation {'):source.index('    private func compileLibbox(')]
@@ -233,6 +243,19 @@ def provider_source():
  func tunnelError(_ code:Int,_ message:String)->NSError {NSError(domain:"ShippingTorAssembly",code:code,userInfo:[NSLocalizedDescriptionKey:message])}
  func entry(_ root:[String:Any],_ mode:String)throws->[String:Data] {
   try compileLibbox(provider:["rawProfileID":mode],root:root,selectedProfile:selectedRouterProfile(root)).files
+ }
+ // startTunnel captures this source before calling the exact assembly method
+ // below. Reuse the shipping Source constructor for the isolated pre-start seam.
+ func prepare(provider:[String:Any],selectedProfile:[String:Any],strict:Bool)throws->Prepared {
+  if provider["tor_entry_bundle"] != nil && multihopExecutionSource == nil {
+   var captured=provider
+   captured["engine"]="external-libbox"
+   let mode=(selectedProfile["external"] as? [String:Any])?["protocol"] as? String ?? ""
+   captured["mode"]="external-"+mode
+   captured["bundle"]=try JSONSerialization.data(withJSONObject:["selectedRouterID":selectedProfile["id"] ?? "","routerProfiles":[selectedProfile]],options:[.sortedKeys])
+   multihopExecutionSource=try IOSMultihopExecution.Source(configuration:captured){SHA256.hash(data:$0).map{String(format:"%02x",$0)}.joined()}
+  }
+  return try assemble(provider:provider,selectedProfile:selectedProfile,strict:strict)
  }
 '''
     support = replace_once(support, ' // SHIPPING_NODE_PROOF_DOMAIN', domain.group(0).replace('private static', 'static', 1))
@@ -470,7 +493,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
   var selected=try tor("tor")
   selected["dns_mode"]="home";selected["dns_protocol"]="udp";selected["dns_host"]=""
   selected["multihop_enabled"]=true;selected["multihop_entry_id"]="entry";selected["multihop_entry_mode"]="wg";selected["multihop_exit_id"]=selected["id"];selected["multihop_exit_mode"]="tor";selected["multihop_execution"]="local"
-  for fault in ["wrong-entry","missing-api","missing-token","missing-dns","other-resolver","server","disabled","wrong-exit","missing-mode"] {
+  for fault in ["wrong-entry","missing-api","missing-token","missing-dns","other-resolver","compare","disabled","wrong-exit","missing-mode"] {
    var badEntry=entry,badExit=selected
    switch fault {
    case "wrong-entry":badEntry["id"]="another-entry"
@@ -478,7 +501,7 @@ enum SHA256 {static func hash(data:Data)->[UInt8] {
    case "missing-token":badEntry.removeValue(forKey:"api_token")
    case "missing-dns":badEntry.removeValue(forKey:"adguard_ipv4");badEntry.removeValue(forKey:"adguard_ipv6")
    case "other-resolver":badExit["dns_host"]="192.168.50.134"
-   case "server":badExit["multihop_execution"]="server"
+   case "compare":badExit["multihop_execution"]="auto"
    case "disabled":badExit["multihop_enabled"]=false
    case "wrong-exit":badExit["multihop_exit_id"]="another-exit"
    default:badExit.removeValue(forKey:"multihop_entry_mode")
@@ -1184,9 +1207,9 @@ def main():
                 raise AssertionError('Missing raw layer-map validation control escaped: ' + rejected_layers.stderr[-1500:])
             print('Apple OpenVPN copied-binding negative control: missing raw layer-map validation rejected')
         if args.output:
-            inputs = [Path(__file__), ROOT / 'mobile/routervpn_openvpn.go', APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
-            report = {'schema': 1, 'graphs': 348, 'home_dns_combinations': 285, 'ordinary_external_graphs': 456, 'external_execution_graphs': 912, 'external_exit_layer_graphs': 144, 'mapped_openvpn_graphs': 171, 'mapped_openvpn_layer_graphs': 342, 'profile_policy_combinations': 320, 'public_tor_traffic': False, 'native_handles': 'boundary doubles',
-                'sources': {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs}}
+            inputs = [Path(__file__), *EXTRA_EVIDENCE_SOURCES, ROOT / 'mobile/routervpn_openvpn.go', APP / 'IOSExternalNodeBuilderView.swift', TUN / 'PacketTunnelProvider.swift', *sources]
+            report = dict(GRAPH_EVIDENCE,
+                sources={str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in inputs})
             (args.output / 'source-evidence.json').write_text(json.dumps(report, sort_keys=True, indent=2) + '\n')
 
 

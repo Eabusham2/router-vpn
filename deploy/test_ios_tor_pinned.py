@@ -24,6 +24,7 @@ APP = ROOT/'ios/RouterVPN/App'
 TUN = ROOT/'ios/RouterVPN/PacketTunnel'
 TEMPLATE = ROOT/'mobile/routervpn_tor_ios_graph_test.go.tmpl'
 FIXTURE = ROOT/'deploy/test_ios_tor_profile.py'
+SERVER_FIXTURE = ROOT/'deploy/test_ios_tor_server_profile.py'
 TEST = 'TestRouterTorAppleGeneratedGraphs'
 TAGS = 'with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test'
 MODES = ('wg', 'awg2-fast', 'awg2-strong', 'wg-pq', 'awg2-pq', 'shadowsocks',
@@ -48,9 +49,9 @@ HOST = module('apple_tor_native_host', 'deploy/native_tor_graph_host.py')
 PIN = TOR.CORE
 
 
-def host_sources() -> list[Path]:
+def host_sources(execution: str = 'local') -> list[Path]:
     # This is the exact source list recorded by the executable Swift fixture.
-    return [FIXTURE, ROOT/'mobile/routervpn_openvpn.go', APP/'IOSExternalNodeBuilderView.swift', TUN/'PacketTunnelProvider.swift',
+    return [FIXTURE, *([SERVER_FIXTURE] if execution == 'server' else []), ROOT/'mobile/routervpn_openvpn.go', APP/'IOSExternalNodeBuilderView.swift', TUN/'PacketTunnelProvider.swift',
             *[APP/(name+'.swift') for name in ('Models', 'IOSExternalExecution', 'IOSMultihopExecution', 'IOSDNSRuntimePolicy',
                 'IOSNativeXrayProfile', 'IOSNativePQProfile', 'IOSMultihopStartLayer', 'IOSRuntimeSelection')],
             *[TUN/(name+'.swift') for name in ('WireGuardQuickConfig', 'RouterVPNMultihopGraph',
@@ -64,7 +65,7 @@ def inputs() -> list[Path]:
              ROOT/'deploy/testfixtures/composite/main.go', ROOT/'go.mod']
     if (ROOT/'go.sum').exists():
         extra.append(ROOT/'go.sum')
-    return sorted(set(extra + host_sources() + TOR.inputs() + MULTIHOP.inputs() + XRAY.sources() + HOST.inputs()))
+    return sorted(set(extra + host_sources('server') + TOR.inputs() + MULTIHOP.inputs() + XRAY.sources() + HOST.inputs()))
 
 
 def sha(path: Path) -> str:
@@ -82,10 +83,17 @@ def digest() -> str:
     return value.hexdigest()
 
 
-def cases() -> dict[str, tuple[str, str, str]]:
+def cases(execution: str = 'local') -> dict[str, tuple[str, str, str]]:
+    if execution not in ('local', 'server'):
+        raise ValueError('Unknown Apple Tor execution matrix')
     values = [(mode, layer, kind) for mode, layer, kind in itertools.product(MODES, LAYERS, KINDS)]
-    values += [('direct', 'off', kind) for kind in KINDS]
+    if execution == 'local':
+        values += [('direct', 'off', kind) for kind in KINDS]
     return {'-'.join(value): value for value in values}
+
+
+def native_cases() -> set[str]:
+    return {execution+'-'+name for execution in ('local', 'server') for name in cases(execution)}
 
 
 def regular(path: Path, maximum: int = 4*1024*1024) -> bytes:
@@ -95,17 +103,18 @@ def regular(path: Path, maximum: int = 4*1024*1024) -> bytes:
     return path.read_bytes()
 
 
-def require_matrix(folder: Path) -> dict[str, str]:
+def require_matrix(folder: Path, execution: str = 'local') -> dict[str, str]:
     if folder.is_symlink() or not folder.is_dir():
         raise ValueError('Apple Tor matrix requires an owned directory')
-    expected = cases()
-    if len(expected) != 348 or {path.name for path in folder.iterdir()} != set(expected) | {'source-evidence.json'}:
-        raise ValueError('Apple Tor matrix must contain exactly 348 named graphs and source evidence')
+    expected = cases(execution)
+    count = 342 if execution == 'server' else 348
+    if len(expected) != count or {path.name for path in folder.iterdir()} != set(expected) | {'source-evidence.json'}:
+        raise ValueError(f'Apple Tor {execution} matrix must contain exactly {count} named graphs and source evidence')
     report = json.loads(regular(folder/'source-evidence.json'))
-    hashes = {str(path.relative_to(ROOT)): sha(path) for path in host_sources()}
-    if (report.get('schema') != 1 or report.get('graphs') != 348
-            or report.get('home_dns_combinations') != 285
-            or report.get('profile_policy_combinations') != 320
+    hashes = {str(path.relative_to(ROOT)): sha(path) for path in host_sources(execution)}
+    if (report.get('schema') != 1 or report.get('graphs') != count
+            or report.get('home_dns_combinations') != (5 if execution == 'server' else 285)
+            or (report.get('execution') != 'server' if execution == 'server' else report.get('profile_policy_combinations') != 320)
             or report.get('public_tor_traffic') is not False
             or report.get('native_handles') != 'boundary doubles' or report.get('sources') != hashes):
         raise ValueError('Apple Tor export is stale or has different source ownership')
@@ -128,9 +137,17 @@ def require_matrix(folder: Path) -> dict[str, str]:
                 or not isinstance(fixture['session'], str) or not 0 < len(fixture['session']) <= 512):
             raise ValueError('Apple graph disagrees with its captured fixture: '+name)
         graph = json.loads(data['sing-box.json'])
-        owners = [out for out in graph.get('outbounds', []) if out.get('type') == 'routervpn-tor']
-        if len(owners) != 1 or owners[0].get('session_id') != fixture['session']:
+        owners = [out for out in graph.get('outbounds', []) if out.get('type') in ('routervpn-tor', 'routervpn-server-tor')]
+        owner_type = 'routervpn-server-tor' if execution == 'server' else 'routervpn-tor'
+        if len(owners) != 1 or owners[0].get('type') != owner_type or owners[0].get('session_id') != fixture['session']:
             raise ValueError('Apple graph lost its exact native Tor session: '+name)
+        if execution == 'server':
+            owner = owners[0]
+            if (set(owner) != {'type', 'tag', 'profile', 'session_id', 'entry_config', 'entry_profile'}
+                    or owner.get('tag') != 'routervpn-tor-exit'
+                    or any(not isinstance(owner.get(key), str) or not isinstance(json.loads(owner[key]), dict)
+                           for key in ('profile', 'entry_config', 'entry_profile'))):
+                raise ValueError('Apple Server graph lost its exact private source inputs: '+name)
         for asset, content in data.items():
             result[name+'/'+asset] = hashlib.sha256(content).hexdigest()
     return result
@@ -191,12 +208,12 @@ def run_native(command: list[str], vendor: Path, env: dict[str, str], log: Path)
         event = json.loads(line)
         if event.get('Action') == 'pass' and event.get('Test', '').startswith(TEST+'/'):
             passed.add(event['Test'][len(TEST)+1:])
-    if passed != set(cases()):
-        raise ValueError('Native parser did not execute every one of the 348 Apple configurations')
+    if passed != native_cases():
+        raise ValueError('Native parser did not execute every one of the 690 Apple Local and Server configurations')
 
 
 def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
-        output: Path | None = None, clang: str | None = None) -> None:
+        output: Path | None = None, clang: str | None = None, server_graphs: Path | None = None) -> None:
     if vendor.is_symlink() or package.is_symlink():
         raise ValueError('Native source and C package must be owned directories')
     vendor, package = vendor.resolve(strict=True), package.resolve(strict=True)
@@ -221,16 +238,22 @@ def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
     with tempfile.TemporaryDirectory(prefix='routervpn-apple-tor-native-') as temporary:
         work = Path(temporary)
         logs = output or work
+        generator_env = env.copy()
+        # Fixture compilers are ordinary host programs. Their nested build
+        # helpers may set link flags, so never inject the Tor DSO into them.
+        generator_env.pop('CGO_LDFLAGS', None)
         if graphs is None:
             graphs = work/'graphs'; graphs.mkdir()
-            generator_env = env.copy()
-            # Fixture compilers are ordinary host programs. Their nested build
-            # helpers may set link flags, so never inject the Tor DSO into them.
-            generator_env.pop('CGO_LDFLAGS', None)
             subprocess.run([sys.executable, str(FIXTURE), '--output', str(graphs)],
                            cwd=ROOT, env=generator_env, check=True, timeout=600)
         graph_hashes = require_matrix(graphs)
+        if server_graphs is None:
+            server_graphs = work/'server-graphs'; server_graphs.mkdir()
+            subprocess.run([sys.executable, str(SERVER_FIXTURE), '--output', str(server_graphs)],
+                           cwd=ROOT, env=generator_env, check=True, timeout=600)
+        server_hashes = require_matrix(server_graphs, 'server')
         env['ROUTERVPN_IOS_TOR_GRAPHS'] = str(graphs.resolve())
+        env['ROUTERVPN_IOS_TOR_SERVER_GRAPHS'] = str(server_graphs.resolve())
         (work/'registry.go').write_bytes(absent)
         overlay = work/'overlay.json'
         overlay.write_text(json.dumps({'Replace': {str(registry): str(work/'registry.go')}}))
@@ -240,11 +263,12 @@ def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
             stream.write(data)
         try:
             run_native(command, vendor, env, logs/'native-positive.jsonl')
-            print('PASS Apple Tor: 348 shipping configurations accepted by real native engines', flush=True)
+            print('PASS Apple Tor: 690 shipping Local and Server configurations accepted by real native engines', flush=True)
             negative = dict(env, ROUTERVPN_IOS_TOR_MISSING_ENGINE='1')
             run_native(command[:2]+['-overlay', str(overlay)]+command[2:], vendor, negative, logs/'native-missing-engine.jsonl')
-            print('PASS Apple Tor: all 348 unchanged configurations reject missing Tor registration', flush=True)
+            print('PASS Apple Tor: all 690 unchanged configurations reject missing Tor registration', flush=True)
             if (source_hashes() != before or sha(library) != native or require_matrix(graphs) != graph_hashes
+                    or require_matrix(server_graphs, 'server') != server_hashes
                     or registry.read_bytes() != registry_source
                     or {name: sha(vendor/name) for name in modules} != modules):
                 raise ValueError('Apple/native source, captured graphs or module closure changed during validation')
@@ -253,9 +277,10 @@ def run(vendor: Path, package: Path, go: str, graphs: Path | None = None,
             report = dict(schema=1, core=PIN, tags=TAGS, sources=before,
                           native_library_sha256=native, native_package=package_record,
                           prepared_source_sha256=TOR.digest(), module_sha256=modules,
-                          graph_sha256=graph_hashes, registry_sha256=hashlib.sha256(registry_source).hexdigest(),
+                          graph_sha256=graph_hashes, server_graph_sha256=server_hashes,
+                          registry_sha256=hashlib.sha256(registry_source).hexdigest(),
                           missing_registry_sha256=hashlib.sha256(absent).hexdigest(),
-                          verified=dict(apple_graphs=348, missing_engine_controls=348,
+                          verified=dict(apple_graphs=690, local_graphs=348, server_graphs=342, missing_engine_controls=690,
                                         exact_c_tor_abi=True, native_config_constructor=True,
                                         vpn_started=False, public_tor_traffic=False, apple_sdk_build=False))
             (logs/'apple-tor-native-evidence.json').write_text(json.dumps(report, indent=2, sort_keys=True)+'\n')
@@ -271,6 +296,7 @@ def main() -> None:
     parser.add_argument('--native-package', type=Path)
     parser.add_argument('--go', default=shutil.which('go'))
     parser.add_argument('--graphs', type=Path, help='previous export from the exact current shipping Swift fixture')
+    parser.add_argument('--server-graphs', type=Path, help='previous export from the exact current Server Swift fixture')
     parser.add_argument('--output', type=Path, help='new directory for complete native logs and source evidence')
     parser.add_argument('--clang', help='Clang21+ next to matching clang++ and ld.lld; defaults to the Swift toolchain')
     parser.add_argument('--digest', action='store_true')
@@ -278,7 +304,7 @@ def main() -> None:
     if args.digest:
         print(digest())
     elif args.vendor and args.native_package and args.go:
-        run(args.vendor, args.native_package, args.go, args.graphs, args.output, args.clang)
+        run(args.vendor, args.native_package, args.go, args.graphs, args.output, args.clang, args.server_graphs)
     else:
         parser.error('--vendor, --native-package and Go are required')
 

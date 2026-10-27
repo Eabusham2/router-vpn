@@ -210,7 +210,8 @@ extension RouterVPNModel {
             }
             let options: [String: NSObject]? = launchOptions.isEmpty ? nil : launchOptions
             try manager.connection.startVPNTunnel(options: options)
-            let selectingExecution = ordinary && profile.multihopEnabled == true && ["server", "auto"].contains(profile.multihopExecution ?? "local")
+            let selectingExecution = profile.multihopEnabled == true &&
+                (tor || (ordinary && ["server", "auto"].contains(profile.multihopExecution ?? "local")))
             let ok = await waitExternalConnection(manager, attempts: tor ? 720 : (selectingExecution ? 480 : 48), generation: generation)
             guard iosConnectGeneration == generation, !iosUserDisconnectInProgress, !Task.isCancelled else { return }
             guard ok else {

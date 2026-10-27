@@ -115,6 +115,18 @@ final class RouterVPNMTUSession: NSObject, LibboxRouterMTUPlatformProtocol, @unc
     func stop() {
         try? stopChecked()
     }
+    /// Return measurement sockets before Tor releases its remote lease. Keep
+    /// NWPath observations active: a real route change must still invalidate
+    /// that retained cleanup path while client data is already cancelled.
+    func drainForTorCleanup() throws {
+        stateLock.lock()
+        invalid = true; abortHandler = nil
+        if let captured = core { retainForClose(captured); core = nil }
+        stateLock.unlock()
+        try drainRetired()
+        stateLock.lock(); let pending = constructing || !retired.isEmpty; stateLock.unlock()
+        if pending { throw failure("Native MTU ownership is still draining before Tor cleanup") }
+    }
     func stopChecked() throws {
         stateLock.lock()
         // Invalidation never waits for the factory/command lock. An in-flight
