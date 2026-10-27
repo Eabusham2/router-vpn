@@ -11,7 +11,17 @@ class NativeRelayBuild(unittest.TestCase):
     def test_exact_xray_and_guard_are_prepared_before_native_build(self):
         with tempfile.TemporaryDirectory() as tmp:
             core=Path(tmp)/'core';xray=Path(tmp)/'xray';core.mkdir();xray.mkdir();(xray/'LICENSE').write_text('license fixture\n'*20)
-            with mock.patch.object(M.HY2_DEADLINES,'prepare') as hy2_deadlines, mock.patch.object(M.XRAY,'checkout') as checkout, mock.patch.object(M,'prepare') as policy, mock.patch.object(M.XRAY,'prepare') as native, mock.patch.object(M.WHITENING,'prepare') as stream, mock.patch.object(M.PQ,'prepare') as pq, mock.patch.object(M.COMPOSITE,'prepare') as composite, mock.patch.object(M.OPENVPN_CLOSE,'prepare') as openvpn, mock.patch.object(M.STRATEGY,'prepare') as strategy, mock.patch.object(M.subprocess,'run') as run:
+            (core/'go.mod').write_text('module github.com/sagernet/sing-box\n')
+            (xray/'go.mod').write_text('module github.com/xtls/xray-core\n')
+            def captured_identity(command,**kwargs):
+                # The actual checkout validator runs against complete module
+                # identities. Only Git metadata is a fixture; native patchers
+                # have separate pinned source/executable integration gates.
+                for path,pin in ((core,M.CORE),(xray,M.XRAY.XRAY_PIN)):
+                    if command==['git','-C',str(path),'rev-parse','HEAD'] and kwargs=={'text':True}:
+                        return pin+'\n'
+                raise AssertionError('Unexpected checkout metadata read: '+repr(command))
+            with mock.patch.object(M.subprocess,'check_output',side_effect=captured_identity), mock.patch.object(M.HY2_DEADLINES,'prepare') as hy2_deadlines, mock.patch.object(M.XRAY,'checkout',wraps=M.XRAY.checkout) as checkout, mock.patch.object(M,'prepare') as policy, mock.patch.object(M.XRAY,'prepare') as native, mock.patch.object(M.WHITENING,'prepare') as stream, mock.patch.object(M.PQ,'prepare') as pq, mock.patch.object(M.COMPOSITE,'prepare') as composite, mock.patch.object(M.OPENVPN_CLOSE,'prepare') as openvpn, mock.patch.object(M.STRATEGY,'prepare') as strategy, mock.patch.object(M.SERVER_TOR,'prepare') as tor, mock.patch.object(M.subprocess,'run') as run:
                 M.prepare_native(core,xray)
                 self.assertEqual(checkout.call_count,2)
                 checkout.assert_any_call(core,M.CORE,'github.com/sagernet/sing-box')
@@ -21,6 +31,7 @@ class NativeRelayBuild(unittest.TestCase):
                 composite.assert_called_once_with(core)
                 openvpn.assert_called_once_with(core)
                 strategy.assert_called_once_with(core,mobile=False)
+                tor.assert_called_once_with(core)
                 self.assertEqual(run.call_count,2)
                 self.assertIn('github.com/xtls/xray-core='+str(xray),run.call_args_list[1].args[0][-1])
             self.assertEqual((core/'routervpn-xray-LICENSE.txt').read_bytes(),(xray/'LICENSE').read_bytes())
@@ -28,7 +39,7 @@ class NativeRelayBuild(unittest.TestCase):
         source=(ROOT/'deploy/prepare-relay-core.py').read_text()
         self.assertIn('args.vendor and args.xray',source)
         inputs=M.inputs();self.assertEqual(len(inputs),len(set(inputs)))
-        for p in (ROOT/'mobile/applexray/outbound.go.tmpl',ROOT/'deploy/prepare-apple-xray.py',ROOT/'internal/applexray/native_transport.go',ROOT/'internal/startwhitening/stream_guard.go',ROOT/'internal/nativecomposite/plan.go',ROOT/'internal/nativesip003/compile.go',ROOT/'mobile/composite/outbound.go.tmpl'):
+        for p in (ROOT/'mobile/applexray/outbound.go.tmpl',ROOT/'deploy/prepare-apple-xray.py',ROOT/'internal/applexray/native_transport.go',ROOT/'internal/startwhitening/stream_guard.go',ROOT/'internal/nativecomposite/plan.go',ROOT/'internal/nativesip003/compile.go',ROOT/'mobile/composite/outbound.go.tmpl',ROOT/'deploy/prepare-server-tor.py',ROOT/'mobile/server_tor/native.go.tmpl'):
             self.assertIn(p,inputs)
         docker=(ROOT/'deploy/router-agent.Dockerfile').read_text()
         self.assertIn('ARG RELAY_XRAY_COMMIT='+M.XRAY.XRAY_PIN,docker)

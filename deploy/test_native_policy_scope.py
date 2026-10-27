@@ -66,13 +66,23 @@ class NativePolicyScope(unittest.TestCase):
             vendor=Path(tmp)/'core';vendor.mkdir()
             xray=Path(tmp)/'xray';xray.mkdir()
             (xray/'LICENSE').write_text('native license fixture\n'*20)
+            (vendor/'go.mod').write_text('module github.com/sagernet/sing-box\n')
+            (xray/'go.mod').write_text('module github.com/xtls/xray-core\n')
+            pins={str(vendor):module.CORE,str(xray):module.XRAY.XRAY_PIN}
+            def captured_identity(command,**kwargs):
+                if len(command)==5 and command[:2]==['git','-C'] and command[2] in pins and command[3:]==['rev-parse','HEAD'] and kwargs=={'text':True}:
+                    return pins[command[2]]+'\n'
+                raise AssertionError('Unexpected checkout metadata read: '+repr(command))
+            mocks.enter_context(mock.patch.object(module.subprocess,'check_output',side_effect=captured_identity))
             calls=mock.Mock()
+            calls.attach_mock(mocks.enter_context(mock.patch.object(module.XRAY,'checkout',wraps=module.XRAY.checkout)),'checkout')
             for label,owner,method in (
-                ('checkout',module.XRAY,'checkout'),('packages',module,'prepare'),
+                ('packages',module,'prepare'),
                 ('whitening',module.WHITENING,'prepare'),('xray',module.XRAY,'prepare'),
                 ('pq',module.PQ,'prepare'),('composite',module.COMPOSITE,'prepare'),
                 ('hy2_deadlines',module.HY2_DEADLINES,'prepare'),
                 ('close_policy',module.OPENVPN_CLOSE,'prepare'),('strategy',module.STRATEGY,'prepare'),
+                ('server_tor',module.SERVER_TOR,'prepare'),
                 ('go',module.subprocess,'run'),
             ):
                 calls.attach_mock(mocks.enter_context(mock.patch.object(owner,method)),label)
@@ -85,16 +95,34 @@ class NativePolicyScope(unittest.TestCase):
             calls.hy2_deadlines.assert_called_once_with(vendor)
             calls.close_policy.assert_called_once_with(vendor)
             calls.strategy.assert_called_once_with(vendor,mobile=False)
+            calls.server_tor.assert_called_once_with(vendor)
             first_go=next(i for i,call in enumerate(calls.mock_calls) if call[0]=='go')
-            for guard in (mock.call.hy2_deadlines(vendor),mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False)):
+            for guard in (mock.call.hy2_deadlines(vendor),mock.call.close_policy(vendor),mock.call.strategy(vendor,mobile=False),mock.call.server_tor(vendor)):
                 self.assertLess(calls.mock_calls.index(guard),first_go)
             # Reject a mismatched second checkout before copying or patching
             # either tree, including before the native close-policy guard.
             calls.reset_mock()
-            calls.checkout.side_effect=[None,ValueError('wrong Xray checkout')]
-            with self.assertRaisesRegex(ValueError,'wrong Xray checkout'):
+            pins[str(xray)]='different-xray-source'
+            with self.assertRaisesRegex(ValueError,'different native engine source revision'):
                 module.prepare_native(vendor,xray)
             self.assertEqual(len(calls.mock_calls),2)
+            calls.reset_mock()
+            pins[str(xray)]=module.XRAY.XRAY_PIN
+            (xray/'go.mod').write_text('module unrelated/module\n')
+            with self.assertRaisesRegex(ValueError,'unrelated dependency module'):
+                module.prepare_native(vendor,xray)
+            self.assertEqual(len(calls.mock_calls),2)
+            # A rejected Server Tor source never reaches module edits/build.
+            # This is an orchestration fixture, not a substitute implementation
+            # of the preparer's separately tested source/ownership guards.
+            calls.reset_mock()
+            (xray/'go.mod').write_text('module github.com/xtls/xray-core\n')
+            calls.server_tor.side_effect=ValueError('captured Server Tor source rejected')
+            with self.assertRaisesRegex(ValueError,'captured Server Tor source rejected'):
+                module.prepare_native(vendor,xray)
+            calls.server_tor.assert_called_once_with(vendor)
+            calls.go.assert_not_called()
+            self.assertEqual(calls.mock_calls[-1],mock.call.server_tor(vendor))
     def test_mobile_copy_does_not_export_parent_build_audits(self):self.copied('prepare-mobile-multihop.py')
     def test_relay_copy_does_not_export_parent_build_audits(self):self.copied('prepare-relay-core.py')
     def test_owned_stale_parent_tests_are_removed(self):
