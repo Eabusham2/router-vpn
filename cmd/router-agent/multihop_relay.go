@@ -166,6 +166,7 @@ func decodeRelayRequest(body io.Reader) (multihoprelay.Request, error) {
 }
 func registerMultihopRelayRoute(h *http.ServeMux, s *server) {
 	h.HandleFunc(multihopRelayPath, s.multihopRelay)
+	h.HandleFunc(multihopTorLeasePath, s.multihopTorLease)
 }
 func (s *server) multihopRelay(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")

@@ -386,6 +386,15 @@ private entry, selected DNS transport and independent native ownership. Tor
 Server/Compare, ordinary external predecessors, exit-side desktop Tor padding
 and Direct dynamic-bridge strict protection remain requirements to implement.
 
+The Tor server lease prerequisite now has a separate asynchronous lifecycle
+with peer/session/source/DNS binding, a restart-bound acquisition challenge,
+absolute bootstrap deadline and final manager-owned Ready admission. Failed or
+retired workers retain their port until joined cleanup. Controlled worker and
+actual HTTP race tests cover cancellation, renewal, stale proof and replay.
+The production runner has no TorRunner implementation and does not advertise
+Tor; the real no-TUN worker, image and client Server path remain unfinished.
+No dynamic Tor proof is mislabeled as a last-node Compare measurement.
+
 Strict protection now permits validated dynamic Tor transports behind an
 independently captured Local Router predecessor. Their TCP, UDP and DNS use
 that authenticated native entry, with the existing exact physical firewall

@@ -54,6 +54,9 @@ type Config struct {
 	LastPort   int    `json:"last_port"`
 	TTLSeconds int    `json:"ttl_seconds"`
 	Exits      []Exit `json:"exits"`
+	// These private references are not capabilities. They remain unavailable
+	// unless the runner implements the separately owned native Tor contract.
+	TorExits []TorExitSource `json:"tor_exits,omitempty"`
 }
 type Request struct {
 	SessionID      string `json:"session_id"`
@@ -106,6 +109,7 @@ type live struct {
 	peer    netip.Addr
 	p       Process
 	retired bool
+	tor     *torOwnedProcess
 }
 type Manager struct {
 	mu             sync.Mutex
@@ -117,6 +121,7 @@ type Manager struct {
 	closed         bool
 	packetEpoch    string
 	packetAttempts map[string]int64
+	torAttempts    map[string]torAttempt
 }
 
 func New(c Config, node string, r Runner) (*Manager, error) {
@@ -131,7 +136,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 	if c.TTLSeconds == 0 {
 		c.TTLSeconds = 90
 	}
-	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits) > MaxPairedExits {
+	if c.TTLSeconds < 15 || c.TTLSeconds > 300 || len(c.Exits)+len(c.TorExits) > MaxPairedExits {
 		return nil, errors.New("relay TTL or exit limit is invalid")
 	}
 	seen := map[string]bool{}
@@ -171,6 +176,12 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		}
 		seen[e.ID+"/"+e.Mode+"/"+ExitLayerMode(e)] = true
 	}
+	for _, source := range c.TorExits {
+		if source.validate() != nil || seen[source.ID+"/"+source.Mode+"/"] {
+			return nil, errors.New("invalid or duplicate private Tor source reference")
+		}
+		seen[source.ID+"/"+source.Mode+"/"] = true
+	}
 	// Copy the supplied private configuration so callers cannot mutate live plans.
 	raw, _ := json.Marshal(c)
 	var frozen Config
@@ -182,7 +193,7 @@ func New(c Config, node string, r Runner) (*Manager, error) {
 		return nil, errors.New("relay ownership epoch could not be generated")
 	}
 	return &Manager{cfg: frozen, node: node, runner: r, leases: map[string]*live{}, now: time.Now,
-		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}}, nil
+		packetEpoch: hex.EncodeToString(epochBytes), packetAttempts: map[string]int64{}, torAttempts: map[string]torAttempt{}}, nil
 }
 func PeerKey(peer netip.Addr) string { return peer.Unmap().String() }
 func (m *Manager) Available() []map[string]string {
@@ -245,6 +256,11 @@ func ValidateIdentityPins(mode, packetPublic, pqClientIdentity string) error {
 }
 
 func (m *Manager) validate(peer netip.Addr, q Request) error {
+	// The ordinary API cannot renew/delete an asynchronous Tor owner merely
+	// by guessing its base fields and omitting the captured source identity.
+	if torMode(q.ExitMode) {
+		return ErrOwnership
+	}
 	if err := ValidateIdentityPins(q.ExitMode, q.ExpectedPacketPublicKey, q.ExpectedPQClientIdentity); err != nil {
 		return err
 	}
@@ -515,6 +531,9 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 	// Revocation precedes cleanup. A failed Stop retains process/key ownership,
 	// but never permits this exact attempt to renew or resurrect the path.
 	s.retired = true
+	if s.tor != nil {
+		_ = m.rememberTorAttemptLocked(s.peer, s.tor.capture.Request, true)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 3*time.Second)
 	defer cancel()
 	if err := s.p.Stop(ctx); err != nil || s.p.Alive() {
@@ -526,7 +545,7 @@ func (m *Manager) stopLocked(ctx context.Context, key string) error {
 func (m *Manager) reapLocked(ctx context.Context) error {
 	m.sweepPacketAttemptsLocked()
 	for key, s := range m.leases {
-		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() {
+		if !s.ExpiresAt.After(m.now()) || !s.p.Alive() || s.tor != nil && s.tor.terminal() {
 			if err := m.stopLocked(ctx, key); err != nil {
 				return err
 			}
