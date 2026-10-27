@@ -11,12 +11,12 @@ import tempfile
 from test_desktop_amnezia_forms import block
 
 ROOT = Path(__file__).resolve().parents[1]
-CATALOG_FILES = ('tor-update-source-catalog.json', 'tor-update-always-source-catalog.json',
-                 'tor-update-server-source-catalog.json', 'tor-update-server-always-source-catalog.json',
-                 'tor-update-capabilities.json', 'tor-update-input-lines.json') + tuple(
-    'tor-update-ordinary-' + protocol + '-' + suffix for protocol in
-    ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn')
-    for suffix in ('source-catalog.json', 'always-source-catalog.json'))
+SELECTIONS = ('local', 'server') + tuple('ordinary-' + protocol for protocol in
+    ('wireguard', 'amneziawg', 'socks5', 'http-connect', 'https-connect', 'shadowsocks', 'hysteria2', 'openvpn'))
+SELECTIONS += tuple('plain-' + selection for selection in SELECTIONS)
+CATALOG_FILES = ('tor-update-capabilities.json', 'tor-update-input-lines.json') + tuple(
+    'tor-update-' + (selection + '-' if selection != 'local' else '') + suffix
+    for selection in SELECTIONS for suffix in ('source-catalog.json', 'always-source-catalog.json'))
 
 
 def swift_source(generated):
@@ -27,8 +27,9 @@ def swift_source(generated):
     methods = block(generated, '    private func selectedTransport()').replace('private ', '') + '\n' + block(generated, '    private func selectedKillSwitch()').replace('private ', '')
     methods += '\n' + block(generated, '    @objc private func updateSelectionChanged()').replace('@objc private ', '')
     capture = generated[generated.index('        let selection: [String: Any]'):generated.index('        let panel = NSPanel')]
+    transports = next(line.strip().replace('private ', '') for line in generated.splitlines() if 'private let transportIDs = ' in line)
     template = (ROOT / 'client/macos/test-tor-bridge-update.swift').read_text()
-    for marker, value in [('/* HELPERS */', helpers), ('/* METHODS */', methods), ('/* SAVE */', save), ('/* CAPTURE */', capture)]:
+    for marker, value in [('/* HELPERS */', helpers), ('/* METHODS */', methods), ('/* SAVE */', save), ('/* CAPTURE */', capture), ('/* TRANSPORTS */', transports)]:
         assert template.count(marker) == 1
         template = template.replace(marker, value)
     return template
@@ -57,6 +58,8 @@ def swift_form(directory):
          'Tor update adopted ordinary-fixed-bypass'),
         ('mixed-udp', 'return (words.first == "bridge" ? words.dropFirst().first : words.first) == "snowflake"',
          '_ = words; return false', 'Tor update adopted ordinary-mixed-udp'),
+        ('plain-lines', 'guard bridges.isEmpty else', 'guard true else',
+         'Tor update adopted plain-lines'),
     )
     for name, original, replacement, witness in controls:
         assert generated.count(original) == 1, name
@@ -109,6 +112,8 @@ def linux_form(directory):
          'Rejected trial identity: ordinary-fixed-bypass'),
         ('mixed-udp', 'if (g_regex_match_simple("(*UCP)(?i)^\\\\s*(?:bridge\\\\s+)?snowflake(?:\\\\s|$)", line, 0, 0)) udp = TRUE;',
          '(void)line;', 'Rejected trial identity: ordinary-mixed-udp'),
+        ('plain-lines', '(plain && bridges->len != 0) || ', '',
+         'Rejected trial identity: plain-lines'),
     )
     include = '#include "routervpn-tor-bridge-v13.inc"'
     assert rendered.count(include) == 1
@@ -149,6 +154,8 @@ def windows_form(directory, shell):
          'Tor update adopted ordinary-fixed-bypass'),
         ('mixed-udp', "if(([string]$Line)-match'^\\s*(?:bridge\\s+)?snowflake(?:\\s|$)')", 'if($false)',
          'Tor update adopted ordinary-mixed-udp'),
+        ('plain-lines', 'if($Plain-and$BridgeCount-ne0)', 'if($false)',
+         'Tor update adopted plain-lines'),
     )
     for name, original, replacement, witness in controls:
         assert source.count(original) == 1, name

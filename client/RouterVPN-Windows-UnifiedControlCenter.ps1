@@ -17,7 +17,7 @@ $script:RouterVPNUnifiedControlCenter = [ordered]@{
     AuthenticatedTransport = $true
     BottomSheetOrder = @('connection','multihop','settings','mode','dns')
     ProfileActions = @('create','load','update','delete','import-router-bundle')
-    BridgeTypes = @('SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Hysteria2','Tor bridge (runtime capability-gated)')
+    BridgeTypes = @('SOCKS5','HTTP CONNECT','HTTPS CONNECT','Shadowsocks 2022','Hysteria2','Tor bridge (runtime capability-gated)','Plain Tor (runtime capability-gated)')
     UnavailableTypes = @{}
     SecureSuites = @(
         'WireGuard Noise_IK + ChaCha20-Poly1305',
@@ -25,7 +25,8 @@ $script:RouterVPNUnifiedControlCenter = [ordered]@{
         'OpenVPN TLS 1.3 + AEAD (only when the native OpenVPN capability check passes)',
         'Shadowsocks 2022 BLAKE3 + AEAD',
         'Hysteria2 QUIC + TLS 1.3',
-        'Tor pluggable transport + proven ntor-v3 circuit (only when /api/tor-bridge/capabilities reports supported)'
+        'Tor pluggable transport + proven ntor-v3 circuit (only when /api/tor-bridge/capabilities reports supported)',
+        'Plain Tor circuit (only when the controller proves the selected circuit and policy)'
     )
 }
 
@@ -35,11 +36,12 @@ function Test-RouterVPNSecureNodeChain {
     $final = $NodeTypes[-1].ToLowerInvariant()
     $unavailable = $script:RouterVPNUnifiedControlCenter.UnavailableTypes[$final]
     if ($unavailable) { throw $unavailable }
-    # tor-bridge is a complete final transport only when the live controller
-    # capability and connect path prove the pinned Tor/PT runtime. Windows ARM64
-    # additionally requires Windows' x64 user-mode execution capability. The
-    # VPN driver stays native; static transport recognition cannot prove readiness.
-    $allowed = @('router-vpn','wireguard','amneziawg','openvpn','shadowsocks','shadowsocks-2022','hysteria2','tor-bridge')
+    # tor and tor-bridge are complete final transports only when the live controller
+    # capability and connect path prove the selected Tor runtime. Local execution
+    # on Windows ARM64 also checks the pinned helper's x64 user-mode capability.
+    # Server execution owns its authenticated entry and lease. The VPN driver
+    # stays native; static transport recognition cannot prove readiness.
+    $allowed = @('router-vpn','wireguard','amneziawg','openvpn','shadowsocks','shadowsocks-2022','hysteria2','tor-bridge','tor')
     if ($allowed -notcontains $final) {
         throw "$final is a bridge only. Add an authenticated encrypted tunnel after it."
     }

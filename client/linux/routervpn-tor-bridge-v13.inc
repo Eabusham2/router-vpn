@@ -1,6 +1,6 @@
 /* Linux native Tor censorship-circumvention panel.
  *
- * This UI only builds validated external Tor bridge profiles through the local
+ * This UI builds validated Plain Tor and bridge profiles through the local
  * controller API. It never accepts executable paths or raw torrc directives.
  * Runtime truth remains owned by /api/tor-bridge/capabilities and the controller.
  */
@@ -22,8 +22,9 @@ typedef struct {
 static JsonObject *linux_tor_update_profile_v13(LinuxTorBridgeV13 *state) {
     JsonObject *store = state->opened != NULL && JSON_NODE_HOLDS_OBJECT(state->opened) ? json_node_get_object(state->opened) : NULL;
     JsonObject *profile = external_source_profile_v24(store, external_source_selection_v24(store));
+    const char *protocol = external_path_string_v4(external_path_object_v4(profile, "external"), "protocol");
     return g_strcmp0(external_path_string_v4(profile, "node_kind"), "external") == 0 &&
-        g_strcmp0(external_path_string_v4(external_path_object_v4(profile, "external"), "protocol"), "tor-bridge") == 0 ? profile : NULL;
+        (g_strcmp0(protocol, "tor") == 0 || g_strcmp0(protocol, "tor-bridge") == 0) ? profile : NULL;
 }
 
 static gboolean linux_tor_router_path_v13(LinuxTorBridgeV13 *state, JsonObject *profile) {
@@ -75,15 +76,19 @@ static void linux_tor_update_changed_v13(GtkToggleButton *button, gpointer data)
     LinuxTorBridgeV13 *state = data;
     if (!gtk_toggle_button_get_active(button)) {
         gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->kill), "off");
-        linux_tor_status_v13(state, "Adding a new Tor node. Choose its protection and paste bridge lines.");
+        linux_tor_status_v13(state, "Adding a new Tor node. Choose Plain Tor with an empty bridge field, or paste bridge lines for a bridge transport.");
         return;
     }
     JsonObject *profile = linux_tor_update_profile_v13(state);
     const char *policy = external_path_string_v4(profile, "kill_switch_policy");
     gtk_combo_box_set_active(GTK_COMBO_BOX(state->kill), -1);
     gboolean loaded = gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->kill), policy);
-    if (profile != NULL) gtk_entry_set_text(GTK_ENTRY(state->name), external_path_string_v4(profile, "name"));
-    linux_tor_status_v13(state, loaded ? "Loaded the captured node name and kill-switch policy. Paste replacement bridge lines; the saved path and DNS remain attached to this node." : "The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.");
+    if (profile != NULL) {
+        gtk_entry_set_text(GTK_ENTRY(state->name), external_path_string_v4(profile, "name"));
+        if (g_strcmp0(external_path_string_v4(external_path_object_v4(profile, "external"), "protocol"), "tor") == 0)
+            gtk_combo_box_set_active_id(GTK_COMBO_BOX(state->transport), "tor");
+    }
+    linux_tor_status_v13(state, loaded ? "Loaded the captured node name and kill-switch policy. Choose Plain Tor or replacement bridge lines; the saved path and DNS remain attached to this node." : "The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.");
 }
 
 static gboolean linux_tor_mutation_idle_v13(App *app, char **reason) {
@@ -185,8 +190,9 @@ static char *linux_tor_payload_v13(LinuxTorBridgeV13 *state, JsonNode *current, 
     }
     g_strfreev(rows);
     g_free(raw);
-    if (bridges->len < 1 || bridges->len > 8) {
-        if (validation_error != NULL) *validation_error = g_strdup("Paste between one and eight Tor bridge lines.");
+    gboolean plain = g_strcmp0(transport, "tor") == 0;
+    if ((plain && bridges->len != 0) || (!plain && (bridges->len < 1 || bridges->len > 8))) {
+        if (validation_error != NULL) *validation_error = g_strdup(plain ? "Clear the bridge lines before choosing Plain Tor. No bridge configuration was discarded." : "Paste between one and eight Tor bridge lines, or choose Plain Tor with the bridge field empty.");
         g_ptr_array_unref(bridges);
         return NULL;
     }
@@ -292,8 +298,8 @@ static gboolean linux_tor_save_v13(LinuxTorBridgeV13 *state) {
         return FALSE;
     }
     gboolean updating = state->update_selected != NULL && gtk_toggle_button_get_active(GTK_TOGGLE_BUTTON(state->update_selected));
-    linux_tor_status_v13(state, updating ? "Selected Tor bridge node updated. Its DNS choice is preserved." : "Tor bridge node saved. Before connecting, choose Custom TCP, DoT, DoH or Rescue in DNS.");
-    append_diag(state->app, updating ? "Updated selected Tor censorship bridge profile without exposing prior private relay lines." : "Saved validated Tor censorship bridge profile (obfs4/meek/Snowflake/WebTunnel/Custom).");
+    linux_tor_status_v13(state, updating ? "Selected Tor node updated. Its DNS choice is preserved." : "Tor node saved. Before connecting, choose Custom TCP, DoT, DoH or Rescue in DNS.");
+    append_diag(state->app, updating ? "Updated selected Tor profile without exposing prior private relay lines." : "Saved validated Tor profile (Plain Tor/obfs4/meek/Snowflake/WebTunnel/Custom).");
     refresh_all(state->app);
     g_free(err);
     free(out.data);
@@ -332,10 +338,10 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_container_set_border_width(GTK_CONTAINER(box), 16);
 
     GtkWidget *title = gtk_label_new(NULL);
-    gtk_label_set_markup(GTK_LABEL(title), "<span size='xx-large' weight='bold'>Tor bridges</span>");
+    gtk_label_set_markup(GTK_LABEL(title), "<span size='xx-large' weight='bold'>Tor and bridges</span>");
     gtk_label_set_xalign(GTK_LABEL(title), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), title, FALSE, FALSE, 0);
-    GtkWidget *intro = gtk_label_new("Choose how Tor gets through censorship. obfs4 disguises bridge traffic; meek uses HTTPS fronts; Snowflake uses volunteer proxies; WebTunnel resembles HTTPS traffic. Auto / Custom accepts Tor-issued bridge sets. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice.");
+    GtkWidget *intro = gtk_label_new("Plain Tor connects without bridge lines. For censorship circumvention, obfs4 disguises bridge traffic; meek uses HTTPS fronts; Snowflake uses volunteer proxies; WebTunnel resembles HTTPS traffic. Auto / Custom accepts Tor-issued bridge sets. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice.");
     gtk_label_set_line_wrap(GTK_LABEL(intro), TRUE);
     gtk_label_set_xalign(GTK_LABEL(intro), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), intro, FALSE, FALSE, 0);
@@ -344,7 +350,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_entry_set_placeholder_text(GTK_ENTRY(state.name), "Node name (optional)");
     gtk_box_pack_start(GTK_BOX(box), state.name, FALSE, FALSE, 0);
     JsonObject *captured_profile = linux_tor_update_profile_v13(&state);
-    g_autofree char *update_label = captured_profile != NULL ? g_strdup_printf("Update %s (paste replacement bridge lines below)", external_path_string_v4(captured_profile, "name")) : g_strdup("Update the Tor node selected when this dialog opened");
+    g_autofree char *update_label = captured_profile != NULL ? g_strdup_printf("Update %s (choose Plain Tor or replacement bridge lines)", external_path_string_v4(captured_profile, "name")) : g_strdup("Update the Tor node selected when this dialog opened");
     state.update_selected = gtk_check_button_new_with_label(update_label);
     gtk_widget_set_sensitive(state.update_selected, captured_profile != NULL);
     gtk_widget_set_tooltip_text(state.update_selected, "Updates retain the displayed Tor node and entry revisions. Reopen this dialog after changing or relinking either node. Paste replacement bridge lines; existing private lines are never read back.");
@@ -357,6 +363,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.transport), "snowflake", "Snowflake");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.transport), "webtunnel", "WebTunnel");
     gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.transport), "custom", "Auto / Custom");
+    gtk_combo_box_text_append(GTK_COMBO_BOX_TEXT(state.transport), "tor", "Plain Tor — no bridges");
     gtk_combo_box_set_active_id(GTK_COMBO_BOX(state.transport), "obfs4");
     gtk_box_pack_start(GTK_BOX(row), state.transport, TRUE, TRUE, 0);
     state.kill = gtk_combo_box_text_new();
@@ -367,7 +374,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_box_pack_start(GTK_BOX(row), state.kill, TRUE, TRUE, 0);
     gtk_box_pack_start(GTK_BOX(box), row, FALSE, FALSE, 0);
 
-    GtkWidget *line_label = gtk_label_new("Tor bridge lines — one per line");
+    GtkWidget *line_label = gtk_label_new("Tor bridge lines — leave empty for Plain Tor");
     gtk_label_set_xalign(GTK_LABEL(line_label), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), line_label, FALSE, FALSE, 0);
     GtkWidget *scroll = gtk_scrolled_window_new(NULL, NULL);
@@ -378,7 +385,7 @@ static void on_linux_tor_bridge_v13(GtkButton *button, gpointer data) {
     gtk_container_add(GTK_CONTAINER(scroll), state.lines);
     gtk_box_pack_start(GTK_BOX(box), scroll, TRUE, TRUE, 0);
 
-    GtkWidget *safety = gtk_label_new("Paste current lines from Tor or a trusted bridge source. Router VPN accepts only obfs4, meek_lite, Snowflake, and WebTunnel syntax. Dynamic transports use a saved Router entry with Local or Server execution for strict protection. Save new Direct nodes with Kill switch Off, then configure their entry before enabling protection in Settings.");
+    GtkWidget *safety = gtk_label_new("Plain Tor needs no bridge lines. For bridges, paste current obfs4, meek_lite, Snowflake or WebTunnel lines from Tor or a trusted source. Strict protection requires an eligible Local entry; Server requires a paired Router. Save new Direct dynamic nodes with Kill switch Off, then configure their entry before enabling protection in Settings.");
     gtk_label_set_line_wrap(GTK_LABEL(safety), TRUE);
     gtk_label_set_xalign(GTK_LABEL(safety), 0.0f);
     gtk_box_pack_start(GTK_BOX(box), safety, FALSE, FALSE, 0);

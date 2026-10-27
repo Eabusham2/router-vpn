@@ -350,8 +350,9 @@ let directMode = try externalPathConnectBody(captured: captured, entryID: "", ex
 check(directMode["entry_mode"] == nil, "Direct retained disabled Router mode"); count += 1
 let ordinaryMode = try externalPathConnectBody(captured: captured, entryID: "ordinary", execution: "local", direct: false, current: [captured, ordinary], entryMode: "", entryModes: entryModes)
 check(ordinaryMode["entry_mode"] == nil, "External entry retained disabled Router mode"); count += 1
+for torProtocol in ["tor-bridge", "tor"] {
 for protocolID in ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"] {
-    var tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": "tor-bridge"],
+    var tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": torProtocol],
         "multihop_enabled": true, "multihop_entry_id": "ordinary", "multihop_entry_mode": protocolID]
     let lower: [String: Any] = ["id": "ordinary", "node_kind": "external", "external": ["protocol": protocolID]]
     let restoredMode = try externalSavedEntryMode(captured: tor, profiles: [tor, lower], modes: entryModes)
@@ -366,10 +367,11 @@ for protocolID in ["wireguard", "amneziawg", "socks5", "http-connect", "https-co
     count += 5
 }
 for bad in ["future", " WireGuard", "tor-bridge"] {
-    let tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": "tor-bridge"],
+    let tor: [String: Any] = ["id": "saved-tor", "node_kind": "external", "external": ["protocol": torProtocol],
         "multihop_enabled": true, "multihop_entry_id": "ordinary", "multihop_entry_mode": bad]
     let lower: [String: Any] = ["id": "ordinary", "node_kind": "external", "external": ["protocol": bad]]
     check(rejects { _ = try externalSavedEntryMode(captured: tor, profiles: [tor, lower], modes: entryModes) }, "Unknown saved Tor predecessor accepted"); count += 1
+}
 }
 var changedModeOwner = captured; changedModeOwner["multihop_entry_mode"] = "hysteria2"
 check(rejects { _ = try externalPathConnectBody(captured: captured, entryID: "entry", execution: "local", direct: false, current: [changedModeOwner, entryModeNode], entryMode: "wg", entryModes: entryModes) }, "Changed saved entry mode owner accepted"); count += 1

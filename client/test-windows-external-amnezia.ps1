@@ -319,8 +319,9 @@ $RestoreMode=@($Shipping.Ast.FindAll({param($Node)$Node -is [System.Management.A
 Check ($RestoreMode.Count -eq 1) 'Saved external entry restoration changed.'
 $RestoreSavedMode=[ScriptBlock]::Create($RestoreMode[0].Extent.Text)
 $PriorCaptured=$Captured;$PriorStore=$Store
+foreach($TorProtocol in @('tor-bridge','tor')){
 foreach($ProtocolID in @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn')){
-    $Captured=[pscustomobject]@{id='saved-tor';node_kind='external';external=[pscustomobject]@{protocol='tor-bridge'};multihop_enabled=$true;multihop_entry_id='ordinary';multihop_entry_mode=$ProtocolID}
+    $Captured=[pscustomobject]@{id='saved-tor';node_kind='external';external=[pscustomobject]@{protocol=$TorProtocol};multihop_enabled=$true;multihop_entry_id='ordinary';multihop_entry_mode=$ProtocolID}
     $Lower=[pscustomobject]@{id='ordinary';node_kind='external';external=[pscustomobject]@{protocol=$ProtocolID}}
     $Store=[pscustomobject]@{profiles=@($Captured,$Lower)}
     . $RestoreSavedMode
@@ -339,6 +340,7 @@ foreach($Bad in @('future',' WireGuard','tor-bridge')){
     $Captured.multihop_entry_mode=$Bad;$Lower.external.protocol=$Bad;$Rejected=$false
     try{[void](GetUnifiedExternalSavedEntryMode $Captured $Store.profiles $EntryModes)}catch{$Rejected=$true}
     Check $Rejected 'Unknown saved Tor predecessor accepted.';$Count++
+}
 }
 $Captured=$PriorCaptured;$Store=$PriorStore
 $UnifiedSource=Get-Content -Raw -Encoding UTF8 -LiteralPath (Join-Path $Root 'client/RouterVPN-Windows-UnifiedShell.ps1')

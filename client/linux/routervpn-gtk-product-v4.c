@@ -306,7 +306,8 @@ static char *external_saved_entry_mode_v4(JsonObject *captured,JsonArray *profil
             const char *protocol=external_path_string_v4(external,"protocol");
             const char *supported[]={"wireguard","amneziawg","socks5","http-connect","https-connect","shadowsocks","hysteria2","openvpn"};gboolean valid=FALSE;
             for(guint i=0;i<G_N_ELEMENTS(supported);i++)if(g_strcmp0(protocol,supported[i])==0)valid=TRUE;
-            if(valid&&g_strcmp0(mode,protocol)==0&&g_strcmp0(external_path_string_v4(external_path_object_v4(captured,"external"),"protocol"),"tor-bridge")==0)return g_strdup("");
+            const char *exit_protocol=external_path_string_v4(external_path_object_v4(captured,"external"),"protocol");
+            if(valid&&g_strcmp0(mode,protocol)==0&&(g_strcmp0(exit_protocol,"tor")==0||g_strcmp0(exit_protocol,"tor-bridge")==0))return g_strdup("");
             message="The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.";
         }else if(message==NULL&&((kind[0]&&g_strcmp0(kind,"router-vpn")!=0)||external!=NULL))message="The saved entry has an inconsistent node identity.";
     }

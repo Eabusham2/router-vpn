@@ -111,8 +111,21 @@ func checkTorBridgePreservedUpdate(t *testing.T, a *app, old, entry common.Route
 	if !updated.MultihopEnabled || updated.MultihopEntryID != old.MultihopEntryID || updated.MultihopExitID != old.MultihopExitID || updated.MultihopEntryMode != old.MultihopEntryMode || updated.MultihopExecution != old.MultihopExecution {
 		t.Fatal("bridge edit lost the complete saved Router graph")
 	}
-	if updated.KillSwitchPolicy != kill || updated.KillSwitch != (kill != "off") || updated.External.TorBridge.Transport != transport || updated.External.TorBridge.SocksPort != old.External.TorBridge.SocksPort {
+	if updated.KillSwitchPolicy != kill || updated.KillSwitch != (kill != "off") || updated.External == nil {
 		t.Fatal("bridge edit changed requested protection or standalone SOCKS ownership")
+	}
+	if transport == "tor" {
+		if updated.External.Protocol != "tor" || updated.External.TorBridge != nil {
+			t.Fatal("Plain Tor update retained a private bridge or changed its protocol")
+		}
+	} else {
+		port := 19050
+		if old.External.TorBridge != nil {
+			port = old.External.TorBridge.SocksPort
+		}
+		if updated.External.Protocol != "tor-bridge" || updated.External.TorBridge == nil || updated.External.TorBridge.Transport != transport || updated.External.TorBridge.SocksPort != port {
+			t.Fatal("bridge edit changed the selected transport or standalone SOCKS ownership")
+		}
 	}
 	if updated.DNSMode != old.DNSMode || updated.DNSProtocol != old.DNSProtocol || updated.DNSHost != old.DNSHost || updated.DNSPort != old.DNSPort || updated.DNSServerName != old.DNSServerName || updated.DNSPath != old.DNSPath || updated.IPv6Mode != old.IPv6Mode || updated.MTUPolicy != old.MTUPolicy || updated.ManualMTU != old.ManualMTU || !reflect.DeepEqual(updated.HomeLANCIDRs, old.HomeLANCIDRs) || updated.HomeLANAccess != old.HomeLANAccess {
 		t.Fatal("bridge edit substituted independent DNS, MTU, LAN or IPv6 choices")

@@ -34,7 +34,7 @@ final class Form {
     var productOwner: Owner?; let api: ProductAPI; let opened: [String: Any]
     let updateSelected = Toggle(), nameField = Field(), transportPopup = Popup(), killSwitchPopup = Popup(), bridgeText = Area(), status = Field()
     var capabilityRoot: [String: Any]; var capabilities: [String: [String: Any]] = [:]
-    let transportIDs = ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom"]
+    /* TRANSPORTS */
     init(owner: Owner, api: ProductAPI, capabilities: [String: Any]) {
         productOwner = owner; self.api = api; capabilityRoot = capabilities
         for row in capabilities["transports"] as! [[String: Any]] { self.capabilities[row["id"] as! String] = row }
@@ -49,16 +49,18 @@ func check(_ value: @autoclosure () -> Bool, _ message: String) { checks += 1; i
 let directory = URL(fileURLWithPath: CommandLine.arguments[1])
 func object(_ name: String) throws -> [String: Any] { try JSONSerialization.jsonObject(with: Data(contentsOf: directory.appendingPathComponent(name))) as! [String: Any] }
 let localCatalog = try object("tor-update-source-catalog.json"), caps = try object("tor-update-capabilities.json"), lines = try object("tor-update-input-lines.json")
-let selections = ["local", "server"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
-for execution in selections {
-let ordinary = execution.hasPrefix("ordinary-"), tcpOnly = ["ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect"].contains(execution)
+let baseSelections = ["local", "server"] + ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].map { "ordinary-" + $0 }
+for execution in baseSelections + baseSelections.map({ "plain-" + $0 }) {
+let plain = execution.hasPrefix("plain-"), path = plain ? String(execution.dropFirst(6)) : execution
+let ordinary = path.hasPrefix("ordinary-"), tcpOnly = ["ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect"].contains(path)
 let filePrefix = execution == "local" ? "" : execution + "-"
 let catalog = try object("tor-update-\(filePrefix)source-catalog.json")
-for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated() {
+for id in ["obfs4", "meek_lite", "snowflake", "webtunnel", "tor"] {
     for (killIndex, kill) in ["off", "on-connect", "always"].enumerated() {
         let owner = Owner(catalog), api = ProductAPI(catalog)
         let active = Form(owner: owner, api: api, capabilities: caps)
-        active.transportPopup.indexOfSelectedItem = index; active.killSwitchPopup.indexOfSelectedItem = killIndex
+        check(active.transportIDs.contains(id), "Shipping transport selector omitted " + id)
+        active.transportPopup.indexOfSelectedItem = active.transportIDs.firstIndex(of: id)!; active.killSwitchPopup.indexOfSelectedItem = killIndex
         active.bridgeText.string = (lines[id] as! [String]).joined(separator: "\n")
         active.save()
         if tcpOnly && id == "snowflake" && kill != "off" {
@@ -77,12 +79,18 @@ for (index, id) in ["obfs4", "meek_lite", "snowflake", "webtunnel"].enumerated()
 let always = try object("tor-update-\(filePrefix)always-source-catalog.json")
 let alwaysOwner = Owner(always), alwaysAPI = ProductAPI(always)
 let saved = Form(owner: alwaysOwner, api: alwaysAPI, capabilities: caps)
+if plain { saved.bridgeText.string = "retained pasted bridge text" }
 saved.updateSelectionChanged()
 check(saved.killSwitchPopup.indexOfSelectedItem == 2 && saved.nameField.stringValue == "Captured Tor exit", "Update checkbox did not load saved Always and name")
-saved.transportPopup.indexOfSelectedItem = ordinary ? 1 : 2; saved.bridgeText.string = (lines[ordinary ? "meek_lite" : "snowflake"] as! [String]).joined(separator: "\n")
+if plain {
+    check(saved.transportIDs[saved.transportPopup.indexOfSelectedItem] == "tor", "Saved Plain Tor reopened as a bridge transport")
+    check(saved.bridgeText.string == "retained pasted bridge text", "Loading Plain Tor silently discarded pasted bridge lines")
+}
+let preserved = plain ? "tor" : ordinary ? "meek_lite" : "snowflake"
+saved.transportPopup.indexOfSelectedItem = saved.transportIDs.firstIndex(of: preserved)!; saved.bridgeText.string = (lines[preserved] as! [String]).joined(separator: "\n")
 saved.save(); check(alwaysAPI.saved?["kill_switch_policy"] as? String == "always", "Actual Save lost untouched saved Always protection")
 try JSONSerialization.data(withJSONObject: alwaysAPI.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-update-\(filePrefix)preserved-protection.json"))
-var faults = ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "compare-path", "server-direct", "server-external-entry", "compare-off", "server-direct-off", "server-external-off", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy"]
+var faults = ["selected", "exit-token", "entry-token", "missing-entry", "duplicate-exit", "entry-is-external", "compare-path", "server-direct", "server-external-entry", "compare-off", "server-direct-off", "server-external-off", "old-controller", "missing-token", "busy", "retired-owner", "display-mutated", "invalid-saved-policy", "missing-saved-policy", "plain-lines", "bridge-empty"]
 if ordinary { faults += ["ordinary-mode", "ordinary-public-proof", "ordinary-capability", "ordinary-fixed-bypass"]; if tcpOnly { faults += ["ordinary-mixed-udp", "ordinary-mixed-udp-bare", "ordinary-mixed-udp-unicode"] } }
 for fault in faults {
     var opened = catalog, current = catalog, capability = caps
@@ -125,6 +133,11 @@ for fault in faults {
         if fault.hasSuffix("-unicode") { mixed = mixed.replacingOccurrences(of: "Bridge snowflake ", with: "bRiDgE\u{00a0}SnOwFlAkE\u{00a0}") }
         active.transportPopup.indexOfSelectedItem = 4; active.bridgeText.string = ((lines["obfs4"] as! [String]) + [mixed]).joined(separator: "\n")
     }
+    if fault == "plain-lines" {
+        active.transportPopup.indexOfSelectedItem = active.transportIDs.firstIndex(of: "tor")!
+        active.bridgeText.string = (lines["obfs4"] as! [String]).joined(separator: "\n")
+    }
+    if fault == "bridge-empty" { active.transportPopup.indexOfSelectedItem = 0; active.bridgeText.string = "" }
     if fault == "invalid-saved-policy" || fault == "missing-saved-policy" { active.updateSelectionChanged(); check(active.killSwitchPopup.indexOfSelectedItem == -1, "Missing/invalid policy became Off") }
     active.save(); check(api.saved == nil, "Tor update adopted "+fault)
 }
@@ -135,4 +148,10 @@ newForm.bridgeText.string = (lines["snowflake"] as! [String]).joined(separator: 
 newForm.save(); check(api.saved == nil, "Direct dynamic transport borrowed Router authority")
 newForm.killSwitchPopup.indexOfSelectedItem = 0; newForm.save()
 check(api.saved != nil && api.saved!["id"] == nil && api.saved!["expected_profile_tokens"] == nil && api.reads == 0, "Add borrowed captured update identity")
+api.saved = nil; newForm.transportPopup.indexOfSelectedItem = newForm.transportIDs.firstIndex(of: "tor")!
+newForm.bridgeText.string = ""; newForm.killSwitchPopup.indexOfSelectedItem = 2
+newForm.save(); check(api.saved == nil, "Plain Tor Direct borrowed strict Router authority")
+newForm.killSwitchPopup.indexOfSelectedItem = 0; newForm.save()
+check(api.saved?["transport"] as? String == "tor" && (api.saved?["bridges"] as? [String])?.isEmpty == true && api.reads == 0, "Plain Tor Add did not preserve its empty bridge contract")
+try JSONSerialization.data(withJSONObject: api.saved!, options: [.sortedKeys]).write(to: directory.appendingPathComponent("tor-create-plain.json"))
 print("Swift actual Tor editor capture/callback: \(checks) checks PASS")

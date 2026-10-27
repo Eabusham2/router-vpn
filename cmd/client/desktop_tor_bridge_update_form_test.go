@@ -18,18 +18,31 @@ func torBridgeFormSelections() []string {
 	for _, protocol := range desktopTorOrdinaryTestProtocols {
 		values = append(values, "ordinary-"+protocol)
 	}
+	for _, selection := range append([]string(nil), values...) {
+		values = append(values, "plain-"+selection)
+	}
 	return values
 }
 
 func torBridgeFormNeedsTCPOnly(selection string) bool {
+	selection = strings.TrimPrefix(selection, "plain-")
 	return selection == "ordinary-socks5" || selection == "ordinary-http-connect" || selection == "ordinary-https-connect"
 }
 
 func torBridgeFormPreservedTransport(selection string) string {
+	if strings.HasPrefix(selection, "plain-") {
+		return "tor"
+	}
 	if strings.HasPrefix(selection, "ordinary-") {
 		return "meek_lite"
 	}
 	return "snowflake"
+}
+
+func torBridgeFormInputLines() map[string][]string {
+	lines := torBridgeUpdateInputLines()
+	lines["tor"] = []string{}
+	return lines
 }
 
 func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
@@ -86,7 +99,7 @@ func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 		if !ok {
 			t.Fatal("Tor capability transport is not an object")
 		}
-		if _, tested := torBridgeUpdateInputLines()[transport["id"].(string)]; tested || transport["id"] == "custom" {
+		if _, tested := torBridgeFormInputLines()[transport["id"].(string)]; tested || transport["id"] == "custom" {
 			transport["supported"] = true
 			transport["helper"] = "test-only simulated runtime availability"
 			delete(transport, "reason")
@@ -99,7 +112,7 @@ func TestDesktopTorBridgeUpdateFormCatalog(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(directory, "tor-update-capabilities.json"), capabilityBytes, 0600); err != nil {
 		t.Fatal(err)
 	}
-	lines, err := json.MarshalIndent(torBridgeUpdateInputLines(), "", "  ")
+	lines, err := json.MarshalIndent(torBridgeFormInputLines(), "", "  ")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -113,6 +126,30 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 	if directory == "" {
 		t.Skip("native Tor editor supplies its callback payload directory")
 	}
+	t.Run("new-plain-direct", func(t *testing.T) {
+		a, old, entry := torBridgeFormSourceFixture(t, "local")
+		raw, err := os.ReadFile(filepath.Join(directory, "tor-create-plain.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var request torBridgeImportRequest
+		if json.Unmarshal(raw, &request) != nil || request.Transport != "tor" || len(request.Bridges) != 0 || request.KillSwitchPolicy != "off" || request.ID != "" || request.ExpectedSelectedNodeID != nil || len(request.ExpectedProfileTokens) != 0 {
+			t.Fatal("actual Plain Tor Add borrowed update identity or bridge material")
+		}
+		response := postTorBridgeUpdate(a, raw)
+		if response.Code != http.StatusOK || len(a.profiles.Profiles) != 3 {
+			t.Fatal("actual Plain Tor Add failed", response.Code, response.Body.String())
+		}
+		added := a.profiles.Profiles[2]
+		if added.External == nil || added.External.Protocol != "tor" || added.External.TorBridge != nil || added.MultihopEnabled || added.KillSwitch || added.KillSwitchPolicy != "off" || a.cmd != nil || a.state.Connected {
+			t.Fatal("Plain Tor Add changed its direct/bridge-free policy or invented runtime proof")
+		}
+		before, _ := json.Marshal([]common.RouterProfile{old, entry})
+		after, _ := json.Marshal(a.profiles.Profiles[:2])
+		if !bytes.Equal(before, after) {
+			t.Fatal("Plain Tor Add changed an existing private node")
+		}
+	})
 	for _, execution := range torBridgeFormSelections() {
 		t.Run(execution+"/unchanged-saved-protection", func(t *testing.T) {
 			a, old, entry := torBridgeFormSourceFixture(t, execution)
@@ -129,7 +166,7 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 			checkTorBridgePreservedUpdate(t, a, old, entry, postTorBridgeUpdate(a, raw), torBridgeFormPreservedTransport(execution), "always")
 			checkTorFormPersistedPath(t, a, old, entry)
 		})
-		for transport := range torBridgeUpdateInputLines() {
+		for transport := range torBridgeFormInputLines() {
 			for _, kill := range []string{"off", "on-connect", "always"} {
 				t.Run(execution+"/"+transport+"/"+kill, func(t *testing.T) {
 					a, old, entry := torBridgeFormSourceFixture(t, execution)
@@ -166,9 +203,11 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 							}
 						} else if relinked == "execution" {
 							replaced.profiles.Profiles[0].MultihopExecution = "server"
-							if execution == "server" {
+							if strings.TrimPrefix(execution, "plain-") == "server" {
 								replaced.profiles.Profiles[0].MultihopExecution = "local"
 							}
+						} else if replaced.profiles.Profiles[0].External.TorBridge == nil {
+							replaced.profiles.Profiles[0].DNSHost = "149.112.112.112"
 						} else {
 							replaced.profiles.Profiles[0].External.TorBridge.Bridges = []string{strings.Replace(torImportObfs4Bridge, "203.0.113.44", "203.0.113.45", 1)}
 						}
@@ -185,6 +224,10 @@ func TestDesktopTorBridgeUpdateFormPayload(t *testing.T) {
 func torBridgeFormSourceFixture(t *testing.T, execution string) (*app, common.RouterProfile, common.RouterProfile) {
 	t.Helper()
 	a, old, entry := torBridgeUpdateSourceFixture(t)
+	if strings.HasPrefix(execution, "plain-") {
+		execution = strings.TrimPrefix(execution, "plain-")
+		old.External.Protocol, old.External.TorBridge = "tor", nil
+	}
 	if protocol, ordinary := strings.CutPrefix(execution, "ordinary-"); ordinary {
 		if protocol == "openvpn" {
 			var err error

@@ -72,6 +72,7 @@ def generate(builder, work):
         '@objc func openTorBridgeBuilder()',
         'retainUnifiedController(builder)',
         '/api/tor-bridge/capabilities', '/api/tor-bridge/import',
+        '"Plain Tor — no bridges"', 'Tor bridge lines — leave empty for Plain Tor',
     )
     for marker in required:
         if marker not in text:
@@ -160,7 +161,7 @@ final class ProductAPI {
         guard timeout > 0 && timeout <= 15 else { throw NSError(domain: "Unbounded test request", code: 1) }
         if path == "/api/nodes" { lock.lock(); defer { lock.unlock() }; reads += 1; return catalog }
         guard path == "/api/tor-bridge/capabilities" else { throw NSError(domain: "Unexpected capability endpoint", code: 1) }
-        return ["profile_update_source_preconditions": true, "transports": ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom"].map {
+        return ["profile_update_source_preconditions": true, "transports": ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom", "tor"].map {
             ["id": $0, "supported": $0 != "webtunnel", "strict_kill_switch": $0 == "obfs4",
              "strict_router_entry_kill_switch": true, "description": "fixture support", "reason": "fixture unavailable"] as [String: Any]
         }]
@@ -203,7 +204,7 @@ func descendants(_ view: NSView) -> [NSView] { [view] + view.subviews.flatMap(de
 APPKIT_MAIN = r'''
 extension RouterVPNTorBridgeBuilder {
     func exerciseAdd(api: ProductAPI, owner: ProductWindowController) {
-        wait({ self.capabilities.count == 5 }, "The real capability callback never reached the form")
+        wait({ self.capabilities.count == 6 }, "The real capability callback never reached the form")
         let buttons = descendants(window!.contentView!).compactMap { $0 as? NSButton }
         let saveButton = buttons.first { $0.title == "Save Tor node" }!
         check(saveButton.target === self && saveButton.action == #selector(save), "Native Save selector does not reach the form")
@@ -231,8 +232,15 @@ extension RouterVPNTorBridgeBuilder {
 
         transportPopup.selectItem(at: 3); saveButton.performClick(nil)
         check(api.snapshot().count == 2 && status.stringValue.contains("cannot run"), "Unavailable transport was submitted as available")
-        bridgeText.string = " \n \n"; saveButton.performClick(nil)
-        check(api.snapshot().count == 2 && status.stringValue.contains("at least one"), "Empty bridge input reached the private importer")
+        transportPopup.selectItem(at: 0); bridgeText.string = " \n \n"; saveButton.performClick(nil)
+        check(api.snapshot().count == 2 && status.stringValue.contains("between one and eight"), "Empty bridge input reached the private importer")
+        transportPopup.selectItem(at: 5); bridgeText.string = "retained pasted bridge text"; saveButton.performClick(nil)
+        check(api.snapshot().count == 2 && status.stringValue.contains("Clear the bridge lines"), "Plain Tor silently discarded pasted bridge configuration")
+        bridgeText.string = ""; killSwitchPopup.selectItem(at: 2); saveButton.performClick(nil)
+        check(api.snapshot().count == 2 && status.stringValue.contains("Kill switch Off"), "Plain Tor Direct borrowed Router strict authority")
+        killSwitchPopup.selectItem(at: 0); saveButton.performClick(nil)
+        wait({ api.snapshot().count == 3 && owner.refreshCount == 3 }, "Plain Tor native Save did not finish")
+        check(api.snapshot()[2]["transport"] as? String == "tor" && (api.snapshot()[2]["bridges"] as? [String])?.isEmpty == true, "Plain Tor native Save invented bridge lines")
         let closeButton = buttons.first { $0.title == "Close" }!
         check(closeButton.target === self && closeButton.action == #selector(closePanel), "Native Close does not reach the owned window")
         closeButton.performClick(nil)
@@ -241,17 +249,21 @@ extension RouterVPNTorBridgeBuilder {
 
 extension RouterVPNTorBridgeBuilder {
     func updateControls() -> NSButton {
-        wait({ self.capabilities.count == 5 }, "Captured editor capability reply did not reach AppKit")
+        wait({ self.capabilities.count == 6 }, "Captured editor capability reply did not reach AppKit")
         check(updateSelected.isEnabled && updateSelected.target === self && updateSelected.action == #selector(updateSelectionChanged), "Native Update selector does not reach the captured checkbox")
         updateSelected.performClick(nil)
         check(updateSelected.state == .on, "Actual Update click did not select Update")
         check(bridgeText.string.isEmpty, "Update read back private bridge lines")
+        if (torBridgeUpdateProfile(opened)?["external"] as? [String: Any])?["protocol"] as? String == "tor" {
+            check(selectedTransport() == "tor", "Saved Plain Tor did not reopen its native transport choice")
+        }
         bridgeText.string = "snowflake 192.0.2.3:80 fingerprint=2B280B23E1107BB62ABFC40DDCC8824814F80A72 url=https://snowflake-broker.example.net/ front=cdn.example.net ice=stun:stun.example.net:3478"
         transportPopup.selectItem(at: 2)
         return descendants(window!.contentView!).compactMap { $0 as? NSButton }.first { $0.title == "Save Tor node" }!
     }
-    func exerciseCapturedUpdate(api: ProductAPI, owner: ProductWindowController, fault: String = "") {
+    func exerciseCapturedUpdate(api: ProductAPI, owner: ProductWindowController, fault: String = "", transport: String = "snowflake") {
         let save = updateControls()
+        if transport == "tor" { transportPopup.selectItem(at: 5); bridgeText.string = "" }
         if fault == "invalid-policy" || fault == "missing-policy" {
             check(selectedKillSwitch().isEmpty, "Unavailable saved AppKit protection became Off")
             save.performClick(nil)
@@ -287,7 +299,7 @@ extension RouterVPNTorBridgeBuilder {
             wait({ api.snapshot().count == 1 && owner.refreshCount == 1 }, "Captured AppKit Update did not finish")
             let body = api.snapshot()[0]
             check(Set(body.keys) == ["id", "name", "transport", "bridges", "kill_switch_policy", "expected_selected_node_id", "expected_profile_tokens"], "Captured Update copied unrelated path or private settings")
-            check(body["id"] as? String == "tor-edit" && body["name"] as? String == "Captured Tor exit" && body["transport"] as? String == "snowflake" && body["kill_switch_policy"] as? String == "always", "Captured Update changed saved identity/name/protection")
+            check(body["id"] as? String == "tor-edit" && body["name"] as? String == "Captured Tor exit" && body["transport"] as? String == transport && body["kill_switch_policy"] as? String == "always", "Captured Update changed saved identity/name/protection")
             check(body["expected_selected_node_id"] as? String == "tor-edit" && body["expected_profile_tokens"] as? [String: String] == ["tor-edit": String(repeating: "a", count: 64), "entry": String(repeating: "b", count: 64)], "Captured Update adopted another public source revision")
             check(api.readCount() == 1 && owner.requiredCount() == 1, "Update skipped current-source or idle admission")
         }
@@ -309,6 +321,13 @@ extension RouterVPNTorBridgeBuilder {
             let form = RouterVPNTorBridgeBuilder(owner: owner, api: api)
             form.exerciseCapturedUpdate(api: api, owner: owner, fault: fault)
         }
+        for plain in [false, true] { for transport in ["tor", "snowflake"] {
+            let api = ProductAPI(), owner = ProductWindowController(window: nil)
+            if plain { owner.profiles[0]["external"] = ["protocol": "tor"] }
+            api.replaceCatalog(["selected_id": "tor-edit", "profiles": owner.profiles])
+            let form = RouterVPNTorBridgeBuilder(owner: owner, api: api)
+            form.exerciseCapturedUpdate(api: api, owner: owner, transport: transport)
+        } }
         print("macOS Tor actual AppKit callbacks: \(checks) checks PASS")
     }
 }

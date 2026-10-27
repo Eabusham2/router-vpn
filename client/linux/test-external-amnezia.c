@@ -273,8 +273,9 @@ int main(int argc,char **argv){
     body=external_path_mode_body_v4(captured,mode_current,"ordinary","local",FALSE,"",entry_modes,&error);check(body!=NULL,"External entry failed with disabled Router mode");root=parse_json(body);check(!json_object_has_member(json_node_get_object(root),"entry_mode"),"External entry retained Router mode");json_node_free(root);g_free(body);count++;
     json_object_set_string_member(json_array_get_object_element(mode_nodes,2),"multihop_entry_mode","hysteria2");
     body=external_path_mode_body_v4(captured,mode_current,"entry","local",FALSE,"wg",entry_modes,&error);check(body==NULL,"Changed saved entry mode owner accepted");g_free(error);error=NULL;count++;
-    for(guint pi=0;pi<G_N_ELEMENTS(eligible);pi++){
-        char *saved_json=g_strdup_printf("{\"profiles\":[{\"id\":\"saved-tor\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"tor-bridge\"},\"multihop_enabled\":true,\"multihop_entry_id\":\"ordinary\",\"multihop_entry_mode\":\"%s\"},{\"id\":\"ordinary\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\"}}]}",eligible[pi],eligible[pi]);
+    const char *tor_protocols[]={"tor-bridge","tor"};
+    for(guint ti=0;ti<G_N_ELEMENTS(tor_protocols);ti++)for(guint pi=0;pi<G_N_ELEMENTS(eligible);pi++){
+        char *saved_json=g_strdup_printf("{\"profiles\":[{\"id\":\"saved-tor\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\"},\"multihop_enabled\":true,\"multihop_entry_id\":\"ordinary\",\"multihop_entry_mode\":\"%s\"},{\"id\":\"ordinary\",\"node_kind\":\"external\",\"external\":{\"protocol\":\"%s\"}}]}",tor_protocols[ti],eligible[pi],eligible[pi]);
         JsonNode *saved_root=parse_json(saved_json);g_free(saved_json);JsonArray *saved_profiles=json_object_get_array_member(json_node_get_object(saved_root),"profiles");
         JsonObject *tor=json_array_get_object_element(saved_profiles,0),*lower=json_array_get_object_element(saved_profiles,1);
         char *restored_mode=external_saved_entry_mode_v4(tor,saved_profiles,entry_modes,&error);

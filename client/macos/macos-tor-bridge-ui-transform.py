@@ -30,7 +30,7 @@ func torBridgeUpdateProfile(_ opened: [String: Any]) -> [String: Any]? {
           let profiles = opened["profiles"] as? [[String: Any]] else { return nil }
     let rows = profiles.filter { $0["id"] as? String == id }
     guard rows.count == 1, rows[0]["node_kind"] as? String == "external",
-          (rows[0]["external"] as? [String: Any])?["protocol"] as? String == "tor-bridge" else { return nil }
+          ["tor", "tor-bridge"].contains((rows[0]["external"] as? [String: Any])?["protocol"] as? String ?? "") else { return nil }
     return rows[0]
 }
 
@@ -63,6 +63,12 @@ func torBridgeImportBody(_ body: [String: Any], opened: [String: Any], update: B
                          capabilities: [String: Any], current: [String: Any]? = nil) throws -> [String: Any] {
     func fail(_ message: String) -> NSError { NSError(domain: "RouterVPN.TorEdit", code: 1, userInfo: [NSLocalizedDescriptionKey: message]) }
     guard let kill = body["kill_switch_policy"] as? String, ["off", "on-connect", "always"].contains(kill) else { throw fail("Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.") }
+    guard let transport = body["transport"] as? String, let bridges = body["bridges"] as? [String] else { throw fail("Choose a Tor transport and its bridge lines.") }
+    if transport == "tor" {
+        guard bridges.isEmpty else { throw fail("Clear the bridge lines before choosing Plain Tor. No bridge configuration was discarded.") }
+    } else {
+        guard (1...8).contains(bridges.count) else { throw fail("Paste between one and eight Tor bridge lines, or choose Plain Tor with the bridge field empty.") }
+    }
     var result = body
     var router = false, ordinary = false, throughEntry = false
     if update {
@@ -104,7 +110,7 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
     private let status = NSTextField(wrappingLabelWithString: "")
     private var capabilities: [String: [String: Any]] = [:]
     private var capabilityRoot: [String: Any] = [:]
-    private let transportIDs = ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom"]
+    private let transportIDs = ["obfs4", "meek_lite", "snowflake", "webtunnel", "custom", "tor"]
 
     init(owner: ProductWindowController, api: ProductAPI) {
         productOwner = owner
@@ -129,21 +135,21 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         content.addSubview(root)
         NSLayoutConstraint.activate([root.leadingAnchor.constraint(equalTo: content.leadingAnchor), root.trailingAnchor.constraint(equalTo: content.trailingAnchor), root.topAnchor.constraint(equalTo: content.topAnchor), root.bottomAnchor.constraint(equalTo: content.bottomAnchor)])
 
-        let title = NSTextField(labelWithString: "Tor bridges")
+        let title = NSTextField(labelWithString: "Tor and bridges")
         title.font = .systemFont(ofSize: 24, weight: .bold)
         root.addArrangedSubview(title)
-        let intro = NSTextField(wrappingLabelWithString: "Choose how Tor gets through censorship. obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles normal HTTPS web traffic. Auto / Custom accepts validated Tor-issued lines from any supported family. Tor's proved circuit—not a homemade XOR layer—is the encrypted final path.")
+        let intro = NSTextField(wrappingLabelWithString: "Plain Tor connects without bridge lines. For censorship circumvention, obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles normal HTTPS web traffic. Auto / Custom accepts validated Tor-issued lines from any supported family.")
         intro.textColor = .secondaryLabelColor
         root.addArrangedSubview(intro)
 
         updateSelected.isEnabled = torBridgeUpdateProfile(opened) != nil
-        if let profile = torBridgeUpdateProfile(opened) { updateSelected.title = "Update \(profile["name"] as? String ?? "selected Tor node") (paste replacement bridge lines)" }
+        if let profile = torBridgeUpdateProfile(opened) { updateSelected.title = "Update \(profile["name"] as? String ?? "selected Tor node") (choose Plain Tor or replacement bridge lines)" }
         updateSelected.target = self; updateSelected.action = #selector(updateSelectionChanged)
         root.addArrangedSubview(updateSelected)
 
         nameField.placeholderString = "Node name (optional)"
         root.addArrangedSubview(nameField)
-        transportPopup.addItems(withTitles: ["obfs4", "meek", "Snowflake", "WebTunnel", "Auto / Custom"])
+        transportPopup.addItems(withTitles: ["obfs4", "meek", "Snowflake", "WebTunnel", "Auto / Custom", "Plain Tor — no bridges"])
         transportPopup.target = self; transportPopup.action = #selector(transportChanged)
         killSwitchPopup.addItems(withTitles: ["Kill switch Off", "On connect", "Always / strict"])
         killSwitchPopup.target = self; killSwitchPopup.action = #selector(transportChanged)
@@ -151,7 +157,7 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
         grid.rowSpacing = 6; grid.columnSpacing = 10
         root.addArrangedSubview(grid)
 
-        let bridgeLabel = NSTextField(labelWithString: "Tor bridge lines — one per line")
+        let bridgeLabel = NSTextField(labelWithString: "Tor bridge lines — leave empty for Plain Tor")
         bridgeLabel.font = .systemFont(ofSize: 14, weight: .semibold)
         root.addArrangedSubview(bridgeLabel)
         bridgeText.isEditable = true; bridgeText.isSelectable = true; bridgeText.font = .monospacedSystemFont(ofSize: 12, weight: .regular); bridgeText.textContainerInset = NSSize(width: 8, height: 8)
@@ -215,6 +221,8 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
             let policy = profile?["kill_switch_policy"] as? String ?? ""
             killSwitchPopup.selectItem(at: ["off", "on-connect", "always"].firstIndex(of: policy) ?? -1)
             if let name = profile?["name"] as? String { nameField.stringValue = name }
+            if (profile?["external"] as? [String: Any])?["protocol"] as? String == "tor",
+               let index = transportIDs.firstIndex(of: "tor") { transportPopup.selectItem(at: index) }
         } else { killSwitchPopup.selectItem(at: 0) }
         renderCapability()
         if selectedKillSwitch().isEmpty { status.stringValue = "The saved kill-switch policy is unavailable. Choose a policy explicitly before saving." }
@@ -225,7 +233,6 @@ private final class RouterVPNTorBridgeBuilder: NSWindowController {
     @objc private func save() {
         guard productOwner?.ensureMutationIdle("saving a Tor bridge node") == true else { status.stringValue = "Disconnect before adding or updating Tor bridge nodes."; return }
         let lines = bridgeText.string.components(separatedBy: .newlines).map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }.filter { !$0.isEmpty }
-        guard !lines.isEmpty else { status.stringValue = "Paste at least one Tor bridge line."; return }
         let transport = selectedTransport(), kill = selectedKillSwitch()
         if let row = capabilities[transport], (row["supported"] as? Bool) == false {
             status.stringValue = "This Mac cannot run \(transport) yet: \(row["reason"] as? String ?? "required Tor helper is missing")"
@@ -271,10 +278,10 @@ required = (
     'Tor censorship circumvention',
     '/api/tor-bridge/capabilities',
     '/api/tor-bridge/import',
-    '"obfs4", "meek_lite", "snowflake", "webtunnel", "custom"',
+    '"obfs4", "meek_lite", "snowflake", "webtunnel", "custom", "tor"',
     'Snowflake uses brokers plus short-lived volunteer WebRTC proxies',
     'choose Custom TCP, DoT, DoH or Rescue in DNS',
-    'Strict protection requires a saved Router entry using Local or Server execution',
+    'Strict protection requires a saved eligible entry.',
 )
 for marker in required:
     if marker not in text:

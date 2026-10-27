@@ -128,14 +128,23 @@ static gboolean drive_dialog(gpointer data) {
     check(trial->transport_widget != NULL && trial->kill_widget != NULL, "actual transport/protection widgets were missing");
     trial->reached = TRUE; dialogs++;
     check(gtk_widget_get_sensitive(trial->toggle), "captured selected Tor cannot be explicitly updated");
+    JsonObject *opened_profile = node_in(source_catalog, "tor-edit");
+    gboolean saved_plain = g_strcmp0(external_path_string_v4(external_path_object_v4(opened_profile, "external"), "protocol"), "tor") == 0;
+    if (saved_plain && trial->update) gtk_text_buffer_set_text(gtk_text_view_get_buffer(GTK_TEXT_VIEW(trial->lines)), "retained pasted bridge text", -1);
     gtk_toggle_button_set_active(GTK_TOGGLE_BUTTON(trial->toggle), trial->update);
+    if (saved_plain && trial->update) {
+        check(g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(trial->transport_widget)), "tor") == 0, "Saved Plain Tor reopened as a bridge transport");
+        char *retained = linux_tor_text_v13(trial->lines);
+        check(g_strcmp0(retained, "retained pasted bridge text") == 0, "Loading Plain Tor silently discarded pasted bridge lines");
+        g_free(retained);
+    }
     if (g_strcmp0(trial->fault, "saved-always") == 0)
         check(g_strcmp0(gtk_combo_box_get_active_id(GTK_COMBO_BOX(trial->kill_widget)), "always") == 0, "Update disabled saved Always protection before any user edit");
     if (g_strcmp0(trial->fault, "invalid-saved-kill") == 0 || g_strcmp0(trial->fault, "missing-saved-kill") == 0)
         check(gtk_combo_box_get_active_id(GTK_COMBO_BOX(trial->kill_widget)) == NULL, "unavailable saved protection silently became Off");
     check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->transport_widget), trial->transport), "requested transport not offered by actual widget");
     if (trial->kill != NULL) check(gtk_combo_box_set_active_id(GTK_COMBO_BOX(trial->kill_widget), trial->kill), "requested protection not offered by actual widget");
-    JsonArray *lines = json_object_get_array_member(json_node_get_object(source_lines), g_str_has_prefix(trial->fault, "ordinary-mixed-udp") ? "obfs4" : trial->transport);
+    JsonArray *lines = json_object_get_array_member(json_node_get_object(source_lines), g_str_has_prefix(trial->fault, "ordinary-mixed-udp") || g_strcmp0(trial->fault, "plain-lines") == 0 ? "obfs4" : trial->transport);
     GString *text = g_string_new("");
     for (guint i = 0; i < json_array_get_length(lines); i++) {
         if (i) g_string_append_c(text, '\n');
@@ -259,7 +268,7 @@ static void run_trial(App *app, const char *transport, const char *kill, gboolea
         check(rejected, "cancelled/rejected modal escaped its owned callback");
     }
     if (emit) {
-        char *name = g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
+        char *name = !update ? g_strdup("tor-create-plain.json") : g_strcmp0(fault, "saved-always") == 0 ? g_strdup_printf("tor-update-%spreserved-protection.json", source_prefix) : g_strdup_printf("tor-update-%s%s-%s.json", source_prefix, transport, kill);
         char *path = g_build_filename(directory, name, NULL);
         check(g_file_set_contents(path, last_body, -1, NULL) && g_chmod(path, 0600) == 0, "actual callback payload could not be saved privately");
         g_free(path); g_free(name);
@@ -276,13 +285,13 @@ int main(int argc, char **argv) {
     source_capabilities = read_fixture("tor-update-capabilities.json"); source_lines = read_fixture("tor-update-input-lines.json");
     check(strstr(obj_string(json_node_get_object(source_capabilities), "test_fixture_runtime_availability"), "simulated") != NULL, "UI fixture must label simulated runtime availability");
     App app = {gtk_window_new(GTK_WINDOW_TOPLEVEL), "tor-edit"}; active_app = &app;
-    const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel"}, *kills[] = {"off", "on-connect", "always"};
+    const char *transports[] = {"obfs4", "meek_lite", "snowflake", "webtunnel", "tor"}, *kills[] = {"off", "on-connect", "always"};
     const char *selections[] = {"local", "server", "ordinary-wireguard", "ordinary-amneziawg", "ordinary-socks5", "ordinary-http-connect", "ordinary-https-connect", "ordinary-shadowsocks", "ordinary-hysteria2", "ordinary-openvpn"};
-    for (guint execution = 0; execution < G_N_ELEMENTS(selections); execution++) {
+    for (guint plain = 0; plain < 2; plain++) for (guint execution = 0; execution < G_N_ELEMENTS(selections); execution++) {
     const char *selection = selections[execution];
     gboolean ordinary = g_str_has_prefix(selection, "ordinary-");
     gboolean tcp_only = g_strcmp0(selection, "ordinary-socks5") == 0 || g_strcmp0(selection, "ordinary-http-connect") == 0 || g_strcmp0(selection, "ordinary-https-connect") == 0;
-    char *prefix = g_strcmp0(selection, "local") == 0 ? g_strdup("") : g_strdup_printf("%s-", selection);
+    char *prefix = plain ? g_strdup_printf("plain-%s-", selection) : g_strcmp0(selection, "local") == 0 ? g_strdup("") : g_strdup_printf("%s-", selection);
     source_prefix = prefix;
     char *catalog_name = g_strdup_printf("tor-update-%ssource-catalog.json", prefix), *always_name = g_strdup_printf("tor-update-%salways-source-catalog.json", prefix);
     source_catalog = read_fixture(catalog_name); source_always = read_fixture(always_name);
@@ -293,12 +302,15 @@ int main(int argc, char **argv) {
         gboolean eligible = !(tcp_only && g_strcmp0(transports[t], "snowflake") == 0 && k > 0);
         run_trial(&app, transports[t], kills[k], TRUE, eligible ? "none" : "ordinary-udp", eligible, FALSE, eligible);
     }
-    const char *preserved = ordinary ? "meek_lite" : "snowflake";
+    const char *preserved = plain ? "tor" : ordinary ? "meek_lite" : "snowflake";
     run_trial(&app, preserved, NULL, TRUE, "saved-always", TRUE, FALSE, TRUE);
     run_trial(&app, preserved, NULL, TRUE, "invalid-saved-kill", FALSE, FALSE, FALSE);
     run_trial(&app, preserved, NULL, TRUE, "missing-saved-kill", FALSE, FALSE, FALSE);
-    const char *failures[] = {"stale-exit", "stale-entry", "missing-exit", "missing-entry", "selected", "duplicate-entry", "mutated-rendered", "busy-after-open", "nodes-unavailable", "missing-token", "no-capability", "empty-lines", "direct-strict", "compare-strict", "external-entry-strict", "server-direct-strict", "server-external-strict", "controller-refusal"};
+    const char *failures[] = {"stale-exit", "stale-entry", "missing-exit", "missing-entry", "selected", "duplicate-entry", "mutated-rendered", "busy-after-open", "nodes-unavailable", "missing-token", "no-capability", "direct-strict", "compare-strict", "external-entry-strict", "server-direct-strict", "server-external-strict", "controller-refusal"};
     for (guint i = 0; i < G_N_ELEMENTS(failures); i++) run_trial(&app, preserved, "always", TRUE, failures[i], FALSE, FALSE, FALSE);
+    run_trial(&app, "obfs4", "always", TRUE, "empty-lines", FALSE, FALSE, FALSE);
+    run_trial(&app, "tor", "always", TRUE, "plain-lines", FALSE, FALSE, FALSE);
+    run_trial(&app, "tor", "always", FALSE, "plain-direct-strict", FALSE, FALSE, FALSE);
     const char *unprotected[] = {"compare-off", "server-direct-off", "server-external-off"};
     for (guint i = 0; i < G_N_ELEMENTS(unprotected); i++) run_trial(&app, "obfs4", "off", TRUE, unprotected[i], FALSE, FALSE, FALSE);
     if (ordinary) {
@@ -311,7 +323,7 @@ int main(int argc, char **argv) {
         }
     }
     run_trial(&app, preserved, "always", TRUE, "cancel", FALSE, TRUE, FALSE);
-    for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, FALSE);
+    for (guint t = 0; t < G_N_ELEMENTS(transports); t++) run_trial(&app, transports[t], "off", FALSE, "add", TRUE, FALSE, g_strcmp0(transports[t], "tor") == 0);
     reset_fixture(&app, "initial-busy"); idle = FALSE; guint before = dialogs;
     on_linux_tor_bridge_v13(NULL, &app); check(dialogs == before && posts == 0 && status_reads == 1 && diagnostics == 1, "busy application opened a Tor mutation dialog");
     json_node_free(source_catalog); json_node_free(source_always); g_free(prefix); source_prefix = NULL;

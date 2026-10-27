@@ -150,7 +150,7 @@ func externalSavedEntryMode(captured: [String: Any], profiles: [[String: Any]], 
         let entry = entries[0], kind = entry["node_kind"] as? String ?? "router-vpn"
         if kind == "external" {
             let protocolID = (entry["external"] as? [String: Any])?["protocol"] as? String ?? ""
-            guard (captured["external"] as? [String: Any])?["protocol"] as? String == "tor-bridge",
+            guard ["tor", "tor-bridge"].contains((captured["external"] as? [String: Any])?["protocol"] as? String ?? ""),
                   ["wireguard", "amneziawg", "socks5", "http-connect", "https-connect", "shadowsocks", "hysteria2", "openvpn"].contains(protocolID), mode == protocolID else {
                 throw fail("The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.")
             }

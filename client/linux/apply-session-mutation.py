@@ -45,7 +45,7 @@ base.SPECS[name] = (
 # insertion text continue to reject unreviewed drift.
 # Saved ordinary Tor entries reopen through the reviewed protocol-aware helper.
 # Those additions follow every insertion below; their guard positions are intact.
-base.SPECS['routervpn-gtk-product-v4.c'] = ('6d82aa7728b7b4904a4c6358d6e85c261ed0bbbf85f46d13edfb5444625bdfab',
+base.SPECS['routervpn-gtk-product-v4.c'] = ('1cd845b815f07cc17b1461f0b428f2c9a09ad2c08cce879b69f494f516045b71',
  [(84,
    84,
    [],

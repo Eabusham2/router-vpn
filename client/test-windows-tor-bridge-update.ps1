@@ -28,7 +28,9 @@ $Raw=Get-Content -Raw (Join-Path $Output 'tor-update-source-catalog.json')
 $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json
 $Capabilities=Get-Content -Raw (Join-Path $Output 'tor-update-capabilities.json')|ConvertFrom-Json
 $InputLines=Get-Content -Raw (Join-Path $Output 'tor-update-input-lines.json')|ConvertFrom-Json
-$Name=[pscustomobject]@{Text='Native Tor update'};$Transport=[pscustomobject]@{Items=@('obfs4','meek_lite','snowflake','webtunnel','custom'|ForEach-Object{[pscustomobject]@{Tag=$_}});SelectedIndex=0}
+$TransportIDs=@($XML.SelectNodes('//*[@Name="TorTransport"]/*')|ForEach-Object{[string]$_.Tag})
+if($TransportIDs-cnotcontains'tor'){throw 'Shipping transport selector omitted Plain Tor'}
+$Name=[pscustomobject]@{Text='Native Tor update'};$Transport=[pscustomobject]@{Items=@($TransportIDs|ForEach-Object{[pscustomobject]@{Tag=$_}});SelectedIndex=0}
 $Transport|Add-Member ScriptProperty SelectedItem {return $this.Items[$this.SelectedIndex]}
 $Kill=[pscustomobject]@{Items=@([pscustomobject]@{Tag='off'},[pscustomobject]@{Tag='on-connect'},[pscustomobject]@{Tag='always'});SelectedIndex=2}
 $Kill|Add-Member ScriptProperty SelectedItem {if($this.SelectedIndex-ge0-and$this.SelectedIndex-lt$this.Items.Count){return $this.Items[$this.SelectedIndex]};return $null}
@@ -61,14 +63,16 @@ function RefreshProduct{}
 function Control($ID){if($ID-cne'UnifiedNodeCombo'){throw 'Unexpected rendered control'};return $script:Rendered}
 $LocalRaw=$Raw
 $Selections=@('local','server')+@('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn'|ForEach-Object{'ordinary-'+$_})
+$Selections+=@($Selections|ForEach-Object{'plain-'+$_})
 foreach($Execution in $Selections){
-    $Ordinary=$Execution.StartsWith('ordinary-');$TCPOnly=$Execution-cin@('ordinary-socks5','ordinary-http-connect','ordinary-https-connect')
+    $Plain=$Execution.StartsWith('plain-');$Selection=if($Plain){$Execution.Substring(6)}else{$Execution}
+    $Ordinary=$Selection.StartsWith('ordinary-');$TCPOnly=$Selection-cin@('ordinary-socks5','ordinary-http-connect','ordinary-https-connect')
     $FilePrefix=if($Execution-ceq'local'){''}else{$Execution+'-'}
     $Raw=Get-Content -Raw (Join-Path $Output ('tor-update-'+$FilePrefix+'source-catalog.json'))
     $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json
-foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel')){
+foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel','tor')){
     foreach($Policy in @('off','on-connect','always')){
-        $Transport.SelectedIndex=@('obfs4','meek_lite','snowflake','webtunnel').IndexOf($ID);$Kill.SelectedIndex=@('off','on-connect','always').IndexOf($Policy);$Lines.Text=$InputLines.$ID-join"`n"
+        $Transport.SelectedIndex=$TransportIDs.IndexOf($ID);$Kill.SelectedIndex=@('off','on-connect','always').IndexOf($Policy);$Lines.Text=$InputLines.$ID-join"`n"
         $script:Saved=$null;$Button.IsEnabled=$true;&$Save
         if($TCPOnly-and$ID-ceq'snowflake'-and$Policy-cne'off'){
             Check ($null-eq$Saved-and$Button.IsEnabled) 'Strict Snowflake escaped the captured TCP-only predecessor check'
@@ -83,13 +87,15 @@ foreach($ID in @('obfs4','meek_lite','snowflake','webtunnel')){
 }
 $AlwaysRaw=Get-Content -Raw (Join-Path $Output ('tor-update-'+$FilePrefix+'always-source-catalog.json'))
 $Opened=$AlwaysRaw|ConvertFrom-Json;$script:Current=$AlwaysRaw|ConvertFrom-Json;$Kill.SelectedIndex=0
+if($Plain){$Lines.Text='retained pasted bridge text'}
 &$SelectUpdate
 Check ($Kill.SelectedIndex-eq2-and$Name.Text-ceq'Captured Tor exit') 'Update checkbox did not load the saved Always policy and name'
-$PreservedTransport=if($Ordinary){'meek_lite'}else{'snowflake'}
-$Transport.SelectedIndex=@('obfs4','meek_lite','snowflake','webtunnel').IndexOf($PreservedTransport);$Lines.Text=$InputLines.$PreservedTransport-join"`n";$script:Saved=$null;$Button.IsEnabled=$true;&$Save
+if($Plain){Check ($Transport.SelectedItem.Tag-ceq'tor') 'Saved Plain Tor reopened as a bridge transport';Check ($Lines.Text-ceq'retained pasted bridge text') 'Loading Plain Tor silently discarded pasted bridge lines'}
+$PreservedTransport=if($Plain){'tor'}elseif($Ordinary){'meek_lite'}else{'snowflake'}
+$Transport.SelectedIndex=$TransportIDs.IndexOf($PreservedTransport);$Lines.Text=$InputLines.$PreservedTransport-join"`n";$script:Saved=$null;$Button.IsEnabled=$true;&$Save
 Check ($null-ne$Saved-and$Saved.kill_switch_policy-ceq'always') ('Actual Save lost untouched saved protection: '+$Status.Text)
 [IO.File]::WriteAllText((Join-Path $Output ('tor-update-'+$FilePrefix+'preserved-protection.json')),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
-$Faults=@('selected','exit-token','entry-token','missing-entry','duplicate-exit','entry-is-external','compare-path','server-direct','server-external-entry','compare-off','server-direct-off','server-external-off','old-controller','missing-token','busy','display-mutated','invalid-saved-policy','missing-saved-policy')
+$Faults=@('selected','exit-token','entry-token','missing-entry','duplicate-exit','entry-is-external','compare-path','server-direct','server-external-entry','compare-off','server-direct-off','server-external-off','old-controller','missing-token','busy','display-mutated','invalid-saved-policy','missing-saved-policy','plain-lines','bridge-empty')
 if($Ordinary){$Faults+=@('ordinary-mode','ordinary-public-proof','ordinary-capability','ordinary-fixed-bypass');if($TCPOnly){$Faults+=@('ordinary-mixed-udp','ordinary-mixed-udp-bare','ordinary-mixed-udp-unicode')}}
 foreach($Fault in $Faults){
     $Opened=$Raw|ConvertFrom-Json;$script:Current=$Raw|ConvertFrom-Json;$Support.Root=$Capabilities|ConvertTo-Json -Depth 16|ConvertFrom-Json;$script:Busy=$false
@@ -128,6 +134,8 @@ foreach($Fault in $Faults){
     }
     elseif($Ordinary){$Transport.SelectedIndex=1;$Lines.Text=$InputLines.meek_lite-join"`n"}
     else{$Transport.SelectedIndex=2;$Lines.Text=$InputLines.snowflake-join"`n"}
+    if($Fault-ceq'plain-lines'){$Transport.SelectedIndex=$TransportIDs.IndexOf('tor');$Lines.Text=$InputLines.obfs4-join"`n"}
+    if($Fault-ceq'bridge-empty'){$Transport.SelectedIndex=0;$Lines.Text=''}
     $script:Saved=$null;$Button.IsEnabled=$true;&$Save;Check ($null-eq$Saved) ('Tor update adopted '+$Fault)
 }
 }
@@ -137,5 +145,10 @@ $Update.IsChecked=$false;$Kill.SelectedIndex=2;$Transport.SelectedIndex=2;$Lines
 $script:Saved=$null;&$Save;Check ($null-eq$Saved) 'New Direct dynamic transport borrowed Router protection'
 $Kill.SelectedIndex=0;$script:Saved=$null;$BeforeReads=$NodeReads;&$Save
 Check ($null-ne$Saved-and-not$Saved.ContainsKey('id')-and-not$Saved.ContainsKey('expected_profile_tokens')-and$NodeReads-eq$BeforeReads) 'Add borrowed selected identity or recaptured nodes'
+$Transport.SelectedIndex=$TransportIDs.IndexOf('tor');$Lines.Text='';$Kill.SelectedIndex=2;$script:Saved=$null;$Button.IsEnabled=$true;&$Save
+Check ($null-eq$Saved) 'Plain Tor Direct borrowed strict Router authority'
+$Kill.SelectedIndex=0;$Button.IsEnabled=$true;&$Save
+Check ($null-ne$Saved-and$Saved.transport-ceq'tor'-and@($Saved.bridges).Count-eq0-and$NodeReads-eq$BeforeReads) 'Plain Tor Add did not preserve its empty bridge contract'
+[IO.File]::WriteAllText((Join-Path $Output 'tor-create-plain.json'),($Saved|ConvertTo-Json -Depth 16),[Text.UTF8Encoding]::new($false))
 if($NativeWPF){$D.Close()}
 Write-Host "Windows actual Tor editor callbacks: $script:Checks checks PASS; WPF=$NativeWPF"

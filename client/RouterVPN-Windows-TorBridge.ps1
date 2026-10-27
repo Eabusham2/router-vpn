@@ -146,7 +146,7 @@ function GetUnifiedExternalSavedEntryMode($Captured,$Profiles,$Modes){
         $External=ExternalPublicValue $Entry 'external' $null
         if($Kind -ceq 'external'){
             $Protocol=[string](ExternalPublicValue $External 'protocol')
-            if((ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'protocol') -cne 'tor-bridge' -or
+            if((ExternalPublicValue (ExternalPublicValue $Captured 'external' $null) 'protocol') -cnotin @('tor','tor-bridge') -or
                $Protocol -cnotin @('wireguard','amneziawg','socks5','http-connect','https-connect','shadowsocks','hysteria2','openvpn') -or $Mode -cne $Protocol){
                 throw 'The saved Tor entry no longer matches its imported protocol. Reopen its path settings after relinking.'
             }
@@ -408,7 +408,7 @@ function GetUnifiedTorUpdateProfile($Opened){
     $Matches=@((ExternalPublicValue $Opened 'profiles' @())|Where-Object{[string](ExternalPublicValue $_ 'id') -ceq $ID})
     if(-not$ID-or$Matches.Count-ne1){return $null}
     $Profile=$Matches[0];$External=ExternalPublicValue $Profile 'external' $null
-    if((ExternalPublicValue $Profile 'node_kind') -cne 'external'-or(ExternalPublicValue $External 'protocol') -cne 'tor-bridge'){return $null}
+    if((ExternalPublicValue $Profile 'node_kind') -cne 'external'-or(ExternalPublicValue $External 'protocol') -cnotin @('tor','tor-bridge')){return $null}
     return $Profile
 }
 function TestUnifiedTorRouterPath($Opened,$Profile){
@@ -435,6 +435,9 @@ function TestUnifiedTorOrdinaryPath($Opened,$Profile,$Body){
 }
 function NewUnifiedTorImportBody($Body,$Opened,[bool]$Update,$Capabilities,$Current=$null){
     if([string]$Body.kill_switch_policy-cnotin@('off','on-connect','always')){throw 'Choose a valid kill-switch policy before saving. The saved policy was not replaced with Off.'}
+    $Plain=[string]$Body.transport-ceq'tor';$BridgeCount=@($Body.bridges).Count
+    if($Plain-and$BridgeCount-ne0){throw 'Clear the bridge lines before choosing Plain Tor. No bridge configuration was discarded.'}
+    if(-not$Plain-and($BridgeCount-lt1-or$BridgeCount-gt8)){throw 'Paste between one and eight Tor bridge lines, or choose Plain Tor with the bridge field empty.'}
     $Result=@{};foreach($Key in $Body.Keys){$Result[$Key]=$Body[$Key]}
     $Profile=$null
     if($Update){
@@ -465,15 +468,15 @@ function ShowUnifiedTorBridgeBuilder{
     [xml]$X=@"
 <Window xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation" Title="Tor censorship circumvention" Width="760" Height="690" MinWidth="620" MinHeight="560" WindowStartupLocation="CenterOwner" Background="#0B1020" Foreground="#F5F7FF">
   <ScrollViewer VerticalScrollBarVisibility="Auto"><StackPanel Margin="22">
-    <TextBlock Text="Tor bridges" FontSize="26" FontWeight="Bold"/>
-    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Choose how Tor gets through censorship. obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles ordinary HTTPS web traffic. Auto / Custom accepts validated Tor-issued bridge lines. Tor's proved circuit—not homemade XOR—is the encrypted final path."/>
+    <TextBlock Text="Tor and bridges" FontSize="26" FontWeight="Bold"/>
+    <TextBlock Margin="0,8,0,14" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Plain Tor connects without bridge lines. For censorship circumvention, obfs4 disguises bridge traffic and resists active probing; meek uses HTTPS/CDN-style fronts; Snowflake uses brokers plus short-lived volunteer WebRTC proxies; WebTunnel resembles ordinary HTTPS web traffic. Auto / Custom accepts validated Tor-issued bridge lines."/>
     <CheckBox Name="TorUpdate" Content="Update the Tor node selected when this dialog opened" Margin="0,0,0,10"/>
     <TextBlock Text="Node name"/><TextBox Name="TorName" Margin="0,4,0,10" Padding="8"/>
     <Grid Margin="0,0,0,10"><Grid.ColumnDefinitions><ColumnDefinition Width="*"/><ColumnDefinition Width="*"/></Grid.ColumnDefinitions>
-      <StackPanel Margin="0,0,6,0"><TextBlock Text="Transport"/><ComboBox Name="TorTransport" Margin="0,4,0,0"><ComboBoxItem Content="obfs4" Tag="obfs4"/><ComboBoxItem Content="meek" Tag="meek_lite"/><ComboBoxItem Content="Snowflake" Tag="snowflake"/><ComboBoxItem Content="WebTunnel" Tag="webtunnel"/><ComboBoxItem Content="Auto / Custom" Tag="custom"/></ComboBox></StackPanel>
+      <StackPanel Margin="0,0,6,0"><TextBlock Text="Transport"/><ComboBox Name="TorTransport" Margin="0,4,0,0"><ComboBoxItem Content="obfs4" Tag="obfs4"/><ComboBoxItem Content="meek" Tag="meek_lite"/><ComboBoxItem Content="Snowflake" Tag="snowflake"/><ComboBoxItem Content="WebTunnel" Tag="webtunnel"/><ComboBoxItem Content="Auto / Custom" Tag="custom"/><ComboBoxItem Content="Plain Tor — no bridges" Tag="tor"/></ComboBox></StackPanel>
       <StackPanel Grid.Column="1" Margin="6,0,0,0"><TextBlock Text="Kill switch"/><ComboBox Name="TorKill" Margin="0,4,0,0"><ComboBoxItem Content="Off" Tag="off"/><ComboBoxItem Content="On connect" Tag="on-connect"/><ComboBoxItem Content="Always / strict" Tag="always"/></ComboBox></StackPanel>
     </Grid>
-    <TextBlock Text="Tor bridge lines — one per line" FontWeight="SemiBold"/>
+    <TextBlock Text="Tor bridge lines — one per line; leave empty for Plain Tor" FontWeight="SemiBold"/>
     <TextBox Name="TorLines" Height="230" Margin="0,4,0,8" Padding="8" AcceptsReturn="True" AcceptsTab="False" VerticalScrollBarVisibility="Auto" TextWrapping="NoWrap" FontFamily="Consolas"/>
     <TextBlock Foreground="#A8B6D5" TextWrapping="Wrap" Text="Paste current lines from Tor or a trusted bridge source. Before connecting a new Tor node, choose Custom TCP, DoT, DoH or Rescue in DNS. Updating a saved node keeps its DNS choice."/>
     <TextBlock Name="TorCapability" Margin="0,10,0,4" Foreground="#A8B6D5" TextWrapping="Wrap" Text="Checking Tor transport support…"/>
@@ -485,7 +488,7 @@ function ShowUnifiedTorBridgeBuilder{
     $reader=New-Object System.Xml.XmlNodeReader $X;$D=[Windows.Markup.XamlReader]::Load($reader);$D.Owner=$W
     $Name=$D.FindName('TorName');$Transport=$D.FindName('TorTransport');$Kill=$D.FindName('TorKill');$Lines=$D.FindName('TorLines');$Capability=$D.FindName('TorCapability');$Status=$D.FindName('TorStatus');$Transport.SelectedIndex=0;$Kill.SelectedIndex=0
     $Update=$D.FindName('TorUpdate');$Update.IsEnabled=$null-ne$CapturedProfile
-    if($null-ne$CapturedProfile){$Update.Content='Update '+[string](ExternalPublicValue $CapturedProfile 'name')+' (paste replacement bridge lines)'}
+    if($null-ne$CapturedProfile){$Update.Content='Update '+[string](ExternalPublicValue $CapturedProfile 'name')+' (choose Plain Tor or replacement bridge lines)'}
     $Support=@{Root=$null;Transports=@{}}
     $Refresh={
         try{
@@ -508,15 +511,18 @@ function ShowUnifiedTorBridgeBuilder{
         $Kill.SelectedIndex=-1
         for($Index=0;$Index-lt$Kill.Items.Count;$Index++){if([string]$Kill.Items[$Index].Tag-ceq$SavedPolicy){$Kill.SelectedIndex=$Index;break}}
         if($null-ne$SavedProfile){$Name.Text=[string](ExternalPublicValue $SavedProfile 'name')}
-        $Status.Text=if($Kill.SelectedIndex-lt0){'The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.'}else{'Loaded the captured node name and kill-switch policy. Paste replacement bridge lines; the saved path and DNS remain attached to this node.'}
+        if((ExternalPublicValue (ExternalPublicValue $SavedProfile 'external' $null) 'protocol') -ceq 'tor'){
+            for($Index=0;$Index-lt$Transport.Items.Count;$Index++){if([string]$Transport.Items[$Index].Tag-ceq'tor'){$Transport.SelectedIndex=$Index;break}}
+        }
+        $Status.Text=if($Kill.SelectedIndex-lt0){'The saved kill-switch policy is unavailable. Choose a policy explicitly before saving.'}else{'Loaded the captured node name and kill-switch policy. Choose Plain Tor or replacement bridge lines; the saved path and DNS remain attached to this node.'}
     })
-    $Update.Add_Unchecked({$Kill.SelectedIndex=0;$Status.Text='Adding a new Tor node. Choose its protection and paste bridge lines.'})
+    $Update.Add_Unchecked({$Kill.SelectedIndex=0;$Status.Text='Adding a new Tor node. Choose Plain Tor with no bridge lines, or paste bridge lines for a bridge transport.'})
     $D.FindName('TorRefresh').Add_Click({&$Refresh})
     $D.FindName('TorClose').Add_Click({$D.Close()})
     $D.FindName('TorSave').Add_Click({
         try{
             if(-not(TestUnifiedExternalMutationIdle)){throw 'VPN state changed while the Tor dialog was open. Nothing was saved.'}
-            $Rows=@($Lines.Text -split "`r?`n"|ForEach-Object{$_.Trim()}|Where-Object{$_});if(-not$Rows){throw 'Paste at least one Tor bridge line.'}
+            $Rows=@($Lines.Text -split "`r?`n"|ForEach-Object{$_.Trim()}|Where-Object{$_})
             $ID=[string](($Transport.SelectedItem).Tag);$KillID=[string](($Kill.SelectedItem).Tag)
             $Body=@{name=[string]$Name.Text;transport=$ID;bridges=$Rows;kill_switch_policy=$KillID}
             [void](NewUnifiedTorImportBody $Body $Opened ([bool]$Update.IsChecked) $Support.Root)
