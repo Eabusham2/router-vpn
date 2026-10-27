@@ -171,8 +171,16 @@ func nativeMAXDesktopTraffic(t *testing.T, binary, reference, awg, xray, entryMo
 	assets["rosenpass-client-secret"], assets["rosenpass-client-public"], assets["rosenpass-server-public"] = nativePQDesktopKey(t, "client", "secret"), nativePQDesktopKey(t, "client", "public"), nativePQDesktopKey(t, "server", "public")
 	middlePort := nativeMultihopTrafficPort(t, "tcp")
 	middleKey := testWGKey('s')
+	packetPort := peer.ready.PacketPort
+	var handshakeGate *nativeWGFirstHandshakeGate
+	if mode == "max-quic-wg" && execution == "local" && fault == "none" {
+		// Reproduce a lost initial authenticated WG response without changing
+		// its PQ key, encrypted payload, packet owner or production deadline.
+		handshakeGate = nativeMultihopDelayFirstWGHandshake(t, packetPort, 5*time.Second)
+		packetPort = handshakeGate.port
+	}
 	middleRules := []any{}
-	for from, to := range map[int]int{basePort: peer.ready.PacketPort, 51822: peer.ready.PQPort} {
+	for from, to := range map[int]int{basePort: packetPort, 51822: peer.ready.PQPort} {
 		middleRules = append(middleRules, map[string]any{"network": "udp", "ip_cidr": []string{"10.88.0.1/32"}, "port": from, "action": "route", "outbound": "captured-packet-peer", "override_address": "127.0.0.1", "override_port": to})
 	}
 	middleRules = append(middleRules, map[string]any{"action": "reject"})
@@ -389,6 +397,14 @@ func nativeMAXDesktopTraffic(t *testing.T, binary, reference, awg, xray, entryMo
 			}
 		}
 		return
+	}
+	// A listening SOCKS port and negotiated PQ key do not prove that the
+	// nested packet handshake has completed. Exercise the complete captured
+	// encrypted path first, as the application does with its node proof.
+	// Keep every following payload exchange's four-second deadline intact.
+	nativeMultihopAwaitEncryptedPath(t, clientPort, 9999, [4]byte{10, 78, 0, 1})
+	if handshakeGate != nil {
+		handshakeGate.requireObservedRetry(t)
 	}
 	var previous nativePQReferenceRecord
 	for epoch := 0; epoch < 2; epoch++ {

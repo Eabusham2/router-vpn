@@ -13,16 +13,21 @@ import (
 // extends the assertion deadline for the tested Naive TCP/UDP exchange.
 func nativeMultihopAwaitEncryptedEntry(t *testing.T, proxy, echo int) {
 	t.Helper()
+	nativeMultihopAwaitEncryptedPath(t, proxy, echo, [4]byte{10, 77, 0, 1})
+}
+
+func nativeMultihopAwaitEncryptedPath(t *testing.T, proxy, echo int, destination [4]byte) {
+	t.Helper()
 	until := time.Now().Add(20 * time.Second)
 	var last error
 	for time.Now().Before(until) {
-		last = nativeMultihopTrafficExchangeTo(proxy, echo, "tcp", [4]byte{10, 77, 0, 1}, 250*time.Millisecond)
+		last = nativeMultihopTrafficExchangeTo(proxy, echo, "tcp", destination, 250*time.Millisecond)
 		if last == nil {
 			return
 		}
 		time.Sleep(25 * time.Millisecond)
 	}
-	t.Fatal("owned encrypted entry never passed its bounded data-plane readiness exchange", last)
+	t.Fatal("owned encrypted path never passed its bounded data-plane readiness exchange", last)
 }
 
 type nativeWGFirstHandshakeGate struct {
