@@ -126,6 +126,13 @@ jobs:
       - name: Build router agent image
         run: docker buildx build --platform linux/arm64 --progress=plain --load -f deploy/router-agent.Dockerfile -t router-vpn-preflight-agent:arm64 .
 
+      - name: Verify installed standalone Tor control without network access
+        run: |
+          docker run --rm --network none --platform linux/arm64 \
+            --entrypoint python3 router-vpn-preflight-agent:arm64 \
+            /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local \
+            --platform linux/arm64 --offline-self-test
+
       - name: Prove benchmark and Emergency Stop tooling in ARM64 agent
         run: |
           set -euo pipefail

@@ -1,0 +1,17 @@
+package box
+
+import (
+	"context"
+	"errors"
+	"github.com/sagernet/sing-box/adapter"
+)
+
+// RouterVPNServerTorDNSProof exercises this no-TUN Box's actual selected DNS
+// route with a fresh cache-disabled query, not a caller-supplied transport.
+func (s *Box) RouterVPNServerTorDNSProof(ctx context.Context) error {
+	if s == nil || ctx == nil || ctx.Err() != nil || s.dnsRouter == nil || s.inbound == nil || len(s.inbound.Inbounds()) != 0 {
+		return errors.New("server Tor requires its exact no-TUN DNS owner")
+	}
+	ctx = adapter.WithContext(ctx, &adapter.InboundContext{Inbound: "routervpn-server-tor-front", Network: "tcp", Protocol: "dns"})
+	return routerVPNStrategyDNSExchange(ctx, s.dnsRouter.Exchange)
+}

@@ -16,6 +16,20 @@ RUN apk add --no-cache build-base linux-headers curl tar \
  && make -C /src/amneziawg-tools/src \
  && test -x /src/amneziawg-tools/src/wg
 
+# Build the standalone child from the same four immutable C sources as mobile,
+# preserving upstream foreground/process ownership rather than embedded patches.
+# This native image stage is the only compiler; production pulls its output.
+FROM alpine:3.22 AS standalone-tor-build
+ARG TARGETARCH
+RUN apk add --no-cache build-base linux-headers autoconf automake libtool perl pkgconf python3 ca-certificates
+WORKDIR /src
+COPY deploy/build-server-tor.py deploy/build-mobile-tor-package.py deploy/test_server_tor_package.py /src/deploy/
+COPY server/scripts/server_tor_package.py /src/server/scripts/
+COPY mobile/torpack/sources.json /src/mobile/torpack/
+RUN python3 /src/deploy/build-server-tor.py --output /tor-package --work /tor-build --cache /tor-sources --platform "linux/${TARGETARCH}" --jobs 2 \
+ && python3 /src/deploy/test_server_tor_package.py --prefix /tor-package --platform "linux/${TARGETARCH}" --source-root /src \
+ && rm -rf /tor-build /tor-sources
+
 # The static protocol library owns no networking. Runtime sockets and peer keys
 # remain scoped to each native relay endpoint; test keys never enter the image.
 FROM rust:1.99.0-alpine3.22 AS relay-pq-protocol
@@ -51,11 +65,16 @@ COPY --from=build /src /routervpn-source
 COPY --from=relay-pq-protocol /pq/target/release/libroutervpn_rosenpass.a /pq-native/libroutervpn_rosenpass.a
 COPY --from=relay-pq-protocol /pq-test-keys /pq-native/keys
 COPY --from=relay-pq-protocol /pq-Cargo.lock.sha256 /routervpn-pq-Cargo.lock.sha256
+COPY --from=standalone-tor-build /tor-package /server-tor-test
 RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
  && go mod download github.com/amnezia-vpn/amneziawg-go/v3@v3.1.20260814 \
  && python3 /routervpn-source/deploy/test_server_pq_real.py --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
  && python3 /routervpn-source/deploy/test_server_pq_traffic.py --core /core --library /pq-native/libroutervpn_rosenpass.a --keys /pq-native/keys \
  && CGO_ENABLED=1 CC=clang CXX=clang++ python3 /routervpn-source/deploy/test_hysteria2_deadlines_pinned.py /core \
+ && ROUTERVPN_SERVER_TOR_PACKAGE=/server-tor-test CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ \
+      go test -mod=mod -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
+      -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
+      ./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s \
  && CGO_ENABLED=1 CGO_LDFLAGS='-fuse-ld=lld -L/pq-native' CC=clang CXX=clang++ go build -mod=mod -trimpath -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl \
       -ldflags='-checklinkname=0 -linkmode external -extldflags "-static" -s -w -X github.com/sagernet/sing-box/constant.Version=1.14.1-routervpn' \
       -o /usr/local/bin/sing-box ./cmd/sing-box \
@@ -64,17 +83,22 @@ RUN python3 /routervpn-source/deploy/prepare-relay-core.py /core /xray-core \
  && python3 /routervpn-source/deploy/prepare-relay-core.py --digest > /routervpn-relay-source.sha256
 
 FROM alpine:3.22
+ARG TARGETARCH
 RUN apk add --no-cache nftables ca-certificates wireguard-tools iproute2 python3
 COPY --from=build /router-vpn-agent /usr/local/bin/router-vpn-agent
 COPY --from=relay-core /usr/local/bin/sing-box /usr/local/bin/sing-box
+COPY --from=standalone-tor-build /tor-package/bin/routervpn-tor /usr/local/bin/routervpn-tor
+COPY --from=standalone-tor-build /tor-package/share/router-vpn/tor/ /usr/local/share/router-vpn/tor/
 COPY --from=build /relay-fixtures /tmp/relay-fixtures
 COPY --from=relay-core /core/routervpn-amnezia-LICENSE.txt /usr/local/share/router-vpn/amneziawg-LICENSE.txt
 COPY --from=relay-core /core/routervpn-xray-LICENSE.txt /usr/local/share/router-vpn/xray-LICENSE.txt
+COPY --from=relay-core /core/routervpn-server-tor-pt-notices.json /usr/local/share/router-vpn/tor-pt-notices.json
 COPY --from=relay-core /routervpn-relay-source.sha256 /usr/local/share/router-vpn/relay-source.sha256
 COPY --from=relay-core /routervpn-pq-Cargo.lock.sha256 /usr/local/share/router-vpn/pq-Cargo.lock.sha256
 RUN sing-box version | grep -F "sing-box version 1.14.1-routervpn" \
  && for config in /tmp/relay-fixtures/*.json; do sing-box check -c "$config" || exit 1; done \
- && rm -rf /tmp/relay-fixtures
+ && rm -rf /tmp/relay-fixtures \
+ && python3 /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local --platform "linux/${TARGETARCH}" --offline-self-test
 COPY --from=awg-tools-build /src/amneziawg-tools/src/wg /usr/local/bin/awg
 RUN chmod 0755 /usr/local/bin/awg \
  && command -v wg >/dev/null \

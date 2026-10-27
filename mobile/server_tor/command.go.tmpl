@@ -1,0 +1,147 @@
+package main
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"io"
+	"os"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/spf13/cobra"
+)
+
+type routerVPNTorRelayOwner interface {
+	Begin() error
+	Snapshot(context.Context, string) (multihoprelay.TorReceipt, error)
+	Close(context.Context) error
+}
+
+func init() {
+	var directory string
+	command := &cobra.Command{Use: "routervpn-tor-relay", Short: "Run one private owned Tor relay", Args: cobra.NoArgs, SilenceUsage: true, SilenceErrors: true,
+		RunE: func(command *cobra.Command, _ []string) error {
+			ctx, cancel := signal.NotifyContext(command.Context(), os.Interrupt, syscall.SIGTERM)
+			defer cancel()
+			return routerVPNRunTorRelay(ctx, directory, os.Stdin, os.Stdout, routerVPNNewServerTor)
+		}}
+	command.Flags().StringVar(&directory, "runtime-dir", "", "Owned private Tor lease directory")
+	mainCommand.AddCommand(command)
+}
+
+func routerVPNRunTorRelay(ctx context.Context, directory string, input io.Reader, output io.Writer, factory func(context.Context, *os.Root, string, multihoprelay.TorCapture) (routerVPNTorRelayOwner, error)) error {
+	bad := errors.New("owned native Tor relay failed")
+	if ctx == nil || ctx.Err() != nil || !filepath.IsAbs(directory) || filepath.Clean(directory) != directory {
+		return bad
+	}
+	info, err := os.Lstat(directory)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0700 || info.Mode()&os.ModeSymlink != 0 {
+		return bad
+	}
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		return bad
+	}
+	defer root.Close()
+	raw, err := routerVPNServerTorRead(root, "tor-capture.json", 8192)
+	if err != nil {
+		return bad
+	}
+	var capture multihoprelay.TorCapture
+	if routerVPNServerTorDecode(raw, &capture) != nil || capture.Validate() != nil || !time.Now().Before(capture.BootstrapDeadline) {
+		return bad
+	}
+	owner, err := factory(ctx, root, directory, capture)
+	defer func() {
+		if owner == nil || owner.Close(context.Background()) == nil {
+			_ = json.NewEncoder(output).Encode(multihoprelay.TorIPCResponse{Schema: 1, Operation: "closed", Nonce: capture.OwnerID, OK: true})
+		}
+	}()
+	if err != nil || owner == nil {
+		return bad
+	}
+	scanner := bufio.NewScanner(input)
+	scanner.Buffer(make([]byte, 4096), 4096)
+	if closer, ok := input.(io.ReadCloser); ok {
+		stop := context.AfterFunc(ctx, func() { _ = closer.Close() })
+		defer stop()
+	}
+	encoder := json.NewEncoder(output)
+	for scanner.Scan() {
+		var request multihoprelay.TorIPCRequest
+		if routerVPNServerTorDecode(scanner.Bytes(), &request) != nil || !request.Valid() {
+			return bad
+		}
+		response := multihoprelay.TorIPCResponse{Schema: 1, Operation: request.Operation, Nonce: request.Nonce}
+		switch request.Operation {
+		case "snapshot":
+			operation, cancel := context.WithTimeout(ctx, time.Second)
+			response.Receipt, err = owner.Snapshot(operation, request.Nonce)
+			cancel()
+			response.OK = err == nil
+		case "bootstrap":
+			response.OK = owner.Begin() == nil
+		case "stop":
+			// A successful acknowledgement is emitted only after all real
+			// process/front/PT/native workers have crossed their close barriers.
+			if owner.Close(context.Background()) != nil {
+				return bad
+			}
+			response.OK = true
+			if encoder.Encode(response) != nil {
+				return bad
+			}
+			return nil
+		}
+		if encoder.Encode(response) != nil || !response.OK {
+			return bad
+		}
+	}
+	if scanner.Err() != nil {
+		return bad
+	}
+	return nil
+}
+
+func routerVPNServerTorDecode(raw []byte, value any) error {
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(value); err != nil {
+		return err
+	}
+	if d.Decode(new(any)) != io.EOF {
+		return errors.New("ambiguous native Tor message")
+	}
+	return nil
+}
+func routerVPNServerTorRead(root *os.Root, name string, limit int64) ([]byte, error) {
+	bad := errors.New("owned Tor source is unavailable")
+	info, err := root.Lstat(name)
+	if err != nil || !info.Mode().IsRegular() || info.Mode().Perm() != 0600 || info.Size() <= 0 || info.Size() > limit {
+		return nil, bad
+	}
+	f, err := root.Open(name)
+	if err != nil {
+		return nil, bad
+	}
+	defer f.Close()
+	actual, err := f.Stat()
+	if err != nil || !os.SameFile(info, actual) {
+		return nil, bad
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, limit+1))
+	if err != nil || int64(len(raw)) != info.Size() {
+		return nil, bad
+	}
+	after, err := root.Lstat(name)
+	if err != nil || !os.SameFile(info, after) || after.Size() != info.Size() || !after.ModTime().Equal(info.ModTime()) {
+		return nil, bad
+	}
+	return raw, nil
+}

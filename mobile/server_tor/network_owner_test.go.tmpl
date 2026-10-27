@@ -1,0 +1,112 @@
+package routervpnservertor
+
+import (
+	"context"
+	"net"
+	"net/netip"
+	"sync/atomic"
+	"testing"
+
+	"github.com/sagernet/sing-box/adapter"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type serverTestManager struct{ adapter.NetworkManager }
+
+func (*serverTestManager) NetworkEnvironment() uint64 { return 1 }
+
+type serverTestDNS struct{ adapter.DNSRouter }
+
+func (*serverTestDNS) Lookup(context.Context, string, adapter.DNSQueryOptions) ([]netip.Addr, error) {
+	return []netip.Addr{netip.MustParseAddr("203.0.113.9")}, nil
+}
+
+type serverTestDNSManager struct{ adapter.DNSTransportManager }
+type serverTestOutbound struct{ adapter.OutboundManager }
+type serverTestPacket struct {
+	net.PacketConn
+	closed atomic.Bool
+}
+
+func (p *serverTestPacket) Close() error { p.closed.Store(true); return nil }
+
+type serverTestDialer struct {
+	entered, release chan struct{}
+	connection       net.Conn
+	packet           *serverTestPacket
+}
+
+func (d *serverTestDialer) DialContext(context.Context, string, M.Socksaddr) (net.Conn, error) {
+	close(d.entered)
+	<-d.release
+	return d.connection, nil
+}
+func (d *serverTestDialer) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	close(d.entered)
+	<-d.release
+	return d.packet, nil
+}
+
+func serverNativeNetwork(t *testing.T, lower *serverTestDialer) *Network {
+	t.Helper()
+	ctx := service.ContextWithDefaultRegistry(t.Context())
+	manager, dns, resolvers, outbounds := &serverTestManager{}, &serverTestDNS{}, &serverTestDNSManager{}, &serverTestOutbound{}
+	service.MustRegister[adapter.NetworkManager](ctx, manager)
+	service.MustRegister[adapter.DNSRouter](ctx, dns)
+	service.MustRegister[adapter.DNSTransportManager](ctx, resolvers)
+	service.MustRegister[adapter.OutboundManager](ctx, outbounds)
+	capture := &torNetworkCapture{ctx: ctx, router: dns, dns: resolvers, outbound: outbounds, network: manager, prepared: true,
+		dnsOwners: map[string]torCapturedDNS{}, outboundOwners: map[string]torCapturedOutbound{}}
+	return &Network{ctx: ctx, capture: capture, lower: lower, manager: manager, environment: 1, current: func() bool { return true }}
+}
+func TestServerTorNativeUnderlayRetainsLateDomainNumericAndPacketOwners(t *testing.T) {
+	for _, kind := range []string{"domain", "numeric", "packet"} {
+		t.Run(kind, func(t *testing.T) {
+			a, b := net.Pipe()
+			defer a.Close()
+			defer b.Close()
+			lower := &serverTestDialer{entered: make(chan struct{}), release: make(chan struct{}), connection: a, packet: &serverTestPacket{}}
+			n := serverNativeNetwork(t, lower)
+			ctx, cancel := context.WithCancel(t.Context())
+			defer cancel()
+			type result struct {
+				connection net.Conn
+				packet     net.PacketConn
+				err        error
+			}
+			finished := make(chan result, 1)
+			go func() {
+				if kind == "packet" {
+					p, e := n.packets(ctx, "udp", "203.0.113.9:443")
+					finished <- result{packet: p, err: e}
+				} else {
+					address := "203.0.113.9:443"
+					if kind == "domain" {
+						address = "bridge.example:443"
+					}
+					c, e := n.dial(ctx, "tcp", address)
+					finished <- result{connection: c, err: e}
+				}
+			}()
+			<-lower.entered
+			cancel()
+			close(lower.release)
+			r := <-finished
+			if r.err == nil {
+				t.Fatal("late canceled native socket escaped its captured operation")
+			}
+			if kind == "packet" {
+				if r.packet != lower.packet {
+					t.Fatal("late packet owner was discarded before drain")
+				}
+				_ = r.packet.Close()
+			} else {
+				if r.connection != a {
+					t.Fatal("late TCP owner was discarded before drain")
+				}
+				_ = r.connection.Close()
+			}
+		})
+	}
+}

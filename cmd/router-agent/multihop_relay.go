@@ -45,7 +45,11 @@ func (s *server) initializeMultihopRelay() error {
 	if !covered {
 		return errors.New("relay listen IP must belong to the configured tunnel ranges")
 	}
-	manager, err := multihoprelay.New(cfg, s.cfg.NodeID, relayExecRunner{})
+	runner, err := installedRelayRunner(cfg, s.cfg.NodeID)
+	if err != nil {
+		return err
+	}
+	manager, err := multihoprelay.New(cfg, s.cfg.NodeID, runner)
 	if err != nil {
 		return err
 	}

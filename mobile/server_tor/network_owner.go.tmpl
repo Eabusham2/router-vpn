@@ -1,0 +1,195 @@
+package routervpnservertor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/common/dialer"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/torpt"
+	"github.com/sagernet/sing-tun"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+	"github.com/sagernet/sing/common/x/list"
+	"github.com/sagernet/sing/service"
+)
+
+const Type = "routervpn-tor"
+
+// Network owns only the started server Box's underlay and bootstrap DNS.
+// It has no system TUN and cannot select a client/global routing table.
+type Network struct {
+	ctx         context.Context
+	capture     *torNetworkCapture
+	upstream    *torUpstreamCapture
+	lower       N.Dialer
+	manager     adapter.NetworkManager
+	environment uint64
+	current     func() bool
+	bridges     *torpt.Bridges
+	proxy       *mobiletor.TCPProxy
+	mu          sync.Mutex
+	closed      bool
+	cancel      context.CancelFunc
+	monitor     tun.NetworkUpdateMonitor
+	callback    *list.Element[tun.NetworkUpdateCallback]
+}
+
+func NewNetwork(ctx context.Context, policy *mobiletor.ServerTorPolicy, current func() bool, retire context.CancelFunc) (*Network, error) {
+	if ctx == nil || ctx.Err() != nil || policy == nil || current == nil || retire == nil || !current() {
+		return nil, errors.New("server Tor requires its current native network owner")
+	}
+	manager := service.FromContext[adapter.NetworkManager](ctx)
+	if manager == nil || !manager.AutoDetectInterface() || manager.NetworkMonitor() == nil {
+		return nil, errors.New("server Tor requires its actual native network monitor")
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	monitor := manager.NetworkMonitor()
+	callback := monitor.RegisterCallback(func() { cancel(); retire() })
+	adopted := false
+	defer func() {
+		if !adopted {
+			monitor.UnregisterCallback(callback)
+			cancel()
+		}
+	}()
+	options := option.DialerOptions{Detour: mobiletor.ServerTorUnderlayTag}
+	options.DomainResolver = &option.DomainResolveOptions{Server: "routervpn-tor-bootstrap"}
+	lower, err := dialer.NewWithOptions(dialer.Options{Context: ctx, Options: options, RemoteIsDomain: true, NewDialer: true})
+	if err != nil {
+		return nil, err
+	}
+	capture, err := captureTorNetwork(ctx, mobiletor.ProfileOutboundTag, options, lower)
+	if err != nil {
+		return nil, err
+	}
+	bootstrap, err := capture.prepare()
+	if err != nil {
+		return nil, err
+	}
+	upstream, err := captureTorUpstream(ctx, mobiletor.ProfileOutboundTag, mobiletor.ServerTorUnderlayTag)
+	if err != nil {
+		return nil, err
+	}
+	n := &Network{ctx: ctx, capture: capture, upstream: upstream, lower: lower, manager: manager, environment: manager.NetworkEnvironment(), current: current, cancel: cancel, monitor: monitor, callback: callback}
+	adopted = true
+	bootstrap.Resolve = n.capture.resolve
+	if policy.Mode() == "tor" {
+		n.proxy, err = mobiletor.StartTCPProxy(ctx, n.dial)
+	} else {
+		var plan mobiletor.Plan
+		plan, err = policy.Plan()
+		if err == nil {
+			n.bridges, err = torpt.StartWithNetwork(ctx, plan, n.dial, n.packets, bootstrap)
+		}
+	}
+	if err != nil {
+		return n, err
+	}
+	if !n.Current() {
+		return n, errors.New("server Tor network retired during admission")
+	}
+	return n, nil
+}
+func (n *Network) Current() bool {
+	if n == nil || n.ctx.Err() != nil || !n.current() || n.manager.NetworkEnvironment() != n.environment || n.capture.current() != nil || n.upstream.current() != nil {
+		return false
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closed {
+		return false
+	}
+	if n.bridges != nil {
+		select {
+		case <-n.bridges.Stopping():
+			return false
+		default:
+		}
+	}
+	if n.proxy != nil {
+		select {
+		case <-n.proxy.Stopping():
+			return false
+		default:
+		}
+	}
+	return true
+}
+func (n *Network) Listeners() map[string]string {
+	if n.bridges == nil {
+		return nil
+	}
+	return n.bridges.Listeners()
+}
+func (n *Network) Proxy() *mobiletor.TCPProxy { return n.proxy }
+func (n *Network) dial(ctx context.Context, network, address string) (net.Conn, error) {
+	if !n.Current() || ctx.Err() != nil {
+		return nil, net.ErrClosed
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("invalid captured Tor underlay destination")
+	}
+	// Resolve through the selected bootstrap object, then bind a numeric dial
+	// to the same native owner. No default resolver runs on either branch.
+	if destination.IsDomain() {
+		addresses, err := n.capture.resolve(ctx, "ip", destination.Fqdn)
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range addresses {
+			if !n.Current() {
+				return nil, net.ErrClosed
+			}
+			c, err := n.lower.DialContext(ctx, network, M.SocksaddrFrom(ip, destination.Port))
+			if !n.Current() || ctx.Err() != nil {
+				return c, net.ErrClosed
+			}
+			if c != nil || err == nil {
+				return c, err
+			}
+		}
+		return nil, errors.New("captured Tor bootstrap addresses did not connect")
+	}
+	c, err := n.lower.DialContext(ctx, network, destination)
+	if !n.Current() || ctx.Err() != nil {
+		return c, net.ErrClosed
+	}
+	return c, err
+}
+func (n *Network) packets(ctx context.Context, network, address string) (net.PacketConn, error) {
+	if !n.Current() || ctx.Err() != nil || (network != "udp" && network != "udp4" && network != "udp6") {
+		return nil, net.ErrClosed
+	}
+	c, err := n.lower.ListenPacket(ctx, M.ParseSocksaddr(address))
+	if !n.Current() || ctx.Err() != nil {
+		return c, net.ErrClosed
+	}
+	return c, err
+}
+func (n *Network) Close(ctx context.Context) error {
+	if n == nil {
+		return nil
+	}
+	n.mu.Lock()
+	if !n.closed {
+		n.monitor.UnregisterCallback(n.callback)
+		n.cancel()
+	}
+	n.closed = true
+	n.mu.Unlock()
+	if n.proxy != nil {
+		if err := n.proxy.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if n.bridges != nil {
+		return n.bridges.Close(ctx)
+	}
+	return nil
+}

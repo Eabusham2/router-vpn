@@ -1,0 +1,231 @@
+package main
+
+import (
+	"bufio"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
+	"io"
+	"net"
+	"net/netip"
+	"os"
+	"path/filepath"
+	"strconv"
+	"strings"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/include"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+)
+
+func serverTorCommandCapture(t *testing.T, host string) (multihoprelay.TorCapture, *mobiletor.ServerTorPolicy) {
+	t.Helper()
+	node := strings.Repeat("1", 64)
+	policy, err := mobiletor.NewServerTorPolicy(`{"schema":1,"id":"native-tor","entry_node_id":"`+node+`","mode":"tor","dns":{"mode":"home"},"adguard_ipv4":"192.168.50.133"}`, node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	source := multihoprelay.TorExitSource{ID: policy.ID(), Mode: policy.Mode(), SourceSHA256: policy.SourceSHA256(), DNSPolicySHA256: policy.DNSPolicySHA256()}
+	raw, _ := json.Marshal(struct {
+		NodeID string                      `json:"node_id"`
+		Source multihoprelay.TorExitSource `json:"source"`
+	}{node, source})
+	digest := sha256.Sum256(raw)
+	request := multihoprelay.TorRequest{SessionID: strings.Repeat("a", 32), EntryNodeID: node, ExitID: source.ID, ExitMode: source.Mode, SourceSHA256: source.SourceSHA256, DNSPolicySHA256: source.DNSPolicySHA256, Epoch: strings.Repeat("4", 64), Peer: host, AcquireExpiresAt: time.Now().Add(time.Minute).Unix()}
+	capture := multihoprelay.TorCapture{Schema: 1, Request: request, Source: source, RegistrySHA256: hex.EncodeToString(digest[:]), OwnerID: strings.Repeat("5", 64), Peer: host, Host: host, Port: 26240, Username: strings.Repeat("6", 48), Password: strings.Repeat("7", 48), BootstrapDeadline: time.Now().Add(time.Minute)}
+	if err := capture.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	return capture, policy
+}
+func serverTorCommandDirectory(t *testing.T, c multihoprelay.TorCapture, p *mobiletor.ServerTorPolicy) string {
+	t.Helper()
+	directory := t.TempDir()
+	if os.Chmod(directory, 0700) != nil {
+		t.Fatal("chmod")
+	}
+	raw, _ := json.Marshal(c)
+	if os.WriteFile(filepath.Join(directory, "tor-capture.json"), raw, 0600) != nil || os.WriteFile(filepath.Join(directory, "tor-source.json"), []byte(p.Source()), 0600) != nil {
+		t.Fatal("write capture")
+	}
+	return directory
+}
+
+type serverTorCommandOwner struct {
+	closed  atomic.Bool
+	started atomic.Bool
+	release chan struct{}
+}
+
+func (o *serverTorCommandOwner) Begin() error { o.started.Store(true); return nil }
+func (o *serverTorCommandOwner) Snapshot(context.Context, string) (multihoprelay.TorReceipt, error) {
+	return multihoprelay.TorReceipt{Phase: multihoprelay.TorPending}, nil
+}
+func (o *serverTorCommandOwner) Close(context.Context) error {
+	if o.release != nil {
+		<-o.release
+	}
+	o.closed.Store(true)
+	return nil
+}
+func TestServerTorNativeCommandJoinsOwnerBeforeAcknowledgingClose(t *testing.T) {
+	c, p := serverTorCommandCapture(t, "10.77.0.1")
+	directory := serverTorCommandDirectory(t, c, p)
+	in, writer := io.Pipe()
+	reader, out := io.Pipe()
+	defer writer.Close()
+	defer reader.Close()
+	owner := &serverTorCommandOwner{release: make(chan struct{})}
+	done := make(chan error, 1)
+	go func() {
+		defer out.Close()
+		done <- routerVPNRunTorRelay(t.Context(), directory, in, out, func(context.Context, *os.Root, string, multihoprelay.TorCapture) (routerVPNTorRelayOwner, error) {
+			return owner, nil
+		})
+	}()
+	encoder := json.NewEncoder(writer)
+	decoder := json.NewDecoder(reader)
+	for _, op := range []string{"snapshot", "bootstrap"} {
+		q := multihoprelay.TorIPCRequest{Schema: 1, Operation: op, Nonce: strings.Repeat("b", 64)}
+		if encoder.Encode(q) != nil {
+			t.Fatal("write")
+		}
+		var response multihoprelay.TorIPCResponse
+		if decoder.Decode(&response) != nil || !response.OK || response.Nonce != q.Nonce || response.Operation != op {
+			t.Fatal("lost owned pipe request")
+		}
+	}
+	if !owner.started.Load() {
+		t.Fatal("bootstrap never reached its native owner")
+	}
+	if encoder.Encode(multihoprelay.TorIPCRequest{Schema: 1, Operation: "stop", Nonce: strings.Repeat("c", 64)}) != nil {
+		t.Fatal("stop write")
+	}
+	ack := make(chan multihoprelay.TorIPCResponse, 1)
+	go func() { var r multihoprelay.TorIPCResponse; _ = decoder.Decode(&r); ack <- r }()
+	select {
+	case <-ack:
+		t.Fatal("stop acknowledged an undrained native worker")
+	default:
+	}
+	close(owner.release)
+	r := <-ack
+	if !owner.closed.Load() || !r.OK || r.Operation != "stop" {
+		t.Fatal("stop did not join its exact native worker")
+	}
+	var terminal multihoprelay.TorIPCResponse
+	if decoder.Decode(&terminal) != nil || terminal.Operation != "closed" || terminal.Nonce != c.OwnerID || !terminal.OK {
+		t.Fatal("missing owned terminal cleanup receipt")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+}
+func TestServerTorNativeRealNoTUNPendingChildAndCapturedFront(t *testing.T) {
+	previous := globalCtx
+	globalCtx = include.Context(t.Context())
+	defer func() { globalCtx = previous }()
+	prefix := os.Getenv("ROUTERVPN_SERVER_TOR_PACKAGE")
+	if prefix == "" {
+		t.Skip("requires built standalone Tor package")
+	}
+	binary, err := mobiletor.VerifyServerTorPackage(prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := ""
+	for _, iface := range interfaces {
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			p, e := netip.ParsePrefix(address.String())
+			if e == nil && p.Addr().Is4() && p.Addr().IsPrivate() {
+				host = p.Addr().String()
+				break
+			}
+		}
+		if host != "" {
+			break
+		}
+	}
+	if host == "" {
+		t.Fatal("requires a private local interface for the actual leased front")
+	}
+	c, policy := serverTorCommandCapture(t, host)
+	reserve, err := net.Listen("tcp4", net.JoinHostPort(host, "0"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	c.Port = reserve.Addr().(*net.TCPAddr).Port
+	_ = reserve.Close()
+	directory := serverTorCommandDirectory(t, c, policy)
+	root, err := os.OpenRoot(directory)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer root.Close()
+	owner, err := routerVPNNewServerTorWithBinary(t.Context(), root, directory, c, binary)
+	if owner != nil {
+		defer owner.Close(context.Background())
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	native := owner.(*routerVPNServerTor)
+	if len(native.box.Inbound().Inbounds()) != 0 || native.child.Session().Current() {
+		t.Fatal("pending native worker started a TUN or enabled Tor networking")
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), time.Second)
+	defer cancel()
+	receipt, err := owner.Snapshot(ctx, strings.Repeat("f", 64))
+	if err != nil || multihoprelay.ValidateTorReceipt(receipt, c, strings.Repeat("f", 64), time.Now(), time.Now()) != nil || receipt.Phase != multihoprelay.TorPending || receipt.TrafficAllowed {
+		t.Fatal("real native pending receipt invalid", err)
+	}
+	connection, err := net.DialTimeout("tcp4", net.JoinHostPort(host, itoaServerTor(c.Port)), time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer connection.Close()
+	_ = connection.SetDeadline(time.Now().Add(time.Second))
+	_, _ = connection.Write([]byte{5, 1, 0})
+	reply := bufio.NewReader(connection)
+	first, _ := reply.ReadByte()
+	second, _ := reply.ReadByte()
+	if first != 5 || second != 255 {
+		t.Fatal("native private front permitted unauthenticated client", first, second)
+	}
+	if err := owner.Close(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if native.child.Alive() || native.front.Current() {
+		t.Fatal("actual Tor child/front survived native close")
+	}
+}
+func itoaServerTor(port int) string { return strconv.Itoa(port) }
+
+func TestServerTorObsoleteProofExpiryCannotRetireRefreshedOwner(t *testing.T) {
+	ctx, cancel := context.WithCancel(t.Context())
+	defer cancel()
+	n := &routerVPNServerTor{ctx: ctx, cancel: cancel, proofGeneration: 1}
+	n.mu.Lock()
+	entered, done := make(chan struct{}), make(chan struct{})
+	go func() { close(entered); n.expire(1); close(done) }()
+	<-entered
+	n.proofGeneration = 2
+	n.mu.Unlock()
+	<-done
+	if ctx.Err() != nil {
+		t.Fatal("obsolete proof timer canceled a refreshed native owner")
+	}
+	n.expire(2)
+	if ctx.Err() == nil {
+		t.Fatal("current expired proof did not close admission")
+	}
+}

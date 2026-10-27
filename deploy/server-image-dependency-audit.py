@@ -64,4 +64,28 @@ assert "deploy/build-xray-runtime.py" in docs["server/init/Dockerfile"]
 assert "COPY --from=xray /xray/linux-${TARGETARCH}/xray" in docs["server/init/Dockerfile"]
 assert "50231eaff98ccc31b5cbd247a721c16e97fe5ec1" in (ROOT/"deploy/prepare-xray-runtime.py").read_text()
 assert "POLICY.prepare(source)" in (ROOT/"deploy/build-xray-runtime.py").read_text()
+agent = docs["deploy/router-agent.Dockerfile"]
+for required in (
+    "FROM alpine:3.22 AS standalone-tor-build",
+    "COPY mobile/torpack/sources.json /src/mobile/torpack/",
+    "python3 /src/deploy/build-server-tor.py --output /tor-package",
+    "python3 /src/deploy/test_server_tor_package.py --prefix /tor-package",
+    'COPY --from=standalone-tor-build /tor-package/bin/routervpn-tor /usr/local/bin/routervpn-tor',
+    'COPY --from=standalone-tor-build /tor-package/share/router-vpn/tor/ /usr/local/share/router-vpn/tor/',
+    'COPY --from=relay-core /core/routervpn-server-tor-pt-notices.json /usr/local/share/router-vpn/tor-pt-notices.json',
+    'COPY --from=standalone-tor-build /tor-package /server-tor-test',
+    'ROUTERVPN_SERVER_TOR_PACKAGE=/server-tor-test CGO_ENABLED=1',
+    'go test -mod=mod -tags with_quic,with_wireguard,with_gvisor,with_openvpn,routervpn_native_pq,with_naive_outbound,with_musl',
+    "./cmd/sing-box ./routervpn/servertor -run '^TestServerTor' -count=1 -timeout 90s",
+    'python3 /usr/local/share/router-vpn/tor/verify.py --prefix /usr/local --platform "linux/${TARGETARCH}" --offline-self-test',
+):
+    assert required in agent, f"standalone server Tor image gate missing: {required}"
+preflight = (ROOT / '.github/workflows/arm64-portainer-preflight.yml').read_text()
+for required in (
+    'docker run --rm --network none --platform linux/arm64',
+    '--entrypoint python3 router-vpn-preflight-agent:arm64',
+    '/usr/local/share/router-vpn/tor/verify.py --prefix /usr/local',
+    '--platform linux/arm64 --offline-self-test',
+):
+    assert required in preflight, f"installed ARM64 standalone Tor verification missing: {required}"
 print("published server image dependency pin audit: OK")

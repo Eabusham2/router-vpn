@@ -1,0 +1,387 @@
+package main
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"net"
+	"os"
+	"sync"
+	"time"
+
+	box "github.com/sagernet/sing-box"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/servertor"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+type routerVPNServerTor struct {
+	ctx             context.Context
+	cancel          context.CancelFunc
+	root            *os.Root
+	capture         multihoprelay.TorCapture
+	policy          *mobiletor.ServerTorPolicy
+	box             *box.Box
+	child           *mobiletor.ServerTorChild
+	network         *routervpnservertor.Network
+	front           *mobiletor.ServerTorFront
+	dns             adapter.DNSRouter
+	dnsManager      adapter.DNSTransportManager
+	dnsOwner        adapter.DNSTransport
+	final           adapter.Outbound
+	proofNetwork    *mobiletor.Network
+	mu              sync.Mutex
+	started         bool
+	closing         bool
+	boxClosed       bool
+	boxCloseError   error
+	proof           mobiletor.Proof
+	sequence        uint64
+	done            chan struct{}
+	expiry          *time.Timer
+	proofGeneration uint64
+}
+
+func routerVPNNewServerTor(parent context.Context, root *os.Root, directory string, capture multihoprelay.TorCapture) (result routerVPNTorRelayOwner, failure error) {
+	binary, err := mobiletor.VerifyServerTorPackage("/usr/local")
+	if err != nil {
+		return nil, errors.New("installed server Tor package is unavailable")
+	}
+	return routerVPNNewServerTorWithBinary(parent, root, directory, capture, binary)
+}
+
+func routerVPNNewServerTorWithBinary(parent context.Context, root *os.Root, directory string, capture multihoprelay.TorCapture, binary *mobiletor.ServerTorBinary) (result routerVPNTorRelayOwner, failure error) {
+	bad := errors.New("server Tor native construction failed")
+	stage := "captured source"
+	defer func() {
+		if failure != nil {
+			failure = errors.New("server Tor native " + stage + " failed")
+		}
+	}()
+	if parent == nil || parent.Err() != nil || globalCtx == nil || root == nil || capture.Validate() != nil {
+		return nil, bad
+	}
+	raw, err := routerVPNServerTorRead(root, "tor-source.json", 64<<10)
+	if err != nil {
+		return nil, bad
+	}
+	policy, err := mobiletor.NewServerTorPolicy(string(raw), capture.Request.EntryNodeID)
+	if err != nil || policy.ID() != capture.Source.ID || policy.Mode() != capture.Source.Mode || policy.SourceSHA256() != capture.Source.SourceSHA256 || policy.DNSPolicySHA256() != capture.Source.DNSPolicySHA256 {
+		return nil, bad
+	}
+	if binary == nil || !binary.Current() {
+		return nil, bad
+	}
+	owned, cancel := context.WithCancel(service.ContextWithDefaultRegistry(service.ExtendContext(globalCtx)))
+	context.AfterFunc(parent, cancel)
+	n := &routerVPNServerTor{ctx: owned, cancel: cancel, root: root, capture: capture, policy: policy, done: make(chan struct{})}
+	result = n
+	stage = "isolated SOCKS reservation"
+	initialize, finish := context.WithTimeout(owned, 7*time.Second)
+	defer finish()
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		return result, bad
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	if listener.Close() != nil {
+		return result, bad
+	}
+	var isolation [64]byte
+	if _, err = rand.Read(isolation[:]); err != nil {
+		return result, bad
+	}
+	configuration, err := policy.NativeConfig(port, hex.EncodeToString(isolation[:32]), hex.EncodeToString(isolation[32:]))
+	clear(isolation[:])
+	if err != nil {
+		return result, bad
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](owned, []byte(configuration))
+	if err != nil {
+		return result, bad
+	}
+	if len(options.Inbounds) != 0 {
+		return result, bad
+	}
+	stage = "Box construction"
+	n.box, err = box.New(box.Options{Context: owned, Options: options})
+	if err != nil {
+		return result, bad
+	}
+	stage = "Box startup"
+	if err = n.box.RouterVPNStrategyStart(); err != nil {
+		return result, bad
+	}
+	stage = "native DNS and outbound capture"
+	n.final, _ = n.box.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	n.dns = service.FromContext[adapter.DNSRouter](owned)
+	n.dnsManager = service.FromContext[adapter.DNSTransportManager](owned)
+	if n.final == nil || n.dns == nil || n.dnsManager == nil {
+		return result, bad
+	}
+	n.dnsOwner, _ = n.dnsManager.Transport("routervpn-tor-dns")
+	if n.dnsOwner == nil || n.dnsManager.Default() != n.dnsOwner {
+		return result, bad
+	}
+	stage = "standalone Tor control"
+	n.child, err = mobiletor.StartServerTorChild(initialize, directory, binary, policy, port)
+	if err != nil {
+		return result, bad
+	}
+	stage = "native bootstrap network"
+	n.network, err = routervpnservertor.NewNetwork(owned, policy, n.baseCurrent, n.cancel)
+	if err != nil {
+		return result, bad
+	}
+	stage = "disabled Tor configuration"
+	if err = n.child.Session().Configure(initialize, n.network.Listeners(), n.network.Proxy()); err != nil {
+		return result, bad
+	}
+	stage = "proof owner"
+	n.proofNetwork, err = mobiletor.NewNetwork(owned, n.finalDial, nil)
+	if err != nil {
+		return result, bad
+	}
+	stage = "private authenticated front"
+	n.front, err = mobiletor.StartServerTorFront(owned, capture.Host, capture.Peer, capture.Port, capture.Username, capture.Password, n.trafficDial)
+	if err != nil || initialize.Err() != nil || !n.baseCurrent() {
+		return result, bad
+	}
+	return result, nil
+}
+func (n *routerVPNServerTor) baseCurrent() bool {
+	if n == nil || n.ctx.Err() != nil || n.child == nil || !n.child.Alive() || n.box == nil || n.final == nil || n.dnsManager == nil {
+		return false
+	}
+	final, ok := n.box.Outbound().Outbound(mobiletor.ProfileOutboundTag)
+	dns, found := n.dnsManager.Transport("routervpn-tor-dns")
+	return ok && found && final == n.final && dns == n.dnsOwner && n.dnsManager.Default() == dns && service.FromContext[adapter.DNSRouter](n.ctx) == n.dns
+}
+func (n *routerVPNServerTor) current() bool {
+	return n.baseCurrent() && n.network != nil && n.network.Current() && n.front != nil && n.front.Current()
+}
+func (n *routerVPNServerTor) Begin() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.started || n.closing || !n.current() {
+		return errors.New("server Tor bootstrap owner is not available")
+	}
+	n.started = true
+	go n.run()
+	return nil
+}
+func (n *routerVPNServerTor) run() {
+	defer close(n.done)
+	initial, finish := context.WithDeadline(n.ctx, n.capture.BootstrapDeadline)
+	if n.child.Session().EnableNetwork(initial) != nil {
+		finish()
+		n.cancel()
+		return
+	}
+	if _, err := n.child.Session().WaitBootstrap(initial); err != nil {
+		finish()
+		n.cancel()
+		return
+	}
+	if n.prove(initial) != nil {
+		finish()
+		n.cancel()
+		return
+	}
+	finish()
+	ticker := time.NewTicker(15 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-n.ctx.Done():
+			return
+		case <-ticker.C:
+			if n.prove(n.ctx) != nil {
+				n.cancel()
+				return
+			}
+		}
+	}
+}
+func (n *routerVPNServerTor) prove(parent context.Context) error {
+	bad := errors.New("server Tor selected path did not prove")
+	ctx, cancel := context.WithTimeout(parent, 25*time.Second)
+	defer cancel()
+	if !n.current() || !n.child.Session().Current() || n.box.RouterVPNServerTorDNSProof(ctx) != nil {
+		return bad
+	}
+	proof, err := mobiletor.Prove(ctx, n.capture.Request.SessionID, n.proofNetwork.DialContext)
+	if err != nil || !proof.IsTor || proof.SessionID != n.capture.Request.SessionID || proof.CheckedAt.IsZero() {
+		return bad
+	}
+	bootstrap, err := n.child.Session().Bootstrap(ctx)
+	if err != nil || bootstrap.Progress != 100 || !bootstrap.CircuitEstablished || !n.current() || ctx.Err() != nil {
+		return bad
+	}
+	proof.DNSProven = true
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closing || !n.current() {
+		return bad
+	}
+	if n.expiry != nil {
+		n.expiry.Stop()
+	}
+	n.proof = proof
+	n.proofGeneration++
+	generation := n.proofGeneration
+	n.expiry = time.AfterFunc(time.Until(proof.CheckedAt.Add(30*time.Second)), func() { n.expire(generation) })
+	if n.front.Enable() != nil {
+		n.cancel()
+		return bad
+	}
+	return nil
+}
+func (n *routerVPNServerTor) expire(generation uint64) {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if !n.closing && generation == n.proofGeneration {
+		n.cancel()
+	}
+}
+func (n *routerVPNServerTor) trafficDial(ctx context.Context, network, address string) (net.Conn, error) {
+	n.mu.Lock()
+	proof := n.proof
+	closing := n.closing
+	n.mu.Unlock()
+	if closing || !proof.IsTor || time.Since(proof.CheckedAt) > 30*time.Second {
+		return nil, net.ErrClosed
+	}
+	return n.finalDial(ctx, network, address)
+}
+func (n *routerVPNServerTor) finalDial(ctx context.Context, network, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || !n.current() || !n.child.Session().Current() {
+		return nil, net.ErrClosed
+	}
+	destination := M.ParseSocksaddr(address)
+	if !destination.IsValid() || destination.Port == 0 {
+		return nil, errors.New("invalid server Tor destination")
+	}
+	if destination.IsDomain() {
+		// Every client/proof hostname uses the selected DNS router before a
+		// numeric Tor dial. Tor's SOCKS hostname resolver cannot substitute it.
+		addresses, err := n.dns.Lookup(ctx, destination.Fqdn, adapter.DNSQueryOptions{})
+		if err != nil {
+			return nil, err
+		}
+		for _, ip := range addresses {
+			if !n.current() || ctx.Err() != nil {
+				return nil, net.ErrClosed
+			}
+			c, err := n.final.DialContext(ctx, "tcp", M.SocksaddrFrom(ip, destination.Port))
+			if !n.current() || ctx.Err() != nil {
+				return c, net.ErrClosed
+			}
+			if c != nil || err == nil {
+				return c, err
+			}
+		}
+		return nil, errors.New("selected Tor DNS addresses did not connect")
+	}
+	c, err := n.final.DialContext(ctx, "tcp", destination)
+	if !n.current() {
+		return c, net.ErrClosed
+	}
+	return c, err
+}
+func (n *routerVPNServerTor) Snapshot(ctx context.Context, nonce string) (multihoprelay.TorReceipt, error) {
+	bad := errors.New("captured server Tor receipt is unavailable")
+	if !n.current() || ctx == nil || ctx.Err() != nil || n.child.Verify(ctx) != nil {
+		return multihoprelay.TorReceipt{}, bad
+	}
+	bootstrap := mobiletor.Bootstrap{}
+	if n.child.Session().Current() {
+		var err error
+		bootstrap, err = n.child.Session().Bootstrap(ctx)
+		if err != nil {
+			return multihoprelay.TorReceipt{}, bad
+		}
+	}
+	raw, err := routerVPNServerTorRead(n.root, "tor-source.json", 64<<10)
+	if err != nil || string(raw) != n.policy.Source() {
+		return multihoprelay.TorReceipt{}, bad
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.closing || !n.current() || ctx.Err() != nil {
+		return multihoprelay.TorReceipt{}, bad
+	}
+	n.sequence++
+	r := multihoprelay.TorReceipt{Schema: 1, SessionID: n.capture.Request.SessionID, OwnerID: n.capture.OwnerID, Peer: n.capture.Peer,
+		SourceSHA256: n.policy.SourceSHA256(), RegistrySHA256: n.capture.RegistrySHA256, DNSPolicySHA256: n.policy.DNSPolicySHA256(), FrontSHA256: n.capture.FrontSHA256(),
+		Nonce: nonce, Sequence: n.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorPending, FrontReady: true}
+	if n.proof.IsTor {
+		if !n.front.Allowed() || time.Since(n.proof.CheckedAt) > 30*time.Second || bootstrap.Progress != 100 || !bootstrap.CircuitEstablished {
+			return multihoprelay.TorReceipt{}, bad
+		}
+		r.Phase = multihoprelay.TorReady
+		r.TrafficAllowed = true
+		r.Bootstrap = 100
+		r.IsTor = true
+		r.DNSProven = true
+		r.ExitIP = n.proof.IP
+		r.ProofAt = n.proof.CheckedAt.UnixMilli()
+	}
+	return r, nil
+}
+func (n *routerVPNServerTor) Close(ctx context.Context) error {
+	if n == nil {
+		return nil
+	}
+	if ctx == nil {
+		return errors.New("server Tor close requires context")
+	}
+	n.mu.Lock()
+	n.closing = true
+	n.cancel()
+	if n.expiry != nil {
+		n.expiry.Stop()
+	}
+	started := n.started
+	n.mu.Unlock()
+	if n.front != nil {
+		if err := n.front.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if started {
+		select {
+		case <-n.done:
+		case <-ctx.Done():
+			return ctx.Err()
+		}
+	}
+	if n.child != nil {
+		if err := n.child.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if n.network != nil {
+		if err := n.network.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if n.proofNetwork != nil {
+		if err := n.proofNetwork.Close(ctx); err != nil {
+			return err
+		}
+	}
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	if n.box != nil && !n.boxClosed {
+		n.boxCloseError = n.box.Close()
+		n.boxClosed = true
+	}
+	return n.boxCloseError
+}

@@ -42,10 +42,13 @@ remote_spec.loader.exec_module(OPENVPN_REMOTE)
 _hy2_spec = importlib.util.spec_from_file_location('routervpn_hy2_deadlines', ROOT/'deploy/prepare-hysteria2-deadlines.py')
 HY2_DEADLINES = importlib.util.module_from_spec(_hy2_spec)
 _hy2_spec.loader.exec_module(HY2_DEADLINES)
+_tor_spec = importlib.util.spec_from_file_location('routervpn_server_tor', ROOT/'deploy/prepare-server-tor.py')
+SERVER_TOR = importlib.util.module_from_spec(_tor_spec)
+_tor_spec.loader.exec_module(SERVER_TOR)
 XRAY_VERSION = 'v1.260327.1-0.20260711155151-50231eaff98c'
 
 def inputs():
-    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs()
+    files = [Path(__file__).resolve(), ROOT/'deploy/test_external_openvpn_native.py', ROOT/'mobile/routervpn_openvpn_external_native_test.go.tmpl', *sorted((ROOT/'mobile/relay').glob('*.tmpl'))] + HY2_DEADLINES.inputs() + AMNEZIA.inputs() + XRAY.sources() + WHITENING.inputs() + PQ.inputs() + COMPOSITE.inputs() + OPENVPN_CLOSE.inputs() + OPENVPN_REMOTE.inputs() + STRATEGY.inputs() + SERVER_TOR.inputs()
     for package in PACKAGES: files += sorted((ROOT/'internal'/package).glob('*.go'))
     return list(dict.fromkeys(files))
 
@@ -101,6 +104,7 @@ def prepare_native(vendor, xray):
     COMPOSITE.prepare(vendor)
     OPENVPN_CLOSE.prepare(vendor)
     STRATEGY.prepare(vendor, mobile=False)
+    SERVER_TOR.prepare(vendor)
     subprocess.run(['go','mod','edit','-require=github.com/xtls/xray-core@'+XRAY_VERSION],cwd=vendor,check=True)
     subprocess.run(['go','mod','edit','-replace=github.com/xtls/xray-core='+str(xray)],cwd=vendor,check=True)
     license = xray/'LICENSE'
