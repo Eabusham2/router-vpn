@@ -43,7 +43,9 @@ base.SPECS[name] = (
 # Current external execution dialog and explicit primary choice.
 # All earlier guards remain in the hardened target; exact source hashes and
 # insertion text continue to reject unreviewed drift.
-base.SPECS['routervpn-gtk-product-v4.c'] = ('5b7a95a3e040db0b1d590889cc6328d501c05739ac2a73d2c0eef268f27b99f2',
+# Saved ordinary Tor entries reopen through the reviewed protocol-aware helper.
+# Those additions follow every insertion below; their guard positions are intact.
+base.SPECS['routervpn-gtk-product-v4.c'] = ('6d82aa7728b7b4904a4c6358d6e85c261ed0bbbf85f46d13edfb5444625bdfab',
  [(84,
    84,
    [],
