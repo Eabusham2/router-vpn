@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import shlex
 import struct
 import subprocess
@@ -18,6 +19,42 @@ ROOT = Path(__file__).resolve().parents[1]
 SPEC = importlib.util.spec_from_file_location('native_dependencies', ROOT/'deploy/build-native-runtime.py')
 N = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(N)
+
+SPEC = importlib.util.spec_from_file_location('native_capture_gate', ROOT/'deploy/test_desktop_native_bundle.py')
+CAPTURE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(CAPTURE)
+
+
+class NativeCapturePartition(unittest.TestCase):
+    def test_all_actual_platform_test_names_keep_one_owner_and_independent_matrices(self):
+        # Include platform-specific tests, even when this verifier runs on Linux.
+        names = sorted({name for path in (ROOT/'cmd/client').glob('*_test.go')
+                        for name in re.findall(r'^func (Test\w+)\(t \*testing\.T\)', path.read_text(), re.M)
+                        if re.match(CAPTURE.NATIVE_CAPTURE_SELECTOR, name)})
+        self.assertIn('TestNativeMultihopWindowsRuntimeRejectsActualPublicNullAndUnknownDACL', names)
+        groups, total = CAPTURE.native_capture_groups('\n'.join(names)+'\nok\trouter-vpn/cmd/client\t0.1s\n')
+        self.assertEqual(total, len(names))
+        owners = {name: [] for name in names}
+        for index, (_, include, exclude) in enumerate(groups):
+            for name in names:
+                if re.match(include, name) and (exclude is None or not re.match(exclude, name)):
+                    owners[name].append(index)
+        self.assertTrue(all(len(value) == 1 for value in owners.values()))
+        capture = owners['TestNativeMultihopCapturedBaseLocalServerAndExactNativeCompiler']
+        retained = owners['TestNativeMultihopRetainedGraphFinalizesServerAndOnlyRestoresSystemMTU']
+        self.assertNotEqual(capture, retained, 'Two complete-parser matrices share one process timeout')
+        for matrix in (capture, retained):
+            self.assertEqual(sum(value == matrix for value in owners.values()), 1)
+
+    def test_discovery_cannot_drop_mandatory_matrix_or_repeat_a_test(self):
+        names = [*CAPTURE.NATIVE_GRAPH_NAMES, *CAPTURE.NATIVE_TRAFFIC_NAMES,
+                 'TestNativeMultihopWindowsRuntimeRejectsActualPublicNullAndUnknownDACL']
+        for removed in CAPTURE.NATIVE_GRAPH_NAMES + CAPTURE.NATIVE_TRAFFIC_NAMES:
+            with self.subTest(removed=removed), self.assertRaises(RuntimeError):
+                CAPTURE.native_capture_groups('\n'.join(name for name in names if name != removed))
+        for discovered in ('', '\n'.join(names + names[:1]), '\n'.join(names + ['TestUnrelated'])):
+            with self.subTest(discovered=discovered), self.assertRaises(RuntimeError):
+                CAPTURE.native_capture_groups(discovered)
 
 
 class NativeBuildDiagnostics(unittest.TestCase):

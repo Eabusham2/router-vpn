@@ -41,7 +41,8 @@ def native_capture_groups(discovered):
         raise RuntimeError('Native graph or encrypted-traffic coverage disappeared')
     exact = lambda selected: '^(' + '|'.join(re.escape(name) for name in selected) + ')$'
     groups = (
-        ('captured graph/parser matrix', exact(NATIVE_GRAPH_NAMES), None),
+        ('captured graph/parser matrix', exact(NATIVE_GRAPH_NAMES[:1]), None),
+        ('retained graph/parser and MTU restoration matrix', exact(NATIVE_GRAPH_NAMES[1:]), None),
         ('policy, source, proof and restoration ownership', NATIVE_CAPTURE_SELECTOR,
          exact(NATIVE_GRAPH_NAMES + NATIVE_TRAFFIC_NAMES)),
         ('encrypted WG/Naive and WG/WG paths', exact(NATIVE_TRAFFIC_NAMES), None),
@@ -125,10 +126,11 @@ def test(bundle, target):
         # list` has no -race flag; an unrelated compiler failure must not be
         # caught and silently retried without race instrumentation.
         race = [] if target == 'windows/arm64' else ['-race']
-        # The old aggregate includes multiple real encrypted network matrices
-        # plus hundreds of complete-parser invocations. Give each coherent
-        # phase its original bounded budget; do not stretch an individual
-        # handshake/assertion or silently omit platform-only ACL negatives.
+        # Each graph matrix includes hundreds of complete-parser invocations.
+        # Keep initial capture and retained MTU restoration in separate bounded
+        # processes, as with ownership and encrypted traffic. Every original
+        # test is selected exactly once; individual handshakes and assertions
+        # retain their deadlines, including platform-only ACL negatives.
         discovered = subprocess.check_output(
             ['go', 'test', *race, './cmd/client', '-list', NATIVE_CAPTURE_SELECTOR],
             cwd=ROOT, env=env, text=True, timeout=300)
