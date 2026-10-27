@@ -93,7 +93,7 @@ class DesktopPTPreparation(unittest.TestCase):
         traffic = (self.vendor/'routervpn/desktoppt/tor_pt_entry_traffic_test.go').read_text()
         for name in ('MeekTLS', 'WebTunnelTLS', 'SnowflakeTraffic'):
             self.assertIn('func TestRouterVPNDesktopTorPTEntryCarriesReal'+name+'(', traffic)
-        for name, relative in PREP.BOX_TEMPLATES.items():
+        for name, relative in {**PREP.BOX_TEMPLATES, **PREP.ROUTE_TEMPLATES}.items():
             self.assertEqual((self.vendor/relative).read_bytes(),
                              (ROOT/'mobile/desktop'/name).read_bytes())
         for name in ('network.go', 'upstream.go'):
@@ -117,10 +117,46 @@ class DesktopPTPreparation(unittest.TestCase):
         with patch.object(PREP, 'prepare_desktop_pt') as selective, patch.object(PREP, 'write'), \
              patch.object(PREP.MTU, 'prepare'), patch.object(PREP.DESKTOP_MTU, 'prepare'), \
              patch.object(PREP.STRATEGY, 'prepare'), patch.object(PREP.EXTERNAL, 'prepare'), \
+             patch.object(PREP, 'prepare_network_startup') as startup, \
              patch.object(PREP.RELAY.OPENVPN_REMOTE, 'prepare'), \
              contextlib.redirect_stdout(io.StringIO()):
             PREP.prepare(self.vendor, GO, env=captured)
             selective.assert_called_once_with(self.vendor.resolve(), GO, env=captured)
+            startup.assert_called_once_with(self.vendor.resolve())
+
+    def test_native_network_startup_joins_exact_callbacks_and_preserves_repeat_preparation(self):
+        self.prepare()
+        with contextlib.redirect_stdout(io.StringIO()):
+            PREP.STRATEGY.prepare(self.vendor, mobile=False)
+        PREP.prepare_network_startup(self.vendor)
+        target = self.vendor/'route/network.go'
+        first = target.read_bytes()
+        self.assertEqual(first.count(b'r.routerVPNStartup.start(r.ctx,'), 1)
+        self.assertEqual(first.count(b'r.routerVPNStartup.stop('), 1)
+        self.assertEqual(first.count(b'r.routerVPNStartup.begin()'), 3)
+        self.assertEqual(first.count(b'defer finish()'), 3)
+        self.assertEqual(first.count(PREP.NETWORK_DISPATCH.encode()), 1)
+        # Exercise the real shared strategy preparer again. Its atomic lifetime
+        # edits must neither erase nor duplicate the owned callback joins.
+        with contextlib.redirect_stdout(io.StringIO()):
+            PREP.STRATEGY.prepare(self.vendor, mobile=False)
+        PREP.prepare_network_startup(self.vendor)
+        self.prepare()
+        self.assertEqual(target.read_bytes(), first)
+        for before, after in (
+            ('r.routerVPNStartup.start(r.ctx,', 'r.routerVPNStartup.start(context.Background(),'),
+            ('defer finish()', 'finish()'),
+            ('r.routerVPNStartup.stop(func() { r.started.Store(false) })', 'r.started.Store(false)'),
+            ('r.routerVPNStartup.begin()', 'foreignStartup.begin()'),
+            ('r.updateInterface(updateContext, defaultInterface)', 'r.updateInterface(context.Background(), defaultInterface)'),
+        ):
+            with self.subTest(before=before):
+                target.write_text(first.decode().replace(before, after, 1))
+                captured = snapshot(self.vendor)
+                with self.assertRaisesRegex(ValueError, 'startup differs'):
+                    PREP.prepare_network_startup(self.vendor)
+                self.assertEqual(snapshot(self.vendor), captured)
+        target.write_bytes(first)
 
     def test_actual_module_commands_use_captured_toolchain_environment(self):
         captured = dict(os.environ, GOTOOLCHAIN='local', GOWORK='off', GOENV='off')
@@ -370,7 +406,7 @@ class DesktopPTPreparation(unittest.TestCase):
         self.assertIn('mobile/torpt/go.mod', notices)
         self.assertIn('mobile/torpt/go.sum', notices)
         inputs = PREP.inputs()
-        for name in (*PREP.PT_TEMPLATES,):
+        for name in (*PREP.PT_TEMPLATES, *PREP.ROUTE_TEMPLATES):
             self.assertIn(ROOT/'mobile/desktop'/name, inputs)
         self.assertIn(ROOT/'deploy/prepare-mobile-tor.py', inputs)
         self.assertIn(ROOT/'mobile/toroutbound/dns_adapter.go.tmpl', inputs)
@@ -395,6 +431,8 @@ if __name__ == '__main__':
     if subprocess.check_output([GO, 'version'], text=True).split()[2] != 'go1.26.3':
         raise ValueError('Desktop preparation fixture requires the actual Go 1.26.3 toolchain')
     ORIGINALS = {name: subprocess.check_output(['git', '-C', str(vendor), 'show', head+':'+name])
-                 for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum')}
+                 for name in ('include/registry.go', 'route/network.go', 'dns/transport_adapter.go', 'go.mod', 'go.sum',
+                              'adapter/inbound/manager.go', 'adapter/outbound/manager.go', 'adapter/endpoint/manager.go',
+                              'adapter/service/manager.go', 'dns/transport_manager.go')}
     result = unittest.TextTestRunner(verbosity=2).run(unittest.defaultTestLoader.loadTestsFromTestCase(DesktopPTPreparation))
     raise SystemExit(not result.wasSuccessful())

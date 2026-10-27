@@ -1,0 +1,240 @@
+package route
+
+import (
+	"context"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"testing/synctest"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/routervpn/desktoppt"
+	"github.com/sagernet/sing/common/control"
+	"github.com/sagernet/sing/common/logger"
+	"github.com/sagernet/sing/common/winpowrprof"
+	"github.com/sagernet/sing/service"
+	"github.com/sagernet/sing/service/pause"
+)
+
+type desktopTorStartupRouter struct {
+	adapter.Router
+	resets atomic.Int32
+}
+
+func (r *desktopTorStartupRouter) ResetNetwork() { r.resets.Add(1) }
+
+type desktopTorStartupEndpoints struct{ adapter.EndpointManager }
+
+func (desktopTorStartupEndpoints) Endpoints() []adapter.Endpoint { return nil }
+
+type desktopTorStartupInbounds struct{ adapter.InboundManager }
+
+func (desktopTorStartupInbounds) Inbounds() []adapter.Inbound { return nil }
+
+type desktopTorStartupOutbounds struct{ adapter.OutboundManager }
+
+func (desktopTorStartupOutbounds) Outbounds() []adapter.Outbound { return nil }
+
+type desktopTorStartupServices struct {
+	adapter.ServiceManager
+	owner adapter.Service
+}
+
+func (s desktopTorStartupServices) Services() []adapter.Service { return []adapter.Service{s.owner} }
+
+type desktopTorStartupPause struct{ pause.Manager }
+
+func (desktopTorStartupPause) NetworkWake()         {}
+func (desktopTorStartupPause) NetworkPause()        {}
+func (desktopTorStartupPause) DeviceWake()          {}
+func (desktopTorStartupPause) DevicePause()         {}
+func (desktopTorStartupPause) IsDevicePaused() bool { return true }
+
+type desktopTorStartupConnections struct {
+	adapter.ConnectionManager
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (c *desktopTorStartupConnections) CloseAll() {
+	c.once.Do(func() { close(c.entered); <-c.release })
+}
+
+// Block inside the actual callback after its admission and execution lock.
+// A channel (not a scheduling delay) lets synctest establish that both this
+// callback and the concurrent native Start have reached their wait points.
+type desktopTorStartupLogger struct {
+	logger.ContextLogger
+	once    sync.Once
+	entered chan struct{}
+	release chan struct{}
+}
+
+func (l *desktopTorStartupLogger) Info(args ...any) {
+	if len(args) > 0 && args[0] == "updated default interface " {
+		l.once.Do(func() { close(l.entered); <-l.release })
+	}
+}
+
+func desktopTorStartupFixture(t *testing.T, ctx context.Context) (*NetworkManager, *routervpndesktoppt.NetworkOwner, *desktopTorStartupLogger) {
+	t.Helper()
+	options := routervpndesktoppt.CaptureOptions{SessionID: strings.Repeat("a", 32), SourceSHA256: strings.Repeat("b", 64)}
+	created, err := routervpndesktoppt.NewNetworkOwner(ctx, nil, routervpndesktoppt.NetworkOwnerTag, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	owner := created.(*routervpndesktoppt.NetworkOwner)
+	ctx = service.ContextWith[adapter.ServiceManager](ctx, desktopTorStartupServices{owner: owner})
+	log := &desktopTorStartupLogger{ContextLogger: logger.NOP(), entered: make(chan struct{}), release: make(chan struct{})}
+	manager := &NetworkManager{ctx: ctx, logger: log, router: new(desktopTorStartupRouter), pauseManager: desktopTorStartupPause{},
+		endpoint: desktopTorStartupEndpoints{}, inbound: desktopTorStartupInbounds{}, outbound: desktopTorStartupOutbounds{}}
+	t.Cleanup(func() { _ = manager.Close(); _ = owner.Close() })
+	return manager, owner, log
+}
+
+func desktopTorStartupActivate(t *testing.T, owner *routervpndesktoppt.NetworkOwner) context.Context {
+	t.Helper()
+	if err := owner.Start(adapter.StartStateStarted); err != nil {
+		t.Fatal(err)
+	}
+	capture, err := owner.Activate(strings.Repeat("a", 32), strings.Repeat("b", 64))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return capture
+}
+
+func TestRouterVPNDesktopTorNetworkStartupJoinsInitialInterface(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		manager, owner, log := desktopTorStartupFixture(t, context.Background())
+		physical := &control.Interface{Name: "routervpn-fixture", Index: 7}
+		manager.notifyInterfaceUpdate(physical, 0)
+		<-log.entered
+		started := make(chan error, 1)
+		go func() { started <- manager.Start(adapter.StartStatePostStart) }()
+		synctest.Wait()
+		var capture context.Context
+		early := false
+		select {
+		case err := <-started:
+			if err != nil {
+				t.Fatal(err)
+			}
+			early = true
+			capture = desktopTorStartupActivate(t, owner)
+		default:
+		}
+		close(log.release)
+		if !early {
+			if err := <-started; err != nil {
+				t.Fatal(err)
+			}
+			capture = desktopTorStartupActivate(t, owner)
+		}
+		synctest.Wait()
+		if early || !manager.started.Load() || !owner.Current() || capture.Err() != nil {
+			t.Fatalf("native startup escaped its initial interface callback: early=%v started=%v current=%v capture=%v", early, manager.started.Load(), owner.Current(), capture.Err())
+		}
+		// Identical interface identity is still a real post-start reset. The
+		// startup join must not weaken the production observer's retirement.
+		manager.notifyInterfaceUpdate(physical, 0)
+		synctest.Wait()
+		if owner.Current() || capture.Err() == nil {
+			t.Fatal("same-interface reset failed to retire the captured Tor owner")
+		}
+	})
+}
+
+func TestRouterVPNDesktopTorNetworkStartupJoinsInitialPowerReset(t *testing.T) {
+	for _, event := range []int{winpowrprof.EVENT_RESUME_AUTOMATIC, winpowrprof.EVENT_RESUME, winpowrprof.EVENT_SUSPEND} {
+		t.Run(map[int]string{winpowrprof.EVENT_RESUME_AUTOMATIC: "automatic", winpowrprof.EVENT_RESUME: "resume", winpowrprof.EVENT_SUSPEND: "suspend"}[event], func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				manager, owner, _ := desktopTorStartupFixture(t, context.Background())
+				connections := &desktopTorStartupConnections{entered: make(chan struct{}), release: make(chan struct{})}
+				manager.connectionManager = connections
+				go manager.notifyWindowsPowerEvent(event)
+				<-connections.entered
+				started := make(chan error, 1)
+				go func() { started <- manager.Start(adapter.StartStatePostStart) }()
+				synctest.Wait()
+				var capture context.Context
+				early := false
+				select {
+				case err := <-started:
+					if err != nil {
+						t.Fatal(err)
+					}
+					early = true
+					capture = desktopTorStartupActivate(t, owner)
+				default:
+				}
+				close(connections.release)
+				if !early {
+					if err := <-started; err != nil {
+						t.Fatal(err)
+					}
+					capture = desktopTorStartupActivate(t, owner)
+				}
+				synctest.Wait()
+				if early || !owner.Current() || capture.Err() != nil {
+					t.Fatalf("native startup escaped its initial power reset: early=%v current=%v capture=%v", early, owner.Current(), capture.Err())
+				}
+				manager.notifyWindowsPowerEvent(event)
+				synctest.Wait()
+				if owner.Current() || capture.Err() == nil {
+					t.Fatal("post-start power reset failed to retire the captured Tor owner")
+				}
+			})
+		})
+	}
+}
+
+func TestRouterVPNDesktopTorNetworkStartupCancellationAndClose(t *testing.T) {
+	for _, action := range []string{"cancel", "close"} {
+		t.Run(action, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ctx, cancel := context.WithCancel(context.Background())
+				defer cancel()
+				manager, _, log := desktopTorStartupFixture(t, ctx)
+				physical := &control.Interface{Name: "routervpn-fixture", Index: 7}
+				manager.notifyInterfaceUpdate(physical, 0)
+				<-log.entered
+				started := make(chan error, 1)
+				go func() { started <- manager.Start(adapter.StartStatePostStart) }()
+				synctest.Wait()
+				if action == "cancel" {
+					cancel()
+				} else if err := manager.Close(); err != nil {
+					t.Fatal(err)
+				}
+				synctest.Wait()
+				var result error
+				returned := false
+				select {
+				case result = <-started:
+					returned = true
+				default:
+				}
+				close(log.release)
+				synctest.Wait()
+				if !returned || result == nil || manager.started.Load() {
+					t.Fatalf("cancelled startup was published or remained blocked: returned=%v error=%v started=%v", returned, result, manager.started.Load())
+				}
+				if err := manager.Start(adapter.StartStatePostStart); err == nil || manager.started.Load() {
+					t.Fatal("retired startup was resurrected")
+				}
+				if action == "close" {
+					before := manager.router.(*desktopTorStartupRouter).resets.Load()
+					manager.notifyInterfaceUpdate(physical, 0)
+					manager.notifyWindowsPowerEvent(winpowrprof.EVENT_RESUME_AUTOMATIC)
+					synctest.Wait()
+					if manager.router.(*desktopTorStartupRouter).resets.Load() != before {
+						t.Fatal("closed native owner admitted a new reset")
+					}
+				}
+			})
+		})
+	}
+}

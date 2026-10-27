@@ -416,6 +416,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
                         expected = {
                             './cmd/sing-box': '^TestRouterVPN(Desktop(External|MTU|DNS|Tor)|NodeMTU)',
                             './routervpn/desktoppt': '^Test(RouterVPNDesktopTorPT|DesktopTorNetworkOwner)',
+                            './route': '^TestRouterVPNDesktopTorNetwork',
                             '.': '^TestRouterVPNDesktopTor',
                         }
                         self.assertIn(package, expected)

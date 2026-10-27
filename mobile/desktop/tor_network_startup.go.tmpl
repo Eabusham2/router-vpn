@@ -1,0 +1,80 @@
+package route
+
+import (
+	"context"
+	"errors"
+	"sync"
+)
+
+// routerVPNNetworkStartup orders native callback admission against Started.
+// Interface discovery and Windows power registration can queue work during
+// Initialize/Start. Publishing Started before that work drains lets an initial
+// reset retire a Tor capture which was admitted only after startup returned.
+// Post-start callbacks still execute the unchanged ResetNetwork dispatcher.
+type routerVPNNetworkStartup struct {
+	mu      sync.Mutex
+	pending int
+	closed  bool
+	changed chan struct{}
+}
+
+func (s *routerVPNNetworkStartup) begin() (func(), bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed {
+		return nil, false
+	}
+	s.pending++
+	return sync.OnceFunc(func() {
+		s.mu.Lock()
+		defer s.mu.Unlock()
+		s.pending--
+		s.signal()
+	}), true
+}
+
+func (s *routerVPNNetworkStartup) signal() {
+	if s.changed != nil {
+		close(s.changed)
+		s.changed = nil
+	}
+}
+
+func (s *routerVPNNetworkStartup) start(ctx context.Context, publish func()) error {
+	for {
+		s.mu.Lock()
+		if s.closed {
+			s.mu.Unlock()
+			return errors.New("native network owner closed during startup")
+		}
+		if err := ctx.Err(); err != nil {
+			s.mu.Unlock()
+			return err
+		}
+		if s.pending == 0 {
+			// The same lock admits callbacks. A callback is either joined
+			// before publication or belongs to the started network owner.
+			publish()
+			s.mu.Unlock()
+			return nil
+		}
+		if s.changed == nil {
+			s.changed = make(chan struct{})
+		}
+		changed := s.changed
+		s.mu.Unlock()
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-changed:
+		}
+	}
+}
+
+func (s *routerVPNNetworkStartup) stop(retire func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.closed = true
+	retire()
+	s.signal()
+}
