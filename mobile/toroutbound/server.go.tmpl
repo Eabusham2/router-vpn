@@ -1,0 +1,358 @@
+package routervpntor
+
+import (
+	"context"
+	"errors"
+	"net"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/routervpn/dnsmeasure"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	M "github.com/sagernet/sing/common/metadata"
+	"github.com/sagernet/sing/service"
+)
+
+func RegisterServerOutbound(registry *outbound.Registry) {
+	outbound.Register[mobiletor.MobileServerTorOptions](registry, mobiletor.ServerTorClientType, NewServerOutbound)
+}
+
+// ServerOutbound owns only TCP through the exact private Router in this Box.
+// It has no local Tor/C/PT lease, listener, executable or independent VPN.
+type ServerOutbound struct {
+	outbound.Adapter
+	ctx         context.Context
+	dataCtx     context.Context
+	cancel      context.CancelFunc
+	parentStop  func() bool
+	policy      *mobiletor.MobileServerTorPolicy
+	mu          sync.Mutex
+	started     bool
+	bound       bool
+	closing     bool
+	acquired    bool
+	client      *mobiletor.ServerTorClient
+	entryData   *mobiletor.Network
+	dataCurrent func() bool
+	proof       mobiletor.Proof
+	upstream    *torUpstreamCapture
+	resets      atomic.Uint64
+	proofGate   chan struct{}
+	workers     sync.WaitGroup
+	drained     chan struct{}
+	closeOnce   sync.Once
+}
+
+func NewServerOutbound(ctx context.Context, _ adapter.Router, _ log.ContextLogger, tag string, options mobiletor.MobileServerTorOptions) (adapter.Outbound, error) {
+	if ctx == nil || ctx.Err() != nil || tag != mobiletor.ProfileOutboundTag {
+		return nil, errors.New("mobile Tor Server requires its captured final owner")
+	}
+	policy, err := mobiletor.NewMobileServerTorPolicy(options)
+	if err != nil {
+		return nil, err
+	}
+	data, cancel := context.WithCancel(ctx)
+	o := &ServerOutbound{Adapter: outbound.NewAdapter(mobiletor.ServerTorClientType, tag, []string{"tcp"}, []string{policy.EntryTag()}),
+		ctx: ctx, dataCtx: data, cancel: cancel, policy: policy, proofGate: make(chan struct{}, 1), drained: make(chan struct{})}
+	o.parentStop = context.AfterFunc(ctx, func() { o.CancelTor(policy.SessionID()) })
+	return o, nil
+}
+
+func (o *ServerOutbound) Start(stage adapter.StartStage) error {
+	if stage != adapter.StartStateStarted {
+		return nil
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if o.started || o.closing || o.ctx.Err() != nil {
+		return errors.New("mobile Tor Server owner was already started or retired")
+	}
+	upstream, err := captureTorUpstream(o.ctx, o.Tag(), o.policy.EntryTag())
+	if err != nil || upstream == nil {
+		return errors.New("mobile Tor Server has no started captured private entry")
+	}
+	o.upstream, o.started = upstream, true
+	return nil
+}
+
+func (o *ServerOutbound) TorSessionID() string    { return o.policy.SessionID() }
+func (o *ServerOutbound) TorServerConfig() string { return o.policy.Config() }
+
+func (o *ServerOutbound) BindTorServer(proof *mobiletor.PredecessorProof, entryCurrent, dataCurrent func() bool) error {
+	if proof == nil || proof.Fingerprint() != o.policy.EntryProof().Fingerprint() || entryCurrent == nil || dataCurrent == nil || !entryCurrent() || !dataCurrent() {
+		return errors.New("mobile Tor Server proof does not own its captured private entry and TUN")
+	}
+	o.mu.Lock()
+	defer o.mu.Unlock()
+	if !o.started || o.bound || o.closing || o.dataCtx.Err() != nil || o.upstream == nil {
+		return errors.New("mobile Tor Server admission was already used or retired")
+	}
+	o.bound = true
+	manager := service.FromContext[adapter.OutboundManager](o.ctx)
+	entry, found := manager.Outbound(o.policy.EntryTag())
+	if !found || entry == nil {
+		return errors.New("mobile Tor Server captured entry is unavailable")
+	}
+	epoch := o.resets.Load()
+	retained := func() bool {
+		if o.ctx.Err() != nil || o.resets.Load() != epoch || o.upstream.current() != nil || !entryCurrent() {
+			return false
+		}
+		actual, exists := manager.Outbound(o.policy.EntryTag())
+		return exists && actual == entry
+	}
+	dial := func(ctx context.Context, network, address string) (net.Conn, error) {
+		if ctx == nil || ctx.Err() != nil || network != "tcp" || !retained() {
+			return nil, net.ErrClosed
+		}
+		destination := M.ParseSocksaddr(address)
+		if !destination.IsValid() || destination.Port == 0 {
+			return nil, errors.New("mobile Tor Server entry destination is invalid")
+		}
+		connection, err := entry.DialContext(ctx, network, destination)
+		if !retained() {
+			return connection, net.ErrClosed
+		}
+		return connection, err
+	}
+	client, err := mobiletor.NewServerTorClient(o.dataCtx, o.policy.ServerPolicy(), proof, o.policy.LeaseSessionID(), dial, retained)
+	if err != nil {
+		return err
+	}
+	o.client = client
+	o.entryData, err = mobiletor.NewNetwork(o.dataCtx, dial, nil)
+	if err != nil {
+		return err
+	}
+	o.dataCurrent = dataCurrent
+	if !retained() || !dataCurrent() {
+		return errors.New("mobile Tor Server native owner changed during admission")
+	}
+	return nil
+}
+
+func (o *ServerOutbound) InterfaceUpdated(context.Context) {
+	// Every reset is a new lifetime, including a same-fingerprint native reset.
+	// Before proof admission no lease exists; afterward the captured epoch never
+	// changes and cleanup cannot accidentally use a replacement physical path.
+	o.resets.Add(1)
+	o.mu.Lock()
+	bound := o.bound
+	o.mu.Unlock()
+	if bound {
+		o.CancelTor(o.policy.SessionID())
+	}
+}
+
+func (o *ServerOutbound) beginProof(parent context.Context, session string) (context.Context, func(), error) {
+	if parent == nil || parent.Err() != nil || session != o.policy.SessionID() {
+		return nil, nil, errors.New("mobile Tor Server proof belongs to another session")
+	}
+	o.mu.Lock()
+	if !o.bound || o.closing || o.client == nil || o.dataCtx.Err() != nil {
+		o.mu.Unlock()
+		return nil, nil, net.ErrClosed
+	}
+	o.workers.Add(1)
+	o.mu.Unlock()
+	ctx, cancel := context.WithCancel(parent)
+	stop := context.AfterFunc(o.dataCtx, cancel)
+	release := func() { stop(); cancel(); o.workers.Done() }
+	select {
+	case o.proofGate <- struct{}{}:
+		return ctx, func() { <-o.proofGate; release() }, nil
+	case <-ctx.Done():
+		release()
+		return nil, nil, ctx.Err()
+	}
+}
+
+func (o *ServerOutbound) TorProofWithPredecessor(parent context.Context, session string, predecessor *mobiletor.PredecessorProof) (mobiletor.Proof, error) {
+	if predecessor == nil || predecessor.Fingerprint() != o.policy.EntryProof().Fingerprint() {
+		return mobiletor.Proof{}, errors.New("mobile Tor Server proof lost its exact private entry")
+	}
+	ctx, release, err := o.beginProof(parent, session)
+	if err != nil {
+		return mobiletor.Proof{}, err
+	}
+	defer release()
+	o.mu.Lock()
+	client, previous, first := o.client, o.proof, !o.acquired
+	if first {
+		o.acquired = true
+	}
+	o.mu.Unlock()
+	if first {
+		if err := client.Acquire(ctx); err != nil {
+			return mobiletor.Proof{}, err
+		}
+		if _, err := client.Wait(ctx); err != nil {
+			return mobiletor.Proof{}, err
+		}
+	} else {
+		if _, err := client.ProveEntry(ctx); err != nil {
+			return mobiletor.Proof{}, err
+		}
+		if previous.IsTor && o.TorHealthy(session) {
+			// MTU verification separately sends a fresh Tor Project check through
+			// the OS TUN. A cancelled trial cannot retire this healthy lease merely
+			// by cancelling a server status request; its own renewal worker owns it.
+			return previous, nil
+		}
+		return mobiletor.Proof{}, net.ErrClosed
+	}
+	proof, err := mobiletor.Prove(ctx, session, func(ctx context.Context, network, address string) (net.Conn, error) {
+		if !o.dataCurrent() {
+			return nil, net.ErrClosed
+		}
+		connection, err := client.DialContext(ctx, network, address)
+		if !o.dataCurrent() {
+			return connection, net.ErrClosed
+		}
+		return connection, err
+	})
+	if err != nil || ctx.Err() != nil || !client.Ready() || !o.dataCurrent() {
+		return mobiletor.Proof{}, errors.New("mobile Tor Server client exit proof failed or became stale")
+	}
+	o.mu.Lock()
+	if o.closing || o.dataCtx.Err() != nil {
+		o.mu.Unlock()
+		return mobiletor.Proof{}, net.ErrClosed
+	}
+	o.proof = proof
+	o.workers.Add(1)
+	go o.renew(client)
+	o.mu.Unlock()
+	return proof, nil
+}
+
+func (o *ServerOutbound) renew(client *mobiletor.ServerTorClient) {
+	defer o.workers.Done()
+	ticker := time.NewTicker(2 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-o.dataCtx.Done():
+			return
+		case <-ticker.C:
+			ctx, cancel := context.WithTimeout(o.dataCtx, 8*time.Second)
+			_, err := client.Status(ctx)
+			cancel()
+			if err != nil || !o.dataCurrent() {
+				o.CancelTor(o.policy.SessionID())
+				return
+			}
+		}
+	}
+}
+
+func (o *ServerOutbound) TorHealthy(session string) bool {
+	if o == nil || session != o.policy.SessionID() || o.dataCtx.Err() != nil {
+		return false
+	}
+	o.mu.Lock()
+	valid := o.bound && !o.closing && o.proof.IsTor && o.proof.SessionID == session
+	client, current := o.client, o.dataCurrent
+	o.mu.Unlock()
+	return valid && client != nil && current != nil && client.Ready() && current()
+}
+
+func (o *ServerOutbound) DialContext(ctx context.Context, network string, destination M.Socksaddr) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || network != "tcp" || !destination.IsValid() || destination.Port == 0 || !o.TorHealthy(o.policy.SessionID()) {
+		return nil, net.ErrClosed
+	}
+	o.mu.Lock()
+	client := o.client
+	o.mu.Unlock()
+	connection, err := client.DialContext(ctx, network, destination.String())
+	if err != nil || !o.TorHealthy(o.policy.SessionID()) {
+		if connection != nil {
+			_ = connection.Close()
+		}
+		return nil, net.ErrClosed
+	}
+	return connection, nil
+}
+
+func (o *ServerOutbound) ListenPacket(context.Context, M.Socksaddr) (net.PacketConn, error) {
+	return nil, errors.New("Tor Server carries captured TCP streams only")
+}
+
+func (o *ServerOutbound) TorMeasurementDial(ctx context.Context, session string, entry bool, address string) (net.Conn, error) {
+	if ctx == nil || ctx.Err() != nil || !o.TorHealthy(session) {
+		return nil, net.ErrClosed
+	}
+	o.mu.Lock()
+	client, network := o.client, o.entryData
+	o.mu.Unlock()
+	var connection net.Conn
+	var err error
+	if entry {
+		connection, err = network.DialRetainedContext(ctx, "tcp", address)
+	} else {
+		connection, err = client.DialRetainedContext(ctx, "tcp", address)
+	}
+	if err != nil || !o.TorHealthy(session) {
+		return connection, errors.New("Tor Server measurement changed its captured native path")
+	}
+	return connection, nil
+}
+
+func (o *ServerOutbound) TorDNSMeasurementDial(ctx context.Context, session, address string) (net.Conn, error) {
+	if !dnsmeasure.AllowedPublicAddress(address) {
+		return nil, errors.New("Tor Server DNS measurement destination is not in its captured catalog")
+	}
+	return o.TorMeasurementDial(ctx, session, false, address)
+}
+
+func (o *ServerOutbound) CancelTor(session string) {
+	if o == nil || session != o.policy.SessionID() {
+		return
+	}
+	o.closeOnce.Do(func() {
+		o.mu.Lock()
+		o.closing, o.proof = true, mobiletor.Proof{}
+		o.mu.Unlock()
+		o.cancel()
+		go func() { o.workers.Wait(); close(o.drained) }()
+	})
+}
+
+func (o *ServerOutbound) CloseTor(ctx context.Context, session string) error {
+	if ctx == nil || session != o.policy.SessionID() {
+		return errors.New("Tor Server cleanup belongs to another captured session")
+	}
+	o.CancelTor(session)
+	select {
+	case <-o.drained:
+	case <-ctx.Done():
+		return ctx.Err()
+	}
+	o.mu.Lock()
+	client, entryData := o.client, o.entryData
+	o.mu.Unlock()
+	if entryData != nil {
+		if err := entryData.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if client != nil {
+		if err := client.Close(ctx); err != nil {
+			return err
+		}
+	}
+	if o.parentStop != nil {
+		o.parentStop()
+	}
+	return nil
+}
+
+func (o *ServerOutbound) Close() error {
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return o.CloseTor(ctx, o.policy.SessionID())
+}

@@ -38,6 +38,53 @@ func (c *routerVPNTorCapturedOwner) DNSProof(ctx context.Context) error {
 	return c.engine.DNSProof(ctx, c.engine.tunTag)
 }
 
+func (c *routerVPNTorCapturedOwner) ServerGraph(config string) bool {
+	if c == nil || c.engine == nil || c.Identity() == "" {
+		return false
+	}
+	box := c.engine.box
+	expected, err := json.UnmarshalExtendedContext[option.Options](box.ctx, []byte(config))
+	return err == nil && box.routerVPNTorOptions != "" && routerVPNTorOptionsSnapshot(box.ctx, expected) == box.routerVPNTorOptions
+}
+
+// Cleanup retains the actual private entry and its native dependencies. It must
+// not depend on data cancellation, a host's mutable selected engine, or the TUN
+// pointer locked by an MTU transaction. Physical resets are separately captured
+// by the Server outbound and still invalidate this retained cleanup witness.
+func (c *routerVPNTorCapturedOwner) EntryCurrent() bool {
+	if c == nil || c.engine == nil || c.engine.box == nil {
+		return false
+	}
+	e := c.engine
+	if e.box.ctx.Err() != nil {
+		return false
+	}
+	select {
+	case <-e.box.done:
+		return false
+	default:
+	}
+	for tag, expected := range e.owners {
+		current, found := e.box.outbound.Outbound(tag)
+		if !found || current != expected {
+			return false
+		}
+	}
+	for tag, expected := range e.dns {
+		current, found := e.box.dnsTransport.Transport(tag)
+		if !found || current != expected {
+			return false
+		}
+	}
+	for tag, expected := range e.services {
+		current, found := e.box.service.Get(tag)
+		if !found || current != expected {
+			return false
+		}
+	}
+	return true
+}
+
 func init() {
 	routerVPNTorCaptureProof = func(s *Box) (routerVPNTorProofCapture, error) {
 		if s == nil || s.routerVPNTorOptions == "" {
@@ -82,7 +129,12 @@ func (s *Box) RouterVPNTorClaimMTU(proof *RouterVPNTorProofRequest, config, prof
 	if err != nil || s.routerVPNTorOptions == "" || routerVPNTorOptionsSnapshot(s.ctx, compiled) != s.routerVPNTorOptions {
 		return nil, errors.New("Tor MTU source differs from its captured native graph")
 	}
-	authority, err := mobiletor.MTUAuthorityWithPredecessor(config, profileJSON, proof.sessionID, proof.predecessor)
+	var authority string
+	if proof.server != nil {
+		authority, err = mobiletor.ServerMTUAuthority(config, profileJSON, proof.sessionID, proof.predecessor)
+	} else {
+		authority, err = mobiletor.MTUAuthorityWithPredecessor(config, profileJSON, proof.sessionID, proof.predecessor)
+	}
 	if err != nil {
 		return nil, err
 	}

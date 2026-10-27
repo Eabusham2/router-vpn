@@ -37,7 +37,7 @@ func captureTorUpstream(ctx context.Context, tag, predecessor string) (*torUpstr
 			return nil
 		}
 		owner, found := manager.Outbound(name)
-		if !found || owner == nil || owner.Type() == Type {
+		if !found || owner == nil || owner.Type() == Type || owner.Type() == "routervpn-server-tor" {
 			return errors.New("native Tor predecessor cannot depend on Tor")
 		}
 		visiting[name] = true

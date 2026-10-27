@@ -13,6 +13,9 @@ import (
 
 // The only dial is the authenticated front through the captured Router. The
 // destination remains SOCKS data and is never resolved or dialed on this host.
+// Every non-nil lower socket is returned, including handshake/dial failures.
+// The calling Network owns its cleanup; retained DNS owners must be able to
+// retry a failed native Close instead of losing the captured socket here.
 func dialServerTorSOCKS(parent context.Context, front, username, password, destination string, dial DialContext) (connection net.Conn, failure error) {
 	host, portText, err := net.SplitHostPort(destination)
 	port, portErr := strconv.Atoi(portText)
@@ -45,10 +48,7 @@ func dialServerTorSOCKS(parent context.Context, front, username, password, desti
 	defer cancel()
 	connection, err = dial(ctx, "tcp", front)
 	if err != nil || connection == nil {
-		if connection != nil {
-			_ = connection.Close()
-		}
-		return nil, errServerTorClient
+		return connection, errServerTorClient
 	}
 	owned := connection
 	closed := make(chan struct{})
@@ -58,8 +58,7 @@ func dialServerTorSOCKS(parent context.Context, front, username, password, desti
 			<-closed
 		}
 		if failure != nil || ctx.Err() != nil {
-			_ = owned.Close()
-			connection, failure = nil, errServerTorClient
+			connection, failure = owned, errServerTorClient
 		}
 	}()
 	deadline, _ := ctx.Deadline()

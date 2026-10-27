@@ -1,0 +1,664 @@
+package box
+
+import (
+	"bufio"
+	"bytes"
+	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/tls"
+	"crypto/x509"
+	"crypto/x509/pkix"
+	"encoding/base64"
+	"encoding/binary"
+	"encoding/hex"
+	"encoding/json"
+	"encoding/pem"
+	"errors"
+	"fmt"
+	"io"
+	"math/big"
+	"net"
+	"net/http"
+	"net/netip"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	mDNS "github.com/miekg/dns"
+	"github.com/sagernet/sing-box/adapter"
+	"github.com/sagernet/sing-box/adapter/certificate"
+	"github.com/sagernet/sing-box/adapter/endpoint"
+	"github.com/sagernet/sing-box/adapter/inbound"
+	"github.com/sagernet/sing-box/adapter/outbound"
+	boxService "github.com/sagernet/sing-box/adapter/service"
+	C "github.com/sagernet/sing-box/constant"
+	"github.com/sagernet/sing-box/dns"
+	DNST "github.com/sagernet/sing-box/dns/transport"
+	"github.com/sagernet/sing-box/experimental/libbox/routervpn/multihoprelay"
+	"github.com/sagernet/sing-box/log"
+	"github.com/sagernet/sing-box/option"
+	"github.com/sagernet/sing-box/protocol/routervpntor"
+	"github.com/sagernet/sing-box/protocol/shadowsocks"
+	"github.com/sagernet/sing-box/routervpn/mobiletor"
+	"github.com/sagernet/sing-box/routervpn/nativetor"
+	"github.com/sagernet/sing-shadowsocks/shadowaead_2022"
+	SJ "github.com/sagernet/sing/common/json"
+	M "github.com/sagernet/sing/common/metadata"
+	N "github.com/sagernet/sing/common/network"
+)
+
+const mobileServerNativeSession = "ca71d05c-9403-4e21-b163-26824d845a26"
+
+type mobileServerNativeTUN struct{ inbound.Adapter }
+
+func (*mobileServerNativeTUN) Start(adapter.StartStage) error { return nil }
+func (*mobileServerNativeTUN) Close() error                   { return nil }
+
+// This fixture executes the shipping mobile compiler, native Box, Server
+// outbound, SS2022 transport, lease client, authenticated SOCKS and selected DNS
+// router. The OS TUN and the far side of the private server are fixtures. Public
+// Tor check bytes still use real TLS and the unmodified production Prove API.
+type mobileServerNativeFixture struct {
+	box                                                     *Box
+	policy                                                  *mobiletor.MobileServerTorPolicy
+	proof                                                   *RouterVPNTorProofRequest
+	owner                                                   *routervpntor.ServerOutbound
+	listener                                                net.Listener
+	certificate                                             tls.Certificate
+	mu                                                      sync.Mutex
+	connections                                             map[net.Conn]bool
+	workers                                                 sync.WaitGroup
+	closing                                                 bool
+	lease                                                   multihoprelay.TorLease
+	sequence                                                uint64
+	methods                                                 []string
+	badNode, badSource, badDNS, badTLS, badAuth, failDelete atomic.Bool
+	allowPending                                            atomic.Bool
+	entryQueries, exitQueries, publicChecks, dataStreams    atomic.Int32
+	putEntered, putRelease                                  chan struct{}
+	putOnce                                                 sync.Once
+}
+
+func mobileServerNativeRoots(t *testing.T) tls.Certificate {
+	t.Helper()
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{SerialNumber: big.NewInt(24601), Subject: pkix.Name{CommonName: "owned Tor test root"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour), IsCA: true, BasicConstraintsValid: true,
+		KeyUsage: x509.KeyUsageCertSign | x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth}, DNSNames: []string{"check.torproject.org"}}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	directory := t.TempDir()
+	root := filepath.Join(directory, "root.pem")
+	if err := os.WriteFile(root, pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}), 0600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("SSL_CERT_FILE", root)
+	t.Setenv("SSL_CERT_DIR", directory)
+	return tls.Certificate{Certificate: [][]byte{der}, PrivateKey: key}
+}
+
+func newMobileServerNativeFixture(t *testing.T, certificate tls.Certificate, mode string, home bool, changeGraph func(map[string]any)) *mobileServerNativeFixture {
+	t.Helper()
+	f := &mobileServerNativeFixture{certificate: certificate, connections: make(map[net.Conn]bool)}
+	listener, err := net.Listen("tcp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.listener = listener
+	password := base64.StdEncoding.EncodeToString([]byte(strings.Repeat("s", 32)))
+	service, err := shadowaead_2022.NewServiceWithPassword("2022-blake3-aes-256-gcm", password, 60, f, nil)
+	if err != nil {
+		listener.Close()
+		t.Fatal(err)
+	}
+	f.workers.Add(1)
+	go func() {
+		defer f.workers.Done()
+		for {
+			connection, err := listener.Accept()
+			if err != nil {
+				return
+			}
+			f.mu.Lock()
+			if f.closing {
+				f.mu.Unlock()
+				connection.Close()
+				return
+			}
+			f.connections[connection] = true
+			f.workers.Add(1)
+			f.mu.Unlock()
+			go func() {
+				defer f.workers.Done()
+				defer func() { connection.Close(); f.mu.Lock(); delete(f.connections, connection); f.mu.Unlock() }()
+				_ = connection.SetDeadline(time.Now().Add(15 * time.Second))
+				_ = service.NewConnection(context.Background(), connection, M.Metadata{Source: M.SocksaddrFromNet(connection.RemoteAddr())})
+			}()
+		}
+	}()
+	ctx, cancel := context.WithCancel(context.Background())
+	t.Cleanup(func() {
+		if f.proof != nil {
+			if err := f.proof.Close(); err != nil && !f.allowPending.Load() {
+				t.Error("lease cleanup failed", err)
+			}
+		}
+		if f.box != nil {
+			if err := f.box.Close(); err != nil && !f.allowPending.Load() {
+				t.Error("native Box cleanup failed", err)
+			}
+		}
+		cancel()
+		f.mu.Lock()
+		f.closing = true
+		for connection := range f.connections {
+			connection.Close()
+		}
+		f.mu.Unlock()
+		listener.Close()
+		f.workers.Wait()
+	})
+	entry := map[string]any{"id": "private-entry", "node_kind": "router-vpn", "node_proof_id": strings.Repeat("a", 64),
+		"router_api": "http://10.77.0.1:8787", "api_token": "captured-mobile-secret", "adguard_ipv4": "10.77.0.53"}
+	external := map[string]any{"protocol": "tor"}
+	if mode != "tor" {
+		line := "obfs4 203.0.113.44:443 0123456789ABCDEF0123456789ABCDEF01234567 cert=" + strings.Repeat("A", 70) + " iat-mode=0"
+		if mode == "snowflake" {
+			line = "snowflake 192.0.2.3:80 1111111111111111111111111111111111111111 fingerprint=1111111111111111111111111111111111111111 url=https://broker.example/ front=front.example ice=stun:stun.example:3478"
+		}
+		external = map[string]any{"protocol": "tor-bridge", "tor_bridge": map[string]any{"transport": "custom", "bridges": []string{line}}}
+	}
+	profile := map[string]any{"id": "mobile-tor", "node_kind": "external", "external": external, "dns_mode": "custom", "dns_protocol": "tcp", "dns_host": "9.9.9.9", "dns_port": 53,
+		"home_lan_access": false, "ipv6_mode": "off", "mtu_policy": "auto", "multihop_enabled": true, "multihop_entry_id": "private-entry", "multihop_exit_id": "mobile-tor", "multihop_entry_mode": "ss", "multihop_exit_mode": external["protocol"], "multihop_execution": "server"}
+	if home {
+		profile["dns_mode"], profile["dns_host"] = "home", "10.77.0.53"
+	}
+	base := map[string]any{"inbounds": []any{map[string]any{"type": "tun", "tag": "owned-tun", "address": []string{"172.29.10.1/30"}, "mtu": 1392, "auto_route": true, "strict_route": true}},
+		"outbounds": []any{map[string]any{"type": "shadowsocks", "tag": "proxy", "server": "192.0.2.44", "server_port": 443, "method": "2022-blake3-aes-256-gcm", "password": password}},
+		"dns":       map[string]any{"servers": []any{map[string]any{"type": "tcp", "tag": "entry-dns", "server": "10.77.0.53", "server_port": 53, "detour": "proxy"}}, "final": "entry-dns"},
+		"route":     map[string]any{"final": "proxy", "auto_detect_interface": false}}
+	encode := func(v any) string { raw, _ := json.Marshal(v); return string(raw) }
+	f.policy, err = mobiletor.NewMobileServerTorPolicy(mobiletor.MobileServerTorOptions{Profile: encode(profile), SessionID: mobileServerNativeSession, EntryConfig: encode(base), EntryProfile: encode(entry)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	inbounds := inbound.NewRegistry()
+	inbound.Register[option.TunInboundOptions](inbounds, C.TypeTun, func(_ context.Context, _ adapter.Router, _ log.ContextLogger, tag string, _ option.TunInboundOptions) (adapter.Inbound, error) {
+		return &mobileServerNativeTUN{Adapter: inbound.NewAdapter(C.TypeTun, tag)}, nil
+	})
+	outbounds := outbound.NewRegistry()
+	routervpntor.RegisterOutbound(outbounds)
+	outbound.Register[option.ShadowsocksOutboundOptions](outbounds, C.TypeShadowsocks, func(ctx context.Context, router adapter.Router, logger log.ContextLogger, tag string, options option.ShadowsocksOutboundOptions) (adapter.Outbound, error) {
+		if options.Server != "192.0.2.44" || options.ServerPort != 443 || options.Method != "2022-blake3-aes-256-gcm" || options.Password != password || options.Detour != "" {
+			return nil, errors.New("native private entry source changed")
+		}
+		address := netip.MustParseAddrPort(listener.Addr().String())
+		options.Server, options.ServerPort = address.Addr().String(), address.Port()
+		return shadowsocks.NewOutbound(ctx, router, logger, tag, options)
+	})
+	dnsRegistry := dns.NewTransportRegistry()
+	DNST.RegisterTCP(dnsRegistry)
+	ctx = Context(ctx, inbounds, outbounds, endpoint.NewRegistry(), dnsRegistry, boxService.NewRegistry(), certificateRegistry())
+	config := f.policy.Config()
+	if changeGraph != nil {
+		var graph map[string]any
+		_ = json.Unmarshal([]byte(config), &graph)
+		changeGraph(graph)
+		config = encode(graph)
+	}
+	options, err := SJ.UnmarshalExtendedContext[option.Options](ctx, []byte(config))
+	if err != nil {
+		t.Fatal(err)
+	}
+	options.Log = &option.LogOptions{Disabled: true}
+	f.box, err = New(Options{Context: ctx, Options: options})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = f.box.Start(); err != nil {
+		t.Fatal(err)
+	}
+	actual, found := f.box.outbound.Outbound(mobiletor.ProfileOutboundTag)
+	if !found {
+		t.Fatal("missing actual Server outbound")
+	}
+	f.owner, found = actual.(*routervpntor.ServerOutbound)
+	if !found {
+		t.Fatal("native Server was replaced by another engine")
+	}
+	return f
+}
+
+// Avoid shadowing the certificate parameter in the fixture constructor.
+func certificateRegistry() *certificate.Registry { return certificate.NewRegistry() }
+
+func (f *mobileServerNativeFixture) request(t *testing.T) *RouterVPNTorProofRequest {
+	t.Helper()
+	request, err := f.box.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, mobileServerNativeSession, f.policy.Options().EntryProfile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.proof = request
+	return request
+}
+
+func (f *mobileServerNativeFixture) methodCount(method string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	n := 0
+	for _, value := range f.methods {
+		if value == method {
+			n++
+		}
+	}
+	return n
+}
+
+func (f *mobileServerNativeFixture) NewConnection(_ context.Context, connection net.Conn, metadata M.Metadata) error {
+	switch metadata.Destination.String() {
+	case "10.77.0.1:8787":
+		return f.api(connection)
+	case "10.77.0.1:26240":
+		return f.socks(connection)
+	case "10.77.0.53:53":
+		return f.dns(connection, true)
+	default:
+		return errors.New("native entry reached an unowned destination")
+	}
+}
+func (*mobileServerNativeFixture) NewPacketConnection(context.Context, N.PacketConn, M.Metadata) error {
+	return errors.New("Server fixture requires only TCP through its private entry")
+}
+func (*mobileServerNativeFixture) NewError(context.Context, error) {}
+
+func (f *mobileServerNativeFixture) api(connection net.Conn) error {
+	request, err := http.ReadRequest(bufio.NewReader(connection))
+	if err != nil {
+		return err
+	}
+	defer request.Body.Close()
+	if request.Host != "10.77.0.1:8787" || request.Header.Get("Authorization") != "Bearer captured-mobile-secret" {
+		return errors.New("server API received another private credential")
+	}
+	write := func(status int, value any) error {
+		raw, _ := json.Marshal(value)
+		_, err := fmt.Fprintf(connection, "HTTP/1.1 %d Fixture\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", status, len(raw), raw)
+		return err
+	}
+	if request.Method == "GET" && request.URL.String() == "/health" {
+		node := strings.Repeat("a", 64)
+		if f.badNode.Load() {
+			node = strings.Repeat("f", 64)
+		}
+		return write(200, map[string]any{"ok": true, "node_id": node, "proof": "router-vpn-private-agent-v1"})
+	}
+	if request.URL.String() != "/api/multihop/tor/lease" {
+		return errors.New("unexpected private API path")
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.methods = append(f.methods, request.Method)
+	policy := f.policy.ServerPolicy()
+	source := multihoprelay.TorExitSource{ID: policy.ID(), Mode: policy.Mode(), SourceSHA256: policy.SourceSHA256(), DNSPolicySHA256: policy.DNSPolicySHA256()}
+	if request.Method == "GET" {
+		if f.badSource.Load() {
+			source.SourceSHA256 = strings.Repeat("f", 64)
+		}
+		return write(200, map[string]any{"node_id": strings.Repeat("a", 64), "challenge": multihoprelay.ExternalPacketChallenge{Epoch: strings.Repeat("b", 64), Peer: "10.77.0.2", ExpiresAt: time.Now().Add(time.Minute).Unix()}, "sources": []multihoprelay.TorExitSource{source}})
+	}
+	var fields map[string]json.RawMessage
+	if json.NewDecoder(io.LimitReader(request.Body, 4097)).Decode(&fields) != nil {
+		return errors.New("invalid private request")
+	}
+	var nonce string
+	_ = json.Unmarshal(fields["status_nonce"], &nonce)
+	delete(fields, "status_nonce")
+	raw, _ := json.Marshal(fields)
+	var captured multihoprelay.TorRequest
+	if json.Unmarshal(raw, &captured) != nil {
+		return errors.New("invalid captured lease")
+	}
+	if captured.SessionID != f.policy.LeaseSessionID() || f.lease.OwnerID != "" && f.lease.Request != captured {
+		return errors.New("native request borrowed another lease session")
+	}
+	switch request.Method {
+	case "PUT":
+		if f.lease.OwnerID == "" {
+			registry, _ := json.Marshal(struct {
+				Node   string                      `json:"node_id"`
+				Source multihoprelay.TorExitSource `json:"source"`
+			}{strings.Repeat("a", 64), source})
+			digest := sha256.Sum256(registry)
+			f.lease = multihoprelay.TorLease{Request: captured, NodeID: strings.Repeat("a", 64), OwnerID: strings.Repeat("e", 64), Host: "10.77.0.1", Port: 26240, Username: strings.Repeat("c", 48), Password: strings.Repeat("d", 48), RegistrySHA256: hex.EncodeToString(digest[:]), DNSPolicySHA256: policy.DNSPolicySHA256(), Phase: multihoprelay.TorPending, BootstrapDeadline: time.Now().Add(multihoprelay.TorBootstrapLimit)}
+		}
+		f.lease.ExpiresAt = time.Now().Add(time.Minute)
+		if f.putEntered != nil {
+			f.putOnce.Do(func() { close(f.putEntered) })
+			release := f.putRelease
+			f.mu.Unlock()
+			<-release
+			f.mu.Lock()
+		}
+		return write(200, f.lease)
+	case "POST":
+		f.sequence++
+		f.lease.Phase = multihoprelay.TorReady
+		capture := multihoprelay.TorCapture{Schema: 1, Request: captured, Source: source, RegistrySHA256: f.lease.RegistrySHA256, OwnerID: f.lease.OwnerID, Peer: captured.Peer, Host: f.lease.Host, Port: f.lease.Port, Username: f.lease.Username, Password: f.lease.Password, BootstrapDeadline: f.lease.BootstrapDeadline}
+		receipt := multihoprelay.TorReceipt{Schema: 1, SessionID: captured.SessionID, OwnerID: f.lease.OwnerID, Peer: captured.Peer, SourceSHA256: source.SourceSHA256, RegistrySHA256: f.lease.RegistrySHA256, DNSPolicySHA256: source.DNSPolicySHA256, FrontSHA256: capture.FrontSHA256(), Nonce: nonce, Sequence: f.sequence, HeartbeatAt: time.Now().UnixMilli(), Phase: multihoprelay.TorReady, Bootstrap: 100, FrontReady: true, TrafficAllowed: true, ExitIP: "198.51.100.77", IsTor: true, DNSProven: true, ProofAt: time.Now().UnixMilli()}
+		return write(200, multihoprelay.TorLeaseStatus{Lease: f.lease, Receipt: receipt})
+	case "DELETE":
+		if f.failDelete.Load() {
+			return write(503, map[string]any{"error": "pending"})
+		}
+		return write(200, map[string]any{"node_id": strings.Repeat("a", 64), "session_id": captured.SessionID, "stopped": true})
+	default:
+		return errors.New("unsupported fixture method")
+	}
+}
+
+func (f *mobileServerNativeFixture) socks(connection net.Conn) error {
+	var greeting [3]byte
+	if _, err := io.ReadFull(connection, greeting[:]); err != nil || greeting != [3]byte{5, 1, 2} {
+		return errors.New("SOCKS authentication was not required")
+	}
+	if _, err := connection.Write([]byte{5, 2}); err != nil {
+		return err
+	}
+	var auth [2]byte
+	if _, err := io.ReadFull(connection, auth[:]); err != nil || auth[0] != 1 || auth[1] != 48 {
+		return errors.New("invalid SOCKS username")
+	}
+	user := make([]byte, 49)
+	if _, err := io.ReadFull(connection, user); err != nil || user[48] != 48 {
+		return errors.New("invalid SOCKS password length")
+	}
+	password := make([]byte, 48)
+	if _, err := io.ReadFull(connection, password); err != nil {
+		return err
+	}
+	if string(user[:48]) != strings.Repeat("c", 48) || string(password) != strings.Repeat("d", 48) || f.badAuth.Load() {
+		_, _ = connection.Write([]byte{1, 1})
+		return errors.New("wrong SOCKS owner")
+	}
+	if _, err := connection.Write([]byte{1, 0}); err != nil {
+		return err
+	}
+	var head [4]byte
+	if _, err := io.ReadFull(connection, head[:]); err != nil || head[0] != 5 || head[1] != 1 || head[2] != 0 {
+		return errors.New("invalid SOCKS command")
+	}
+	var host string
+	switch head[3] {
+	case 1:
+		raw := make([]byte, 4)
+		if _, err := io.ReadFull(connection, raw); err != nil {
+			return err
+		}
+		host = net.IP(raw).String()
+	case 3:
+		var length [1]byte
+		if _, err := io.ReadFull(connection, length[:]); err != nil {
+			return err
+		}
+		raw := make([]byte, int(length[0]))
+		if _, err := io.ReadFull(connection, raw); err != nil {
+			return err
+		}
+		host = string(raw)
+	default:
+		return errors.New("unexpected SOCKS target")
+	}
+	var port [2]byte
+	if _, err := io.ReadFull(connection, port[:]); err != nil {
+		return err
+	}
+	target := net.JoinHostPort(host, fmt.Sprint(binary.BigEndian.Uint16(port[:])))
+	if _, err := connection.Write([]byte{5, 0, 0, 1, 0, 0, 0, 0, 0, 0}); err != nil {
+		return err
+	}
+	switch target {
+	case "9.9.9.9:53":
+		return f.dns(connection, false)
+	case "check.torproject.org:443":
+		f.publicChecks.Add(1)
+		if f.badTLS.Load() {
+			_, _ = connection.Write([]byte("untrusted plaintext"))
+			return errors.New("TLS failure fixture")
+		}
+		secure := tls.Server(connection, &tls.Config{Certificates: []tls.Certificate{f.certificate}, MinVersion: tls.VersionTLS12})
+		defer secure.Close()
+		if err := secure.Handshake(); err != nil {
+			return err
+		}
+		request, err := http.ReadRequest(bufio.NewReader(secure))
+		if err != nil {
+			return err
+		}
+		defer request.Body.Close()
+		if request.Method != "GET" || request.URL.String() != "/api/ip" || request.Host != "check.torproject.org" {
+			return errors.New("Tor check changed its authenticated origin")
+		}
+		body := `{"IsTor":true,"IP":"198.51.100.18"}`
+		_, err = fmt.Fprintf(secure, "HTTP/1.1 200 OK\r\nContent-Length: %d\r\nConnection: close\r\n\r\n%s", len(body), body)
+		return err
+	case "8.8.8.8:443":
+		f.dataStreams.Add(1)
+		_, err := io.Copy(connection, connection)
+		return err
+	default:
+		return errors.New("SOCKS fixture received an unowned public destination")
+	}
+}
+
+func (f *mobileServerNativeFixture) dns(connection net.Conn, entry bool) error {
+	peer := &mDNS.Conn{Conn: connection}
+	for {
+		query, err := peer.ReadMsg()
+		if err != nil {
+			return err
+		}
+		if entry {
+			f.entryQueries.Add(1)
+		} else {
+			f.exitQueries.Add(1)
+		}
+		answer := new(mDNS.Msg)
+		answer.SetReply(query)
+		if f.badDNS.Load() || len(query.Question) != 1 || query.Question[0].Name != "example.com." || query.Question[0].Qtype != mDNS.TypeA {
+			answer.Rcode = mDNS.RcodeServerFailure
+		} else {
+			answer.Answer = []mDNS.RR{&mDNS.A{Hdr: mDNS.RR_Header{Name: "example.com.", Rrtype: mDNS.TypeA, Class: mDNS.ClassINET, Ttl: 60}, A: net.ParseIP("93.184.216.34")}}
+		}
+		if err := peer.WriteMsg(answer); err != nil {
+			return err
+		}
+	}
+}
+
+func TestRouterTorServerNativeLeaseAndProof(t *testing.T) {
+	// System trust roots are cached by Go. A fresh process isolates this real
+	// TLS fixture from other native tests without any production verifier hook.
+	if os.Getenv("ROUTERVPN_MOBILE_SERVER_NATIVE_CHILD") != "1" {
+		executable, err := os.Executable()
+		if err != nil {
+			t.Fatal(err)
+		}
+		command := exec.Command(executable, "-test.run=^TestRouterTorServerNativeLeaseAndProof$", "-test.v")
+		command.Env = append(os.Environ(), "ROUTERVPN_MOBILE_SERVER_NATIVE_CHILD=1")
+		output, err := command.CombinedOutput()
+		if err != nil {
+			t.Fatalf("native Server child failed: %v\n%s", err, output)
+		}
+		t.Log(string(output))
+		return
+	}
+	certificate := mobileServerNativeRoots(t)
+	if nativetor.ABI() != 0 {
+		t.Fatal("this Server-only fixture must not load a local native Tor ABI")
+	}
+	for _, mode := range []string{"tor", "tor-bridge", "snowflake"} {
+		for _, home := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/home=%t", mode, home), func(t *testing.T) {
+				f := newMobileServerNativeFixture(t, certificate, mode, home, nil)
+				request := f.request(t)
+				if f.methodCount("GET") != 0 || f.methodCount("PUT") != 0 {
+					t.Fatal("construction or CreateProof acquired a lease")
+				}
+				if connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443")); err == nil || connection != nil {
+					t.Fatal("application data passed before client proof")
+				}
+				raw, err := request.Run()
+				var proof mobiletor.Proof
+				if err != nil || json.Unmarshal([]byte(raw), &proof) != nil || !proof.IsTor || !proof.DNSProven || proof.SessionID != mobileServerNativeSession || !request.Healthy() {
+					t.Fatal("actual native client proof failed", raw, err)
+				}
+				if f.publicChecks.Load() != 1 || home && (f.entryQueries.Load() == 0 || f.exitQueries.Load() != 0) || !home && (f.exitQueries.Load() == 0 || f.entryQueries.Load() != 0) {
+					t.Fatal("client proof or selected DNS used another path")
+				}
+				connection, err := f.owner.DialContext(context.Background(), "tcp", M.ParseSocksaddr("8.8.8.8:443"))
+				if err != nil {
+					t.Fatal(err)
+				}
+				payload := bytes.Repeat([]byte("SS2022, owned server SOCKS, captured mobile session;"), 32)
+				_ = connection.SetDeadline(time.Now().Add(3 * time.Second))
+				_, err = connection.Write(payload)
+				actual := make([]byte, len(payload))
+				_, readErr := io.ReadFull(connection, actual)
+				connection.Close()
+				if err != nil || readErr != nil || !bytes.Equal(payload, actual) {
+					t.Fatal("real native data path changed payload", err, readErr)
+				}
+				lease, err := f.box.RouterVPNTorClaimMTU(request, f.policy.Config(), f.policy.Options().Profile)
+				if err != nil {
+					t.Fatal("proved Server graph lost MTU authority", err)
+				}
+				lease.Close()
+				if _, err := f.owner.ListenPacket(context.Background(), M.ParseSocksaddr("8.8.8.8:53")); err == nil {
+					t.Fatal("TCP Tor invented UDP support")
+				}
+				request.Cancel()
+				if request.Healthy() {
+					t.Fatal("canceled request stayed healthy")
+				}
+				if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+					t.Fatal("data cancellation lost exact lease cleanup", err)
+				}
+				if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+					t.Fatal("cleanup retry changed or repeated an acknowledged lease", err)
+				}
+			})
+		}
+	}
+	for _, failure := range []string{"node", "source", "dns", "tls", "socks"} {
+		t.Run("reject/"+failure, func(t *testing.T) {
+			f := newMobileServerNativeFixture(t, certificate, "tor", false, nil)
+			switch failure {
+			case "node":
+				f.badNode.Store(true)
+			case "source":
+				f.badSource.Store(true)
+			case "dns":
+				f.badDNS.Store(true)
+			case "tls":
+				f.badTLS.Store(true)
+			case "socks":
+				f.badAuth.Store(true)
+			}
+			request := f.request(t)
+			raw, err := request.Run()
+			if err == nil || raw != "" || request.Healthy() {
+				t.Fatal("failed native proof became Connected", failure)
+			}
+			if (failure == "node" || failure == "source") && f.methodCount("PUT") != 0 {
+				t.Fatal("wrong identity/source acquired a lease")
+			}
+			if failure == "dns" && f.publicChecks.Load() == 0 {
+				t.Fatal("fixture never traversed the real public TLS proof")
+			}
+		})
+	}
+	t.Run("exact-runtime-source", func(t *testing.T) {
+		f := newMobileServerNativeFixture(t, certificate, "tor", false, func(graph map[string]any) { graph["inbounds"].([]any)[0].(map[string]any)["mtu"] = 1420 })
+		if request, err := f.box.RouterVPNTorCreateProof(mobiletor.ProfileOutboundTag, mobileServerNativeSession, f.policy.Options().EntryProfile); err == nil || request != nil {
+			t.Fatal("changed actual native TUN acquired source authority")
+		}
+		if f.methodCount("PUT") != 0 {
+			t.Fatal("changed runtime source acquired a server lease")
+		}
+	})
+	t.Run("cleanup-retry-retains-entry-with-mtu-lock", func(t *testing.T) {
+		f := newMobileServerNativeFixture(t, certificate, "tor-bridge", true, nil)
+		request := f.request(t)
+		if _, err := request.Run(); err != nil {
+			t.Fatal(err)
+		}
+		f.failDelete.Store(true)
+		if err := request.Close(); err == nil || request.Healthy() {
+			t.Fatal("unacknowledged cleanup reported success")
+		}
+		f.failDelete.Store(false)
+		capture := request.capture.(*routerVPNTorCapturedOwner)
+		capture.engine.mu.Lock()
+		done := make(chan error, 1)
+		go func() { done <- request.Close() }()
+		select {
+		case err := <-done:
+			capture.engine.mu.Unlock()
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(2 * time.Second):
+			capture.engine.mu.Unlock()
+			<-done
+			t.Fatal("retained cleanup depended on the mutable MTU/data lock")
+		}
+		if f.methodCount("DELETE") != 2 {
+			t.Fatal("retry did not delete the same captured attempt")
+		}
+	})
+	t.Run("late-acquire-cancellation", func(t *testing.T) {
+		f := newMobileServerNativeFixture(t, certificate, "tor", false, nil)
+		f.putEntered, f.putRelease = make(chan struct{}), make(chan struct{})
+		request := f.request(t)
+		done := make(chan error, 1)
+		go func() { _, err := request.Run(); done <- err }()
+		select {
+		case <-f.putEntered:
+		case <-time.After(3 * time.Second):
+			t.Fatal("PUT never entered the actual private entry")
+		}
+		request.Cancel()
+		close(f.putRelease)
+		if err := <-done; err == nil {
+			t.Fatal("late acquired lease became connected")
+		}
+		if err := request.Close(); err != nil || f.methodCount("DELETE") != 1 {
+			t.Fatal("lost PUT response lost its exact owned cleanup", err)
+		}
+	})
+	t.Run("same-network-reset-cannot-delete-through-replacement", func(t *testing.T) {
+		f := newMobileServerNativeFixture(t, certificate, "tor", true, nil)
+		request := f.request(t)
+		if _, err := request.Run(); err != nil {
+			t.Fatal(err)
+		}
+		f.allowPending.Store(true)
+		f.owner.InterfaceUpdated(context.Background())
+		if request.Healthy() || request.Close() == nil || f.methodCount("DELETE") != 0 {
+			t.Fatal("physical reset retained data or adopted a replacement cleanup path")
+		}
+	})
+}

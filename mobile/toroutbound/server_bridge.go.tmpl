@@ -1,0 +1,19 @@
+package libbox
+
+import "github.com/sagernet/sing-box/routervpn/mobiletor"
+
+// Server uses the captured private Router entry in this existing VPN. This
+// compiler does not enable a second VPN, local Tor child or server-wide route.
+func RouterCompileServerTorProfileWithPredecessor(profile, session, entryConfig, entryProfile string) (string, error) {
+	return mobiletor.CompileServerProfileWithPredecessor(profile, session, entryConfig, entryProfile)
+}
+
+// Close cancels traffic immediately and joins an exact Server lease DELETE
+// before the host closes this native Box. A pending cleanup remains retryable
+// through this request even after the host clears its selected connection.
+func (r *RouterTorProofRequest) Close() error {
+	if r == nil || r.request == nil {
+		return nil
+	}
+	return r.request.Close()
+}

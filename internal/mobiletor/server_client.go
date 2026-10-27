@@ -325,6 +325,20 @@ func (c *ServerTorClient) DialContext(ctx context.Context, network, address stri
 	return connection, nil
 }
 
+// DialRetainedContext is used by native DNS/measurement owners that must keep
+// a late or failed-close socket reachable for retry. It never publishes that
+// socket as successful traffic after the exact lease or captured path retires.
+func (c *ServerTorClient) DialRetainedContext(ctx context.Context, network, address string) (net.Conn, error) {
+	if !c.Ready() || ctx == nil || ctx.Err() != nil || network != "tcp" {
+		return nil, errServerTorClient
+	}
+	connection, err := c.data.DialRetainedContext(ctx, network, address)
+	if err != nil || !c.Ready() {
+		return connection, errServerTorClient
+	}
+	return connection, nil
+}
+
 func (c *ServerTorClient) Close(ctx context.Context) error {
 	if c == nil {
 		return nil

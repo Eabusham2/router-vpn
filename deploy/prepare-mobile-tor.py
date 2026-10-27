@@ -114,6 +114,7 @@ def copies():
     mapped = {'box.go.tmpl': 'routervpn_tor.go',
               'box_test.go.tmpl': 'routervpn_tor_test.go',
               'bridge.go.tmpl': 'experimental/libbox/routervpn_tor.go',
+              'server_bridge.go.tmpl': 'experimental/libbox/routervpn_tor_server.go',
               'notices.go.tmpl': 'routervpn/tornotices/notices.go'}
     for path in sorted((ROOT/'mobile/toroutbound').glob('*.tmpl')):
         if path.name == 'dns_adapter.go.tmpl':

@@ -42,6 +42,7 @@ type Options struct {
 
 func RegisterOutbound(registry *outbound.Registry) {
 	outbound.Register[Options](registry, Type, NewOutbound)
+	RegisterServerOutbound(registry)
 }
 
 var _ adapter.Outbound = (*Outbound)(nil)

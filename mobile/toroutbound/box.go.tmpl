@@ -42,6 +42,7 @@ type RouterVPNTorProofRequest struct {
 	succeeded   atomic.Bool
 	canceled    atomic.Bool
 	capture     routerVPNTorProofCapture
+	server      torServerProofOwner
 }
 
 func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON string) (*RouterVPNTorProofRequest, error) {
@@ -49,7 +50,7 @@ func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON st
 		return nil, errors.New("native Tor proof owner is unavailable")
 	}
 	owner, found := s.outbound.Outbound(outboundTag)
-	if !found || owner == nil || owner.Type() != "routervpn-tor" {
+	if !found || owner == nil || owner.Type() != "routervpn-tor" && owner.Type() != mobiletor.ServerTorClientType {
 		return nil, errors.New("native Tor final outbound is unavailable")
 	}
 	request, err := newRouterTorProofRequest(s.ctx, owner, sessionID, predecessorJSON, func() bool {
@@ -67,6 +68,10 @@ func (s *Box) RouterVPNTorCreateProof(outboundTag, sessionID, predecessorJSON st
 			request.cancel()
 			return nil, err
 		}
+	}
+	if err := request.bindServer(owner); err != nil {
+		request.Cancel()
+		return nil, err
 	}
 	return request, nil
 }
@@ -159,4 +164,48 @@ func (s *Box) RouterVPNTorProof(outboundTag, sessionID string) (string, error) {
 		return "", err
 	}
 	return request.Run()
+}
+
+type torServerProofOwner interface {
+	torProofOwner
+	TorServerConfig() string
+	BindTorServer(*mobiletor.PredecessorProof, func() bool, func() bool) error
+	CloseTor(context.Context, string) error
+}
+
+type torServerProofCapture interface {
+	routerVPNTorProofCapture
+	ServerGraph(string) bool
+	EntryCurrent() bool
+}
+
+func (r *RouterVPNTorProofRequest) bindServer(outbound adapter.Outbound) error {
+	if outbound.Type() != mobiletor.ServerTorClientType {
+		return nil
+	}
+	owner, ok := r.owner.(torServerProofOwner)
+	capture, captured := r.capture.(torServerProofCapture)
+	if !ok || !captured || capture == nil || r.predecessor == nil || !capture.ServerGraph(owner.TorServerConfig()) || !capture.EntryCurrent() {
+		return errors.New("Tor Server requires its complete captured native TUN, selected DNS and private entry")
+	}
+	if err := owner.BindTorServer(r.predecessor, capture.EntryCurrent, r.currentNative); err != nil {
+		return err
+	}
+	r.server = owner
+	return nil
+}
+
+func (r *RouterVPNTorProofRequest) Close() error {
+	if r == nil {
+		return nil
+	}
+	r.Cancel()
+	if r.server == nil {
+		// Local cancellation is drained by the existing checked native service
+		// close. It owns no remote lease and needs no new shutdown operation.
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 8*time.Second)
+	defer cancel()
+	return r.server.CloseTor(ctx, r.sessionID)
 }

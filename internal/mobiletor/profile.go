@@ -510,7 +510,7 @@ func torPredecessorCaptured(source string, ordinaryExternal bool) (map[string]an
 		for _, raw := range rows {
 			outbound, ok := raw.(map[string]any)
 			tag := profileString(outbound, "tag")
-			if !ok || !profileIdentifier.MatchString(tag) || seen[tag] || tag == ProfileOutboundTag || outbound["type"] == "routervpn-tor" {
+			if !ok || !profileIdentifier.MatchString(tag) || seen[tag] || tag == ProfileOutboundTag || outbound["type"] == "routervpn-tor" || outbound["type"] == ServerTorClientType {
 				return nil, nil, "", failure
 			}
 			seen[tag] = true

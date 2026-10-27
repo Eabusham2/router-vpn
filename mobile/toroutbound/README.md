@@ -36,8 +36,10 @@ The Go host entry points are:
 Libbox.RouterTorSetStateDirectory(directory string) error
 Libbox.RouterTorCreateProof(server *CommandServer, outboundTag, sessionID string) (*RouterTorProofRequest, error)
 Libbox.RouterTorCreateProofWithPredecessor(server *CommandServer, outboundTag, sessionID, profileJSON string) (*RouterTorProofRequest, error)
+Libbox.RouterCompileServerTorProfileWithPredecessor(profileJSON, sessionID, predecessorJSON, predecessorProfileJSON string) (string, error)
 request.Run() (string, error)
 request.Cancel()
+request.Close() error
 request.Healthy() bool
 ```
 
@@ -92,6 +94,37 @@ dial in one process and ordinary TCP dial in the other must time out, retain
 ownership, and quarantine native Tor permanently. Captured
 test dialers carry no public bridge traffic, so these native lifecycle fixtures
 cannot satisfy or fabricate the public Tor exit proof.
+
+## Server execution in the same mobile VPN
+
+The separate Server compiler emits `routervpn-server-tor` after an authenticated
+private Router entry. Its native adapter keeps the complete original profile,
+entry profile, entry graph and session identity. Proof admission recompiles those
+inputs and compares the complete graph with the same Box's construction snapshot.
+Construction, CheckConfig and proof creation perform no lease acquisition.
+Only `Run` authenticates the captured Router, matches its advertised canonical
+Tor source and selected DNS hashes, then acquires and proves that owned lease.
+
+Plain Tor and bridge modes use the authenticated TCP SOCKS front through that
+entry. The client runs no local Tor or PT process for Server. Its proof still
+requires a separate verified Tor exit check through the actual client path and
+the Box's selected DNS query. Status renewal cannot replace those proofs. The
+existing TUN, IPv6, LAN, protection and MTU rules remain owned by this Box.
+
+The host must cancel immediately, then call the retained request's `Close` before
+closing its native service. Close joins data and measurements and requires an
+acknowledged DELETE for the exact attempted lease. A failed cleanup retains the
+old entry and request for retry; physical reset or replacement cannot lend a new
+entry to the old DELETE. Server execution remains explicit; these APIs do not
+provide a Compare score or change a saved choice to Local.
+
+Full mobile preparation installs `TestRouterTorServerNativeLeaseAndProof` in the
+pinned native core. Its actual SS2022 entry, authenticated lease/SOCKS protocol,
+TLS client proof and native DNS fixtures cover plain Tor, obfs4 and Snowflake,
+Home and Custom DNS, captured MTU authority, failed proofs, changed runtime
+source, cancellation during acquisition, cleanup retry and physical reset. The
+fixture uses a native TUN adapter and local Router/Tor endpoints; it establishes
+the runtime integration boundary, not physical-device or public-Tor acceptance.
 
 ## Snowflake bootstrap DNS
 
