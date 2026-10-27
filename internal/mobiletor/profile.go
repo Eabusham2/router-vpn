@@ -66,6 +66,9 @@ func capturedTorProfile(profileJSON string) (map[string]any, []string, error) {
 	if err != nil || profile["node_kind"] != "external" || !profileIdentifier.MatchString(profileString(profile, "id")) {
 		return nil, nil, errors.New("Tor requires one frozen external node profile")
 	}
+	if err := validateTorPaddingPolicy(profile); err != nil {
+		return nil, nil, err
+	}
 	for _, key := range []string{"start_layer", "dns_mode", "dns_protocol", "dns_host", "dns_server_name", "dns_path", "ipv6_mode", "mtu_policy", "multihop_entry_id", "multihop_exit_id", "multihop_entry_mode", "multihop_exit_mode", "multihop_execution"} {
 		if value, exists := profile[key]; exists {
 			if _, ok := value.(string); !ok {
