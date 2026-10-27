@@ -396,8 +396,11 @@ meek/WebTunnel TLS and Snowflake STUN/WebRTC/KCP loopback traffic, wrong-source
 and retirement controls. All 201 generated/shared inputs match the isolated
 candidate; the production-tag native race gate passes in 3.084 seconds.
 These fixtures map the Router lower to owned test peers and do not establish
-physical firewall/leak acceptance. Import/editor retention when replacing
-bridge lines is a separate remaining gap.
+physical firewall/leak acceptance. The idle import/update API now preserves the
+saved complete Router path when replacing bridge lines, checks captured
+selected/entry/exit revisions under the transaction and rejects cancelled or
+stale mutations before persistence. Four executable broken variants are
+rejected. Native editor adoption of that revision contract remains separate.
 
 The ordinary-external predecessor prerequisite now captures its exact native
 transport, credentials, selected DNS/bootstrap and MTU through the shared

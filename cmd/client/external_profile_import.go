@@ -67,6 +67,10 @@ func (a *app) externalProfileImport(w http.ResponseWriter, r *http.Request) {
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if r.Context().Err() != nil {
+		http.Error(w, "external profile import was cancelled", http.StatusConflict)
+		return
+	}
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		http.Error(w, "disconnect before importing an external node", http.StatusConflict)
 		return

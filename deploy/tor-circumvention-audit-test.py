@@ -299,5 +299,112 @@ class TorChoiceAuditTests(unittest.TestCase):
                     "retainedProof, err = saved.adopt(a)\n\tif err != nil {\n\t\ta.rollbackProfilesLocked(a.profiles)")
 
 
+IMPORT_CHECK = AUDIT["need_desktop_tor_import"]
+IMPORT = "cmd/client/tor_bridge_import.go"
+IMPORT_SOURCE_DECODER = "cmd/client/tor_bridge_import_source.go"
+APPEND_IMPORT = "cmd/client/external_profile_import.go"
+IMPORT_SOURCE = {path: (ROOT/path).read_text(encoding="utf-8")
+                 for path in (IMPORT, IMPORT_SOURCE_DECODER, APPEND_IMPORT)}
+
+
+class TorCapturedImportAuditTests(unittest.TestCase):
+    def errors(self, changed=None):
+        sources = dict(IMPORT_SOURCE)
+        sources.update(changed or {})
+        errors = []
+        with patch.dict(IMPORT_CHECK.__globals__, {"read": sources.__getitem__, "errors": errors}):
+            IMPORT_CHECK()
+        return errors
+
+    def reject(self, path, original, replacement):
+        source = IMPORT_SOURCE[path]
+        self.assertEqual(1, source.count(original), "mutation must target actual shipping code once")
+        errors = self.errors({path: source.replace(original, replacement)})
+        self.assertTrue(errors, "unsafe captured bridge import must fail its shipping contract")
+        self.assertTrue(all("desktop Tor captured bridge update ownership:" in error for error in errors))
+
+    def test_actual_captured_update_chain_passes(self):
+        self.assertEqual([], self.errors())
+
+    def test_nonsemantic_comments_and_whitespace_do_not_replace_guards(self):
+        changed = {path: source.replace("\n", "\r\n").replace("a.persistProfilesLocked()",
+                   "a /* { } */ . persistProfilesLocked ( )") for path, source in IMPORT_SOURCE.items()}
+        self.assertEqual([], self.errors(changed))
+
+    def test_shipping_audit_invokes_actual_import_contract(self):
+        original_read = Path.read_text
+        broken = IMPORT_SOURCE[IMPORT].replace("a.validateExternalProfileExpectedProfilesLocked(expected, existing)", "skipSourceGuard(expected, existing)")
+        def read(path, *args, **kwargs):
+            return broken if path == ROOT/IMPORT else original_read(path, *args, **kwargs)
+        output = io.StringIO()
+        with patch.object(Path, "read_text", read), redirect_stdout(output):
+            with self.assertRaises(SystemExit) as failure:
+                runpy.run_path(str(Path(__file__).with_name("tor-circumvention-audit.py")))
+        self.assertEqual(1, failure.exception.code)
+        self.assertIn("desktop Tor captured bridge update ownership:", output.getvalue())
+
+    def test_route_and_policy_calls_cannot_be_replaced_by_comments_or_strings(self):
+        for original in (
+            "handled, err := a.updateExistingTorBridgeProfile(r, &profile, updateIntent, q.expectedProfiles())",
+            "merged := preserveTorBridgeEditSettings(existing, *profile, intent)",
+            "policy, err := normalizeTorBridgeImportPolicy(merged)",
+            "if _, err := standardExitFromExternalProfile(policy); err != nil {",
+        ):
+            with self.subTest(original=original):
+                self.reject(IMPORT, original, '// '+original+'\n\t_ = "'+original+'"')
+
+    def test_every_saved_graph_field_and_protection_are_preserved(self):
+        for field in ("MultihopEnabled", "MultihopEntryID", "MultihopExitID", "MultihopEntryMode", "MultihopExecution"):
+            original = f"next.{field} = existing.{field}"
+            with self.subTest(field=field):
+                self.reject(IMPORT, original, '// '+original)
+        self.reject(IMPORT, "next.KillSwitchPolicy = existing.KillSwitchPolicy", "/* protection reset */")
+
+    def test_direct_dynamic_strict_admission_still_requires_a_real_saved_path(self):
+        self.reject(IMPORT, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {',
+                    'if requestedKill != "off" && !strictLiteralObfs4 && false {')
+        self.reject(IMPORT, "if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported {", "if supported, reason := true, \"\"; !supported {")
+        self.reject(IMPORT, "if err := validateExternalDeviceSettings(merged); err != nil {", "if err := error(nil); err != nil {")
+        self.reject(IMPORT, "if matches != 1 {", "if matches < 1 {")
+
+    def test_source_revision_and_identity_guards_must_precede_adoption(self):
+        for original, replacement in (
+            ("if err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil {", "if err := error(nil); err != nil {"),
+            ("return false, errExternalProfileSelectionChanged", "return false, nil"),
+            ("if index >= 0 {", "if false {"),
+            ("release, guardErr := a.beginMutationOperation(r)", "release, guardErr := func() {}, error(nil)"),
+            ("defer a.mu.Unlock()", "/* no captured transaction */"),
+        ):
+            with self.subTest(original=original):
+                self.reject(IMPORT, original, replacement)
+        source = IMPORT_SOURCE[IMPORT]
+        guard = "\tif err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil {\n\t\treturn false, err\n\t}\n"
+        marker = "\ta.profiles.Profiles[index] = merged\n"
+        self.assertEqual(1, source.count(guard))
+        changed = source.replace(guard, "").replace(marker, marker+guard)
+        self.assertTrue(self.errors({IMPORT: changed}), "source check after private mutation cannot pass")
+
+    def test_malformed_source_json_cannot_silently_downgrade(self):
+        for original, replacement in (
+            ("fields, err := externalConnectJSONObject(data)", "fields, err := map[string]json.RawMessage{}, error(nil)"),
+            ("json.Unmarshal(expectationJSON, &capture)", "json.Unmarshal([]byte(`{}`), &capture)"),
+            ("decoder.DisallowUnknownFields()", "/* unknown path controls accepted */"),
+            ("if name != canonical && strings.EqualFold(name, canonical) {", "if false {"),
+        ):
+            with self.subTest(original=original):
+                self.reject(IMPORT_SOURCE_DECODER, original, replacement)
+
+    def test_real_cancellation_and_persistence_rollback_remain_required(self):
+        source = IMPORT_SOURCE[IMPORT]
+        guard = '\tif r.Context().Err() != nil {\n\t\treturn false, errors.New("Tor bridge update was cancelled")\n\t}\n'
+        self.assertEqual(2, source.count(guard))
+        for index in (0, 1):
+            parts = source.split(guard)
+            parts[index] += '/* cancellation ignored */\n' + parts.pop(index+1)
+            self.assertTrue(self.errors({IMPORT: guard.join(parts)}))
+        self.reject(APPEND_IMPORT, "if r.Context().Err() != nil {", "if false {")
+        self.reject(IMPORT, "a.rollbackProfilesLocked(previousStore)", "/* rollback omitted */")
+
+
 if __name__ == "__main__":
     unittest.main()

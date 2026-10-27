@@ -11,21 +11,23 @@ import (
 )
 
 type torBridgeImportRequest struct {
-	ID               string   `json:"id,omitempty"`
-	Name             string   `json:"name,omitempty"`
-	Transport        string   `json:"transport,omitempty"`
-	Bridges          []string `json:"bridges"`
-	SocksPort        int      `json:"socks_port,omitempty"`
-	KillSwitchPolicy string   `json:"kill_switch_policy,omitempty"`
-	DNSMode          string   `json:"dns_mode,omitempty"`
-	DNSProtocol      string   `json:"dns_protocol,omitempty"`
-	DNSHost          string   `json:"dns_host,omitempty"`
-	DNSPort          int      `json:"dns_port,omitempty"`
-	DNSServerName    string   `json:"dns_server_name,omitempty"`
-	DNSPath          string   `json:"dns_path,omitempty"`
-	Location         string   `json:"location,omitempty"`
-	Latitude         float64  `json:"latitude,omitempty"`
-	Longitude        float64  `json:"longitude,omitempty"`
+	ID                     string            `json:"id,omitempty"`
+	Name                   string            `json:"name,omitempty"`
+	Transport              string            `json:"transport,omitempty"`
+	Bridges                []string          `json:"bridges"`
+	SocksPort              int               `json:"socks_port,omitempty"`
+	KillSwitchPolicy       string            `json:"kill_switch_policy,omitempty"`
+	DNSMode                string            `json:"dns_mode,omitempty"`
+	DNSProtocol            string            `json:"dns_protocol,omitempty"`
+	DNSHost                string            `json:"dns_host,omitempty"`
+	DNSPort                int               `json:"dns_port,omitempty"`
+	DNSServerName          string            `json:"dns_server_name,omitempty"`
+	DNSPath                string            `json:"dns_path,omitempty"`
+	Location               string            `json:"location,omitempty"`
+	Latitude               float64           `json:"latitude,omitempty"`
+	Longitude              float64           `json:"longitude,omitempty"`
+	ExpectedSelectedNodeID *string           `json:"expected_selected_node_id,omitempty"`
+	ExpectedProfileTokens  map[string]string `json:"expected_profile_tokens,omitempty"`
 }
 
 type torBridgeUpdateIntent struct {
@@ -34,6 +36,7 @@ type torBridgeUpdateIntent struct {
 	SocksPort bool
 	DNS       bool
 	Location  bool
+	Kill      bool
 }
 
 func torBridgeUpdateIntentFor(q torBridgeImportRequest) torBridgeUpdateIntent {
@@ -43,6 +46,7 @@ func torBridgeUpdateIntentFor(q torBridgeImportRequest) torBridgeUpdateIntent {
 		SocksPort: q.SocksPort != 0,
 		DNS:       strings.TrimSpace(q.DNSMode) != "" || strings.TrimSpace(q.DNSProtocol) != "" || strings.TrimSpace(q.DNSHost) != "" || q.DNSPort != 0 || strings.TrimSpace(q.DNSServerName) != "" || strings.TrimSpace(q.DNSPath) != "",
 		Location:  strings.TrimSpace(q.Location) != "" || q.Latitude != 0 || q.Longitude != 0,
+		Kill:      strings.TrimSpace(q.KillSwitchPolicy) != "",
 	}
 }
 
@@ -51,9 +55,17 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "POST only", http.StatusMethodNotAllowed)
 		return
 	}
-	var q torBridgeImportRequest
-	if err := json.NewDecoder(http.MaxBytesReader(w, r.Body, 256<<10)).Decode(&q); err != nil {
+	q, err := decodeTorBridgeImportRequest(http.MaxBytesReader(w, r.Body, 256<<10))
+	if err != nil {
 		http.Error(w, "invalid Tor bridge form", http.StatusBadRequest)
+		return
+	}
+	if r.Context().Err() != nil {
+		http.Error(w, "Tor bridge form was cancelled", http.StatusConflict)
+		return
+	}
+	if q.expectedProfiles().hasExpectedProfiles() && strings.TrimSpace(q.ID) == "" {
+		http.Error(w, "Tor bridge source expectations require an existing update id", http.StatusBadRequest)
 		return
 	}
 	updateIntent := torBridgeUpdateIntentFor(q)
@@ -96,7 +108,7 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 			Bridges:   append([]string(nil), q.Bridges...),
 			SocksPort: q.SocksPort,
 		}},
-		KillSwitchPolicy: "off",
+		KillSwitchPolicy: requestedKill,
 		IPv6Mode:         "on",
 		MTUPolicy:        "auto",
 		StartupMode:      "manual",
@@ -114,45 +126,11 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 		profile.DNSMode, profile.DNSProtocol, profile.DNSPort = "home", "udp", 53
 		profile.DNSHost, profile.DNSServerName, profile.DNSPath = "", "", ""
 	}
-	// Normalize with kill switch disabled first so the canonical PT parser can
-	// decide whether this graph owns one exact literal obfs4 bootstrap endpoint.
-	if err := common.NormalizeRouterProfile(&profile); err != nil {
-		http.Error(w, "invalid Tor bridge profile: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	cfg := profile.External.TorBridge
-	strictLiteralObfs4 := cfg != nil && cfg.Transport == "obfs4" && len(cfg.Bridges) == 1
-	if requestedKill == "" {
-		if strictLiteralObfs4 {
-			requestedKill = "on-connect"
-		} else {
-			requestedKill = "off"
-		}
-	}
-	if requestedKill != "off" && !strictLiteralObfs4 {
-		http.Error(w, "meek/Snowflake/WebTunnel/custom or multi-bridge Tor profiles require kill_switch_policy=off until their dynamic bootstrap egress can be scoped safely", http.StatusBadRequest)
-		return
-	}
-	profile.KillSwitchPolicy = requestedKill
-	profile.KillSwitch = requestedKill != "off"
-	if err := common.NormalizeRouterProfile(&profile); err != nil {
-		http.Error(w, "invalid Tor bridge profile: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	// Re-run both dataplane translation and policy validation before the private
-	// store is touched. This prevents a saved node from looking ready when its
-	// DNS/kill-switch/runtime policy would fail only at Connect time.
-	if _, err := standardExitFromExternalProfile(profile); err != nil {
-		http.Error(w, "Tor bridge profile is not runnable: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-	if _, err := externalRuntimePolicy(profile); err != nil {
-		http.Error(w, "Tor bridge policy is not runnable: "+err.Error(), http.StatusBadRequest)
-		return
-	}
-
+	// An update must first recover its saved complete path under the mutation
+	// owner. Validating a new Direct profile here would discard or reject the
+	// existing Router entry before its captured policy can be considered.
 	if strings.TrimSpace(profile.ID) != "" {
-		handled, err := a.updateExistingTorBridgeProfile(r, &profile, updateIntent)
+		handled, err := a.updateExistingTorBridgeProfile(r, &profile, updateIntent, q.expectedProfiles())
 		if err != nil {
 			status := http.StatusConflict
 			if errors.Is(err, errInvalidTorBridgeUpdateID) {
@@ -167,6 +145,15 @@ func (a *app) torBridgeImport(w http.ResponseWriter, r *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{"ok": true, "updated": true, "profile": publicProfileFor(profile)})
 			return
 		}
+	}
+	profile, err = normalizeTorBridgeImportPolicy(profile)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if r.Context().Err() != nil {
+		http.Error(w, "Tor bridge form was cancelled", http.StatusConflict)
+		return
 	}
 
 	body, err := json.Marshal(profile)
@@ -249,7 +236,53 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 	next.ShareDiagnostics = existing.ShareDiagnostics
 	next.TelemetryEnabled = existing.TelemetryEnabled
 	next.PathProbeURL = existing.PathProbeURL
+	next.MultihopEnabled = existing.MultihopEnabled
+	next.MultihopEntryID = existing.MultihopEntryID
+	next.MultihopExitID = existing.MultihopExitID
+	next.MultihopEntryMode = existing.MultihopEntryMode
+	next.MultihopExecution = existing.MultihopExecution
+	if existing.MultihopEnabled && !intent.Kill {
+		// Editing bridge bytes is not permission to disable the protection
+		// already chosen for this saved Router path. Direct additions/edits
+		// retain their existing single-obfs4 versus dynamic defaults.
+		next.KillSwitchPolicy = existing.KillSwitchPolicy
+		if next.KillSwitchPolicy == "" {
+			next.KillSwitchPolicy = "off"
+			if existing.KillSwitch {
+				next.KillSwitchPolicy = "on-connect"
+			}
+		}
+		next.KillSwitch = existing.KillSwitch
+	}
 	return next
+}
+
+func normalizeTorBridgeImportPolicy(profile common.RouterProfile) (common.RouterProfile, error) {
+	requestedKill := profile.KillSwitchPolicy
+	profile.KillSwitchPolicy, profile.KillSwitch = "off", false
+	if err := common.NormalizeRouterProfile(&profile); err != nil {
+		return common.RouterProfile{}, errors.New("invalid Tor bridge profile: " + err.Error())
+	}
+	cfg := profile.External.TorBridge
+	strictLiteralObfs4 := cfg != nil && cfg.Transport == "obfs4" && len(cfg.Bridges) == 1
+	if requestedKill == "" {
+		requestedKill = "off"
+		if strictLiteralObfs4 {
+			requestedKill = "on-connect"
+		}
+	}
+	if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled {
+		return common.RouterProfile{}, errors.New("dynamic bootstrap egress requires the exact saved Local Router entry; Direct meek/Snowflake/WebTunnel/custom or multi-bridge profiles require kill_switch_policy=off")
+	}
+	profile.KillSwitchPolicy, profile.KillSwitch = requestedKill, requestedKill != "off"
+	policy, err := externalRuntimePolicy(profile)
+	if err != nil {
+		return common.RouterProfile{}, errors.New("Tor bridge policy is not runnable: " + err.Error())
+	}
+	if _, err := standardExitFromExternalProfile(policy); err != nil {
+		return common.RouterProfile{}, errors.New("Tor bridge profile is not runnable: " + err.Error())
+	}
+	return policy, nil
 }
 
 // updateExistingTorBridgeProfile handles only an explicit update of an already
@@ -257,7 +290,7 @@ func preserveTorBridgeEditSettings(existing common.RouterProfile, next common.Ro
 // never silently replace another external node merely because an ID collided.
 // A safe ID that is not present returns handled=false so the historical import
 // behavior (create while retaining that stable ID) is preserved.
-func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.RouterProfile, intent torBridgeUpdateIntent) (bool, error) {
+func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.RouterProfile, intent torBridgeUpdateIntent, expected externalProfileConnectRequest) (bool, error) {
 	if profile == nil {
 		return false, errInvalidTorBridgeUpdateID
 	}
@@ -273,36 +306,63 @@ func (a *app) updateExistingTorBridgeProfile(r *http.Request, profile *common.Ro
 
 	a.mu.Lock()
 	defer a.mu.Unlock()
+	if r.Context().Err() != nil {
+		return false, errors.New("Tor bridge update was cancelled")
+	}
 	if profileSettingsBusy(a.state.Connected, a.state.Phase) {
 		return false, errors.New("disconnect before updating a Tor bridge node")
 	}
 	index := -1
 	for i := range a.profiles.Profiles {
 		if a.profiles.Profiles[i].ID == profile.ID {
+			if index >= 0 {
+				return false, errors.New("Tor bridge update identity is ambiguous; relink the intended node")
+			}
 			index = i
-			break
 		}
 	}
 	if index < 0 {
+		if expected.hasExpectedProfiles() {
+			return false, errExternalProfileSelectionChanged
+		}
 		return false, nil
 	}
 	existing := a.profiles.Profiles[index]
 	if existing.NodeKind != "external" || existing.External == nil || strings.ToLower(strings.TrimSpace(existing.External.Protocol)) != "tor-bridge" {
 		return false, errors.New("profile id belongs to a non-Tor node; refusing replacement")
 	}
+	if err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil {
+		return false, err
+	}
 
 	merged := preserveTorBridgeEditSettings(existing, *profile, intent)
-	if err := common.NormalizeRouterProfile(&merged); err != nil {
-		return false, errors.New("updated Tor bridge profile is invalid: " + err.Error())
-	}
-	if _, err := standardExitFromExternalProfile(merged); err != nil {
-		return false, errors.New("updated Tor bridge profile is not runnable: " + err.Error())
-	}
-	policy, err := externalRuntimePolicy(merged)
+	policy, err := normalizeTorBridgeImportPolicy(merged)
 	if err != nil {
-		return false, errors.New("updated Tor bridge policy is not runnable: " + err.Error())
+		return false, err
 	}
 	merged = policy
+	var entry common.RouterProfile
+	if merged.MultihopEnabled {
+		matches := 0
+		for _, node := range a.profiles.Profiles {
+			if node.ID == merged.MultihopEntryID {
+				matches++
+				entry = node
+			}
+		}
+		if matches != 1 {
+			return false, errors.New("Tor bridge update lost its exact saved entry; reopen after relinking it")
+		}
+	}
+	if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported {
+		return false, errors.New(reason)
+	}
+	if err := validateExternalDeviceSettings(merged); err != nil {
+		return false, errors.New("updated Tor bridge policy differs from its captured native path: " + err.Error())
+	}
+	if r.Context().Err() != nil {
+		return false, errors.New("Tor bridge update was cancelled")
+	}
 
 	previousStore := cloneRouterProfileStore(a.profiles)
 	// Usage metadata describes this stable node identity and is safe to retain.

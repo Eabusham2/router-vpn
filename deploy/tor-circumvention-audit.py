@@ -203,6 +203,86 @@ def need_desktop_tor_maintenance() -> None:
         errors.append(f"desktop Tor retained maintenance/proof ownership: {error}")
 
 
+def need_desktop_tor_import() -> None:
+    """Follow the captured bridge edit through policy merge and commit."""
+    try:
+        source = go_contract_tokens(read("cmd/client/tor_bridge_import.go"))
+        route = go_contract_block(source, "func (a *app) torBridgeImport(")
+        go_contract_at(route, "q, err := decodeTorBridgeImportRequest(http.MaxBytesReader(w, r.Body, 256<<10))")
+        expected = go_contract_block(route, 'if q.expectedProfiles().hasExpectedProfiles() && strings.TrimSpace(q.ID) == ""')
+        go_contract_at(expected, "return")
+        update_call = go_contract_at(route, "handled, err := a.updateExistingTorBridgeProfile(r, &profile, updateIntent, q.expectedProfiles())")
+        add_policy = go_contract_at(route, "profile, err = normalizeTorBridgeImportPolicy(profile)")
+        if update_call >= add_policy:
+            raise ValueError("saved path must merge before Direct Add policy validation")
+        direct = go_contract_block(source, "func normalizeTorBridgeImportPolicy(")
+        normalize = go_contract_at(direct, "if err := common.NormalizeRouterProfile(&profile); err != nil")
+        go_contract_at(direct, 'strictLiteralObfs4 := cfg != nil && cfg.Transport == "obfs4" && len(cfg.Bridges) == 1')
+        rejected_direct = go_contract_block(direct, 'if requestedKill != "off" && !strictLiteralObfs4 && !profile.MultihopEnabled')
+        go_contract_at(rejected_direct, "return common.RouterProfile{}, errors.New(")
+        policy = go_contract_at(direct, "policy, err := externalRuntimePolicy(profile)")
+        translated = go_contract_at(direct, "if _, err := standardExitFromExternalProfile(policy); err != nil")
+        if not normalize < policy < translated:
+            raise ValueError("Tor import skipped the exact normalized policy translation")
+        preserve = go_contract_block(source, "func preserveTorBridgeEditSettings(")
+        for field in ("MultihopEnabled", "MultihopEntryID", "MultihopExitID", "MultihopEntryMode", "MultihopExecution"):
+            go_contract_at(preserve, f"next.{field} = existing.{field}")
+        saved_kill = go_contract_block(preserve, "if existing.MultihopEnabled && !intent.Kill")
+        go_contract_at(saved_kill, "next.KillSwitchPolicy = existing.KillSwitchPolicy")
+
+        update = go_contract_block(source, "func (a *app) updateExistingTorBridgeProfile(")
+        owned = go_contract_at(update, "release, guardErr := a.beginMutationOperation(r)")
+        locked = go_contract_at(update, "a.mu.Lock()")
+        go_contract_at(update, "defer release()")
+        go_contract_at(update, "defer a.mu.Unlock()")
+        capture_marker = "if err := a.validateExternalProfileExpectedProfilesLocked(expected, existing); err != nil"
+        capture = go_contract_at(update, capture_marker)
+        go_contract_at(go_contract_block(update, capture_marker), "return false, err")
+        missing = go_contract_block(update, "if index < 0")
+        go_contract_at(go_contract_block(missing, "if expected.hasExpectedProfiles()"), "return false, errExternalProfileSelectionChanged")
+        duplicate = go_contract_block(update, "if index >= 0")
+        go_contract_at(duplicate, "return false, errors.New(")
+        merged = go_contract_at(update, "merged := preserveTorBridgeEditSettings(existing, *profile, intent)")
+        normalized = go_contract_at(update, "policy, err := normalizeTorBridgeImportPolicy(merged)")
+        entry = go_contract_block(update, "if merged.MultihopEnabled")
+        go_contract_at(go_contract_block(entry, "if matches != 1"), "return false, errors.New(")
+        linked_marker = "if supported, reason := externalDevicePolicySupportForPath(merged, entry); !supported"
+        linked = go_contract_at(update, linked_marker)
+        go_contract_at(go_contract_block(update, linked_marker), "return false, errors.New(reason)")
+        native_marker = "if err := validateExternalDeviceSettings(merged); err != nil"
+        native = go_contract_at(update, native_marker)
+        go_contract_at(go_contract_block(update, native_marker), "return false, errors.New(")
+        previous = go_contract_at(update, "previousStore := cloneRouterProfileStore(a.profiles)")
+        adopted = go_contract_at(update, "a.profiles.Profiles[index] = merged")
+        saved = go_contract_at(update, "if err := a.persistProfilesLocked(); err != nil")
+        if not owned < locked < capture < merged < normalized < linked < native < previous < adopted < saved:
+            raise ValueError("Tor edit persisted before its owned source/path admission")
+        for bounds in (update[locked:capture], update[native:previous]):
+            cancelled = go_contract_block(bounds, "if r.Context().Err() != nil")
+            go_contract_at(cancelled, "return false, errors.New(")
+        failed = go_contract_block(update, "if err := a.persistProfilesLocked(); err != nil")
+        if go_contract_at(failed, "a.rollbackProfilesLocked(previousStore)") >= go_contract_at(failed, "return false, err"):
+            raise ValueError("Tor update did not restore its private store before failure")
+
+        decoder = go_contract_block(go_contract_tokens(read("cmd/client/tor_bridge_import_source.go")),
+                                    "func (q *torBridgeImportRequest) UnmarshalJSON(")
+        for marker in ("fields, err := externalConnectJSONObject(data)", "json.Unmarshal(expectationJSON, &capture)",
+                       "decoder.DisallowUnknownFields()", "decoded.ExpectedSelectedNodeID = capture.ExpectedSelectedNodeID",
+                       "decoded.ExpectedProfileTokens = capture.ExpectedProfileTokens"):
+            go_contract_at(decoder, marker)
+        aliases = go_contract_block(decoder, "if name != canonical && strings.EqualFold(name, canonical)")
+        go_contract_at(aliases, "return errors.New(")
+        append = go_contract_block(go_contract_tokens(read("cmd/client/external_profile_import.go")),
+                                   "func (a *app) externalProfileImport(")
+        after_lock = append[go_contract_at(append, "a.mu.Lock()"):]
+        cancelled = go_contract_block(after_lock, "if r.Context().Err() != nil")
+        go_contract_at(cancelled, "return")
+        if go_contract_at(after_lock, "if r.Context().Err() != nil") >= go_contract_at(after_lock, "a.profiles.Profiles = append(a.profiles.Profiles, p)"):
+            raise ValueError("cancelled Tor Add reached private-store adoption")
+    except (ValueError, IndexError) as error:
+        errors.append(f"desktop Tor captured bridge update ownership: {error}")
+
+
 # Canonical external profile model: PT family is explicit, dynamic Tor exit is
 # never replaced with a user-supplied fixed public IP, and imported data cannot
 # supply executable paths or torrc directives. Native transport listeners are
@@ -511,14 +591,13 @@ need(
     "common.NormalizeRouterProfile",
     'profile.DNSMode, profile.DNSProtocol, profile.DNSPort = "home", "udp", 53',
     "strictLiteralObfs4",
-    "dynamic bootstrap egress can be scoped safely",
-    "standardExitFromExternalProfile(profile)",
     "externalRuntimePolicy(profile)",
     "updateExistingTorBridgeProfile",
     "preserveTorBridgeEditSettings",
     "profile id belongs to a non-Tor node; refusing replacement",
     "Public exit, durable latency/DNS benchmarks, and effective-MTU measurement",
 )
+need_desktop_tor_import()
 need(
     "cmd/client/tor_bridge_import_test.go",
     "TestTorBridgeImportExistingIDUpdatesInPlace",
