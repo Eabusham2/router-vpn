@@ -103,13 +103,14 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
     def populate(self,root):
         for kind,mode,layer in itertools.product(GATE.KINDS,GATE.MODES,GATE.LAYERS):
             (root/f'{kind}-{mode}-{layer}.json').write_text('{}')
+            (root/f'server-{kind}-{mode}-{layer}.json').write_text('{}')
         for kind in GATE.KINDS:(root/f'{kind}-direct-off.json').write_text('{}')
 
     def test_matrix_requires_every_named_branch_and_no_extra_entry(self):
         for mutation in ('missing','empty','large','directory','link','extra','different-name'):
             with self.subTest(mutation=mutation),tempfile.TemporaryDirectory() as temporary:
                 root=Path(temporary);self.populate(root);GATE.matrix(root)
-                self.assertEqual(len(list(root.iterdir())),348)
+                self.assertEqual(len(list(root.iterdir())),690)
                 path=root/'snowflake-max-quic-awg-aes-256-gcm.json'
                 if mutation=='missing':path.unlink()
                 elif mutation=='empty':path.write_text('')
@@ -134,7 +135,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
                          'android/app/src/main/java/com/eabusham/routervpn/AndroidTorSession.java',
                          'android/app/src/main/java/com/eabusham/routervpn/LayeredVpnService.java',
                          'android/app/src/main/java/com/eabusham/routervpn/StandardExitActivity.java',
-                         'android/test_android_tor_profile.py','android/test_android_tor_session.py',
+                         'android/test_android_tor_profile.py','android/test_android_tor_server_profile.py','android/test_android_tor_session.py',
                          'android/test_android_tor_form.py','android/test_android_start_layer_relay_lifecycle.py',
                          'deploy/native_tor_graph_host.py','deploy/test_native_tor_graph_host.py',
                          'mobile/routervpn_tor_android_graph_test.go.tmpl'):
@@ -199,7 +200,7 @@ assert args[1:]==['--native-package',os.environ['TOR_PACKAGE'],'--android-aar',o
         self.assertIn('env=HOST.environment(go,library,clang)',source)
         self.assertIn("'^TestRouterTorAndroidGeneratedGraphs$'",source)
         native=GATE.TEMPLATE.read_text()
-        for marker in ('len(entries) != 348','CheckConfig(string(data))','CheckConfig(string(bad))',
+        for marker in ('len(entries) != 690','CheckConfig(string(data))','CheckConfig(string(bad))',
                        'routervpn-missing-tor-engine','RouterTorSetStateDirectory'):
             self.assertIn(marker,native)
 

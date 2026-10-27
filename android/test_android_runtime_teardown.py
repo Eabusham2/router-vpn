@@ -67,6 +67,8 @@ final class LayeredVpnService {
     static boolean discardPreparedSession(Context context,String session){if(!"native-session".equals(session))throw new AssertionError("Discarded wrong session");discarded.incrementAndGet();return true;}
     static final AtomicInteger externalReads=new AtomicInteger();static volatile boolean externalHealthy=true;
     static String externalExecution(String session,String exit){return "local";}
+    static final AtomicInteger torExecutionReads=new AtomicInteger();static String torExecutionOverride="";
+    static String torExecution(String session,String exit){torExecutionReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor execution");return torExecutionOverride.isEmpty()?(AndroidStandardExitController.lastExecution.isEmpty()?"local":AndroidStandardExitController.lastExecution):torExecutionOverride;}
     static String externalExitIP(String session,String exit){externalReads.incrementAndGet();if(!externalHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured external owner");return "1.1.1.1";}
     static final AtomicInteger torReads=new AtomicInteger();static volatile boolean torHealthy=true;
     static String torExitIP(String session,String exit){torReads.incrementAndGet();if(!torHealthy||!"native-session".equals(session)||!"external".equals(exit))throw new IllegalStateException("wrong captured Tor owner");return "8.8.4.4";}
@@ -127,10 +129,10 @@ final class AndroidExternalPolicy {static volatile String entryVersion="captured
     // PRODUCTION_EXTERNAL_PREDICATE
 }
 final class AndroidStandardExitController {
-    static volatile String lastEntryMode="",lastProtocol="";
+    static volatile String lastEntryMode="",lastProtocol="",lastExecution="";
     AndroidStandardExitController(Context c) {}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e) { return new NativeSingBoxController.SessionInfo(); }
-    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode,String execution,String restored){return prepare(f,e,mode);}
+    NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode,String execution,String restored){lastExecution=execution;return prepare(f,e,mode);}
     NativeSingBoxController.SessionInfo prepare(File f, AndroidStandardExitStore.Entry e,String mode) {lastEntryMode=mode;lastProtocol=e.protocol;return prepare(f,e); }
 }
 final class AndroidDirectStandardExitController {
@@ -238,7 +240,7 @@ public final class RuntimeTeardownHarness {
         final AndroidMultihopRuntime multihop; final AndroidStandardExitRuntime external;
         final String kind;
         Owner(String kind) {
-            this.kind=kind;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torHealthy=true;publicProofs.set(0);
+            this.kind=kind;LayeredVpnService.selectedOverride="";LayeredVpnService.serverPins="{}";LayeredVpnService.staleCapture=false;AndroidMultihopController.changedSources.clear();AndroidMultihopController.lastPins="";LayeredVpnService.torReads.set(0);LayeredVpnService.torExecutionReads.set(0);LayeredVpnService.torExecutionOverride="";AndroidStandardExitController.lastExecution="";LayeredVpnService.torHealthy=true;publicProofs.set(0);
             LayeredVpnService.externalReads.set(0);LayeredVpnService.externalHealthy=true;
             LayeredVpnService.discarded.set(0);
             AndroidHomeStateStore.reset(); LayeredVpnService.mtuStarts.set(0); LayeredVpnService.mtuEntered=null;LayeredVpnService.mtuRelease=null;
@@ -372,8 +374,8 @@ public final class RuntimeTeardownHarness {
                 Callback cb=new Callback(0);owner.connect(cb);cb.awaitDone();
                 check(cb.ok&&AndroidHomeStateStore.current.connected,"normal connection never reached proved Connected");
                 check(LayeredVpnService.mtuStarts.get()==1,"MTU must start once, only after its captured path proof");
-                if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()==2,"Tor used fixed-IP proof or lost final owner readback");
-                if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==3,"ordinary external path bypassed captured entry/DNS/native proof or winner ownership");
+                if(kind.equals("tor"))check(publicProofs.get()==0&&LayeredVpnService.torReads.get()>=2&&LayeredVpnService.torExecutionReads.get()==2,"Tor used fixed-IP proof or lost final execution readback");
+                if(kind.equals("external"))check(publicProofs.get()==0&&LayeredVpnService.externalReads.get()==4,"ordinary external path bypassed captured entry/DNS/native proof or winner ownership");
                 if(kind.equals("external"))check(LayeredVpnService.discarded.get()==0,"successful native launch discarded its active session");
                 owner.disconnect();awaitIdle(owner);
             }
@@ -524,9 +526,13 @@ public final class RuntimeTeardownHarness {
     }
     static AndroidStandardExitStore.Entry torEntry(){AndroidStandardExitStore.Entry e=new AndroidStandardExitStore.Entry();e.protocol="tor-bridge";e.expectedPublicIp="";return e;}
     static void torTests(){
-        for(String mode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"})test("Tor exact entry "+mode,()->{
-            try(Owner owner=new Owner("tor")){Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),torEntry(),mode,cb);cb.awaitDone();
-                check(cb.ok&&mode.equals(AndroidStandardExitController.lastEntryMode)&&mode.equals(AndroidHomeStateStore.current.activeEntryMode),"Tor entry was replaced with default WG");check(publicProofs.get()==0,"Tor borrowed fixed-IP proof");owner.disconnect();awaitIdle(owner);}
+        for(String execution:new String[]{"local","server"})for(String mode:new String[]{"wg","awg2-fast","awg2-strong","wg-pq","awg2-pq","shadowsocks","hysteria2","naive-h2","naive-h3","reality-vision","reality-pq-vision","reality-xhttp","ss-v2ray","split","max","max-tls-wg","max-tls-awg","max-quic-wg","max-quic-awg"})test("Tor exact entry "+mode+"/"+execution,()->{
+            try(Owner owner=new Owner("tor")){Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),torEntry(),mode,execution,cb);cb.awaitDone();
+                check(cb.ok&&mode.equals(AndroidStandardExitController.lastEntryMode)&&mode.equals(AndroidHomeStateStore.current.activeEntryMode)&&execution.equals(owner.external.capturedExternalExecution(AndroidHomeStateStore.current)),"Tor entry or execution was replaced");check(publicProofs.get()==0,"Tor borrowed fixed-IP proof");owner.disconnect();awaitIdle(owner);}
+        });
+        test("Tor Server cannot adopt a Local receipt",()->{
+            try(Owner owner=new Owner("tor")){LayeredVpnService.torExecutionOverride="local";Callback cb=new Callback(0);owner.external.connect(new java.io.File("a".repeat(32)+".json"),torEntry(),"shadowsocks","server",cb);cb.awaitDone();
+                check(!cb.ok&&!AndroidHomeStateStore.current.connected&&LayeredVpnService.mtuStarts.get()==0,"Tor published Connected or MTU before proving its Server receipt");awaitIdle(owner);}
         });
         test("Tor late underlying UP cannot adopt after cancel",()->{
             try(Owner owner=new Owner("tor")){owner.engine.startState="STARTING";Callback cb=new Callback(0);owner.connect(cb);long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(3);while(owner.engine.starts.get()==0&&System.nanoTime()<deadline)Thread.sleep(2);

@@ -21,12 +21,15 @@ SOURCES.pop('com/eabusham/routervpn/AndroidTorSession.java')
 SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void activateTor(AndroidTorSession tor){}', 'public int torStarts;public AndroidTorSession activatedTor;public void activateTor(AndroidTorSession tor){torStarts++;activatedTor=tor;}')
 SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'] = SOURCES['com/eabusham/routervpn/AndroidMTUSession.java'].replace('public void established(int mtu)throws Exception{}', 'public int establishedMTU;public void established(int mtu)throws Exception{establishedMTU=mtu;}')
 SOURCES['android/net/VpnService.java'] = SOURCES['android/net/VpnService.java'].replace('public class Builder {', 'public static int requestedMTU,establishments;public class Builder {').replace('setMtu(int n){return this;}', 'setMtu(int n){requestedMTU=n;return this;}').replace('public android.os.ParcelFileDescriptor establish(){return null;}', 'public android.os.ParcelFileDescriptor establish(){establishments++;return new android.os.ParcelFileDescriptor();}')
+for name in ('io/nekohasekai/libbox/RouterDNSMeasurement.java','io/nekohasekai/libbox/RouterHopMeasurement.java','com/eabusham/routervpn/AndroidMTUSession.java'):
+    SOURCES[name]=SOURCES[name].replace('public void close()throws Exception{}','public int closeCalls;public boolean pendingClose;public void close()throws Exception{closeCalls++;if(pendingClose)throw new IllegalStateException("retained measurement socket close failed");}')
 SOURCES['io/nekohasekai/libbox/RouterMTU.java'] = 'package io.nekohasekai.libbox;public class RouterMTU {}'
 SOURCES['io/nekohasekai/libbox/RouterMTUPlatform.java'] = 'package io.nekohasekai.libbox;public interface RouterMTUPlatform {}'
 SOURCES['com/eabusham/routervpn/AndroidTorProfile.java'] = '''package com.eabusham.routervpn;
 final class AndroidTorProfile {
  static final String OUTBOUND="routervpn-tor-exit",SESSION_FILE="routervpn-tor.json";static final int MAX_METADATA=262144;
  static boolean isTor(String value){return "tor".equals(value)||"tor-bridge".equals(value);}
+ static String execution(org.json.JSONObject metadata)throws Exception{return metadata.optString("execution","local");}
  static org.json.JSONObject session(String c,String m,String s,String mode)throws Exception{return new org.json.JSONObject(m);}
  static String strictText(byte[] b)throws Exception{return new String(b,java.nio.charset.StandardCharsets.UTF_8);}
 }'''
@@ -40,11 +43,12 @@ SOURCES['android/net/ConnectivityManager.java'] = SOURCES['android/net/Connectiv
 SOURCES['com/eabusham/routervpn/AndroidStartLayerRelay.java'] = SOURCES['com/eabusham/routervpn/AndroidStartLayerRelay.java'].replace('public void close(){}', 'public boolean pending;public int closes;public void close(){closes++;if(pending)throw new IllegalStateException("unfinished relay workers");}')
 SOURCES['io/nekohasekai/libbox/CommandServer.java'] = '''package io.nekohasekai.libbox;
 public class CommandServer {public int closes,uncheckedCloses;public CommandServer(PlatformInterface p,CommandServerHandler h){}public void start(){}public void startOrReloadService(String c,OverrideOptions o){}public void closeService(){uncheckedCloses++;}public void close(){closes++;}public void resetNetwork(){}}'''
+SOURCES['com/eabusham/routervpn/AndroidMAXProfilePreparation.java'] = SOURCES['com/eabusham/routervpn/AndroidMAXProfilePreparation.java'].replace('public Physical physical;public boolean current(boolean exact){return false;}public boolean cleanupCurrent(){return false;}public void cancel(){}', 'public Physical physical=new Physical();public boolean cancelled,sourceCurrent=true;public boolean current(boolean exact){return !cancelled&&sourceCurrent;}public boolean cleanupCurrent(){return cancelled&&sourceCurrent;}public void cancel(){cancelled=true;}')
 SOURCES['io/nekohasekai/libbox/RouterTorProofRequest.java'] = r'''package io.nekohasekai.libbox;
 import java.util.concurrent.*;import java.util.concurrent.atomic.*;import org.json.*;import java.time.*;
 public class RouterTorProofRequest {
  public final CommandServer server;public final String session,predecessor;
- public final AtomicInteger cancels=new AtomicInteger();public volatile boolean alive=true,ran,ignoreCancellation;
+ public final AtomicInteger cancels=new AtomicInteger(),closes=new AtomicInteger();public volatile boolean alive=true,ran,ignoreCancellation,pendingClose;
  public volatile String response;public volatile CountDownLatch entered,release;
  public RouterTorProofRequest(CommandServer s,String id,String p){server=s;session=id;predecessor=p;}
  public String run()throws Exception {if(entered!=null){entered.countDown();release.await();}ran=true;
@@ -52,6 +56,8 @@ public class RouterTorProofRequest {
   return response!=null?response:new JSONObject().put("session_id",session).put("is_tor",true).put("dns_proven",true).put("ip","8.8.4.4").put("checked_at",Instant.now().toString()).toString();}
  public void cancel(){cancels.incrementAndGet();if(!ignoreCancellation){alive=false;if(release!=null)release.countDown();if(Libbox.dnsRelease!=null)Libbox.dnsRelease.countDown();}}
  public boolean healthy(){return alive&&ran;}
+ public interface CloseBoundary{void run()throws Exception;}public CloseBoundary closeBoundary;
+ public void close()throws Exception{closes.incrementAndGet();alive=false;if(closeBoundary!=null)closeBoundary.run();if(pendingClose)throw new IllegalStateException("Tor lease DELETE is unacknowledged");}
 }'''
 LIBBOX = SOURCES['io/nekohasekai/libbox/Libbox.java']
 LIBBOX = LIBBOX.replace('public static void routerStrategyCloseService(CommandServer server)throws Exception{}', 'public static void routerStrategyCloseService(CommandServer server)throws Exception{checkedCloses++;if(failClose)throw new IllegalStateException("unconfirmed native drain");}')
@@ -80,7 +86,8 @@ public final class TorSessionHarness {
  static void waitFor(CountDownLatch latch)throws Exception{check(latch.await(2,TimeUnit.SECONDS),"boundary was not reached");}
  static final class Fixture implements AndroidTorSession.Owner {
   CommandServer server=new CommandServer(null,null);volatile CommandServer currentServer=server;volatile String network="wifi-1";volatile AndroidTorSession session;
-  Fixture(boolean predecessor)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned");if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));m.put("tor_profile",new JSONObject().put("id","exit-owned"));session=new AndroidTorSession(m,"exact-config",server,this);}
+  Fixture(boolean predecessor)throws Exception{this(predecessor,"local");}
+  Fixture(boolean predecessor,String execution)throws Exception{JSONObject m=new JSONObject().put("session_id","session-owned").put("external_id","exit-owned").put("execution",execution);if(predecessor)m.put("predecessor_profile",new JSONObject().put("id","private-entry").put("api_token","captured-private-token"));m.put("tor_profile",new JSONObject().put("id","exit-owned"));session=new AndroidTorSession(m,"exact-config",server,this);}
   public boolean current(AndroidTorSession s,CommandServer c){return s==session&&c==currentServer;}
   public String network(){return network;}
   RouterTorProofRequest blocked(boolean ignore){RouterTorProofRequest r=new RouterTorProofRequest(server,"session-owned","");r.entered=new CountDownLatch(1);r.release=new CountDownLatch(1);r.ignoreCancellation=ignore;Libbox.next=r;return r;}
@@ -90,10 +97,11 @@ public final class TorSessionHarness {
   void finish(boolean failed)throws Exception{thread.join(2000);check(!thread.isAlive(),"proof worker escaped its join");check((error.get()!=null)==failed,"proof adopted stale completion");}
  }
  static void successes()throws Exception{
-  for(boolean entry:new boolean[]{false,true}){Libbox.reset();Fixture f=new Fixture(entry);check(!f.session.healthy(),"unproven session healthy");rejected(()->f.session.result("session-owned","exit-owned"));f.session.prove();
+  for(String execution:new String[]{"local","server"})for(boolean entry:new boolean[]{false,true}){if(!entry&&execution.equals("server"))continue;Libbox.reset();Fixture f=new Fixture(entry,execution);check(!f.session.healthy(),"unproven session healthy");rejected(()->f.session.result("session-owned","exit-owned"));rejected(()->f.session.execution("session-owned","exit-owned"));f.session.prove();
    check(f.session.healthy()&&Libbox.dnsCalls==1,"circuit and uncached DNS not proved");check(!Libbox.created.predecessor.isEmpty()==entry,"entry proof factory dropped captured profile");
    if(entry)check(Libbox.created.predecessor.contains("captured-private-token"),"entry authentication capture lost");
    check(new JSONObject(f.session.result("session-owned","exit-owned")).getString("ip").equals("8.8.4.4"),"Tor exit mismatch");
+   check(f.session.execution("session-owned","exit-owned").equals(execution),"Tor returned Local for a captured Server receipt");rejected(()->f.session.execution("other","exit-owned"));rejected(()->f.session.execution("session-owned","other"));
    rejected(()->f.session.result("other","exit-owned"));rejected(()->f.session.result("session-owned","other"));rejected(f.session::prove);
    Libbox.created.alive=false;check(!f.session.healthy(),"dead native owner stayed healthy");check(Libbox.dnsCalls==1,"health started another proof");}
  }
@@ -121,7 +129,7 @@ public final class TorSessionHarness {
   Libbox.reset();Fixture f=new Fixture(false);RouterTorProofRequest r=f.blocked(true);Job job=new Job(f);waitFor(r.entered);f.network="cellular-2";r.release.countDown();job.finish(true);check(Libbox.dnsCalls==0,"changed network reached DNS");
  }
  static Field field(String name)throws Exception{Field f=LayeredVpnService.class.getDeclaredField(name);f.setAccessible(true);return f;}
- static void close(LayeredVpnService service)throws Exception{Method m=LayeredVpnService.class.getDeclaredMethod("closeCoreLocked");m.setAccessible(true);try{m.invoke(service);}catch(InvocationTargetException e){throw (Exception)e.getCause();}}
+ static void close(LayeredVpnService service)throws Exception{Method m=LayeredVpnService.class.getDeclaredMethod("closeCoreLocked");m.setAccessible(true);try{m.invoke(service);}catch(InvocationTargetException e){if(e.getCause() instanceof Error)throw (Error)e.getCause();throw (Exception)e.getCause();}}
  static void retainedClose()throws Exception{
   Libbox.reset();LayeredVpnService service=new LayeredVpnService();CommandServer server=new CommandServer(service,service);android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();
   Path folder=Files.createTempDirectory("tor-owned-java-");Files.writeString(folder.resolve("keep"),"owned metadata");field("torOwner").set(service,true);field("commandServer").set(service,server);field("tunDescriptor").set(service,tun);field("activeSession").set(service,folder.toFile());field("activeMode").set(service,"standard-direct-tor");
@@ -129,6 +137,66 @@ public final class TorSessionHarness {
   check(!tun.closed&&field("tunDescriptor").get(service)==tun&&Files.exists(folder.resolve("keep")),"unconfirmed native drain released VPN or session");
   check(server.closes==0&&server.uncheckedCloses==0,"unchecked close bypassed quarantine");check(field("state").get(service).equals("STOPPING"),"unconfirmed drain reported terminal state");
   Libbox.failClose=false;close(service);check(field("commandServer").get(service)==null&&!field("torOwner").getBoolean(service),"proved close did not release owner");check(tun.closed&&server.closes==1&&server.uncheckedCloses==0&&Libbox.checkedCloses==2,"retained close did not retry exact Box");service.onDestroy();check(!Files.exists(folder),"proved shutdown retained temporary session");
+ }
+ static void retainedServerLeaseClose()throws Exception{
+  Libbox.reset();Fixture f=new Fixture(true,"server");f.session.prove();RouterTorProofRequest proof=Libbox.created;
+  LayeredVpnService service=new LayeredVpnService();android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();
+  field("torOwner").setBoolean(service,true);field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("tunDescriptor").set(service,tun);field("state").set(service,"UP");
+  proof.pendingClose=true;rejected(()->close(service));
+  check(proof.closes.get()==1&&!f.session.healthy(),"Tor Server cleanup did not cancel data and wait for its lease");
+  check(Libbox.checkedCloses==0&&f.server.closes==0&&!tun.closed,"Tor entry or TUN closed before DELETE acknowledgement");
+  check(field("commandServer").get(service)==f.server&&field("torSession").get(service)==f.session&&field("state").get(service).equals("STOPPING"),"pending Tor lease lost its exact retained owner");
+  rejected(()->f.session.execution("session-owned","exit-owned"));proof.pendingClose=false;close(service);
+  check(proof.closes.get()==2&&Libbox.checkedCloses==1&&f.server.closes==1&&tun.closed,"Tor lease retry did not precede its exact Box drain");
+  check(field("torSession").get(service)==null&&field("commandServer").get(service)==null,"acknowledged Tor cleanup retained old ownership");service.onDestroy();
+ }
+ static void retainedMeasurementsBeforeLease()throws Exception{
+  for(String kind:new String[]{"hop","dns","mtu"}){
+   Libbox.reset();Fixture f=new Fixture(true,"server");f.session.prove();RouterTorProofRequest proof=Libbox.created;LayeredVpnService service=new LayeredVpnService();android.os.ParcelFileDescriptor tun=new android.os.ParcelFileDescriptor();
+   field("torOwner").setBoolean(service,true);field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("tunDescriptor").set(service,tun);
+   RouterHopMeasurement hop=new RouterHopMeasurement();RouterDNSMeasurement dns=new RouterDNSMeasurement();AndroidMTUSession mtu=new AndroidMTUSession(service,owner->{});
+   field("hopMeasurement").set(service,hop);field("dnsMeasurement").set(service,dns);field("mtuSession").set(service,mtu);
+   hop.pendingClose=kind.equals("hop");dns.pendingClose=kind.equals("dns");mtu.pendingClose=kind.equals("mtu");
+   proof.closeBoundary=()->{check(hop.closeCalls>0&&dns.closeCalls>0&&mtu.closeCalls>0&&!hop.pendingClose&&!dns.pendingClose&&!mtu.pendingClose,"DELETE preceded retained measurement socket drain");};
+   rejected(()->close(service));check(proof.closes.get()==0&&Libbox.checkedCloses==0&&!tun.closed&&!f.session.healthy(),"failed measurement drain released lease/entry or retained data");
+   check(field("commandServer").get(service)==f.server&&field(kind.equals("hop")?"hopMeasurement":kind.equals("dns")?"dnsMeasurement":"mtuSession").get(service)==(kind.equals("hop")?hop:kind.equals("dns")?dns:mtu),"failed measurement close forgot its retryable owner");
+   hop.pendingClose=false;dns.pendingClose=false;mtu.pendingClose=false;close(service);
+   check((kind.equals("hop")?hop.closeCalls:kind.equals("dns")?dns.closeCalls:mtu.closeCalls)==2,"retained measurement did not receive its exact close retry");
+   check(proof.closes.get()==1&&Libbox.checkedCloses==1&&tun.closed,"measurement retry did not permit ordered lease/native drain");service.onDestroy();
+  }
+ }
+ static void cleanupPhysicalAuthority()throws Exception{
+  for(String execution:new String[]{"local","server"})for(boolean useMAX:new boolean[]{false,true})for(boolean explicit:new boolean[]{false,true})for(String fault:new String[]{"live","core","session","max","network","network-id","physical","deadline","max-source"}){
+   if(fault.equals("max-source")&&!useMAX)continue;
+   Libbox.reset();Fixture f=new Fixture(true,execution);f.session.prove();RouterTorProofRequest proof=Libbox.created;
+   LayeredVpnService service=new LayeredVpnService();android.net.Network network=new android.net.Network();android.net.ConnectivityManager.networks=new android.net.Network[]{network};
+   field("connectivity").set(service,new android.net.ConnectivityManager());field("torPhysicalNetwork").set(service,network);field("torOwner").setBoolean(service,true);field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("explicitStop").setBoolean(service,explicit);
+   Method identity=LayeredVpnService.class.getDeclaredMethod("executionNetworkIdentity");identity.setAccessible(true);String networkIdentity=(String)identity.invoke(service);field("executionNetwork").set(service,networkIdentity);
+   AndroidMAXProfilePreparation.Adopted max=useMAX?new AndroidMAXProfilePreparation.Adopted():null;if(max!=null){max.physical.network=network;field("maxSession").set(service,max);}
+   Method cancel=LayeredVpnService.class.getDeclaredMethod("cancelMultihopComparison");cancel.setAccessible(true);cancel.invoke(service);check(!f.session.healthy(),"cleanup revived cancelled Tor data");
+   rejected(()->service.autoDetectInterfaceControl(130));
+   proof.closeBoundary=()->{
+    Object cleanup=field("torCleanup").get(service);
+    if(fault.equals("core"))field("commandServer").set(service,new CommandServer(null,null));
+    if(fault.equals("session"))field("torSession").set(service,null);
+    if(fault.equals("max"))field("maxSession").set(service,new AndroidMAXProfilePreparation.Adopted());
+    if(fault.equals("network"))field("torPhysicalNetwork").set(service,new android.net.Network());
+    if(fault.equals("network-id"))field("executionNetwork").set(service,"replacement-network");
+    if(fault.equals("physical"))android.net.ConnectivityManager.networks=new android.net.Network[]{new android.net.Network()};
+    if(fault.equals("deadline")&&cleanup!=null){Field expiry=cleanup.getClass().getDeclaredField("deadline");expiry.setAccessible(true);expiry.setLong(cleanup,System.nanoTime()-1);}
+    if(fault.equals("max-source"))max.sourceCurrent=false;
+    boolean admitted=execution.equals("server")&&fault.equals("live");
+    try{
+     // Libbox may call back on a Go worker rather than the closing Java thread.
+     AtomicReference<Throwable> error=new AtomicReference<>();Thread nativeCallback=new Thread(()->{try{service.autoDetectInterfaceControl(131);service.protectRelaySocket(new java.net.Socket());service.protectRelaySocket((java.net.DatagramSocket)null);}catch(Throwable failed){error.set(failed);}},"tor-cleanup-native-callback");nativeCallback.start();nativeCallback.join(2000);
+     check(!nativeCallback.isAlive(),"cleanup callback deadlocked under service close");check((error.get()==null)==admitted,"cleanup borrowed changed/unbounded owner: "+execution+"/"+useMAX+"/"+fault);
+     check(network.fdBinds==(admitted?1:0)&&network.tcpBinds==(admitted?1:0)&&network.udpBinds==(admitted?1:0),"cleanup bypassed captured physical socket binding");check(!f.session.healthy(),"cleanup exposed a healthy data path");
+    }finally{field("commandServer").set(service,f.server);field("torSession").set(service,f.session);field("maxSession").set(service,max);field("torPhysicalNetwork").set(service,network);field("executionNetwork").set(service,networkIdentity);android.net.ConnectivityManager.networks=new android.net.Network[]{network};if(max!=null)max.sourceCurrent=true;}
+   };
+   proof.pendingClose=true;rejected(()->close(service));check(field("torCleanup").get(service)==null,"pending DELETE leaked socket authority");rejected(()->service.autoDetectInterfaceControl(132));
+   check(field("commandServer").get(service)==f.server&&field("torSession").get(service)==f.session,"cleanup failure discarded retained entry");
+   proof.closeBoundary=null;proof.pendingClose=false;close(service);check(field("torCleanup").get(service)==null&&field("commandServer").get(service)==null,"acknowledged cleanup leaked its admission");service.onDestroy();
+  }
  }
  static void physicalNetwork()throws Exception{
   Libbox.reset();LayeredVpnService service=new LayeredVpnService();android.net.Network captured=new android.net.Network();android.net.ConnectivityManager.networks=new android.net.Network[]{captured};field("connectivity").set(service,new android.net.ConnectivityManager());field("torPhysicalNetwork").set(service,captured);field("torOwner").setBoolean(service,true);
@@ -186,7 +254,7 @@ public final class TorSessionHarness {
    if(changed.equals("live"))check(mtu.activatedTor==f.session,"MTU borrowed another circuit proof");service.onDestroy();AndroidHomeStateStore.emergency=false;
   }
  }
- public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();physicalNetwork();retainedRelayClose();failedCapacityTeardown();configuredOSInterface();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
+ public static void main(String[] args)throws Exception{try{successes();responses();cancellation();retainedClose();retainedServerLeaseClose();retainedMeasurementsBeforeLease();cleanupPhysicalAuthority();physicalNetwork();retainedRelayClose();failedCapacityTeardown();configuredOSInterface();automaticMTU();System.out.println("Android captured Tor proof/service lifecycle: PASS "+checks+" checks (native and OS handles doubled)");}catch(Throwable failure){failure.printStackTrace();System.exit(1);}}
 }'''
 
 
@@ -207,7 +275,13 @@ def main():
         controls=[('AndroidTorSession.java','''            if (cancelled || !current() || !captured.healthy()) throw unavailable();
             result = response;''','''            result = response;''','DNS completion owner check'),
                   ('LayeredVpnService.java','Libbox.routerStrategyCloseService(commandServer);','commandServer.closeService();','checked native close'),
+                  ('LayeredVpnService.java','capturedTor.close();','capturedTor.cancel();','Tor Server lease acknowledgement before native close'),
                   ('LayeredVpnService.java','captured.bindSocket(borrowed.getFileDescriptor());','','captured physical network binding'),
+                  ('LayeredVpnService.java','finally{torCleanup=null;}','finally{}','bounded cleanup admission cleared on failure'),
+                  ('LayeredVpnService.java','closeTorMeasurementsLocked();','','measurement drain before Tor lease DELETE'),
+                  ('LayeredVpnService.java','System.nanoTime()<captured.deadline','true','cleanup deadline'),
+                  ('LayeredVpnService.java','!captured.cleanupCurrent()','false','cancelled MAX cleanup source'),
+                  ('LayeredVpnService.java','(stopped&&!torCleanupCurrent())','stopped','exact cancelled Server cleanup authority'),
                   ('LayeredVpnService.java','||!service.ownsTorMTUHome()','','Tor MTU Home generation ownership'),
                   ('LayeredVpnService.java','AndroidHomeStateStore.failedTorExternal(this,torHome,error.isEmpty()?"The captured Tor VPN is stopping; its path proof is no longer valid.":error,false);','','Tor failed-capacity pre-drain invalidation'),
                   ('LayeredVpnService.java','AndroidHomeStateStore.failedTorExternal(this,torHome,"The captured Tor VPN service stopped; its path proof is no longer valid.",false);','','Tor destroy pre-drain invalidation'),
@@ -217,7 +291,7 @@ def main():
             path.write_text(original.replace(old,new));subprocess.run(compile_args,check=True,timeout=45)
             result=subprocess.run(run_args,capture_output=True,text=True,timeout=20);assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' control escaped'
             path.write_text(original)
-        print('Android Tor lifecycle negative controls: PASS (7 broken proof, close, network, MTU, OS capacity and failed-capacity guards rejected)')
+        print(f'Android Tor lifecycle negative controls: PASS ({len(controls)} broken proof, lease cleanup, close, network, MTU, OS capacity and failed-capacity guards rejected)')
 
 
 if __name__=='__main__':main()

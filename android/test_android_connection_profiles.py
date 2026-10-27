@@ -225,6 +225,17 @@ public final class ConnectionProfilesHarness {
    }
   }
  }
+ static void torExecutionProfiles(Path root)throws Exception{
+  for(String protocol:List.of("tor","tor-bridge"))for(String execution:List.of("local","server")){
+   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-b");exit.protocol=protocol;if(protocol.equals("tor")){exit.torBridges.clear();exit.torTransport="";}f.exits.save(exit);
+   f.store.selectExternalPath(exit,f.first,"hysteria2",execution);var saved=f.store.add("Captured Tor "+execution);String source=AndroidStandardExitStore.snapshot(exit);
+   for(String secret:List.of("fixture-api-","fixture-socks-","fixture-private-","api_token","tor_bridge"))check(!text(f.rows).contains(secret),"Tor connection profile duplicated private source material");
+   f.changeNode(f.first);f.changeExternal(exit.id);f.otherSelection();f.store.load(saved.id);var selected=f.store.currentExternalPath(exit.id);
+   check(selected.execution.equals(execution)&&selected.entry.id.equals(f.first.id)&&selected.entryMode.equals("hysteria2")&&source.equals(AndroidStandardExitStore.snapshot(selected.exit)),"complete Tor profile lost execution, DNS or source");
+   check(profile(f.first).getString("api_token").equals("fixture-api-first")&&profile(f.first).getString("start_layer").equals("aes-256-gcm+xor-whitening"),"Tor restoration mixed private entry credentials or Start Layer");
+   ProductConnectSurface surface=new ProductConnectSurface(f);surface.pressConnect();check(surface.connection.starts==1&&surface.connection.execution.equals(execution)&&surface.connection.entry.id.equals(f.first.id),"map Connect replaced the saved Tor execution");
+  }
+ }
  static void mappedOpenVPNProfiles(Path root)throws Exception{
   for(String layer:List.of("off","aes-256-gcm","aes-256-gcm+xor-whitening")){
   String variable=layer.equals("off")?"ROUTERVPN_OPENVPN_MULTIHOST_CLIENT_FIXTURE":layer.equals("aes-256-gcm")?"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_AES_FIXTURE":"ROUTERVPN_OPENVPN_MULTIHOST_LAYERED_XOR_FIXTURE";JSONObject source=new JSONObject(Files.readString(Path.of(System.getenv(variable)))).getJSONObject("external"),inline=source.getJSONObject("openvpn");
@@ -368,7 +379,7 @@ public final class ConnectionProfilesHarness {
   Fixture f=new Fixture(root);AndroidStandardExitStore.Entry exit=f.exits.get("external-a");exit.policy.put("kill_switch","false");rejected(()->f.exits.save(exit),"string kill switch");
   exit.policy.put("kill_switch",false).put("kill_switch_policy","unknown");rejected(()->f.exits.save(exit),"unknown kill policy");
  }
- public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
+ public static void main(String[] args)throws Exception{Path root=Path.of(args[0]);if(args.length>1&&args[1].equals("concurrency")){concurrentExternalEditors(root);return;}quickProtection(root);if(args.length>1){System.out.println("Android captured quick protection: "+checks+" checks passed");return;}externalRoundtrip(root,false);externalRoundtrip(root,true);externalExecution(root);torExecutionProfiles(root);mappedOpenVPNProfiles(root);externalDefaultHome(root);externalStartup(root);torJumboProfiles(root);routerRoundtrip(root);routerLegacyPolicy(root);for(String fault:List.of("node","external","preferences","rollback"))rollback(root,fault);invalidBeforeMutation(root);evidenceAndLegacy(root);activeSelectionEdges(root);busyAndSelectionFailure(root);concurrentExternalEditors(root);strictRawImport(root);System.out.println("Android actual profile/node/exit stores: "+checks+" checks across "+cases+" isolated cases passed");}
 }
 '''
 

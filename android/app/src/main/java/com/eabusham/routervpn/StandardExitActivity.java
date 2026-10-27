@@ -571,6 +571,10 @@ public final class StandardExitActivity extends Activity {
     }
 
     private void chooseExecution(AndroidNodeStore.Node entry,AndroidStandardExitStore.Entry exit,String mode){
+        if(AndroidTorProfile.isTor(exit.protocol)){
+            new AlertDialog.Builder(this).setCustomTitle(choiceHeader("Tor execution","Local runs Tor on this device. Server uses an isolated session on the selected Router VPN entry, which must have the matching private Tor source and DNS policy."))
+                    .setItems(new String[]{"Local","Server"},(d,w)->requestConnect(entry,exit,mode,new String[]{"local","server"}[w])).setNegativeButton("Cancel",null).show();return;
+        }
         if(!AndroidStandardExitStore.serverExecutionProtocol(exit.protocol)){requestConnect(entry,exit,mode);return;}
         new AlertDialog.Builder(this).setCustomTitle(choiceHeader("External path execution","Local runs the exit on this device. Server uses an isolated paired session on the entry. Compare both measures both paths and keeps the lower valid average response time."))
                 .setItems(new String[]{"Local","Server","Compare both"},(d,w)->requestConnect(entry,exit,mode,new String[]{"local","server","auto"}[w])).setNegativeButton("Cancel",null).show();

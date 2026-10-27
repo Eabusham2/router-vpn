@@ -63,7 +63,7 @@ final class AndroidStandardExitRuntime {
  String execution="local",selected="local",restoredResponseMap="";
  String capturedRequestedExecution(AndroidHomeStateStore.Snapshot s){return execution;}String capturedExternalExecution(AndroidHomeStateStore.Snapshot s){return selected;}
  void connect(File f,AndroidStandardExitStore.Entry e,String mode,String execution,Callback cb){this.execution=execution;selected=execution.equals("auto")?"server":execution;connect(f,e,mode,cb);}
- void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;this.execution=execution;selected=winner;restoredResponseMap=e.responseMap;connect(f,e,mode,cb);}
+ void restoreCaptured(File f,AndroidStandardExitStore.Entry e,String mode,String execution,String winner,Callback cb){RuntimeBoundary.restores++;RuntimeBoundary.restoredExecution=winner;this.execution=execution;selected=winner;restoredResponseMap=e.responseMap;connect(f,e,mode,new Callback(){public void owned(String id){cb.owned(id);}public void progress(String message){cb.progress(message);}public void finished(boolean ok,String message){if(ok&&RuntimeBoundary.afterRestoredProof!=null)RuntimeBoundary.afterRestoredProof.run();cb.finished(ok,message);}});}
  interface Callback{void progress(String s);void finished(boolean ok,String s);default void owned(String id){}}
  boolean isActiveOrTransitioning(){return AndroidHomeStateStore.current.connected&&AndroidHomeStateStore.current.logicalMode.equals("external");}
  String capturedTorExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}String capturedExternalExit(AndroidHomeStateStore.Snapshot s){return "8.8.4.4";}
@@ -139,6 +139,18 @@ public final class SpeedLabRestoreTest {
    f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"external winner restoration failed");f.originalRestored();
    check(owner.execution.equals("auto")&&owner.selected.equals(selected)&&RuntimeBoundary.restoredExecution.equals(selected)&&owner.restoredResponseMap.equals(f.external.responseMap),"external Compare was rerun instead of restoring its proved winner");
   }
+ }
+ static void exactTorExecution(Path root)throws Exception{
+  for(String kind:new String[]{"external-tor","external-tor-bridge"})for(String selected:new String[]{"local","server"})for(String topology:new String[]{"router","multihop","external","system-direct"}){
+   Fixture f=new Fixture(root,kind,topology);AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution=selected;owner.selected=selected;
+   if(topology.equals("external"))f.request.execution=selected;
+   f.start();f.quiesce();f.measured();f.complete();check(f.result.error==null,"captured Tor execution restoration failed");f.originalRestored();
+   check(owner.execution.equals(selected)&&owner.selected.equals(selected),"Tor Server was replaced by Local during restore");
+   if(selected.equals("server"))check(RuntimeBoundary.restoredExecution.equals("server"),"Tor Server did not use captured restoration");
+  }
+  Fixture replaced=new Fixture(root,"external-tor-bridge","router");AndroidStandardExitRuntime owner=AndroidRuntimeRegistry.instance.standardExit;owner.execution="server";owner.selected="server";
+  RuntimeBoundary.afterRestoredProof=()->owner.selected="local";replaced.start();replaced.quiesce();replaced.measured();replaced.complete();
+  check(replaced.result.error!=null&&replaced.result.result==null,"Tor retained a score after restoration switched execution");
  }
  static void cancellation(Path root)throws Exception{
   for(String stage:new String[]{"quiesce","suspend","permission","connect","http","hop","cleanup","restore"}){
@@ -238,7 +250,7 @@ public final class SpeedLabRestoreTest {
   }
   Fixture invalid=new Fixture(root,"router","external");invalid.request.execution="auto";invalid.start();check(invalid.result.error!=null&&LayeredVpnService.quiesce==null&&RuntimeBoundary.stops==0&&AndroidHomeStateStore.current.sessionId.equals(invalid.originalSession),"Unsupported Tor comparison stopped the original path");
  }
- public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,24 exact-winner restores,8 cancellation phases,changed profile and newer-user ownership");}
+ public static void main(String[]args)throws Exception{Path root=Path.of(args[0]);matrix(root);externalUI(root);exactMultihopWinner(root);exactExternalWinner(root);exactTorExecution(root);cancellation(root);stale(root);multihopPins(root);permissionCapture(root);uiCancellation(root);System.out.println("Shipping Android Speed Lab restoration: "+checks+" checks;24 paths,24 exact-winner restores,16 Tor execution restores,8 cancellation phases,changed profile and newer-user ownership");}
 }
 '''
 
@@ -302,6 +314,7 @@ def main():
             ('AndroidUnifiedConnectionController.java','multihop.restoreCaptured(point.entry,point.exit,point.multihopCapture,idle,','multihop.connect(point.entry,point.exit,point.home.runtimeMode,point.execution,point.home.activeEntryMode,','captured original winner'),
             ('AndroidUnifiedConnectionController.java','multihop.captureCurrent(point.multihopCapture)','true','original Server pin owner'),
             ('AndroidUnifiedConnectionController.java','multihop.restoredMatches(point.multihopCapture,point.entry,point.exit,now)','true','restored Server pin owner'),
+            ('AndroidUnifiedConnectionController.java','execution=runtime.standardExit.capturedRequestedExecution(home);selectedExecution=runtime.standardExit.capturedExternalExecution(home);','execution="local";selectedExecution="local";','captured Tor Server execution'),
         )
         for filename,old,new,label in cases:
             path=app/filename;source=path.read_text();assert source.count(old)==1,label
@@ -309,6 +322,6 @@ def main():
             result=subprocess.run(run,capture_output=True,text=True,timeout=35)
             assert result.returncode!=0 and 'AssertionError' in result.stderr,label+' negative control escaped'
             path.write_text(source)
-        print('Android connected Speed Lab negative controls: 11 rejected')
+        print(f'Android connected Speed Lab negative controls: {len(cases)} rejected')
 
 if __name__=='__main__':main()

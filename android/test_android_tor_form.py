@@ -334,18 +334,20 @@ public final class TorFormHarness {
  static void dialogAndPermission()throws Exception{
   Context context=new Context(root.toFile());AlertDialog negative=new AlertDialog.Builder(context).setMessage("Explainer").setItems(new String[]{"Hidden"},(d,w)->{throw new AssertionError("hidden item executed");}).show();
   check(!negative.itemsVisible(),"dialog double ignores Android message/list exclusivity");boolean hidden=false;try{negative.clickItem(0);}catch(IllegalStateException expected){hidden=true;}check(hidden,"hidden-list negative control cannot reject an item");negative.dismiss();
-  for(String mode:ALL){
+  for(String execution:new String[]{"local","server"})for(String mode:ALL){
    Path directory=Files.createTempDirectory(root,"permission-");StandardExitActivity activity=activity(directory,null);AndroidNodeStore.Node node=node(directory);AndroidStandardExitStore.Entry selected=tor("custom","doh");store(activity).save(selected);
    invoke(activity,"showExitActions",selected);AlertDialog actions=AlertDialog.last;check(actions.itemsVisible()&&actions.items.length==5&&actions.items[3].equals("Compare DNS on this connected path"),"saved Tor actions are hidden");
    check(!displayed(actions.customTitle).contains("cert=Y2VydA"),"actions header exposed bridge credentials");actions.clickItem(1);
    AlertDialog entries=AlertDialog.last;check(entries.itemsVisible()&&entries.items.length==1,"entry choices are hidden");entries.clickItem(0);
    AlertDialog modes=AlertDialog.last;check(modes.itemsVisible()&&modes.items.length==19,"exact native mode choices missing or duplicated");int index=-1;
    for(int i=0;i<modes.items.length;i++)if(modes.items[i].endsWith("["+mode+"]"))index=i;check(index>=0,"entry mode not selectable: "+mode);modes.clickItem(index);
+   AlertDialog choices=AlertDialog.last;check(choices.itemsVisible()&&Arrays.equals(choices.items,new String[]{"Local","Server"}),"Tor execution choices are hidden or use unproved Compare");choices.clickItem(execution.equals("server")?1:0);
    check(activity.permission!=null&&activity.permissionRequest==2101&&mode.equals(get(activity,"pendingEntryMode")),"permission handoff changed selected entry mode");
    Bundle state=new Bundle();activity.onSaveInstanceState(state);check(state.getString("pending_entry_digest","").matches("[0-9a-f]{64}")&&state.getString("pending_exit_digest","").matches("[0-9a-f]{64}"),"permission state lacks exact source digests");
    check(!state.values.toString().contains("cert=Y2VydA")&&!state.values.toString().contains("/selected-query"),"saved Activity state contains private bridge/DNS configuration");
    StandardExitActivity restored=activity(directory,state);restored.onActivityResult(2101,Activity.RESULT_OK,null);AndroidStandardExitRuntime runtime=AndroidRuntimeRegistry.get(restored).standardExit;
-   check(runtime.starts==1&&runtime.mode.equals(mode)&&runtime.entry.equals(node.file)&&runtime.exit.id.equals(selected.id),"restored permission relabeled the selected path");
+   check(runtime.starts==1&&runtime.mode.equals(mode)&&runtime.entry.equals(node.file)&&runtime.exit.id.equals(selected.id)&&runtime.execution.equals(execution),"restored permission relabeled the selected path or Tor execution");
+   check(state.getString("pending_execution","").equals(execution)&&AndroidConnectionProfileStore.executions.get(directory.toString()).equals(execution),"Tor execution was omitted from permission or saved path");
   }
   for(String mutation:new String[]{"entry","exit","denied","busy"}){
    Path directory=Files.createTempDirectory(root,"changed-");StandardExitActivity activity=activity(directory,null);AndroidNodeStore.Node node=node(directory);AndroidStandardExitStore.Entry selected=tor("obfs4","doh");store(activity).save(selected);
@@ -363,7 +365,7 @@ public final class TorFormHarness {
    directory=Files.createTempDirectory(root,"select-only-");activity=activity(directory,null);AndroidNodeStore.Node entry=node(directory);selected=tor("obfs4","doh");store(activity).save(selected);
    activity.intent.putExtra(StandardExitActivity.EXTRA_EXIT_ID,selected.id).putExtra(StandardExitActivity.EXTRA_SELECT_PATH,true);activity.onResume();
    AlertDialog paths=AlertDialog.last;check(paths.itemsVisible()&&paths.items.length==2,"external path choices are reachable without connecting");paths.clickItem(direct?0:1);
-   if(!direct){AlertDialog.last.clickItem(0);AlertDialog.last.clickItem(0);}
+   if(!direct){AlertDialog.last.clickItem(0);AlertDialog.last.clickItem(0);AlertDialog.last.clickItem(0);}
    check(activity.finished&&activity.permission==null&&get(activity,"pendingExit")==null&&AndroidRuntimeRegistry.get(activity).standardExit.starts==0,"selection-only path requested permission or started VPN");
    check(AndroidConnectionProfileStore.selected.get(directory.toString()).equals(selected.id+"|"+(direct?"":entry.id)+"|wg"),"selection-only lost exact entry/exit reference");
   }
@@ -747,6 +749,7 @@ def main():
  public static String routerCompileTorProfile(String profile,String session,String predecessor)throws Exception{return call("tor-profile",new JSONObject().put("Profile",profile).put("Session",session).toString(),predecessor);}
  public static void routerValidateTorProfile(String profile)throws Exception{call("tor-validate",profile,"");}
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
+ public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);}
  public static String routerCompileExternalPolicy(String config,String capture)throws Exception{return call("external-policy",config,capture);}
  public static void routerValidatePrivateNodeJSON(String raw)throws Exception{call("private-node-json",raw,"");}
  public static void routerValidateExternalOpenVPNResponseProbes(String profile,String probes)throws Exception{call("external-openvpn-probes",profile,probes);}

@@ -73,7 +73,7 @@ public final class PQSelectionHarness {
   check(Arrays.equals(before,Files.readAllBytes(input.toPath())),"failed MAX launch rewrote source");
  }
  static boolean same(Object a,Object b)throws Exception {
-  if(a instanceof JSONObject && b instanceof JSONObject){JSONObject x=(JSONObject)a,y=(JSONObject)b;if(x.length()!=y.length())return false;for(var i=x.keys();i.hasNext();){String k=i.next();if(!y.has(k)||!same(x.get(k),y.get(k)))return false;}return true;}
+  if(a instanceof JSONObject && b instanceof JSONObject){JSONObject x=(JSONObject)a,y=(JSONObject)b;if(x.length()!=y.length())return false;for(var i=x.keys();i.hasNext();){String k=(String)i.next();if(!y.has(k)||!same(x.get(k),y.get(k)))return false;}return true;}
   if(a instanceof JSONArray && b instanceof JSONArray){JSONArray x=(JSONArray)a,y=(JSONArray)b;if(x.length()!=y.length())return false;for(int i=0;i<x.length();i++)if(!same(x.get(i),y.get(i)))return false;return true;}
   if(a instanceof Number&&b instanceof Number)return Double.compare(((Number)a).doubleValue(),((Number)b).doubleValue())==0;
   return Objects.equals(a,b);

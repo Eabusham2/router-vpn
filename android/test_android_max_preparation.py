@@ -70,7 +70,11 @@ P.HARNESS = P.HARNESS[:P.HARNESS.index(' public static void main(')] + r'''
    o.stage();o.owner.beforeSubmit(o.session,mode);var adopted=o.claim();
    check(adopted.current(true)&&!AndroidMAXProfilePreparation.busy()&&state.closes.get()==1,"handoff escaped native/resolver close barrier");
    check(o.folder.isDirectory(),"successful handoff deleted staged graph");o.unchanged();
-   AndroidHomeStateStore.value.sessionId="changed-session";check(!adopted.current(true),"adopted MAX lost Home session identity");adopted.cancel();graphs++;
+   check(!adopted.cleanupCurrent(),"live MAX acquired cleanup authority before cancellation");
+   AndroidHomeStateStore.value.sessionId="changed-session";check(!adopted.current(true),"adopted MAX lost Home session identity");adopted.cancel();
+   check(adopted.cleanupCurrent()&&!adopted.current(true),"cancelled MAX lost exact cleanup source or revived data");
+   long timestamp=o.source.lastModified();byte[] changed=o.original.clone();changed[changed.length-2]^=1;Files.write(o.source.toPath(),changed);check(o.source.setLastModified(timestamp),"cleanup source fixture did not preserve metadata");check(!adopted.cleanupCurrent(),"MAX cleanup borrowed a same-metadata replacement source");Files.write(o.source.toPath(),o.original);check(o.source.setLastModified(timestamp),"cleanup source restore failed");
+   o.context.connectivity.active.links.privateName="changed-cleanup-network";check(!adopted.cleanupCurrent(),"MAX cleanup borrowed a changed physical path");graphs++;
   }
   check(graphs==24,"MAX hostname IPv4/IPv6/Start Layer matrix incomplete");
  }

@@ -302,6 +302,7 @@ for executable_contract in (
     "test_android_max_host_paths.py",
     "test_android_max_service.py",
     "test_android_tor_profile.py",
+    "test_android_tor_server_profile.py",
     "test_android_tor_form.py",
     "test_android_tor_session.py",
     "test_android_external_policy.py",

@@ -23,8 +23,9 @@ native transport validation precedes admission. Their saved paths also reopen
 in the Windows, AppKit and GTK dialogs without replacing their raw protocol
 with a Router-only mode (`02ddd025`). The existing source-token, selected-DNS,
 MTU and lifecycle checks remain; ordinary proof cannot authorize private
-Router policy. Strict protection on these ordinary predecessors, Tor Compare,
-mobile Server adoption and exit-side Tor padding remain separate unfinished work.
+Router policy. Strict protection now retains independently checked physical
+egress for those ordinary entries (`c88a2f0c`). Tor Compare, Apple Server host
+adoption and enabled Tor padding remain separate unfinished work.
 
 Desktop private Router entry → Tor bridge Server now reaches the real isolated
 server worker through authenticated source discovery and an owned private lease.
@@ -37,6 +38,19 @@ remain separate from server readiness. The frozen host source passed 796
 race-instrumented cases/subtests; actual native and Windows/POSIX wrapper tests
 also passed. Current packages, ARM64 image execution, private deployment and
 physical acceptance remain unproved by these local tests.
+
+Mobile Tor Server now uses an immutable private Router entry and an authenticated
+lease inside the existing native Box (`a24845ef`). Actual native tests cover
+lease, selected DNS, public Tor proof and retryable cleanup through an SS2022
+entry. Android now carries Local/Server through its real form, native preparation,
+connection receipt, complete profiles, Startup Last and Speed Lab. Cancelled
+Server cleanup retains the exact entry/Box/TUN until DELETE acknowledges;
+new cleanup sockets have a bounded eight-second, source-checked physical owner.
+Data stays cancelled throughout. The Android Java/Go gate covers 342 Server and
+348 Local graphs; actual native parsing of all 690 remains wired to CI and was
+not run locally because the required verified Tor DSO/LLVM 21 is unavailable.
+Apple host integration, current APK/IPA packages and physical devices remain
+separate evidence. The continuation ledger records focused host tests and limits.
 
 The native parser matrices now run in separate processes with the same existing
 180-second per-process deadline (`c81d0930`). Source jobs select Go 1.26.3 for

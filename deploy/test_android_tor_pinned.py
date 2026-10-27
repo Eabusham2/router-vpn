@@ -25,7 +25,7 @@ LAYERS=('off','aes-256-gcm','aes-256-gcm+xor-whitening')
 
 
 def inputs():
-    extra=[Path(__file__).resolve(),TEMPLATE,ROOT/'deploy/test_android_tor_pinned_contract.py',ROOT/'android/test_android_tor_profile.py',ROOT/'android/test_android_tor_form.py',ROOT/'android/test_android_tor_session.py',ROOT/'android/test_android_start_layer_relay_lifecycle.py',ROOT/'android/test_android_runtime_teardown.py',ROOT/'android/test_android_runtime_contract.py',ROOT/'android/test_android_standard_exit_contract.py',ROOT/'android/test_android_multihop_home_state.py',ROOT/'android/test_android_layered_service_compile.py']
+    extra=[Path(__file__).resolve(),TEMPLATE,ROOT/'deploy/test_android_tor_pinned_contract.py',ROOT/'android/test_android_tor_profile.py',ROOT/'android/test_android_tor_server_profile.py',ROOT/'android/test_android_tor_form.py',ROOT/'android/test_android_tor_session.py',ROOT/'android/test_android_start_layer_relay_lifecycle.py',ROOT/'android/test_android_runtime_teardown.py',ROOT/'android/test_android_runtime_contract.py',ROOT/'android/test_android_standard_exit_contract.py',ROOT/'android/test_android_multihop_home_state.py',ROOT/'android/test_android_layered_service_compile.py']
     extra += [ROOT/'android'/name for name in ('max_preparation_test_boundary.py','test_android_max_dns_owner.py','test_android_max_preparation.py','test_android_max_host_paths.py','test_android_max_service.py')]
     extra += [JAVA/(name+'.java') for name in ('AndroidMAXDNSOwner','AndroidMAXProfilePreparation','AndroidTorProfile','AndroidTorSession','AndroidStandardExitStore','AndroidStandardExitRuntime','AndroidStandardExitController','AndroidDirectStandardExitController','AndroidHomeStateStore','AndroidSessionRevalidator','LayeredVpnService','AndroidStartLayerRelay','StandardExitActivity')]
     return sorted(set(M.inputs()+HOST.inputs()+extra))
@@ -41,6 +41,7 @@ def matrix(folder):
     if folder.is_symlink() or not folder.is_dir():raise ValueError('Android Tor matrix needs an owned directory')
     expected={f'{kind}-{mode}-{layer}.json' for kind,mode,layer in itertools.product(KINDS,MODES,LAYERS)}
     expected.update(f'{kind}-direct-off.json' for kind in KINDS)
+    expected.update(f'server-{kind}-{mode}-{layer}.json' for kind,mode,layer in itertools.product(KINDS,MODES,LAYERS))
     actual=set()
     for path in folder.iterdir():
         if path.is_symlink() or not path.is_file() or not 0<path.stat().st_size<=4*1024*1024:raise ValueError('Unsafe Android Tor graph')
@@ -87,6 +88,13 @@ def run(vendor,package,go,clang=None):
             # DT_NEEDED entry without the external linker's matching rpath.
             profile_env=env.copy();profile_env.pop('CGO_LDFLAGS',None)
             subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_profile.py')],cwd=ROOT,env=profile_env,check=True,timeout=600)
+            server_graphs=work/'server-graphs';server_graphs.mkdir()
+            server_env=profile_env.copy();server_env['ROUTERVPN_ANDROID_TOR_GRAPHS']=str(server_graphs)
+            subprocess.run([sys.executable,str(ROOT/'android/test_android_tor_server_profile.py')],cwd=ROOT,env=server_env,check=True,timeout=600)
+            for path in server_graphs.iterdir():
+                if path.is_symlink() or not path.is_file() or not path.name.startswith('server-') or (graphs/path.name).exists():
+                    raise ValueError('Server graph does not have its own capture identity')
+                path.rename(graphs/path.name)
             matrix(graphs)
             subprocess.run([go,'test','-mod=readonly','-ldflags=-checklinkname=0','-tags','with_quic,with_wireguard,with_gvisor,with_naive_outbound,routervpn_tor_native_test','./experimental/libbox','-run','^TestRouterTorAndroidGeneratedGraphs$','-count=1','-timeout=120s','-v'],cwd=vendor,env=env,check=True,timeout=600)
         if before!=digest() or native!=hashlib.sha256(library.read_bytes()).hexdigest():raise ValueError('Android or native Tor source changed during validation')
@@ -94,7 +102,7 @@ def run(vendor,package,go,clang=None):
         verify_prepared(vendor)
     finally:
         if target.exists() and target.read_bytes()==data:target.unlink()
-    print('Android Tor: all 348 captured graphs and 348 missing-engine controls passed the exact native parser; no VPN started.')
+    print('Android Tor: all 690 captured Local/Server graphs and 690 missing-engine controls passed the exact native parser; no VPN started.')
 
 
 if __name__=='__main__':

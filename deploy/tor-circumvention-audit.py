@@ -754,7 +754,7 @@ need("android/test_android_runtime_contract.py", '"test_android_tor_profile.py"'
      '"test_android_external_session.py"',
      '"test_android_start_layer_relay_lifecycle.py"')
 need("deploy/test_android_tor_pinned.py", "with_naive_outbound", "TestRouterTorAndroidGeneratedGraphs",
-     "all 348 captured graphs and 348 missing-engine controls")
+     "all 690 captured Local/Server graphs and 690 missing-engine controls")
 forbid(
     "android/app/src/main/java/com/eabusham/routervpn/AndroidStandardExitStore.java",
     "Tor obfs4 bridge is unavailable on Android",

@@ -190,6 +190,20 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     private volatile io.nekohasekai.libbox.RouterHopMeasurement hopMeasurement;
     private volatile io.nekohasekai.libbox.RouterDNSMeasurement dnsMeasurement;
     private volatile AndroidTorSession torSession;
+    private static final class TorCleanup {
+        final AndroidTorSession tor;
+        final CommandServer server;
+        final AndroidMAXProfilePreparation.Adopted max;
+        final Network network;
+        final String networkIdentity;
+        // The native Close request has the same eight-second maximum.
+        final long deadline = System.nanoTime() + 8_000_000_000L;
+        TorCleanup(AndroidTorSession tor, CommandServer server, AndroidMAXProfilePreparation.Adopted max,
+                   Network network, String networkIdentity) {
+            this.tor=tor;this.server=server;this.max=max;this.network=network;this.networkIdentity=networkIdentity;
+        }
+    }
+    private volatile TorCleanup torCleanup;
     private volatile AndroidHomeStateStore.Snapshot torHomeOwner;
     private volatile AndroidExternalSession externalSession;
     private volatile boolean externalOwner;
@@ -381,6 +395,12 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
     }
     static String torExitIP(String sessionID, String externalID) throws Exception {
         return new JSONObject(torProofJSON(sessionID, externalID)).getString("ip");
+    }
+    static String torExecution(String sessionID, String externalID) throws Exception {
+        LayeredVpnService service = currentService.get();
+        AndroidTorSession captured = service == null ? null : service.torSession;
+        if (captured == null || !"UP".equals(service.state) || service.explicitStop) throw new IllegalStateException("The captured Tor execution receipt is unavailable.");
+        return captured.execution(sessionID, externalID);
     }
     static String externalExitIP(String sessionID, String externalID) throws Exception {
         LayeredVpnService service = currentService.get();
@@ -851,7 +871,18 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         AndroidMAXProfilePreparation.Adopted capturedMAX = maxSession;
         if (capturedMAX != null) capturedMAX.cancel();
         AndroidTorSession capturedTor = torSession;
-        if(capturedTor!=null)capturedTor.cancel();
+        if(capturedTor!=null){
+            // Revoke data first. Only the exact native Server lease can use
+            // its retained lower path while this bounded DELETE is running.
+            capturedTor.cancel();
+            // Native Tor Close waits for retained measurement sockets. Join
+            // their retryable owners first, while keeping the entry and TUN.
+            closeTorMeasurementsLocked();
+            torCleanup=new TorCleanup(capturedTor,commandServer,capturedMAX,torPhysicalNetwork,executionNetwork);
+            try{capturedTor.close();}
+            catch(Exception pending){publish("STOPPING",activeMode,"Tor server lease cleanup remains pending; the captured native path is retained for retry.");throw new IllegalStateException("Tor execution cleanup has not been acknowledged.",pending);}
+            finally{torCleanup=null;}
+        }
         AndroidExternalSession capturedExternal = externalSession;
         if(capturedExternal!=null){
             try{capturedExternal.close();}
@@ -924,6 +955,24 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         torHomeOwner = null;
     }
 
+    private void closeTorMeasurementsLocked(){
+        if(hopMeasurement!=null){
+            hopMeasurement.networkChanged();
+            try{hopMeasurement.close();}
+            catch(Exception pending){publish("STOPPING",activeMode,"Tor hop measurement cleanup is still pending; its native owner is retained.");throw new IllegalStateException("Tor hop measurement teardown has not drained.",pending);}
+            hopMeasurement=null;
+        }
+        if(dnsMeasurement!=null)dnsMeasurement.networkChanged();
+        closeDNSMeasurementLocked();
+        AndroidMTUSession captured=mtuSession;
+        if(captured!=null){
+            captured.networkChanged();
+            try{captured.close();}
+            catch(Exception pending){publish("STOPPING",activeMode,"Tor MTU cleanup is still pending; its native owner is retained.");throw new IllegalStateException("Tor MTU teardown has not drained.",pending);}
+            mtuSession=null;mtuMetadata="";
+        }
+    }
+
     private void publish(String newState, String mode, String error) {
         state = newState;
         getSharedPreferences(PREFS, MODE_PRIVATE).edit()
@@ -970,13 +1019,23 @@ public final class LayeredVpnService extends VpnService implements PlatformInter
         else if(externalOwner){Network captured=externalPhysicalNetwork;requireExternalNetwork(captured);captured.bindSocket(socket);requireExternalNetwork(captured);}
     }
     private void requireMAXNetwork(AndroidMAXProfilePreparation.Adopted captured) {
-        if (explicitStop || captured != maxSession || !captured.current(false)) throw new IllegalStateException("The captured MAX physical network changed; reconnect before opening traffic.");
+        boolean cleanup=torCleanupCurrent();
+        if (captured != maxSession || (cleanup ? !captured.cleanupCurrent() : explicitStop || !captured.current(false))) throw new IllegalStateException("The captured MAX physical network changed; reconnect before opening traffic.");
         if (torOwner) requireTorNetwork(torPhysicalNetwork);
         if (externalOwner) requireExternalNetwork(externalPhysicalNetwork);
     }
+    private boolean torCleanupCurrent(){
+        TorCleanup captured=torCleanup;
+        return captured!=null&&System.nanoTime()<captured.deadline&&torOwner
+                &&captured.tor==torSession&&captured.server!=null&&captured.server==commandServer
+                &&captured.max==maxSession&&captured.network!=null&&captured.network==torPhysicalNetwork
+                &&captured.networkIdentity.equals(executionNetwork)&&captured.tor.retainsServerCleanup(captured.server);
+    }
     private void requireTorNetwork(Network captured){
         NetworkCapabilities caps=captured==null?null:connectivity.getNetworkCapabilities(captured);
-        if(explicitStop||!torOwner||captured!=torPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+        AndroidTorSession tor=torSession;
+        boolean stopped=explicitStop||torCleanup!=null||tor!=null&&tor.dataCancelled();
+        if((stopped&&!torCleanupCurrent())||!torOwner||captured!=torPhysicalNetwork||caps==null||caps.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
                 ||!executionNetwork.equals(executionNetworkIdentity()))throw new IllegalStateException("The captured Tor physical network changed; reconnect before opening traffic.");
     }
     private void requireExternalNetwork(Network captured){

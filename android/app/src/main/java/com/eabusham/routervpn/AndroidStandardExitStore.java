@@ -343,6 +343,11 @@ final class AndroidStandardExitStore {
 
     static void validateExecution(Entry exit,boolean hasEntry,String execution)throws Exception{
         if(!Arrays.asList("local","server","auto").contains(execution))throw new IllegalArgumentException("Choose Local, Server, or Compare both.");
+        if(exit!=null&&AndroidTorProfile.isTor(exit.protocol)){
+            if("auto".equals(execution))throw new IllegalArgumentException("Tor Compare both requires independent last-node and external response measurements; select Local or Server.");
+            if("server".equals(execution)&&!hasEntry)throw new IllegalArgumentException("Tor Server requires a captured Router VPN entry with a matching private Tor source.");
+            return;
+        }
         if(!"local".equals(execution)){
             if(!hasEntry||!authenticatedExecutionTransport(exit))throw new IllegalArgumentException("Server and Compare both need a Router VPN entry, an authenticated exit and its verified HTTPS response endpoints. WireGuard and AmneziaWG require a separate Server peer; OpenVPN requires its private pairing with independent provider credentials.");
             if("openvpn".equals(exit.protocol)&&exit.openVPNResponseProbes!=null)AndroidOpenVPN.validateResponseProbes(exit);

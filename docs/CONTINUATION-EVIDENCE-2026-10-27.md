@@ -29,8 +29,7 @@ defined last-node measurement and cannot be counted twice for Compare.
 
 The ordinary-external desktop Tor host changes and server Tor work found in
 the previous workspace were inspected against current source. Only coherent,
-tested changes listed below were published. Unfinished server prerequisites
-are not evidence of a usable Server mode.
+tested changes listed below were published. Server prerequisites alone are not evidence of usable host integration.
 
 ## Verified source changes and pushes
 
@@ -46,7 +45,6 @@ then reconciled with that exact Git tree while preserving unrelated work.
 | [`548f9d24`](https://github.com/Eabusham2/router-vpn/commit/548f9d24f81ab460e298b3a92605da3d8041a08b) | Resolve the test-owned macOS temporary-directory alias, and clone a containing Windows profile store so PowerShell array enumeration cannot evade the relink fixture. | Old failures reproduced in isolation. Private-store, relink and payload tests pass without relaxing production symlink/source checks. Hosted macOS and Windows PowerShell 5.1 builds remain separate evidence. |
 | [`3c125deb`](https://github.com/Eabusham2/router-vpn/commit/3c125debc9221efc111ab89a5d0dda851e6094de) | Adopt captured ordinary external predecessors across the desktop Local Tor connection lifecycle. | Focused isolated race tests, product and Tor audits, and rejected admission/source-token mutations cover Connect, profiles, startup, updates and Speed Lab restore. All eight supported import families retain complete transport validation and their distinct public-address proof. Physical networking and Server execution are not established by these tests. |
 | [`02ddd025`](https://github.com/Eabusham2/router-vpn/commit/02ddd025568d5c8a7273e5be684bb8ceb6c95084) | Reopen saved ordinary Tor predecessors in Windows, macOS and Linux path dialogs without treating their protocol as a Router mode. | Windows 267, Swift 266 and GTK 259 cases passed; each generated payload set passed the Go race consumer. The published old Windows initialization reproduced the valid-path failure. Missing/duplicate entries, changed imported protocols and Router-only mode substitution remain rejected. Swift helpers run with value-only native-control doubles; GTK widgets run under Xvfb. Full AppKit/WPF packages and physical visual acceptance remain separate. |
-
 | [`078d4ef3`](https://github.com/Eabusham2/router-vpn/commit/078d4ef3ccd2d1ac701c4b57c193799963857d2d) | Join initial native network/power callbacks before publishing Tor ownership. | Actual pinned native race and reset controls pass; real network changes still retire the owner. Physical transitions remain separate. |
 | [`285a8093`](https://github.com/Eabusham2/router-vpn/commit/285a8093e47b05274b386d92f6f153f348cd8294) | Authenticate Tor source discovery and bind the detached catalog to entry identity, acquisition challenge, source hash and DNS-policy hash. | Discovery never starts a worker or grants traffic proof. Changed/replayed identities remain rejected. |
 | [`d76977a8`](https://github.com/Eabusham2/router-vpn/commit/d76977a80b8e08277a395c7872af98f38710dca0) | Refresh the exact GTK source pin for the already published saved-path correction. | Actual GTK preparation, map and release orchestration checks pass; removing the source guard remains rejected. |
@@ -55,18 +53,61 @@ then reconciled with that exact Git tree while preserving unrelated work.
 | [`adf24e9a`](https://github.com/Eabusham2/router-vpn/commit/adf24e9aa3b0e6261fdffb9aef8f60b61ee11c72) | Adopt authenticated Tor Server leases inside the captured desktop native graph. | Shared and actual native Local/Server race suites pass. Native tests exercise SS2022 entry traffic, exact HTTP/SOCKS lease ownership, selected DNS and client public-exit proof; removing source matching, client DNS proof or retained cleanup ownership fails. No local Tor child is constructed for Server. These are Linux AMD64 native tests, not mobile host or physical-network acceptance. |
 | [`9d87c110`](https://github.com/Eabusham2/router-vpn/commit/9d87c110458fc5d84f5c5366e748fa3982d24f57) | Connect, save and restore desktop Tor Server selections through public Connect, Startup Last, complete profiles, DNS/device edits and Speed Lab. | Exact isolated 28-file source: 796 cases/subtests pass with race detection, plus 1,920 Windows wrapper checks, 26 POSIX tests and 36 source-audit regressions. Two form-only entry points are run separately with their payloads below. Retained execution mismatch, null Server binary and stale graph/source captures reject before runtime/firewall admission. |
 | [`943d7462`](https://github.com/Eabusham2/router-vpn/commit/943d74621667ac13e6a84f5a3d28dfefc3769c47) | Preserve private Router Server paths in all desktop bridge editors. | Windows 286 and Swift 312 callback checks, rendered GTK 2,176 checks across 82 dialogs, and three mutations per platform pass. Every generated Local/Server payload set passes the actual Go importer with race detection; changed execution rejects stale editor captures. Full AppKit/WPF builds remain CI evidence. |
-
 | [`01ae5aef`](https://github.com/Eabusham2/router-vpn/commit/01ae5aef62f08ec23c930bf85d61e6031afa6b0e) | Make the verified lease client, canonical server policy and immutable proof/DNS values available to mobile preparation, preserving desktop aliases. | Focused shared race, actual generated mobile copy-set compilation, a rejected desktop-dependency mutation and server preparation tests pass. This prerequisite does not yet enroll mobile Server execution or its host cleanup. |
+
+
+| [`1ee61b03`](https://github.com/Eabusham2/router-vpn/commit/1ee61b030422181612a4e0be9b7db257fc317aa0) | Reject enabled or malformed Tor padding before compiling a runnable graph. | Thirty rejection and ten dormant-policy cases, shared race tests and the actual generated mobile copy pass; removing the guard recreates silent omission. This is admission protection, not completion of padding. |
+| [`c88a2f0c`](https://github.com/Eabusham2/router-vpn/commit/c88a2f0c1408dc9e493debfc80bbe20ac3dd5f1a) | Keep strict protection through all eight captured ordinary desktop Tor entry families. | Independently recomputed physical egress, typed ordinary proof, native/controller race tests and Windows/PF/nft consumers pass. Actual editor checks: Windows 1,409, Swift 1,533, GTK 11,483 across 451 dialogs; five broken variants per platform reject. Snowflake UDP remains invalid through TCP-only SOCKS/HTTP entries. These entries gain no private Router, Home DNS or Server authority. |
+| [`c504b642`](https://github.com/Eabusham2/router-vpn/commit/c504b642b8ba8d4a92bdff70d8c4a6dd7cdfa86b) | Give the relay preparation tests valid pinned-core fixtures and preserve invalid-source rejection. | Two relay-build and six native-scope tests, plus the failing Go wrappers under race detection, pass. Production source validation remains unchanged. |
+| [`a24845ef`](https://github.com/Eabusham2/router-vpn/commit/a24845ef32cad4c5271941b6f771450fc176fa41) | Own mobile Tor Server lease, selected DNS, complete native source and retained cleanup inside the existing Box. | Fifteen actual pinned native cases pass under race detection through SS2022, authenticated leased SOCKS, TLS Tor proof and DNS. Cancelled-data cleanup, changed-TUN-source and skipped-DNS mutations reject. Failed or late SOCKS construction retains its socket until acknowledged close. Android/Apple host adoption is separate from this foundation. |
+| [`a9ee6fd5`](https://github.com/Eabusham2/router-vpn/commit/a9ee6fd5f60b4e428b021418f9e72ba466d079ac) | Run Windows lifecycle matrices in five bounded processes. | All 164 compiler-discovered tests from the original selection occur exactly once. Both actual workflow PowerShell bodies issue the exact commands and stop after an injected failed phase. Eleven release-gate tests pass; each process retains its original 180-second deadline. |
+| [`9fcbd80f`](https://github.com/Eabusham2/router-vpn/commit/9fcbd80fa04dd6a9d4018772af06b159658cd525) | Capture canonical PQ fixture ownership through macOS temporary aliases. | Ten tests and four production mutations pass. Alias retargeting cannot redirect owned cleanup, and linked cores, changed sources and escaping directories still reject. Actual macOS packaging remains CI evidence. |
+
+### Android Tor Server host adoption in this change
+
+The real Tor form, StandardExit dispatcher and existing VpnService now carry
+explicit Local or Server execution for a captured private Router entry. Plain
+Tor and all five bridge choices retain the exact entry mode, Start Layer,
+credentials, selected DNS, IPv6, LAN and MTU policy. The staged metadata binds
+the complete native graph, both profiles, session and predecessor graph hash.
+A real native execution receipt must match the captured request before the app
+reports Connected. Complete profiles, Startup Last and Speed Lab restoration
+preserve Server instead of replacing it with Local or rerunning Compare.
+
+Disconnect and asynchronous cancellation revoke data immediately. The service
+joins retryable hop, DNS and MTU measurement owners before retaining its Box, TUN
+and entry until the exact Server lease acknowledges DELETE.
+During that bounded native close only, the already-cancelled Server owner may
+bind new cleanup sockets to its captured unchanged physical network. A retained
+MAX entry requires exact source and physical readback; changed Home selection
+cannot reopen data. The eight-second admission is cleared on both success and
+failure. Pending cleanup stays retryable and cannot release replacement owners.
+
+Focused evidence: 342 actual Java/Go Server graphs and 6,541 assertions, alongside
+348 Local graphs and 20,613 assertions; 4,363 real-form assertions and 162 compiler
+roundtrips; 983 proof/service lifecycle assertions and thirteen rejected mutations;
+561 real MAX preparation assertions and 55 full-service assertions; full service
+compilation and four broken-signature guards; 1,729 profile assertions across
+130 cases; 935 startup assertions; 941 Speed Lab restore assertions and twelve
+mutations; 2,014 permission assertions; and the actual runtime teardown suite.
+The unchanged MTU suite passes 118 assertions and six negative controls.
+
+Java platform/native handles are boundary doubles in these host tests. The
+actual native parser gate is wired to all 690 Local/Server graphs, with eight
+pinned-gate contract tests passing. That 690-graph native run was **not** performed
+locally: this workspace lacks the required verified Tor DSO and LLVM 21. It
+remains exact-SHA CI evidence, as do APK packaging and physical Android tests.
 
 ## Requirements still requiring source or runtime work
 
 This is the concrete continuation queue, not a complete replacement inventory.
 The older ledgers retain the original identifiers and broader requirements.
 
-| Requirement family | Established source boundary at `943d7462` | Remaining evidence or implementation |
+| Requirement family | Established source boundary in this continuation | Remaining evidence or implementation |
 |---|---|---|
-| Desktop ordinary entry → Tor | Public Local Connect and restoration retain WG, AWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and supported OpenVPN imports. | Strict protection for ordinary predecessors; physical leak, reconnect and path acceptance. Ordinary public-IP proof must not acquire private Router authority. |
-| Desktop private Router entry → Tor bridge Server | Real no-TUN worker, source provisioning, native leased outbound, desktop Connect/restoration and three editors are connected and locally tested. | Exact-SHA Windows/macOS/Linux packages and ARM64 image validation, public Tor circuits, private pairing/deployment and device acceptance. Plain-Tor desktop controls and Android/iOS Server host adoption are separate source work. |
+| Desktop ordinary entry → Tor | Public Local Connect and restoration retain WG, AWG, SOCKS5, HTTP(S) CONNECT, Shadowsocks, Hysteria2 and supported OpenVPN imports. | Strict protection now retains the captured physical egress (`c88a2f0c`); physical leak, reconnect and path acceptance remain. Ordinary public-IP proof must not acquire private Router authority. |
+| Desktop private Router entry → Tor bridge Server | Real no-TUN worker, source provisioning, native leased outbound, desktop Connect/restoration and three editors are connected and locally tested. | Exact-SHA Windows/macOS/Linux packages and ARM64 image validation, public Tor circuits, private pairing/deployment and device acceptance. Plain-Tor desktop controls and iOS Server host adoption remain separate source work; Android adoption is described above. |
+| Mobile private Router entry → Tor Server | Shared actual native lease/proof/cleanup and Android forms, Connect, profiles, Startup Last and Speed Lab are integrated. | Apple host adoption, the Android 690-graph native gate, exact-SHA APK/IPA and device networking remain separate. |
 | Tor Compare both | The required arithmetic and invalid-candidate rules are preserved. | Distinct, correctly owned last-node and external measurements through each actual candidate; final winner recheck and restoration. Dynamic Tor exit proof is not either score input by itself. |
 | Tor native startup | Initial network/power callbacks are joined before ownership publication, with actual native race/reset controls (`078d4ef3`). | Current packaged native builds and physical network/power transitions; no remaining source race is inferred from the superseded failure. |
 | Tor padding and direct dynamic-bridge protection | Requested policies remain explicit; unsupported paths cannot silently disable them. | Actual bounded padding and OS protection owners for the applicable graphs, followed by native/device verification. |
@@ -75,12 +116,12 @@ The older ledgers retain the original identifiers and broader requirements.
 
 ## Release, deployment and device evidence
 
-The exact-`943d7462` Actions read returned 26 workflows, all pending, queued or
-running at that observation. Authoritative release run
-[`40459394588`](https://github.com/Eabusham2/router-vpn/actions/runs/40459394588)
-was pending. The earlier `adf24e9a` read had seven successful completed
-workflows and thirteen unfinished workflows; those results do not certify
-`943d7462` or a later commit.
+The latest recorded exact-`9fcbd80f` Actions read returned 20 runs: one
+completed successfully and nineteen were queued or pending. Earlier commits'
+successes, superseded cancellations and these unfinished runs do not certify
+this Android change or any later commit. The latest native failure logs drove
+the bounded Windows matrix, valid pinned fixtures and canonical PQ-path repairs
+above; their local checks are not a replacement for subsequent hosted runs.
 
 Re-read the latest attempts for the exact current commit. Publication requires
 matching native packages, checksums/manifest, nine ARM64 custom images and

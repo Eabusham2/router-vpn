@@ -123,8 +123,14 @@ final class AndroidTorProfile {
 
     static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile,
             AndroidStandardExitStore.Entry selected, String entryMode) throws Exception {
+        return prepare(context, entryFile, selected, entryMode, "local");
+    }
+
+    static NativeSingBoxController.SessionInfo prepare(Context context, File entryFile,
+            AndroidStandardExitStore.Entry selected, String entryMode, String execution) throws Exception {
         AndroidStandardExitStore.Entry exit = AndroidStandardExitStore.copy(selected);
         AndroidStandardExitStore.validate(exit);
+        AndroidStandardExitStore.validateExecution(exit, entryFile != null, execution);
         String capturedExit = AndroidStandardExitStore.snapshot(exit);
         JSONObject capturedSelection = profile(exit);
         JSONObject entry = null, predecessorProfile = null;
@@ -184,20 +190,23 @@ final class AndroidTorProfile {
             if (predecessorProfile != null) {
                 capturedSelection.put("multihop_entry_id", predecessorProfile.getString("id"))
                         .put("multihop_exit_id", exit.id).put("multihop_entry_mode", entryMode)
-                        .put("multihop_exit_mode", exit.protocol).put("multihop_execution", "local");
+                        .put("multihop_exit_mode", exit.protocol).put("multihop_execution", execution);
             }
             String capturedProfile = capturedSelection.toString();
             String sessionId = UUID.randomUUID().toString();
-            String config = Libbox.routerCompileTorProfileWithPredecessor(capturedProfile, sessionId, predecessor,
-                    predecessorProfile == null ? "" : predecessorProfile.toString());
+            String entryProfile = predecessorProfile == null ? "" : predecessorProfile.toString();
+            String config = "server".equals(execution)
+                    ? Libbox.routerCompileServerTorProfileWithPredecessor(capturedProfile, sessionId, predecessor, entryProfile)
+                    : Libbox.routerCompileTorProfileWithPredecessor(capturedProfile, sessionId, predecessor, entryProfile);
             if (!bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor did not compile the complete captured graph.");
             RouterPQNative.install();
             Libbox.checkConfig(config);
             JSONObject metadata = new JSONObject().put("version", 1).put("session_id", sessionId)
                     .put("external_id", exit.id).put("protocol", exit.protocol).put("config_sha256", digest(config.getBytes(StandardCharsets.UTF_8)))
-                    .put("entry_mode", entryFile == null ? "external" : entryMode)
+                    .put("entry_mode", entryFile == null ? "external" : entryMode).put("execution", execution)
                     .put("tor_profile", new JSONObject(capturedProfile));
             if (predecessorProfile != null) metadata.put("predecessor_profile", predecessorProfile);
+            if ("server".equals(execution)) metadata.put("predecessor_config_sha256", digest(predecessor.getBytes(StandardCharsets.UTF_8)));
             String metadataText = metadata.toString();
             if (!bounded(metadataText, MAX_METADATA)) throw new IllegalStateException("Tor session metadata exceeds its bound.");
             if (Thread.currentThread().isInterrupted() || !capturedExit.equals(AndroidStandardExitStore.snapshot(selected))
@@ -251,6 +260,7 @@ final class AndroidTorProfile {
         if (!bounded(metadataText, MAX_METADATA) || !bounded(config, MAX_CONFIG)) throw new IllegalStateException("Tor session is empty or oversized.");
         JSONObject metadata = new JSONObject(metadataText), graph = new JSONObject(config);
         AndroidExternalProtection.torCapture(metadata);
+        String execution = execution(metadata);
         JSONObject capturedProfile = metadata.getJSONObject("tor_profile");
         if (!metadata.getString("external_id").equals(capturedProfile.getString("id"))
                 || !metadata.getString("protocol").equals(capturedProfile.getJSONObject("external").getString("protocol")))
@@ -263,14 +273,56 @@ final class AndroidTorProfile {
         JSONArray outputs = graph.getJSONArray("outbounds");
         for (int i = 0; i < outputs.length(); i++) {
             JSONObject output = outputs.getJSONObject(i);
-            if ("routervpn-tor".equals(output.optString("type"))) {
+            String type = output.optString("type");
+            if ("routervpn-tor".equals(type) || "routervpn-server-tor".equals(type)) {
                 owners++;
                 if (!OUTBOUND.equals(output.getString("tag")) || !sessionId.equals(output.getString("session_id"))
-                        || output.has("detour") != metadata.has("predecessor_profile")) throw new IllegalStateException("Tor outbound lost its captured owner.");
+                        || !type.equals("server".equals(execution) ? "routervpn-server-tor" : "routervpn-tor"))
+                    throw new IllegalStateException("Tor outbound lost its captured execution owner.");
+                if ("server".equals(execution)) {
+                    if (output.length() != 6 || !metadata.has("predecessor_profile")
+                            || !sameJSON(new JSONObject(output.getString("profile")), capturedProfile)
+                            || !sameJSON(new JSONObject(output.getString("entry_profile")), metadata.getJSONObject("predecessor_profile"))
+                            || !digest(output.getString("entry_config").getBytes(StandardCharsets.UTF_8)).equals(metadata.getString("predecessor_config_sha256")))
+                        throw new IllegalStateException("Tor Server lost its captured entry, source or lease owner.");
+                } else if (output.has("detour") != metadata.has("predecessor_profile")) {
+                    throw new IllegalStateException("Tor outbound lost its captured entry owner.");
+                }
             }
         }
         if (owners != 1 || graph.getJSONArray("inbounds").length() != 1 || !"tun".equals(graph.getJSONArray("inbounds").getJSONObject(0).getString("type"))) throw new IllegalStateException("Tor requires one owned runtime and one VPN interface.");
         return metadata;
+    }
+
+    static String execution(JSONObject metadata) throws Exception {
+        Object value = metadata.has("execution") ? metadata.get("execution") : "local";
+        if (!(value instanceof String) || !Arrays.asList("local", "server").contains(value))
+            throw new IllegalStateException("Tor requires its captured Local or Server execution.");
+        JSONObject profile = metadata.getJSONObject("tor_profile");
+        if (profile.has("multihop_execution") && !value.equals(profile.get("multihop_execution"))
+                || "server".equals(value) && (!metadata.has("predecessor_profile") || !"server".equals(profile.opt("multihop_execution"))))
+            throw new IllegalStateException("Tor execution differs from its captured profile.");
+        return (String) value;
+    }
+
+    private static boolean sameJSON(Object left, Object right) throws Exception {
+        if (left instanceof JSONObject && right instanceof JSONObject) {
+            JSONObject a = (JSONObject) left, b = (JSONObject) right;
+            if (a.length() != b.length()) return false;
+            JSONArray keys = a.names();
+            for (int i = 0; keys != null && i < keys.length(); i++) {
+                String key = keys.getString(i);
+                if (!b.has(key) || !sameJSON(a.get(key), b.get(key))) return false;
+            }
+            return true;
+        }
+        if (left instanceof JSONArray && right instanceof JSONArray) {
+            JSONArray a = (JSONArray) left, b = (JSONArray) right;
+            if (a.length() != b.length()) return false;
+            for (int i = 0; i < a.length(); i++) if (!sameJSON(a.get(i), b.get(i))) return false;
+            return true;
+        }
+        return left == null ? right == null : left.equals(right);
     }
 
     static String summary(AndroidStandardExitStore.Entry exit) {

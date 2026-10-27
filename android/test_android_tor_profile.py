@@ -405,6 +405,9 @@ GO = GO.replace('case "xray-policy":', '''case "private-node-json":err=privatepa
  case "tor-profile-captured":
   var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfileWithPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
+ case "tor-server-profile-captured":
+  var input struct{Profile string;Session string;Entry string};err=json.Unmarshal([]byte(r.Config),&input)
+  if err==nil{value,err=mobiletor.CompileServerProfileWithPredecessor(input.Profile,input.Session,r.Policy,input.Entry)}
  case "tor-profile":
   var input struct{Profile string;Session string};err=json.Unmarshal([]byte(r.Config),&input)
   if err==nil{value,err=mobiletor.CompileProfile(input.Profile,input.Session,r.Policy)}
@@ -464,6 +467,10 @@ def run():
  public static String routerCompileTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
   torCalls++;lastTorPredecessor=predecessor;
   return call("tor-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
+ }
+ public static String routerCompileServerTorProfileWithPredecessor(String profile,String session,String predecessor,String entry)throws Exception{
+  torCalls++;lastTorPredecessor=predecessor;
+  return call("tor-server-profile-captured",new JSONObject().put("Profile",profile).put("Session",session).put("Entry",entry).toString(),predecessor);
  }
  public static String testTorPredecessor(String profile)throws Exception{return call("tor-predecessor",profile,"");}
  public static String routerCompilePQProfile(''', 1)

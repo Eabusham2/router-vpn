@@ -22,9 +22,12 @@ final class AndroidStandardExitController {
     }
     NativeSingBoxController.SessionInfo prepare(File entryBundle, AndroidStandardExitStore.Entry exit, String entryMode, String execution, String restoredExecution) throws Exception {
         AndroidStandardExitStore.validate(exit);
-        AndroidStandardExitStore.validateExecution(exit,true,execution);
+        AndroidStandardExitStore.validateExecution(exit,entryBundle!=null,execution);
+        if(AndroidTorProfile.isTor(exit.protocol)){
+            if(!restoredExecution.isEmpty()&&!execution.equals(restoredExecution))throw new IllegalArgumentException("The proved Tor execution differs from its captured restoration choice.");
+            return AndroidTorProfile.prepare(context,entryBundle,exit,entryMode,execution);
+        }
         if("local".equals(execution)&&restoredExecution.isEmpty())return prepare(entryBundle,exit,entryMode);
-        if(AndroidTorProfile.isTor(exit.protocol))throw new IllegalArgumentException("Tor cannot adopt an ordinary external execution receipt.");
         return AndroidExternalPolicy.prepare(context,entryBundle,exit,entryMode,execution,restoredExecution);
     }
 

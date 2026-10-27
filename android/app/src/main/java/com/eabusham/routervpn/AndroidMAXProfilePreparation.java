@@ -73,6 +73,14 @@ final class AndroidMAXProfilePreparation implements AutoCloseable {
             for (Source source : sources) if (!source.current(exact)) return false;
             return true;
         }
+        /** Only an already-cancelled Tor lease may borrow this retained entry.
+         * The service owns the bounded cleanup admission; cancellation never
+         * grants a new data path, source or physical-network selection. */
+        boolean cleanupCurrent() {
+            if (!cancelled || !physical.current(true)) return false;
+            for (Source source : sources) if (!source.current(true)) return false;
+            return true;
+        }
         void cancel() { cancelled = true; }
     }
 

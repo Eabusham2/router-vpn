@@ -21,7 +21,7 @@ final class AndroidTorSession {
     }
 
     final String sessionID, externalID;
-    private final String predecessor, network, config, profile;
+    private final String predecessor, network, config, profile, execution;
     private final CommandServer server;
     private final Owner owner;
     private RouterTorProofRequest request;
@@ -33,6 +33,7 @@ final class AndroidTorSession {
         this.externalID = metadata.getString("external_id");
         this.config = config;
         this.profile = metadata.getJSONObject("tor_profile").toString();
+        this.execution = AndroidTorProfile.execution(metadata);
         if (config == null || config.isEmpty() || !externalID.equals(new JSONObject(profile).getString("id"))) throw unavailable();
         this.predecessor = metadata.has("predecessor_profile") ? metadata.getJSONObject("predecessor_profile").toString() : "";
         this.server = server;
@@ -51,10 +52,12 @@ final class AndroidTorSession {
                 ? Libbox.routerTorCreateProof(server, AndroidTorProfile.OUTBOUND, sessionID)
                 : Libbox.routerTorCreateProofWithPredecessor(server, AndroidTorProfile.OUTBOUND, sessionID, predecessor);
         if (captured == null) throw unavailable();
+        final boolean admitted;
         synchronized (this) {
             request = captured;
-            if (cancelled || !current()) { captured.cancel(); throw unavailable(); }
+            admitted = !cancelled && current();
         }
+        if (!admitted) { captured.cancel(); captured.close(); throw unavailable(); }
         String response = captured.run();
         if (response == null || response.getBytes(StandardCharsets.UTF_8).length > 4096) throw unavailable();
         JSONObject proof = new JSONObject(response);
@@ -85,6 +88,11 @@ final class AndroidTorSession {
     synchronized String result(String session, String external) throws Exception {
         if (!sessionID.equals(session) || !externalID.equals(external) || !healthy()) throw unavailable();
         return result;
+    }
+
+    synchronized String execution(String session, String external) throws Exception {
+        result(session, external);
+        return execution;
     }
 
     RouterHopMeasurement newHopMeasurement() throws Exception {
@@ -129,6 +137,20 @@ final class AndroidTorSession {
         synchronized (this) { cancelled = true; proved = false; result = ""; captured = request; }
         if (captured != null) captured.cancel();
     }
+
+    /** Keep the captured entry alive until its Server lease acknowledges DELETE. */
+    void close() throws Exception {
+        cancel();
+        final RouterTorProofRequest captured;
+        synchronized (this) { captured = request; }
+        if (captured != null) captured.close();
+    }
+
+    synchronized boolean retainsServerCleanup(CommandServer nativeServer) {
+        return cancelled && !proved && request != null && server == nativeServer && "server".equals(execution);
+    }
+
+    synchronized boolean dataCancelled() { return cancelled; }
 
     private boolean current() { return owner.current(this, server) && network.equals(owner.network()); }
     private static IllegalStateException unavailable() { return new IllegalStateException("The captured Tor circuit, entry proof, DNS or network owner is unavailable; reconnect to prove the path."); }

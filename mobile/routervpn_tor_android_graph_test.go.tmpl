@@ -15,7 +15,7 @@ func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
 		t.Skip("run deploy/test_android_tor_pinned.py for the exact Android matrix")
 	}
 	entries, err := os.ReadDir(root)
-	if err != nil || len(entries) != 348 {
+	if err != nil || len(entries) != 690 {
 		t.Fatalf("exact Android Tor matrix unavailable: %v (%d files)", err, len(entries))
 	}
 	if err = RouterTorSetStateDirectory(filepath.Join(t.TempDir(), "tor-state")); err != nil {
@@ -47,7 +47,7 @@ func TestRouterTorAndroidGeneratedGraphs(t *testing.T) {
 				if !ok {
 					t.Fatal("invalid outbound")
 				}
-				if outbound["type"] == "routervpn-tor" {
+				if outbound["type"] == "routervpn-tor" || outbound["type"] == "routervpn-server-tor" {
 					outbound["type"] = "routervpn-missing-tor-engine"
 					found++
 				}

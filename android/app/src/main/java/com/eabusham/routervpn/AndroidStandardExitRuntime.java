@@ -117,8 +117,10 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             if(!"UP".equals(singBox.getState()))throw new IllegalStateException("Embedded custom-exit engine did not reach UP before timeout.");
             cb.progress(tor?"The captured Tor circuit, entry and selected DNS passed; checking current ownership…":"Captured entry, selected DNS and public exit passed; checking current ownership…");
             String observed=tor?capturedTorExit(capturedHome):capturedExternalExit(capturedHome);
+            String selectedExecution=capturedExternalExecution(capturedHome);
             synchronized(this){
                 if(disconnectRequested||closed.get()||Thread.currentThread().isInterrupted())throw new InterruptedException("Custom exit cancelled before Connected adoption.");
+                if(!selectedExecution.equals(capturedExternalExecution(capturedHome)))throw new IllegalStateException("The proved execution changed before Connected adoption.");
                 if(tor){
                     capturedTorExit(capturedHome);
                     if(!AndroidHomeStateStore.connectedTorExternal(context,capturedHome,observed))throw new IllegalStateException("The captured Tor session changed before Connected adoption.");
@@ -129,8 +131,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
                     LayeredVpnService.startExternalAutomaticMTU(externalNativeSession,externalID,capturedHome.sessionId);
                 }
             }
-            String selectedExecution=tor?"local":capturedExternalExecution(capturedHome);
-            cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor")+". Captured circuit and DNS proof passed; current exit "+observed
+            cb.finished(true,tor?"Connected: "+(direct?"direct Tor":entryMode+" entry → Tor ["+selectedExecution+"]")+". Captured circuit and DNS proof passed; current exit "+observed
                     :"Connected: "+(direct?"direct ":entryMode+" entry → ")+exit.protocol+(direct?"":" ["+selectedExecution+"]")+". Captured entry, selected DNS and public exit proof passed: "+observed);
         } catch(InterruptedException error){
             boolean stopped=!started||stopEmbeddedAndProve();
@@ -167,7 +168,7 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
             cb.finished(false,message);
         }finally{
             try{
-                if(policy&&releasePrepared&&preparedSession!=null){
+                if((policy||tor)&&releasePrepared&&preparedSession!=null){
                     if(preparedSession.maxPreparation!=null)preparedSession.maxPreparation.close();
                     LayeredVpnService.discardPreparedSession(context,preparedSession.sessionId);
                 }
@@ -188,6 +189,8 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
         if(disconnectRequested||closed.get()||owner==null||!AndroidTorProfile.isTor(owner.activeExternalProtocol)
                 ||torNativeSession.isEmpty()||!torHomeSession.equals(owner.sessionId)||!torHomeSession.equals(current.sessionId)
                 ||!torExternalID.equals(owner.activeExternalId)||!torExternalID.equals(current.activeExternalId)
+                ||owner.pathGeneration!=current.pathGeneration||!owner.activeExternalProtocol.equals(current.activeExternalProtocol)
+                ||!owner.activeEntryId.equals(current.activeEntryId)||!owner.activeEntryMode.equals(current.activeEntryMode)
                 ||!"UP".equals(singBox.getState()))throw new IllegalStateException("The captured Tor runtime is unavailable; reconnect to prove its path.");
         return LayeredVpnService.torExitIP(torNativeSession,torExternalID);
     }
@@ -203,12 +206,17 @@ final class AndroidStandardExitRuntime implements AutoCloseable {
     }
 
     synchronized String capturedRequestedExecution(AndroidHomeStateStore.Snapshot owner)throws Exception {
-        capturedExternalExit(owner);return requestedExecution;
+        if(owner!=null&&AndroidTorProfile.isTor(owner.activeExternalProtocol))capturedTorExit(owner);else capturedExternalExit(owner);
+        return requestedExecution;
     }
 
     synchronized String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner)throws Exception {
-        capturedExternalExit(owner);
-        String selected=LayeredVpnService.externalExecution(externalNativeSession,externalID);
+        final String selected;
+        if(owner!=null&&AndroidTorProfile.isTor(owner.activeExternalProtocol)){
+            capturedTorExit(owner);selected=LayeredVpnService.torExecution(torNativeSession,torExternalID);
+        }else{
+            capturedExternalExit(owner);selected=LayeredVpnService.externalExecution(externalNativeSession,externalID);
+        }
         if(!java.util.Arrays.asList("local","server").contains(selected)||!"auto".equals(requestedExecution)&&!requestedExecution.equals(selected))throw new IllegalStateException("The external execution receipt differs from its captured selection.");
         return selected;
     }

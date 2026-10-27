@@ -70,14 +70,8 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
     String capturedExternalExecution(AndroidHomeStateStore.Snapshot owner,String requested)throws Exception{
         if(owner==null||!owner.connected||!"connected".equals(owner.phase)||!"passed".equals(owner.pathProof)||!"external".equals(owner.logicalMode)
                 ||!samePath(owner,AndroidHomeStateStore.snapshot(activity)))throw new IllegalStateException("The temporary external path lost its captured owner.");
-        final String selected;
-        if(AndroidTorProfile.isTor(owner.activeExternalProtocol)){
-            if(!"local".equals(requested))throw new IllegalStateException("The captured Tor path requires Local execution.");
-            runtime.standardExit.capturedTorExit(owner);selected="local";
-        }else{
-            if(!requested.equals(runtime.standardExit.capturedRequestedExecution(owner)))throw new IllegalStateException("The external execution changed during the temporary test.");
-            selected=runtime.standardExit.capturedExternalExecution(owner);
-        }
+        if(!requested.equals(runtime.standardExit.capturedRequestedExecution(owner)))throw new IllegalStateException("The external execution changed during the temporary test.");
+        final String selected=runtime.standardExit.capturedExternalExecution(owner);
         if(!samePath(owner,AndroidHomeStateStore.snapshot(activity)))throw new IllegalStateException("The temporary external owner changed while reading its execution receipt.");
         return selected;
     }
@@ -153,8 +147,7 @@ final class AndroidUnifiedConnectionController implements AutoCloseable {
             files.put(entry.file,multihopCapture.entrySource.digest);files.put(exit.file,multihopCapture.exitSource.digest);
         }else if("external".equals(home.logicalMode)){
             topology="external";
-            if(AndroidTorProfile.isTor(home.activeExternalProtocol))runtime.standardExit.capturedTorExit(home);
-            else{runtime.standardExit.capturedExternalExit(home);execution=runtime.standardExit.capturedRequestedExecution(home);selectedExecution=runtime.standardExit.capturedExternalExecution(home);}
+            execution=runtime.standardExit.capturedRequestedExecution(home);selectedExecution=runtime.standardExit.capturedExternalExecution(home);
             external=AndroidStandardExitStore.copy(exitStore.get(home.activeExternalId));AndroidStandardExitStore.validate(external);
             if(!home.activeExternalProtocol.equals(external.protocol))throw new IllegalStateException("The active external protocol changed.");
             savedExternal=externalDigest(external);
