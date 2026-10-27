@@ -33,6 +33,7 @@ type connectionProfilePreferences struct {
 	MTUPolicy              string    `json:"mtu_policy"`
 	ManualMTU              int       `json:"manual_mtu,omitempty"`
 	DAITAEnabled           bool      `json:"daita_enabled"`
+	DAITARateKbps          *int      `json:"daita_rate_kbps,omitempty"`
 	JumboTUN               bool      `json:"jumbo_tun"`
 	SocksEnabled           bool      `json:"socks_enabled"`
 	DNSMode                string    `json:"dns_mode"`
@@ -268,7 +269,7 @@ func snapshotConnectionPreferences(p common.RouterProfile, customLayers []string
 		HomeLANCIDRs: &lan, StartupMode: &startup, AutoConnect: &autoConnect,
 		AutoRequireEncrypted: p.AutoRequireEncrypted, AutoRequireObfuscation: p.AutoRequireObfuscation,
 		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: startLayer, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
-		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
+		DAITAEnabled: p.DAITAEnabled, DAITARateKbps: &p.DAITARateKbps, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
 		DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort,
 		DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, HomeDNSCaptured: homeDNSCaptured,
 		MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID,

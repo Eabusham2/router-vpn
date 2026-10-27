@@ -22,7 +22,7 @@ var connectionProfilePreferenceKeys = map[string]struct{}{
 	"home_lan_cidrs": {}, "startup_mode": {}, "auto_connect": {},
 	"auto_require_encrypted": {}, "auto_require_obfuscation": {},
 	"base_tunnel": {}, "base_fallback": {}, "start_layer": {}, "mtu_policy": {}, "manual_mtu": {},
-	"daita_enabled": {}, "jumbo_tun": {}, "socks_enabled": {},
+	"daita_enabled": {}, "daita_rate_kbps": {}, "jumbo_tun": {}, "socks_enabled": {},
 	"dns_mode": {}, "dns_protocol": {}, "dns_host": {}, "dns_port": {},
 	"dns_server_name": {}, "dns_path": {}, "home_dns_captured": {}, "multihop_enabled": {},
 	"multihop_entry_id": {}, "multihop_exit_id": {}, "multihop_entry_mode": {}, "custom_layers": {},
@@ -41,7 +41,7 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 			return fmt.Errorf("connection profile preferences contain unsupported field %q", key)
 		}
 	}
-	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured", "multihop_entry_mode"} {
+	for _, key := range []string{"home_lan_cidrs", "startup_mode", "auto_connect", "home_dns_captured", "multihop_entry_mode", "daita_rate_kbps"} {
 		if value, ok := raw[key]; ok && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
 			return errors.New("saved connection policy cannot be null")
 		}
@@ -88,6 +88,9 @@ func (p *connectionProfilePreferences) UnmarshalJSON(data []byte) error {
 		BaseTunnel: p.BaseTunnel, BaseFallback: p.BaseFallback, StartLayer: p.StartLayer,
 		MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU,
 		DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled,
+	}
+	if p.DAITARateKbps != nil {
+		seed.DAITARateKbps = *p.DAITARateKbps
 	}
 	settings := profileSettingsRequest{
 		HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode,

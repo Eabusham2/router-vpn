@@ -27,6 +27,7 @@ type connectionProfileExternalCapture struct {
 	MTUPolicy         string   `json:"mtu_policy"`
 	ManualMTU         int      `json:"manual_mtu"`
 	DAITAEnabled      bool     `json:"daita_enabled"`
+	DAITARateKbps     *int     `json:"daita_rate_kbps,omitempty"`
 	JumboTUN          bool     `json:"jumbo_tun"`
 	SocksEnabled      bool     `json:"socks_enabled"`
 	DNSMode           string   `json:"dns_mode"`
@@ -60,6 +61,9 @@ func (p *connectionProfileExternalCapture) UnmarshalJSON(data []byte) error {
 			return errors.New("saved external policy is incomplete")
 		}
 	}
+	if value, exists := fields["daita_rate_kbps"]; exists && bytes.Equal(bytes.TrimSpace(value), []byte("null")) {
+		return errors.New("saved cover rate cannot be null")
+	}
 	var decoded connectionProfileExternalWire
 	decoder := json.NewDecoder(bytes.NewReader(data))
 	decoder.DisallowUnknownFields()
@@ -75,6 +79,9 @@ func (p *connectionProfileExternalCapture) UnmarshalJSON(data []byte) error {
 }
 
 func (p connectionProfileExternalCapture) validate() error {
+	if p.DAITARateKbps != nil && *p.DAITARateKbps != 0 && (*p.DAITARateKbps < common.DAITALikeMinRateKbps || *p.DAITARateKbps > common.DAITALikeMaxRateKbps) {
+		return errors.New("saved cover rate must be 0 or 32..192 kbps")
+	}
 	if _, err := routeExecution(multihopConnectRequest{Execution: p.MultihopExecution}); err != nil {
 		return err
 	}
@@ -160,7 +167,7 @@ func snapshotExternalConnectionPolicy(node common.RouterProfile) (*connectionPro
 		p.MultihopEntryID, p.MultihopExitID = "", ""
 		p.MultihopEntryMode = ""
 	}
-	c := &connectionProfileExternalCapture{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID, MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode}
+	c := &connectionProfileExternalCapture{Protocol: p.External.Protocol, ExpectedPublicIP: p.External.ExpectedPublicIP, HomeLANAccess: p.HomeLANAccess, HomeLANCIDRs: cloneStrings(p.HomeLANCIDRs), KillSwitchPolicy: p.KillSwitchPolicy, IPv6Mode: p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, MTUPolicy: p.MTUPolicy, ManualMTU: p.ManualMTU, DAITAEnabled: p.DAITAEnabled, DAITARateKbps: &p.DAITARateKbps, JumboTUN: p.JumboTUN, SocksEnabled: p.SocksEnabled, DNSMode: p.DNSMode, DNSProtocol: p.DNSProtocol, DNSHost: p.DNSHost, DNSPort: p.DNSPort, DNSServerName: p.DNSServerName, DNSPath: p.DNSPath, FastestDNSHost: p.FastestDNSHost, MultihopEnabled: p.MultihopEnabled, MultihopEntryID: p.MultihopEntryID, MultihopExitID: p.MultihopExitID, MultihopExecution: p.MultihopExecution, MultihopEntryMode: p.MultihopEntryMode}
 	c.StartLayer = p.StartLayer
 	c.MultihopExecution = p.MultihopExecution
 	c.MultihopEntryMode = p.MultihopEntryMode
@@ -195,6 +202,9 @@ func (p connectionProfileExternalCapture) apply(node common.RouterProfile) (comm
 	updated.StartupMode, updated.AutoConnect = c.StartupMode, c.AutoConnect
 	updated.MTUPolicy, updated.ManualMTU = c.MTUPolicy, c.ManualMTU
 	updated.DAITAEnabled, updated.JumboTUN, updated.SocksEnabled = c.DAITAEnabled, c.JumboTUN, c.SocksEnabled
+	if p.DAITARateKbps != nil {
+		updated.DAITARateKbps = *p.DAITARateKbps
+	}
 	updated.DNSMode, updated.DNSProtocol, updated.DNSHost, updated.DNSPort = c.DNSMode, c.DNSProtocol, c.DNSHost, c.DNSPort
 	updated.DNSServerName, updated.DNSPath, updated.FastestDNSHost = c.DNSServerName, c.DNSPath, c.FastestDNSHost
 	updated.MultihopEnabled, updated.MultihopEntryID, updated.MultihopExitID = c.MultihopEnabled, c.MultihopEntryID, c.MultihopExitID
@@ -294,7 +304,11 @@ func (a *app) snapshotConnectionPathLocked(node common.RouterProfile) (*connecti
 }
 
 func applySavedRouterConnectionPolicy(node common.RouterProfile, p *connectionProfilePreferences) (common.RouterProfile, error) {
-	updated, err := applyProfileSettings(cloneRouterProfile(node), profileSettingsRequest{HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation, BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer, MTUPolicy: &p.MTUPolicy, ManualMTU: &p.ManualMTU, DAITAEnabled: &p.DAITAEnabled, JumboTUN: &p.JumboTUN, SocksEnabled: &p.SocksEnabled})
+	seed := cloneRouterProfile(node)
+	if p.DAITARateKbps != nil {
+		seed.DAITARateKbps = *p.DAITARateKbps
+	}
+	updated, err := applyProfileSettings(seed, profileSettingsRequest{HomeLANAccess: &p.HomeLANAccess, KillSwitchPolicy: &p.KillSwitchPolicy, IPv6Mode: &p.IPv6Mode, StartupMode: p.StartupMode, AutoConnect: p.AutoConnect, AutoRequireEncrypted: &p.AutoRequireEncrypted, AutoRequireObfuscation: &p.AutoRequireObfuscation, BaseTunnel: &p.BaseTunnel, BaseFallback: &p.BaseFallback, StartLayer: &p.StartLayer, MTUPolicy: &p.MTUPolicy, ManualMTU: &p.ManualMTU, DAITAEnabled: &p.DAITAEnabled, JumboTUN: &p.JumboTUN, SocksEnabled: &p.SocksEnabled})
 	if err != nil {
 		return node, err
 	}
