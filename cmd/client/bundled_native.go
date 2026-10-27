@@ -80,7 +80,11 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 			return r, bad
 		}
 		if name != nativeBinaryName() && name != "libcronet.dll" && name != "libcronet.so" {
-			if limit := nativeLicenseBound(name); limit == 0 || f.Size > limit {
+			limit := nativeLicenseBound(name)
+			if torLimit := bundledTorPayloadBound(name, r.Target); torLimit != 0 {
+				limit = torLimit
+			}
+			if limit == 0 || f.Size > limit {
 				return r, bad
 			}
 		}
@@ -92,6 +96,11 @@ func validateNativeReceipt(raw []byte) (bundledNativeReceipt, error) {
 		return r, bad
 	}
 	for _, name := range []string{"SING-BOX-LICENSE", "AMNEZIA-LICENSE", "XRAY-LICENSE", "ROSENPASS-LICENSE-MIT", "ROSENPASS-LICENSE-APACHE", "CRONET-LICENSE", bundledNativePTNoticesName} {
+		if _, ok := r.Files[name]; !ok {
+			return r, bad
+		}
+	}
+	for _, name := range append(append([]string{}, bundledTorRecords...), bundledTorBinaryName(r.Target)) {
 		if _, ok := r.Files[name]; !ok {
 			return r, bad
 		}
@@ -168,6 +177,9 @@ func verifyBundledNative(root string) (string, error) {
 		return "", err
 	}
 	if err := verifyNativePayload(directory, receipt); err != nil {
+		return "", err
+	}
+	if _, err := verifyBundledTorPayload(directory, receipt.Target); err != nil {
 		return "", err
 	}
 	binary := filepath.Join(directory, nativeBinaryName())

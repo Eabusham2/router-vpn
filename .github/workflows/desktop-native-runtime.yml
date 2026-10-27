@@ -81,9 +81,34 @@ jobs:
               output.write('matrix='+json.dumps(matrix, separators=(',', ':'))+'\n')
           PY
 
+  tor-windows:
+    name: Pinned Windows Tor compile prerequisite
+    if: inputs.platform == 'all' || inputs.platform == 'windows' || inputs.platform == ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install source build tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends autoconf automake libtool make perl pkg-config
+      - name: Compile the exact user-mode Tor helper and native C tests
+        run: |
+          python3 deploy/build-desktop-tor.py compile windows/amd64 dist/tor-compiled/windows-amd64 --work "$RUNNER_TEMP/tor-source-build" --cache "$RUNNER_TEMP/tor-source-cache" --compiler "$RUNNER_TEMP/tor-llvm-mingw" --jobs 2
+      - uses: actions/upload-artifact@v4
+        with:
+          name: RouterVPN-Tor-Windows-compile-${{ github.sha }}
+          path: dist/tor-compiled/windows-amd64
+          if-no-files-found: error
+          retention-days: 3
+
   runtime:
     name: Complete native engine ${{ matrix.target }}
-    needs: targets
+    needs: [targets, tor-windows]
+    if: always() && needs.targets.result == 'success' && (needs.tor-windows.result == 'success' || needs.tor-windows.result == 'skipped')
     strategy:
       fail-fast: false
       matrix: ${{ fromJSON(needs.targets.outputs.matrix) }}
@@ -102,13 +127,18 @@ jobs:
           python-version: '3.12'
       - name: Install native Linux build libraries
         if: runner.os == 'Linux'
-        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang libclang-dev cmake ninja-build pkg-config libssl-dev autoconf automake libtool make perl
       - name: Install native macOS build libraries
         if: runner.os == 'macOS'
-        run: brew install cmake ninja pkg-config openssl@3
+        run: brew install cmake ninja pkg-config openssl@3 autoconf automake libtool
       - name: Prepare exact Rust and native C toolchains
         shell: bash
         run: python3 deploy/setup-desktop-native-toolchain.py '${{ matrix.target }}' "$RUNNER_TEMP/native-toolchain"
+      - uses: actions/download-artifact@v4
+        if: runner.os == 'Windows'
+        with:
+          name: RouterVPN-Tor-Windows-compile-${{ github.sha }}
+          path: dist/tor-compiled/windows-amd64
       - name: Native DNS proxy H3 exchanges and kernel proof
         shell: bash
         env:
@@ -153,7 +183,12 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          python3 deploy/build-native-runtime.py '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}'
+          tor_args=()
+          if [[ '${{ matrix.target }}' == windows/* ]]; then
+            tor_args+=(--tor-compiled dist/tor-compiled/windows-amd64)
+          fi
+          python3 deploy/build-native-runtime.py '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' "${tor_args[@]}"
+          python3 deploy/test_desktop_tor_package.py --package 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}' --within-native
           python3 deploy/test_desktop_native_bundle.py 'dist/native-runtime/${{ matrix.slug }}' '${{ matrix.target }}'
           python3 deploy/test_native_runtime_delivery.py --bundle 'dist/native-runtime/${{ matrix.slug }}' --target '${{ matrix.target }}'
           python3 deploy/native-runtime-bundle.py archive '${{ matrix.target }}' 'dist/native-runtime/${{ matrix.slug }}' 'dist/native-artifact/native-${{ matrix.slug }}.tar.gz'

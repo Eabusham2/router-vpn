@@ -24,6 +24,10 @@ SPEC = importlib.util.spec_from_file_location('native_capture_gate', ROOT/'deplo
 CAPTURE = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(CAPTURE)
 
+SPEC = importlib.util.spec_from_file_location('native_tor_metadata_fixture', ROOT/'deploy/desktop_tor_test_fixture.py')
+TOR_FIXTURE = importlib.util.module_from_spec(SPEC)
+SPEC.loader.exec_module(TOR_FIXTURE)
+
 
 class NativeCapturePartition(unittest.TestCase):
     def test_all_actual_platform_test_names_keep_one_owner_and_independent_matrices(self):
@@ -135,7 +139,7 @@ class NativeBuildDiagnostics(unittest.TestCase):
         # payload and atomically publishes the resulting bundle directory.
         for target in N.TARGETS:
             with self.subTest(target=target), tempfile.TemporaryDirectory(prefix='native-notice-build-') as temporary:
-                root = Path(temporary)
+                root = Path(temporary).resolve()
                 source = root/'core'; (source/'cmd/sing-box').mkdir(parents=True)
                 for name in ('LICENSE', 'routervpn-amnezia-LICENSE.txt', 'routervpn-xray-LICENSE.txt'):
                     (source/name).write_text('bounded upstream fixture license\n')
@@ -174,6 +178,7 @@ class NativeBuildDiagnostics(unittest.TestCase):
                      patch.object(N.OPENVPN, 'prepare'), patch.object(N.EXTERNAL, 'prepare'), patch.object(N.BUFFERS, 'prepare'), \
                      patch.object(N.POLICY.AMNEZIA, 'verify'), patch.object(N, 'stage_cronet', side_effect=cronet), \
                      patch.object(N, 'stage_pq_licenses', side_effect=pq_licenses), \
+                     patch.object(N.TOR, 'build', side_effect=lambda selected, output, **kwargs: TOR_FIXTURE.write(output, selected)), \
                      patch.object(N.platform, 'system', return_value='FixtureOS'), \
                      patch.object(N.platform, 'machine', return_value='fixture'), contextlib.redirect_stdout(io.StringIO()):
                     result = N.build(target, root/'bundle', source=source, xray=root/'xray', pq=root/'pq')
@@ -280,7 +285,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
     def test_both_targets_read_ordinary_delay_and_case_insensitive_owned_imports(self):
         for target in ('windows/amd64', 'windows/arm64'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 engine = image(target, ('KERNEL32.dll', 'LIBCRONET.dll'), ('WS2_32.DLL',))
                 cronet = image(target, ('NTDLL.dll',), ('api-ms-win-core-winrt-l1-1-0.dll',))
                 write_bundle(root, target, engine=engine, cronet=cronet)
@@ -295,7 +300,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
             for payload in ('engine', 'cronet'):
                 for delay in (False, True):
                     with self.subTest(target=target, payload=payload, delay=delay), tempfile.TemporaryDirectory() as tmp:
-                        root = Path(tmp)
+                        root = Path(tmp).resolve()
                         foreign = image(target, ('KERNEL32.dll',) if delay else ('libunwind.dll',),
                                         ('libunwind.dll',) if delay else ())
                         write_bundle(root, target, **{payload: foreign})
@@ -306,7 +311,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
 
     def test_staging_unowned_dll_never_turns_it_into_an_owned_dependency(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             target = 'windows/amd64'
             write_bundle(root, target, engine=image(target, ('libunwind.dll',)))
             (root/'libunwind.dll').write_bytes(image(target))
@@ -315,7 +320,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
 
     def test_cronet_is_required_and_inspected_even_without_a_static_import(self):
         with tempfile.TemporaryDirectory() as tmp:
-            root = Path(tmp)
+            root = Path(tmp).resolve()
             target = 'windows/amd64'
             (root/N.binary_name(target)).write_bytes(image(target))
             with self.assertRaisesRegex(ValueError, 'Unsafe or missing.*libcronet.dll'):
@@ -327,11 +332,12 @@ class WindowsDependencyDelivery(unittest.TestCase):
     def test_complete_receipt_reuse_still_requires_imports_without_foreign_toolchain(self):
         for target in ('windows/amd64', 'windows/arm64'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 policy = 'a'*64
                 write_bundle(root, target)
                 for name in N.LICENSES:
                     (root/name).write_bytes(N.EXTERNAL.desktop_pt_notices() if name == N.PT_NOTICES else b'owned fixture license\n')
+                TOR_FIXTURE.write(root, target)
 
                 def seal(engine):
                     (root/N.binary_name(target)).write_bytes(engine+N.marker(policy).encode())
@@ -413,7 +419,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
             N.pe_dependencies(raw, target)
         for name in ('libunwind.dll', 'vcruntime140.dll', 'api-ms-win-fake.dll', 'api-ms-win-core-l1-1-0-extra.dll'):
             with self.subTest(name=name), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 write_bundle(root, target, cronet=image(target, (name,)))
                 with self.assertRaisesRegex(ValueError, 'imports an unowned DLL'):
                     N.check_windows_dependencies(root, target)
@@ -424,7 +430,7 @@ class WindowsDependencyDelivery(unittest.TestCase):
 
         for target in ('windows/amd64', 'windows/arm64'):
             with self.subTest(target=target), tempfile.TemporaryDirectory() as tmp:
-                root = Path(tmp)
+                root = Path(tmp).resolve()
                 source = root/'core'
                 (source/'cmd/sing-box').mkdir(parents=True)
                 pq = root/'verified pq'

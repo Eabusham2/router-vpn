@@ -29,6 +29,7 @@ function Reset-Fixture([string]$Name,[bool]$Existing=$true) {
         foreach($name in @(Get-RouterVPNRuntimeInstallNames $kind)) {
             $payload='new-'+$kind+'-'+$name
             if($kind -eq 'native' -and $name -ceq 'TOR-PT-NOTICES.json') { $payload='{"notice":"'+('x'*300000)+'"}' }
+            if($kind -eq 'native' -and $name -ceq 'TOR-LICENSES.json') { $payload='{"licenses":"'+('x'*40000)+'"}' }
             Write-Fixture (Join-Path $script:Bundle ('runtime/'+$kind+'/'+$name)) $payload
             if($Existing) { Write-Fixture (Join-Path $script:Installed ('runtime/'+$kind+'/'+$name)) ('old-'+$kind+'-'+$name) }
         }
@@ -66,6 +67,10 @@ function Copy-RouterVPNRuntimeInstallXray([string]$Bundle,[string]$Destination,[
     if($script:Fault -eq 'stage-notices-drift') {
         $path=Join-Path ([IO.Path]::GetDirectoryName($Destination)) 'native/TOR-PT-NOTICES.json'
         $raw=[IO.File]::ReadAllBytes($path);$raw[100]=[byte]($raw[100] -bxor 1);[IO.File]::WriteAllBytes($path,$raw)
+    }
+    if($script:Fault -eq 'stage-tor-drift') {
+        $path=Join-Path ([IO.Path]::GetDirectoryName($Destination)) 'native/tor-routervpn.exe'
+        $raw=[IO.File]::ReadAllBytes($path);$raw[1]=[byte]($raw[1] -bxor 1);[IO.File]::WriteAllBytes($path,$raw)
     }
 }
 
@@ -111,6 +116,9 @@ function Expect-Failure([string]$Pattern) {
 
 try {
     Check ('TOR-PT-NOTICES.json' -cin @(Get-RouterVPNRuntimeInstallNames 'native')) 'Native installer omitted mandatory PT notices.'
+    foreach($name in @('tor-routervpn.exe','TOR-RUNTIME.json','TOR-SOURCE-LOCK.json','TOR-PADDING-SOURCE-LOCK.json','TOR-LICENSES.json')) {
+        Check ($name -cin @(Get-RouterVPNRuntimeInstallNames 'native')) ('Native installer omitted owned Tor payload '+$name)
+    }
     Reset-Fixture 'upgrade'
     Invoke-Install
     Require-Payload $script:New
@@ -128,7 +136,15 @@ try {
     Require-Payload $script:New
     Check ((Get-Item -LiteralPath (Join-Path $script:Installed 'runtime/native/TOR-PT-NOTICES.json')).Length -gt 262144) 'PT notices did not survive installation with their explicit larger bound.'
 
-    foreach($faultCase in @('backup-locked','adopt-second','post-verify','stage-drift','stage-notices-drift')) {
+    Reset-Fixture 'upgrade-from-stock-tor-release'
+    foreach($name in @('tor-routervpn.exe','TOR-RUNTIME.json','TOR-SOURCE-LOCK.json','TOR-PADDING-SOURCE-LOCK.json','TOR-LICENSES.json')) {
+        Remove-Item -LiteralPath (Join-Path $script:Installed ('runtime/native/'+$name)) -Force
+    }
+    Invoke-Install
+    Require-Payload $script:New
+    Check ((Get-Item -LiteralPath (Join-Path $script:Installed 'runtime/native/TOR-LICENSES.json')).Length -gt 32768) 'All four upstream Tor dependency licenses did not survive their explicit bound.'
+
+    foreach($faultCase in @('backup-locked','adopt-second','post-verify','stage-drift','stage-notices-drift','stage-tor-drift')) {
         Reset-Fixture $faultCase
         $script:Fault=$faultCase
         Expect-Failure 'injected|changed fixture'
@@ -177,6 +193,14 @@ try {
         Expect-Failure 'incomplete|unowned|file bound'
         Require-Payload $script:Old
         Check ($script:Moves -eq 0) 'Invalid notices or widened ordinary license bound reached runtime adoption.'
+    }
+
+    foreach($name in @('tor-routervpn.exe','TOR-RUNTIME.json','TOR-SOURCE-LOCK.json','TOR-PADDING-SOURCE-LOCK.json','TOR-LICENSES.json')) {
+        Reset-Fixture ('tor-missing-'+$name)
+        Remove-Item -LiteralPath (Join-Path $script:Bundle ('runtime/native/'+$name)) -Force
+        Expect-Failure 'incomplete'
+        Require-Payload $script:Old
+        Check ($script:Moves -eq 0) 'Missing Tor receipt or executable reached adoption.'
     }
 
     Reset-Fixture 'linked-source'

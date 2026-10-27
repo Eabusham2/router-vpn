@@ -65,7 +65,7 @@ def unpack_payload(records, prefix, target, destination):
             raise ValueError('Native archive member length differs')
         path = destination/relative
         path.write_bytes(raw)
-        path.chmod(0o755 if relative == BUILD.binary_name(target) else 0o644)
+        path.chmod(0o755 if relative in (BUILD.binary_name(target), BUILD.TOR.VERIFY.binary_name(target)) else 0o644)
     if seen != {name.casefold() for name in members(target)}:
         raise ValueError('Native bundle archive is incomplete')
     return BUILD.reuse(destination, target)
@@ -240,7 +240,7 @@ def archive_bundle(target, bundle, output):
             archive.add(bundle/name, arcname=slug(target)+'/'+name, recursive=False)
     # Inspect the real compressed bytes before they become a workflow artifact.
     with tempfile.TemporaryDirectory(prefix='native-artifact-check-') as temporary:
-        extract_bundle(target, output, Path(temporary)/slug(target))
+        extract_bundle(target, output, Path(temporary).resolve()/slug(target))
 
 
 def extract_bundle(target, archive, destination):
@@ -250,7 +250,7 @@ def extract_bundle(target, archive, destination):
         raise ValueError('Linked native artifact destination')
     destination.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.TemporaryDirectory(prefix='.native-import-', dir=destination.parent) as temporary:
-        stage = Path(temporary)/'bundle'
+        stage = Path(temporary).resolve()/'bundle'
         stage.mkdir()
         with open_tar(archive, target) as handle:
             incoming = unpack_payload(tar_records(handle), slug(target)+'/', target, stage)
@@ -291,7 +291,7 @@ def package(target, package_root):
     if destination.exists() or destination.is_symlink():
         raise ValueError('Native package destination already exists')
     with tempfile.TemporaryDirectory(prefix='.native-package-', dir=runtime) as temporary:
-        stage = Path(temporary)/'bundle'
+        stage = Path(temporary).resolve()/'bundle'
         shutil.copytree(source, stage, symlinks=True)
         BUILD.reuse(stage, target)
         os.replace(stage, destination)
@@ -303,7 +303,7 @@ def verify_package(target, path):
     slug(target)
     verify_archive_path(path)
     with tempfile.TemporaryDirectory(prefix='native-package-check-') as temporary:
-        destination = Path(temporary)
+        destination = Path(temporary).resolve()
         if zipfile.is_zipfile(path):
             preflight_zip(path)
             with zipfile.ZipFile(path) as archive:

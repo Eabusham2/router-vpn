@@ -18,7 +18,7 @@ function Assert-RouterVPNRuntimeInstallPath([string]$Path,[bool]$Directory) {
 
 function Get-RouterVPNRuntimeInstallNames([string]$Kind) {
     switch($Kind) {
-        'native' { return @('NATIVE-RUNTIME.json','sing-box-routervpn.exe','libcronet.dll','SING-BOX-LICENSE','AMNEZIA-LICENSE','XRAY-LICENSE','ROSENPASS-LICENSE-MIT','ROSENPASS-LICENSE-APACHE','CRONET-LICENSE','TOR-PT-NOTICES.json') }
+        'native' { return @('NATIVE-RUNTIME.json','sing-box-routervpn.exe','libcronet.dll','SING-BOX-LICENSE','AMNEZIA-LICENSE','XRAY-LICENSE','ROSENPASS-LICENSE-MIT','ROSENPASS-LICENSE-APACHE','CRONET-LICENSE','TOR-PT-NOTICES.json','tor-routervpn.exe','TOR-RUNTIME.json','TOR-SOURCE-LOCK.json','TOR-PADDING-SOURCE-LOCK.json','TOR-LICENSES.json') }
         'amnezia' { return @('AMNEZIA-RUNTIME.json','sing-box-amnezia.exe','SING-BOX-LICENSE','AMNEZIA-LICENSE') }
         'xray' { return @('XRAY-RUNTIME.json','xray.exe','XRAY-LICENSE') }
         default { throw 'Unknown owned runtime directory.' }
@@ -38,6 +38,8 @@ function Get-RouterVPNRuntimeInstallManifest([string]$Directory,[string]$Kind,[b
         Assert-RouterVPNRuntimeInstallPath $item.FullName $false
         $limit=262144
         if($Kind -eq 'native' -and $item.Name -ceq 'TOR-PT-NOTICES.json') { $limit=2097152 }
+        elseif($Kind -eq 'native' -and $item.Name -ceq 'TOR-LICENSES.json') { $limit=262144 }
+        elseif($Kind -eq 'native' -and $item.Name -ceq 'tor-routervpn.exe') { $limit=67108864 }
         elseif($item.Name -like '*.json') { $limit=32768 }
         elseif($item.Name -eq 'libcronet.dll') { $limit=134217728 }
         elseif($item.Name -like '*.exe') { $limit=402653184 }

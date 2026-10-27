@@ -17,6 +17,9 @@ func nativeReceiptFixture() bundledNativeReceipt {
 	for _, name := range []string{nativeBinaryName(), "SING-BOX-LICENSE", "AMNEZIA-LICENSE", "XRAY-LICENSE", "ROSENPASS-LICENSE-MIT", "ROSENPASS-LICENSE-APACHE", "CRONET-LICENSE", "TOR-PT-NOTICES.json"} {
 		r.Files[name] = bundledNativeFile{42, digest}
 	}
+	for _, name := range append(append([]string{}, bundledTorRecords...), bundledTorBinaryName(r.Target)) {
+		r.Files[name] = bundledNativeFile{42, digest}
+	}
 	if runtime.GOOS == "linux" {
 		r.Files["libcronet.so"] = bundledNativeFile{42, digest}
 	}

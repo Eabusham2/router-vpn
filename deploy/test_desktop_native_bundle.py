@@ -101,7 +101,7 @@ def test(bundle, target):
     bundle = Path(bundle)
     BUILD.reuse(bundle, target)
     with tempfile.TemporaryDirectory(prefix='routervpn-native-relocation-') as temporary:
-        moved = Path(temporary)/'relocated app'/'runtime'/'native'
+        moved = Path(temporary).resolve()/'relocated app'/'runtime'/'native'
         shutil.copytree(bundle, moved)
         receipt = moved/'NATIVE-RUNTIME.json'
         original = receipt.read_bytes()
@@ -163,6 +163,12 @@ def test(bundle, target):
         # list` has no -race flag; an unrelated compiler failure must not be
         # caught and silently retried without race instrumentation.
         race = [] if target == 'windows/arm64' else ['-race']
+        env['ROUTERVPN_DESKTOP_TOR_PACKAGE'] = str(moved)
+        subprocess.run(['go', 'test', *race, '-count=1', '-timeout=60s', './cmd/client',
+                        '-run', '^Test(BundledTor|NativeReceiptRequiresEveryBundledTorFile)'],
+                       cwd=ROOT, env=env, check=True, timeout=300)
+        BUILD.TOR.VERIFY.offline_self_test(moved/BUILD.TOR.VERIFY.binary_name(target), target)
+        print('Complete native runtime passed actual bundled Tor identity and relocated offline control', flush=True)
         # Each graph matrix includes hundreds of complete-parser invocations.
         # Keep initial capture and retained MTU restoration in separate bounded
         # processes, as with ownership and encrypted traffic. Every original
@@ -210,14 +216,14 @@ def test(bundle, target):
         # Build may reuse a cache and removes its disposable core, so this gate
         # owns a fresh exact-pinned checkout and prepares the shared AWG sources
         # on every invocation. No stale helper can silently satisfy the gate.
-        core = Path(temporary)/'reference-core'
+        core = Path(temporary).resolve()/'reference-core'
         BUILD.checkout(core, 'https://github.com/SagerNet/sing-box.git', BUILD.PIN)
         subprocess.run([sys.executable, str(ROOT/'deploy/prepare-mobile-amnezia.py'), str(core)],
                        cwd=ROOT, env=env, check=True, timeout=300)
         subprocess.run(['go', 'mod', 'tidy'], cwd=core, env=env, check=True, timeout=300)
         subprocess.run([sys.executable, str(ROOT/'deploy/prepare-mobile-amnezia.py'),
                         '--verify-dependency', str(core)], cwd=ROOT, env=env, check=True, timeout=60)
-        reference = Path(temporary)/('awg-reference.exe' if target.startswith('windows/') else 'awg-reference')
+        reference = Path(temporary).resolve()/('awg-reference.exe' if target.startswith('windows/') else 'awg-reference')
         subprocess.run([sys.executable, str(ROOT/'deploy/build_awg_reference_fixture.py'),
                         '--core', str(core), '--output', str(reference), *(['--race'] if race else [])],
                        cwd=ROOT, env=env, check=True, timeout=660)
@@ -233,14 +239,14 @@ def test(bundle, target):
         # Server lease compiler, then execute those graphs with this sealed
         # engine. Keep this mandatory matrix separate from the existing bounded
         # native and AWG groups; none may silently skip a missing helper.
-        xray = Path(temporary)/'reference-xray'
+        xray = Path(temporary).resolve()/'reference-xray'
         BUILD.checkout(xray, 'https://github.com/XTLS/Xray-core.git', BUILD.POLICY.XRAY.XRAY_PIN)
         subprocess.run([sys.executable, str(ROOT/'deploy/prepare-relay-core.py'), str(core), str(xray)],
                        cwd=ROOT, env=env, check=True, timeout=300)
         subprocess.run(['go', 'mod', 'tidy'], cwd=core, env=env, check=True, timeout=300)
         suffix = '.exe' if target.startswith('windows/') else ''
-        composite_reference = Path(temporary)/('composite-reference'+suffix)
-        xray_reference = Path(temporary)/('xray-reference'+suffix)
+        composite_reference = Path(temporary).resolve()/('composite-reference'+suffix)
+        xray_reference = Path(temporary).resolve()/('xray-reference'+suffix)
         subprocess.run([sys.executable, str(ROOT/'deploy/build_composite_reference_fixture.py'),
                         '--core', str(core), '--output', str(composite_reference),
                         '--xray-output', str(xray_reference), *(['--race'] if race else [])],
@@ -258,11 +264,11 @@ def test(bundle, target):
         # the exact production Rust/C ABI, generate fresh disposable keys, and
         # keep this mandatory matrix separate from the existing bounded groups.
         # The helper, keys and link input never enter the sealed payload.
-        pq = Path(temporary)/'reference-pq'
+        pq = Path(temporary).resolve()/'reference-pq'
         pq_cache = ROOT/'dist/.native-pq-cache'
         BUILD.PQ.build(target, pq, pq_cache)
-        pq_reference = Path(temporary)/('pq-reference'+suffix)
-        pq_keys = Path(temporary)/'pq-private'/'keys'
+        pq_reference = Path(temporary).resolve()/('pq-reference'+suffix)
+        pq_keys = Path(temporary).resolve()/'pq-private'/'keys'
         subprocess.run([sys.executable, str(ROOT/'deploy/build_pq_reference_fixture.py'),
                         '--core', str(core), '--pq', str(pq), '--keys', str(pq_keys),
                         '--output', str(pq_reference), '--target', target, '--cache', str(pq_cache),

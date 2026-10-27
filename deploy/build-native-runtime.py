@@ -37,6 +37,7 @@ BUFFERS = load('desktop_native_buffers', 'prepare-mobile-buffers.py')
 PERFORMANCE = load('desktop_native_performance', 'prepare-mobile-performance.py')
 OPENVPN = load('desktop_native_openvpn', 'mobile_openvpn_close_policy.py')
 EXTERNAL = load('desktop_native_external', 'prepare-desktop-external.py')
+TOR = load('desktop_native_tor', 'build-desktop-tor.py')
 PIN, VERSION, TOOLCHAIN = POLICY.CORE, '1.14.1', 'go1.26.3'
 TARGETS = tuple(PQ.TARGETS)
 TAGS = ('with_wireguard', 'with_gvisor', 'with_quic', 'with_utls', 'with_openvpn',
@@ -100,7 +101,7 @@ def inputs():
                              *sorted((ROOT/'mobile/rosenpass').glob('*.h')),
                              *sorted((ROOT/'mobile/rosenpass').glob('*.c')),
                              *sorted((ROOT/'mobile/rosenpass/src').rglob('*.rs')),
-                             *POLICY.inputs(),
+                             *POLICY.inputs(), *TOR.inputs(),
                              *PERFORMANCE.inputs(), *OPENVPN.inputs(), *EXTERNAL.inputs(),
                              ROOT/'mobile/desktop/native_library.go.tmpl',
                              ROOT/'deploy/prepare-mobile-buffers.py',
@@ -184,10 +185,12 @@ def payload(raw):
 
 def expected_names(target):
     library = library_name(target)
-    return set(LICENSES)|{binary_name(target)}|({library} if library else set())
+    return set(LICENSES)|{binary_name(target)}|({library} if library else set())|TOR.VERIFY.names(target)
 
 
 def payload_bound(name, target):
+    if name in TOR.VERIFY.names(target):
+        return TOR.VERIFY.bound(name, target)
     if name == binary_name(target):
         return MAX_BINARY
     if name == library_name(target):
@@ -359,6 +362,7 @@ def reuse(directory, target, policy=None, env=None):
     expected = {**receipt_fields(target, policy), **files[binary], 'files': files}
     if receipt != expected:
         raise ValueError('Native runtime differs from the exact source, target or payload receipt')
+    TOR.VERIFY.verify(directory, target, source_root=ROOT, exact=False)
     if marker(policy).encode() not in regular(directory/binary, MAX_BINARY):
         raise ValueError('Native runtime source fingerprint is missing')
     check_target(directory/binary, target, env)
@@ -420,7 +424,7 @@ def stage_pt_notices(stage):
     path.write_bytes(raw)
 
 
-def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
+def build(target, destination, *, source=None, xray=None, pq=None, cache=None, tor_compiled=None):
     env, policy = environment(target, compiler=True), digest()
     destination = Path(destination).absolute()
     if destination.is_symlink():
@@ -511,6 +515,11 @@ def build(target, destination, *, source=None, xray=None, pq=None, cache=None):
             (stage/name).write_bytes(regular(source/source_name, MAX_LICENSE))
         stage_pq_licenses(stage, env)
         stage_pt_notices(stage)
+        tor = TOR.build(target, temp/'tor-bundle', compiled=tor_compiled,
+                        cache=ROOT/'dist/.tor-source-cache')
+        for name in TOR.VERIFY.names(target):
+            shutil.copyfile(tor/name, stage/name)
+        (stage/TOR.VERIFY.binary_name(target)).chmod(0o755)
         files = {name: payload(regular(stage/name, payload_bound(name, target)))
                  for name in expected_names(target)}
         receipt = {**receipt_fields(target, policy), **files[binary.name], 'files': files}
@@ -539,5 +548,6 @@ if __name__ == '__main__':
     parser.add_argument('--xray', type=Path, help='pristine disposable exact Xray checkout')
     parser.add_argument('--pq', type=Path, help='verified desktop PQ link-input directory')
     parser.add_argument('--cache', type=Path, help='owned Rust incremental build cache')
+    parser.add_argument('--tor-compiled', type=Path, help='exact Windows Tor compile artifact; accepted only after native tests')
     args = parser.parse_args()
-    build(args.target, args.destination, source=args.source, xray=args.xray, pq=args.pq, cache=args.cache)
+    build(args.target, args.destination, source=args.source, xray=args.xray, pq=args.pq, cache=args.cache, tor_compiled=args.tor_compiled)

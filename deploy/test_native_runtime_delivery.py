@@ -29,6 +29,7 @@ def load(name, relative):
 DELIVERY = load('native_delivery', 'deploy/native-runtime-bundle.py')
 SIGN = load('native_sign', 'deploy/seal-native-runtime.py')
 PE_FIXTURE = load('native_pe_fixture', 'deploy/test_desktop_native_dependencies.py')
+TOR_FIXTURE = load('native_tor_fixture', 'deploy/desktop_tor_test_fixture.py')
 BUILD = DELIVERY.BUILD
 checks = 0
 
@@ -58,6 +59,7 @@ def fixture(directory, target):
         if target.startswith('windows/') and name in (BUILD.binary_name(target), BUILD.library_name(target)):
             raw = PE_FIXTURE.image(target)+raw
         (directory/name).write_bytes(raw)
+    TOR_FIXTURE.write(directory, target)
     fixture_receipt(directory, target)
 
 
@@ -88,7 +90,7 @@ def checkout_bytes_test():
     inputs = {path.relative_to(BUILD.ROOT).as_posix(): path.read_bytes() for path in BUILD.inputs()}
     attributes = (ROOT/'.gitattributes').read_bytes()
     with tempfile.TemporaryDirectory(prefix='native-checkout-bytes-') as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         source = root/'source'
         source.mkdir()
         for name, raw in inputs.items():
@@ -368,7 +370,7 @@ def boundary_tests():
     with tempfile.TemporaryDirectory(prefix='native-delivery-boundaries-') as temporary, \
             patch.object(BUILD, 'run', side_effect=object_metadata), \
             patch.object(SIGN.BUILD, 'run', side_effect=object_metadata):
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         for target in BUILD.TARGETS:
             slug = DELIVERY.slug(target)
             source = root/'sources'/slug
@@ -449,7 +451,9 @@ def boundary_tests():
         with patch.object(SIGN.subprocess, 'run', side_effect=codesign):
             SIGN.seal(signed, 'darwin/amd64')
         check(BUILD.reuse(signed, 'darwin/amd64')['sha256'] != json.loads(original['NATIVE-RUNTIME.json'])['sha256'], 'signed receipt not updated')
-        check(all((signed/name).read_bytes() == raw for name,raw in original.items() if name not in ('sing-box-routervpn','NATIVE-RUNTIME.json')), 'signing changed nonbinary payload')
+        check(all((signed/name).read_bytes() == raw for name,raw in original.items() if name not in ('sing-box-routervpn','NATIVE-RUNTIME.json','tor-routervpn','TOR-RUNTIME.json')), 'signing changed unrelated payload')
+        check((signed/'tor-routervpn').read_bytes().endswith(b'owned signature'), 'Tor helper was omitted from controlled signing')
+        check(json.loads((signed/'TOR-RUNTIME.json').read_bytes())['files']['tor-routervpn'] == BUILD.payload((signed/'tor-routervpn').read_bytes()), 'signed Tor receipt was not resealed')
         rejected(lambda: SIGN.seal(signed, 'linux/amd64'), 'foreign target reseal')
         archive_boundaries(root)
         signing_promotion_boundaries(root)
@@ -462,7 +466,7 @@ def boundary_tests():
 def real_bundle_tests(bundle, target):
     before = BUILD.reuse(bundle, target)
     with tempfile.TemporaryDirectory(prefix='native-real-delivery-') as temporary:
-        root = Path(temporary)
+        root = Path(temporary).resolve()
         archive = root/('native-'+DELIVERY.slug(target)+'.tar.gz')
         DELIVERY.archive_bundle(target, bundle, archive)
         restored = root/'restored'

@@ -34,12 +34,22 @@ def seal(directory, target, identity='-'):
         flags = ['--timestamp=none'] if identity == '-' else ['--options', 'runtime', '--timestamp']
         subprocess.run(['codesign', '--force', '--sign', identity, *flags, str(binary)], check=True, timeout=120)
         subprocess.run(['codesign', '--verify', '--strict', str(binary)], check=True, timeout=20)
+        tor = stage/BUILD.TOR.VERIFY.binary_name(target)
+        subprocess.run(['codesign', '--force', '--sign', identity, *flags, str(tor)], check=True, timeout=120)
+        subprocess.run(['codesign', '--verify', '--strict', str(tor)], check=True, timeout=20)
+        tor_record = BUILD.TOR.VERIFY.SERVER.json_object((stage/BUILD.TOR.VERIFY.RECEIPT).read_bytes())
+        tor_raw = BUILD.regular(tor, BUILD.TOR.VERIFY.MAX_BINARY)
+        tor_record['files'][tor.name] = BUILD.payload(tor_raw)
+        tor_record['executable_identity'] = BUILD.TOR.VERIFY.executable_identity(tor_raw, target)
+        (stage/BUILD.TOR.VERIFY.RECEIPT).write_text(json.dumps(tor_record, sort_keys=True, indent=2)+'\n')
         BUILD.check_target(binary, target, BUILD.environment(target))
         raw = BUILD.regular(binary, BUILD.MAX_BINARY)
         if BUILD.marker(BUILD.digest()).encode() not in raw:
             raise ValueError('Signed native source identity changed')
         sealed = {**original, **BUILD.payload(raw), 'files': dict(original['files'])}
         sealed['files'][binary.name] = BUILD.payload(raw)
+        for name in (tor.name, BUILD.TOR.VERIFY.RECEIPT):
+            sealed['files'][name] = BUILD.payload(BUILD.regular(stage/name, BUILD.payload_bound(name, target)))
         (stage/'NATIVE-RUNTIME.json').write_text(json.dumps(sealed, sort_keys=True, indent=2)+'\n')
         # Checks every unchanged library/license, all provenance fields, target
         # and tags as well as the newly signed binary's exact size and digest.
