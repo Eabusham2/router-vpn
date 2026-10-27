@@ -31,15 +31,8 @@ type DesktopPredecessor struct {
 	external                           *ExternalPredecessorProof
 }
 
-// DesktopBridgeEntryProof is emitted only after the native owner authenticates
-// the captured private Router API through its retained encrypted entry. It
-// contains no credential and is separate from the Tor Project exit proof.
-type DesktopBridgeEntryProof struct {
-	EntryID     string               `json:"entry_id"`
-	EntrySHA256 string               `json:"entry_sha256"`
-	CheckedAt   time.Time            `json:"checked_at"`
-	EntryKind   PredecessorProofKind `json:"entry_kind,omitempty"`
-}
+// DesktopBridgeEntryProof preserves the desktop API for the shared entry receipt.
+type DesktopBridgeEntryProof = EntryProof
 
 func (m DesktopBridgeMetadata) ValidEntryProof(proof *DesktopBridgeEntryProof, started, now time.Time) bool {
 	if m.EntryID == "" {

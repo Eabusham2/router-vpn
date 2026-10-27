@@ -12,6 +12,11 @@ ROOT = Path(__file__).resolve().parents[1]
 CORE = '1ac1a339cb1223e9c70eae14c44411c75033c02d'
 MODULE = 'github.com/sagernet/sing-box'
 OWNER = 'routervpn-tor-source.json'
+# The lease client uses the exact existing relay wire/receipt validators. This
+# closed, standard-library policy set is also used by full Libbox preparation;
+# standalone Tor tests must compile those same bytes instead of a protocol copy.
+LEASE_PACKAGES = ('multihoprelay', 'applexray', 'awgpolicy', 'mobilepq',
+                  'nativecomposite', 'nativeopenvpn', 'nativesip003')
 spec = importlib.util.spec_from_file_location('routervpn_native_tor_pack', ROOT/'deploy/prepare-mobile-torpack.py')
 TORPACK = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(TORPACK)
@@ -30,7 +35,7 @@ def inputs():
         *[p for p in (ROOT/'internal/common').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/awgpolicy').glob('*.go') if not p.name.endswith('_test.go')],
         *[p for p in (ROOT/'internal/nativeopenvpn').glob('*.go') if not p.name.endswith('_test.go')],
-        *mobile_policy_sources(), ROOT/'deploy/test_mobile_tor_source_closure.py',
+        *mobile_policy_sources(), *lease_policy_sources(), ROOT/'deploy/test_mobile_tor_source_closure.py',
         ROOT/'internal/dnsmeasure/catalog.go',
         *[p for p in (ROOT/'mobile/torpt').rglob('*') if p.is_file()],
         *(ROOT/'mobile/toroutbound').glob('*.tmpl')]))
@@ -63,14 +68,32 @@ def rewrite(data):
         ('router-vpn/internal/common', MODULE+'/routervpn/common'),
         ('router-vpn/internal/awgpolicy', MODULE+'/routervpn/awgpolicy'),
         ('router-vpn/internal/nativeopenvpn', MODULE+'/routervpn/nativeopenvpn'),
+        ('router-vpn/internal/multihoprelay', MODULE+'/experimental/libbox/routervpn/multihoprelay'),
         ('router-vpn/mobile/torpt', MODULE+'/routervpn/torpt'),
     ):
         data = data.replace(('"'+source).encode(), ('"'+target).encode())
     return data
 
 
+def lease_policy_sources():
+    return sorted(path for package in LEASE_PACKAGES
+                  for path in (ROOT/'internal'/package).glob('*.go')
+                  if not path.name.endswith('_test.go'))
+
+
+def lease_rewrite(data):
+    for package in LEASE_PACKAGES:
+        data = data.replace(('"router-vpn/internal/'+package+'"').encode(),
+                            ('"'+MODULE+'/experimental/libbox/routervpn/'+package+'"').encode())
+    if b'"router-vpn/internal/' in data:
+        raise ValueError('Native Tor lease policy closure is incomplete')
+    return data
+
+
 def copies():
     result = {}
+    for path in lease_policy_sources():
+        result['experimental/libbox/routervpn/'+path.parent.name+'/'+path.name] = lease_rewrite(path.read_bytes())
     # The DNS-only native Tor adapter uses the same closed catalog as the full
     # mobile measurement bridge, including in standalone pinned Tor tests.
     result['routervpn/dnsmeasure/catalog.go'] = (ROOT/'internal/dnsmeasure/catalog.go').read_bytes()

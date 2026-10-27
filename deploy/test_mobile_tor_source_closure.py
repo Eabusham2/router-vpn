@@ -13,7 +13,8 @@ SPEC = importlib.util.spec_from_file_location('mobile_tor_closure', ROOT/'deploy
 PREP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PREP)
 PREFIXES = ('routervpn/common/', 'routervpn/mobiletor/', 'routervpn/awgpolicy/',
-            'routervpn/nativeopenvpn/', 'routervpn/dnsmeasure/')
+            'routervpn/nativeopenvpn/', 'routervpn/dnsmeasure/',
+            'experimental/libbox/routervpn/')
 
 
 def compile_sources(content, go, pattern):
@@ -44,6 +45,10 @@ def main():
     for source in PREP.mobile_policy_sources():
         if content['routervpn/mobiletor/'+source.name] != PREP.rewrite(source.read_bytes()):
             raise AssertionError('Mobile Tor changed shared policy bytes: '+source.name)
+    for source in PREP.lease_policy_sources():
+        path = 'experimental/libbox/routervpn/'+source.parent.name+'/'+source.name
+        if content.get(path) != PREP.lease_rewrite(source.read_bytes()):
+            raise AssertionError('Mobile Tor changed the shared lease validator: '+source.name)
     result = compile_sources(content, args.go,
                              '^Test(TorProfilePreservesSavedResolverAndDynamicSession|'
                              'PredecessorFingerprintBindsCompleteCapturedEntry|TorJumbo)')

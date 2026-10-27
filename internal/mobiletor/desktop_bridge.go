@@ -1,8 +1,6 @@
 package mobiletor
 
 import (
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 
@@ -21,14 +19,8 @@ type DesktopBridgePolicy struct {
 	server         *ServerTorPolicy
 }
 
-type DesktopBridgeDNS struct {
-	Mode       string `json:"mode"`
-	Transport  string `json:"transport"`
-	Address    string `json:"address"`
-	Port       int    `json:"port"`
-	ServerName string `json:"server_name,omitempty"`
-	Path       string `json:"path,omitempty"`
-}
+// DesktopBridgeDNS preserves the desktop API for the shared selected resolver.
+type DesktopBridgeDNS = SelectedDNS
 
 // Metadata records requested policy, never a measured path MTU or successful
 // DNS/Tor proof. Secrets remain exclusively in the private source/configuration.
@@ -430,12 +422,6 @@ func desktopBridgeSavedRouterSelection(profile map[string]any) bool {
 		profileIdentifier.MatchString(profileString(profile, "multihop_entry_mode")) && profile["multihop_exit_mode"] == "tor-bridge")
 }
 
-func desktopHex(value string, bytes int) bool {
-	decoded, err := hex.DecodeString(value)
-	return err == nil && len(decoded) == bytes && hex.EncodeToString(decoded) == value
-}
+func desktopHex(value string, bytes int) bool { return capturedHex(value, bytes) }
 
-func desktopDigest(value []byte) string {
-	sum := sha256.Sum256(value)
-	return hex.EncodeToString(sum[:])
-}
+func desktopDigest(value []byte) string { return capturedDigest(value) }

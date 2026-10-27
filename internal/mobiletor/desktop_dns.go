@@ -1,7 +1,6 @@
 package mobiletor
 
 import (
-	"encoding/json"
 	"errors"
 )
 
@@ -56,21 +55,5 @@ func SelectDesktopBridgeDNS(source, entryJSON string, idle bool) (DesktopBridgeD
 }
 
 func desktopBridgeDNSMetadata(profile, selected map[string]any) (DesktopBridgeDNS, error) {
-	encoded, err := json.Marshal(selected)
-	if err != nil {
-		return DesktopBridgeDNS{}, err
-	}
-	numbers, err := profileObject(string(encoded), 16<<10)
-	if err != nil {
-		return DesktopBridgeDNS{}, err
-	}
-	port, err := profileInteger(numbers, "server_port", 0)
-	if err != nil || port < 1 || port > 65535 {
-		return DesktopBridgeDNS{}, errors.New("desktop Tor selected resolver lost its exact port")
-	}
-	dns := DesktopBridgeDNS{Mode: profileString(profile, "dns_mode"), Transport: profileString(selected, "type"), Address: profileString(selected, "server"), Port: port, Path: profileString(selected, "path")}
-	if tls, ok := selected["tls"].(map[string]any); ok {
-		dns.ServerName = profileString(tls, "server_name")
-	}
-	return dns, nil
+	return selectedDNSMetadata(profile, selected)
 }

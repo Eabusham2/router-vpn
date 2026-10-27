@@ -5,17 +5,6 @@ import (
 	"errors"
 )
 
-const ServerTorClientType = "routervpn-server-tor"
-
-// NodeID exposes the authenticated public identity needed to bind a server
-// registry source. Router credentials remain private to the captured proof.
-func (p *PredecessorProof) NodeID() string {
-	if p == nil {
-		return ""
-	}
-	return p.node
-}
-
 // NewDesktopServerTorPolicy keeps the same captured TUN/device policy compiler
 // but gives its final outbound an explicit leased-server owner. Lowering the
 // common entry graph does not create Local Tor authority: both its metadata and

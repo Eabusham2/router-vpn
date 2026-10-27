@@ -13,23 +13,6 @@ import (
 	"router-vpn/internal/mobilemultihop"
 )
 
-// PredecessorProofKind distinguishes authenticated Router control from the
-// selected ordinary provider's public-address proof. Neither grants the other
-// kind's private DNS, server-execution or protection authority.
-type PredecessorProofKind string
-
-const (
-	RouterPredecessorProofKind   PredecessorProofKind = "router-private-agent"
-	ExternalPredecessorProofKind PredecessorProofKind = "external-public-ip"
-)
-
-func (p *PredecessorProof) Kind() PredecessorProofKind {
-	if p == nil {
-		return ""
-	}
-	return RouterPredecessorProofKind
-}
-
 // ExternalPredecessorProof captures an ordinary external transport through the
 // same compiler used by its standalone native path. It is deliberately a
 // different type from PredecessorProof: a provider's public address cannot
